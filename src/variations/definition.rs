@@ -173,7 +173,7 @@ pub enum Feature {
     /// gaussian around the origin). Such fuzz can be rendered *analytically*
     /// — plot the deterministic mean and convolve a separate buffer with the
     /// fuzz kernel — instead of stochastically. See
-    /// `docs/projects/analytic-blur-buffer.md` and `analytic_blur_kernel()`
+    /// `docs/archive/projects/analytic-blur-buffer.md` and `analytic_blur_kernel()`
     /// for the per-variation kernel descriptor.
     ///
     /// Input-DEPENDENT blurs (`radial_blur`, `farblur`, `post_rblur`,
@@ -384,7 +384,7 @@ pub struct VariationDef {
     /// access their slots via the generated `get_state` / `set_state`
     /// accessors. Default 0 (no state).
     ///
-    /// See [`docs/projects/intra-iteration-state-and-accum.md`](../../docs/projects/intra-iteration-state-and-accum.md).
+    /// See [`docs/archive/intra-iteration-state-and-accum.md`](../../docs/archive/intra-iteration-state-and-accum.md).
     pub state_count: usize,
 
     /// Optional WGSL fragment that runs once at thread start (inside main(),

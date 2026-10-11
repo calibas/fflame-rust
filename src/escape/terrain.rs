@@ -1,4 +1,4 @@
-//! The terrain geometry source (docs/projects/heightfield-3d.md, phase
+//! The terrain geometry source (docs/archive/terrain/heightfield-3d.md, phase
 //! T1): a height field viewed through mode D's solid camera and lit by
 //! mode D's rig.
 //!
@@ -837,7 +837,7 @@ fn hf_cell_at(x: f32, y: f32) -> vec4<f32> {
     return vec4<f32>(f32(a), f32(b), cx - f32(a), cy - f32(b));
 }
 
-// The height map's choices (docs/projects/terrain-height.md, H2), in
+// The height map's choices (docs/archive/terrain/terrain-height.md, H2), in
 // fdata[2].x: the curve in its low bits -- 0 the source's own (log for
 // a count, linear for a relief), 1 log, 2 linear, 3 mesa -- and 8 the
 // land inverted.
@@ -2121,7 +2121,7 @@ pub struct TerrainView {
     /// (`path_core::sky_seen`); None for the background alone.
     pub sky: Option<[f32; 3]>,
     /// The height map's curve (`TerrainCurve::code`) and whether the land
-    /// is inverted (docs/projects/terrain-height.md, H2).
+    /// is inverted (docs/archive/terrain/terrain-height.md, H2).
     pub curve: u32,
     pub invert: bool,
     /// A count's or a relief's range, pinned by a lock (H3); None for the
@@ -4096,7 +4096,7 @@ mod tests {
     }
 }
 
-/// The T1 gates (docs/projects/heightfield-3d.md, section 9), on the GPU.
+/// The T1 gates (docs/archive/terrain/heightfield-3d.md, section 9), on the GPU.
 #[cfg(test)]
 pub(crate) mod gpu_tests {
     use super::*;
@@ -4661,7 +4661,7 @@ pub(crate) mod gpu_tests {
         assert!(worst < 1e-4, "{worst}");
     }
 
-    /// One material, every tier's (docs/projects/materials.md): under a
+    /// One material, every tier's (docs/archive/projects/materials.md): under a
     /// sun alone, the lit tier's coat, glow and highlight are the path
     /// tracer's direct light -- the same terms, so the same picture.
     #[test]

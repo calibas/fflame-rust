@@ -131,7 +131,7 @@ pub(crate) struct Run<'a> {
     pub frames: usize,
     pub reps: usize,
     /// Keep each thread's orbit between dispatches
-    /// (docs/projects/persistent-orbits.md), as every renderer does; off
+    /// (docs/archive/projects/persistent-orbits.md), as every renderer does; off
     /// for a gate's restarted baseline.
     pub persistent: bool,
     /// Workgroups of each dispatch, cycled through; empty is 256 each.

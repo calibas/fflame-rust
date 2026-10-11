@@ -746,7 +746,7 @@ pub fn render_colors_content(
 
             if matches!(current_color_mode, ColorMode::PathMap) {
                 // PathMap colours by path, and only Focused Rendering
-                // draws through paths (docs/projects/word-editing.md §10):
+                // draws through paths (docs/projects/deep-zoom/word-editing.md §10):
                 // say so where it cannot, and offer to turn it on.
                 let cfg = config_manager.active_config();
                 let planar = crate::ui::visibility::control(

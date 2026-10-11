@@ -130,7 +130,7 @@ or run):
      directional distance estimate in **pixel units** at any depth.
    - Their DE-based colouring, and KF2's analytic slopes, work at every zoom.
    - *Since 2026-10-04 so do ours:* P11 carries the derivative through
-     both perturbed rungs (docs/projects/derivative-under-perturbation.md).
+     both perturbed rungs (docs/archive/escape-time/derivative-under-perturbation.md).
 
 7. **The quick fixes come first.** §6 lists four problems in our current
    colouring, none needing new features: boundary darkening with
@@ -317,7 +317,7 @@ needs an engine change first.
 | P8 | **Separate inside colouring** | Pick an interior colouring independently of the exterior one, like UF's Inside tab. | UF | M |
 | P9 | **Phase add** | Palette position += strength × `arg(z)/2π`. With P2 in place the smooth fraction and phase line up into KF2's "exterior grid". | KF2 | S |
 | P10 | **OKLab palette interpolation** | Plus a finer table (we resample our table nearest-index at every stage, so squeezing lowers its resolution). | techmatt | S |
-| P11 | **Derivative under perturbation** | Carry dz/dc through perturbation and BLA as KF2 does, or use dual numbers as F3 does. Gives distance estimate, normal map and analytic relief at every depth, in pixel units. *Done:* docs/projects/derivative-under-perturbation.md. | KF2, F3 | L |
+| P11 | **Derivative under perturbation** | Carry dz/dc through perturbation and BLA as KF2 does, or use dual numbers as F3 does. Gives distance estimate, normal map and analytic relief at every depth, in pixel units. *Done:* docs/archive/escape-time/derivative-under-perturbation.md. | KF2, F3 | L |
 
 ### 5.2 New colourings
 
@@ -1076,6 +1076,6 @@ Read from the code, not reproduced by render, except where noted.
 
    **Done since, with a generated image rather than an imported one.**
    The texture is a simulation run whose recipe is stored with the
-   picture (`docs/projects/sim-textures.md`), so nothing is loaded from
+   picture (`docs/archive/projects/sim-textures.md`), so nothing is loaded from
    disk. The overlay is that plan's phase 2, measured there against a
    CPU port of `KF_TextureWarp`.

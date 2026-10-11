@@ -141,7 +141,7 @@ struct ShadeParams {
 
     // The material's coat -- reflectance at normal incidence (0, none)
     // and roughness (GGX's alpha its square) -- and the albedo's glow
-    // (docs/projects/materials.md): the path tracer's, which every tier
+    // (docs/archive/projects/materials.md): the path tracer's, which every tier
     // reads alike.
     gloss: f32,
     roughness: f32,
@@ -285,7 +285,7 @@ fn shade_store(lx: i32, ly: i32, v: vec4<f32>) {
     textureStore(shade_out, vec2<i32>(lx, ly), out);
 }
 
-// The material's coat (docs/projects/materials.md), as the path tracer
+// The material's coat (docs/archive/projects/materials.md), as the path tracer
 // evaluates it (`escape/path_core.rs`): GGX's distribution, Smith's
 // masking for one direction, Schlick's Fresnel on a scalar reflectance.
 fn coat_d(nh: f32, a2: f32) -> f32 {

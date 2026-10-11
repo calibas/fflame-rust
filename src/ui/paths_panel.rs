@@ -1,4 +1,4 @@
-//! **The Paths panel** (`docs/projects/word-editing.md` §6): the plan on
+//! **The Paths panel** (`docs/projects/deep-zoom/word-editing.md` §6): the plan on
 //! screen as a tree of its words -- "paths" in the UI, the transforms
 //! that lead into each part of the picture -- grouped by their
 //! last-applied maps, each with its share of the view. A path can be

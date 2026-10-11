@@ -1,7 +1,7 @@
 # Simulation mode — CPU prototypes
 
 Phase-0 measurement for the simulation render mode
-([docs/projects/simulation-fractals.md](../../docs/projects/simulation-fractals.md)).
+([docs/archive/projects/simulation-fractals.md](../../docs/archive/projects/simulation-fractals.md)).
 NumPy, CPU, no GPU needed. Nothing here ships; these exist to answer
 questions the plan would otherwise have to guess at, **before** the GPU
 kernel is written to a guess.
@@ -11,7 +11,7 @@ the reason the shipped discretisations and presets are what they are,
 and a future change to a rule should be able to re-run the thing that
 justified it. Every number they produced is recorded against the model
 it belongs to in
-[simulation-catalog.md](../../docs/projects/simulation-catalog.md),
+[simulation-catalog.md](../../docs/main/SIMULATION-CATALOG.md),
 with the date.
 
 Images, JSON row sets and logs go to `output/sim_proto/` (gitignored —

@@ -38,7 +38,7 @@
 //! convention and back rather than handing over raw pixels or raw
 //! world units.
 //!
-//! See `docs/projects/escape-camera-lens.md`.
+//! See `docs/archive/escape-time/escape-camera-lens.md`.
 
 use crate::config::escape::EscapeConfig;
 use crate::scene::transforms::{Flame, Transform};

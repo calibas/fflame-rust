@@ -1,6 +1,6 @@
 //! What a variation tells the inverse walks about itself.
 //!
-//! `docs/projects/ifs-general.md` D1. The analysis used to decide
+//! `docs/projects/deep-zoom/ifs-general.md` D1. The analysis used to decide
 //! which variations the walks can invert with two `match`es on the
 //! variation NAME -- one in `variation_stage` to notice a kernel, one
 //! in `transform_map_2d_ordered` (and its solid twin) to build it

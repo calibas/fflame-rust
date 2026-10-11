@@ -1,4 +1,4 @@
-//! **A plan's words as a tree** (`docs/projects/word-editing.md`): grouped
+//! **A plan's words as a tree** (`docs/projects/deep-zoom/word-editing.md`): grouped
 //! by their last-applied maps -- depth 1 by the last map, depth 2 by the
 //! last two -- which is the tree the inverse walk grows from the view
 //! inward. A branch's share of the view is the sum over its words of

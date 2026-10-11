@@ -1,7 +1,7 @@
 //! Variation reachability census — counts what real renders actually
 //! feed every variation.
 //!
-//! Design: `docs/projects/variation-reachability-census.md`. The math
+//! Design: `docs/archive/projects/variation-reachability-census.md`. The math
 //! probe answers *what can diverge* (variation × input-class); this
 //! answers *which input classes occur* in real renders, so the two
 //! join into a ranked worklist instead of 400-odd equally-weighted

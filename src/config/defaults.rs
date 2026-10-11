@@ -9,7 +9,7 @@
 //!   1. Bump CURRENT_CONFIG_VERSION in fractal_config.rs
 //!   2. Add migration to preserve old default for existing configs
 //!   3. Document the change in VERSION_HISTORY
-//! See docs/projects/config-versioning.md for details.
+//! See docs/archive/config-versioning.md for details.
 //!
 //! See also `docs/projects/config-v2-migration.md` for the running list
 //! of changes pending a v1 → v2 bump (tonemap defaults shift, levels_high

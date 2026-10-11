@@ -1,5 +1,15 @@
 # Config v1 → v2 migration tracker
 
+> **Status 2026-10-10: open.** The bump happened -- `CURRENT_CONFIG_VERSION`
+> is 3 -- but `migrate_value`'s v1 -> v2 arm (`src/config/fractal_config.rs`)
+> is a no-op: the two value translations below, `levels_high` ÷1000 above
+> 100 (§2) and `dof_blur_strength` ×10 (§4), were never applied. A v1
+> file saved before those unit changes, with either value set
+> explicitly, now renders with different Levels or depth of field.
+> Decide whether to add them (they would also touch v1 files saved
+> after the changes, which §2's threshold guards against for Levels but
+> nothing guards for depth of field).
+
 Running list of changes accumulating for the eventual `CURRENT_CONFIG_VERSION`
 bump to 2. **This document is a tracker, not an active project plan** — the
 migration code isn't being written yet. We're collecting the changes that

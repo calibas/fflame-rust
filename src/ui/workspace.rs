@@ -42,7 +42,7 @@ pub enum PanelType {
     /// Config import/export dialog
     ConfigDialog,
     /// The plan's words as a tree -- "paths" in the UI: trim, remove,
-    /// solo (docs/projects/word-editing.md §6)
+    /// solo (docs/projects/deep-zoom/word-editing.md §6)
     Paths,
     /// PNG Export panel
     Export,
@@ -71,7 +71,7 @@ pub enum PanelType {
     /// Simulation editing surface (model, grid, transport, coloring)
     Simulation,
     /// Simulation textures an escape-time fractal can use
-    /// (docs/projects/sim-textures.md)
+    /// (docs/archive/projects/sim-textures.md)
     Textures,
 }
 

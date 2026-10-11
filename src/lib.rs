@@ -512,8 +512,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             // on iPhone Pro), the per-pixel GPU buffers exceed iOS Safari's
             // ~512 MB-on-iPad / ~256 MB-on-iPhone per-tab memory limit and
             // the tab silently crashes. Cost: slight softening on retina
-            // displays. See docs/projects/wasm-dpr-cap.md if we want to
-            // revisit (e.g., a user preference toggle for high-DPR mode).
+            // displays. Worth revisiting (e.g., a user preference toggle for
+            // high-DPR mode); no write-up exists beyond this comment.
             //
             // Memory budget math at full DPR on iPad retina (2048×1536, DPR
             // 2.0 → 4096×3072 physical, 12.6M pixels):

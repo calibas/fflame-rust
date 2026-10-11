@@ -3,7 +3,7 @@
 //! User-written scripts that generate or modify flames, safe to share:
 //! a script can only call functions we register here, and runs under
 //! hard execution budgets. See
-//! [docs/projects/flame-scripting.md](../../docs/projects/flame-scripting.md).
+//! [docs/archive/projects/flame-scripting.md](../../docs/archive/projects/flame-scripting.md).
 //!
 //! Two kinds, declared by the script itself:
 //!

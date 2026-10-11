@@ -14,7 +14,7 @@
 // reconstructs that integral at every full-res pixel, so we divide by D² to
 // spread it back — total density is preserved end-to-end and the per-pixel
 // color ratio Σcolor/Σdensity is unchanged. See
-// docs/projects/analytic-blur-buffer.md.
+// docs/archive/projects/analytic-blur-buffer.md.
 //
 // One thread per full-res pixel; additive, so it preserves the direct
 // (non-blur) samples already in the histogram.

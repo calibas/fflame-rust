@@ -63,7 +63,7 @@ struct TonemapParams {
 @group(0) @binding(4) var curve_lut_sampler: sampler;
 // Bindings 5-7 (the path buffer and the palette) are still in the layout
 // but read by nothing: PathMap colours in the compute pass now, where its
-// paths carry their colour (docs/projects/word-editing.md §10).
+// paths carry their colour (docs/projects/deep-zoom/word-editing.md §10).
 
 // Vertex shader for fullscreen quad
 @vertex

@@ -2,7 +2,7 @@
 
 Notes worth keeping but not addressing right now. Accumulated as we work
 through the bulk metadata review (Phase 4 of
-[VARIATIONS_BULK_METADATA_IMPORT.md](VARIATIONS_BULK_METADATA_IMPORT.md)).
+[VARIATIONS_BULK_METADATA_IMPORT.md](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md)).
 
 Two buckets: things that belong to the metadata-import project itself,
 and things we'll defer to other branches when we hit them. Add freely;
@@ -16,20 +16,20 @@ The other active project docs in this directory that touch the
 variations system. Completed projects have been moved to
 [`docs/archive/`](../archive/).
 
-- [VARIATIONS_BULK_METADATA_IMPORT.md](VARIATIONS_BULK_METADATA_IMPORT.md)
+- [VARIATIONS_BULK_METADATA_IMPORT.md](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md)
   — the parent project plan for this branch (bulk doc-comments + per-param
   descriptions + author attribution). Most phases complete; this TODO doc
   is the deferred-work residue.
 - [VARIATIONS_WIRE_FORMAT.md](VARIATIONS_WIRE_FORMAT.md) — client/API
   wire contract for variations served from the fractalsforall API. Pure
   reference; update if you change either side.
-- [variation-bulk-port.md](variation-bulk-port.md) — the long-tail
+- [variation-bulk-port.md](../archive/projects/variation-bulk-port.md) — the long-tail
   porting log (JWildfire/Chaotica → our registry). ~491 ported as of
   the most recent batch; ~67 candidates remain.
 - [variation-port-blockers.md](variation-port-blockers.md) — numbered
   index of architectural blockers that prevent specific variations from
   being ported. Cross-referenced from several entries below.
-- [subflames.md](subflames.md) — architecture reference for the
+- [subflames.md](../archive/projects/subflames.md) — architecture reference for the
   `subflame_wf` variation (v1 shipped). Subflame v2 (real param/state
   slots for variations inside subflames) shipped 2026-05-17 — see
   [`docs/archive/subflame-variations-v2.md`](../archive/subflame-variations-v2.md).
@@ -48,7 +48,7 @@ Variations encountered with no obvious author. Need a research pass
 (JWildfire history, Apophysis docs, original `.cpp` headers) before we
 can fill in `# Authors`. Leave the section omitted on the static until
 the answer is known — that's the convention for "unknown" per
-[VARIATIONS_BULK_METADATA_IMPORT.md §3.3](VARIATIONS_BULK_METADATA_IMPORT.md).
+[VARIATIONS_BULK_METADATA_IMPORT.md §3.3](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md).
 
 - `rings2` ([advanced.rs](../../src/variations/defs/advanced.rs))
 - `log` ([advanced.rs](../../src/variations/defs/advanced.rs))
@@ -820,3 +820,11 @@ from the zcone/flatten/zscale signatures. The rotation3d variations
 already had clean `(p, xform_id, variation_id)` signatures — no
 change needed there. Verified bit-identical pixel output via 3D
 smoke tests for zcone, flatten, and zscale.
+
+## Effects metadata (from the archived bulk-metadata import)
+
+The variations got descriptions and authors through
+[VARIATIONS_BULK_METADATA_IMPORT.md](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md);
+its Phase 8, the same for effects, was never started.
+`EffectParameter::description` exists but is never populated -- the
+gap is written up in the header of `src/bin/export_effects_json.rs`.

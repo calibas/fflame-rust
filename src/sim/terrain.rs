@@ -1,4 +1,4 @@
-//! A simulation's 3D terrain (docs/projects/heightfield-3d.md, T4 and
+//! A simulation's 3D terrain (docs/archive/terrain/heightfield-3d.md, T4 and
 //! section 6): the grid as a height field -- one channel of a layer,
 //! smoothed by the relief stage -- coloured by the colour stack once a
 //! cell, seen through a solid camera over the grid and drawn by the

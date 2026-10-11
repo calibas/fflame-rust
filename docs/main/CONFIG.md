@@ -1,1244 +1,669 @@
 # Configuration and State Management
 
-Complete guide to the delta-based configuration system, ConfigManager, undo/redo, and serialization.
-
-## ✅ Migration Status: COMPLETE (2025-11-17)
-
-**All UI controls now use ConfigManager with simplified immediate updates:**
-- ✅ View controls (zoom, pan, rotation, camera) - Real-time with 100ms overwrite window
-- ✅ Settings sliders (iterations, blend, compression) - Coalescing within 2s window
-- ✅ Tone mapping (exposure, gamma, curves) - Immediate updates, no accumulation reset
-- ✅ Variation weights and parameters - Real-time with overwrite mode
-- ✅ Color controls (palette, background) - Real-time with overwrite mode
-- ✅ **Triangle Editor** - Batch updates for multi-param changes
-- ✅ Palette editor - Direct updates, no separate preview mode
-
-**Key Achievement**: Eliminated blank frames and preview mode complexity. All updates are immediate with automatic coalescing for undo history.
+`FractalConfig` is everything needed to reproduce one picture: the flame,
+the view, the colouring and tone mapping, the effects, and the settings
+of the escape-time and simulation engines. It is saved as a `.fflame`
+JSON file, embedded in exported PNGs, and stored as the cloud API's
+config blob. Every edit the editor makes goes through `ConfigManager`,
+which records it for undo and says what the renderers must refresh.
+Device preferences that are not part of a picture live separately, in
+`SystemSettings`.
 
 **See also:**
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overview and module organization
-- [TRANSFORMS.md](TRANSFORMS.md) - Transform structure details
-- [UI.md](UI.md) - Config import/export UI controls and delta-based UI patterns
-- [EXPORT.md](EXPORT.md) - PNG metadata embedding
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — module overview
+- [TRANSFORMS.md](TRANSFORMS.md) — `Flame` and `Transform`
+- [UI.md](UI.md) — panels, the History panel, render modes in the UI
+- [RENDERER.md](RENDERER.md) — how the frame loop consumes update actions
+- [EXPORT.md](EXPORT.md) — PNG metadata, which embeds the config
+- [ESCAPE.md](ESCAPE.md), [TERRAIN.md](TERRAIN.md) — what `EscapeConfig` drives
+- [SIMULATION.md](SIMULATION.md) — what `SimConfig` drives
+- [ANIMATION.md](ANIMATION.md) — tracks, which address configs by `ConfigPath`
+- [FRACTAL-BROWSER.md](FRACTAL-BROWSER.md) — the Fractal Browser
 
-**Archived Migration Documentation:**
-All delta migration planning docs have been archived to [archive/delta-migration/](../archive/delta-migration/):
-- [delta-system-completed.md](../archive/delta-migration/delta-system-completed.md) - Summary of completed work (Phases 1-10)
-- [complete-delta-migration.md](../archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
-- [MIGRATION-STATUS.md](../archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
-- [remove-preview-mode.md](../archive/remove-preview-mode.md) - Removal of preview mode system (PR #23)
+**Design record** (archived; the code is the authority where they differ):
+- [delta-migration/](../archive/delta-migration/README.md) — the move to
+  delta-based state management
+- [undo-redo-improvements/](../archive/undo-redo-improvements/undo-redo-improvements.md)
+  and [bidirectional-snapshots.md](../archive/undo-redo-improvements/bidirectional-snapshots.md)
+- [remove-preview-mode.md](../archive/remove-preview-mode.md) — why edits
+  apply immediately
+- [config-versioning.md](../archive/config-versioning.md) — the original
+  versioning plan
+- [local-storage-system.md](../archive/projects/local-storage-system.md) —
+  `SystemSettings` and the storage backend
+- [ui-render-modes.md](../archive/projects/ui-render-modes.md) — the
+  render-mode rules
 
----
+**Code locations:**
 
-## The non-flame engines
-
-`FractalConfig` carries a block per render engine — `escape:
-EscapeConfig` and `sim: SimConfig` — alongside the flame. Both are
-skip-if-default, so a flame file never grows them, and both parse
-**even in a build without that engine**: the mode round-trips so a file
-is never silently rewritten, and the render reports a missing engine
-rather than drawing something the file never described.
-
-`SimConfig` and its `ConfigPath::Sim*` paths are documented in
-[SIMULATION.md](SIMULATION.md). One thing worth knowing here: `sim.steps`
-means Max Steps (a cap) to the panel's transport and a target to the
-animation timeline and the exporter — see [UI.md](UI.md).
-
-## Overview
-
-The application uses a **simplified delta-based state management system** centered around `ConfigManager`. This system provides:
-- Type-safe parameter identification (`ConfigPath`)
-- Automatic undo/redo with delta tracking and coalescing (2 second window)
-- Selective GPU updates via `UpdateType` classification
-- Real-time rendering with 100ms overwrite window (no blank frames)
-- Immediate updates for all parameters (no lazy/preview distinction)
-
-**Key Files:**
-- [src/config/manager.rs](../../src/config/manager.rs) - ConfigManager implementation (~800 lines)
-- [src/config/delta.rs](../../src/config/delta.rs) - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
-- [src/config/fractal_config.rs](../../src/config/fractal_config.rs) - FractalConfig struct
-- [src/config/slider.rs](../../src/config/slider.rs) - UI helper (config_slider) (299 lines)
-- [src/config/defaults.rs](../../src/config/defaults.rs) - Default value constants
-- [src/app/mod.rs](../../src/app/mod.rs) - 100ms overwrite window implementation
+| file | holds |
+| --- | --- |
+| `src/config/fractal_config.rs` | `FractalConfig`, serialization, versioning and migration |
+| `src/config/defaults.rs` | default constants, `entry_tone_mapping` |
+| `src/config/escape.rs` | `EscapeConfig` and its types |
+| `src/config/sim.rs` | `SimConfig` and its types |
+| `src/config/delta.rs` | `ConfigPath`, `ConfigValue`, `ConfigDelta`, `ConfigChange`, `SnapshotData`, `UpdateType`, `json_to_config_value` |
+| `src/config/manager.rs` | `ConfigManager`, `EditingTarget`, `UpdateAction`, `ConfigError` |
+| `src/config/precision.rs` | how an `f32` is written down and quantised |
+| `src/config/slider.rs` | `ConfigSlider` and the egui helpers (`web-app` feature only) |
+| `src/storage/settings.rs` | `SystemSettings` |
+| `src/storage/backend.rs` | the cross-platform storage backend |
+| `src/scene/presets.rs`, `src/resources/presets.rs` | the preset library |
+| `src/ui/render_mode.rs`, `src/ui/visibility.rs` | the render-mode rules |
 
 ---
 
-## FractalConfig Structure
+## FractalConfig
 
-The `FractalConfig` struct represents **complete application state** for exact reproducibility. Everything needed to recreate a fractal is stored in this single struct.
+`FractalConfig` (`src/config/fractal_config.rs`) has one required field,
+`flame`; every other field has a serde default, so a file that omits a
+field loads with its default.
 
-**Location:** [src/config/fractal_config.rs](../../src/config/fractal_config.rs)
+| group | fields |
+| --- | --- |
+| the flame | `flame: Flame` — transforms in three pools, xaos, solo, post-symmetry, subflames. Variation weights are `HashMap<String, f32>` keyed by variation name; parameters are `HashMap<String, f32>` keyed `"variation.param"`. See [TRANSFORMS.md](TRANSFORMS.md). |
+| scene-level render | `render_mode` (`TwoD`, `ThreeD`, `Escape`, `Simulation`; wire form `"2d"`, `"3d"`, `"escape"`, `"simulation"`), `preserve_z`, `perspective_strength`, `depth_density_compensation`, `far_density_fade`, `far_density_fade_start` |
+| 2D view | `zoom` (f32), `pan_x`, `pan_y` (f64), `rotation` (radians) |
+| 3D camera | `camera_rotation_x` (pitch), `camera_rotation_y` (yaw), `camera_bank`, `camera_x`, `camera_y`, `camera_z` |
+| depth effects | `dof_focus_distance`, `dof_blur_strength`, `fog_strength`, `fog_start` |
+| solid rendering | `solid_strength`, `surface_thickness`, `solid_shading` (`SolidShadingSettings`: lights, ambient/diffuse/specular, the material's gloss, roughness and glow, SSAO, shadows) |
+| accumulation | `density_scale`, `speed_factor`, `max_iterations`, `blend_factor`, `use_dynamic_blend`, `deterministic_rng`, `filter_radius`, `filter_blur_edges` |
+| colour | `color_mode` (`Palette`, `Speed`, `PathMap`), `path_map_style`, `path_map_level`, `palette` (the palette itself, always embedded), `palette_rotation`, `palette_size`, `palette_squeeze`, `palette_squeeze_mode`, `palette_squeeze_falloff`, `palette_log_strength`, `palette_reverse`, `background_color` |
+| tone mapping | `tonemap_mode`, `highlight_mode`, `tonemap_curve`, `use_curve`, `exposure`, `gamma`, `gamma_threshold`, `brightness`, `vibrancy`, `white_level`, `saturation`, `hue_shift`, `alpha_blend_low`, `alpha_blend_high`, `levels_enabled`, `levels_low`, `levels_high`, `levels_gamma` |
+| effects | `density_effects`, `color_effects` (lists of `EffectInstance`; see [EFFECTS.md](EFFECTS.md)) |
+| focused rendering | `importance`, `cylinder_targeting`, `cylinder_always`, `cylinder_trim`, `cylinder_trim_levels`, `word_removals`, `auto_exposure` (see [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md)) |
+| other engines | `escape: EscapeConfig`, `sim: SimConfig` (below) |
+| file | `image_size` — JWildfire/Apophysis's `size`, round-tripped through `.flame` XML; the app uses it only to pre-fill the export panel's custom size |
 
-### Core Fields
+Points worth knowing:
 
-```rust
-pub struct FractalConfig {
-    // 1. Flame Definition
-    pub flame: Flame,                    // Transform collection, render mode, projection
+- **The pan is f64**; every other view field is f32. The pan is the only
+  absolute position, and an f32 centre stops being addressable past a
+  zoom of about 1e8. `zoom` stays f32 because only its relative
+  precision matters. A JSON number parses into either, so the change
+  needed no migration.
+- **The palette is always embedded.** There is no palette index; the
+  config carries the palette's stops, so a file renders the same
+  whatever the user's palette library holds.
+- **`render_mode` is always serialized**, even at its default, because
+  the cloud API projects it into a column.
+- **`preserve_z` has two defaults.** `FractalConfig::default()` (a new
+  flame) is `false`, the Apophysis/JWildfire semantics, and is written
+  explicitly; a file that omits the field loads as `true`, which is how
+  flames made before the flag existed rendered.
+- **`render_mode` and `preserve_z` live on `FractalConfig`**, not on
+  `Flame`, since config v3 (see *Versioning*): the whole render has one
+  mode, so subflames inherit it.
 
-    // 2. View State
-    pub zoom: f32,                       // Zoom level (1.0 = default)
-    pub pan_x: f32,                      // Horizontal pan (0.0 = centered)
-    pub pan_y: f32,                      // Vertical pan (0.0 = centered)
-    pub rotation: f32,                   // View rotation in radians (0.0 = no rotation)
-    pub camera_pitch: f32,               // 3D camera pitch (vertical orbit, 0.0 = level)
-    pub camera_yaw: f32,                 // 3D camera yaw (horizontal orbit, 0.0 = front)
+### Defaults
 
-    // 3. Rendering Settings
-    pub density_scale: f32,              // Density multiplier (default: 50.0)
-    pub speed_factor: f32,               // Speed multiplier (default: 1.0)
-    pub max_iterations: u64,             // Target iteration count (default: 1 billion)
+The constants are in `src/config/defaults.rs`; `impl Default for
+FractalConfig` assembles them.
 
-    // 4. Color Settings
-    pub color_mode: ColorMode,           // Transform/Palette/Speed
-    pub palette_index: usize,            // Library index for palette
-    pub background_color: [f32; 3],      // RGB background (default: black)
-    pub palette: Option<Palette>,        // Embedded palette data (added 2025-10-24)
+| field | default | field | default |
+| --- | --- | --- | --- |
+| `render_mode` | `TwoD` | `tonemap_mode` | `Logarithmic` |
+| `zoom` | 1.0 | `exposure` | 1.0 |
+| `density_scale` | 1.0 | `gamma` | 4.0 |
+| `speed_factor` | 0.5 | `gamma_threshold` | 5.0 |
+| `max_iterations` | 1,000,000,000 | `brightness` | 4.0 |
+| `blend_factor` | 0.1 | `vibrancy` | 1.0 |
+| `use_dynamic_blend` | true | `white_level` | 200 |
+| `color_mode` | `Palette` | `saturation` | 1.0 |
+| `palette` | Fire | `alpha_blend_low` / `high` | 0.3 / 0.8 |
+| `palette_size` | 256 | `levels_enabled` | true |
+| `palette_squeeze` | 1.0 | `levels_high` / `levels_gamma` | 10 / 0.5 |
+| `dof_focus_distance` | 0.0 | `surface_thickness` | 0.02 |
+| `image_size` | (1920, 1080) | `path_map_level`, `cylinder_trim_levels` | 2, 2 |
 
-    // 5. Tone Mapping
-    pub tonemap_mode: TonemapMode,       // Logarithmic/Linear
-    pub tonemap_curve: f32,              // S-curve strength (0.0-1.0)
-    pub use_curve: bool,                 // Enable tone curve (default: true)
-    pub exposure: f32,                   // Exposure adjustment (default: 1.0)
-    pub gamma: f32,                      // Gamma correction (default: 2.2)
+Entering Escape or Simulation from a flame mode with a logarithmic tone
+map switches the tone map to Linear (`entry_tone_mapping`): exposure 2.0
+and gamma 1.0 for Escape (`ESCAPE_EXPOSURE`, `ESCAPE_GAMMA`), the flame
+defaults for Simulation. A Log-calibrated flame tone map renders either
+engine's unit-range image black.
 
-    // 6. Reproducibility
-    pub deterministic_rng: bool,         // Enable fixed RNG seeds (default: false)
-}
-```
-
-### Added for Full Reproducibility (2025-10-24)
-
-Four critical fields ensure **exact reproduction** across sessions:
-
-1. **`palette: Option<Palette>`** - Embeds actual palette data
-   - Problem: Palette library indices could change if palettes are added/removed
-   - Solution: Store the actual palette ColorStop array
-   - Backward compatible: Old configs without this field use `palette_index`
-
-2. **`use_curve: bool`** - Whether to apply tone curve
-   - Problem: Tone curve application was implicit (always on)
-   - Solution: Explicit flag allows exact reproduction
-   - Default: true (matches previous behavior)
-
-3. **`max_iterations: u64`** - Exact iteration count target
-   - Problem: Interactive mode renders forever, testing needs fixed counts
-   - Solution: Store target iteration count for reproducibility
-   - Default: 1 billion (reasonable test target)
-
-4. **`deterministic_rng: bool`** - Enable reproducible RNG
-   - Problem: GPU RNG uses global timestamp → different results each run
-   - Solution: Fixed seed mode for exact reproduction
-   - Default: false (random behavior for interactive use)
-
-### Flame Field
-
-The `flame` field contains the core fractal definition:
-
-```rust
-pub struct Flame {
-    pub name: String,                    // Flame name
-    pub transforms: Vec<Transform>,      // Transform collection
-    pub render_mode: RenderMode,         // 2D or 3D
-    pub projection: ProjectionType,      // Orthographic or Perspective
-}
-```
-
-**Transform structure** (see [TRANSFORMS.md](TRANSFORMS.md) for details):
-- Affine matrix: `a, b, c, d, e, f` (2D transformation)
-- Z offset: `g` (3D depth in 3D mode)
-- Variation weights: `variations: [f32; 24]` (16 basic 2D + 8 3D)
-- Variation parameters: `variation_params: HashMap<String, HashMap<String, f32>>`
-- Color: `color: f32` (0.0-1.0, palette index)
-- Speed: `color_speed: f32` (color update rate)
-- Weight: `weight: f32` (transform selection probability)
+**Changing a default changes old files.** Serialization omits values
+equal to their default, so a file saved before the change and relying
+on the old default renders with the new one. A default change needs a
+version bump and a migration arm that restores the old value (see
+*Versioning*).
 
 ---
 
-## JSON Serialization
+## Serialization
 
-Configs use **JSON** format (not RON as originally planned) for human readability and wide tool support.
+### Writing
 
-### Serialization
+`FractalConfig::to_json()` is `to_json_value()` printed pretty.
+`to_json_value()` produces the canonical form:
 
-**Location:** [src/config.rs](../../src/config.rs#L29-L36)
+- `version` first (`CURRENT_CONFIG_VERSION`), then `flame`, then the
+  remaining fields;
+- fields equal to their defaults omitted, by two mechanisms: serde's
+  `skip_serializing_if` on most fields, and `remove_default_fields` for
+  the older ones that have none;
+- every number that is exactly an `f32` rewritten to its shortest
+  round-trip decimal (`precision::normalize_f32_numbers`), so `0.98` is
+  saved as `0.98` and not `0.9799999594688416`. Numbers that need f64
+  (the pan) are left alone.
 
-```rust
-impl FractalConfig {
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
-    }
+`save_to_file` writes `to_json()`. `to_json_array` and
+`save_multi_to_file` write a JSON array of configs (defaults stripped,
+version first; this path does not normalize the numbers).
+`EscapeConfig::texture` embeds a whole config through `to_json_value` /
+`from_json_value`, so a texture recipe is stored and migrated like a
+file.
 
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
-    }
-}
-```
+`serde_json::to_string(&config)` — the plain derive — writes **no
+`version`** and strips no defaults. The PNG metadata's `Config` chunk is
+written this way (`PngMetadata::from_app_state`); see the warning under
+*Versioning*.
 
-### File Format (.fflame)
+### Reading
 
-**Extension:** `.fflame`
+`from_json(json)` → `from_json_value(value)`:
 
-**Example structure:**
-```json
-{
-  "flame": {
-    "name": "My Flame",
-    "transforms": [
-      {
-        "a": 0.707, "b": -0.707, "c": 0.707, "d": 0.707,
-        "e": 0.0, "f": 0.0, "g": 0.0,
-        "weight": 0.5,
-        "variations": [0.5, 0.5, 0.0, ...],
-        "variation_params": {
-          "julian": {"power": 3.0, "dist": 1.0}
-        },
-        "color": 0.3,
-        "color_speed": 0.5
-      }
-    ],
-    "render_mode": "TwoD",
-    "projection": "Orthographic"
-  },
-  "zoom": 1.0,
-  "pan_x": 0.0,
-  "pan_y": 0.0,
-  "rotation": 0.0,
-  "camera_pitch": 0.0,
-  "camera_yaw": 0.0,
-  "density_scale": 50.0,
-  "speed_factor": 1.0,
-  "max_iterations": 1000000000,
-  "color_mode": "Palette",
-  "palette_index": 2,
-  "background_color": [0.0, 0.0, 0.0],
-  "palette": {
-    "name": "Fire",
-    "stops": [
-      {"position": 0.0, "color": [0.0, 0.0, 0.0]},
-      {"position": 0.5, "color": [1.0, 0.5, 0.0]},
-      {"position": 1.0, "color": [1.0, 1.0, 0.0]}
-    ]
-  },
-  "tonemap_mode": "Logarithmic",
-  "tonemap_curve": 0.0,
-  "use_curve": true,
-  "exposure": 1.0,
-  "gamma": 2.2,
-  "deterministic_rng": false
-}
-```
+1. Read `version`; refuse a version newer than `CURRENT_CONFIG_VERSION`.
+2. `migrate_value` on the raw JSON, before deserializing — so an arm can
+   tell an absent field (saved at its old default) from a present one.
+3. `lift_path_material`: a shape fix, not a version. An older picture
+   kept its material (`gloss`, `roughness`, `emission`) in a path
+   tracer's settings (`escape.path` or `sim.terrain.path`); it is moved
+   into `solid_shading` (`gloss`, `roughness`, `glow`), without
+   overwriting values already there.
+4. Deserialize; serde fills every still-absent field with its current
+   default.
+5. `fixup_ids`: assign session-local IDs to every transform, flame and
+   effect that arrived with the zero sentinel (IDs are not serialized;
+   animation tracks bind to them).
 
-### Backward Compatibility
-
-**Transform variations array:**
-- Old presets: 16-element array (basic 2D only)
-- New presets: 24-element array (16 basic 2D + 8 3D)
-- Deserialization: Custom deserializer auto-pads old arrays with zeros
-
-**Implementation:** [src/scene/transforms.rs](../../src/scene/transforms.rs)
-
-```rust
-#[serde(deserialize_with = "deserialize_variations_24")]
-pub variations: [f32; 24],
-
-fn deserialize_variations_24<'de, D>(deserializer: D) -> Result<[f32; 24], D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let v: Vec<f32> = Vec::deserialize(deserializer)?;
-    if v.len() == 16 {
-        // Old preset: pad with zeros for 3D variations
-        let mut arr = [0.0; 24];
-        arr[0..16].copy_from_slice(&v);
-        Ok(arr)
-    } else if v.len() == 24 {
-        Ok(v.try_into().unwrap())
-    } else {
-        Err(de::Error::custom("variations array must be 16 or 24 elements"))
-    }
-}
-```
+`from_json_multi` accepts either one object or an array, and
+`load_multi_from_file` reads such a file; File > Open uses it, so one
+`.fflame` can hold several configs.
 
 ---
 
-## Preset System
+## Versioning and migration
 
-The preset system stores **complete FractalConfig** (not just Flame) to ensure exact recreation of all settings.
+`CURRENT_CONFIG_VERSION` is **3** (`src/config/fractal_config.rs`).
+`migrate_value` upgrades one version per arm:
 
-**Location:** [src/scene/presets.rs](../../src/scene/presets.rs)
+| arm | what it does |
+| --- | --- |
+| v0 → v1 | nothing; configs from before versioning |
+| v1 → v2 | nothing. v2 is the cloud "opaque blob" format ([api-v2.md](../archive/api-v1-v2/api-v2.md)): the `.fflame` JSON stored as-is |
+| v2 → v3 | lifts the scene-level render fields from `flame` to the top level: `render_mode` (absent: `"2d"`), `perspective_strength` (or the legacy `projection` enum, converted), `depth_density_compensation`, `far_density_fade`, `far_density_fade_start`, and `preserve_z` (absent: `true`) |
 
-### PresetLibrary Structure
+A value **without a `version`** is read as v0, with two exceptions: a
+top-level `render_mode` of `"escape"` or `"simulation"` dates the file to
+at least v3 (both modes came after it), and an animation's embedded
+`base_config` is read as v2 (`from_json_value_with_default_version`).
 
-```rust
-pub struct PresetLibrary {
-    pub presets: Vec<FractalConfig>,     // All presets (built-in + loaded)
-}
+**The v1 → v2 arm is a no-op that should not be.** Two value
+translations were tracked for it and never applied: `levels_high`
+divided by 1000 when above 100 (its units changed from raw density to
+multiples of the mean), and `dof_blur_strength` multiplied by 10 (the
+shader now scales it by 0.1). A v1 file saved before those changes, with
+either value set explicitly, renders differently today. The open
+decision is in [config-v2-migration.md](../projects/config-v2-migration.md).
 
-impl PresetLibrary {
-    pub fn new() -> Self {
-        let mut lib = PresetLibrary {
-            presets: Vec::new(),
-        };
+**A versionless v3 config is mis-migrated.** The v2 → v3 arm replaces
+the top-level `render_mode`, `perspective_strength` and `preserve_z`
+with what it finds on `flame` — which in a v3 config is nothing, so a 3D
+flame becomes 2D with no perspective. The plain-derive JSON in a PNG's
+`Config` chunk has no `version`, so reloading it through `from_json`
+(for example a `.fflame` written by `scripts/png_metadata.py -o`) loses
+a 3D flame's mode. Escape and simulation configs are protected by the
+exception above.
 
-        // 1. Load built-in code-based presets
-        lib.presets.push(flame_to_config(presets::sierpinski_triangle()));
-        lib.presets.push(flame_to_config(presets::julia_set()));
-        // ... more built-in presets
-
-        // 2. Load file-based presets (desktop only)
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(configs) = load_configs_from_dir("assets/presets") {
-            lib.presets.extend(configs);
-        }
-
-        lib
-    }
-}
-```
-
-### Creating Presets
-
-**Option 1: Code-based (built-in)**
-
-Add function in [src/scene/presets.rs](../../src/scene/presets.rs):
-
-```rust
-pub fn my_preset() -> Flame {
-    let mut flame = Flame::new("My Preset");
-
-    let mut xform = Transform::new();
-    xform.a = 0.7; xform.d = 0.7;
-    xform.variations[0] = 0.5;  // Linear
-    xform.variations[1] = 0.5;  // Sinusoidal
-    flame.transforms.push(xform);
-
-    flame
-}
-```
-
-Add to `PresetLibrary::new()`:
-```rust
-lib.presets.push(flame_to_config(presets::my_preset()));
-```
-
-**Option 2: File-based (auto-loaded)**
-
-1. Create `.fflame` file in `assets/presets/` directory
-2. Desktop builds auto-load on startup
-3. WASM builds use built-in presets only
-
-**Option 3: Export current state**
-
-1. Use Config Import/Export → Save Config
-2. Save as `.fflame` file in `assets/presets/`
-3. Restart app to see in preset dropdown (desktop only)
-
-### Helper Function: flame_to_config()
-
-Converts a `Flame` struct to a complete `FractalConfig` with sensible defaults:
-
-```rust
-pub fn flame_to_config(flame: Flame) -> FractalConfig {
-    FractalConfig {
-        flame,
-        zoom: 1.0,
-        pan_x: 0.0,
-        pan_y: 0.0,
-        rotation: 0.0,
-        camera_pitch: 0.0,
-        camera_yaw: 0.0,
-        density_scale: 50.0,
-        speed_factor: 1.0,
-        max_iterations: 1_000_000_000,
-        color_mode: ColorMode::Palette,
-        palette_index: 2,
-        background_color: [0.0, 0.0, 0.0],
-        palette: None,
-        tonemap_mode: TonemapMode::Logarithmic,
-        tonemap_curve: 0.0,
-        use_curve: true,
-        exposure: 1.0,
-        gamma: 2.2,
-        deterministic_rng: false,
-    }
-}
-```
-
-### Critical Implementation Details (2025-10-20 Bug Fixes)
-
-**Problem 1: Buffer Overrun**
-- Old: Transform buffer sized for current flame only
-- Issue: Loading preset with more transforms than current flame caused buffer overrun
-- Fix: Pre-allocate for `MAX_TRANSFORMS` (32)
-
-**Problem 2: Residual Transforms**
-- Old: Writing N transforms left old data in slots N+1 to 31
-- Issue: Ghost transforms from previous presets
-- Fix: Zero-pad remaining slots after writing
-
-**Problem 3: Reset Overwrites Params**
-- Old: `reset()` cleared both accumulation AND GPU params
-- Issue: `load_config()` sets params → `reset()` zeros them → broken render
-- Fix: `reset()` only clears accumulation buffers, never touches params
-
-**Implementation:** [src/renderer/compute_kernel.rs](../../src/renderer/compute_kernel.rs)
-
-```rust
-pub fn load_config(&mut self, config: &FractalConfig) {
-    // 1. Update all flame parameters atomically
-    self.update_flame(&config.flame, /* zero_padding: */ true);
-
-    // 2. Update view parameters
-    self.update_view(config.zoom, config.pan_x, config.pan_y, config.rotation);
-
-    // 3. Update camera (3D mode)
-    self.update_camera(config.camera_pitch, config.camera_yaw);
-
-    // 4. Update tone mapping
-    self.update_tonemap(config.tonemap_mode, config.tonemap_curve,
-                       config.use_curve, config.exposure, config.gamma);
-
-    // 5. Clear accumulation (safe - no params touched)
-    self.reset();
-}
-```
+`SystemSettings` has its own version (`CURRENT_SETTINGS_VERSION` = 4,
+`src/storage/settings.rs`); all four of its migration arms are no-ops.
 
 ---
 
-## ConfigManager - Delta-Based State Management
+## Precision
 
-The `ConfigManager` is the central gateway for all configuration changes. It provides type-safe delta tracking, automatic undo/redo with coalescing, and selective GPU updates.
+`src/config/precision.rs` is the one place that decides how an `f32` is
+written and how a slider quantises it:
 
-**Location:** [src/config/manager.rs](../../src/config/manager.rs)
+- `fmt_f32` — the shortest decimal that parses back to the same `f32`
+  (Rust's `{}`), not a fixed number of places; `"0"` for non-finite.
+- `normalize_f32_numbers` — the serialization pass above.
+- `nice_step`, `snap_to_step`, `snap_to_significant`,
+  `decimals_for_step` — drag quantisation to 1/2/5 × 10^k, so a drag
+  lands on short decimals. Typed values are never snapped.
 
-### Architecture
+`ConfigValue::Double` and `ConfigValue::Vec2` carry the pan as f64, with
+an f64 epsilon for change detection, so undo never merges two pans that
+differ at a deep zoom. There is deliberately no `From<f64>` for
+`ConfigValue`: an untyped float literal would become a `Double` and fail
+at runtime on every f32 path.
 
-**Key Components:**
-1. **current** - Current configuration state
-2. **undo_history** - Vector of ConfigChange entries (max 50)
-3. **redo_history** - Vector of ConfigChange entries
-4. **coalescing_window** - Automatic merging of rapid changes (2 second window)
-5. **modify_session** - Batch update tracking for multi-param changes
+---
 
-### Core Structure
+## The other engines' configs
+
+`escape: EscapeConfig` and `sim: SimConfig` sit beside the flame. Both
+are skip-if-default — a flame file never grows them — and both are
+compiled into every build, engine or not: a build without the escape or
+simulation engine still parses such a config, so the file round-trips
+unchanged, and rendering it returns `RenderError::EngineMissing` rather
+than drawing the flame (see [EXPORT.md](EXPORT.md)). Switching modes
+leaves the inactive engine's block in place, so a round trip keeps it.
+
+### EscapeConfig
+
+`src/config/escape.rs`. Formula, colouring and lens parameters are keyed
+maps (`BTreeMap<String, f32>`, deterministic order), and parameters of
+an inactive formula are kept, as `variation_params` keeps them.
+
+| group | fields |
+| --- | --- |
+| the fractal | `formula` (default `mandelbrot`), `formula_params`, `julia`, `julia_re`, `julia_im`, `max_iter` (256), `bailout`, `damping_re`, `damping_im`, `biomorph`, `reference_period` |
+| the plane view | `center_re`, `center_im` (exact decimal strings), `zoom_log2` (f64), `rotation` |
+| the lens | `lens` (a variation name; empty is none), `lens_params`, `lens_amount` |
+| the solid camera | `cam_target_x`, `cam_target_y`, `cam_target_z` (decimal strings; empty is the attractor's centre), `cam_pitch`, `cam_yaw`, `cam_bank`, `cam_fov`, `solid_tier` |
+| colour | `coloring` (default `smooth`), `coloring_params`, `layer` (a second colouring blended in), `palette_map`, `contrast`, `shading` (relief) |
+| texture | `texture` (a simulation recipe, embedded whole), `texture_overlay` |
+| antialiasing | `supersample` (1–`MAX_SUPERSAMPLE` = 8), `downsample` |
+| 3D | `terrain` (`TerrainConfig`), `path` (`PathTraceConfig`) |
+
+The centre is a pair of strings because no float the config could hold
+reaches a deep-zoom centre; the zoom is a log2 exponent so animating it
+is an ordinary float track. `bailout` has two defaults: a new config
+gets 1e4, while a file without the key loads as 4, the value it was
+saved under. What the fields do is in [ESCAPE.md](ESCAPE.md) and
+[TERRAIN.md](TERRAIN.md).
+
+### SimConfig
+
+`src/config/sim.rs`: the model and its parameters, seed, init, steps,
+`dt`, boundary, grid, warp, view, resolve, matte, colouring, layers,
+couplings, colour layers and the terrain. The table, and what each edit
+costs the run, are in [SIMULATION.md](SIMULATION.md). `sim.steps` is a
+cap to the panel's transport and a target to the timeline and exporters
+(see [UI.md](UI.md)).
+
+---
+
+## Who changes the render mode
+
+The render mode has exactly one writer: `switch_render_mode` in
+`src/ui/render_mode.rs`. It applies the tone-map reset on entering a
+non-flame mode in the same undo entry as the mode change, and a mode
+change never coalesces with another. The test
+`nothing_outside_this_module_writes_the_render_mode` scans the source
+tree and fails on any mention of `ConfigPath::RenderMode` outside that
+module, except the config module itself (`delta.rs`, `manager.rs`) and
+the whole-config load paths (`ui_handlers.rs`, `panel_viewer.rs`,
+`api/`), which bring a mode in with a file rather than switch one.
+
+What a mode makes available — which panels, which controls, whether fly
+mode is offered — is answered only by `src/ui/visibility.rs`
+(`visibility::panel`, `visibility::control`, `visibility::fly_mode`,
+`WINDOW_MENU`). Add a case there rather than a `matches!(render_mode,
+...)` in a panel. See [UI.md](UI.md).
+
+---
+
+## ConfigManager
+
+`ConfigManager` (`src/config/manager.rs`) owns the current
+`FractalConfig`, the undo history and the `SystemSettings`, and
+accumulates the GPU work edits imply.
+
+| state | meaning |
+| --- | --- |
+| `current` | the config |
+| `history`, `position` | one `Vec<ConfigChange>`; entries before `position` can be undone, entries from it on redone |
+| `max_undo_depth` | 500; past it the oldest entry is dropped |
+| `pending_actions` | an `UpdateAction`, the union of what every edit since the last clear needs |
+| `editing_target` | `Main` or `Subflame { index }` (below) |
+| `modify_session` | an open transform edit (below) |
+| `animation_mode` | while true, `update_param` records no history |
+| `load_generation` | bumped by `load_config`, so panels can reset per-fractal UI state |
+| `system_settings` | device preferences (no undo) |
+| `preview` | vestigial: nothing sets it any more, so `active_config()` and `config()` both return `current` |
+
+### Writing
+
+| method | use |
+| --- | --- |
+| `update_param(path, value)` | one value; a history entry, coalesced (below). Returns `Result<UpdateType, ConfigError>`; an unchanged value (`ConfigValue::approx_eq`) returns `UpdateType::None` and records nothing. |
+| `update_batch(changes, description)` | several values as one history entry under the given description; each delta's update type is recorded separately, so the actions are their union. Coalesces like a single edit when consecutive batches change the same paths, or carry the same gesture description. |
+| `update_param_silent`, `update_param_silent_on(target, …)` | no history: animation playback, and tracks aimed at a subflame |
+| `apply_value_detached(config, target, path, value)` | apply one value to a detached config with the manager's own setters and clamps, no history or disk; the video exporter's way to apply tracks |
+| `remove_variation(xref, name)` | removes a variation and records the whole transform before and after, so undo restores its parameters and order |
+| `load_config(config, description)` | a new picture (file, preset, browser): one full-config snapshot, editing target reset to `Main`, `load_generation` bumped, every update action plus `reset_accumulation` and `structural_changed` |
+| `apply_config_edit(config, description)` | an edit no single path carries (a simulation's layers, couplings or colour layers added, removed or reordered): a full-config snapshot without the side effects of a load |
+| `load_config_silent`, `load_config_with_explicit_before` | restore the base config after animation playback, and record the playback as one undo entry |
+| `apply_structural_change(change)` | add, delete or modify a transform; add, delete or move an effect |
+| `start_modify_transform` / `commit_modify_transform` / `cancel_modify_transform` | a modify session: edits apply without history, and the commit records one before/after snapshot of the transform — one undo per Triangle Editor drag, in any pool |
+| `add_subflame`, `delete_subflame`, `replace_subflame`, `set_editing_target` | subflames (below) |
+| `update_system_setting(path, value)` | `System*` paths: no history, saved to disk at once |
+
+Four simulation setters change more than their own field — choosing a
+model resets its parameters, `dt` and `steps`; the grid mode its sizes;
+the init kind its shape — so `update_param` records `SimModel`,
+`SimLayerModel`, `SimGridMode` and `SimInitKind` as full-config
+snapshots rather than single deltas.
+
+`System*` paths are not part of `FractalConfig`: passing one to
+`update_param`, `get_value` or the setters panics. Use
+`update_system_setting` and `system_settings()`.
+
+The App wraps the manager: `App::load_config_with_undo`
+(`src/app/config.rs`) loads a config through `load_config` and pushes it
+to the renderers; File > Open accepts `.fflame` (one or several configs)
+and `.flame` XML; File > Save writes `save_to_file`; the JSON dialog and
+the clipboard go through `from_json` and `to_json`
+(`src/app/ui_handlers.rs`).
+
+### Undo and redo
+
+`undo()` and `redo()` return `Result<UpdateType, ConfigError>`
+(`EmptyUndoStack` / `EmptyRedoStack` at either end). Each moves
+`position`, first switching the editing target silently to the one the
+entry was made against, then applies the entry: inverse deltas, or the
+snapshot's before or after state. `structural_changed` is flagged for a
+structural snapshot so animation tracks rebind. `App::undo` and
+`App::redo` re-import the resulting config into the renderers; undoing
+or redoing a load, a preset or a script run restarts the simulation, so
+the field matches the config.
+
+History descriptions are i18n keys (`history.param.*`,
+`history.action.*`), translated by the History panel
+(`src/ui/undo_history.rs`).
+
+Keyboard: Ctrl+Z undoes and Ctrl+Y redoes (Cmd on macOS; the web build
+accepts either), in `src/app/input.rs`.
+
+### Coalescing
+
+A new entry merges into the previous one instead of being pushed when
+all of these hold (`should_coalesce`):
+
+- it is a delta change, not a snapshot;
+- the history is at its head, and the previous entry was made against
+  the same editing target;
+- either both changes touch the same paths in the same order and every
+  path supports coalescing, or both carry the same description from
+  `GESTURE_HISTORY_DESCS` — the fly camera and the viewport's pan, zoom,
+  rotate and orbit gestures, whose per-frame path sets vary;
+- no more than **500 ms** have passed since the previous entry's last
+  update (`COALESCE_INACTIVITY_THRESHOLD`);
+- no more than **3 s** have passed since the previous entry began
+  (`MAX_COALESCE_SPAN`).
+
+A merge keeps each path's first old value and takes the newest new
+value, adding any path the entry did not have yet. So a slider drag is
+one undo step, a pause of half a second starts another, and a long drag
+is split every three seconds. Discrete choices never coalesce
+(`supports_coalescing`): the render mode, and the simulation's seed,
+model, colouring, init kind, grid mode, boundary, warp filter, mode,
+cull and channel mask, matte channel, direction and edge, layer models
+and enabled flags, coupling endpoints, forms and channels, and
+`use_transforms`.
+
+### Subflames: EditingTarget
+
+`EditingTarget` is `Main` or `Subflame { index }` — which flame the
+editor is working on. The data never moves: `current.flame` is always
+the main flame and subflames stay in `current.flame.subflames`. Per-flame
+paths (transforms in every pool, xaos, solo, post-symmetry) route to the
+target flame through `target_flame_mut` / `active_flame_mut`;
+scene-level paths (`RenderMode`, `PreserveZ`, the view, tone mapping)
+always write the config. Panels read the target through
+`active_flame()`.
+
+Switching target is an undo entry of its own (`SwapTarget`). Every
+history entry is stamped with the target it was made against
+(`ConfigChange::target`), undo switches back to it before applying, and
+entries never coalesce across targets. `load_config` resets the target
+to `Main`.
+
+---
+
+## ConfigPath and ConfigValue
+
+`ConfigPath` (`src/config/delta.rs`) names every editable parameter:
+372 variants, many carrying an index or a name.
+
+| family | examples | update type |
+| --- | --- | --- |
+| view | `Zoom`, `Pan`, `PanX`, `PanY`, `Rotation`, `CameraRotationX`/`Y`, `CameraBank`, `CameraX`/`Y`/`Z` | `ViewOnly` |
+| depth and filter | `DofFocusDistance`, `DofBlurStrength`, `FogStrength`, `FogStart`, `FilterRadius`, `FilterBlurEdges` | `IterationReset` |
+| tone mapping | `Exposure`, `Gamma`, `GammaThreshold`, `Brightness`, `Vibrancy`, `WhiteLevel`, `Saturation`, `HueShift`, `AlphaBlendLow`/`High`, `DensityScale`, `TonemapMode`, `HighlightMode`, `TonemapCurve`, `UseCurve`, `Levels*`, `BackgroundColor`(`R`/`G`/`B`) | `ToneMappingOnly` |
+| colour | `ColorMode`, `Palette`, `PaletteIndex`, `PaletteRotation`, `PaletteSize`, `PaletteSqueeze*`, `PaletteLogStrength`, `PaletteReverse`, `SpeedFactor` | `ColorOnly` |
+| accumulation | `BlendFactor`, `UseDynamicBlend`, `MaxIterations`, `DeterministicRng`, `PathMapStyle`, `PathMapLevel` | `IterationReset` |
+| focused rendering | `AutoExposure`, `CylinderTargeting`, `CylinderAlways`, `CylinderTrim`, `CylinderTrimLevels`, `WordRemovals` | `IterationReset` |
+| transforms | `TransformCount`, `TransformWeight`, `TransformColor`, `TransformAffine { index, param }`, `TransformVariation { index, variation }`, `TransformVariationParam { index, variation, param }`, the post-affine, plane-coefficient and origin/rotation/scale paths; the same set as `LinkedTransform*` and `FinalTransform*` | `IterationReset` |
+| flame and scene | `RenderMode`, `PerspectiveStrength`, `DepthDensityCompensation`, `FarDensityFade`(`Start`), `PreserveZ`, `Xaos { src, dst }`, `SoloTransform`, `PostSymmetry*`, `SolidStrength`, `SurfaceThickness` | `IterationReset` |
+| solid lighting | `ShadingStrength`, `SolidAmbient`, `SolidDiffuse`, `SolidSpecular`, `SolidShininess`, `SolidGloss`, `SolidRoughness`, `SolidGlow`, `Ssao*`, `NormalSmoothing`, `GapFill`, `SolidShadowStrength`, `SolidLight*` | `ShadingOnly` |
+| effects | `DensityEffectEnabled`/`Param`, `ColorEffectEnabled`/`Param`, `Add`/`Remove*Effect` | `ToneMappingOnly` |
+| escape-time | about a hundred `Escape*` paths: formula, view, solid camera, colouring, relief shading, contrast, palette map, texture overlay, terrain, path tracer, lens | `EscapeRerender` |
+| simulation | about eighty `Sim*` paths: model, grid, seed, init, steps, warp, view, matte, resolve, layers, couplings, colour layers, terrain, path tracer | `SimRerender`, `SimResample` or `SimReseed` (see [SIMULATION.md](SIMULATION.md)) |
+| system | 17 `System*` paths | see *SystemSettings* |
+
+What a path supports is spread over several exhaustive matches, so the
+compiler lists every place a new variant needs an arm:
+
+| function | where | purpose |
+| --- | --- | --- |
+| `ConfigPath::update_type()` | `delta.rs` | the GPU work the path implies |
+| `to_i18n_key()`, `Display` | `delta.rs` | history labels (`history.param.*` in `locales/*.yml`) |
+| `to_string_key()`, `from_string_key()` | `delta.rs` | stable string keys for animation files (`"Transform.0.Affine.A"`); legacy un-indexed `FinalTransform.*` keys map to index 0 |
+| `json_to_config_value()` | `delta.rs` | converts a track's JSON value; the paths it returns `None` for are not animatable |
+| `get_value_from_config()`, `set_value()` | `manager.rs` | read and write, with the setters' clamps and side effects |
+
+`ConfigValue` is the value side: `Unit`, `Float(f32)`, `Int`, `UInt`,
+`UInt64`, `Bool`, `String`, `StringList`, `Vec2(f64, f64)`,
+`Double(f64)`, `ColorRgb`, `ToneMapMode`, `HighlightMode`, `ColorMode`,
+`PathMapStyle`, `RenderMode`, `ToneCurve`, `Palette`, `SqueezeMode`.
+`approx_eq` compares floats within 1e-6 (f32) or 1e-15 (f64).
+
+---
+
+## UpdateType and UpdateAction
+
+`UpdateType` (`delta.rs`) classifies a change. It is ordered, and
+`merge` takes the maximum, so a change set takes its strongest member:
+
+`None` < `ViewOnly` < `ToneMappingOnly` < `ShadingOnly` < `ColorOnly` <
+`IterationReset` < `EscapeRerender` < `SimRerender` < `SimResample` <
+`SimReseed`
+
+`UpdateAction` (`manager.rs`) is what the frame loop acts on: a set of
+flags, unioned across every edit until the loop consumes them
+(`get_pending_actions()`, then `clear_pending_actions()`, in
+`process_gpu_updates`, `src/app/gpu_updates.rs`).
+
+| update type | action flags |
+| --- | --- |
+| `ViewOnly` | `update_view` |
+| `ToneMappingOnly` | `update_tone_curve` |
+| `ShadingOnly` | `update_shading` |
+| `ColorOnly` | `update_palette` |
+| `IterationReset` | `update_flame`, `update_palette`, `update_view`, `update_tone_curve`, `update_shading` |
+| `EscapeRerender` | `rerender_escape` |
+| `SimRerender` / `SimResample` / `SimReseed` | `rerender_sim` / `resample_sim` / `reseed_sim` |
+
+None of these sets `reset_accumulation`. A flame edit is shown through
+overwrite mode instead: while edits arrive, and for 100 ms after the
+last, each frame replaces the accumulation rather than blending into it,
+and when the window closes the iteration count restarts
+(`update_overwrite_mode` in `src/app/gpu_updates.rs`; not in Escape
+mode). `reset_accumulation` comes from `load_config`, `apply_config_edit`,
+`request_reset` and `request_full_resync`. `structural_changed` comes
+from structural snapshots and asks the App to rebind animation tracks.
+`rebuild_shader` is read by the frame loop but nothing sets it.
+
+---
+
+## UI helpers
+
+`src/config/slider.rs` (built with the `web-app` feature):
+
+- `ConfigSlider::new(manager, path, range, label)` returns
+  `Result<ConfigSlider, ConfigError>` (the path must hold an `f32`);
+  `.tooltip(text)` and `.show(ui)` render it and call `update_param` on
+  change, returning a `ConfigSliderResult { changed, should_capture,
+  update_type }`.
+- `ConfigSliderUi` on `egui::Ui`: `config_slider(manager, path, range,
+  label, tooltip)` and `config_drag_value(manager, path, speed, label)`.
+- `LazyUndoUi`: `lazy_slider` and `lazy_drag`, the same calls under the
+  names the tone-mapping panel uses.
+
+`.lazy(true)` and the drag-end `force_commit_preview` it triggers are
+vestigial: preview mode is gone, and coalescing is what turns a drag
+into one undo step.
+
+Most controls use the plain pattern:
 
 ```rust
-pub struct ConfigManager {
-    // Fractal configuration (undo/redo enabled)
-    current: FractalConfig,              // Current fractal state
-    undo_history: Vec<ConfigChange>,     // Undo history (max 50)
-    redo_history: Vec<ConfigChange>,     // Redo history
-    last_change_time: Option<Instant>,   // For coalescing window
-    modify_session: Option<ModifySession>, // Batch update tracking
-
-    // System settings (no undo/redo, persistent across sessions)
-    system_settings: SystemSettings,     // Device-specific settings
-    pending_actions: UpdateActions,      // GPU update tracking
-}
-
-impl ConfigManager {
-    pub fn new(initial_config: FractalConfig, system_settings: SystemSettings) -> Self {
-        Self {
-            current: initial_config,
-            undo_history: Vec::new(),
-            redo_history: Vec::new(),
-            last_change_time: None,
-            modify_session: None,
-            system_settings,
-            pending_actions: UpdateActions::default(),
-        }
-    }
-
-    // Main entry point for fractal parameter updates (undo/redo enabled)
-    pub fn update_param(
-        &mut self,
-        path: ConfigPath,
-        new_value: ConfigValue,
-    ) -> Result<UpdateType, ConfigError> {
-        // 1. Check for actual change
-        let old_value = self.get_value(&path)?;
-        if old_value.approx_eq(&new_value) {
-            return Ok(UpdateType::None);
-        }
-
-        // 2. Create delta and push to undo (coalescing happens automatically)
-        let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-        let change = ConfigChange::single(delta);
-        let update_type = change.update_type();
-
-        self.push_undo(change);  // Automatic coalescing within 2s window
-
-        // 3. Apply change
-        self.set_value(&path, new_value)?;
-        self.record_action(update_type);
-
-        Ok(update_type)
-    }
-
-    // System settings updates (no undo/redo, immediate disk save)
-    pub fn update_system_setting(
-        &mut self,
-        path: ConfigPath,
-        new_value: ConfigValue,
-    ) -> Result<UpdateType, ConfigError> {
-        // 1. Apply change to system_settings
-        // 2. Save to disk immediately (cross-platform storage)
-        // 3. Return UpdateType for GPU sync
-        // 4. NO undo delta created
-        /* ... */
-    }
-
-    // Batch updates for multi-param changes
-    pub fn update_batch(
-        &mut self,
-        changes: Vec<(ConfigPath, ConfigValue)>,
-        description: &str,
-    ) -> Result<UpdateType, ConfigError> { /* ... */ }
-
-    // Undo/redo operations (fractal params only, not system settings)
-    pub fn undo(&mut self) -> Option<ConfigChange> { /* ... */ }
-    pub fn redo(&mut self) -> Option<ConfigChange> { /* ... */ }
-}
-```
-
-### SystemSettings Integration (Added 2025-11-23, PR #27)
-
-**Problem Solved:** Device-specific settings (VSync, FPS, iterations per thread) were mixed with artistic parameters in `FractalConfig`, causing issues:
-- System settings shouldn't be tracked in undo/redo history
-- System settings should persist across app restarts
-- GPU updates weren't propagated when system settings changed
-
-**Solution:** Separate `SystemSettings` struct managed by ConfigManager but excluded from undo/redo:
-
-```rust
-// src/storage/settings.rs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemSettings {
-    // Performance & Rendering
-    pub vsync_enabled: bool,              // VSync toggle (default: true)
-    pub target_fps: f32,                  // FPS when VSync off (default: 60.0)
-    pub iterations_per_thread: u32,       // GPU tuning (default: 256)
-    pub frame_governor: bool,             // size each frame's dispatch to the budget (default: true)
-    pub manual_workgroups: u32,           // workgroups a frame dispatches with the governor off (default: 128)
-
-    // UI/UX
-    pub language: String,                 // ISO 639-1 code (default: "en")
-
-    // Export Defaults
-    pub default_export_width: u32,        // PNG export width (default: 1920)
-    pub default_export_height: u32,       // PNG export height (default: 1080)
-    pub use_custom_export_size: bool,     // Use custom vs viewport size
-
-    // File Paths (desktop only)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub recent_files: Vec<String>,        // Recent file paths (max 10)
-}
-```
-
-**Storage Backend** ([src/storage/backend.rs](../../src/storage/backend.rs)):
-- **Desktop**: JSON files in platform-specific user data directory
-  - Windows: `%APPDATA%\Fractals for All\Fractal Art Editor\data\system_settings.json`
-  - macOS: `~/Library/Application Support/com.Fractals-for-All.Fractal-Art-Editor/system_settings.json`
-  - Linux: `$XDG_DATA_HOME/fractalarteditor/system_settings.json`
-
-  Resolved by `directories::ProjectDirs`, so each platform gets its own
-  convention rather than one shape forced onto all three. Named for the
-  product — `FractalFlame` and `fractal_flame_wgpu` were internal names
-  in a path users browse to.
-- **WASM**: Browser localStorage (5-10 MB quota)
-
-**Usage Pattern:**
-```rust
-// UI code updates system setting
-if response.changed() {
-    let update_type = config_manager.update_system_setting(
-        ConfigPath::SystemIterationsPerThread,
-        new_value.into()
-    )?;
-    // Returns UpdateType::IterationReset for GPU sync
-    // Settings automatically saved to disk
-    // No undo delta created
-}
-```
-
-**Key Benefits:**
-- ✅ System settings persist across sessions
-- ✅ GPU updates work correctly (UpdateType propagation)
-- ✅ No undo/redo for device settings (correct UX)
-- ✅ Automatic disk persistence (no manual save() calls)
-- ✅ UI code stays simple (same pattern as fractal params)
-
-**VSync Handling:**
-- **Desktop**: User can toggle VSync on/off, set custom target FPS (10-1000 Hz)
-- **WASM**: VSync always enabled (WebGPU Fifo mode required), controls hidden in UI
-- Settings persist across app restarts
-
-**See Also:**
-- [docs/projects/local-storage-system.md](../../docs/projects/local-storage-system.md) - Complete design document
-
-### ConfigPath - Type-Safe Parameter Identification
-
-**Location:** [src/config/delta.rs](../../src/config/delta.rs)
-
-`ConfigPath` is an enum with 100+ variants covering every editable parameter:
-
-```rust
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ConfigPath {
-    // View parameters (no fractal recalc)
-    Zoom,
-    PanX,
-    PanY,
-    Rotation,
-    CameraRotationX,
-    CameraRotationY,
-
-    // Tone mapping (no reset needed)
-    Exposure,
-    Gamma,
-    DensityScale,
-    TonemapMode,
-    TonemapCurve,
-    UseCurve,
-
-    // Color (reset needed, no recompute)
-    ColorMode,
-    PaletteIndex,
-    Palette(Box<Palette>),
-    SpeedFactor,
-    BackgroundColor,
-
-    // Rendering settings (fractal params, undo/redo enabled)
-    IterationsPerThread,
-    SpeedMultiplier,
-    HistogramColorScale,
-    LowDensitySmoothing,
-    DensityCompressionStrength,
-    BlendFactor,
-    UseDynamicBlend,
-    TargetIterationsPerPixel,
-    MaxIterations,
-    DeterministicRng,
-
-    // System settings (device-specific, no undo/redo, persistent)
-    SystemVSyncEnabled,
-    SystemTargetFPS,
-    SystemIterationsPerThread,
-    SystemLanguage,
-    SystemExportWidth,
-    SystemExportHeight,
-    SystemUseCustomExportSize,
-
-    // Transform-level (reset + recompute)
-    TransformCount,
-    TransformWeight { index: usize },
-    TransformColor { index: usize, component: ColorComponent },
-    TransformColorSpeed { index: usize },
-    TransformAffine { index: usize, param: AffineParam },
-    TransformVariation { index: usize, variation: String },
-    TransformVariationParam { index: usize, variation: String, param: String },
-
-    // Flame-level
-    RenderMode,
-    ProjectionType,
-}
-
-// Human-readable display for undo history
-impl Display for ConfigPath {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            ConfigPath::Exposure => write!(f, "Exposure"),
-            ConfigPath::TransformAffine { index, param } =>
-                write!(f, "Transform {} → Affine {}", index + 1, param),
-            ConfigPath::TransformVariation { index, variation } =>
-                write!(f, "Transform {} → {} variation", index + 1, variation),
-            // ... etc (100+ variants)
-        }
-    }
-}
-```
-
-### ConfigValue - Type-Safe Value Container
-
-```rust
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConfigValue {
-    Float(f32),
-    Int(i32),
-    UInt(u32),
-    UInt64(u64),
-    Bool(bool),
-    String(String),
-    ColorRgb([f32; 3]),
-    ToneMapMode(ToneMapMode),
-    ColorMode(ColorMode),
-    RenderMode(RenderMode),
-    ProjectionType(ProjectionType),
-    ToneCurve(ToneCurve),
-    Palette(Box<Palette>),
-}
-```
-
-### UpdateType - Selective GPU Updates
-
-`UpdateType` classifies changes to determine minimal GPU work required:
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateType {
-    None,             // No GPU update
-    ViewOnly,         // Camera/zoom → use overwrite mode
-    ColorOnly,        // Palette → use overwrite mode
-    IterationReset,   // Transform/variation → use overwrite mode + iteration reset after 100ms
-    ToneMappingOnly,  // Tone mapping → no accumulation buffer changes
-}
-```
-
-**How Updates Work:**
-
-1. **ViewOnly / ColorOnly / IterationReset** - Trigger 100ms overwrite window:
-   - `blend_factor = 1.0` replaces accumulation buffer (no blending)
-   - `batch_size = 1` accumulates every frame (smooth 60fps updates)
-   - Window keeps overwrite ON for 100ms after last change (~6 frames)
-   - After window expires: return to normal accumulation (`blend_factor = 0.1`, `batch_size = 4`)
-
-2. **IterationReset Additional Behavior**:
-   - When 100ms window expires, reset iteration counter to 0
-   - Provides clean rebuild after transform/variation changes
-   - No blank frames (overwrite mode prevents buffer clear)
-
-3. **ToneMappingOnly**:
-   - No overwrite mode (excluded from had_changes check)
-   - Continues accumulating while tone mapping parameters update
-   - No performance impact on sample generation
-
-**Mapping:**
-```rust
-fn classify_update(path: &ConfigPath) -> UpdateType {
-    match path {
-        ConfigPath::Zoom | ConfigPath::PanX | ConfigPath::PanY | ConfigPath::Rotation
-        | ConfigPath::CameraRotationX | ConfigPath::CameraRotationY => UpdateType::ViewOnly,
-
-        ConfigPath::ColorMode | ConfigPath::PaletteIndex | ConfigPath::Palette(_)
-        | ConfigPath::SpeedFactor | ConfigPath::BackgroundColor => UpdateType::ColorOnly,
-
-        ConfigPath::TransformAffine { .. } | ConfigPath::TransformVariation { .. }
-        | ConfigPath::TransformVariationParam { .. } | ConfigPath::TransformWeight { .. }
-        | ConfigPath::TransformColor { .. } | ConfigPath::TransformColorSpeed { .. }
-        | ConfigPath::TransformCount | ConfigPath::RenderMode | ConfigPath::ProjectionType
-            => UpdateType::IterationReset,
-
-        ConfigPath::Exposure | ConfigPath::Gamma | ConfigPath::TonemapMode
-        | ConfigPath::TonemapCurve | ConfigPath::UseCurve => UpdateType::ToneMappingOnly,
-
-        _ => UpdateType::None,
-    }
-}
-```
-
-### Undo/Redo Implementation
-
-**Undo Operation:**
-```rust
-pub fn undo(&mut self) -> Option<ConfigDelta> {
-    if self.undo_stack.is_empty() {
-        return None;
-    }
-
-    // Push current state to redo stack
-    self.redo_stack.push(self.active_config.clone());
-
-    // Pop previous state from undo stack
-    let previous_config = self.undo_stack.pop().unwrap();
-
-    // Compute delta for display
-    let delta = self.compute_delta(&previous_config, &self.active_config);
-
-    // Apply previous state
-    self.active_config = previous_config;
-
-    Some(delta)
-}
-```
-
-**Redo Operation:**
-```rust
-pub fn redo(&mut self) -> Option<ConfigDelta> {
-    if self.redo_stack.is_empty() {
-        return None;
-    }
-
-    // Push current state to undo stack
-    self.undo_stack.push(self.active_config.clone());
-
-    // Pop next state from redo stack
-    let next_config = self.redo_stack.pop().unwrap();
-
-    // Compute delta for display
-    let delta = self.compute_delta(&self.active_config, &next_config);
-
-    // Apply next state
-    self.active_config = next_config;
-
-    Some(delta)
-}
-```
-
-### Coalescing - Automatic Undo Merging
-
-**Purpose:** Prevent undo stack bloat during rapid parameter changes (e.g., slider drags, mouse panning).
-
-**How It Works:**
-- ConfigManager tracks `last_change_time` for each update
-- Changes to the **same ConfigPath** within 2 seconds are merged into single undo entry
-- Changes to **different ConfigPath** always create separate undo entries
-- No explicit lazy/throttling logic needed - coalescing is automatic
-
-**Example:**
-```rust
-// User drags Exposure slider for 1 second (100 changes)
-config_manager.update_param(ConfigPath::Exposure, 1.0.into())?;
-config_manager.update_param(ConfigPath::Exposure, 1.1.into())?;  // Merged with previous
-config_manager.update_param(ConfigPath::Exposure, 1.2.into())?;  // Merged with previous
-// ... 97 more updates ...
-// Result: 1 undo entry (1.0 → 1.2)
-
-// User changes Gamma (different path)
-config_manager.update_param(ConfigPath::Gamma, 2.2.into())?;  // New undo entry
-
-// Wait 2+ seconds, then change Exposure again
-thread::sleep(Duration::from_secs(2));
-config_manager.update_param(ConfigPath::Exposure, 1.5.into())?;  // New undo entry (window expired)
-```
-
-**Benefits:**
-- Slider drags create 1 undo entry (not 100+)
-- Mouse panning creates 1 undo entry per drag session
-- Multi-parameter changes (different paths) properly tracked
-- No manual commit logic needed in UI code
-
-### Keyboard Shortcuts
-
-**Location:** [src/app/input.rs](../../src/app/input.rs)
-
-- **Ctrl+Z**: Undo
-- **Ctrl+Y**: Redo
-
-```rust
-if modifiers.control() && key == winit::keyboard::Key::Character("z".into()) {
-    if self.undo() {
-        self.view_changed_by_keyboard = true;
-    }
+let mut value = config_manager.active_config().exposure;
+if ui.add(egui::Slider::new(&mut value, 0.1..=5.0)).changed() {
+    let _ = config_manager.update_param(ConfigPath::Exposure, value.into());
 }
 ```
 
 ---
 
-## Config Import/Export
+## Presets
 
-The UI provides import/export controls for saving and loading configurations.
+The shipped presets are one file, `assets/presets.fflame`: a JSON array
+of configs (twenty at present). `src/resources/presets.rs` loads it:
 
-**Location:** [src/ui/mod.rs](../../src/ui/mod.rs) - Config Import/Export section
+- **Desktop** reads the file at runtime (resolved against the working
+  directory and the executable's location), so editing it needs no
+  rebuild. If the file cannot be read it falls back to the copy embedded
+  at compile time (`PRESETS_JSON`). A file that reads but does not parse
+  falls through to a single built-in default preset.
+- **WASM** uses the embedded copy.
 
-### Export Flow
-
-**UI:** Config Import/Export window → Export section
-
-```rust
-if ui.button("💾 Save Config").clicked() {
-    ui_response.export_requested = true;
-}
-if ui.button("📋 Copy to Clipboard").clicked() {
-    ui_response.copy_config_requested = true;
-}
-```
-
-**Handler:** [src/app/mod.rs](../../src/app/mod.rs#L630-L644)
-
-```rust
-if ui_response.export_requested {
-    let config = self.export_config();
-
-    // Open file dialog
-    if let Some(path) = rfd::FileDialog::new()
-        .add_filter("Fractal Flame", &["fflame"])
-        .save_file()
-    {
-        if let Ok(json) = config.to_json() {
-            std::fs::write(path, json).ok();
-        }
-    }
-}
-```
-
-### Import Flow
-
-**UI:** Config Import/Export window → Import section
-
-```rust
-if ui.button("📂 Load Config").clicked() {
-    ui_response.import_requested = true;
-}
-if ui.button("📋 Paste from Clipboard").clicked() {
-    ui_response.paste_config_requested = true;
-}
-```
-
-**Handler:** [src/app/mod.rs](../../src/app/mod.rs#L647-L680)
-
-```rust
-if ui_response.import_requested {
-    // Open file dialog
-    if let Some(path) = rfd::FileDialog::new()
-        .add_filter("Fractal Flame", &["fflame"])
-        .pick_file()
-    {
-        if let Ok(json) = std::fs::read_to_string(path) {
-            if let Ok(config) = FractalConfig::from_json(&json) {
-                self.capture_state();  // Capture before importing
-                self.import_config(config);
-            }
-        }
-    }
-}
-```
-
-### Palette Library Sync
-
-When importing a config with embedded palette data, the palette is automatically added to the library if not already present:
-
-```rust
-pub fn import_config(&mut self, config: FractalConfig) {
-    // Sync palette library if config has embedded palette
-    if let Some(ref palette) = config.palette {
-        // Check if palette exists in library
-        let exists = self.palette_library.palettes.iter()
-            .any(|p| p.name == palette.name);
-
-        if !exists {
-            // Add to library
-            self.palette_library.palettes.push(palette.clone());
-
-            // Update palette index to point to new palette
-            config.palette_index = self.palette_library.palettes.len() - 1;
-        }
-    }
-
-    // Load config into renderer
-    self.renderer.load_config(&config);
-
-    // Update local state
-    self.zoom = config.zoom;
-    self.pan_x = config.pan_x;
-    // ... etc
-}
-```
+`PresetLibrary` (`src/scene/presets.rs`) holds the result;
+`global_preset_library()` is its shared instance. To add a preset, add a
+config to the array — for example one saved with File > Save — and keep
+it as `to_json` writes it. The preset browser is described in
+[FRACTAL-BROWSER.md](FRACTAL-BROWSER.md).
 
 ---
 
-## Asset Loading System
+## SystemSettings
 
-Desktop builds auto-load presets and palettes from the filesystem.
+`SystemSettings` (`src/storage/settings.rs`) holds device preferences:
+no undo, saved on every change, the same for every picture.
 
-**Location:** [src/scene/assets.rs](../../src/scene/assets.rs)
+| group | field | default |
+| --- | --- | --- |
+| rendering | `vsync_enabled` | true |
+| | `target_fps` (used when VSync is off) | 60 |
+| | `iterations_per_thread` | 256 |
+| | `burn_in` | 20 |
+| | `frame_governor` | true |
+| | `manual_workgroups` (with the governor off; clamped 1–65535) | 128 |
+| | `orbit_cache_mb` (deep-zoom reference orbit cache) | 1024 |
+| fly mode | `fly_mouse_sensitivity` (radians per pixel) | 0.005 |
+| | `fly_move_speed`, `fly_sprint_multiplier` | 1.0, 3.0 |
+| | `fly_invert_y` | false |
+| | `fly_camera_mode` (`FreeLook` or `Fps`) | `FreeLook` |
+| export | `default_export_width`, `default_export_height` | 1920, 1080 |
+| | `png_export_strip_metadata` | false |
+| UI | `language` | `"en"` |
+| | `show_help_on_startup` | true |
+| | `compact_mode` | detected on first run |
+| online | `online_mode`, `auth_token`, `auth_email`, `saved_credentials` (desktop) | see [ONLINE.md](ONLINE.md) |
+| files (desktop) | `recent_files`, `last_opened_file`, `default_save_location` | empty |
 
-### Directory Structure
+`update_system_setting(path, value)` writes one `System*` path, saves
+the file, and returns the path's update type:
 
-```
-assets/
-├── presets/
-│   ├── sierpinski.fflame
-│   ├── julia.fflame
-│   └── custom.fflame
-└── palettes/
-    ├── fire.palette
-    ├── ocean.palette
-    └── custom.palette
-```
+| paths | update type | side effect |
+| --- | --- | --- |
+| `SystemIterationsPerThread`, `SystemBurnIn` | `IterationReset` | |
+| `SystemFrameGovernor`, `SystemManualWorkgroups` | `None` | read by the frame loop each frame |
+| `SystemOrbitCacheMb` | `None` | pushed into the escape engine's orbit store (desktop) |
+| `SystemVsyncEnabled`, `SystemTargetFps`, `SystemFly*` | `ViewOnly` | |
+| `SystemPngStripMetadata` | `None` | mirrored into the PNG encoder's global switch at once |
+| `SystemExportWidth`, `SystemExportHeight`, `SystemLanguage`, `SystemShowHelpOnStartup` | `None` | |
 
-### Load Functions
+Fields without a path (compact mode, the online and sign-in state) are
+written through `system_settings_mut()` by their owners.
 
-**Load Configs:**
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-pub fn load_configs_from_dir(path: &str) -> Option<Vec<FractalConfig>> {
-    let dir = std::fs::read_dir(path).ok()?;
-    let mut configs = Vec::new();
+Things the code does not do:
 
-    for entry in dir.flatten() {
-        let path = entry.path();
-        if path.extension() == Some(OsStr::new("fflame")) {
-            if let Ok(json) = std::fs::read_to_string(&path) {
-                if let Ok(config) = FractalConfig::from_json(&json) {
-                    configs.push(config);
-                }
-            }
-        }
-    }
+- **The language is not persisted.** The language menu (the globe in
+  the menu bar, `src/ui/menu_bar.rs`) calls `i18n::set_locale` only.
+  Nothing writes `SystemLanguage`, and nothing reads `language` at
+  startup, so every launch starts in rust-i18n's default locale.
+- `recent_files`, `last_opened_file` and `default_save_location` are
+  declared and serialized but nothing reads or writes them.
 
-    Some(configs)
-}
-```
+### The settings file
 
-**Load Palettes:**
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-pub fn load_palettes_from_dir(path: &str) -> Option<Vec<Palette>> {
-    // Similar to load_configs_from_dir, but for .palette files
-    // ...
-}
-```
-
-### Platform-Specific Behavior
-
-**Desktop (Windows/macOS/Linux):**
-- Auto-loads from `assets/presets/` and `assets/palettes/`
-- User can add files to these directories
-- Restart app to see new assets
-
-**WASM (Web):**
-- Uses built-in presets/palettes only
-- No filesystem access
-- All assets compiled into binary
-
-**Conditional Compilation:**
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-{
-    // Desktop: Load from filesystem
-    if let Some(configs) = load_configs_from_dir("assets/presets") {
-        lib.presets.extend(configs);
-    }
-}
-```
+`SystemSettings::load()` and `save()` use `settings.json` through the
+storage backend. The file is written with a `version` first and some
+default-valued fields omitted (`remove_default_fields`); an unreadable
+or unparsable file loads the defaults.
 
 ---
 
-## Export Preset Files Example
+## Local storage
 
-The `export_presets` example generates `.fflame` files from code-based presets.
+`src/storage/backend.rs` gives every platform the same small API
+(`read_file`, `write_file`, `delete_file`, `file_exists`,
+`list_entries`) over relative paths:
 
-**Location:** [examples/export_presets.rs](../../examples/export_presets.rs)
+| platform | where |
+| --- | --- |
+| Windows | `%APPDATA%\Fractals for All\Fractal Art Editor\data\` |
+| macOS | `~/Library/Application Support/com.Fractals-for-All.Fractal-Art-Editor/` |
+| Linux | `$XDG_DATA_HOME/fractalarteditor/` |
+| web | browser `localStorage`, keyed by the relative path |
 
-**Usage:**
-```bash
-cargo run --example export_presets
-```
+The desktop directory comes from `directories::ProjectDirs::from("com",
+"Fractals for All", "Fractal Art Editor")`. Changing those strings moves
+everyone's data; there is no migration.
 
-**Output:**
-```
-Exported: assets/presets/sierpinski_triangle.fflame
-Exported: assets/presets/julia_set.fflame
-...
-```
+What lives there:
 
-**Implementation:**
-```rust
-fn main() -> anyhow::Result<()> {
-    let library = PresetLibrary::new();
-
-    std::fs::create_dir_all("assets/presets")?;
-
-    for config in &library.presets {
-        let name = config.flame.name
-            .to_lowercase()
-            .replace(" ", "_");
-        let filename = format!("assets/presets/{}.fflame", name);
-
-        let json = config.to_json()?;
-        std::fs::write(&filename, json)?;
-
-        println!("Exported: {}", filename);
-    }
-
-    Ok(())
-}
-```
+| path | contents |
+| --- | --- |
+| `settings.json` | `SystemSettings` |
+| `custom_palettes.json` | the user's palettes |
+| `plugins/variations/`, `plugins/effects/` | locally installed plugins |
+| `textures/` | user simulation textures ([SIMULATION.md](SIMULATION.md)) |
+| `texture_cache/` | generated texture images (desktop) |
+| `orbit_cache/` | deep-zoom reference orbits (desktop) |
+| `crash.log` | panic breadcrumbs (desktop) |
 
 ---
 
-## State Management Best Practices
+## Common tasks
 
-### When to Capture State
+### Add a config field
 
-**Always capture before:**
-- Editing transform parameters
-- Adding/deleting transforms
-- Changing flame settings
-- Loading presets
-- Importing configs
+1. Add the field to `FractalConfig` (or `EscapeConfig` / `SimConfig`)
+   with a serde default and a `skip_serializing_if`, so old files load
+   and unchanged files stay byte-identical; set it in the `Default`
+   impl.
+2. If the UI edits it, add a `ConfigPath` variant and follow the
+   compiler through the exhaustive matches listed above — including a
+   `history.param.*` string in `locales/*.yml`, and a
+   `json_to_config_value` arm that returns a value if it should be
+   animatable.
+3. Make the renderer use it: in `FlameRenderer::load_config` if a load
+   must carry it, and where its update type's action is handled
+   (`src/app/gpu_updates.rs`).
 
-**Don't capture for:**
-- View changes (zoom, pan, rotation) - too frequent
-- Continuous sliders during drag - only on release
-- Performance settings
+### Change a default
 
-### Reset Behavior
+Old files that relied on the old default change with it. Bump
+`CURRENT_CONFIG_VERSION` and add a `migrate_value` arm that restores the
+old default for files that omitted the field
+(`obj.entry("field").or_insert(json!(old))`).
 
-**What `reset()` does:**
-- Clears accumulation buffers (ping-pong textures)
-- Clears histogram buffer
-- Resets iteration counters
-- Swaps to clean buffer
+### Change the undo depth
 
-**What `reset()` does NOT do:**
-- Touch GPU parameter buffers
-- Modify transform data
-- Change palette
-- Alter tone mapping settings
-
-**When to call `reset()`:**
-- After any flame/view/palette change
-- After loading config/preset
-- When user clicks "Reset" button
-- When switching render modes (2D ↔ 3D)
-
-### Atomic Config Loading
-
-When loading a complete config, use `load_config()` instead of individual update functions to ensure atomic application of all settings:
-
-```rust
-// GOOD: Atomic load
-self.renderer.load_config(&config);
-
-// BAD: Piecemeal updates (race conditions possible)
-self.renderer.update_flame(&config.flame);
-self.renderer.update_view(config.zoom, config.pan_x, config.pan_y, config.rotation);
-// ... reset() might be called between these, causing inconsistency
-```
-
----
-
-## UI Helpers for ConfigManager
-
-**Location:** [src/config/slider.rs](../../src/config/slider.rs)
-
-### config_slider() - Simple Slider Helper
-
-Basic slider with automatic coalescing (no manual commit logic needed):
-
-```rust
-use crate::config::slider::config_slider;
-
-config_slider(ui, &mut config_manager, ConfigPath::Exposure, 0.1..=5.0)
-    .text("Exposure")
-    .suffix("x")
-    .show();
-```
-
-**Behavior:**
-- Every change calls `config_manager.update_param()`
-- Coalescing automatically merges rapid changes to same parameter
-- Result: 1 undo entry per drag session (automatic 2s window)
-- Works for all controls: sliders, drag values, checkboxes, etc.
-
-### Standard UI Pattern
-
-All UI controls follow the same simple pattern:
-
-```rust
-// Read current value
-let mut value = config_manager.current().exposure;
-
-// Show UI control
-let response = ui.add(egui::Slider::new(&mut value, 0.1..=5.0).text("Exposure"));
-
-// Update if changed
-if response.changed() {
-    config_manager.update_param(ConfigPath::Exposure, value.into())?;
-}
-```
-
-**That's it!** No lazy parameters, no force_commit calls, no preview mode logic.
-
-### Handling UpdateType
-
-Update actions are tracked automatically by App via `config_manager.consume_actions()`:
-
-```rust
-// In App::render() after UI updates
-let actions = self.config_manager.consume_actions();
-
-// Handle GPU updates based on what changed
-if actions.update_view {
-    let config = self.config_manager.current();
-    self.flame_renderer.update_view(/* ... */);
-}
-if actions.update_flame {
-    let config = self.config_manager.current();
-    self.flame_renderer.update_flame(/* ... */);
-}
-if actions.update_tone_curve {
-    let config = self.config_manager.current();
-    self.flame_renderer.update_tonemap(/* ... */);
-}
-// etc.
-```
-
-**100ms Overwrite Window** (automatic in [src/app/mod.rs](../../src/app/mod.rs)):
-- Triggered by `actions.update_view`, `actions.update_palette`, or `actions.update_flame`
-- Keeps overwrite mode ON for 100ms after last change (~6 frames at 60fps)
-- Provides smooth real-time updates with no blank frames
-- No UI code needs to know about this - it's handled automatically
-
----
-
-## Common Tasks
-
-### Create New Preset
-
-1. Write flame function in `presets.rs`
-2. Add to `PresetLibrary::new()`
-3. Or: Export current state → save as `.fflame` in `assets/presets/`
-
-### Add Config Field
-
-1. Add field to `FractalConfig` struct
-2. Update `Default` impl
-3. Update `export_config()` and `import_config()` in `app.rs`
-4. Add UI control if needed
-5. Handle in `load_config()` if GPU-side change
-
-### Change Undo History Size
-
-Modify constant in `app.rs`:
-```rust
-const MAX_UNDO_HISTORY: usize = 50;  // Change this value
-```
-
-### Debug Config Issues
-
-Enable config logging:
-```rust
-pub fn import_config(&mut self, config: FractalConfig) {
-    println!("Importing config:");
-    println!("  Flame: {}", config.flame.name);
-    println!("  Transforms: {}", config.flame.transforms.len());
-    println!("  Render mode: {:?}", config.flame.render_mode);
-    // ...
-
-    self.renderer.load_config(&config);
-}
-```
-
----
-
-**Last Updated:** 2025-11-24
-**Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md), [local-storage-system.md](../../docs/projects/local-storage-system.md)
-
-**Major Changes:**
-
-**2025-10-31 (PR #22 - Undo/Redo Improvements):**
-- Replaced UndoHistory with ConfigManager delta-based system
-- Added ConfigPath, ConfigValue, ConfigDelta documentation
-- Added UpdateType classification for selective GPU updates
-- All 100+ parameters now have type-safe ConfigPath variants
-
-**2025-11-17 (PR #23 - Remove Preview Mode):**
-- Removed preview mode system and lazy parameter complexity
-- Simplified all UI controls to immediate updates with automatic coalescing
-- Implemented 100ms overwrite window for real-time rendering without blank frames
-- Removed LazyUndoHelper - replaced with automatic coalescing (2s window)
-- Removed live preview mode - palette editor uses direct updates
-- Simplified UpdateType enum (ViewOnly, ColorOnly, IterationReset, ToneMappingOnly)
+`max_undo_depth` in `ConfigManager::new`. Each full-config snapshot
+holds two whole configs.

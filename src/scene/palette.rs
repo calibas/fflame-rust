@@ -23,7 +23,7 @@ impl Default for ColorMode {
     }
 }
 
-/// **PathMap colouring** (docs/projects/word-editing.md §10): how a
+/// **PathMap colouring** (docs/projects/deep-zoom/word-editing.md §10): how a
 /// sample's path -- the transforms Focused Rendering drew it through --
 /// becomes a palette position. Every style reads the palette.
 ///

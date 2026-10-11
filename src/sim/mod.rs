@@ -2,7 +2,7 @@
 //! cellular automata, growth).
 //!
 //! The third render mode described in
-//! `docs/projects/simulation-fractals.md`. Where the flame renderer
+//! `docs/archive/projects/simulation-fractals.md`. Where the flame renderer
 //! runs a chaos game into a histogram and the escape renderer
 //! evaluates each pixel independently, this one steps a **stateful
 //! grid**: every cell reads its neighbours, many times per frame, and

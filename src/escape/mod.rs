@@ -1,7 +1,7 @@
 //! Escape-time fractal rendering (Mandelbrot and kin).
 //!
 //! The parallel system to the flame pipeline described in
-//! `docs/projects/escape-time-fractals.md`. Where the flame renderer
+//! `docs/archive/escape-time/escape-time-fractals.md`. Where the flame renderer
 //! runs a chaos game into a histogram, this mode evaluates a per-pixel
 //! iteration directly — one compute pass, no accumulation loop — and
 //! writes an `Rgba32Float` image shaped exactly like the flame

@@ -7,261 +7,255 @@
 > JSON and return pixels; they are built with `wasm-pack` and
 > documented in [wasm/README.md](../wasm/README.md).
 >
-> All three render engines work in both. The single-engine modules
-> exist only to cut download size, and are not interchangeable: a
-> module built without an engine reports that the engine is missing
+> All three render engines work in the web app. Among the gallery
+> modules, `wasm/render` is built with the flame and escape-time
+> engines only (its `Cargo.toml` features), so a simulation needs
+> `wasm/sim`. The single-engine modules exist only to cut download
+> size, and are not interchangeable: a module built without an engine
+> reports that the engine is missing (`RenderError::EngineMissing`)
 > rather than rendering something the file never described.
 
-## ✅ 100% Feature Parity - Production Ready
+The live web app is `https://fractalsforall.com/editor/`; how it gets
+there is [RELEASE.md §5](RELEASE.md).
 
-The fractal flame renderer has been successfully configured for WebAssembly/browser deployment!
+## What runs in the browser
 
-### What Was Done:
+The same application as the desktop build: the library crate compiled
+to `wasm32-unknown-unknown`, booted by `wasm_main` (`src/lib.rs`, a
+`#[wasm_bindgen(start)]` function), drawing the same egui panels on a
+canvas.
 
-1. **Dependencies Configured** ([Cargo.toml](Cargo.toml))
-   - Added `wasm-bindgen`, `web-sys`, `console_error_panic_hook`, `console_log`
-   - Configured `rand` with `getrandom` features for WASM compatibility
-   - Split platform-specific deps (pollster, clap for desktop only)
-   - Set up `cdylib` crate type for WASM
+- **All four render modes** — 2D and 3D flames, escape-time fractals
+  ([ESCAPE.md](main/ESCAPE.md)) and simulations
+  ([SIMULATION.md](main/SIMULATION.md)).
+- **The full variation registry** — 647 variations.
+- **Colour modes** Palette, Speed and PathMap
+  ([COLOR.md](main/COLOR.md)).
+- **Presets** from `assets/presets.fflame`, embedded in the module at
+  compile time (`src/resources/presets.rs`).
+- **Palette packs:** `starter_pack.json` is embedded; the other packs
+  are listed by a manifest that `build.rs` generates from
+  `assets/palettes/packs/` and are fetched on demand through
+  `src/resources/` ([PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md)).
+- **Files:** opening uses the browser's file picker
+  (`trigger_browser_file_picker` in `src/app/mod.rs`, an
+  `<input type="file">`) for `.fflame` / `.flame` configs, animations,
+  scripts and audio; saving and PNG export arrive as browser downloads
+  (`trigger_browser_download`).
+- **Settings** persist in the browser's `localStorage`
+  (`src/storage/backend.rs`).
+- **Online sync** ([ONLINE.md](main/ONLINE.md)).
 
-2. **Dual Entry Points** ([src/lib.rs](src/lib.rs))
-   - Created `wasm_main()` for browser entry
-   - Created `desktop_main()` for native entry
-   - Platform-specific window creation (canvas vs native window)
-   - Proper async initialization for both platforms
+What differs from desktop is mostly what a browser cannot do — list a
+directory, block on the GPU, read a file without the user picking it.
+The constraints that shape code are below.
 
-3. **Build Scripts**
-   - [build-wasm.sh](build-wasm.sh) - Linux/macOS build script
-   - [build-wasm.bat](build-wasm.bat) - Windows build script
-   - Both handle RUSTFLAGS and wasm-bindgen properly
+## Building the web app
 
-4. **Web Interface** ([index.html](index.html))
-   - Responsive canvas that fills viewport
-   - Loading screen with spinner
-   - Controls info panel
-   - Error handling for WebGPU compatibility
+### Prerequisites
 
-5. **Documentation** ([README-WASM.md](archive/README-WASM.md))
-   - Setup instructions
-   - Build process
-   - Browser compatibility guide
-   - Troubleshooting tips
-
-### Building for WASM:
-
-#### Prerequisites:
 ```bash
-# Install WASM target
 rustup target add wasm32-unknown-unknown
-
-# Install wasm-bindgen CLI
-cargo install wasm-bindgen-cli
+cargo install wasm-bindgen-cli --version 0.2.121
 ```
 
-#### Build:
+The CLI's version must match the `wasm-bindgen` crate in `Cargo.lock`
+(0.2.121 at the time of writing); `wasm-bindgen` refuses a mismatch.
+
+### Build
+
 ```bash
-# Windows
-build-wasm.bat
-
-# Linux/macOS
-chmod +x build-wasm.sh
-./build-wasm.sh
+./build-wasm.sh            # Linux, macOS, Git Bash
+build-wasm.bat             # Windows cmd
 ```
 
-#### Run Locally:
+Both scripts do the same three things:
+
+1. `cargo build --lib --target wasm32-unknown-unknown --profile dist`,
+   with `RUSTFLAGS` set to `--cfg=web_sys_unstable_apis`,
+   `--cfg getrandom_backend="wasm_js"`, `-C target-feature=+simd128`
+   and a 64 MiB shadow stack (`-C link-arg=-zstack-size=67108864`).
+   Setting `RUSTFLAGS` *replaces* the target's list in
+   `.cargo/config.toml`, so the scripts repeat those flags; that file
+   explains each one (getrandom 0.3's backend selection; the escape
+   engine's vectorized bignum multiply; a default 1 MiB stack that
+   overflows silently as `index out of bounds`).
+2. `wasm-bindgen --target web --out-dir ./pkg` on the built module.
+3. Copy `assets/palettes/packs/*.json` into `pkg/assets/palettes/packs/`.
+
+The `.bat` runs `setlocal` first, so its `RUSTFLAGS` does not leak into
+later native builds in the same window. The two scripts are parallel
+implementations of one procedure and nothing checks that they agree
+([RELEASE.md §7](RELEASE.md)).
+
+### Profiles
+
+| flag | profile | what it is for |
+|---|---|---|
+| (none) | `dist` | the shipped build: fat LTO, one codegen unit, stripped, `panic = "abort"`. About 16 MiB of `.wasm` (16.0 MiB when measured for the `dist-symbols` comment in `Cargo.toml`) |
+| `--symbols` | `dist-symbols` | `dist`'s codegen exactly, with the symbol table kept (`strip = false`, `debug = false`). Writes to `./pkg-names/` and copies the module to `pkg/fractal_flame_wgpu_bg.names.wasm`, leaving the served `./pkg` untouched. 18.9 MiB against dist's 16.0 |
+| `--debug` | `dist-debug` | debug info, debug assertions, overflow checks and unwinding panics, with thin LTO and 16 codegen units. A `debug_assert` or a wrapping subtraction fails at its source instead of corrupting an index somewhere else. Bigger and slower, and because it changes codegen it does not reproduce faults that depend on how the shipped build is optimized |
+
+Why `dist` and not `--release` (size, and the profile name recorded in
+every PNG and in the Performance panel): [RELEASE.md §4c](RELEASE.md).
+Why `dist-symbols` keeps `debug` off: emitting DWARF took the module
+from 17 MB to 206 MB and changed its compile and instantiation timing
+enough to hide the race it was built to catch (the comment on
+`[profile.dist-symbols]` in `Cargo.toml`).
+
+### Run locally
+
+Serve the repository root (wasm will not instantiate from `file://`):
+
 ```bash
-# Python
-python -m http.server 8080
-
-# Or npx
-npx serve
-
-# Then open http://localhost:8080
+python -m http.server 8080      # or: npx serve
+# open http://localhost:8080
 ```
 
-### Browser Support:
+`index.html` imports `./pkg/fractal_flame_wgpu.js`. Palette packs are
+fetched relative to the page, at `assets/palettes/packs/<file>`
+(`load_pack` in `src/resources/palettes.rs`), which a server rooted at
+the repository finds in `assets/` itself.
 
-**✅ Fully Tested & Working:**
-- **Chrome/Chromium 113+** - All features confirmed working (Windows, macOS)
-- **Firefox 121+** - All features confirmed working (Windows, macOS)
+### Deploy
 
-**⚠️ Experimental / Not Tested:**
-- **Safari 18+** (macOS Ventura+) - WebGPU support experimental, requires flags
-- **Edge 113+** - Should work (Chromium-based), not explicitly tested
+Upload `pkg/`, `index.html`, `css/` and `js/` (the virtual-keyboard
+bridge). The list and the checks after an upload are in
+[RELEASE.md §5](RELEASE.md).
 
-**❌ Not Supported:**
-- **Mobile browsers** - WebGPU support limited/experimental
-- **WebGL fallback** - Not possible (compute shaders required for fractal generation)
+The build copies the palette packs to `pkg/assets/palettes/packs/`,
+but `load_pack` requests `assets/palettes/packs/<file>` relative to the
+page, not to `pkg/`. After a deploy, open a pack other than the
+embedded starter pack in the Palette Library and check that it loads.
 
-### Features Available in WASM:
+## JavaScript API — `WasmApi`
 
-✅ **100% feature parity with desktop:**
-- Real-time GPU rendering
-- Interactive pan/zoom (mouse & keyboard)
-- Full transform editing UI (egui panels)
-- Color palette system with editor
-- Palette import/export (clipboard-based)
-- Config import/export (.fflame files via clipboard)
-- PNG export (with/without transparency)
-- Progressive accumulation
-- Three color modes (Transform/Palette/Speed)
-- All 24 variation functions (16 2D + 8 3D)
-- Full 3D rendering with camera rotation
-- Perspective/orthographic projection
-- Preset system (5 built-in presets)
-- Undo/redo support
-- Pause/resume rendering
-- Max iterations limit
-
-### Platform-Specific Implementation Details:
-
-**Texture Clearing:**
-- Desktop: Uses `encoder.clear_texture()` with `CLEAR_TEXTURE` feature
-- WASM: Uses render pass with `LoadOp::Clear` for compatibility
-  - Accumulation textures have `RENDER_ATTACHMENT` usage in WASM only
-  - Temp samples texture clearing skipped (compute shader overwrites all pixels)
-
-**Render Pipeline:**
-- Tonemap pipeline uses `blend: None` (no GPU alpha blending)
-- Shader handles all color mixing internally
-- Surface uses `CompositeAlphaMode::Opaque` for clarity
-
-**File I/O:**
-- Desktop: Native file dialogs with `rfd` crate
-- WASM: Clipboard-based import/export (copy/paste JSON)
-- PNG export works on both platforms (async on WASM)
-
-### Performance:
-
-- **Native speed** - No measurable performance difference vs desktop
-- **60+ FPS** at 1080p on modern hardware
-- **Optimizations applied:**
-  - Disabled unnecessary GPU alpha blending (performance improvement)
-  - Platform-optimized texture clearing
-  - Same compute shader efficiency as desktop
-
-### Known Limitations:
-
-1. **Asset Loading**: No filesystem access for .palette or .fflame files
-   - Built-in presets and palettes only
-   - Desktop auto-loads from `assets/` directory
-   - WASM must use clipboard-based import/export
-
-2. **First Load**: Takes a few seconds to compile WASM
-   - Subsequent loads are cached by browser
-
-### Deployment:
-
-To deploy, just copy 3 files to your web server:
-- `index.html`
-- `pkg/fractal_flame_wgpu.js`
-- `pkg/fractal_flame_wgpu_bg.wasm`
-
-Total size: ~2-3 MB (uncompressed WASM)
-
-### JavaScript API (Headless PNG Export)
-
-In addition to the interactive app, WASM exposes a JavaScript API for programmatic PNG generation:
+`src/wasm_api.rs` exports a `WasmApi` class (only in builds with the
+`web-app` feature, which is on by default). It holds one config and
+renders it headless — no canvas, no app — through the same
+`renderer::render` the desktop CLI export uses
+(`export_headless_wasm` in `src/app/export.rs`), so every render mode
+works.
 
 ```javascript
-import init, { export_headless_wasm } from './pkg/fractal_flame_wgpu.js';
-
-// Initialize WASM module
+import init, { WasmApi } from './pkg/fractal_flame_wgpu.js';
 await init();
-
-// Load fractal config (FractalConfig JSON)
-const config = await fetch('config.fflame').then(r => r.json());
-
-// Export to PNG (returns Uint8Array)
-const pngData = await export_headless_wasm(
-    config,              // FractalConfig object
-    800,                 // width
-    600,                 // height
-    256,                 // iterations_per_thread
-    4                    // speed_multiplier
-);
-
-// Download PNG
-const blob = new Blob([pngData], { type: 'image/png' });
-const url = URL.createObjectURL(blob);
-const a = document.createElement('a');
-a.href = url;
-a.download = 'fractal.png';
-a.click();
+const api = new WasmApi();
+api.load_config_json(JSON.stringify(config));       // a .fflame's JSON
+const png = await api.export_png(800, 600, 256, false);
+// width, height, iterations per thread, transparent -> Uint8Array (PNG, with metadata)
 ```
 
-**Use Cases:**
-- Automated testing (visual regression tests)
-- Batch fractal generation in browser
-- Server-side rendering via Node.js (with WebGPU support)
-- Integration with web applications
+| method | does |
+|---|---|
+| `new WasmApi()` | an empty instance |
+| `load_config_json(json)` | parse a `FractalConfig` |
+| `load_config_from_url(url)` | read `?config=<base64 JSON>` or `?preset=<name>` from a URL |
+| `load_preset(name)` | a built-in preset, by flame name (case-insensitive) |
+| `get_preset_names()` | JSON array of preset names |
+| `get_config_json()` | the loaded config, pretty-printed |
+| `has_config()` | whether one is loaded |
+| `export_png(w, h, ipt, transparent)` | async; render and encode a PNG |
+| `get_target_iterations()` / `set_target_iterations(n)` | the iteration target (set from the config's `max_iterations` on load) |
+| `get_current_iterations()` / `get_progress()` | progress counters; nothing in `export_png` advances them |
+| `api_get_auth_status()`, `api_validate_token()` | online account state (cookie session) |
+| `api_save_current_flame(name)`, `api_update_flame(id, name)`, `api_list_flames(page, per_page)`, `api_load_flame(id)`, `api_delete_flame(id)` | online flame storage, async ([ONLINE.md](main/ONLINE.md)) |
+| `api_set_base_url(url)` | no-op, kept for old callers; the API URL is a compile-time constant |
 
-### Browser-Specific Compatibility Notes
+The same file exports `PlanBench`, a test harness for Focused
+Rendering's planner in the browser; `tests/visual/wasm/test_plan.py`
+drives it.
 
-**Chrome/Chromium (Windows, macOS):**
-- ✅ Full WebGPU support
-- ✅ All features working
-- ✅ Headless PNG export working
-- No special configuration required
+## Gallery modules
 
-**Firefox (Windows, macOS):**
-- ✅ Full WebGPU support
-- ✅ All features working
-- ✅ Headless PNG export working
-- No special configuration required (WebGPU enabled by default in 121+)
+The `wasm/` crates are separate, small modules — config JSON in, RGBA
+out (`render`, `flame`, `escape`, `sim`), or script + seed in, config
+out (`script`). Each is built with
+`wasm-pack build --target web --release` in its own directory, does not
+include the editor (they depend on this crate with
+`default-features = false`, so `web-app` and `wasm_main` stay out), and
+has its own `[profile.release]` tuned for size plus a `wasm-opt -Oz`
+pass. Engines per module, from each `Cargo.toml`: `render` flame +
+escape-time, `flame` flame, `escape` escape-time, `sim` simulation;
+`script` links all three, to generate configs. API, sizes and an
+end-to-end example: [wasm/README.md](../wasm/README.md).
+How they are gated and released: [RELEASE.md §5](RELEASE.md).
 
-**Safari (macOS):**
-- ⚠️ WebGPU support experimental
-- May require enabling flags in Develop menu
-- Not tested for this project
-- 1D texture → 2D texture conversion implemented for compatibility
+## Browser constraints
 
-**Key Implementation Fixes:**
-- **1D Textures → 2D**: Browser WebGPU doesn't support `textureSampleLevel` on 1D textures
-  - Palette LUT: `texture_2d` with height=1, sampled with `vec2(x, 0.5)`
-  - Curve LUT: Same approach
-- **Surface Creation (macOS)**: Direct canvas approach using `SurfaceTarget::Canvas(canvas)`
-  - Bypasses winit's window-based surface creation
-- **GPU Limits**: Uses `downlevel_webgl2_defaults()` for broader compatibility
+Rules for code that runs on the web. Desktop drivers tolerate most of
+these violations, so a mistake shows up only in a browser — often as a
+black canvas rather than an error.
 
-### Visual Regression Testing
+- **WebGPU only.** There is no WebGL fallback: the renderer is built on
+  compute shaders. Chrome / Edge 113+ and Firefox 121+ work; Safari's
+  WebGPU is experimental; mobile browsers are limited.
+- **`textureSample()` only in uniform control flow.** Inside a branch
+  that varies per invocation, use `textureLoad()`. Browsers enforce
+  the WGSL uniformity rules strictly.
+- **Storage buffers per shader stage are scarce.** A browser counts
+  every storage buffer in a bind group layout against
+  `max_storage_buffers_per_shader_stage`, used or not — a fixed layout
+  of eleven broke every flame on a laptop Chrome that allows ten. So
+  the flame compute layout holds only the bindings its generated WGSL
+  uses (`gpu::pipelines::used_bindings`, read from the source because
+  naga is not in the web build), and the device asks for the adapter's
+  own limit (`src/gpu/device.rs`). Two tests hold this:
+  `a_layout_holds_every_binding_its_shader_uses` and
+  `a_flame_renders_within_a_browsers_storage_limit`.
+- **Limits start from `downlevel_webgl2_defaults()`** on the web, with
+  storage-binding size, buffer size, 2D texture size and storage-buffer
+  count raised to what the adapter reports (`src/gpu/device.rs`).
+- **No blocking device poll.** WebGPU cannot wait for the GPU, so
+  nothing on the web may: GPU readbacks complete on a later frame, long
+  work is a future polled a slice per frame (the Focused Rendering
+  planner), and renderers that size their work from timing must not
+  infer GPU cost from the gap between calls — on the web that gap is
+  just the frame period (see the chunk sizing in
+  `src/escape/renderer.rs`).
+- **No directory listing.** Anything discovered by scanning a folder
+  on desktop needs a build-time manifest on the web, as the palette
+  packs have.
+- **Panics abort.** `dist` sets `panic = "abort"`;
+  `console_error_panic_hook` still prints the panic message to the
+  console before the abort.
 
-Automated visual regression tests run in headless browsers via Playwright:
+## Hunting a crash in the shipped build
 
-```bash
-# Install Python dependencies
-pip install playwright Pillow numpy
+A trap in the stripped `dist` bundle reaches the console as a bare
+`RuntimeError: memory access out of bounds` (Chrome) or
+`index out of bounds` (Firefox) at a byte offset, with no name.
 
-# Install Playwright browsers
-playwright install chromium firefox
+1. **Read the offset before rebuilding.** An offset only means
+   something against the module that produced it.
+2. `python scripts/wasm-locate.py <offset|#index>` identifies the
+   function containing it from `pkg/fractal_flame_wgpu_bg.wasm` alone,
+   using the string literals the function references and the export
+   names that survive `strip`.
+3. To keep names in the module, rebuild with `--symbols` (same
+   codegen); for a bug that is not optimization-dependent, `--debug`
+   turns on assertions and overflow checks so it fails at its source.
 
-# Run WASM visual tests
-python tests/visual/wasm/test_wasm.py
+The investigation that produced these tools — and the tooling errors
+that gave confident wrong answers on the way — is recorded in
+[wasm-load-crash.md](archive/projects/wasm-load-crash.md).
 
-# Run all tests (desktop + WASM)
-python tests/visual/run_all_tests.py
-```
+## Testing
 
-**Test Process:**
-1. Launches headless Chrome/Firefox
-2. Loads WASM module and test configs
-3. Calls `export_headless_wasm()` for each config
-4. Downloads PNG via blob URL
-5. Compares pixel-perfect SHA256 hash against baseline
-6. Extracts performance metrics from PNG metadata
+- `python scripts/release.py check` compiles the library for
+  `wasm32-unknown-unknown`, and at each single-engine feature
+  combination the gallery modules link; it also runs the gallery
+  crates' script-parity and renderer smoke tests.
+- `tests/visual/wasm/test_wasm.py` renders the visual-suite configs in
+  Chrome through `WasmApi.export_png`, driven by Selenium, and
+  compares exact pixel hashes against `tests/visual/baseline/wasm/`.
+- `tests/visual/wasm/test_plan.py` times the planner in the browser
+  (`PlanBench`).
 
-**Coverage:**
-- 7 WASM visual tests (800x600 resolution)
-- Pixel-perfect comparison (SHA256 hash of pixel data)
-- Performance tracking (render time, throughput in M iter/sec)
-- Tested on Chrome and Firefox
+Details and commands: [TESTING-GUIDE.md §4](TESTING-GUIDE.md).
 
-### Testing Status:
-
-✅ Interactive app fully tested (Chrome, Firefox on Windows/macOS)
-✅ Headless PNG export API tested (Playwright automation)
-✅ Visual regression tests passing (7 test cases)
-✅ Performance tracking enabled (PNG metadata)
-✅ Browser compatibility confirmed (Chrome 113+, Firefox 121+)
-
-The implementation is **production-ready** with comprehensive test coverage!
+Older material — the original port, quick start and troubleshooting
+notes — is in the archive: [README-WASM.md](archive/README-WASM.md),
+[QUICKSTART-WASM.md](archive/QUICKSTART-WASM.md),
+[WASM-TROUBLESHOOTING.md](archive/WASM-TROUBLESHOOTING.md),
+[WASM-PROFILING.md](archive/WASM-PROFILING.md).

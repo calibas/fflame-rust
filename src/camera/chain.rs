@@ -21,7 +21,7 @@
 //! side. Today's flame free-look solved for pitch, yaw and ROLL instead
 //! (a ZXZ sequence), whose singularity is pitch 0: the flame's home pose,
 //! looking straight down, which is why its sliders jumped there
-//! (docs/projects/camera-unification.md, C2).
+//! (docs/archive/3d-camera/camera-unification.md, C2).
 //!
 //! Of the two solutions, and every 2π, the decomposition returns the one
 //! nearest the angles it was given, so a turn moves the sliders by about

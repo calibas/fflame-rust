@@ -14,7 +14,7 @@ all, and 20 of 23 formulas cannot zoom past the f32 direct path.
 ## 1. Accuracy against a reference — DONE 2026-08-28
 
 Ran, results and the open item recorded in
-[escape-time-fractals.md](../../projects/escape-time-fractals.md) ("Formula accuracy
+[escape-time-fractals.md](escape-time-fractals.md) ("Formula accuracy
 audit"), reproducible via `scripts/audit_escape_formulas.py`.
 21 of 23 formulas verified against independent numpy oracles; one
 real bug found and fixed (novaretti's pole sentinel overflowed f32 on
@@ -90,12 +90,12 @@ Still open, in the order the survey judged tractable:
   for its O(1) divisor. Kaliset is accurate only past about zoom 24
   and carries a floor of its own rather than shipping a render worse
   than direct at the threshold. Full account, with the numbers, in
-  [escape-time-fractals.md](../../projects/escape-time-fractals.md).
+  [escape-time-fractals.md](escape-time-fractals.md).
 - **Lambda — DONE 2026-08-30.** The first tier whose PARAMETER
   MULTIPLIES, so its delta step reads the reference's own c and its
   parameter-plane term picks up `Z(1-Z)` rather than a bare `+ dc`.
   Both rungs. Details in
-  [escape-time-fractals.md](../../projects/escape-time-fractals.md).
+  [escape-time-fractals.md](escape-time-fractals.md).
 - **Feather — DONE 2026-08-30** (same day, two commits). The gate
   described below lasted hours: the depth failure turned out to be the
   f32 escape test quantizing away sub-ulp deltas, fixed engine-wide by
@@ -645,7 +645,7 @@ where no derivative is compiled, and the escape panel explains which
 of the two causes applies (the formula defines none, or the view is on
 the deep path, which iterates no derivative orbit whatever the formula
 defines). Details in
-[escape-time-fractals.md](../../projects/escape-time-fractals.md).
+[escape-time-fractals.md](escape-time-fractals.md).
 
 ## Known gap, found 2026-08-29: no recovery from DEVICE LOST — CLOSED
 

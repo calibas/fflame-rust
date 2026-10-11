@@ -1,4 +1,4 @@
-//! A terrain's tiers (docs/projects/heightfield-3d.md, sections 4 and 8),
+//! A terrain's tiers (docs/archive/terrain/heightfield-3d.md, sections 4 and 8),
 //! over a [`TerrainRenderer`]: the lit tier's antialiasing grid and the
 //! path tracer, by tier, for the viewport and for an export. What an
 //! escape terrain and a simulation's share -- each hands in its own view

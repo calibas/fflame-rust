@@ -4,7 +4,7 @@
 needed first.
 
 The escape engine has a **camera lens**: a variation that warps the
-view, not the fractal ([escape-camera-lens.md](escape-camera-lens.md)).
+view, not the fractal ([escape-camera-lens.md](../archive/escape-time/escape-camera-lens.md)).
 This plan brings it to every mode:
 - 2D and 3D flames;
 - every escape view: the plane, Flame Attractor, mode D's solid, the
@@ -51,7 +51,7 @@ Points that fall outside the unlensed frame land inside it if the lens
 puts them there.
 
 The two directions give **inverse pictures for the same variation**.
-[escape-camera-lens.md](escape-camera-lens.md) §1 already measures this:
+[escape-camera-lens.md](../archive/escape-time/escape-camera-lens.md) §1 already measures this:
 `eyefish` as a lens looks like `eyefish`-inverse. See decision 1.
 
 **Conventions.** Every site uses the escape lens's units: half-height

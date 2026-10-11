@@ -183,7 +183,7 @@ struct VariationParams {
 // these after the chaos game picks a normal transform: linkeds advance
 // the dynamics state (their output feeds the next iteration), finals
 // shape the plotted point only (output discarded for IFS).
-// See docs/projects/per-transform-linked-and-final.md.
+// See docs/archive/projects/per-transform-linked-and-final.md.
 struct AttachmentList {
     linked: array<u32, {{ATTACHMENT_CAP}}>,
     linked_count: u32,
@@ -196,7 +196,7 @@ struct AttachmentList {
 // Sample-emit output: shader writes one Sample per plotted point to a
 // streaming buffer, host-side accumulate pass scatters into per-tile
 // histograms. Used by multi-tile strategies (above the single-binding
-// histogram size limit). See docs/projects/unified-render-pipeline.md.
+// histogram size limit). See docs/archive/projects/unified-render-pipeline.md.
 //
 // WGSL storage array stride must be a multiple of 16 bytes; 5 floats
 // (20B) padded to 32B (8 floats).
@@ -300,7 +300,7 @@ fn shadow_map_splat(p: vec3<f32>) {
 @group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
 {{#if PATH_TRACKING}}
 
-// **PathMap's Origin styles** (docs/projects/word-editing.md §10): where
+// **PathMap's Origin styles** (docs/projects/deep-zoom/word-editing.md §10): where
 // the point was before its path carried it into the view -- a point of
 // the attractor -- read in the attractor's frame. Every other style keeps
 // `t`, the path's own colour, which the CPU packed with the path.
@@ -320,7 +320,7 @@ fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
 }
 {{/if}}
 // Binding 8 intentionally unused: the path filters, which word editing
-// replaced (docs/projects/word-editing.md).
+// replaced (docs/projects/deep-zoom/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
@@ -329,7 +329,7 @@ fn pathmap_origin(p: vec2<f32>, t: f32) -> f32 {
 @group(0) @binding(10) var<storage, read> attachments: array<AttachmentList>;
 {{#if IMPORTANCE_SAMPLING}}
 // Biased selection weights and their likelihood ratios -- stage 1 of
-// docs/projects/flame-deep-zoom.md. Two regions, N = num_transforms:
+// docs/projects/deep-zoom/flame-deep-zoom.md. Two regions, N = num_transforms:
 //
 //   [0, N)            q[i]  -- the BIASED selection weight, bias × weight
 //   [N, N + N*N)      r[prev*N + i] = p(prev→i) / q(prev→i)
@@ -379,7 +379,7 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 
 {{#if FRAME_COVERAGE}}
 // Frame-coverage counters (auto exposure --
-// docs/projects/flame-deep-zoom.md). Three words: [0] plot attempts that
+// docs/projects/deep-zoom/flame-deep-zoom.md). Three words: [0] plot attempts that
 // landed INSIDE the frame, [1] plot attempts, and [2] plot attempts
 // whose WORLD position fell outside `params.leak_probe` -- see there.
 // Their ratio is the share
@@ -396,7 +396,7 @@ fn bias_ratio(prev: u32, i: u32) -> f32 {
 
 {{#if PERSISTENT_ORBITS}}
 // **Each thread's orbit, kept between dispatches**
-// (docs/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
+// (docs/archive/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
 //
 //   0..4   x, y, z, point_w        4..8   speed rgb, color_index
 //   8      generation              9      burn-in left
@@ -413,7 +413,7 @@ const ORBIT_WORDS: u32 = 16u + ORBIT_SLOTS;
 {{/if}}
 {{#if CYLINDER_TARGETING}}
 // The enumerated cylinders -- stage 2 of
-// docs/projects/flame-deep-zoom.md. Twelve floats a word, packed by
+// docs/projects/deep-zoom/flame-deep-zoom.md. Twelve floats a word, packed by
 // `scene::cylinder::pack`:
 //
 //   0..4  the composed 2x2      4..6  its translation

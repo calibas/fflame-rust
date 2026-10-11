@@ -438,7 +438,7 @@ fn test_future_version_rejection() {
 - `src/config/fractal_config.rs` - Add version field and migration
 - `src/config/versions.rs` - New file for version constants and history
 - `src/config/migration.rs` - New file for migration logic
-- `docs/projects/local-storage-system.md` - Update with versioning strategy
+- `docs/archive/projects/local-storage-system.md` - Update with versioning strategy
 
 ## Notes
 

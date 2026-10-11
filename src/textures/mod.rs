@@ -1,4 +1,4 @@
-//! Simulation textures (`docs/projects/sim-textures.md`).
+//! Simulation textures (`docs/archive/projects/sim-textures.md`).
 //!
 //! A texture is not an image file. It is a **Simulation-mode config**: a
 //! small recipe, `(model, params, seed, init, steps)` with its colouring

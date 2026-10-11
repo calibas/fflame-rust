@@ -16,7 +16,7 @@ We made a fractal that's shaped like a fern, so let's create a new palette to ma
 
 First, you want to make sure you've got the Colors panel open on the right. If you don't see the Colors tab, it can be opened through top Menu under Window.
 
-In the Color & Appearance section, confirm you've got Palette selected as the Color Mode. Then select "Greyscale" from the Palette dropdown just below, and Edit Palette.
+In the Color & Appearance section, confirm you've got Palette selected as the Color Mode. Then select "Grayscale" from the Palette dropdown just below, and Edit Palette.
 
 [<img src="../images/FAR-Tutorial2-1.png">](#)
 

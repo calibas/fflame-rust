@@ -1,6 +1,6 @@
 //! Phase 0 of the GPU reference-orbit plan: measure, then decide.
 //!
-//! [`docs/projects/escape-ntt-reference.md`] gates that project on a
+//! [`docs/archive/escape-time/escape-ntt-reference.md`] gates that project on a
 //! number rather than an intuition — "GO if ≥3x at 197 limbs;
 //! otherwise park the project and record the numbers". This module is
 //! that measurement.

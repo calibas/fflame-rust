@@ -17,7 +17,7 @@
 //
 // One thread per sample (workgroup_size 64 along x, dispatch sized to
 // the sample-count read back from the counter). See
-// docs/projects/unified-render-pipeline.md.
+// docs/archive/projects/unified-render-pipeline.md.
 
 struct Sample {
     x: f32,

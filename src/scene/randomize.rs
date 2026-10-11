@@ -406,7 +406,7 @@ fn random_transform_with_settings<R: Rng>(
         // the local index map and the generated shader — is identical
         // for every flame drawing the same subset from a pool. That is
         // what lets a batch of random flames share one compiled pipeline
-        // (docs/projects/sticky-shader-compilation.md); with pick-order
+        // (docs/archive/projects/sticky-shader-compilation.md); with pick-order
         // emission, two flames with the SAME variations still compiled
         // two shaders.
         //

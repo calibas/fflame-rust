@@ -50,7 +50,7 @@ impl Flame {
     /// then ends in the same group, and its light is shared out by the walk
     /// itself. With two or more, which group an orbit ends in is drawn once,
     /// so the share of the light each holds is the share of the orbits that
-    /// went there (`docs/projects/persistent-orbits.md` §3.7).
+    /// went there (`docs/archive/projects/persistent-orbits.md` §3.7).
     pub fn xaos_closed_classes(&self) -> usize {
         self.xaos_groups().map_or(1, |g| g.closed.len())
     }
@@ -60,7 +60,7 @@ impl Flame {
     /// reaches two or more closed groups. Where the first pick decides,
     /// the shader's stratified first pick gives each group its share;
     /// where the walk does, only restarting orbits redraws it
-    /// (`docs/projects/persistent-orbits.md` §3.7, refresh).
+    /// (`docs/archive/projects/persistent-orbits.md` §3.7, refresh).
     pub fn xaos_walk_splits_orbits(&self) -> bool {
         let Some(g) = self.xaos_groups() else { return false };
         if g.closed.len() < 2 {

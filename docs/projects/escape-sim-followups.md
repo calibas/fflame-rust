@@ -81,7 +81,7 @@ would need to carry a flat track onto layer 0.
 sample takes **6.2 s** in the viewport, **4.7 s** in an export; the lit
 picture of the same view takes **0.6 s**. The default 256 samples is
 about 25 minutes. The 2026-10-08 fix (`a73c481d`, see
-[heightfield-3d.md](heightfield-3d.md), "Losing the device, and
+[heightfield-3d.md](../archive/terrain/heightfield-3d.md), "Losing the device, and
 re-banded") made it safe and faster on narrow viewports, but not
 faster at full width.
 
@@ -147,9 +147,12 @@ resets the display driver for the whole desktop.
 
 - The video's deep-zoom memory check looks only at the base config, not
   at each frame's zoom.
-- The escape-time and simulation engines still allocate a flame
-  histogram they never read, which is what sets their export size
-  ceiling.
+- The export size ceiling for escape and simulation pictures is still
+  the flame histogram's (`route_custom_size_export`'s `TooLarge`,
+  `export_headless`), though `render_with` now gives them
+  `FlameRenderer::for_tail`, which allocates no histogram. The video
+  loop (`animation/export.rs`) still builds the full
+  `FlameRenderer::with_palette_size` for every engine.
 - No PNG input for `export` (a PNG's embedded config); flame-only
   metadata fields are written for escape and simulation pictures.
 - Browser exports don't generate texture layers, for a 2D or a terrain
@@ -158,3 +161,43 @@ resets the display driver for the whole desktop.
   most panels.
 - The animation picker's View and Rendering categories are not yet
   gated by render mode -- deferred to the camera/View panel work.
+
+## The escape engine: not built
+
+Moved here from the escape engine's design record (now
+[escape-time-fractals.md](../archive/escape-time/escape-time-fractals.md), archived) when its
+main doc, [docs/main/ESCAPE.md](../main/ESCAPE.md), was written. Everything
+else in that record is built. These are not:
+
+- **Perturbation tiers for the transcendental formulas** —
+  `tetration`, `exponential`, `trig`, `collatz`. The deltas exist
+  (`exp(Z+d) = exp(Z)·exp(d)`); each needs its own error analysis.
+  Ducks' trig variants 1-3 (Secant among them) sit here too: they
+  want big-float `sin`/`cos`/`exp` on the reference side, which is
+  comparable groundwork to the `ln`/`atan2` already done.
+- **Chebyshev over the two non-unity Newton functions** DECLINES the
+  tier, by measurement rather than omission: its `r` is
+  asymptotically constant, so the quotient rule loses the delta, and
+  the symbolic cancellation that fixes it exists only for `z^p - 1`.
+  Recorded so it is not re-attempted blind.
+- **Series approximation** — absent, and still unmeasured against
+  BLA. Worth a Phase-0 measurement before any building.
+- **Kaliset's zoom-24 floor** — it perturbs correctly above zoom 24
+  and declines below it, because the inversion amplifies the delta
+  faster than the rung holds. The panel's depth hint does not yet
+  express that nuance (it reads "unlimited" from zoom 14).
+- **Row banding of the perturbed path** — would let a frame exceed a
+  device's buffer limit by sizing the per-pixel state to a band, as
+  the direct path already does via `tile_y0`. Only needed where a
+  device's real `max_buffer_size` is under the frame's state (398 MB
+  at 4K); accumulation covers the antialiasing case. Not built.
+- **Temporal antialiasing / spectral rendering** — motion blur and
+  wavelength-correlated fringing on a zoom. Planned, never scheduled;
+  it is an export-loop feature, not a shader one, and wants its own
+  plan. Full costing in the archived new-families research (§7).
+- **GPU reference-orbit computation (the NTT direction)** —
+  measurement-gated go/no-go, never run. See
+  [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md).
+- **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
+  since before 2026-09-02; verified pre-existing against a stashed
+  tree. Unrelated to the tiers.
