@@ -657,11 +657,17 @@ impl App {
                                     self.egui_layer.update_palette_editor(palette.clone());
 
                                     // Add or update in library (prevents duplicates)
-                                    let palette_idx = self.palette_library.add_or_update(palette.clone());
-                                    // Set to the palette
+                                    let _palette_idx = self.palette_library.add_or_update(palette.clone());
+                                    // Set it as the config's palette, as the JSON
+                                    // import above does. This wrote the deprecated
+                                    // PaletteIndex, which the manager ignores: the
+                                    // viewport showed the palette while the config
+                                    // kept the old one, so save, export and undo
+                                    // used the old one and the next palette edit
+                                    // reverted the picture.
                                     let _ = self.config_manager.update_param(
-                                        crate::config::ConfigPath::PaletteIndex,
-                                        (palette_idx as u32).into()
+                                        crate::config::ConfigPath::Palette,
+                                        crate::config::ConfigValue::Palette(palette.clone())
                                     );
 
                                     // Update renderer

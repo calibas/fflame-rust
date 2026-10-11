@@ -5198,6 +5198,51 @@ mod tests {
         assert!(!v1.approx_eq(&v3)); // Outside epsilon
     }
 
+    /// `PaletteIndex` is deprecated: the manager ignores a write to it,
+    /// so a caller that "sets the palette" through it changes nothing in
+    /// the config. Desktop Load .palette did exactly that -- the viewport
+    /// showed the new palette while the config (and so save, export and
+    /// undo) kept the old one. Nothing outside src/config/ may write it;
+    /// set `ConfigPath::Palette` instead.
+    #[test]
+    fn nothing_outside_config_writes_the_deprecated_palette_index() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        if !src.is_dir() {
+            eprintln!("no source tree; skipping");
+            return;
+        }
+        let config_dir = src.join("config");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path != config_dir {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                for (n, line) in text.lines().enumerate() {
+                    let code = line.trim_start();
+                    if !code.starts_with("//") && code.contains("ConfigPath::PaletteIndex") {
+                        offenders.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "ConfigPath::PaletteIndex is ignored by the manager; write ConfigPath::Palette:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     #[test]
     fn test_update_type_merge() {
         assert_eq!(
