@@ -1937,7 +1937,7 @@ impl<'a> PanelViewer<'a> {
         let animation_duration = self.context.animation_controller.animation
             .as_ref()
             .map(|a| a.duration)
-            .unwrap_or(10.0);
+            .unwrap_or(super::signal_panel::DEFAULT_GENERATOR_DURATION);
         super::signal_panel::render_signal_panel(
             ui,
             self.context.audio_manager,

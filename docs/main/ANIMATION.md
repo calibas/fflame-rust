@@ -509,10 +509,15 @@ reproducible and ignores the frequency.
 
 Generators live in the Signals panel's state and are copied into
 `Animation::generators` when the animation is saved, and back (then
-regenerated) when one is loaded. A generator's signal is regenerated
-when its row is edited; it is **not** regenerated when the animation's
-duration changes, so past its original length it holds its last sample
-until the row is touched.
+regenerated, the previous generators' signals removed) when one is
+loaded. A generator's signal is regenerated when its row is edited, and
+all of them when the animation's duration changes
+(`SignalPanelState::sync_generators`, run every frame and before a video
+export copies the signals). Renaming one removes the old name's signal
+unless another generator uses it. A generator never replaces or removes
+a signal from another source: if its name is taken (say `amplitude`
+from audio analysis), its own signal is not published and the name
+field says so.
 
 ### The `.signal` file
 
@@ -541,8 +546,7 @@ available in every mode:
 
 - **Audio File** — load a file (decoded, analysed and imported as
   signals immediately), and a playback section with play/pause, stop
-  and position. The **Analyze** button has no effect; analysis already
-  ran on load.
+  and position.
 - **Live Capture** — device list, start/stop, a level meter. Switching
   device while capturing restarts on the new one.
 - **Signal Generators** — add, edit, delete.

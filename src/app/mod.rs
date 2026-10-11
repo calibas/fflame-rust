@@ -2965,6 +2965,11 @@ impl App {
             let already_exporting = self.export_status.lock()
                 .map(|s| s.active)
                 .unwrap_or(false);
+            if !already_exporting {
+                // The generator signals the export copies below must be
+                // rendered over the duration it renders.
+                self.sync_generator_signals();
+            }
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {

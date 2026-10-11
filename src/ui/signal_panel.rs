@@ -10,8 +10,12 @@
 use crate::audio::{
     AudioCapture, AudioManager, AudioPlayer, CaptureState, PlaybackState,
 };
-use crate::signal::generator::{GeneratorConfig, WaveformType};
+use crate::signal::generator::{GeneratorConfig, WaveformType, SAMPLE_RATE};
 use rust_i18n::t;
+use std::collections::HashSet;
+
+/// The duration generators render over when no animation is loaded.
+pub const DEFAULT_GENERATOR_DURATION: f64 = 10.0;
 
 /// State for the signal panel
 pub struct SignalPanelState {
@@ -31,6 +35,18 @@ pub struct SignalPanelState {
     generator_counter: usize,
     /// Names of signals loaded from .signal files (tracked for UI display)
     pub loaded_signal_files: Vec<String>,
+    /// The duration the generators' signals were last rendered over.
+    /// A signal is sampled over a fixed length, so when the animation's
+    /// duration changes they are rendered again (`sync_generators`) --
+    /// otherwise, past the old length, a track held the last sample.
+    generated_duration: f64,
+    /// Names under which THIS panel has put a generator signal into the
+    /// `SignalManager`. A generator may replace or remove only these: a
+    /// name another source owns (audio analysis, a `.signal` file) is
+    /// left alone, so typing a new name that passes through `amplitude`
+    /// does not replace the audio's `amplitude` and then delete it on
+    /// the next keystroke.
+    generated_names: HashSet<String>,
 }
 
 impl Default for SignalPanelState {
@@ -44,6 +60,8 @@ impl Default for SignalPanelState {
             generators: Vec::new(),
             generator_counter: 0,
             loaded_signal_files: Vec::new(),
+            generated_duration: f64::NAN,
+            generated_names: HashSet::new(),
         }
     }
 }
@@ -61,15 +79,100 @@ impl SignalPanelState {
         signal_manager: &mut crate::signal::SignalManager,
         animation_duration: f64,
     ) {
-        self.generators = generators;
+        // The previous generators' signals go with them.
+        let previous = std::mem::replace(&mut self.generators, generators);
+        for gen in &previous {
+            self.retire_signal_name(&gen.name, signal_manager);
+        }
         if !self.generators.is_empty() {
             self.generator_counter = self.generators.len();
-            for gen in &self.generators {
-                let signal = gen.generate_signal(animation_duration, 100.0);
-                signal_manager.insert(signal);
-            }
             log::info!("Restored {} generators from animation", self.generators.len());
         }
+        self.regenerate_all(signal_manager, animation_duration);
+    }
+
+    /// Keep the generators' signals current: render them all again
+    /// when the duration differs from the one they were rendered over,
+    /// and render any that are missing (the first frame after a load).
+    ///
+    /// The app calls this once per frame, so it holds whether or not
+    /// the panel is open, and again just before a video export copies
+    /// the signals.
+    pub fn sync_generators(
+        &mut self,
+        signal_manager: &mut crate::signal::SignalManager,
+        duration: f64,
+    ) {
+        if duration != self.generated_duration {
+            self.regenerate_all(signal_manager, duration);
+            return;
+        }
+        for idx in 0..self.generators.len() {
+            if signal_manager.get(&self.generators[idx].name).is_none() {
+                self.publish_generator(idx, signal_manager, duration);
+            }
+        }
+    }
+
+    fn regenerate_all(&mut self, signal_manager: &mut crate::signal::SignalManager, duration: f64) {
+        for idx in 0..self.generators.len() {
+            self.publish_generator(idx, signal_manager, duration);
+        }
+        self.generated_duration = duration;
+    }
+
+    /// Render generator `idx` into the manager under its name, unless
+    /// that name belongs to a signal from another source. Returns
+    /// whether it did.
+    fn publish_generator(
+        &mut self,
+        idx: usize,
+        signal_manager: &mut crate::signal::SignalManager,
+        duration: f64,
+    ) -> bool {
+        let Some(gen) = self.generators.get(idx) else { return false };
+        if signal_manager.get(&gen.name).is_some() && !self.generated_names.contains(&gen.name) {
+            return false;
+        }
+        signal_manager.insert(gen.generate_signal(duration, SAMPLE_RATE));
+        self.generated_names.insert(gen.name.clone());
+        true
+    }
+
+    /// Take a generator's old name out of the manager -- unless another
+    /// generator still uses it, or the signal there was never this
+    /// panel's.
+    fn retire_signal_name(&mut self, name: &str, signal_manager: &mut crate::signal::SignalManager) {
+        if self.generators.iter().any(|g| g.name == name) {
+            return;
+        }
+        if self.generated_names.remove(name) {
+            signal_manager.remove(name);
+        }
+    }
+
+    /// Rename generator `idx`. The name field calls this on every
+    /// keystroke, so the old name is retired each time: otherwise every
+    /// intermediate name stayed behind as a signal.
+    pub fn rename_generator(
+        &mut self,
+        idx: usize,
+        new_name: String,
+        signal_manager: &mut crate::signal::SignalManager,
+        duration: f64,
+    ) {
+        let Some(gen) = self.generators.get_mut(idx) else { return };
+        let old = std::mem::replace(&mut gen.name, new_name);
+        self.retire_signal_name(&old, signal_manager);
+        self.publish_generator(idx, signal_manager, duration);
+    }
+
+    /// Whether generator `idx`'s name is held by a signal from another
+    /// source, so the generator's own signal is not in the manager.
+    fn generator_name_taken(&self, idx: usize, signal_manager: &crate::signal::SignalManager) -> bool {
+        self.generators.get(idx).is_some_and(|g| {
+            signal_manager.get(&g.name).is_some() && !self.generated_names.contains(&g.name)
+        })
     }
 
     /// Refresh the list of available audio devices
@@ -174,18 +277,11 @@ fn render_file_section(
         }
     });
 
-    ui.horizontal(|ui| {
-        if ui.button(t!("audio.load_button")).clicked() {
-            *load_audio_file = true;
-        }
-
-        if audio_manager.has_audio() {
-            if ui.button(t!("audio.analyze_button")).clicked() {
-                // Note: This is a simplified trigger - actual analysis
-                // happens in the app loop to avoid blocking UI
-            }
-        }
-    });
+    // No Analyze button: analysis runs when the file loads (the one
+    // that was here did nothing).
+    if ui.button(t!("audio.load_button")).clicked() {
+        *load_audio_file = true;
+    }
 
     // Show analysis progress
     if audio_manager.is_analyzing() {
@@ -388,21 +484,17 @@ fn render_generators_section(
         return;
     }
 
-    // Sample rate for generated signals (100 Hz is enough for animation control signals)
-    let sample_rate = 100.0;
-
-    // Ensure all generators have corresponding signals in SignalManager
-    // (needed on first render after loading an animation with generators)
-    for gen in panel_state.generators.iter() {
-        if signal_manager.get(&gen.name).is_none() {
-            let signal = gen.generate_signal(animation_duration, sample_rate);
-            signal_manager.insert(signal);
-        }
-    }
+    // Current for this duration, none missing (the app does this every
+    // frame too).
+    panel_state.sync_generators(signal_manager, animation_duration);
+    let taken: Vec<bool> = (0..panel_state.generators.len())
+        .map(|i| panel_state.generator_name_taken(i, signal_manager))
+        .collect();
 
     // Track changes: (index, what changed) — apply after UI to avoid borrow issues
     let mut to_delete: Option<usize> = None;
     let mut regenerate: Vec<usize> = Vec::new();
+    let mut renames: Vec<(usize, String)> = Vec::new();
 
     egui::Grid::new("generators_grid")
         .num_columns(6)
@@ -420,14 +512,20 @@ fn render_generators_section(
             for (i, gen) in panel_state.generators.iter_mut().enumerate() {
                 let mut changed = false;
 
-                // Name (editable text)
+                // Name (editable text). Edited on a copy and applied by
+                // `rename_generator`, which retires the old name.
+                let mut name = gen.name.clone();
                 let name_response = ui.add(
-                    egui::TextEdit::singleline(&mut gen.name)
+                    egui::TextEdit::singleline(&mut name)
                         .desired_width(80.0)
                 );
-                super::vkb_sync(ui, &name_response, &gen.name);
-                if name_response.changed() {
-                    changed = true;
+                super::vkb_sync(ui, &name_response, &name);
+                let name_changed = name_response.changed();
+                if taken.get(i).copied().unwrap_or(false) {
+                    name_response.on_hover_text(t!("signal.generator_name_taken"));
+                }
+                if name_changed {
+                    renames.push((i, name));
                 }
 
                 // Waveform dropdown
@@ -480,18 +578,18 @@ fn render_generators_section(
             }
         });
 
+    // Renames, then other edits, while the indices still hold
+    for (idx, name) in renames {
+        panel_state.rename_generator(idx, name, signal_manager, animation_duration);
+    }
+    for idx in regenerate {
+        panel_state.publish_generator(idx, signal_manager, animation_duration);
+    }
+
     // Apply deletions
     if let Some(idx) = to_delete {
         let removed = panel_state.generators.remove(idx);
-        signal_manager.remove(&removed.name);
-    }
-
-    // Regenerate changed signals
-    for idx in regenerate {
-        if let Some(gen) = panel_state.generators.get(idx) {
-            let signal = gen.generate_signal(animation_duration, sample_rate);
-            signal_manager.insert(signal);
-        }
+        panel_state.retire_signal_name(&removed.name, signal_manager);
     }
 }
 
@@ -789,5 +887,83 @@ fn regenerate_beat_signals(audio_manager: &mut AudioManager, bpm: f32) {
         "beat".to_string(),
         Signal::new("beat".to_string(), signal_rate, SignalType::Trigger, beat),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::signal::{Signal, SignalManager, SignalType};
+
+    fn panel_with(names: &[&str]) -> SignalPanelState {
+        let mut state = SignalPanelState::new();
+        state.generators = names.iter().map(|n| GeneratorConfig::new(n.to_string())).collect();
+        state
+    }
+
+    /// Renaming retires the old name: the field renames on every
+    /// keystroke, and each intermediate name used to stay behind.
+    #[test]
+    fn a_renamed_generator_leaves_no_old_signal() {
+        let mut signals = SignalManager::new();
+        let mut state = panel_with(&["A"]);
+        state.sync_generators(&mut signals, 2.0);
+        assert!(signals.get("A").is_some());
+
+        state.rename_generator(0, "B".into(), &mut signals, 2.0);
+        assert!(signals.get("A").is_none(), "the old name must go");
+        assert!(signals.get("B").is_some());
+
+        // A name another generator still uses stays.
+        let mut state = panel_with(&["A", "A"]);
+        state.sync_generators(&mut signals, 2.0);
+        state.rename_generator(0, "C".into(), &mut signals, 2.0);
+        assert!(signals.get("A").is_some(), "generator 2 still uses it");
+    }
+
+    /// A rename that passes through an audio signal's name neither
+    /// replaces nor (on the next keystroke) deletes it.
+    #[test]
+    fn a_rename_through_an_audio_name_leaves_the_audio_alone() {
+        let mut signals = SignalManager::new();
+        signals.insert(Signal::new("amplitude".into(), 10.0, SignalType::Continuous, vec![0.25; 4]));
+        let mut state = panel_with(&["gen_1"]);
+        state.sync_generators(&mut signals, 2.0);
+
+        state.rename_generator(0, "amplitude".into(), &mut signals, 2.0);
+        assert_eq!(signals.get("amplitude").unwrap().data, vec![0.25; 4], "not replaced");
+        assert!(state.generator_name_taken(0, &signals));
+        state.rename_generator(0, "amplitude_lfo".into(), &mut signals, 2.0);
+        assert_eq!(signals.get("amplitude").unwrap().data, vec![0.25; 4], "not deleted");
+        assert!(signals.get("amplitude_lfo").is_some());
+    }
+
+    /// A longer animation renders the generators again over the new
+    /// length; before, past the old one a track held the last sample.
+    #[test]
+    fn a_duration_change_regenerates_the_generators() {
+        let mut signals = SignalManager::new();
+        let mut state = panel_with(&["lfo"]);
+        state.sync_generators(&mut signals, 2.0);
+        assert_eq!(signals.get("lfo").unwrap().data.len(), 200);
+
+        let longer = 3.333;
+        state.sync_generators(&mut signals, longer);
+        assert_eq!(
+            signals.get("lfo").unwrap().data.len(),
+            (longer * SAMPLE_RATE).ceil() as usize
+        );
+    }
+
+    /// Loading an animation's generators replaces the previous ones'
+    /// signals.
+    #[test]
+    fn restoring_generators_retires_the_previous_ones() {
+        let mut signals = SignalManager::new();
+        let mut state = panel_with(&["old"]);
+        state.sync_generators(&mut signals, 2.0);
+        state.restore_generators(vec![GeneratorConfig::new("new".into())], &mut signals, 4.0);
+        assert!(signals.get("old").is_none());
+        assert_eq!(signals.get("new").unwrap().data.len(), 400);
+    }
 }
 
