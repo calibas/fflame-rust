@@ -278,9 +278,11 @@ The Fractal Browser's **Online** tab lists your flames
 (`GET /api/flames`, first 100) or a search (`GET /api/search/flames`),
 loads one (`GET /api/flames/{id}`) and deletes one
 (`DELETE /api/flames/{id}`); see
-[FRACTAL-BROWSER.md](FRACTAL-BROWSER.md). Its error check treats both
-"Authentication required" (401) and "Access denied" (403) as an expired
-session and signs the user out.
+[FRACTAL-BROWSER.md](FRACTAL-BROWSER.md). Its error check treats
+"Authentication required" (401) as an expired session and signs the
+user out; "Access denied" (403) is shown as an error and leaves the
+session alone (`only_a_401_signs_the_user_out`). A delete asks for
+confirmation first.
 
 **Cloud Palettes** in the Palette Library lists your palette library
 (`GET /api/users/me/palettes`, first 100); a click sets the config's
@@ -549,8 +551,6 @@ in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 
 - **Simulations cannot be saved online yet** — refused client-side
   until the server knows the mode; see *Render modes*.
-- **An Online-tab 403 signs you out**, since the tab treats "Access
-  denied" as an expired session.
 - **Loading an animation from the Animation panel's list goes through
   the web deep-link loader**, which builds its `ApiState` with an empty
   token. On the web the cookie authenticates it; on desktop the request
