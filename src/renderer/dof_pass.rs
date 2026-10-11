@@ -48,6 +48,18 @@ pub struct DofPass {
 }
 
 impl DofPass {
+    /// Free the GPU resources now (dropping frees nothing on WebGPU).
+    pub fn destroy(&self) {
+        self.params_h.destroy();
+        self.params_v.destroy();
+        self.params_coc.destroy();
+        if let Some((_, _, texs)) = &self.texs {
+            for (t, _) in texs {
+                t.destroy();
+            }
+        }
+    }
+
     pub fn new(device: &Device) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Solid DoF Shader"),

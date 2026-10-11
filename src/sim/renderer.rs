@@ -611,6 +611,24 @@ pub struct SimRenderer {
 }
 
 impl SimRenderer {
+    /// Free the field, the output and the buffers now. Dropping frees
+    /// nothing on WebGPU, so leaving simulation mode, or a one-shot
+    /// render's throwaway renderer, kept the whole grid until garbage
+    /// collection.
+    pub fn destroy(&self) {
+        for t in &self.field {
+            t.destroy();
+        }
+        self.output_texture.destroy();
+        self.diffs.0.destroy();
+        self.params_buffer.destroy();
+        self.model_params_buffer.destroy();
+        self.coloring_params_buffer.destroy();
+        self.coupling_buffer.destroy();
+        self.color_layers_buffer.destroy();
+        self.kernel_buffer.destroy();
+    }
+
     pub fn new(device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> Self {
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
         // Every slice: the user's layers, their memory and their scratch.

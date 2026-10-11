@@ -191,6 +191,25 @@ pub struct ShadePass {
 }
 
 impl ShadePass {
+    /// Free the GPU resources now (dropping frees nothing on WebGPU).
+    pub fn destroy(&self) {
+        self.params_buffer.destroy();
+        for b in &self.atrous_params {
+            b.destroy();
+        }
+        if let Some((_, _, texs)) = &self.normal_texs {
+            for (t, _) in texs {
+                t.destroy();
+            }
+        }
+        self.dummy_normal.0.destroy();
+        if let Some(out) = &self.output {
+            for (t, _) in out {
+                t.destroy();
+            }
+        }
+    }
+
     /// Pipeline-only construction (exporters): no standing output
     /// allocation; callers provide region outputs to `run_region`.
     pub fn new_pipeline_only(device: &Device) -> Self {

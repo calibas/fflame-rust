@@ -933,7 +933,16 @@ impl FlameRenderer {
 
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
-        self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
+        // Destroy the old set, not just drop it: dropping frees nothing on
+        // WebGPU, where every viewport resize kept its 64 bytes a pixel
+        // until garbage collection. Safe here: only work already
+        // submitted holds them (wgpu frees after it), and every bind
+        // group the renderer keeps is rebuilt below.
+        let old = std::mem::replace(
+            &mut self.buffers,
+            FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size),
+        );
+        old.destroy();
 
         // **The plan on screen goes with them.** The fresh buffers hold
         // the placeholder cylinder table, and the shader -- still compiled
@@ -3138,6 +3147,8 @@ impl FlameRenderer {
     /// completes, before dropping the renderer. See `FlameBuffers::destroy`.
     pub fn destroy(&self) {
         self.buffers.destroy();
+        self.shade_pass.destroy();
+        self.dof_pass.destroy();
         self.fractal_texture.destroy();
         if let Some(staging) = &self.readback_staging {
             staging.destroy();
@@ -5868,6 +5879,14 @@ mod memory_tests {
         assert_eq!((out.width(), out.height()), (640, 480), "the output is the frame's");
         full.destroy();
         tail.destroy();
+
+        // `destroy` frees everything it holds (dropping frees nothing on
+        // WebGPU): writing to the orbit buffer after it is an error.
+        let r = FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &flame, 256);
+        r.destroy();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        queue.write_buffer(&r.buffers.dummy_orbit_buffer, 0, &[0u8; 4]);
+        assert!(pollster::block_on(scope.pop()).is_some(), "the orbit buffer outlived destroy()");
 
         // `for_job`, the choice every one-shot path makes (`render()` and
         // the video loop): the tail for the non-flame engines.

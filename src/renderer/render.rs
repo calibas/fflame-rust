@@ -882,6 +882,9 @@ async fn render_sim(
     // seeded, run to `steps`. A video loop passes its own, and frame n
     // continues frame n-1's run instead of re-running from the seed
     // (`simulation-fractals.md` D5).
+    // Whose renderer this is decides whether the teardown may free it
+    // (as in `render_escape`).
+    let caller_owned = job.engines.is_some();
     let mut owned: Option<crate::sim::SimRenderer> = None;
     let make = || crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
     // A simulation's terrain (heightfield plan T4) lives beside it, so a
@@ -936,6 +939,9 @@ async fn render_sim(
             break;
         }
         if progress.is_cancelled() {
+            if !caller_owned {
+                sim.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
     }
@@ -960,6 +966,12 @@ async fn render_sim(
             !progress.is_cancelled()
         });
         if progress.is_cancelled() {
+            if let Some(t) = terrain_owned.as_ref() {
+                t.destroy();
+            }
+            if !caller_owned {
+                sim.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
         Some(t)
@@ -1032,6 +1044,13 @@ async fn render_sim(
         if let Some(chain) = &effect_chain {
             chain.destroy();
         }
+        #[cfg(feature = "terrain")]
+        if let Some(t) = terrain_owned.as_ref() {
+            t.destroy();
+        }
+        if let Some(s) = owned.as_ref() {
+            s.destroy();
+        }
         return Err(RenderError::OutOfMemory(err.to_string()));
     }
 
@@ -1055,6 +1074,10 @@ async fn render_sim(
     #[cfg(feature = "terrain")]
     if let Some(t) = terrain_owned.as_ref() {
         t.destroy();
+    }
+    // A throwaway run's grid (a caller's, a video's, goes on).
+    if let Some(s) = owned.as_ref() {
+        s.destroy();
     }
     let (width, height, rgba_data) = pixels?;
 
@@ -1192,6 +1215,9 @@ async fn render_escape(
             },
         );
         if progress.is_cancelled() {
+            if !caller_owned {
+                escape_renderer.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
         log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
@@ -1259,6 +1285,9 @@ async fn render_escape(
             renderer.palette_generation(),
             );
             if progress.is_cancelled() {
+                if !caller_owned {
+                    escape_renderer.destroy();
+                }
                 return Err(RenderError::Cancelled);
             }
             guard += 1;
@@ -1507,6 +1536,9 @@ async fn render_escape_terrain(
     while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         if progress.is_cancelled() {
+            if !caller_owned {
+                terrain.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
         let done = (terrain.footprint_renders - before) as f64;
@@ -1527,6 +1559,9 @@ async fn render_escape_terrain(
         !progress.is_cancelled()
     });
     if progress.is_cancelled() {
+        if !caller_owned {
+            terrain.destroy();
+        }
         return Err(RenderError::Cancelled);
     }
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;

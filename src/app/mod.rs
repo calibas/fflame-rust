@@ -1597,7 +1597,8 @@ impl App {
             if let Some(t) = self.sim_terrain.take() {
                 t.destroy();
             }
-            if self.sim_renderer.take().is_some() {
+            if let Some(sim) = self.sim_renderer.take() {
+                sim.destroy();
                 log::info!("Left simulation mode: freed the simulation grid");
                 // The grid was the state; coming back starts from the
                 // seed rather than from an uninitialised field.
