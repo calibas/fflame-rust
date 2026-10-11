@@ -1399,7 +1399,7 @@ impl FlameRenderer {
         }
 
         // Track what's actually in the accumulation buffer right now,
-        // since the shader's overwrite branch (blend_factor ≥ 0.99)
+        // since the shader's overwrite mode (use_fixed_ema == 2)
         // discards `prev` before adding this dispatch's contribution.
         // Without this, sample_density (which the tonemap uses) would
         // reflect cumulative compute work while bucket_count in the
@@ -1416,8 +1416,13 @@ impl FlameRenderer {
         // Pick blend mode + rate for the accumulate shader. See
         // docs/archive/projects/accumulator-unification.md and the comment on
         // `AccumulateParams::use_fixed_ema` in gpu/buffers.rs.
-        //   - overwrite (slider drag): blend_factor=1.0 triggers the
-        //     shader's clear-prev branch; mode is irrelevant.
+        //   - overwrite (slider drag): mode 2, the shader's clear-prev
+        //     branch; blend_factor unused. It was once signalled by
+        //     blend_factor = 1.0 in mode 0, and the shader took ANY
+        //     blend_factor >= 0.99 for it -- so a Fixed Blend Rate of
+        //     0.99-1.0 cleared the buffer every batch while this
+        //     function, not in overwrite mode, kept adding to
+        //     samples_in_buffer, and the picture faded frame by frame.
         //   - use_dynamic_blend=true (default): pure cumulative-mean.
         //     blend_factor unused.
         //   - use_dynamic_blend=false: fixed EMA at user's blend_factor.
@@ -1428,7 +1433,7 @@ impl FlameRenderer {
         //     renders past ~10^9 iters/pixel where cumulative-mean
         //     hits f32's precision floor.
         let (blend_factor, use_fixed_ema) = if self.overwrite_mode {
-            (1.0, 0u32)
+            (1.0, 2u32)
         } else if self.use_dynamic_blend {
             (0.0, 0u32)
         } else {
@@ -6006,5 +6011,84 @@ mod plan_key_tests {
         let mut symmetric = config.clone();
         symmetric.flame.post_symmetry.ty = PostSymmetryType::Point;
         assert_ne!(FlameRenderer::flame_key(&config), FlameRenderer::flame_key(&symmetric));
+    }
+}
+
+#[cfg(test)]
+mod accumulate_mode_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+
+    /// A Sierpinski gasket filling the view (the orbit gates' fixture):
+    /// every sample lands, so the whole view's density per iteration is
+    /// one when the sample count matches what the buffer holds.
+    fn gasket() -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (i, (e, f)) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = crate::scene::transforms::Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, e, f);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.levels_enabled = false;
+        cfg
+    }
+
+    /// The whole view's density per iteration after `frames` batches at
+    /// a Fixed Blend Rate of `rate` (dynamic blend off).
+    fn view_density(device: &wgpu::Device, queue: &wgpu::Queue, rate: f32, frames: usize) -> f64 {
+        const N: u32 = 64;
+        let cfg = gasket();
+        let mut r = FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        r.set_use_dynamic_blend(false);
+        r.set_blend_factor(rate);
+        for _ in 0..frames {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, queue, device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, queue, device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let total = r.read_density_blocking(device, queue).iter().sum();
+        r.destroy();
+        total
+    }
+
+    /// A Fixed Blend Rate of 1.0 (or anything from 0.99) is a blend rate,
+    /// not the overwrite signal. The shader used to read
+    /// `blend_factor >= 0.99` as overwrite and discard the buffer every
+    /// batch, while the host -- not in overwrite mode -- kept adding each
+    /// batch to `samples_in_buffer`: the tone map's sample density grew
+    /// over a buffer holding one batch, and the picture faded, 1/N after
+    /// N frames. Overwrite is its own mode now.
+    #[test]
+    fn a_fixed_blend_rate_of_one_keeps_every_batch() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        for rate in [1.0, 0.995] {
+            let one = view_density(&device, &queue, rate, 1);
+            let five = view_density(&device, &queue, rate, 5);
+            assert!(one > 0.9 && one < 1.1, "rate {rate}: one batch put {one:.3} per iteration in view; the gasket fills it");
+            assert!(
+                (five / one - 1.0).abs() < 0.02,
+                "rate {rate}: five batches hold {five:.3} per iteration against one batch's {one:.3} -- the buffer lost batches the count kept"
+            );
+        }
     }
 }

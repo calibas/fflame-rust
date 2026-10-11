@@ -1129,12 +1129,15 @@ pub struct BlurConvolveParams {
 pub struct AccumulateParams {
     pub width: u32,
     pub height: u32,
+    /// The fixed-EMA rate, read only in mode 1. Any value is a rate,
+    /// 1.0 included: overwrite is mode 2, never inferred from this.
     pub blend_factor: f32,
-    /// Mode flag — 0 = cumulative-mean (algorithmic ideal,
+    /// Mode — 0 = cumulative-mean (algorithmic ideal,
     /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
     /// EMA at `blend_factor` (precision-stable, dim early frames as
-    /// the EMA bootstraps from 0). Mirrors `accumulate.wgsl`'s
-    /// `use_fixed_ema` field.
+    /// the EMA bootstraps from 0), 2 = overwrite (discard the
+    /// accumulation, store this batch alone: the parameter-change
+    /// reset). Mirrors `accumulate.wgsl`'s `use_fixed_ema` field.
     pub use_fixed_ema: u32,
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
