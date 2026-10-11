@@ -1003,7 +1003,7 @@ fn is_auth_error(error: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod auth_tests {
     use super::is_auth_error;
     use crate::resources::FetchError;
 
