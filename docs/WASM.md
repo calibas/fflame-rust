@@ -7,13 +7,13 @@
 > JSON and return pixels; they are built with `wasm-pack` and
 > documented in [wasm/README.md](../wasm/README.md).
 >
-> All three render engines work in the web app. Among the gallery
-> modules, `wasm/render` is built with the flame and escape-time
-> engines only (its `Cargo.toml` features), so a simulation needs
-> `wasm/sim`. The single-engine modules exist only to cut download
-> size, and are not interchangeable: a module built without an engine
-> reports that the engine is missing (`RenderError::EngineMissing`)
-> rather than rendering something the file never described.
+> All three render engines work in the web app, and in the gallery
+> module `wasm/render` (its `Cargo.toml` features). The single-engine
+> modules (`wasm/flame`, `wasm/escape`, `wasm/sim`) exist only to cut
+> download size, and are not interchangeable: a module built without
+> an engine reports that the engine is missing
+> (`RenderError::EngineMissing`) rather than rendering something the
+> file never described.
 
 The live web app is `https://fractalsforall.com/editor/`; how it gets
 there is [RELEASE.md §5](RELEASE.md).
@@ -175,9 +175,9 @@ out (`script`). Each is built with
 include the editor (they depend on this crate with
 `default-features = false`, so `web-app` and `wasm_main` stay out), and
 has its own `[profile.release]` tuned for size plus a `wasm-opt -Oz`
-pass. Engines per module, from each `Cargo.toml`: `render` flame +
-escape-time, `flame` flame, `escape` escape-time, `sim` simulation;
-`script` links all three, to generate configs. API, sizes and an
+pass. Engines per module, from each `Cargo.toml`: `render` all three
+(flame, escape-time, simulation), `flame` flame, `escape` escape-time,
+`sim` simulation; `script` links all three, to generate configs. API, sizes and an
 end-to-end example: [wasm/README.md](../wasm/README.md).
 How they are gated and released: [RELEASE.md §5](RELEASE.md).
 

@@ -31,8 +31,8 @@ Four surfaces, built four different ways, from one repository.
 The three single-engine renderer modules (`flame`, `escape`, `sim`) are
 the SAME SOURCE as `wasm/render` built with different Cargo features;
 each drops the engines it does not need, which is roughly half the
-gzipped download. (`wasm/render` itself is built with the flame and
-escape-time engines, not simulation.) `release.py check` compiles the
+gzipped download. (`wasm/render` itself is built with all three
+engines.) `release.py check` compiles the
 library at each of those feature combinations, because a `#[cfg]`
 attached to the wrong item is invisible in every build that has all
 three engines on — that has happened, and only a build with simulation
@@ -614,7 +614,7 @@ The Endless Gallery's renderers and script engine. Separate crates, so
 they are the one surface that does **not** use `build-wasm.sh`:
 
 ```bash
-cd wasm/render && wasm-pack build --target web --release   # flame + escape-time
+cd wasm/render && wasm-pack build --target web --release   # every engine
 # ...and the single-engine modules, same source, different Cargo features:
 cd wasm/flame  && wasm-pack build --target web --release   # flame only
 cd wasm/escape && wasm-pack build --target web --release   # escape-time only
