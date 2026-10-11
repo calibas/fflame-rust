@@ -75,6 +75,7 @@ pub mod prelude {
 
 #[cfg(feature = "web-app")]
 use app::App;
+#[cfg(target_arch = "wasm32")]
 use winit::dpi::PhysicalSize;
 
 /// Force a specific export engine from the CLI (`export --engine`); see app::export.

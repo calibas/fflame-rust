@@ -161,7 +161,6 @@ pub fn max_log_ratio(flame: &Flame, settings: &ImportanceSettings) -> f64 {
 /// renders, and a real bias renders the same measure as no bias.
 #[cfg(test)]
 mod gpu_tests {
-    use super::*;
     use crate::config::FractalConfig;
     use crate::config::fractal_config::ImportanceSettings;
     use crate::scene::transforms::Transform;

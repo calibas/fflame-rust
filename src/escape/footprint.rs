@@ -1504,7 +1504,7 @@ mod tests {
         let mut c = terrain_config();
         c.escape.terrain.tier = RenderTier::Lit;
         let mut engines = crate::renderer::render::RenderEngines::default();
-        let mut draw = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+        let draw = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
             pollster::block_on(crate::renderer::render(
                 &device,
                 &queue,
@@ -2391,7 +2391,7 @@ mod tests {
         };
         let mut engines = crate::renderer::render::RenderEngines::default();
         let mut c = terrain_config();
-        let mut frame = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+        let frame = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
             pollster::block_on(crate::renderer::render(
                 &device,
                 &queue,
@@ -2689,7 +2689,7 @@ mod tests {
         c.escape.terrain.occlusion = 0.0;
         let (w, h) = (320u32, 180u32);
         let mut engines = crate::renderer::render::RenderEngines::default();
-        let mut picture = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+        let picture = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
             pollster::block_on(crate::renderer::render(
                 &device,
                 &queue,

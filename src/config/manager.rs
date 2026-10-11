@@ -5847,7 +5847,6 @@ mod tests {
     /// index than the active one (target index shifts down).
     #[test]
     fn add_delete_subflame_in_any_target() {
-        use crate::scene::transforms::Transform;
 
         let config = FractalConfig::default();
         let mut mgr = ConfigManager::new(config);

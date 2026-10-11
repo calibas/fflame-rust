@@ -2798,8 +2798,8 @@ mod tests {
         // takes the "widget already exists" path where id collisions
         // surface.
         for _ in 0..2 {
-            let out = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let out = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
                     render_escape_content(ui, &mut manager, &mut None, None);
                 });
             });
@@ -2899,7 +2899,7 @@ mod tests {
     /// for every formula and reads the constant back out.
     #[test]
     fn the_derivative_hint_matches_what_the_shader_compiles() {
-        use crate::escape::{assembler, colorings, DerivativeGap, EscapeRenderer};
+        use crate::escape::{assembler, colorings, EscapeRenderer};
         for f in crate::escape::FORMULAS {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = f.name.to_string();

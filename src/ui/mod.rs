@@ -600,8 +600,8 @@ mod u64_field_tests {
             // the "text already present" path where a careless re-seed or
             // an unconditional write-back would show up.
             for _ in 0..3 {
-                let _ = ctx.run(Default::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
                         ui.add(super::VkbU64::new(&mut seed, "test_seed"));
                     });
                 });
@@ -634,8 +634,8 @@ mod u64_field_tests {
         let mut seed: u64 = 1;
 
         // Frame 1: draw, and take focus.
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 let r = ui.add(super::VkbU64::new(&mut seed, "typed_seed"));
                 r.request_focus();
             });
@@ -658,8 +658,8 @@ mod u64_field_tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 ui.add(super::VkbU64::new(&mut seed, "typed_seed"));
             });
         });
@@ -684,8 +684,8 @@ mod u64_field_tests {
                 // What Reroll does: exact u64 arithmetic, outside the widget.
                 seed = u64::MAX - 3;
             }
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
                     ui.add(super::VkbU64::new(&mut seed, "reroll_seed"));
                 });
             });

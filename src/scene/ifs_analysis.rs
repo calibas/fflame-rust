@@ -4281,7 +4281,7 @@ fn collect_final<A: Copy>(flame: &Flame, f: impl Fn(&Transform) -> Raw<A>) -> Ve
 fn merge<A: Copy + MapKind>(
     maps: Vec<(usize, Raw<A>)>,
     finals: Vec<Raw<A>>,
-    flame: &Flame,
+    _flame: &Flame,
 ) -> (Vec<IfsMap<A>>, Option<IfsMap<A>>, Vec<Disqualification>) {
     let mut errs = Vec::new();
     let mut out = Vec::new();
@@ -4899,7 +4899,6 @@ pub(crate) fn kernel_probe_points() -> Vec<[f64; 2]> {
 mod difference_tests {
     use super::*;
     use crate::escape::bigfloat::BigFloat;
-    use crate::scene::ifs_real::Real;
 
     const LIMBS: usize = 8;
 
@@ -5305,7 +5304,7 @@ mod tests {
     #[test]
     fn the_solid_jacobian_is_the_derivative_of_the_solid_inverse() {
         use super::{Kernel3, Map3, NonlinearMap3};
-        let id = Affine3::IDENTITY;
+        let _id = Affine3::IDENTITY;
         let tilt = Affine3 {
             m: [[0.9, 0.2, 0.0], [-0.2, 0.9, 0.1], [0.0, -0.1, 0.95]],
             t: [0.15, -0.1, 0.05],
@@ -6304,7 +6303,7 @@ mod tests {
         // runs there. So walk DOWNHILL in clearance: random steps that
         // reduce it, with the step shrinking, which reaches the
         // singular set without needing its equation.
-        let mut descend = |m: &Map2, mut q: [f64; 2], next: &mut dyn FnMut() -> f64| -> [f64; 2] {
+        let descend = |m: &Map2, mut q: [f64; 2], next: &mut dyn FnMut() -> f64| -> [f64; 2] {
             let mut step = 0.5f64;
             for _ in 0..400 {
                 let c = m.singular_distance(q);
@@ -6883,7 +6882,7 @@ mod tests {
                     // plane, and a transform with no contribution at
                     // all is refused as having no variations, which
                     // would say nothing about the role.
-                    let mut t = t.clone();
+                    let t = t.clone();
                     let t = with(t.clone(), "linear", 1.0);
                     let order = t.ordered_variation_names(r);
                     let p = |q: &str| t.get_variation_param_or_default(def.name, q, r) as f64;

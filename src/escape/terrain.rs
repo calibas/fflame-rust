@@ -4100,7 +4100,6 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod gpu_tests {
     use super::*;
-    use wgpu::*;
 
     pub(crate) fn device() -> Option<(Device, Queue)> {
         let instance = Instance::new(InstanceDescriptor {

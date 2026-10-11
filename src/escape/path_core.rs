@@ -1406,7 +1406,7 @@ impl PathSum {
         };
         let (gx, gy) = (w.div_ceil(8), h.div_ceil(8));
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Path Denoise") });
-        let mut run = |enc: &mut CommandEncoder, pipeline: &ComputePipeline, entries: &[BindGroupEntry]| {
+        let run = |enc: &mut CommandEncoder, pipeline: &ComputePipeline, entries: &[BindGroupEntry]| {
             let bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Path Denoise"),
                 layout: &pipeline.get_bind_group_layout(0),

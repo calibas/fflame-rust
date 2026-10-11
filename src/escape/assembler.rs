@@ -3924,7 +3924,7 @@ fn rebase_manowar_fe() -> String {
 /// The shared deep-rung pair rebase. Both deltas are rebuilt in
 /// double-float from the reference's own DF entries, never by an
 /// f32 subtraction of two O(1) iterates.
-fn rebase_two_term_fe(prev_target: &str, prev_rebase: &str) -> String {
+fn rebase_two_term_fe(_prev_target: &str, prev_rebase: &str) -> String {
     format!(
     "        let delta_prev = cfe2_to_f32(w_prev);
              let mp = min(max(m, 1u) - 1u, perturb.orbit_len - 1u);
@@ -7828,7 +7828,6 @@ pub fn assemble_layered(
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
-    let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
     let needs_period = either(ColoringFeature::NeedsPeriod);

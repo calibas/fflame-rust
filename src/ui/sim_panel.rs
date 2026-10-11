@@ -1018,7 +1018,7 @@ fn render_coloring_section(
             return;
         }
 
-        let mut body = |ui: &mut egui::Ui, config_manager: &mut ConfigManager| {
+        let body = |ui: &mut egui::Ui, config_manager: &mut ConfigManager| {
             let mut action: Option<Box<dyn Fn(&mut SimConfig)>> = None;
             if let Some(l) = entry {
                 ui.horizontal(|ui| {

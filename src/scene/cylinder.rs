@@ -614,7 +614,7 @@ impl Cylinders {
         let mut heap: std::collections::BinaryHeap<(u64, usize)> =
             std::collections::BinaryHeap::new();
         let bits = |p: f64| -> u64 { p.to_bits() };
-        let unbits = |b: u64| -> f64 { f64::from_bits(b) };
+        let _unbits = |b: u64| -> f64 { f64::from_bits(b) };
 
         let root = Word { map: crate::scene::mobius::Moebius::IDENTITY };
         let root_key = root.map.key().ok_or(NoCylinders::NoInvariantBall)?;
@@ -3625,7 +3625,7 @@ mod gpu_tests {
         r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
         queue.submit(Some(enc.finish()));
 
-        r.sync_cylinders(&device, &queue, &cfg);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
         assert_eq!(
             *r.targeting_state(),
             TS::NotPlanar,
@@ -3634,13 +3634,13 @@ mod gpu_tests {
 
         // ...and switching the box off is the one case that may.
         cfg.cylinder_targeting = false;
-        r.sync_cylinders(&device, &queue, &cfg);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
         assert_eq!(*r.targeting_state(), TS::Off);
 
         // The same flame in 2D is not refused for the render mode.
         cfg.cylinder_targeting = true;
         cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
-        r.sync_cylinders(&device, &queue, &cfg);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
         assert_ne!(*r.targeting_state(), TS::NotPlanar);
         assert_ne!(*r.targeting_state(), TS::Off);
     }
@@ -9116,7 +9116,7 @@ mod tests {
                 let mut st = 99u64;
                 let mut lcg = move || {
                     st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                    ((st >> 33) as usize)
+                    (st >> 33) as usize
                 };
                 let mut cur = mf.empty_word();
                 let mut syms: Vec<u32> = Vec::new();
