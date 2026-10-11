@@ -2684,6 +2684,13 @@ impl FlameRenderer {
             crate::scene::tonemap::HighlightMode::Filmic => 3,
         };
         self.background_color = config.background_color;
+        // The depth fog's target, which every per-frame GpuParams write
+        // (compute_pass, update_iterations, ...) and the shade pass read.
+        // Only update_flame used to set it, so a renderer that was only
+        // ever loaded -- render() for exports, the CLI, thumbnails and
+        // the visual suite -- fogged a 3D flame toward black whatever the
+        // background.
+        [self.background_r, self.background_g, self.background_b] = config.background_color;
 
         // 4. Update render mode and perspective
         self.current_render_mode = config.render_mode;
@@ -6089,6 +6096,83 @@ mod accumulate_mode_tests {
                 (five / one - 1.0).abs() < 0.02,
                 "rate {rate}: five batches hold {five:.3} per iteration against one batch's {one:.3} -- the buffer lost batches the count kept"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod fog_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+
+    /// The accumulator's density-weighted mean colour for the orbit
+    /// gates' gasket in 3D, two units in front of the camera, under a
+    /// depth fog thick enough (strength 100 from depth 0) that every
+    /// sample is fogged all the way to the background.
+    fn fogged_mean_rgb(device: &wgpu::Device, queue: &wgpu::Queue, background: [f32; 3]) -> [f64; 3] {
+        const N: u32 = 64;
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (i, (e, f)) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = crate::scene::transforms::Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, e, f);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+        cfg.perspective_strength = 0.0;
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.camera_z = 2.0;
+        cfg.fog_strength = 100.0;
+        cfg.fog_start = 0.0;
+        cfg.background_color = background;
+        cfg.levels_enabled = false;
+        let mut r = FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        for _ in 0..2 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, queue, device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, queue, device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let (mut sum, mut weight) = ([0.0f64; 3], 0.0f64);
+        for p in r.read_accumulator_blocking(device, queue) {
+            for k in 0..3 {
+                sum[k] += p[k] * p[3];
+            }
+            weight += p[3];
+        }
+        r.destroy();
+        assert!(weight > 0.5, "the gasket put only {weight:.3} per iteration in view");
+        sum.map(|s| s / weight)
+    }
+
+    /// A renderer that is only ever LOADED -- render() for exports, the
+    /// CLI, thumbnails, the visual suite -- fogs toward the config's
+    /// background. load_config set the renderer's background colour but
+    /// not the copy every per-frame GpuParams write reads, which only
+    /// update_flame (the app) set: the fog headed for black.
+    #[test]
+    fn a_loaded_renderer_fogs_toward_its_background() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let rgb = fogged_mean_rgb(&device, &queue, [1.0, 1.0, 1.0]);
+        for c in rgb {
+            assert!((c - 1.0).abs() < 0.01, "a fully fogged sample over a white background is {rgb:?}, not white");
         }
     }
 }
