@@ -495,6 +495,9 @@ pub struct PanelContext<'a> {
     /// target. Greys the transport. Wider than `sim_timeline_target`,
     /// which is `None` while a backward target is being held.
     pub sim_timeline_driven: bool,
+    /// The escape terrain's measured count or relief range, for the
+    /// Escape panel's lock to pin (terrain-height.md, H3).
+    pub terrain_range: Option<[f32; 2]>,
     /// Downloaded variations the Variations panel asked to re-fetch at
     /// the catalog's version. Consumed by App.
     pub variation_update_requested: &'a mut Vec<String>,
@@ -788,6 +791,7 @@ impl<'a> PanelViewer<'a> {
                     ui,
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
+                    self.context.terrain_range,
                 );
             }
             PanelType::Textures => {

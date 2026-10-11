@@ -1307,6 +1307,9 @@ impl EguiLayer {
         sim_timeline_target: Option<u32>,
         sim_timeline_holding: bool,
         sim_timeline_driven: bool,
+        // The escape terrain's count or relief range as last measured,
+        // which locking the relief pins (terrain-height.md, H3).
+        terrain_range: Option<[f32; 2]>,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -1882,6 +1885,7 @@ impl EguiLayer {
                         sim_timeline_target,
                         sim_timeline_holding,
                         sim_timeline_driven,
+                        terrain_range,
                         variation_update_requested: &mut variation_update_requested,
                         script_cloud,
                         effect_catalog,

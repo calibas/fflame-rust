@@ -20,6 +20,7 @@ pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
+    terrain_range: Option<[f32; 2]>,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
@@ -750,7 +751,7 @@ pub fn render_escape_content(
     // Above the relief because, on, it replaces the relief's 2D lighting
     // with its own.
     #[cfg(feature = "terrain")]
-    show_terrain_section(ui, config_manager, &esc);
+    show_terrain_section(ui, config_manager, &esc, terrain_range);
 
     // ---- Relief shading ----
     // A LAYER, not a coloring: it runs after the palette lookup, so it
@@ -1494,6 +1495,7 @@ fn show_terrain_section(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     esc: &crate::config::escape::EscapeConfig,
+    terrain_range: Option<[f32; 2]>,
 ) {
     use crate::config::escape::{TerrainInterior, TerrainSource};
     let t = esc.terrain.clone();
@@ -1548,8 +1550,10 @@ fn show_terrain_section(
                 ui.horizontal(|ui| {
                     ui.label(label);
                     let mut pc = value * 100.0;
+                    // A range from 0 reaches 0 at its left end and is
+                    // logarithmic from 0.1% (egui's smallest positive).
                     if ui
-                        .add(egui::Slider::new(&mut pc, range).suffix("%").logarithmic(true))
+                        .add(egui::Slider::new(&mut pc, range).suffix("%").logarithmic(true).smallest_positive(0.1))
                         .on_hover_text(tip)
                         .changed()
                     {
@@ -1562,7 +1566,8 @@ fn show_terrain_section(
                 t!("escape_panel.terrain_height").to_string(),
                 ConfigPath::EscapeTerrainHeight,
                 t.height,
-                0.1..=30.0,
+                // From 0: a flat plane, seen in 3D.
+                0.0..=30.0,
                 t!("escape_panel.terrain_height_tip").to_string(),
             );
             if t.source == TerrainSource::Distance {
@@ -1574,6 +1579,103 @@ fn show_terrain_section(
                     0.05..=10.0,
                     t!("escape_panel.terrain_de_width_tip").to_string(),
                 );
+            }
+            // The relief fixed at a zoom (terrain-height.md, H3): locked
+            // here, the lengths above are this zoom's, and a count's or a
+            // relief's range is pinned as the view measures it now -- so
+            // locking changes nothing on screen, and zooming after it
+            // approaches one landscape.
+            let lock_here = |config_manager: &mut ConfigManager| {
+                let [lo, hi] = terrain_range.unwrap_or([1.0, 0.0]);
+                let _ = config_manager.update_batch(
+                    vec![
+                        (ConfigPath::EscapeTerrainLocked, true.into()),
+                        (ConfigPath::EscapeTerrainLockZoom, ConfigValue::Double(esc.zoom_log2)),
+                        (ConfigPath::EscapeTerrainLockLo, lo.into()),
+                        (ConfigPath::EscapeTerrainLockHi, hi.into()),
+                    ],
+                    "history.action.terrain_lock".to_string(),
+                );
+            };
+            ui.horizontal(|ui| {
+                let mut locked = t.locked;
+                if ui
+                    .checkbox(&mut locked, t!("escape_panel.terrain_lock"))
+                    .on_hover_text(t!("escape_panel.terrain_lock_tip"))
+                    .changed()
+                {
+                    if locked {
+                        lock_here(config_manager);
+                    } else {
+                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainLocked, false.into());
+                    }
+                }
+                if t.locked {
+                    let at = magnification_label(t.lock_zoom * std::f64::consts::LOG10_2);
+                    ui.label(egui::RichText::new(t!("escape_panel.terrain_lock_at", zoom = at)).weak());
+                    if esc.zoom_log2 != t.lock_zoom
+                        && ui
+                            .small_button(t!("escape_panel.terrain_relock"))
+                            .on_hover_text(t!("escape_panel.terrain_relock_tip"))
+                            .clicked()
+                    {
+                        lock_here(config_manager);
+                    }
+                }
+            });
+            if t.locked && t.source != TerrainSource::Distance {
+                ui.horizontal(|ui| {
+                    ui.label(t!("escape_panel.terrain_lock_range")).on_hover_text(t!("escape_panel.terrain_lock_range_tip"));
+                    if let Some([lo, hi]) = t.pinned_range() {
+                        let (mut a, mut b) = (lo, hi);
+                        let speed = ((hi - lo).abs() * 0.002).max(1.0e-4) as f64;
+                        if ui.add(egui::DragValue::new(&mut a).speed(speed).range(f32::MIN..=hi)).on_hover_text(t!("escape_panel.terrain_lock_range_tip")).changed() {
+                            let _ = config_manager.update_param(ConfigPath::EscapeTerrainLockLo, a.into());
+                        }
+                        ui.label("–");
+                        if ui.add(egui::DragValue::new(&mut b).speed(speed).range(lo..=f32::MAX)).on_hover_text(t!("escape_panel.terrain_lock_range_tip")).changed() {
+                            let _ = config_manager.update_param(ConfigPath::EscapeTerrainLockHi, b.into());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(t!("escape_panel.terrain_lock_range_none")).small().weak());
+                    }
+                });
+            }
+            // How the land rises: a count's or a relief's curve, and the
+            // land inverted for any source (terrain-height.md, H2).
+            if t.source != TerrainSource::Distance {
+                ui.horizontal(|ui| {
+                    use crate::config::escape::TerrainCurve;
+                    ui.label(t!("escape_panel.terrain_curve"));
+                    let label = |s: TerrainCurve| match s {
+                        TerrainCurve::Auto => t!("escape_panel.terrain_curve_auto"),
+                        TerrainCurve::Log => t!("escape_panel.terrain_curve_log"),
+                        TerrainCurve::Linear => t!("escape_panel.terrain_curve_linear"),
+                        TerrainCurve::Mesa => t!("escape_panel.terrain_curve_mesa"),
+                    };
+                    egui::ComboBox::from_id_salt("terrain_curve")
+                        .selected_text(label(t.curve))
+                        .show_ui(ui, |ui| {
+                            for s in TerrainCurve::ALL {
+                                if ui.selectable_label(t.curve == s, label(s)).clicked() && s != t.curve {
+                                    let _ = config_manager.update_param(
+                                        ConfigPath::EscapeTerrainCurve,
+                                        ConfigValue::String(s.as_str().to_string()),
+                                    );
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("escape_panel.terrain_curve_tip"));
+                });
+            }
+            let mut invert = t.invert;
+            if ui
+                .checkbox(&mut invert, t!("escape_panel.terrain_invert"))
+                .on_hover_text(t!("escape_panel.terrain_invert_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTerrainInvert, invert.into());
             }
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.terrain_interior"));
@@ -1628,6 +1730,42 @@ fn show_terrain_section(
                     .changed()
                 {
                     let _ = config_manager.update_param(ConfigPath::EscapeTerrainDetail, v.into());
+                }
+            });
+            // The sections' filter (terrain-height.md, H4): samples
+            // averaged into a texel, and a softness in texels.
+            ui.horizontal(|ui| {
+                use crate::config::escape::MAX_TERRAIN_PREFILTER;
+                ui.label(t!("escape_panel.terrain_prefilter")).on_hover_text(t!("escape_panel.terrain_prefilter_tip"));
+                for k in 1..=MAX_TERRAIN_PREFILTER {
+                    let text = if k == 1 { t!("escape_panel.terrain_prefilter_off").to_string() } else { format!("{k}×{k}") };
+                    if ui
+                        .selectable_label(t.prefilter == k, text)
+                        .on_hover_text(t!("escape_panel.terrain_prefilter_tip"))
+                        .clicked()
+                        && t.prefilter != k
+                    {
+                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainPrefilter, ConfigValue::UInt(k));
+                    }
+                }
+            });
+            let mut smooth = t.smooth;
+            if ui
+                .checkbox(&mut smooth, t!("escape_panel.terrain_smooth"))
+                .on_hover_text(t!("escape_panel.terrain_smooth_tip"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeTerrainSmooth, smooth.into());
+            }
+            ui.horizontal(|ui| {
+                ui.label(t!("escape_panel.terrain_softness"));
+                let mut v = t.softness;
+                // Each step re-renders the ground: a coarse step.
+                let r = ui
+                    .add(egui::Slider::new(&mut v, 0.0..=crate::config::escape::MAX_TERRAIN_SOFTNESS).step_by(0.25))
+                    .on_hover_text(t!("escape_panel.terrain_softness_tip"));
+                if r.changed() {
+                    let _ = config_manager.update_param(ConfigPath::EscapeTerrainSoftness, v.into());
                 }
             });
             ui.label(egui::RichText::new(t!("escape_panel.view_has_camera")).small().weak());
@@ -2640,7 +2778,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run(Default::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None);
+                    render_escape_content(ui, &mut manager, &mut None, None);
                 });
             });
             labels = out

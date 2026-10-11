@@ -695,8 +695,42 @@ impl FlameRenderer {
         flame: &Flame,
         palette_size: u32,
     ) -> Self {
+        Self::build(device, queue, surface_format, width, height, flame, palette_size, (width, height))
+    }
+
+    /// A renderer for the shared TAIL alone -- the tonemap of another
+    /// engine's image (`tonemap_pass_with_input`), its output texture and
+    /// the readback -- as an escape picture, a terrain and a simulation
+    /// use it. The flame's own per-pixel state (two histograms and the
+    /// accumulator pair, 64 bytes a pixel: 2.1 GB at 8K) is never read
+    /// there, so it is made 1x1; the output, and the size the tonemap
+    /// normalises by, are the full frame. Not for drawing a flame.
+    pub fn for_tail(
+        device: &Device,
+        queue: &Queue,
+        surface_format: TextureFormat,
+        width: u32,
+        height: u32,
+        flame: &Flame,
+        palette_size: u32,
+    ) -> Self {
+        Self::build(device, queue, surface_format, width, height, flame, palette_size, (1, 1))
+    }
+
+    /// The renderer at `width x height`, its flame state at `state`.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        device: &Device,
+        queue: &Queue,
+        surface_format: TextureFormat,
+        width: u32,
+        height: u32,
+        flame: &Flame,
+        palette_size: u32,
+        state: (u32, u32),
+    ) -> Self {
         let pipelines = FlamePipelines::new(device, surface_format, flame);
-        let buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
+        let buffers = FlameBuffers::with_palette_size(device, queue, state.0, state.1, flame, palette_size);
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
@@ -804,7 +838,12 @@ impl FlameRenderer {
             surface_thickness: crate::config::DEFAULT_SURFACE_THICKNESS,
             needs_depth_prime: false,
             solid_shading: crate::config::SolidShadingSettings::default(),
-            shade_pass: crate::renderer::shade_pass::ShadePass::new(device, width, height),
+            // Sized on first use (`run_shade_pass`): its four full-frame
+            // Rgba32Float textures are 64 bytes a pixel -- 2.1 GB at 8K --
+            // and only a lit 3D solid ever runs it. Made at the frame's
+            // size, every renderer carried them: every 2D flame, every
+            // escape picture's and terrain's tail, the viewport's own.
+            shade_pass: crate::renderer::shade_pass::ShadePass::new(device, 1, 1),
             dof_pass: crate::renderer::dof_pass::DofPass::new(device),
             dof_dirty: true,
             solid_density_fraction: 1.0,
@@ -905,7 +944,8 @@ impl FlameRenderer {
         self.buffers.set_solid_depth_region(device, solid_enabled);
         self.buffers.set_census_region(device, self.census);
         self.needs_depth_prime = solid_enabled;
-        self.shade_pass.resize(device, width, height);
+        // The shade pass follows on its next run (`run_shade_pass`), so a
+        // renderer that never lights a solid never holds its textures.
 
         // Recreating variation_params_buffer wipes the init-derived slots
         // (slots N..N+M, written by the init dispatch). User-param slots
@@ -1782,6 +1822,9 @@ impl FlameRenderer {
         // any DoF built on it is stale.
         self.dof_dirty = true;
         let sh_fit = self.frozen_shadow_fit.unwrap_or_else(|| self.shadow_placement(zoom, pan_x, pan_y, camera_rotation_x, camera_rotation_y, camera_bank, [camera_x, camera_y, camera_z]));
+        // Its textures at the frame's size: made here, the first time a
+        // solid is lit (a no-op once they are).
+        self.shade_pass.resize(device, self.width, self.height);
         self.shade_pass.run(
             device,
             queue,
@@ -5729,5 +5772,62 @@ mod orbit_fuse_tests {
         assert_eq!(c.dispatch(1024, 256, 20, 16, 3), 960 * 256 + 64 * 236);
         // A seed past u32::MAX wraps as the shader's sum does.
         assert_eq!(c.dispatch(16, 256, 20, 16, u32::MAX), 15 * 256 + 236);
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::FlameRenderer;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+            let al = adapter.limits();
+            let mut limits = wgpu::Limits::default();
+            limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
+            limits.max_buffer_size = al.max_buffer_size;
+            limits.max_storage_buffers_per_shader_stage = al.max_storage_buffers_per_shader_stage;
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("renderer memory test"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: limits,
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: Default::default(),
+                })
+                .await
+                .ok()
+        })
+    }
+
+    /// A renderer holds only what it draws with. The solid shade pass's
+    /// four full-frame textures (64 bytes a pixel, 2.1 GB at 8K) wait for
+    /// a lit solid; a renderer for another engine's tail holds none of
+    /// the flame's per-pixel state (64 bytes a pixel more), but its
+    /// output, and the size the tonemap normalises by, are the frame's.
+    /// Measured: a terrain export at 8K went from out of memory to 3.2 GB.
+    #[test]
+    fn a_renderer_holds_only_what_it_draws() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let flame = crate::scene::transforms::Flame::default();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let full = FlameRenderer::with_palette_size(&device, &queue, format, 640, 480, &flame, 256);
+        assert_eq!(full.shade_pass.size_for_test(), (1, 1), "no shade textures before a solid is lit");
+        assert_eq!(full.buffers.size_for_test(), (640, 480));
+        let tail = FlameRenderer::for_tail(&device, &queue, format, 640, 480, &flame, 256);
+        assert_eq!(tail.buffers.size_for_test(), (1, 1), "no flame state for a tail");
+        assert_eq!((tail.width, tail.height), (640, 480));
+        let out = &tail.fractal_texture;
+        assert_eq!((out.width(), out.height()), (640, 480), "the output is the frame's");
+        full.destroy();
+        tail.destroy();
     }
 }

@@ -1827,6 +1827,58 @@ impl RenderTier {
     }
 }
 
+/// The most samples a terrain texel averages, each way (H4): 3² costs
+/// nine section renders' worth.
+pub const MAX_TERRAIN_PREFILTER: u32 = 3;
+/// The most a terrain's heights are smoothed, in texels (H4): its
+/// border of three sigmas stays a dozen texels.
+pub const MAX_TERRAIN_SOFTNESS: f32 = 4.0;
+
+/// How a terrain's escape count or relief value rises to its height
+/// (docs/projects/terrain-height.md, H2): over the range the ground
+/// measured, a logarithmic or linear rise, or a mesa that tops out
+/// early, so the busy boundary is a flat top rather than spikes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainCurve {
+    /// The source's own: logarithmic for an escape count, linear for a
+    /// relief -- every terrain's map before the choice.
+    #[default]
+    Auto,
+    Log,
+    Linear,
+    Mesa,
+}
+
+impl TerrainCurve {
+    pub const ALL: [TerrainCurve; 4] = [TerrainCurve::Auto, TerrainCurve::Log, TerrainCurve::Linear, TerrainCurve::Mesa];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerrainCurve::Auto => "auto",
+            TerrainCurve::Log => "log",
+            TerrainCurve::Linear => "linear",
+            TerrainCurve::Mesa => "mesa",
+        }
+    }
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "log" => TerrainCurve::Log,
+            "linear" => TerrainCurve::Linear,
+            "mesa" => TerrainCurve::Mesa,
+            _ => TerrainCurve::Auto,
+        }
+    }
+    /// The walk's code (`hf_rise`).
+    pub fn code(self) -> u32 {
+        match self {
+            TerrainCurve::Auto => 0,
+            TerrainCurve::Log => 1,
+            TerrainCurve::Linear => 2,
+            TerrainCurve::Mesa => 3,
+        }
+    }
+}
+
 /// What a terrain does where the set's interior is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1970,6 +2022,27 @@ pub struct TerrainConfig {
     /// 2D render at that antialiasing does.
     #[serde(default = "default_terrain_detail", skip_serializing_if = "is_default_terrain_detail")]
     pub detail: f32,
+    /// Samples a texel, each way (docs/projects/terrain-height.md, H4):
+    /// a section's height texel is the mean of `prefilter²` samples over
+    /// its footprint rather than one at its centre, so detail finer than
+    /// a texel averages instead of aliasing into spikes. 1 is a point
+    /// sample; each step costs its square in section renders.
+    #[serde(default = "default_terrain_prefilter", skip_serializing_if = "is_default_terrain_prefilter")]
+    pub prefilter: u32,
+    /// How far the heights are smoothed, in texels (a Gaussian's sigma,
+    /// H4). A texel is about `supersample × detail` of a screen pixel
+    /// where the ground is nearest, so this is a softness on screen; the
+    /// sections are rendered with a border of three sigmas so they meet
+    /// without a seam.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub softness: f32,
+    /// The ground a smooth surface through its samples -- a cubic
+    /// B-spline, continuous to its curvature -- rather than a bilinear
+    /// patch a texel, whose creases at every grid line show as stepped
+    /// shadows and serrated ridges where the ground is magnified
+    /// (terrain-height.md, H5). Slower to draw; re-renders nothing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub smooth: bool,
     /// How far the ground reaches, in view widths from the eye; the fog
     /// reaches the background just before.
     #[serde(default = "default_terrain_far", skip_serializing_if = "is_default_terrain_far")]
@@ -1983,6 +2056,13 @@ pub struct TerrainConfig {
     pub tier: RenderTier,
     #[serde(default, skip_serializing_if = "is_default_terrain_interior")]
     pub interior: TerrainInterior,
+    /// How a count or a relief rises to its height (H2).
+    #[serde(default, skip_serializing_if = "is_default_terrain_curve")]
+    pub curve: TerrainCurve,
+    /// The land upside down: `H − h`, for every source -- spikes become
+    /// pits, the set's boundary a canyon. The interior stays as chosen.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub invert: bool,
     /// A lake's colour under its surface (linear), and how blurred its
     /// reflections are: 0.02 is a still mirror.
     #[serde(default = "default_terrain_lake_tint", skip_serializing_if = "is_default_terrain_lake_tint")]
@@ -2007,6 +2087,21 @@ pub struct TerrainConfig {
     /// above the ground; 0 is the camera every terrain had before.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub target_lift: f32,
+    /// The relief fixed at a zoom (docs/projects/terrain-height.md, H3).
+    /// Locked, the height, the flanks' width, occlusion's reach and a
+    /// hole's depth are fractions of `lock_zoom`'s view width rather than
+    /// the current one's ([`EscapeConfig::terrain_scale`]), so zooming
+    /// approaches one landscape instead of rescaling it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub lock_zoom: f64,
+    /// The count's or the relief's range at the lock, `[lo, hi]`, pinned
+    /// so the heights stop following the ground's own range as it zooms
+    /// and streams. `lo > hi` when none was measured: the ground's own
+    /// range stands in.
+    #[serde(default = "default_terrain_lock_range", skip_serializing_if = "is_default_terrain_lock_range")]
+    pub lock_range: [f32; 2],
 }
 
 fn default_terrain_height() -> f32 {
@@ -2084,6 +2179,21 @@ fn is_default_terrain_lake_roughness(v: &f32) -> bool {
 fn is_default_terrain_interior(v: &TerrainInterior) -> bool {
     *v == TerrainInterior::default()
 }
+fn is_default_terrain_curve(v: &TerrainCurve) -> bool {
+    *v == TerrainCurve::default()
+}
+fn default_terrain_prefilter() -> u32 {
+    1
+}
+fn is_default_terrain_prefilter(v: &u32) -> bool {
+    *v == default_terrain_prefilter()
+}
+fn default_terrain_lock_range() -> [f32; 2] {
+    [1.0, 0.0]
+}
+fn is_default_terrain_lock_range(v: &[f32; 2]) -> bool {
+    *v == default_terrain_lock_range()
+}
 
 impl Default for TerrainConfig {
     fn default() -> Self {
@@ -2093,16 +2203,24 @@ impl Default for TerrainConfig {
             height: default_terrain_height(),
             de_width: default_terrain_de_width(),
             detail: default_terrain_detail(),
+            prefilter: default_terrain_prefilter(),
+            softness: 0.0,
+            smooth: false,
             far: default_terrain_far(),
             haze: default_terrain_haze(),
             tier: RenderTier::default(),
             interior: TerrainInterior::default(),
+            curve: TerrainCurve::default(),
+            invert: false,
             lake_tint: default_terrain_lake_tint(),
             lake_roughness: default_terrain_lake_roughness(),
             shadow: default_terrain_shadow(),
             shadow_sharpness: default_terrain_shadow_sharpness(),
             occlusion: default_terrain_occlusion(),
             target_lift: 0.0,
+            locked: false,
+            lock_zoom: 0.0,
+            lock_range: default_terrain_lock_range(),
         }
     }
 }
@@ -2111,9 +2229,28 @@ impl TerrainConfig {
     pub fn is_default(v: &TerrainConfig) -> bool {
         *v == TerrainConfig::default()
     }
+
+    /// The pinned count or relief range, when the lock holds one.
+    pub fn pinned_range(&self) -> Option<[f32; 2]> {
+        let [lo, hi] = self.lock_range;
+        (self.locked && lo <= hi && lo.is_finite() && hi.is_finite()).then_some(self.lock_range)
+    }
 }
 
 impl EscapeConfig {
+    /// What the terrain's lengths -- its height, the flanks' width,
+    /// occlusion's reach, a hole's depth -- are fractions of, in current
+    /// view widths: 1, or with the relief locked (H3), the lock's view
+    /// width, `2^(zoom - lock_zoom)` current ones. Held within 2^±24 of
+    /// the lock, where an f32 world still resolves the view.
+    pub fn terrain_scale(&self) -> f64 {
+        if !self.terrain.locked {
+            return 1.0;
+        }
+        let d = self.zoom_log2 - self.terrain.lock_zoom;
+        if d.is_finite() { d.clamp(-24.0, 24.0).exp2() } else { 1.0 }
+    }
+
     /// Whether the iterate pass needs the derivative orbit: the
     /// relief's analytic slopes, or the terrain's distance.
     pub fn wants_derivative(&self) -> bool {
