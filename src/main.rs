@@ -134,9 +134,11 @@ enum Commands {
 
     /// Export animation to video (pipes directly to ffmpeg, requires ffmpeg in PATH)
     ExportAnimation {
-        /// Input .fflame config file (base flame state)
+        /// Input .fflame config file (base flame state). Optional when the
+        /// .anim embeds a base config (an animation saved from the app
+        /// does); given anyway, it wins over the embedded one.
         #[arg(short, long)]
-        config: String,
+        config: Option<String>,
 
         /// Input .anim animation file
         #[arg(short, long)]
@@ -423,7 +425,7 @@ fn main() {
                 });
 
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config);
+                fractal_flame_wgpu::export_animation_mode(config.as_deref(), &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config);
             }
             None => {
                 // Run normal GUI mode

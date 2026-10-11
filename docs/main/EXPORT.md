@@ -440,7 +440,7 @@ FractalArtEditor export-animation -c config.fflame -a animation.anim -o out.mp4 
 
 | flag | default |
 | --- | --- |
-| `-c`, `--config` | required: the base config |
+| `-c`, `--config` | the base config; without it, the `.anim`'s embedded `base_config` (an error if it has none). Given with one, `-c` wins |
 | `-a`, `--animation` | required: the `.anim` file |
 | `-o`, `--output` | required |
 | `-w`, `--width` / `-H`, `--height` | 1920 / 1080 |

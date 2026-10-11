@@ -612,16 +612,20 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
   tracks applied through the exporter's apply path (above).
 - **Signals in export.** The app passes a copy of the **stored**
   signals (`SignalManager::clone_signals`): audio analysis, generators,
-  `.signal` files. Live producers are not copied, so a track on a
-  `live_*` signal applies nothing in a video. The CLI passes **no**
-  signals, so every signal track — generator-driven ones included — is
-  skipped there.
-- **Smoothing in export.** The exporter never advances the
-  controller's clock, so signal smoothing uses its initial 1/60 s step
-  for every frame whatever the frame rate.
+  `.signal` files. The exporter then renders each of the animation's
+  generators that is not among them (`export_signals`), so the CLI,
+  which passes none, still drives generator tracks; the app's panel
+  version of a generator wins. Live producers are not copied, so a
+  track on a `live_*` signal applies nothing in a video — deliberate:
+  the export logs a warning naming each signal track whose signal it
+  does not have (`tracks_missing_signals`; the CLI prints it).
+- **Smoothing in export.** The exporter sets the controller's step to
+  one frame (`set_step(1 / fps)`), so signal smoothing comes out the
+  same at any frame rate.
 - **The base config.** The app exports from the active config, with
   the export window's Max Iterations written over it. The CLI takes the
-  config from `-c`; an `.anim`'s embedded `base_config` is not used.
+  config from `-c`, or without it the `.anim`'s embedded `base_config`
+  (`cli_base_config`); with both, `-c` wins and the CLI says so.
 - **Encoding.** H.264, H.265 (default) or VP9; software or a hardware
   encoder:
 
@@ -640,8 +644,10 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 - **Audio.** An audio file chosen in the export window (or `--audio` on
   the CLI) is muxed as AAC with an offset (negative skips into the file,
   positive delays it), fade-in, fade-out and bitrate. It is independent
-  of the Signals panel's file, and the offset shifts only the muxed
-  audio, not the signals the tracks read.
+  of the Signals panel's file. In the app the offset also shifts the
+  audio-analysis signals the tracks read (`Signal::shifted`), so the
+  picture stays with the sound; generators and `.signal` files are not
+  shifted.
 - **Where.** Desktop only: the export window says it is unavailable on
   the web. In the app it opens from **Export Animation**; it fills
   iterations per thread and Max Iterations from the current settings,
