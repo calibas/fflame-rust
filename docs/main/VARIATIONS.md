@@ -156,7 +156,9 @@ integer, sparsely: an entry exists only where it differs from the
 variation's natural priority (`Pre` −1, `Normal`/`Any` 0, `Post` 1).
 The dispatcher buckets by sign: negative is pre, positive post. Only
 `Any` variations honour an override; `Pre`, `Normal` and `Post` stay
-where their definition puts them.
+where their definition puts them. Every transform's override counts --
+normal, Linked and Final alike, as JWildfire partitions the phases per
+XForm.
 
 An `Any` variation moved to pre or post is still a normal-style body,
 so the dispatcher applies its weight: `temp = temp + w·f(temp)`, or
