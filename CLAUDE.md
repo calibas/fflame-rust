@@ -81,7 +81,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 
 ### Config, state, storage ([CONFIG.md](docs/main/CONFIG.md))
 - **All configuration changes flow through ConfigManager**: `ConfigPath` identifies every parameter; the `UpdateType` it returns drives selective GPU updates. Undo: delta-based, 500 states; rapid changes coalesce (500 ms inactivity, 3 s max span); camera gestures coalesce by description.
-- `FractalConfig` (per fractal, undoable; versioned with `migrate_value`, now v3 -- `render_mode`, `perspective_strength`, `preserve_z` live on the config, not the flame) vs `SystemSettings` (device preferences, no undo, saved immediately via `update_system_setting()`): VSync/FPS, iterations per thread, burn-in, the governor and manual workgroups, orbit cache size, export defaults, fly-mode preferences, online credentials, compact mode.
+- `FractalConfig` (per fractal, undoable; versioned with `migrate_value`, now v4 -- `render_mode`, `perspective_strength`, `preserve_z` live on the config, not the flame) vs `SystemSettings` (device preferences, no undo, saved immediately via `update_system_setting()`): VSync/FPS, iterations per thread, burn-in, the governor and manual workgroups, orbit cache size, export defaults, fly-mode preferences, online credentials, compact mode.
 - Storage (`src/storage/backend.rs`): Windows `%APPDATA%\Fractals for All\Fractal Art Editor\data\`, macOS/Linux via `directories`, WASM localStorage. Presets are one bundled file, `assets/presets.fflame`.
 
 ### GPU memory during exports ([EXPORT.md](docs/main/EXPORT.md))
