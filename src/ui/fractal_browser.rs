@@ -260,10 +260,17 @@ impl FractalBrowserPanel {
         }
     }
 
-    /// Load configs directly (e.g., from Apophysis import)
-    pub fn load_configs(&mut self, configs: Vec<FractalConfig>, source_name: &str) {
+    /// Load configs that are already parsed into the Files tab -- a
+    /// multi-flame `.flame` from File > Open or Import Apophysis.
+    /// `path` is the file they came from, for the tab's header.
+    pub fn load_configs(
+        &mut self,
+        configs: Vec<FractalConfig>,
+        source_name: &str,
+        path: Option<std::path::PathBuf>,
+    ) {
         self.files_error_message = None;
-        self.files_current_path = None;
+        self.files_current_path = path;
 
         if configs.is_empty() {
             self.files_error_message =
@@ -1048,6 +1055,28 @@ mod tests {
         assert!(label.contains("| 3T | linear, swirl"), "{label}");
         let label = online_row_label(&item(ApiRenderMode::ThreeD, 2, &["a", "b", "c", "d"]));
         assert!(label.contains("| 2T | a, b, +2"), "{label}");
+    }
+
+    /// A multi-flame `.flame` lands in Files and leaves the Random tab's
+    /// batch alone. It used to go through `load_batch`, replacing the
+    /// last random batch and opening the Random tab, while
+    /// `load_configs` -- the Files loader -- had no caller.
+    #[test]
+    fn parsed_configs_from_a_file_go_to_files_and_keep_the_batch() {
+        let mut panel = FractalBrowserPanel::new();
+        panel.load_batch(vec![FractalConfig::default(), FractalConfig::default()]);
+        assert_eq!(panel.current_tab(), BrowserTab::Batch);
+
+        let path = std::path::PathBuf::from("several.flame");
+        panel.load_configs(
+            vec![FractalConfig::default(), FractalConfig::default(), FractalConfig::default()],
+            "several.flame",
+            Some(path.clone()),
+        );
+        assert_eq!(panel.current_tab(), BrowserTab::Files);
+        assert_eq!(panel.files_gallery.len(), 3);
+        assert_eq!(panel.files_current_path, Some(path));
+        assert_eq!(panel.batch_gallery.len(), 2, "the random batch was replaced");
     }
 
     /// Escape is searchable; Simulation is not offered, because the

@@ -41,7 +41,7 @@ It is available in every render mode.
 |---|---|---|
 | Presets | `Presets` | The built-in presets (see [Presets](#presets)) |
 | Random | `Batch` | The last batch from the Random Generator or a Scripts batch, until the next one replaces it. The label shows the count |
-| Files | `Files` | The configs from one file: **Open File...** on the tab, or a multi-config `.fflame` opened with File ▸ Open. The label shows the count |
+| Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
 | Online | `Online` | The signed-in user's flames from the API. Shown only in online mode |
 
 The code calls the second tab `Batch`; its label (`browser.tab_batch`)
@@ -179,10 +179,6 @@ the web build needs a rebuild to embed the new file.
 Recorded from the code as it stands; the escape-time and simulation
 cases were added to a browser built for flames.
 
-- **A multi-flame `.flame` (XML) file opened with File ▸ Open lands in
-  the Random tab**, not Files: the app loads it with
-  `load_batch_into_fractal_browser`, while the comments beside both call
-  sites say Files.
 - **The disk cache never shrinks.** `enforce_cache_limit` lists `.png`
   files, but the cache now writes `.jpg`, so it finds nothing to
   evict and the folder grows past 200 files. (`ThumbnailCache::clear`,
