@@ -231,7 +231,9 @@ impl ThumbnailCache {
         if let Ok(entries) = std::fs::read_dir(&self.cache_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e == "png") {
+                // The cache's own extension: this looked for `.png` after
+                // the cache moved to JPEG, found nothing, and never evicted.
+                if path.extension().map_or(false, |e| e == CACHE_EXT) {
                     if let Ok(metadata) = path.metadata() {
                         if let Ok(mtime) = metadata.modified() {
                             files.push((path, mtime));
@@ -287,7 +289,7 @@ impl ThumbnailCache {
         #[cfg(not(target_arch = "wasm32"))]
         if self.disk_enabled {
             for hash in &self.cached_hashes {
-                let path = self.cache_dir.join(format!("{}.png", hash));
+                let path = self.cache_dir.join(format!("{}.{CACHE_EXT}", hash));
                 std::fs::remove_file(path).ok();
             }
         }
@@ -360,6 +362,29 @@ impl Default for TextureCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cache holds at most MAX_CACHE_SIZE thumbnails, evicting the
+    /// oldest. Eviction looked for `.png` files after the cache moved to
+    /// JPEG, so it never found any and the cache grew without bound.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_cache_evicts_past_its_limit() {
+        let dir = std::env::temp_dir().join(format!("fflame-thumb-cache-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cache = ThumbnailCache { cache_dir: dir.clone(), cached_hashes: HashSet::new(), disk_enabled: true };
+        let image = image::RgbaImage::new(8, 8);
+        for i in 0..MAX_CACHE_SIZE + 5 {
+            cache.save(&format!("{i:016x}"), &image).unwrap();
+        }
+        let on_disk = std::fs::read_dir(&dir).unwrap().count();
+        assert!(on_disk <= MAX_CACHE_SIZE, "{on_disk} thumbnails on disk, limit {MAX_CACHE_SIZE}");
+        assert!(cache.len() <= MAX_CACHE_SIZE, "{} indexed, limit {MAX_CACHE_SIZE}", cache.len());
+        assert!(cache.exists(&format!("{:016x}", MAX_CACHE_SIZE + 4)), "the newest stays");
+        cache.clear();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "clear removes the files");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn test_config_hash_deterministic() {
