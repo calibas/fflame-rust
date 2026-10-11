@@ -265,10 +265,13 @@ reads. How the plan, the colour fold and the right-click work is
 | `built_in` | set at runtime on library palettes, never serialized; picking one in the Colors panel makes an editable copy with it cleared |
 
 `sample_color(t)` clamps `t` to [0, 1] and interpolates linearly between
-the two stops around it; past the last stop it returns that stop's
-colour. `sample_color_stepped(t)` returns the colour of the last stop at
-or before `t` (the first stop's before it), drawing each stop as a flat
-band.
+the two stops around it; before the first stop and past the last it
+returns that stop's colour. `sample_color_stepped(t)` returns the colour
+of the last stop at or before `t` (the first stop's before it), drawing
+each stop as a flat band. Both assume the stops are in position order;
+the Palette Editor re-sorts them after every Position change (a dragged
+stop keeps its row's widget id through the sort, so the drag stays on
+it) as well as on Add.
 
 **Serialized form**, which is also the `.palette` file format: a palette
 of exactly 256 stops at positions `i/255` is written compactly as

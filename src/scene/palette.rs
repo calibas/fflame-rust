@@ -307,6 +307,20 @@ impl Palette {
 
         let t = t.clamp(0.0, 1.0);
 
+        // Before the first stop is the first stop's colour, as the
+        // stepped sampler has it and as every gradient convention does.
+        // Without this the search below settles on stops 0 and 1 and
+        // interpolates with a NEGATIVE local t -- extrapolating past the
+        // first colour, out of [0, 1] for most palettes (a grey first
+        // stop at 0.5 before a white one gave 0.0 a darker-than-grey,
+        // and a black one gave it negative channels). Strictly before:
+        // at the first position itself the search below already returns
+        // the right colour, including the last of several stops stacked
+        // there.
+        if t < self.stops[0].position {
+            return self.stops[0].color;
+        }
+
         // Find the two stops to interpolate between
         let mut idx = 0;
         for (i, stop) in self.stops.iter().enumerate() {
@@ -1534,6 +1548,30 @@ mod tests {
         assert!(data[1] < 0.1); // G
         assert!(data[2] < 0.1); // B
         assert_eq!(data[3], 1.0); // A
+    }
+
+    /// Before the first stop is the first stop's colour. The linear
+    /// sampler used to interpolate stops 0 -> 1 with a negative local t
+    /// there, extrapolating darker than the first colour (negative
+    /// channels for a black-to-white pair) into the bottom of the
+    /// gradient texture.
+    #[test]
+    fn before_the_first_stop_holds_the_first_colour() {
+        let stop = |position: f32, color: [f32; 3]| ColorStop { position, color };
+        let grey = [0.5, 0.5, 0.5];
+        let p = Palette::new("late start", vec![stop(0.5, grey), stop(1.0, [1.0, 1.0, 1.0])]);
+        assert_eq!(p.sample_color(0.0), grey);
+        assert_eq!(p.sample_color(0.25), grey);
+        assert_eq!(p.sample_color(0.5), grey);
+        let data = p.generate_texture_data(256);
+        assert_eq!(&data[0..3], &grey, "the texture's first texel");
+        // The stepped sampler already had it right; the two agree.
+        assert_eq!(p.sample_color_stepped(0.25), grey);
+
+        // And past the last stop is the last colour (unchanged).
+        let p = Palette::new("early end", vec![stop(0.0, [0.0; 3]), stop(0.5, [1.0; 3])]);
+        assert_eq!(p.sample_color(0.75), [1.0; 3]);
+        assert_eq!(p.sample_color(0.25), [0.5; 3]);
     }
 
     #[test]
