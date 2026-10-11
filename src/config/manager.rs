@@ -2162,6 +2162,15 @@ impl ConfigManager {
             ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
+            ConfigPath::EscapeTerrainCurve => Ok(ConfigValue::String(config.escape.terrain.curve.as_str().to_string())),
+            ConfigPath::EscapeTerrainInvert => Ok(config.escape.terrain.invert.into()),
+            ConfigPath::EscapeTerrainLocked => Ok(config.escape.terrain.locked.into()),
+            ConfigPath::EscapeTerrainLockZoom => Ok(ConfigValue::Double(config.escape.terrain.lock_zoom)),
+            ConfigPath::EscapeTerrainLockLo => Ok(config.escape.terrain.lock_range[0].into()),
+            ConfigPath::EscapeTerrainLockHi => Ok(config.escape.terrain.lock_range[1].into()),
+            ConfigPath::EscapeTerrainPrefilter => Ok(ConfigValue::UInt(config.escape.terrain.prefilter)),
+            ConfigPath::EscapeTerrainSoftness => Ok(config.escape.terrain.softness.into()),
+            ConfigPath::EscapeTerrainSmooth => Ok(config.escape.terrain.smooth.into()),
             ConfigPath::EscapeTerrainShadow => Ok(config.escape.terrain.shadow.into()),
             ConfigPath::EscapeTerrainShadowSharpness => Ok(config.escape.terrain.shadow_sharpness.into()),
             ConfigPath::EscapeTerrainLakeTint => Ok(ConfigValue::ColorRgb(config.escape.terrain.lake_tint)),
@@ -3792,6 +3801,39 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainInterior => {
                 let v: String = value.try_into()?;
                 self.current.escape.terrain.interior = crate::config::escape::TerrainInterior::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainCurve => {
+                let v: String = value.try_into()?;
+                self.current.escape.terrain.curve = crate::config::escape::TerrainCurve::from_str_or_default(&v);
+            }
+            ConfigPath::EscapeTerrainInvert => {
+                self.current.escape.terrain.invert = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainLocked => {
+                self.current.escape.terrain.locked = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainLockZoom => {
+                let v: f64 = value.try_into()?;
+                if v.is_finite() {
+                    self.current.escape.terrain.lock_zoom = v;
+                }
+            }
+            ConfigPath::EscapeTerrainLockLo => {
+                self.current.escape.terrain.lock_range[0] = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainLockHi => {
+                self.current.escape.terrain.lock_range[1] = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainPrefilter => {
+                let v: u32 = value.try_into()?;
+                self.current.escape.terrain.prefilter = v.clamp(1, crate::config::escape::MAX_TERRAIN_PREFILTER);
+            }
+            ConfigPath::EscapeTerrainSmooth => {
+                self.current.escape.terrain.smooth = value.try_into()?;
+            }
+            ConfigPath::EscapeTerrainSoftness => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.terrain.softness = if v.is_finite() { v.clamp(0.0, crate::config::escape::MAX_TERRAIN_SOFTNESS) } else { 0.0 };
             }
             ConfigPath::EscapeTerrainShadow => {
                 let v: f32 = value.try_into()?;
