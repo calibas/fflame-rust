@@ -79,7 +79,19 @@ impl<'a> ConfigSlider<'a> {
             self.drag_start_value = drag_start;
         }
 
-        let response = ui.add(egui::Slider::new(&mut self.current_value, self.range.clone()).text(&self.label));
+        // `Edits`, not egui's default `Always`: the range is what the
+        // user can enter, not a constraint on what a config may hold
+        // (scripts, imports and older files write outside it). `Always`
+        // clamps the value it is handed before drawing it, so a loaded
+        // gamma of -0.5 under a 0.1..=10 slider DISPLAYED 0.1 while the
+        // render used -0.5. It never wrote the clamp back -- egui marks
+        // a draw-time clamp unchanged, and this writes on `changed()`
+        // only -- so this changes what the slider shows, not the config.
+        let response = ui.add(
+            egui::Slider::new(&mut self.current_value, self.range.clone())
+                .text(&self.label)
+                .clamping(egui::SliderClamping::Edits),
+        );
 
         // Publish for the virtual keyboard overlay: this slider is the
         // workhorse of every parameter panel, and without the sync a
@@ -328,5 +340,28 @@ mod tests {
         .lazy(true);
 
         assert!(slider.lazy);
+    }
+
+    /// Drawing a slider must never edit the config, whatever range it is
+    /// drawn with. Narrowing a range (Gamma went from -1..10 to
+    /// 0.1..10) leaves files holding values outside it, and those keep
+    /// their value until the user actually moves the slider.
+    #[test]
+    fn drawing_a_slider_keeps_a_value_outside_its_range() {
+        for stored in [-0.5f32, 0.0, 25.0] {
+            let mut config = FractalConfig::default();
+            config.gamma = stored;
+            let mut manager = ConfigManager::new(config);
+            for _ in 0..3 {
+                egui::__run_test_ui(|ui| {
+                    let r = ui
+                        .lazy_slider(&mut manager, ConfigPath::Gamma, 0.1..=10.0, "Gamma", None)
+                        .expect("gamma is an f32 path");
+                    assert!(!r.changed, "drawing reported a change for {stored}");
+                });
+            }
+            assert_eq!(manager.active_config().gamma, stored);
+            assert!(!manager.can_undo(), "drawing made an undo entry for {stored}");
+        }
     }
 }
