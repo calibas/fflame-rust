@@ -238,9 +238,14 @@ on the host:
 
 | mode | `blend_factor` | `use_fixed_ema` | colour update |
 | --- | --- | --- | --- |
-| overwrite (live preview) | 1.0 | 0 | previous discarded (the shader treats `blend_factor ≥ 0.99` as "clear") |
+| overwrite (live preview) | 1.0 (unread) | 2 | previous discarded |
 | cumulative mean (default, `use_dynamic_blend`) | 0.0 | 0 | `α = new_density / total_density` |
 | fixed EMA | `FractalConfig::blend_factor` | 1 | `α = blend_factor` |
+
+Overwrite is its own mode. It used to be `blend_factor ≥ 0.99` in mode
+0, which a Fixed Blend Rate of 0.99-1.0 also sent: the shader cleared
+every batch while the host kept counting them into `samples_in_buffer`,
+and the picture faded.
 
 Density is cumulative in every mode. Cumulative mean is the reference
 algorithm and reaches an f32 precision floor around 10⁹ hits a pixel;
