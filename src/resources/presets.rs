@@ -44,12 +44,29 @@ pub fn load_presets() -> Result<Vec<FractalConfig>, FetchError> {
 
     // Try loading from file first (allows runtime updates without recompile)
     match fetch_text(PRESETS_PATH) {
-        Ok(text) => {
-            FractalConfig::from_json_multi(&text)
-                .map_err(|e| FetchError::Parse(format!("Failed to parse presets: {}", e)))
-        }
+        Ok(text) => parse_or_embedded(&text),
         Err(e) => {
             log::info!("Falling back to embedded presets (file error: {})", e);
+            load_embedded_presets()
+        }
+    }
+}
+
+/// The presets in a file's text, or the embedded copy when it holds none:
+/// a file that is malformed, empty, or carries one entry this build cannot
+/// read (a newer `version`) fails the whole array, and a single "Default"
+/// preset in place of the bundled set is no fallback. The file is meant to
+/// be hand-edited, which is exactly when it breaks.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_or_embedded(text: &str) -> Result<Vec<FractalConfig>, FetchError> {
+    match FractalConfig::from_json_multi(text) {
+        Ok(presets) if !presets.is_empty() => Ok(presets),
+        Ok(_) => {
+            log::warn!("{PRESETS_PATH} holds no presets; using the embedded ones");
+            load_embedded_presets()
+        }
+        Err(e) => {
+            log::warn!("{PRESETS_PATH} could not be read ({e}); using the embedded presets");
             load_embedded_presets()
         }
     }
@@ -79,6 +96,40 @@ pub fn load_presets_with_fallback() -> Vec<FractalConfig> {
             log::error!("Failed to load presets: {}", e);
             log::info!("Using default preset as fallback");
             vec![create_default_preset()]
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every bundled preset loads, as the config it was written as.
+    #[test]
+    fn the_bundled_presets_load() {
+        let raw: Vec<serde_json::Value> = serde_json::from_str(PRESETS_JSON).expect("a JSON array");
+        let presets = load_embedded_presets().expect("parses");
+        assert_eq!(presets.len(), raw.len(), "one config per entry");
+        for (p, r) in presets.iter().zip(&raw) {
+            let mode = r.get("render_mode").or_else(|| r.pointer("/flame/render_mode"));
+            if let Some(mode) = mode {
+                let written: crate::scene::transforms::RenderMode = serde_json::from_value(mode.clone()).expect("a render mode");
+                assert_eq!(p.render_mode, written, "{}", p.flame.name);
+            }
+            // Saving and reloading changes nothing.
+            let again = FractalConfig::from_json(&p.to_json().unwrap()).expect("reloads");
+            assert_eq!(again.to_json().unwrap(), p.to_json().unwrap(), "{}", p.flame.name);
+        }
+    }
+
+    /// A presets file this build cannot use falls back to the bundled set,
+    /// not to one "Default" preset.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_unusable_presets_file_falls_back_to_the_bundled_set() {
+        let bundled = load_embedded_presets().unwrap().len();
+        for text in ["not json", "[]", r#"[{"version": 999, "flame": {"name": "x", "transforms": []}}]"#] {
+            assert_eq!(parse_or_embedded(text).unwrap().len(), bundled, "{text}");
         }
     }
 }
