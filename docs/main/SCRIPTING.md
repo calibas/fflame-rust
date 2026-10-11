@@ -213,6 +213,30 @@ refused here — use `flame`.
 
 Camera angles are stored in **radians**.
 
+A dotted path walks the config **as it is saved**, and a group still at
+its defaults is left out of a saved config. So `config.set` reaches a
+field inside a group only when that group already holds something:
+`config.set("sim.use_transforms", true)` fails with "unknown setting
+group `sim`" while every simulation setting is at its default, and
+`sim.terrain.height` fails while the terrain is. A Rhai map is not a
+config value, so a script cannot create a group either.
+
+That matters for the settings with no call of their own: a simulation's
+layers, couplings, warp, view and terrain, and an escape config's
+texture (`escape.texture`, `escape.texture_overlay`) and terrain. A
+script can adjust their fields on a config that already uses them —
+typically a modifier run on a saved one:
+
+```rhai
+script("Taller terrain", "modifier");
+try {
+    let h = config.get("sim.terrain.height");
+    config.set("sim.terrain.height", h * 1.5);
+} catch {
+    print("this config has no simulation terrain with a set height");
+}
+```
+
 ## The `escape` object
 
 Escape-time fractals (Mandelbrot and kin). **Touching `escape` at all
@@ -231,11 +255,11 @@ values under which escape output renders black.
 | `escape.shading_off()` | — | Turns the layer back off. |
 | `escape.shading_shadow(r, g, b, strength, blend)` | — | The side facing away from the light. `blend` is `"multiply"` (default), `"screen"`, `"overlay"`, `"mix"`, `"soft_light"` or `"hard_light"`. Strength 0 leaves the image exactly untouched; the range runs to 4, and values above 1 are for dark images where a pixel has little room left below it. |
 | `escape.shading_highlight(r, g, b, strength, blend)` | — | The side facing into it; same blend names, `"screen"` by default. |
-| `escape.shading_softness(radius)` | — | Radius in pixels of the stencil the surface normal is estimated from. 0 (the default) is a single-pixel difference — the sharpest estimate, and the one that makes finely-detailed colorings look crunchy. Raising it low-passes the **normal**, so edges soften without blurring the colour underneath. |
+| `escape.shading_softness(sigma)` | — | The width in pixels of a Gaussian blur on the **height** before its slope is taken. Continuous, so 0.5 and 0.8 differ. 0 (the default) leaves the height as it is, the sharpest relief and the one that makes finely-detailed colorings look crunchy. Raising it softens the relief without blurring the colour underneath. |
 | `escape.shading_light(model, elevation, ambient)` | — | How a slope becomes light: `"tilt"` (the default, the surface's lean toward the light) or `"lambert"` (the light raised `elevation` degrees above the horizon, as Ultra Fractal lights); `ambient` 0..1 is a floor under the shadow. |
 | `escape.shading_slope(stencil)` | — | How the slope is estimated: `"central"` (default), `"forward"`, `"roberts"` (the diagonals of a 2x2 block) or `"least_squares"` (the plane fitted to the 3x3 neighbourhood). |
 | `escape.shading_height_curve(curve, pre, post)` | — | A curve on the height before its slope is taken, `post * f(pre * h)`: `"linear"`, `"log"`, `"square_root"`, `"cube_root"`, `"square"`, `"cube"`, `"sin"` or `"cos"` (the last two fold the surface into terraces). |
-| `escape.shading_field(name)` | — | Which field the slope is taken from: `"smooth"` (the coloring's value before the palette wraps it — terrain relief), `"banded"` (the wrapped coordinate, so every band edge is a step — an engraved look), `"layer"` (the texture layer's value, so the relief follows one field and the colour another; without a layer, the coloring's own), `"analytic"` (the distance estimate's slope from the derivative, as Kalles Fraktaler draws it; flat where no derivative is iterated: under perturbation, and on formulas without one), `"offset"` (the coloring's value at points a small step beside each pixel, run as orbits of their own, as Ultra Fractal's Slope does: the same at any output size, three orbits a pixel, direct path only) or `"embossed"` (Ultra Fractal's Embossed: two orbits either side of each pixel along the light, each reduced to a whole number, drawing bevelled contour lines where they differ; direct path only). |
+| `escape.shading_field(name)` | — | Which field the slope is taken from: `"smooth"` (the coloring's value before the palette wraps it — terrain relief), `"banded"` (the wrapped coordinate, so every band edge is a step — an engraved look), `"layer"` (the texture layer's value, so the relief follows one field and the colour another; without a layer, the coloring's own), `"analytic"` (the distance estimate's slope from the derivative, as Kalles Fraktaler draws it; flat on formulas that iterate no derivative; the perturbed path carries the derivative too), `"offset"` (the coloring's value at points a small step beside each pixel, run as orbits of their own, as Ultra Fractal's Slope does: the same at any output size, three orbits a pixel, direct path only) or `"embossed"` (Ultra Fractal's Embossed: two orbits either side of each pixel along the light, each reduced to a whole number, drawing bevelled contour lines where they differ; direct path only). |
 | `escape.shading_offset(fraction)` | — | The step to the offset orbits, as a fraction of the view's height (1e-5..0.05; default 1/1024). For `"embossed"` it is the step either side of the pixel, which sets the contour lines' width (Ultra Fractal's Contour Size). |
 | `escape.shading_emboss(type)` / `escape.shading_emboss(type, sections)` | — | What Embossed's two orbits are reduced to: `"iteration"` (default; the iteration it escaped on), `"real_positive"` / `"imag_positive"` (how many iterates had a positive real / imaginary part), `"smallest_magnitude"` (the iteration of the smallest \|z\| either orbit has reached), `"magnitude"` (the whole part of ln\|z\| at escape) or `"angle"` (which of `sections` equal sectors arg z ended in; 1..32, default 2). |
 | `escape.transfer(name, pivot)` | — | A curve on the coloring's value before the palette wraps it: `"linear"`, `"square_root"`, `"cube_root"`, `"log"`, `"log_log"`, `"square"` or `"arc_tan"`. Each meets Linear at `pivot` (in the coloring's own units — for smooth, iterations times its scale): below it the root and log curves stretch the value, above it they compress it, so palette cycles crowd less near the set. With auto contrast on it applies to the fitted 0..1 value. An unknown name throws and lists the curves. |
@@ -288,7 +312,7 @@ of the mode rather than quirks:
 | `sim.colorings()` | array | Every colouring name. |
 | `sim.param(name, value)` | — | A model parameter. On a layered simulation, the first layer's (as are `sim.model` and `sim.preset`). |
 | `sim.coloring_param(name, value)` | — | A colouring parameter. Under a colour stack, the first colour layer's (as is `sim.coloring`). |
-| `sim.preset(name)` | — | Applies a named parameter set **and its measured step count** — the numbers without the steps show the pattern half-formed. Throws if the current model has no such preset. |
+| `sim.preset(name)` | — | Applies a named preset of the current model as a whole recipe, as the panel does: `dt` reset to the model's default, the parameters, **the measured step count** (the numbers without the steps show the pattern half-formed), the init and the colouring with its parameters when the preset names them, and the matte and warp (cleared when the preset has none). Throws if the current model has no such preset. |
 | `sim.grid(w, h)` | — | A fixed cell count, 16–8192 per side. Reproducible at any output size: the resolve pass scales the coloured grid to the export, letterboxed to the grid's aspect. |
 | `sim.grid_viewport(scale)` | — | Bind the grid to the output instead: `round(output × scale)` cells, 0.125–4. Fills the window, and **re-simulates** at a different export size. |
 | `sim.seed(n)` | — | Seed for the initial field and every stochastic model. With the model, the init and the step count, this is what makes a still reproducible. |

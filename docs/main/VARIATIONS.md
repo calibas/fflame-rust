@@ -1,660 +1,588 @@
-# Variation System Architecture
+# Variations
 
-**Overview:** The variation system provides a registry of nonlinear transformation functions that create fractal structure. Supports 26 core variations plus unlimited plugin variations with parameters.
+**Overview:** A **variation** is a nonlinear map applied inside a
+transform, after its affine. Each is a static definition holding its
+metadata and its WGSL — a 2D body and a 3D body — and the registry
+gathers them, together with any downloaded or locally installed ones.
+A flame's shader compiles in only the variations the flame uses, and
+each transform blends them by weight. The registry holds 647 shipped
+definitions, mostly ported from flam3, Apophysis and JWildfire.
 
 **See also:**
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
-- [TRANSFORMS.md](TRANSFORMS.md) - Flame algorithm and variation blending
-- [SHADERS.md](SHADERS.md) - Shader implementation details
+- [TRANSFORMS.md](TRANSFORMS.md) — the transform and the iteration the
+  variations run inside
+- [SHADERS.md](SHADERS.md) — how `apply_variations` is generated, the
+  WGSL lints, the Metal fast-math rules, the math probe and the census
+- [BUFFERS.md](BUFFERS.md) — `GpuVariationParams` and the state buffers
+- [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) — the planners that
+  consume inverse definitions and forward bounds
+- [ESCAPE.md](ESCAPE.md) — the escape engine's IFS modes, which use the
+  inverse definitions too
+- [ONLINE.md](ONLINE.md) — downloaded variations, the catalog, plugins
+  as a distribution channel
+- [VARIATIONS_WIRE_FORMAT.md](../projects/VARIATIONS_WIRE_FORMAT.md) —
+  the client ↔ API contract
 
 **Code locations:**
-- [src/variations/mod.rs](../../src/variations/mod.rs) - VariationRegistry and core registration
-- [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) - Dynamic WGSL variation code generation
-- **Note:** Variation shader code is generated at runtime, not stored in separate files
+- [src/variations/definition.rs](../../src/variations/definition.rs) —
+  `VariationDef`, `VariationParamDef`, `Feature`, the `param!` macro
+- [src/variations/mod.rs](../../src/variations/mod.rs) —
+  `VariationRegistry`, `VariationInfo`, `ParamType`, `VariationPhase`,
+  `VariationCategory`, `global_registry()`, the shader lints
+- [src/variations/defs/](../../src/variations/defs/) — the definitions,
+  in 208 files; [defs/mod.rs](../../src/variations/defs/mod.rs) holds
+  `ALL_VARIATIONS`
+- [src/variations/inverse.rs](../../src/variations/inverse.rs) —
+  inverse definitions for the inverse walks
+- [src/variations/bound.rs](../../src/variations/bound.rs),
+  [src/variations/derive.rs](../../src/variations/derive.rs) — forward
+  bounds, by hand and derived from the WGSL
+- [src/variations/docs.rs](../../src/variations/docs.rs) — prose read
+  back out of the definitions' doc comments
+- [src/variations/analytic_blur.rs](../../src/variations/analytic_blur.rs)
+  — kernels for the analytic blur path
+- [src/storage/plugins.rs](../../src/storage/plugins.rs) — locally
+  installed variations
+- [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) — the
+  per-flame dispatcher and helper-library splicing
 
 ---
 
-## What is a Variation?
+## Definitions
 
-A **variation** is a nonlinear function that transforms a 2D or 3D point:
+A variation is a `pub static` `VariationDef` in a `defs/*.rs` file:
 
-```
-v: ℝ² → ℝ²  (2D variation)
-v: ℝ³ → ℝ³  (3D variation)
-```
+| field | means |
+| --- | --- |
+| `name` | The wire name — the key in a transform's `variations` map and in `.flame` XML. Usually snake_case; JWildfire names keep their case (`linear3D`, `roundspher3D`). |
+| `aliases` | Foreign names (Apophysis, JWildfire, Chaotica, or a name we renamed) that resolve to this one. |
+| `display_name` | UI label. |
+| `category` | Where the UI files it (*Categories*). |
+| `phase` | `Pre`, `Normal`, `Post` or `Any` (*Phases*). |
+| `features` | Capability flags (*Features*). |
+| `parameters` | User parameters, usually written with `param!`. |
+| `init_param_count`, `wgsl_init` | Derived parameter slots and the WGSL that computes them (*Parameter slots*). |
+| `state_count`, `wgsl_state_init` | Per-thread state slots and an optional initialiser. |
+| `wgsl_2d`, `wgsl_3d` | The two bodies. Both are required. |
 
-**Examples:**
-- **Linear**: `v(x, y) = (x, y)` - Identity (no change)
-- **Sinusoidal**: `v(x, y) = (sin(x), sin(y))` - Wraps space periodically
-- **Spherical**: `v(x, y) = (x/r², y/r²)` where `r² = x² + y²` - Inverts through unit circle
-- **Swirl**: `v(x, y) = (x·sin(r²) - y·cos(r²), x·cos(r²) + y·sin(r²))` - Rotates by distance
+The definition's `///` doc comment is part of it too: it is the only
+place a variation's description and authors exist (*The docs corpus*).
 
-In the fractal flame algorithm, variations are **blended additively**:
-```
-result = w₁·v₁(p) + w₂·v₂(p) + ... + wₙ·vₙ(p)
-```
+## The registry
 
-This creates infinite variety from a small set of building blocks.
+`VariationRegistry` holds a `VariationInfo` per name, an alias table,
+the names in registration order, and a version counter.
+`VariationInfo` is the runtime form, shared by every source:
 
----
+| field | from a `VariationDef` |
+| --- | --- |
+| `name`, `display_name`, `category`, `phase`, `parameters` | copied |
+| `wgsl_function` | `variation_<name>`; the one exception is `julia`, whose function is `julia` |
+| `features` | copied, as a `Vec` |
+| `provenance` | `Builtin`; a download is `Api { version }`, a local plugin `Local` |
+| `wgsl_source`, `wgsl_source_3d`, `wgsl_source_init`, `wgsl_source_state_init` | the bodies (optional, because a download may lack one) |
+| `init_param_count`, `state_count` | copied |
 
-## Variation Registry
+**Registration.** `VariationRegistry::new()` registers every entry of
+`defs::ALL_VARIATIONS` in order. The list is **append-only**:
+registration order is the stable order the registry reports
+(`names()`), the fallback dispatch order and the UI order within a
+category, and legacy configs that stored weights as an array are read
+by it. With the `engine-flame` cargo feature off, `ALL_VARIATIONS` is
+`[&LINEAR]` alone — a default config still names `linear` — and the
+linker drops the other definitions.
 
-### Architecture
+**Global access.** The registry is a process-wide
+`RwLock<VariationRegistry>`. `global_registry()` returns a
+`RwLockReadGuard`; `global_registry_mut()` a write guard, used to
+register downloads and plugins at run time and to clear the download
+cache. Every runtime add or remove bumps `version()`, which the shader
+cache watches. Drop a read guard before anything that may take the write
+lock; `local_plugin_dependencies` drops its guard before moving on to
+the effect registry for that reason.
 
-The registry is a **global singleton** that stores metadata for all variations:
+**Lookups.**
+- `get(name)` and `has(name)` resolve aliases.
+- `resolve_alias(name)` returns the canonical name.
+- `aliases_for(canonical)` lists a variation's aliases, sorted.
+- An alias may not shadow a real name, and the first registration of
+  an alias wins.
+- Transforms always store the canonical name. `.flame` import and
+  `.fflame` deserialisation both canonicalise, parameter keys included.
 
-**Location:** [src/variations/mod.rs](../../src/variations/mod.rs)
+**Ordering for the UI.** Iterate `names()`, `all()` or
+`by_category(c)`, never the internal `HashMap`. The Variations panel
+and the Transforms panel's picker walk the categories in a fixed order
+and list each one with `by_category`, which keeps registration order.
 
-```rust
-pub struct VariationRegistry {
-    // Name → metadata
-    variations: HashMap<String, VariationInfo>,
+**Removal.** `clear_api()` removes only `Api` variations — built-ins
+are compiled in, and local plugins are the user's files.
+`remove_by_name()` removes one variation of any provenance.
 
-    // Core variations (fixed indices 0-25)
-    ordered_names: Vec<String>,
-}
+### Categories
 
-pub struct VariationInfo {
-    pub name: String,              // Internal name ("linear")
-    pub display_name: String,      // UI name ("Linear")
-    pub category: VariationCategory,
-    pub shader_index: usize,       // GPU array index (0-25 for core)
-    pub needs_rng: bool,           // Requires random number generator
-    pub parameters: Vec<VariationParameter>,
-}
+| category | holds |
+| --- | --- |
+| `Basic2D` | the flam3 originals (`linear`, `sinusoidal`, …) |
+| `Advanced2D` | most 2D ports |
+| `Depth3D` | z-only maps (`zcone`, `flatten`, `zscale`, …) |
+| `Rotation3D` | `pre_rotate_x/y`, `post_rotate_x/y` |
+| `Full3D` | 3D in character, with a real 2D body too |
+| `Only3D` | no meaningful 2D reading; empty today |
+| `Plugin` | JWildfire plugin ports, and any downloaded variation whose category this client does not know |
 
-pub enum VariationCategory {
-    Basic2D,      // 0-4: Linear, Sinusoidal, Spherical, Swirl, Horseshoe
-    Advanced2D,   // 5-15: Polar, Handkerchief, Heart, Disc, Spiral, etc.
-    Depth3D,      // 16-17, 23: Zcone, Flatten, ZScale (modify Z only)
-    Full3D,       // 18: Hemisphere (full 3D structure)
-    Rotation3D,   // 19-22: PreRotate/PostRotate X/Y
-}
-```
-
-### Global Access
-
-```rust
-use once_cell::sync::Lazy;
-
-static GLOBAL_REGISTRY: Lazy<VariationRegistry> = Lazy::new(|| {
-    VariationRegistry::new()
-});
-
-pub fn global_registry() -> &'static VariationRegistry {
-    &GLOBAL_REGISTRY
-}
-```
-
-**Why singleton?**
-- All code paths use same variation ID mapping
-- UI, shader builder, GPU upload stay synchronized
-- Avoids passing registry around everywhere
-
-### Two-Tier ID System
-
-**Core Variations (0-25):** Fixed indices, never change
-```
-ordered_names[0] = "linear"      → shader index 0
-ordered_names[1] = "sinusoidal"  → shader index 1
-...
-ordered_names[25] = "blob"       → shader index 25
-```
-
-**Plugin Variations (26-49):** Dynamic indices per-flame
-- Registry can hold unlimited plugins (hundreds/thousands)
-- Only active plugins get shader indices 26-49
-- Shader is dynamically compiled with active set
-- Example: If flame uses "custom1" and "custom2", they get indices 26 and 27
-
-**Why this design?**
-- Core variations have stable IDs (backward compatibility with presets)
-- Plugin system is flexible (no recompilation to add variations)
-- Shader stays small (only active variations compiled)
+Categories are cosmetic except `Only3D`, which `ShaderBuilder` drops
+from 2D shaders. Every other variation contributes its 2D body in a 2D
+flame. The per-category counts are published in
+[docs/generated/engine-contract.json](../generated/engine-contract.json).
 
 ---
 
-## Core Variations (0-25)
+## Phases
 
-### Basic 2D Variations (0-4)
+A transform applies its variations in three phases
+([TRANSFORMS.md](TRANSFORMS.md), step 4):
 
-**0. Linear**
-```rust
-fn variation_linear(p: vec2<f32>) -> vec2<f32> {
-    return p;  // Identity
-}
-```
-- No transformation
-- Often used as base blend
+| phase | input | combine | weight |
+| --- | --- | --- | --- |
+| `Pre` | the point after the affine | `temp = f(temp)`, chained in order | applied inside the body |
+| `Normal` | `temp` after the pre phase | `result += w · f(temp)` | applied by the dispatcher |
+| `Post` | `result` | `result = f(result)`, chained in order | applied inside the body |
 
-**1. Sinusoidal**
-```rust
-fn variation_sinusoidal(p: vec2<f32>) -> vec2<f32> {
-    return vec2(sin(p.x), sin(p.y));
-}
-```
-- Wraps space periodically
-- Creates wave patterns
+**`Any`** — most shipped variations — is phase-agnostic: it runs in the
+normal phase unless a transform overrides it with JWildfire's
+`fx_priority`. `Transform::variation_priorities` holds the raw JWF
+integer, sparsely: an entry exists only where it differs from the
+variation's natural priority (`Pre` −1, `Normal`/`Any` 0, `Post` 1).
+The dispatcher buckets by sign: negative is pre, positive post. Only
+`Any` variations honour an override; `Pre`, `Normal` and `Post` stay
+where their definition puts them.
 
-**2. Spherical**
-```rust
-fn variation_spherical(p: vec2<f32>) -> vec2<f32> {
-    let r2 = dot(p, p) + 1e-6;
-    return p / r2;
-}
-```
-- Inverts through unit circle
-- Near points go far, far points come near
+An `Any` variation moved to pre or post is still a normal-style body,
+so the dispatcher applies its weight: `temp = temp + w·f(temp)`, or
+`temp = w·f(temp)` if it has `Feature::Replace` (and the same on
+`result` in post). When one variation lands in different phases on
+different transforms, each placement is gated on `xform_id`, and the
+normal placement is the catch-all, so Linked and Final members run it
+there.
 
-**3. Swirl**
-```rust
-fn variation_swirl(p: vec2<f32>) -> vec2<f32> {
-    let r2 = dot(p, p);
-    let sin_r2 = sin(r2);
-    let cos_r2 = cos(r2);
-    return vec2(
-        p.x * sin_r2 - p.y * cos_r2,
-        p.x * cos_r2 + p.y * cos_r2
-    );
-}
-```
-- Rotates points by their distance from origin
-- Creates spiral patterns
+**Order within a phase.** Pre and post run in local-index order, which
+follows the flame's variation order ([TRANSFORMS.md](TRANSFORMS.md),
+*Per-flame local indices*). In the normal phase, accumulating
+variations run first and `Replace` variations last — a `Replace`
+assigns `result = w · f(temp)`, overwriting what the others summed, as
+JWildfire's `pVarTP.x = …` does. Order matters only for chained pre and
+post variations, `Replace`, `NeedsAccum`, and several variations
+writing one colour register; a weighted sum is order-free up to
+rounding. Where one transform's recorded order differs from another's,
+the flame-wide local index decides. The app's sticky superset reorders
+the map canonically, but only for flames where none of these can bite
+([SHADERS.md](SHADERS.md#the-sticky-variation-superset)).
 
-**4. Horseshoe**
-```rust
-fn variation_horseshoe(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p) + 1e-6;
-    return vec2(
-        (p.x - p.y) * (p.x + p.y) / r,
-        2.0 * p.x * p.y / r
-    );
-}
-```
-- Bends space into horseshoe shape
-
-### Advanced 2D Variations (5-15)
-
-**5. Polar**
-```rust
-fn variation_polar(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    return vec2(theta / 3.14159265359, r - 1.0);
-}
-```
-- Converts cartesian → polar, then treats as cartesian
-
-**6. Handkerchief**
-```rust
-fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    return vec2(
-        r * sin(theta + r),
-        r * cos(theta - r)
-    );
-}
-```
-
-**7. Heart**
-```rust
-fn variation_heart(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    return vec2(
-        r * sin(theta * r),
-        -r * cos(theta * r)
-    );
-}
-```
-- Creates heart-shaped patterns
-
-**8. Disc**
-```rust
-fn variation_disc(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    let factor = theta / 3.14159265359;
-    return vec2(
-        factor * sin(3.14159265359 * r),
-        factor * cos(3.14159265359 * r)
-    );
-}
-```
-
-**9. Spiral**
-```rust
-fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p) + 1e-6;
-    let theta = atan2(p.y, p.x);
-    return vec2(
-        (cos(theta) + sin(r)) / r,
-        (sin(theta) - cos(r)) / r
-    );
-}
-```
-
-**10. Hyperbolic**
-```rust
-fn variation_hyperbolic(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p) + 1e-6;
-    let theta = atan2(p.y, p.x);
-    return vec2(sin(theta) / r, r * cos(theta));
-}
-```
-
-**11. Diamond**
-```rust
-fn variation_diamond(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    return vec2(sin(theta) * cos(r), cos(theta) * sin(r));
-}
-```
-
-**12. Ex**
-```rust
-fn variation_ex(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    let p0 = sin(theta + r);
-    let p1 = cos(theta - r);
-    let p0_cubed = p0 * p0 * p0;
-    let p1_cubed = p1 * p1 * p1;
-    return vec2(r * (p0_cubed + p1_cubed), r * (p0_cubed - p1_cubed));
-}
-```
-
-**13. Julia (needs RNG)**
-```rust
-fn variation_julia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    let r = sqrt(length(p));
-    let theta = atan2(p.y, p.x) * 0.5;
-    let offset = if pcg_float(rng) < 0.5 { 0.0 } else { 3.14159265359 };
-    return vec2(r * cos(theta + offset), r * sin(theta + offset));
-}
-```
-- Randomly selects branch of Julia set
-- Requires RNG (non-deterministic)
-
-**14. Bent**
-```rust
-fn variation_bent(p: vec2<f32>) -> vec2<f32> {
-    let x = if p.x >= 0.0 { p.x } else { p.x * 2.0 };
-    let y = if p.y >= 0.0 { p.y } else { p.y * 0.5 };
-    return vec2(x, y);
-}
-```
-- Stretches space in different directions by quadrant
-
-**15. Waves**
-```rust
-fn variation_waves(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
-    // Note: In CPU implementation, uses transform params b, c, e, f
-    // GPU version would need to access transform directly
-    let b = 0.5;  // Placeholder
-    let c = 0.5;
-    let e = 0.5;
-    let f = 0.5;
-    return vec2(
-        p.x + b * sin(p.y / (c * c + 1e-6)),
-        p.y + e * sin(p.x / (f * f + 1e-6))
-    );
-}
-```
-- Creates wave distortions
-
-### 3D Depth Variations (16-17, 23)
-
-These variations modify **only the Z coordinate**, preserving XY structure.
-
-**16. Zcone**
-```rust
-fn variation_zcone(p: vec3<f32>) -> vec3<f32> {
-    let r = sqrt(p.x * p.x + p.y * p.y);
-    return vec3(p.x, p.y, r);  // Z = distance from origin
-}
-```
-- Creates cone shape in Z
-- Good for adding depth to 2D patterns
-
-**17. Flatten**
-```rust
-fn variation_flatten(p: vec3<f32>) -> vec3<f32> {
-    return vec3(p.x, p.y, p.z * 0.5);  // Compress Z
-}
-```
-- Reduces Z range
-- Controls depth extent
-
-**23. ZScale (parameterized)**
-```rust
-fn variation_zscale(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
-    let scale = get_param(xform_id, 23u, 0u);
-    return vec3(p.x, p.y, p.z * scale);
-}
-```
-- User-controlled Z scaling
-- Parameter: scale factor
-
-### Full 3D Variations (18)
-
-**18. Hemisphere**
-```rust
-fn variation_hemisphere(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
-    let r = sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
-    if r < 1e-6 { return p; }
-
-    let normalized = p / r;
-    return normalized * (1.0 + pcg_float(rng) * 0.1);
-}
-```
-- Projects onto sphere surface
-- Creates true 3D structure
-- Needs RNG for variation
-
-### 3D Rotation Variations (19-22)
-
-Apply rotation matrices to the full 3D vector.
-
-**19. PreRotateX**
-```rust
-fn variation_pre_rotate_x(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
-    let angle = get_param(xform_id, 19u, 0u);
-    let cos_a = cos(angle);
-    let sin_a = sin(angle);
-    return vec3(
-        p.x,
-        p.y * cos_a - p.z * sin_a,
-        p.y * sin_a + p.z * cos_a
-    );
-}
-```
-
-**20. PreRotateY**
-```rust
-fn variation_pre_rotate_y(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
-    let angle = get_param(xform_id, 20u, 0u);
-    let cos_a = cos(angle);
-    let sin_a = sin(angle);
-    return vec3(
-        p.x * cos_a - p.z * sin_a,
-        p.y,
-        p.x * sin_a + p.z * cos_a
-    );
-}
-```
-
-**21. PostRotateX** - Same as PreRotateX but applied after other variations
-
-**22. PostRotateY** - Same as PreRotateY but applied after other variations
-
-### Parameterized Variations (24-25)
-
-**24. JuliaN**
-```rust
-fn variation_julian(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
-    let power = get_param(xform_id, 24u, 0u);     // Integer: -10 to 10
-    let dist = get_param(xform_id, 24u, 1u);      // Float: 0.0 to 10.0
-
-    let r = pow(dot(p, p), dist / power * 0.5);
-    let theta = (atan2(p.y, p.x) + 6.28318530718 * floor(pcg_float(rng) * abs(power))) / power;
-
-    return vec2(r * cos(theta), r * sin(theta));
-}
-```
-- Generalized Julia set
-- Parameters: power (symmetry), distance (scaling)
-
-**25. Blob**
-```rust
-fn variation_blob(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
-    let high = get_param(xform_id, 25u, 0u);     // Float: 0.0 to 10.0
-    let low = get_param(xform_id, 25u, 1u);      // Float: 0.0 to 10.0
-    let waves = get_param(xform_id, 25u, 2u);    // Float: 1.0 to 20.0
-
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    let blob_factor = low + (high - low) * 0.5 * (sin(waves * theta) + 1.0);
-
-    return vec2(r * blob_factor * cos(theta), r * blob_factor * sin(theta));
-}
-```
-- Creates blob-like distortions
-- Parameters: high/low (size range), waves (frequency)
+The generated code is shown in [SHADERS.md](SHADERS.md); the
+`fx_priority` model in [jwf-features.md](../projects/jwf-features.md).
 
 ---
 
-## Variation Parameters
+## Features
 
-### Parameter System
+Each flag in `features` changes the variation's signature, the
+dispatch, or what the shader compiles in. The shader builder checks
+them with `has_feature`; the vocabulary on the wire is
+`Feature::to_api_str`.
 
-**Structure:**
-```rust
-pub struct VariationParameter {
-    pub name: String,          // Internal name ("power")
-    pub display_name: String,  // UI name ("Power")
-    pub param_type: ParamType,
-    pub default_value: f32,
-    pub min_value: Option<f32>,
-    pub max_value: Option<f32>,
-}
+| feature | effect |
+| --- | --- |
+| `NeedsRng` | The body takes `rng: ptr<function, RngState>` and draws with `rng_nextf(rng)`. |
+| `NeedsTransform` | The body takes `xform_id, variation_id` even without parameters, to read `transforms[xform_id]` — its affine, colour, or its own weight. |
+| `WritesColor` | Direct colour: the body takes `vc: ptr<function, f32>` and writes a palette index, blended in by the transform's `direct_color`. Compiles `HAS_DC`. |
+| `WritesRgb` | Direct RGB: the body takes `vrc: ptr<function, vec3<f32>>` and writes a colour (it must stay well inside ±1e29; the register starts at a −1e30 sentinel). Compiles `HAS_RGB`. |
+| `NeedsAccum` | The body takes `accum` — the running weighted sum — right after `p`, for JWF variations that read `pVarTP`. Normal and post phases only. |
+| `AlwaysZ` | Its z contribution survives `preserve_z = false` (*Z semantics*). |
+| `NeverZ` | Its z contribution is always zeroed. Mutually exclusive with `AlwaysZ`. |
+| `Replace` | It assigns rather than accumulates (*Phases*). |
+| `CanHide` | The body takes `hide: ptr<function, bool>` and may set it to drop this iteration's splat (JWF `doHide`; the `cut_*` family). On a normal or Linked transform the iteration also reverts its point. |
+| `VolumeSideEmit` | Writes an extra depth-only point to `volume_side_point` / `volume_side_flag`, splatted into the solid depth buffer and shadow maps; the image is untouched. 3D, solid rendering only. |
+| `PlotEmits(n)` | May plot up to `n` extra points per call (*Multi-emit plotting*). |
+| `AnalyticBlur` | An input-independent blur that the analytic blur path can render as a mean splat plus a convolution ([analytic-blur-buffer.md](../archive/projects/analytic-blur-buffer.md)). Carried by `analytic_blur` and `analytic_gaussian_blur`. |
+| `NeedsW` | Carries the per-thread 4th coordinate: read `point_w`, write the raw output to `point_w_out`; the dispatcher weight-sums it like x/y/z. 3D only. |
+| `NeedsMobiusLib` | Splices in the SL(2,ℂ) Möbius library (*Helper libraries*). Changes nothing else. |
 
-pub enum ParamType {
-    Float,    // Continuous value
-    Integer,  // Whole numbers
-    Angle,    // 0-360° (stored as radians)
-}
-```
+Per-feature counts are in the generated contract.
 
-### Adding Parameters to Variation
+### Z semantics
 
-**Registration:**
-```rust
-impl VariationRegistry {
-    pub fn new() -> Self {
-        let mut registry = Self::default();
+JWildfire has three classes of z behaviour, and a 3D shader reproduces
+them in the normal phase:
 
-        // Register variation
-        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, true);
+| class | JWildfire source | our flag | z under `preserve_z = true` | under `false` |
+| --- | --- | --- | --- | --- |
+| gated (default) | `if (isPreserveZCoordinate()) pVarTP.z += amount·z` | none | the body's z | zeroed |
+| always | unconditional `pVarTP.z` writes | `AlwaysZ` | the body's z | the body's z |
+| never | no z write | `NeverZ` | zeroed | zeroed |
 
-        // Add parameters
-        registry.add_parameters("julian", vec![
-            VariationParameter {
-                name: "power".to_string(),
-                display_name: "Power".to_string(),
-                param_type: ParamType::Integer,
-                default_value: 2.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "dist".to_string(),
-                display_name: "Distance".to_string(),
-                param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.0),
-                max_value: Some(10.0),
-            },
-        ]);
+A 2D-shaped 3D body passes `p.z` through, which is exactly the gated
+add when kept and exactly JWF's skip when zeroed. `preserve_z` is a
+`FractalConfig` field ([TRANSFORMS.md](TRANSFORMS.md)).
+`scripts/audit_z_write_semantics.py` classifies the JWildfire sources
+in `output/variation-jwf-source/` and adds `AlwaysZ` where the source
+writes z unconditionally; it reports "never" candidates without
+applying them, because some of our 3D bodies extend a 2D variation on
+purpose. Set either flag by hand only with the source in front of you.
+See [preserve-z-semantics.md](../archive/projects/preserve-z-semantics.md).
 
-        registry
-    }
-}
-```
+### Multi-emit plotting
 
-### GPU Storage
+A `PlotEmits(n)` variation plots extra points without changing the
+walk. The shader builder generates, only when such a variation is
+active (`HAS_PLOT_EMIT`):
+- `emit_plot(p)` and `emit_plot_weighted(p, w)` — an absolute point;
+- `emit_plot_offset(p, w)` — an offset from wherever the iteration
+  finally plots, after post-affine and the Final chain, so a blur-style
+  emitter works on any transform;
+- `emit_suppress_main()` — drop the iteration's own plot but keep the
+  emissions.
 
-Parameters are uploaded to a dedicated storage buffer:
+The contract:
+- The return value keeps its usual meaning; emissions never enter the
+  chaos game.
+- Emissions respect the opacity draw and pass through post-symmetry and
+  every plot-time effect, but not through a Final chain — put an
+  emitter on the Final.
+- `w` scales all four histogram channels, so `w = 1/N` keeps an
+  `N`-emitter's brightness.
+- Do not pair with `CanHide`: a hide on a normal transform abandons the
+  iteration, emissions included.
+- The cap is the largest `n` among the active variations, clamped to
+  16; calls past it are dropped.
 
-```rust
-// In src/gpu/buffers.rs
-struct GpuVariationParams {
-    params: [f32; 400],  // 50 variations × 8 params each
-}
-
-// Access in shader
-fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
-    let idx = variation_id * 8u + param_slot;
-    return variation_params[xform_id].params[idx];
-}
-```
-
-### UI Display
-
-Parameter sliders automatically appear below active variations in the Transforms window:
-
-```rust
-// Pseudo-code for UI rendering
-for (var_name, weight) in &transform.variations {
-    // Weight slider
-    ui.add(Slider::new(weight, 0.0..=2.0).text(var_name));
-
-    // Parameter sliders (if variation has parameters)
-    if let Some(params) = registry.get_parameters(var_name) {
-        for param in params {
-            let value = transform.get_variation_param(var_name, &param.name);
-            match param.param_type {
-                ParamType::Float => {
-                    ui.add(Slider::new(value, param.min..=param.max).text(param.display_name));
-                }
-                ParamType::Integer => {
-                    ui.add(Slider::new(value, param.min..=param.max).step_by(1.0).text(param.display_name));
-                }
-                ParamType::Angle => {
-                    ui.add(Slider::new(value, 0.0..=360.0).suffix("°").text(param.display_name));
-                }
-            }
-        }
-    }
-}
-```
+Three variations use it: `stereogram`, `multi_kaleidoscope`,
+`spray_blur`. See
+[multi-emit-stereograms.md](../archive/projects/multi-emit-stereograms.md).
 
 ---
 
-## Adding New Variations
+## Parameters
 
-### Step-by-Step Guide
+### Types
 
-**1. Register in VariationRegistry**
+`VariationParamDef` has `name`, `display_name`, `param_type`,
+`default_value`, `min_value`, `max_value` and an optional
+`description` (the tooltip). `param!` writes one:
 
-Edit [src/variations/mod.rs](../../src/variations/mod.rs):
+| `param!` form | `ParamType` | stored as |
+| --- | --- | --- |
+| `float, default, min, max` | `Float` | the value; the slider is clamped to min–max |
+| `unlimited_float, default, min, max` | `UnlimitedFloat` | min–max is the slider range; any value can be typed |
+| `int, default, min, max` | `Integer` | an integer in an `f32` |
+| `unlimited_int, default, min, max` | `UnlimitedInteger` | as `Integer`, with typing past the slider |
+| `angle, default` | `Angle` | degrees, slider −360…360; the body converts |
+| `bool, default` | `Boolean` | 0.0 or 1.0 |
+| `enum, default, &[choices]` | `Enum { choices }` | the choice's index |
 
-```rust
-impl VariationRegistry {
-    pub fn new() -> Self {
-        let mut registry = Self::default();
+Each form also takes a trailing description. The Transforms panel
+builds every slider from these definitions.
 
-        // ... existing registrations
+On a transform, values live in `Transform::variation_params` under
+`"variation.param"` keys. A missing key means the definition's default,
+both on the CPU (`variation_param_or_default`) and in the upload.
 
-        // Add your variation
-        registry.register_core(
-            "myvariation",           // Internal name
-            "My Variation",          // Display name
-            VariationCategory::Advanced2D,
-            false                    // needs_rng: true if uses random numbers
-        );
+### Parameter slots
 
-        registry
-    }
-}
-```
+A variation owns `slot_count() = parameters.len() + init_param_count`
+consecutive floats in its transform's parameter block:
 
-**2. Add WGSL Code Generation**
+- **User parameters**, in declaration order, are uploaded as stored.
+- **Derived parameters** are computed on the GPU. `wgsl_init` defines
+  `fn init_<name>(user: array<f32, N>) -> array<f32, M>` with `N` user
+  parameters and `M = init_param_count`. When parameters change, an
+  init compute pass runs it for every (transform, variation) pair that
+  uses it — subflame transforms included — and writes the results after
+  the user parameters. Use it for anything a body would otherwise
+  recompute from its parameters every iteration.
 
-Edit [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) to generate the variation function.
-The shader builder generates WGSL code dynamically - there are no separate variation files.
+The layout is packed per flame: each active variation gets the same
+offset in every transform's block, in local-index order, and the
+generated `get_param(xform_id, variation_id, slot)` maps the local
+index to that offset. A transform's block holds
+`MAX_VARIATION_PARAM_SLOTS = 1600` floats; a flame that needs more logs
+an error and loses parameters. See [BUFFERS.md](BUFFERS.md) and
+[SHADERS.md](SHADERS.md).
 
-**2D Implementation** (generated for 2D mode):
-```wgsl
-fn variation_myvariation(p: vec2<f32>) -> vec2<f32> {
-    // Your transformation here
-    let r = length(p);
-    let theta = atan2(p.y, p.x);
-    return vec2(r * cos(theta * 2.0), r * sin(theta * 2.0));
-}
-```
+### Per-thread state
 
-**3D Implementation** (generated for 3D mode):
-```wgsl
-fn variation_myvariation(p: vec3<f32>) -> vec3<f32> {
-    // For 2D variations in 3D mode, pass Z through
-    let r = length(p.xy);
-    let theta = atan2(p.y, p.x);
-    return vec3(r * cos(theta * 2.0), r * sin(theta * 2.0), p.z);
-}
-```
+`state_count` slots of `f32` per (transform, variation) instance, per
+thread, read and written with `get_state(xform_id, variation_id, slot)`
+and `set_state(xform_id, variation_id, slot, value)`. They start at
+zero; `wgsl_state_init`, if given, runs once at thread start with
+`xform_id`, `variation_id` and `set_state` in scope.
 
-**Note:** Both 2D and 3D code are generated by the same function in shader_builder_v2.rs based on the `render_3d` flag.
+- Slots are allocated only for instances with a non-zero weight; the
+  accessors exist whenever an active variation declares state.
+- Two transforms using the same stateful variation get independent
+  state.
+- With persistent orbits the state rides in the orbit buffer, so it
+  survives from one dispatch to the next. A flame carrying state
+  restarts its orbits at every restart of the accumulation, as
+  JWildfire reinitialises variations per render
+  ([RENDERER.md](RENDERER.md)).
+- `MAX_STATE_SLOTS_PER_FLAME = 1024` is a soft cap: past it the build
+  logs a warning.
 
-**4. (Optional) Add Parameters**
-
-```rust
-registry.add_parameters("myvariation", vec![
-    VariationParameter {
-        name: "strength".to_string(),
-        display_name: "Strength".to_string(),
-        param_type: ParamType::Float,
-        default_value: 1.0,
-        min_value: Some(0.0),
-        max_value: Some(5.0),
-    },
-]);
-```
-
-Then update shader to use parameter:
-```wgsl
-fn variation_myvariation(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
-    let strength = get_param(xform_id, VARIATION_INDEX, 0u);
-    // Use strength in calculation
-}
-```
-
-**5. Done!**
-
-Variation automatically appears in UI under its category. ShaderBuilder will generate correct function calls based on `needs_rng` and parameter presence.
+`subflame_wf` keeps its nested chaos game in five state slots
+([TRANSFORMS.md](TRANSFORMS.md), *Subflames*).
 
 ---
 
-## UI Ordering Rule
+## Writing the WGSL
 
-**CRITICAL:** Variations must be listed in registration order, NOT HashMap order.
+**Names.** The function is `variation_<name>`, in both bodies. Any
+helper is a top-level `fn` prefixed with the variation's name
+(`fn myvar_helper`), because every active variation's bodies share one
+module. The builder splits bodies into top-level functions and emits a
+byte-identical duplicate once — so sibling variations can share a
+helper — and panics, naming both variations, when two bodies define one
+name differently.
 
-**Wrong (random order):**
-```rust
-for var_info in registry.variations.values() {
-    // HashMap iteration is RANDOM!
-}
-```
+**Signature.** Arguments follow `p` in this order, each present only
+when its condition holds:
 
-**Correct (registration order):**
-```rust
-for var_name in registry.ordered_names() {
-    let var_info = registry.get(var_name);
-    // Preserves registration order
-}
-```
+| argument | when |
+| --- | --- |
+| `p: vec2<f32>` (2D) / `vec3<f32>` (3D) | always |
+| `accum: vec2/3<f32>` | `NeedsAccum` |
+| `xform_id: u32, variation_id: u32` | the variation has parameters, or `NeedsTransform` |
+| `rng: ptr<function, RngState>` | `NeedsRng` |
+| `vc: ptr<function, f32>` | `WritesColor` |
+| `vrc: ptr<function, vec3<f32>>` | `WritesRgb` |
+| `hide: ptr<function, bool>` | `CanHide` |
 
-**Why?** Registration order determines shader indices. UI must match to avoid confusion.
+The return type is the point type. Read parameter `k` with
+`get_param(xform_id, variation_id, k)`.
+
+**Both bodies.** `wgsl_3d` is required. For a 2D-shaped map it repeats
+the 2D math on `p.xy` and returns `p.z` unchanged, which gives the
+gated z behaviour above.
+
+**Weight inside the formula.** Some JWildfire variations use their
+weight inside the formula rather than as a final scale. A normal-phase
+port reads its own weight,
+`transforms[xform_id].variations[variation_id]` (so it needs
+`NeedsTransform` or parameters), and divides its result by it, so the
+dispatcher's `w · f(p)` gives back the intended value. `idisc` in
+[defs/apo_misc.rs](../../src/variations/defs/apo_misc.rs) is the
+pattern. Native pre- and post-phase variations always apply their own
+weight.
+
+**Per-flame specialisation.** A body can be re-emitted per flame:
+`synth` and `mondrianomies` cut their unused modes before compilation
+(`variation_specialized_source` in `generate_variation_code`). A new
+specialiser is a new arm there.
+
+**GPU arithmetic.** The shader lints reject self-compares (`x != x`),
+self-divisions (`x / x`) and f32-subnormal literals (`1e-40`) in every
+variation body; Metal runs with fast-math, so NaN tests and `atan2` at
+zero behave differently there — use `!(abs(x) <= 1e32)` and `ff_atan2`.
+The rules and their reasons are in [SHADERS.md](SHADERS.md).
+
+### Helper libraries
+
+| library | spliced in when |
+| --- | --- |
+| `complex.wgsl` | always (dead-code-eliminated when unused) |
+| `subflame.wgsl` | `subflame_wf` or `pre_subflame_wf` is active |
+| `fractwf.wgsl` | any `fract_*_wf` is active |
+| `noise.wgsl` | `dc_perlin`, `crackle`, `dc_crackle_wf` or `crackle_fast` |
+| `voronoi.wgsl` | `crackle`, `dc_crackle_wf` or `crackle_fast` |
+| `polyhedra.wgsl` | `polyhedron` or `polyhedron_volume` |
+| `polychora.wgsl` | `polychoron` or `menger` |
+| `su_mobius.wgsl` | any active variation has `NeedsMobiusLib` |
+
+All but `su_mobius.wgsl` are gated on **names**, in
+`ShaderBuilder::build_definitions`. A downloaded variation can therefore
+reach only `complex.wgsl` and the Möbius library; anything else it
+needs must be in its own body.
 
 ---
 
-## Common Variation Tasks
+## What variations tell the planners
 
-| Task | Files to Modify |
-|------|-----------------|
-| Add 2D variation | [variations/mod.rs](../../src/variations/mod.rs) (register), [shader_builder_v2.rs](../../src/shader_builder_v2.rs) (generate WGSL) |
-| Add 3D variation | [variations/mod.rs](../../src/variations/mod.rs) (register), [shader_builder_v2.rs](../../src/shader_builder_v2.rs) (generate WGSL) |
-| Add parameters | [variations/mod.rs](../../src/variations/mod.rs) `add_parameters()`, shader uses `get_param()` |
-| Change category | [variations/mod.rs](../../src/variations/mod.rs) registration |
-| Fix UI ordering | [ui/mod.rs](../../src/ui/mod.rs) - use `ordered_names()` not `values()` |
+Focused Rendering and the escape engine's IFS modes analyse a flame
+rather than iterate it, and need two kinds of extra knowledge per
+variation. Both live beside the variation, in side tables keyed by its
+name, so most definitions carry nothing.
+
+**Inverse definitions** ([inverse.rs](../../src/variations/inverse.rs)).
+An `InverseDef` names a variation and its `InverseKernel`:
+- `Affine` — what the variation contributes to the transform's affine
+  map at weight `w`, in the planar or the solid space;
+- `Planar` — a 2D kernel the inverse walk can invert;
+- `Solid` — a 3D one.
+
+A kernel may refuse at given parameters (`Refusal::Degenerate`, or
+`Mode` for a mode the walk does not invert). `INVERSES` is append-only
+and holds 26: twelve affine roles, eleven planar kernels and three
+solid ones. The `InverseDef` statics sit in the variations' own
+`defs/*.rs` files. `VariationRegistry::inverse(name)` resolves through
+aliases. The users are the backward planner and IFS analysis in
+`src/scene/` and the escape engine's IFS code
+([FOCUSED-RENDERING.md](FOCUSED-RENDERING.md), [ESCAPE.md](ESCAPE.md)).
+
+**Forward bounds** ([bound.rs](../../src/variations/bound.rs)). Given a
+disc of inputs, a bound names a disc that contains every output, as the
+variation's contribution lands (weight included). It must
+**over-estimate**: too loose only costs the planner efficiency, too
+tight silently drops part of the picture.
+- `BOUNDS` holds hand-derived bounds — `spherical`, `bubble`, `julian`,
+  `pre_blur`, `blur` — each with its derivation beside it.
+- Anything else is derived from the shipped WGSL by
+  [derive.rs](../../src/variations/derive.rs): interval arithmetic over
+  the naga IR, refusing any construct it does not model. Desktop only;
+  the web build has no WGSL front end and uses the hand bounds alone.
+- `ARMED` lists the variations whose random draw picks one of finitely
+  many arms (`julian`, `juliascope`). The planner enumerates the arms,
+  and a replay build rewrites the draw to read a forced arm.
+
+See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
+[ifs-general.md](../projects/deep-zoom/ifs-general.md).
 
 ---
 
-**Last Updated:** 2026-01-24
-**Related Documentation:**
-- [TRANSFORMS.md](TRANSFORMS.md) - Flame algorithm and variation blending
-- [SHADERS.md](SHADERS.md) - Shader implementation
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system
+## Downloaded variations and local plugins
+
+The registry also takes variations at run time, in the API's
+`VariationDownload` JSON, through `register_from_api(download,
+provenance)`:
+- **Downloaded** (`Provenance::Api`). When a flame names an unknown
+  variation, the app fetches it from the API, caches it, and registers
+  it.
+- **Local plugins** (`Provenance::Local`). The same JSON, installed by
+  the user under `plugins/variations/` in the app data directory
+  (localStorage on the web).
+
+`storage::load_installed_resources` loads the cache and then the
+plugins at startup.
+
+The registry's rules:
+- A built-in can never be replaced.
+- A download cannot displace a local plugin.
+- A plugin whose name is already taken is refused, not shadowed.
+- A download with no 2D body is refused unless its category is
+  `only_3d`, and an `only_3d` one with no 3D body is refused.
+- A variation with no 3D body is dropped from 3D flames, with a
+  warning.
+
+A flame that uses a local plugin renders only where the plugin is
+installed (`local_plugin_dependencies` reports it).
+`VariationPhase::Any` has no wire form yet, so a downloaded variation
+cannot honour `fx_priority`. The catalog, caching and curation are in
+[ONLINE.md](ONLINE.md); the design record is
+[api-shared-resources.md](../archive/projects/api-shared-resources.md)
+and [api-managed-variations.md](../archive/api-managed-variations.md).
+
+---
+
+## The docs corpus
+
+A variation's description and authors exist only as the `///` doc
+comment directly above its `pub static` — no blank line between — with
+an optional `# Authors` section:
+
+```rust
+/// What it does, in markdown.
+///
+/// # Authors
+/// - Someone
+pub static MYVAR: VariationDef = VariationDef {
+    name: "myvar",
+```
+
+[docs.rs](../../src/variations/docs.rs) parses that back out
+(`parse_source`), keyed by the `name:` field. `cargo run --release --bin
+export_variations_json` writes the full corpus the API imports — the
+registry's structural data plus that prose — to
+`output/variations-corpus.json`, and **refuses** to write it while any
+built-in lacks a description. Prose reaches the app only through the
+API catalog. Name only authors the source names; an unknown author
+stays unknown.
+
+---
+
+## Testing
+
+- **Shader lints** (`shader_lint` in [mod.rs](../../src/variations/mod.rs))
+  scan every registered variation's four WGSL strings and every file
+  under `shaders/`.
+- **The math probe** (`cargo run --release --bin variation_probe`)
+  evaluates every variation at a fixed adversarial input grid, in 2D
+  and 3D, for cross-platform comparison.
+- **The reachability census** counts which input classes real renders
+  feed each variation.
+- **The contract** — `docs/generated/engine-contract.json`, checked by
+  `contract_is_current` — publishes per-category, per-phase and
+  per-feature counts, so it changes whenever a variation is added.
+
+All four are described in [SHADERS.md](SHADERS.md) and
+[TESTING-GUIDE.md](../TESTING-GUIDE.md).
+
+---
+
+## Adding a variation
+
+1. **Port from the source.** Read the JWildfire/Apophysis source, keep
+   its quirks, and cite the source file in the definition's doc
+   comment. Check the variation is not already registered first: grep
+   `src/variations/defs/` for `name: "<name>"`, and the aliases.
+2. **Write the definition** in a new or existing
+   `src/variations/defs/<file>.rs` — see `defs/octapol.rs` or
+   `defs/szubieta.rs`. Give it a `///` description and, if the source
+   names one, an `# Authors` section.
+3. **Choose phase and features.** Most ports are `Any`. Add `Replace`
+   if the source assigns `pVarTP` rather than adding to it, and
+   `AlwaysZ` if it writes `pVarTP.z` unconditionally (or run
+   `scripts/audit_z_write_semantics.py`).
+4. **Write both bodies** to the signature rules above, helpers
+   name-prefixed, epsilons normal in f32.
+5. **Register it** in `src/variations/defs/mod.rs`: `mod <file>;`,
+   `pub use <file>::*;`, and `&MYVAR` appended to the **end** of
+   `ALL_VARIATIONS`.
+6. **Unit conversions.** If the foreign app stores a parameter in other
+   units, add the pair to `variation_param_from_xml` /
+   `variation_param_to_xml` in [flame_xml.rs](../../src/flame_xml.rs).
+7. **Regenerate the contract**
+   (`UPDATE_CONTRACT=1 cargo test --lib contract_is_current`) and read
+   the diff; run the shader lints; render a flame that uses it in 2D
+   and 3D, and compare against JWildfire.
+
+The variation appears in the UI under its category with no further
+wiring.
+
+## Porting and trackers
+
+- [variation-port-blockers.md](../projects/variation-port-blockers.md) —
+  what is not ported, and what feature would unblock it
+- [jwf-common-variations-port.md](../projects/jwf-common-variations-port.md)
+  — JWildfire's common set
+- [VARIATIONS_TODOS.md](../projects/VARIATIONS_TODOS.md) — running notes
+- [jwf-features.md](../projects/jwf-features.md) — non-variation
+  JWildfire features, including `fx_priority` and variation order
+- [VARIATIONS_WIRE_FORMAT.md](../projects/VARIATIONS_WIRE_FORMAT.md) —
+  the wire contract
+- [accepted-divergences.txt](../accepted-divergences.txt) — known,
+  accepted differences from the references
+
+## Design record
+
+- [VARIATION-SYSTEM-V2.md](../archive/VARIATION-SYSTEM-V2.md) — named variations and per-flame indices
+- [global-registries.md](../archive/global-registries.md)
+- [packed-variation-params.md](../archive/packed-variation-params.md)
+- [variation-init-dispatch.md](../archive/variation-init-dispatch.md)
+- [intra-iteration-state-and-accum.md](../archive/intra-iteration-state-and-accum.md)
+- [needs-transform-and-direct-color.md](../archive/needs-transform-and-direct-color.md)
+- [complex-math-and-klein-group.md](../archive/complex-math-and-klein-group.md)
+- [preserve-z-semantics.md](../archive/projects/preserve-z-semantics.md)
+- [multi-emit-stereograms.md](../archive/projects/multi-emit-stereograms.md)
+- [analytic-blur-buffer.md](../archive/projects/analytic-blur-buffer.md)
+- [variation-bulk-port.md](../archive/projects/variation-bulk-port.md)
+- [VARIATIONS_BULK_METADATA_IMPORT.md](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md)
+- [variation-math-probe.md](../archive/projects/variation-math-probe.md), [variation-reachability-census.md](../archive/projects/variation-reachability-census.md)

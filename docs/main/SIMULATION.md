@@ -11,22 +11,48 @@ a run at a step count*.
 - [RENDERER.md](RENDERER.md) — the flame pipeline this shares a tail with
 - [UI.md](UI.md) — the panel, and how the animation timeline drives the grid
 - [EXPORT.md](EXPORT.md) — stills and video
+- [CONFIG.md](CONFIG.md) — `ConfigManager`, undo, and where `SimConfig` sits
+- [TERRAIN.md](TERRAIN.md) — the 3D terrain view a simulation shares
+  with escape-time pictures
+- [CAMERA.md](CAMERA.md) — the 2D view and the terrain camera's gestures
+- [ESCAPE.md](ESCAPE.md) — the escape-time pictures that use simulation
+  textures
 - [SCRIPTING.md](SCRIPTING.md) — the `sim` script surface
-- [simulation-catalog.md](SIMULATION-CATALOG.md) — every model,
+- [SIMULATION-CATALOG.md](SIMULATION-CATALOG.md) — every model,
   its governing rule, its source, and what bit it. **Read this before
   touching a model.**
+
+**Design record** (archived plans; the code is the authority where they
+differ):
 - [simulation-fractals.md](../archive/projects/simulation-fractals.md) — the
   master plan and its decision record
+- [simulation-pipeline.md](../archive/projects/simulation-pipeline.md),
+  [simulation-integration.md](../archive/projects/simulation-integration.md),
+  [simulation-panel.md](../archive/projects/simulation-panel.md)
+- [simulation-layers.md](../archive/projects/simulation-layers.md) — layers,
+  couplings, the colour stack, `use_transforms`
+- [simulation-derived-fields.md](../archive/projects/simulation-derived-fields.md)
+  — the resolve filters, the matte's distance field, gradients
+- [mccabe-multiscale.md](../archive/projects/mccabe-multiscale.md) — the
+  pyramid, memory, measure passes, exact discs, relief
+- [sim-textures.md](../archive/projects/sim-textures.md) — simulation
+  textures
+- [video-loop-and-sim-timeline.md](../archive/projects/video-loop-and-sim-timeline.md)
+  — the step count as an animation target
 
 **Code locations:**
 - [src/sim/mod.rs](../../src/sim/mod.rs) — `ModelDef`, `SimColoringDef`,
-  the `MODELS` and `COLORINGS` registries, the pure rules
+  `SimPreset`, `SimLayeredPreset`, the `MODELS`, `COLORINGS` and
+  `LAYERED_PRESETS` registries, the pure rules
 - [src/sim/models.rs](../../src/sim/models.rs) — 31 models, inline WGSL
 - [src/sim/colorings.rs](../../src/sim/colorings.rs) — 13 colourings
 - [src/sim/assembler.rs](../../src/sim/assembler.rs) — WGSL assembly
 - [src/sim/renderer.rs](../../src/sim/renderer.rs) — `SimRenderer`
-- [src/config/sim.rs](../../src/config/sim.rs) — `SimConfig` and its paths
+- [src/sim/terrain.rs](../../src/sim/terrain.rs) — the simulation terrain
+- [src/config/sim.rs](../../src/config/sim.rs) — `SimConfig` and its types
 - [src/ui/sim_panel.rs](../../src/ui/sim_panel.rs) — the panel
+- [src/textures/](../../src/textures/mod.rs) and
+  [src/ui/textures_panel.rs](../../src/ui/textures_panel.rs) — textures
 
 ---
 
@@ -74,10 +100,13 @@ body, and:
 | `passes` | dispatches per step, 1–4. A fourth-order PDE needs two; the breakdown model needs three (grow, relax, weigh). |
 | `repeat` | `(pass index, parameter name)` — that pass runs a slider-controlled number of times. A relaxation sweep count cannot be compiled in. |
 | `measure` | a `MeasurePass { param, slices }`: pass 0 writes `slices` scratch slices for the later passes to read at any cell, and runs only while `param` is above 0. Off, the step is the passes after it, and costs what it did before (McCabe's variation radius). |
-| `max_dt` | stability bound for the explicit solver. Exceed it and the field diverges. |
+| `max_dt` | stability bound for the explicit solver at the DEFAULT diffusion rates. Exceed it and the field diverges. The cap actually enforced (config writes, the panel's slider, the renderer's uniform) is `max_dt_for`, which takes the current parameters. |
 | `diffusion` | which parameters are diffusion rates, for the dt ceiling. |
+| `dt_bound` | a bound the model derives itself, overriding the diffusion one (the fourth-order PDEs). |
 | `agents` | an `AgentDef` for the models with a moving population (physarum). |
 | `kernel` | a function building a `SimKernel` lookup table, for the large-radius convolution models (Lenia, SmoothLife, McCabe). |
+| `wgsl_seed` | `fn sim_seed(inside, noise, p)`: the initial state of a cell, given the init shape's mask. |
+| `default_steps`, `default_dt` | what selecting the model sets `steps` and `dt` to (its parameters are cleared to their defaults too). |
 
 **`ModelFeature`** is how a model opts into machinery it needs, so
 nothing pays for what it does not use:
@@ -94,11 +123,25 @@ matte and a transparent PNG work; the matte multiplies into that same
 channel.
 
 A **`SimPreset`** is a whole recipe, not a parameter list: parameters,
-the *measured* step count, `dt`, the initial field the model needs, the
-colouring its state layout wants with that colouring's parameters, and
-optionally a matte and a warp. Applying half of one produces a picture
-of nothing — FitzHugh–Nagumo's constants give spirals from a cut
-wavefront and a **flat field** from noise.
+the *measured* step count, the initial field the model needs (or `None`
+to keep the user's), the colouring its state layout wants with *every*
+parameter that colouring declares, and optionally a matte and a warp
+(`None` for the warp sets the identity, clearing one a previous preset
+left). It carries no `dt`: the model's `default_dt` is applied when the
+model is selected. Applying half of one produces a picture of nothing —
+FitzHugh–Nagumo's constants give spirals from a cut wavefront and a
+**flat field** from noise.
+
+A **`SimLayeredPreset`** (`LAYERED_PRESETS` in
+[src/sim/mod.rs](../../src/sim/mod.rs)) is the same idea for several
+models on one grid: per-layer model and parameters, the couplings as
+`(from, to, form, strength, channel mask)`, steps, `dt`,
+`steps_per_frame`, init, a colouring or a colour stack. `apply` writes
+all of it and resets the matte, the warp and `use_transforms`, so the
+preset is the whole picture. The panel offers them in a Layered presets
+list and applies one as a single undoable config edit. Four ship: two
+coupled Gray–Scotts, two cubic-coupled Brusselators, and two four-field
+Turing rings.
 
 ---
 
@@ -113,21 +156,27 @@ seed ──▶ step × N ──▶ colour ──▶ resolve ──▶ [shared ta
  │         │            │           └─ grid → output size, filtered
  │         │            └─ cells → rgb + coverage, via the palette
  │         └─ 1–4 dispatches per step, batched into submissions
- └─ the initial field: noise, blob(s), ring, line, centre
+ └─ the initial field: noise, blob, blobs, ring, line, centre, broken wave
 ```
 
 The tail from `resolve` on is **the flame renderer's own**, fed an
 `Rgba32Float` image in the accumulator's layout. That is what gives
 simulation mode density effects, tone mapping, the effect chain,
 transparent export and PNG metadata without a line of its own.
-`render_sim` in [src/renderer/render.rs](../../src/renderer/render.rs)
-is the dispatch point, so CLI export, thumbnails, video and the gallery
-inherit it.
+`render_with` in [src/renderer/render.rs](../../src/renderer/render.rs)
+dispatches a Simulation-mode config to `render_sim`, so CLI export,
+thumbnails, textures, video and the gallery inherit it. A render that
+only needs the tail gets a `FlameRenderer::for_tail`, without the
+flame's per-pixel histograms (see [EXPORT.md](EXPORT.md)).
 
 ### The field
 
 A `Rgba32Float` **texture array**, one slice per layer, ping-ponged
-between two allocations. A grid is capped at 8192 cells a side.
+between two allocations. `SimRenderer::allocation_error` refuses a grid
+or an output larger than the device's maximum texture side, or one whose
+two field textures plus the output pass a 4 GiB budget, with a message
+rather than an allocation failure; a caller that skipped the check gets
+a grid clamped to 8192 cells a side.
 
 **Memory slices.** A layer whose model keeps a memory
 (`ModelFeature::Memory`, McCabe's colour memory) has two more
@@ -250,15 +299,34 @@ batch freely while a still stays reproducible.
 
 | group | fields |
 | --- | --- |
-| the run | `model`, `model_params`, `seed`, `init`, `steps`, `steps_per_frame`, `dt`, `boundary` |
-| the grid | `grid` (`Fixed` cells or `Viewport` × scale), `fit` |
-| the resolve | `upscale` (`Nearest`/`Bilinear`/`Bicubic`), `downscale` (`Box`/`Nearest`) |
-| the picture | `coloring`, `coloring_params`, `matte` |
-| motion | `warp` |
+| the run | `model`, `model_params`, `seed`, `init` (`Noise`, `Blob`, `Blobs`, `Ring`, `Line`, `Center`, `BrokenWave`), `steps`, `steps_per_frame`, `dt`, `boundary` |
+| the grid | `grid` (`Fixed { width, height }` or `Viewport { scale }`) |
+| the resolve | `upscale` (`Nearest`/`Bilinear`/`Bicubic`), `downscale` (`Box`/`Nearest`), `fit` (`Letterbox`/`Cover`) |
+| the view | `view`: `center_x`, `center_y` (fractions of the grid), `zoom` (over the fit), `rotation`, `tile` |
+| the picture | `coloring`, `coloring_params`, `matte` (`channel`, `cutoff`, `softness`, `invert`, `edge`) |
+| motion | `warp`: `zoom`, `rotation`, `pan_x`, `pan_y`, `flow`, `filter` (`Bilinear`/`Nearest`/`Bicubic`), `mode` (`Continuous`/`Octaves`), `cull`, `layers` (channel mask) |
 | layers | `layers`, `couplings`, `color_layers`, `use_transforms` |
+| 3D | `terrain` (`SimTerrainConfig`, see below) |
 
-Every field has a `ConfigPath::Sim*`, so everything flows through
-`ConfigManager` with undo, and every numeric one is animatable.
+Every field is skip-if-default, so a config that never touched
+simulation mode serialises without a `sim` block. Fields reach the
+editor through `ConfigPath::Sim*` paths and `ConfigManager`, with undo;
+the layer, coupling and colour-layer lists are added, removed and
+reordered as whole-config edits (`ConfigManager::apply_config_edit`).
+Which paths are animatable is the set `json_to_config_value` accepts
+(see [CONFIG.md](CONFIG.md)); choices such as the boundary, the warp's
+filter and mode, the fit and the matte's channel and edge are not.
+
+What an edit costs the run is its `UpdateType`: `SimRerender` (colour,
+resolve, view, matte, warp, model and colouring parameters, steps, `dt`,
+the terrain: the run continues), `SimResample` (a bound grid's scale: the live
+field is interpolated into the new grid), or `SimReseed` (model, seed,
+init, boundary, grid mode or size: the run restarts).
+
+A bound grid is `round(output × scale)` cells with the scale clamped to
+0.125–4 (`SimGrid::cells_for`), so it re-simulates whenever the output
+size changes, including an export at another size. A `Fixed` grid is the
+same picture at any output size.
 
 **`steps` means two things, and whoever is driving decides which.** To
 the panel's transport it is Max Steps, a *cap*: the run stops there
@@ -274,15 +342,27 @@ so the pattern has somewhere to grow into), `Mirror`.
 
 ## Layers, couplings and the colour stack
 
-A config can hold several **layers** — independent fields in the same
-texture array, each with its own model and parameters. **Couplings**
-feed one layer's field into another's rule:
+A config can hold several **layers** (`SimLayer`: a model, its
+parameters, and whether it is stepped; up to `MAX_LAYERS` = 16) —
+independent fields in the same texture array. With no `layers` list the
+flat `model` / `model_params` are layer 0; adding a second layer moves
+them into the list (`promote_model_to_layers`). **Couplings**
+(`SimCoupling`: `from`, `to`, `form`, `strength`, a channel mask; up to
+32) feed one layer's field into another's rule. Per channel, with *u*
+the driven layer's value and *v* the driving layer's
+(`COUPLING_ACCESSORS` in
+[src/sim/assembler.rs](../../src/sim/assembler.rs)):
 
-| form | what the driving layer contributes |
+| form | term |
 | --- | --- |
-| `Linear`, `Cubic`, `Quadratic` | its value, raised to that power |
-| `Product` | its value multiplied with the target's |
-| `Signal` | its field through its OWN kernel (two-block = activator − inhibitor), or its published `.y` channel |
+| `Linear` | *v* − *u*: diffusion between the layers |
+| `Cubic` | *u*·*v*·(*v* − *u*) |
+| `Quadratic` | *v*² − *u*² |
+| `Product` | *u*·*v* |
+| `Signal` | the driving layer's field through its OWN kernel table (two blocks = activator − inhibitor), or its published `.y` channel |
+
+Each term is multiplied by the coupling's strength and masked to its
+channels.
 
 **Where a coupling lands depends on the target model, not only on the
 form.** Everything is summed *after* the rule and scaled by `dt`, with
@@ -296,12 +376,13 @@ Pre-rule value couplings (linear, cubic, quadratic, product) are
 deliberately not offered: they have no source in the papers this
 catalogue follows.
 
-**Colour layers** are a stack, bottom first, each with its own colouring
-and blend mode and opacity. With a stack, the flat `coloring` fields are
-ignored. A `gather` colour layer reads the first channel of four
-consecutive layers as one colouring's four channels. The blend modes are
-Normal, Lighten, Darken, Multiply, Screen, Overlay, Add and Hard light,
-the last being Overlay decided by the top layer.
+**Colour layers** (`SimColorLayer`, up to 8) are a stack, bottom first,
+each with its source layer, its own colouring, colouring parameters,
+matte, blend mode, opacity and an enabled flag. With a stack, the flat
+`coloring` fields are ignored. A `gather` colour layer reads the first
+channel of four consecutive layers as one colouring's four channels. The
+blend modes are Normal, Lighten, Darken, Multiply, Screen, Overlay, Add
+and Hard light, the last being Overlay decided by the top layer.
 
 **Relief** is a colouring meant for the top of the stack under Hard
 light: one channel of its source layer as a height, smoothed and lit,
@@ -324,8 +405,8 @@ counter-clockwise from east, 135 by default.
   distance field.
 - **The cost** on a 1080p grid: about 2 ms a frame at softness 2, 6 ms
   at the maximum 8.
-- **The same texture** is the height a 3D height-field mode would
-  displace by (mccabe-multiscale plan, section 10).
+- **The same stage** makes the simulation terrain's height (see *The
+  terrain* below).
 
 **`use_transforms`** makes the flame's transforms the layers' per-step
 maps: transform *i* warps layer *i*, by its affine **and its
@@ -336,7 +417,7 @@ is why the single-engine `wasm/sim` module, built without
 
 ---
 
-## Presentation: resolve, matte, warp
+## Presentation: resolve, fit, view, matte, warp
 
 **The resolve** maps the grid to the output. Everything it produces is
 *derived at colour time and never written into the field*, so no model
@@ -345,11 +426,37 @@ on the **state**, and the colouring is called once on the result — not
 the other way round, which matters wherever the colouring is non-linear
 (a clamp being crossed, a palette with structure, a matte).
 
-**The matte** separates figure from background: a channel, a cutoff, a
-softness, and a direction. It multiplies the colouring's coverage, so a
-colouring that already reports empty cells keeps saying so. Applied per
-grid cell **before** the resolve filter, so a magnified edge is
-antialiased by the same filter that magnifies it.
+**The fit** frames a grid whose aspect differs from the output's:
+`Letterbox` shows the whole grid with bars, `Cover` fills the output and
+crops the grid along the axis that does not fit.
+
+**The view** (`SimView`) is a camera the colour pass applies between the
+output's pixels and the grid's cells: a centre as a fraction of the grid
+(0.5, 0.5 is the middle), a zoom over the fit, a rotation in radians
+(positive clockwise on screen, the flame's convention), and `tile`.
+Display only: the step never reads it, so moving it never touches the
+run, and the viewport, an export and a video show the same framing.
+`tile` repeats the field past its edges as the torus a periodic
+boundary makes it; under any other boundary the edges show
+(`SimView::tiles`).
+
+The viewport navigates it through the shared gesture code
+(`ViewKind::Sim2d` in [src/camera/gesture.rs](../../src/camera/gesture.rs)):
+a drag pans, the wheel zooms toward the cursor, a turn rotates, and
+Reset View restores the centre, zoom and rotation while keeping `tile`.
+Fly mode is not offered for the 2D view. See [CAMERA.md](CAMERA.md).
+
+**The matte** separates figure from background: a channel (or `Off`), a
+cutoff, a softness, a direction (`invert`), and an edge. It multiplies
+the colouring's coverage, so a colouring that already reports empty
+cells keeps saying so. Applied per grid cell **before** the resolve
+filter, so a magnified edge is antialiased by the same filter that
+magnifies it. The edge is either `Threshold` — the cutoff on the
+interpolated channel, softness in the channel's units — or `Distance`:
+a signed distance to the edge in cells from a jump flood over the
+occupancy, which interpolates smoothly at any magnification and makes
+the softness a width in cells, at ceil(log2 N) + 2 grid-sized dispatches
+per coloured frame.
 
 **The warp** is a per-step affine resample of the field — zoom,
 rotation, pan, and an analytic swirl — with a `filter` that is
@@ -358,11 +465,96 @@ is a small blur, and a step applies one; over thousands of steps they
 add up and erase reaction–diffusion entirely (measured: a 0.4 %/step
 zoom on the coral preset came out a single dot). Nearest is exact for
 integer pans and for integer state, which bilinear would smear into
-values a sandpile has no meaning for.
+values a sandpile has no meaning for. Bicubic (Catmull-Rom) is sharper
+than bilinear under magnification.
 
-The warp is **not a camera**. It moves the field, and it is why
-viewport navigation is currently refused in Simulation rather than
-misdirected — a display-time view is a separate, unbuilt feature.
+The warp has two **modes**. `Continuous` resamples the whole affine into
+the field every step. `Octaves` applies the zoom alone: the per-step
+zoom accumulates as a view magnification in [1, 2) that the colour pass
+shows, and the field is resampled by exactly 2 each time it reaches 2,
+so there is no per-step blur; rotation, pan and flow are not applied in
+this mode. Its state is a function of the step index alone
+(`SimWarp::octave`), so a run stays reproducible and batch invariant.
+In octave mode `cull` freezes the cells outside the visible window and a
+halo around it, which the next doubling crops away anyway. `layers` is a
+channel mask (bit 0 = x … bit 3 = w) of what the warp moves, continuous
+mode only; moving one channel while the others stay is differential
+advection.
+
+The warp is **not a camera**: it moves the field, and changes what the
+next steps do. The view above is the camera.
+
+---
+
+## The terrain
+
+`sim.terrain` (`SimTerrainConfig`, drawn by
+[src/sim/terrain.rs](../../src/sim/terrain.rs)) shows the grid as a lit
+height field: one channel of one layer, smoothed by the relief stage, is
+the height; the colour stack, once a cell, is the albedo; a solid camera
+looks at it. The world is the grid's cells, x right and y up the
+picture. It is drawn by the escape engine's terrain renderer and its
+tiers, so the lighting, shadows, occlusion and path tracer are the
+escape terrain's — see [TERRAIN.md](TERRAIN.md) for those.
+
+| group | fields |
+| --- | --- |
+| the height | `enabled`, `layer`, `channel` (0–3), `softness` (cells), `height` (a field unit, in grid widths) |
+| the ground | `tiling` (`Single`, or `Repeat` to the horizon, seamless on the periodic boundary), `far` and `haze` (a repeated ground's reach and fog) |
+| the light | `tier` (`Auto`, `Lit`, `PathTraced`), `shadow`, `shadow_sharpness`, `occlusion`, `path` (the path tracer's settings) |
+| the camera | `cam_pitch`, `cam_yaw`, `cam_bank`, `cam_fov`, `cam_distance` (grid widths), `target_x`, `target_y` (fractions of the grid), `target_lift` |
+
+The ground is rebuilt whenever the field or how it is drawn changes —
+every step of a running simulation — so a run shows the lit tier, and in
+`Auto` the path tracer gathers once it rests; an export is path traced
+unless the tier is `Lit`. The viewport's camera is `ViewKind::SimTerrain`,
+which supports fly mode (see [CAMERA.md](CAMERA.md)). Terrain edits are
+`SimRerender`: the run is kept.
+
+The terrain needs the `terrain` Cargo feature (on by default). A build
+without it — the gallery modules — renders a terrain config as its 2D
+picture. In the app a terrain export runs in the background on a device
+of its own (see [EXPORT.md](EXPORT.md)).
+
+---
+
+## Textures
+
+A **texture** is not an image file: it is a Simulation-mode config, a
+recipe that reproduces its field exactly, used by escape-time pictures
+(`EscapeConfig::texture`; see [ESCAPE.md](ESCAPE.md)). The library
+([src/textures/mod.rs](../../src/textures/mod.rs)) lists:
+
+- **Presets**, `assets/textures/*.fflame`, embedded in the binary by
+  `build.rs`.
+- **User textures**, saved from Simulation mode, stored as
+  `textures/<name>.fflame` through the storage backend (the data
+  directory on desktop, browser storage on the web).
+
+**Save as texture** (the Simulation panel) saves the simulation as it
+stands: the live run's step index replaces `steps` once the run has
+advanced, and a viewport-bound grid is fixed at its current size.
+`textures::as_recipe` then fixes the grid (at most `MAX_TEXTURE_SIDE` =
+2048 on its longer side), forces `Letterbox` so the grid fills the image
+edge to edge, and drops any texture of the config's own — textures do
+not nest. Names are sanitised and numbered if taken.
+
+**The Textures panel** ([src/ui/textures_panel.rs](../../src/ui/textures_panel.rs))
+shows presets, then the user's own, each with a preview. Picking one
+copies its recipe into the escape config in one undo step, so the file
+that uses it needs nothing else; user textures can be renamed and
+deleted, and a fractal already using one keeps its own copy. The panel
+is available in Escape and Simulation modes (in Simulation, to manage
+what was saved).
+
+**The image** is derived data. `textures::obtain` reads it from the
+cache, or generates it by rendering the recipe through
+`renderer::render` at the recipe's grid size and caches it. The cache
+key is a SHA-256 of the recipe's file form, its size,
+`TEXTURE_CACHE_VERSION` and the crate version
+([src/textures/cache.rs](../../src/textures/cache.rs)); desktop keeps
+PNGs under `texture_cache/` in the data directory, the web keeps them in
+memory for the session.
 
 ---
 
@@ -370,8 +562,11 @@ misdirected — a display-time view is a separate, unbuilt feature.
 
 A field is only ever the state of the run that produced it, so the
 renderer restarts when the config no longer describes it. `SeedIdentity`
-is the part that matters: the model of every layer, the boundary, the
-init and the seed. Change any of those and the run restarts.
+([src/sim/renderer.rs](../../src/sim/renderer.rs)) is the part that
+matters: the model of every layer, the boundary, the init, the seed, and
+each layer's memory slice count. Change any of those and the run
+restarts. A change of grid size reseeds too (`SimReseed`), except a
+bound grid's scale, which resamples the live field (`SimResample`).
 
 Model and colouring **parameters are deliberately excluded** — turning
 Gray–Scott's feed rate while it runs is what the slider is for, and
@@ -386,7 +581,7 @@ reseeding on it would make every model unusable.
 2. Append it to `MODELS` in [src/sim/mod.rs](../../src/sim/mod.rs)
    (**append-only** — order is the stable ID order).
 3. Add a section to
-   [simulation-catalog.md](SIMULATION-CATALOG.md): the
+   [SIMULATION-CATALOG.md](SIMULATION-CATALOG.md): the
    governing rule as its source states it, the discretisation, the
    parameters, and what bit you. Cite the source and mark it `[read]`
    or `[verify]` honestly.
