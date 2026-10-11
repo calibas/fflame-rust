@@ -448,8 +448,8 @@ FractalArtEditor export-animation -c config.fflame -a animation.anim -o out.mp4 
 | `-w`, `--width` / `-H`, `--height` | 1920 / 1080 |
 | `--fps` | 30 |
 | `--iterations-per-thread` | 1024 |
-| `--video-codec` | `h265`; also `h264`, `vp9` (WebM). An unknown name falls back to H.264 |
-| `--hw-accel` | `none`; `nvenc`, `qsv`, `amf`, `videotoolbox`; falls back to software when the encoder cannot do the codec |
+| `--video-codec` | `h265` (also `hevc`); also `h264`, `vp9` (WebM). An unknown name falls back to the default, H.265, with a message saying so |
+| `--hw-accel` | `none`; `nvenc`, `qsv`, `amf`, `videotoolbox`. An unknown name falls back to the default, software, with a message; so does an encoder that cannot do the codec |
 | `--video-quality` | 18 (CRF, 0–51, lower is better) |
 | `--audio` | none: an MP3, WAV, FLAC or OGG file to mux in |
 | `--audio-offset`, `--audio-fade-in`, `--audio-fade-out` | 0 seconds |

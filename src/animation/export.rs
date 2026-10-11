@@ -46,6 +46,18 @@ impl VideoCodec {
             VideoCodec::VP9 => "VP9 (WebM)",
         }
     }
+
+    /// The codec a `--video-codec` value names (case-insensitive), or
+    /// `None` for a name it does not know -- the caller decides what an
+    /// unknown name falls back to, and should say so.
+    pub fn from_cli_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "h264" => Some(VideoCodec::H264),
+            "h265" | "hevc" => Some(VideoCodec::H265),
+            "vp9" => Some(VideoCodec::VP9),
+            _ => None,
+        }
+    }
 }
 
 /// Hardware acceleration options for video encoding
@@ -109,6 +121,19 @@ impl HardwareAccel {
             HardwareAccel::Qsv => "Intel Quick Sync",
             HardwareAccel::Amf => "AMD AMF",
             HardwareAccel::VideoToolbox => "Apple VideoToolbox",
+        }
+    }
+
+    /// The encoder a `--hw-accel` value names (case-insensitive, with
+    /// the vendor aliases), or `None` for a name it does not know.
+    pub fn from_cli_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "none" | "software" | "cpu" => Some(HardwareAccel::None),
+            "nvenc" | "nvidia" => Some(HardwareAccel::Nvenc),
+            "qsv" | "quicksync" | "intel" => Some(HardwareAccel::Qsv),
+            "amf" | "amd" => Some(HardwareAccel::Amf),
+            "videotoolbox" | "vt" | "apple" => Some(HardwareAccel::VideoToolbox),
+            _ => None,
         }
     }
 
@@ -2453,6 +2478,35 @@ mod tests {
     use super::*;
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
+
+    /// The CLI's names resolve, case-insensitively, and an unknown one
+    /// is `None` so the caller can fall back to the DEFAULT and say so.
+    /// The CLI used to map an unknown codec to H.264 ("Using h264")
+    /// while the default -- and its own `--video-codec` default -- is
+    /// H.265.
+    #[test]
+    fn cli_names_parse_and_unknown_ones_are_left_to_the_caller() {
+        assert_eq!(VideoCodec::from_cli_name("h264"), Some(VideoCodec::H264));
+        assert_eq!(VideoCodec::from_cli_name("HEVC"), Some(VideoCodec::H265));
+        assert_eq!(VideoCodec::from_cli_name(" vp9 "), Some(VideoCodec::VP9));
+        assert_eq!(VideoCodec::from_cli_name("av1"), None);
+        // `--video-codec`'s clap default names the enum's default.
+        assert_eq!(VideoCodec::from_cli_name("h265"), Some(VideoCodec::default()));
+
+        assert_eq!(HardwareAccel::from_cli_name("NVENC"), Some(HardwareAccel::Nvenc));
+        assert_eq!(HardwareAccel::from_cli_name("apple"), Some(HardwareAccel::VideoToolbox));
+        assert_eq!(HardwareAccel::from_cli_name("cuda"), None);
+        // `--hw-accel`'s clap default names the enum's default.
+        assert_eq!(HardwareAccel::from_cli_name("none"), Some(HardwareAccel::default()));
+        for hw in HardwareAccel::all() {
+            assert!(
+                ["none", "nvenc", "qsv", "amf", "videotoolbox"]
+                    .iter()
+                    .any(|n| HardwareAccel::from_cli_name(n) == Some(*hw)),
+                "{hw:?} has no CLI name"
+            );
+        }
+    }
 
     /// An animated supersample keeps the panel's full range.
     ///
