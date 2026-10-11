@@ -218,9 +218,9 @@ WebGPU's 128 MB floor. Desktop adapters commonly report far more, so 8K
 can take the direct path.
 
 **CLI** (`export_headless`):
-- Escape and Simulation always go to `render`. Above one binding they
-  are refused: the shared tail allocates its histogram at the export
-  size whatever the mode.
+- Escape and Simulation always go to `render`, at any size: the tail
+  they use holds no histogram (`FlameRenderer::for_tail`), and `render`
+  refuses what the device cannot hold (`TooLarge`) before allocating.
 - A flame goes to `HighResExporter` when the histogram exceeds the
   binding, otherwise to `render`. `--engine flamerenderer` or
   `--engine highres` forces one (for parity testing; forcing the direct
@@ -228,8 +228,9 @@ can take the direct path.
   allocate).
 
 **App** (`export_custom_size`, rule in `route_custom_size_export`):
-- Escape and Simulation: `Direct` (`render`), or `TooLarge` above one
-  binding, reported with a toast.
+- Escape and Simulation: `Direct` (`render`), at any size; a size the
+  device refuses comes back from `render` as `TooLarge`, reported with a
+  toast.
 - A flame: `HighRes` — in the background — when the histogram exceeds
   the binding **or** `max_iterations` exceeds 250,000,000
   (`BACKGROUND_EXPORT_ITER_THRESHOLD`), so a long render shows progress

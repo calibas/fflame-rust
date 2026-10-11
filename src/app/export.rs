@@ -228,21 +228,10 @@ pub async fn export_headless(
             ExportEngine::HighRes => true,
             ExportEngine::FlameRenderer => false,
         };
-    // The escape and simulation engines hand their picture to the flame
-    // renderer's tail, which allocates its histogram at the export size
-    // whatever the mode: past one binding that is a validation error, and
-    // wgpu panics on it. Refused here, as the app refuses it.
-    if non_flame_mode && hist_size > max_binding {
-        return Err(format!(
-            "{} export at {}x{} exceeds this GPU's buffer limit ({} MB > {} MB) -- try a smaller size",
-            if config.render_mode == crate::scene::transforms::RenderMode::Escape { "escape-time" } else { "simulation" },
-            render_width,
-            render_height,
-            hist_size / (1024 * 1024),
-            max_binding / (1024 * 1024),
-        )
-        .into());
-    }
+    // The escape and simulation engines render through `render()`, which
+    // gives them the flame renderer's tail alone (no histogram) and refuses
+    // what this device cannot hold before allocating -- so the flame's
+    // histogram size does not limit them.
     if !non_flame_mode && engine == ExportEngine::FlameRenderer && hist_size > max_binding {
         log::warn!(
             "--engine flamerenderer forced at {}x{}, but histogram {} MB > binding {} MB — allocation will likely fail.",
