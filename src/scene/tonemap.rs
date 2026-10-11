@@ -267,20 +267,37 @@ impl ToneCurve {
         }
     }
 
-    /// Move an existing point
-    pub fn move_point(&mut self, index: usize, new_x: f32, new_y: f32) {
-        if index >= self.points.len() {
-            return;
+    /// Move an existing point, and return its index afterwards.
+    ///
+    /// The points stay sorted by x, so an interior point dragged past a
+    /// neighbour changes index. A caller that holds the index across a
+    /// drag must carry on with the returned one: the editor kept the old
+    /// index, so the moment the point passed its neighbour it started
+    /// moving the neighbour instead. Endpoints move vertically only, and
+    /// an interior point stays between them.
+    pub fn move_point(&mut self, index: usize, new_x: f32, new_y: f32) -> usize {
+        let len = self.points.len();
+        if index >= len {
+            return index;
         }
 
         // Don't allow moving endpoints horizontally
-        if index == 0 || index == self.points.len() - 1 {
+        if index == 0 || index == len - 1 {
             self.points[index].y = new_y.clamp(0.0, 1.0);
-        } else {
-            self.points[index].x = new_x.clamp(0.0, 1.0);
-            self.points[index].y = new_y.clamp(0.0, 1.0);
-            self.points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+            return index;
         }
+
+        let mut point = self.points.remove(index);
+        point.x = new_x.clamp(0.0, 1.0);
+        point.y = new_y.clamp(0.0, 1.0);
+        // Among the rest (still sorted): after every point left of the
+        // new x, before every point right of it, and among equal x where
+        // it already was -- what the stable sort this replaces did.
+        let left = self.points.partition_point(|p| p.x < point.x);
+        let right = self.points.partition_point(|p| p.x <= point.x);
+        let at = index.clamp(left, right).clamp(1, self.points.len() - 1);
+        self.points.insert(at, point);
+        at
     }
 }
 
@@ -311,6 +328,34 @@ mod tests {
         curve.add_point(CurvePoint::new(0.5, 0.7));
         assert_eq!(curve.points.len(), 3);
         assert_eq!(curve.evaluate(0.5), 0.7);
+    }
+
+    /// Dragging a point past its neighbour re-sorts the curve; the
+    /// returned index is where the dragged point went, so the next
+    /// frame's move is still the same point.
+    #[test]
+    fn a_point_moved_past_its_neighbour_reports_its_new_index() {
+        let mut curve = ToneCurve::linear();
+        curve.add_point(CurvePoint::new(0.3, 0.3));
+        curve.add_point(CurvePoint::new(0.6, 0.6));
+
+        let at = curve.move_point(1, 0.8, 0.9);
+        assert_eq!(at, 2);
+        assert_eq!((curve.points[at].x, curve.points[at].y), (0.8, 0.9));
+        assert_eq!(curve.points[1].x, 0.6, "the neighbour moved instead");
+        let xs: Vec<f32> = curve.points.iter().map(|p| p.x).collect();
+        assert_eq!(xs, vec![0.0, 0.6, 0.8, 1.0]);
+
+        // Back again, across it and down to the left endpoint: it stays
+        // inside the endpoints.
+        let at = curve.move_point(at, 0.0, 0.1);
+        assert_eq!(at, 1);
+        assert_eq!(curve.points[0].x, 0.0);
+        assert_eq!(curve.points[0].y, 0.0, "the endpoint was disturbed");
+
+        // Endpoints move vertically only.
+        assert_eq!(curve.move_point(3, 0.5, 0.7), 3);
+        assert_eq!((curve.points[3].x, curve.points[3].y), (1.0, 0.7));
     }
 
     #[test]
