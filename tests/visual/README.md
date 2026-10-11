@@ -89,8 +89,10 @@ other's output and baseline.
    config without `"deterministic_rng": true` is skipped with a warning.
 2. **Render** — for each config:
    `FractalArtEditor export -i <config> -o current/<name>.png --width 800 --height 600 --iterations-per-thread 256`,
-   with a 60-second timeout. The iterations-per-thread value is pinned
-   because every baseline was recorded at 256.
+   with a 60-second timeout. The test's old `current/<name>.png` is
+   deleted first, so a failed export cannot leave a stale render in its
+   place. The iterations-per-thread value is pinned because every
+   baseline was recorded at 256.
 3. **Compare** — against `baseline/<name>.png` (below).
 4. **Throughput** — after all renders, flags any render whose
    iterations per second fall below the run's median divided by 12.
@@ -128,16 +130,18 @@ The constants are `BASELINE_SIZE`, `TOLERANCE_MEAN`, `TOLERANCE_MAX`,
 
 ### Updating baselines
 
-`--update-baseline` runs the suite, then walks every PNG in `current/`:
+`--update-baseline` runs the suite, then takes the renders THIS run
+produced (a `--category` run touches only that category's baselines;
+a test whose export failed keeps its baseline):
 
-- a PNG whose baseline still passes the tolerance compare is left
+- a render whose baseline still passes the tolerance compare is left
   alone, so the baseline file stays byte-identical;
 - anything else is written as a new thumbnail.
 
-It then rewrites `baseline/baseline_manifest.json` (sizes, tolerances,
-per-image hashes, git hash). It updates whatever is in `current/`, not
-only what this run rendered: after a `--category` run, renders left
-over from earlier runs of other categories are considered too.
+It then merges this run's entries into `baseline/baseline_manifest.json`
+(sizes, tolerances, per-image hashes, git hash), keeping the entries of
+baselines the run did not touch and dropping entries whose baseline file
+no longer exists.
 
 Look at the changed images before committing them.
 

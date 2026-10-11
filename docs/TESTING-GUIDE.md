@@ -238,7 +238,9 @@ python tests/visual/run_tests.py --update-baseline
   out of that check (their `Iterations` metadata is not a sample count).
 - **Updating:** `--update-baseline` runs the suite, then rewrites only
   the baselines whose renders moved beyond the tolerance; the rest stay
-  byte-identical. It considers every PNG in `tests/visual/current/`.
+  byte-identical. It considers only the renders this run produced (each
+  test deletes its old output first), so a `--category` run touches only
+  that category, and it merges them into `baseline_manifest.json`.
 - **Every config must set `"deterministic_rng": true`**, or it is
   skipped.
 
@@ -261,8 +263,11 @@ than a pixel mismatch. Treat a lone throughput failure as a measurement
 to repeat, not a regression to chase.
 
 `tests/visual/run_all_tests.py` runs this suite and the WASM suite (§4)
-one after the other and appends render timings to
-`tests/visual/performance_history.csv`.
+one after the other, compares each render's time with the previous
+run's, and appends every render's timing to
+`tests/visual/performance_history.csv`, which is where the previous run
+is read from. (It used to read timings from the baselines; the desktop
+ones are metadata-stripped thumbnails, so every desktop delta was 0%.)
 
 ---
 
