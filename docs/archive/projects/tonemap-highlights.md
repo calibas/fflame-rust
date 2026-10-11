@@ -1,5 +1,7 @@
 # Tonemap: hue-preserving highlights — **shipped**
 
+> **Archived 2026-10-10** -- finished. Read [TONE-MAPPING.md](../../main/TONE-MAPPING.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Status
 
 All three phases landed on the `tonemap-highlights` branch (commits

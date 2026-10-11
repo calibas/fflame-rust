@@ -1,5 +1,7 @@
 # Accumulator unification (Phase 8 of the unified-render-pipeline merge)
 
+> **Archived 2026-10-10** -- finished (8a-8d; 8e dropped). Read [RENDERER.md](../../main/RENDERER.md), [COLOR.md](../../main/COLOR.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Collapse the last remaining split between the interactive renderer and

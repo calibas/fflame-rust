@@ -1,5 +1,7 @@
 # Variation math probe
 
+> **Archived 2026-10-10** -- finished: the tool ships. Read [SHADERS.md](../../main/SHADERS.md), [TESTING-GUIDE.md](../../TESTING-GUIDE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Evaluates every shipped variation's shader arithmetic directly and
 writes one compact, diffable report. Run it on two platforms, diff the
 reports, and a divergence names the variation and the input that moved.

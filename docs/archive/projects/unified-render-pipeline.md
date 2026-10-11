@@ -1,5 +1,7 @@
 # Unified render pipeline
 
+> **Archived 2026-10-10** -- finished. Read [RENDERER.md](../../main/RENDERER.md), [EXPORT.md](../../main/EXPORT.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Collapse the three render paths (interactive `FlameRenderer`, high-res

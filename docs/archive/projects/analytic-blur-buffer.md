@@ -1,5 +1,7 @@
 # Analytic Blur Buffer (experimental)
 
+> **Archived 2026-10-10** -- finished (phases 1-2; phase 3 deferred). Read [RENDERER.md](../../main/RENDERER.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Status: **Phase 1 + Phase 2 complete** on branch `analytic-blur-buffer`. The
 sections below are the original design; this status block records what
 actually shipped and where it diverged.

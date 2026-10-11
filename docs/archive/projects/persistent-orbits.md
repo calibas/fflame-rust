@@ -1,5 +1,7 @@
 # Persistent orbits: keeping each thread's chaos-game orbit between dispatches
 
+> **Archived 2026-10-10** -- finished. Read [RENDERER.md](../../main/RENDERER.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Status: **done** (2026-10-01), branch `persistent-orbits`, steps 0-8:
 every renderer keeps its orbits, with no setting to turn them off; the
 governor shortens every dispatch; and the Rendering menu can switch the

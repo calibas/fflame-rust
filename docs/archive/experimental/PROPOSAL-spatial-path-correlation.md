@@ -1,5 +1,7 @@
 # Spatial Path Correlation - Experimental Proposal
 
+> **Archived 2026-10-10** -- superseded: path tracking shipped, and Focused Rendering met the deep-zoom goal another way. Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Experimental idea - not yet implemented
 **Date:** 2025-10-28
 **Complexity:** Very High

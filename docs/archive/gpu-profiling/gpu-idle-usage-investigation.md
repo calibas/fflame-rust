@@ -1,5 +1,7 @@
 # GPU Idle Usage Investigation
 
+> **Archived 2026-10-10** -- implemented: event-driven rendering (2025-11-22). Read [RENDERER.md](../../main/RENDERER.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Date:** 2025-10-30
 **Status:** Investigated, Root Cause Identified
 **Priority:** Low (Performance acceptable, optimization deferred)

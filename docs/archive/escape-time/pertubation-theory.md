@@ -1,3 +1,5 @@
+> **Archived 2026-10-10** -- a source conversation; implemented in src/escape/. Read [ESCAPE.md](../../main/ESCAPE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 
 "Do you know much about rendering the Mandelbrot using pertubation theory?"
 

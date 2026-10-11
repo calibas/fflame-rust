@@ -1,5 +1,7 @@
 # Audio System Design
 
+> **Archived 2026-10-10** -- finished (phases 0-7; 8 and 9 not started). Read [ANIMATION.md](../../main/ANIMATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Overview
 
 Audio integration for the fractal flame renderer, enabling:

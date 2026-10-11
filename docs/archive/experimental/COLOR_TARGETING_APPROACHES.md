@@ -1,5 +1,7 @@
 # Color Targeting in Light/Dark Areas - Implementation Approaches
 
+> **Archived 2026-10-10** -- obsolete: the accumulator formula it builds on was removed. Read [COLOR.md](../../main/COLOR.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Date:** 2025-10-27
 **Status:** ⚠️ **POC Tests Invalidated - Re-Testing Required**
 **Goal:** Provide artistic control over how colors appear in sparse (dark) vs dense (bright) areas

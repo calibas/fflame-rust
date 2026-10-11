@@ -1,5 +1,7 @@
 # Perturbation in delta form: the second design (plan, 2026-09-17)
 
+> **Archived 2026-10-10** -- superseded by the flame deep-zoom plan (its own §10 redirects there). Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md), [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 The first design is
 [ifs-nonlinear-perturbation.md](ifs-nonlinear-perturbation.md): the
 CPU walks the view centre's inverse orbit in `BigFloat`, hands over

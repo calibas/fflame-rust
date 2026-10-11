@@ -1,5 +1,7 @@
 # Palette System Improvements
 
+> **Archived 2026-10-10** -- finished. Read [PALETTE_LIBRARY.md](../../main/PALETTE_LIBRARY.md), [COLOR.md](../../main/COLOR.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Branch:** `feature/palette-improvements`
 **Created:** 2025-01-06
 **Status:** Phase 1, 2, 3, 4, 5 Complete

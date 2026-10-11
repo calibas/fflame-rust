@@ -1,5 +1,7 @@
 # Simulation textures: generated images for the escape engine
 
+> **Archived 2026-10-10** -- finished. Read [SIMULATION.md](../../main/SIMULATION.md), [ESCAPE.md](../../main/ESCAPE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Status: **planned**, branch `escape-textures` (off `escape-coloring`),
 2026-10-03. This is the plan being followed, not a summary of it.
 

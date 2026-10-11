@@ -1,5 +1,7 @@
 # The WASM load crash
 
+> **Archived 2026-10-10** -- fixed 2026-09-03; kept as the record. Read [WASM.md](../../WASM.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** FIXED 2026-09-03 by moving the web build to winit's
 `EventLoopExtWebSys::spawn` (below). No longer reproducible after
 repeated attempts in Firefox, where it previously failed on the first

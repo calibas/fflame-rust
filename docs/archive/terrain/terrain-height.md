@@ -1,5 +1,7 @@
 # Escape terrain: height quality
 
+> **Archived 2026-10-10** -- finished (H1-H6). Read [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** built on `terrain-height` (2026-10-10): H1 to H6, and the
 export-memory work alongside (docs/main/EXPORT.md).
 

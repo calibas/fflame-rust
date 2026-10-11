@@ -1,5 +1,7 @@
 # Signal Panel
 
+> **Archived 2026-10-10** -- finished. Read [ANIMATION.md](../../main/ANIMATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Overview
 
 Refactor the Audio panel into a broader **Signal panel** that manages all signal sources: audio-derived signals, procedural generators, and loaded signal files.

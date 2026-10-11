@@ -1,5 +1,7 @@
 # Variation reachability census
 
+> **Archived 2026-10-10** -- finished: the tool ships (its usage lines here are stale; the CLI is in src/census/). Read [SHADERS.md](../../main/SHADERS.md), [TESTING-GUIDE.md](../../TESTING-GUIDE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status: BUILT** — phases 1–3 shipped (instrument 05deb591, runtime
 9a218b15, corpus + rank in the phase-2/3 commit). Phase 4's commit
 decision is resolved below, for now: **the report is not committed.**

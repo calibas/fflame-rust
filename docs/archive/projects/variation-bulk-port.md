@@ -1,5 +1,7 @@
 # Variation Bulk Port from JWildfire / Chaotica
 
+> **Archived 2026-10-10** -- finished: the campaign closed; porting continues in the trackers. Read [VARIATIONS.md](../../main/VARIATIONS.md), [variation-port-blockers.md](../../projects/variation-port-blockers.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Port the bulk of standard fractal-flame variations from upstream JWildfire/Chaotica into our `src/variations/defs/` registry, then upload them to the API as the variation cache's primary content. Target: from ~80 today to ~500 commonly-used variations.

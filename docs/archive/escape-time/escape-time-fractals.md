@@ -1,5 +1,7 @@
 # Escape-Time, Field & Orbit-Trap Fractals
 
+> **Archived 2026-10-10** -- the engine shipped; this is its dated design record. What is left moved to escape-sim-followups. Read [ESCAPE.md](../../main/ESCAPE.md), [escape-sim-followups.md](../../projects/escape-sim-followups.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** SHIPPED and live on the `escape-time` branch — 26
 formulas, 14 colorings, 3 field formulas, deep zoom by perturbation
 with big-float references, relief shading, auto contrast, and the

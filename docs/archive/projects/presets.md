@@ -1,3 +1,5 @@
+> **Archived 2026-10-10** -- abandoned scratch notes: presets are bundled in assets/presets.fflame. Read [CONFIG.md](../../main/CONFIG.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Ongoing project to create better initial Presets:
 
 

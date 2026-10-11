@@ -1,30 +1,43 @@
-# Current Projects
+# Projects
 
-This folder contains documentation for **active development work** and ongoing projects.
+Work in progress: plans being built, paused projects, open backlogs and
+the trackers they feed. How a finished system works is in
+[docs/main/](../main/); ideas not yet started are in
+[docs/experimental/](../experimental/); finished plans go to
+[docs/archive/projects/](../archive/projects/) under the same name, with
+a banner saying what happened (move them with `scripts/move_docs.py`,
+which rewrites the references in code comments too).
 
-## What Goes Here
+## Plans
 
-- **Active feature development** - In-progress work on new features
-- **Refactoring projects** - Ongoing code reorganization efforts
-- **Investigation reports** - Active research into problems or improvements
-- **Project plans** - Detailed plans for multi-step projects
-- **Work-in-progress designs** - Architecture proposals being implemented
+| Doc | Status |
+|---|---|
+| [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
+| [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
 
-## File Organization
+## Paused
 
-Use descriptive names that indicate the project:
-- `feature-name-plan.md` - Planning document
-- `feature-name-progress.md` - Progress tracking
-- `investigation-topic.md` - Research and findings
+| Doc | Status |
+|---|---|
+| [deep-zoom/](deep-zoom/) | Focused Rendering (flame deep zoom): shipped as an opt-in feature, coverage work paused. Start at [deep-zoom/README.md](deep-zoom/README.md). |
+| [escape-coloring-survey.md](escape-coloring-survey.md) | The escape colouring survey: items 1-5 built, 6-7 partly. |
+| [pyfflame.md](pyfflame.md) | Python bindings: the tier 1-4 backlog, none of it built yet. |
 
-## When to Archive
+## Open lists
 
-When a project is **completed** or **abandoned**, move the documentation to:
-- `docs/archive/` - For completed work that's now part of the system
-- `docs/experimental/` - Future ideas and experimental designs
+| Doc | What it tracks |
+|---|---|
+| [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, the path tracer's speed, known gaps, and what the escape engine has not built. |
+| [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |
+| [config-v2-migration.md](config-v2-migration.md) | Config value translations planned for the v1 -> v2 bump. The bump shipped without the `levels_high` and `dof_blur_strength` translations: open. |
+| [VARIATIONS_TODOS.md](VARIATIONS_TODOS.md) | The variation backlog. |
+| [variation-port-blockers.md](variation-port-blockers.md) | Why particular variations are not ported yet. |
+| [jwf-common-variations-port.md](jwf-common-variations-port.md) | Porting JWildfire's common variations (and the cut family). |
 
+## Standing references
 
-**Related:**
-- [docs/main/](../main/) - Current implementation documentation
-- [docs/experimental/](../experimental/) - Future ideas and experimental designs
-- [docs/archive/](../archive/) - Historical documentation
+| Doc | What it is |
+|---|---|
+| [jwf-features.md](jwf-features.md) | JWildfire features: shipped, deferred, and why. |
+| [VARIATIONS_WIRE_FORMAT.md](VARIATIONS_WIRE_FORMAT.md) | The variation wire format shared with the API repository. |
+| [macos-release-checklist.md](macos-release-checklist.md) | The macOS release procedure, called from [docs/RELEASE.md](../RELEASE.md). |

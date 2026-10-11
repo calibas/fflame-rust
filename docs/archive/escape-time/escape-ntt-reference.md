@@ -1,5 +1,7 @@
 # GPU reference-orbit computation (the FractalShark NTT direction)
 
+> **Archived 2026-10-10** -- shelved: phase 0 measured the GPU path 7.7x slower. Read [ESCAPE.md](../../main/ESCAPE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Plan written 2026-08-28; scheduled AFTER the TDR-safety items and the
 orbit-store compression. This is a project, not a tail item — it gets
 a measurement-gated go/no-go before any real investment.

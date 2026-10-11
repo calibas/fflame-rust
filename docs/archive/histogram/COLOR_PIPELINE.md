@@ -1,5 +1,7 @@
 # Color and Tone Mapping Pipeline
 
+> **Archived 2026-10-10** -- obsolete: the colour pipeline it describes was replaced. Read [COLOR.md](../../main/COLOR.md), [TONE-MAPPING.md](../../main/TONE-MAPPING.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Overview
 
 This document traces the complete pipeline from fractal iteration to final display, documenting how colors are computed, accumulated, and tone-mapped for display.

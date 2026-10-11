@@ -1,5 +1,7 @@
 # Camera unification: one 2D view, one 3D camera, one fly mode
 
+> **Archived 2026-10-10** -- finished (P0-P8, PR #130). Read [CAMERA.md](../../main/CAMERA.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Branch `camera-unification`. Status: **plan, decided** -- written
 2026-10-08, the user's answers recorded 2026-10-09 (§3). Nothing is
 built yet.

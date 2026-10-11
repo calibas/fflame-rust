@@ -1,5 +1,7 @@
 # Affine flames by distance: 2D fields and 3D raymarching in the escape engine
 
+> **Archived 2026-10-10** -- finished through phase 3 (mode D shipped); open work in escape-sim-followups. Read [ESCAPE.md](../../main/ESCAPE.md), [TERRAIN.md](../../main/TERRAIN.md), [escape-sim-followups.md](../../projects/escape-sim-followups.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** plan of record, 2026-09-10, on branch `ifs-distance`.
 **Phase 0 built 2026-09-10** (§5, with the census result recorded
 there). **Phase 1 built 2026-09-10** (§5, with its three

@@ -1,5 +1,7 @@
 # One material per picture (camera-unification P7, C7)
 
+> **Archived 2026-10-10** -- finished. Read [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** decided and built, 2026-10-09, on `camera-unification`
 (§4: the highlight kept in both tiers, one material per picture beside
 the lights). What was built is §6.

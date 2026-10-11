@@ -1,5 +1,7 @@
 # The measure by the inverse walk: the flame's density at any zoom (plan, 2026-09-17)
 
+> **Archived 2026-10-10** -- superseded by the flame deep-zoom plan. Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md), [flame-deep-zoom.md](../../projects/deep-zoom/flame-deep-zoom.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 The third of three plans written together; the first is
 [ifs-perturbation-delta.md](ifs-perturbation-delta.md), whose §9
 orders the work of all three, and the second is

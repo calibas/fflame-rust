@@ -1,5 +1,7 @@
 # Per-transform Linked and Final transforms
 
+> **Archived 2026-10-10** -- finished. Read [TRANSFORMS.md](../../main/TRANSFORMS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Replace the current "global Final transform" model with first-class

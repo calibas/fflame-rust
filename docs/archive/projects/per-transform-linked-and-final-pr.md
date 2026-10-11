@@ -1,5 +1,7 @@
 # Per-Transform Linked and Final Transforms (PR)
 
+> **Archived 2026-10-10** -- merged (PR #68). Read [TRANSFORMS.md](../../main/TRANSFORMS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Branch: `per-transform-linked-and-final`
 
 Replaces the global single-Final-transform model with first-class per-transform attachments. Every normal transform now owns ordered lists of **Linked** (dynamics extension) and **Final** (view filter) attachments. Linked and Final live in dedicated GPU pools; the chain is dispatched from a per-normal attachment list.

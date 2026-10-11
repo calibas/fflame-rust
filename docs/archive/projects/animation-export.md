@@ -1,5 +1,7 @@
 # Animation Export System
 
+> **Archived 2026-10-10** -- superseded: video export pipes frames into ffmpeg. Read [EXPORT.md](../../main/EXPORT.md), [ANIMATION.md](../../main/ANIMATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Overview
 
 Export animations as high-quality PNG sequences or video files. Each frame is rendered to completion (max_iterations) for production-quality output.

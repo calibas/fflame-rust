@@ -1,5 +1,7 @@
 # Sticky shader compilation
 
+> **Archived 2026-10-10** -- finished (layers A and B; C not built). Read [SHADERS.md](../../main/SHADERS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Avoid recompiling the flame shader when the flame changes — for the
 gallery's random walks, in-app batch generation, thumbnails, and the
 editor's own variation add/remove churn. This is the working plan; it is

@@ -1,5 +1,7 @@
 # Simulation Mode — master plan
 
+> **Archived 2026-10-10** -- finished. Read [SIMULATION.md](../../main/SIMULATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Phases 0–5 shipped, and phase 6 is all but done as of
 2026-09-10 — the script, the WASM module and the documentation landed
 that day. What is left is at the end of §5 and is three items, none of

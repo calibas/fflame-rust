@@ -1,5 +1,7 @@
 # Tone Mapping Improvements Project
 
+> **Archived 2026-10-10** -- finished (P3 dropped). Read [TONE-MAPPING.md](../../main/TONE-MAPPING.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Overview
 
 Improve the tone mapping system with Photoshop-style controls for better artistic control over the final image. The goal is to provide more intuitive controls than Apophysis's gamma/brightness/vibrancy system.

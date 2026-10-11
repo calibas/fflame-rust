@@ -1,5 +1,7 @@
 # API: shared resources — variations, effects, scripts, palettes
 
+> **Archived 2026-10-10** -- finished (only the shared palettes, §8.6, deferred). Read [ONLINE.md](../../main/ONLINE.md), [VARIATIONS.md](../../main/VARIATIONS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Plan. Nothing here is implemented yet.
 
 Pairs with a server-side counterpart (`api-shared-resources-server.md`,
