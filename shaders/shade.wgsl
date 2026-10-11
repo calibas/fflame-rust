@@ -557,7 +557,11 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // not the other way around.
     if (sp.fog_strength > 0.0 && d < 1.0e37) {
         let fog_factor = 1.0 - exp(-sp.fog_strength * max(d - sp.fog_start, 0.0));
-        let background = vec3<f32>(sp.background_r, sp.background_g, sp.background_b);
+        // The background arrives as the sRGB the user picked; `rgb` is
+        // linear. Decode it as the tonemap does before compositing
+        // (`srgb_to_linear` there: the 2.2 power), or the fog heads for
+        // a colour lighter than the background behind it.
+        let background = pow(max(vec3<f32>(sp.background_r, sp.background_g, sp.background_b), vec3<f32>(0.0)), vec3<f32>(2.2));
         rgb = mix(rgb, background, fog_factor);
     }
     shade_store(lx, ly, vec4<f32>(rgb, alpha_out));

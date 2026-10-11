@@ -6124,11 +6124,13 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     var rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
     // Depth fog AFTER lighting, so distant lit surfaces fade toward
     // the background like atmosphere rather than being lit on top of
-    // it -- the ordering the shade pass settled on.
+    // it -- the ordering the shade pass settled on. The fog colour is
+    // the background as picked (sRGB); `rgb` is linear, so decode it
+    // the way the tonemap does before it composites the background.
     if (ifs_fog_strength() > 0.0) {
         let depth = t * dot(dir, ifs_forward());
         let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
-        rgb = mix(rgb, ifs_fog_color(), f);
+        rgb = mix(rgb, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
     }
     return rgb;
 }
@@ -7652,10 +7654,12 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
     pt_first(h, ray.d);
     var l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
+    // Fog toward the background, decoded from the sRGB it was picked in
+    // to the linear `l` (as the lit tier's rig does).
     if (ifs_fog_strength() > 0.0) {
         let depth = t * dot(ray.d, ifs_forward());
         let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
-        l = mix(l, ifs_fog_color(), f);
+        l = mix(l, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
     }
     return vec4<f32>(l, 1.0);
 }

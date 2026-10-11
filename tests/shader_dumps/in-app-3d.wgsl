@@ -1599,8 +1599,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let fog_distance = max(fog_depth - params.fog_start, 0.0);
                     let fog_factor = 1.0 - exp(-params.fog_strength * fog_distance);
 
-                    // Blend toward background color
-                    let background = vec3<f32>(params.background_r, params.background_g, params.background_b);
+                    // Blend toward background color. The sample colour is
+                    // linear (palette texels decode with srgb_to_linear);
+                    // the background arrives as the sRGB the user picked,
+                    // which the tonemap decodes the same way before it
+                    // composites. Mixing toward the raw value fogged a
+                    // grey 0.5 background toward 0.5 linear -- about
+                    // sRGB 0.73, far lighter than the background shown
+                    // behind it. Black and white are unchanged.
+                    let background = srgb_to_linear(vec3<f32>(params.background_r, params.background_g, params.background_b));
                     final_color = mix(final_color, background, fog_factor);
                 }
 
