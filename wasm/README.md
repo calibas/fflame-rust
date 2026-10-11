@@ -8,13 +8,20 @@ whatever repo consumes the modules.
 | module | does | size (raw / gzip) | needs |
 | --- | --- | --- | --- |
 | `fflame-script` | script + seed + params → FractalConfig JSON | 3.93 MB / 1.01 MB | nothing (pure CPU; worker-safe) |
-| `fflame-render` | FractalConfig JSON + dims → RGBA pixels, **any render mode** | 3.29 MB / 0.80 MB | WebGPU |
+| `fflame-render` | FractalConfig JSON + dims → RGBA pixels, **any render mode** | 3.29 MB / 0.80 MB¹ | WebGPU |
 | `fflame-flame` | the same, flames only | 3.12 MB / 0.73 MB | WebGPU |
 | `fflame-escape` | the same, escape-time only | 1.52 MB / 0.46 MB | WebGPU |
 | `fflame-sim` | the same, simulations only | 1.46 MB / 0.43 MB | WebGPU |
 
-**Which renderer to take.** `fflame-render` renders every mode and is
-the one to embed if you do not know what the config will be. The three
+¹ Measured when `fflame-render` carried the flame and escape-time
+engines only; it now carries the simulation engine too (its
+`Cargo.toml` features) and has not been re-measured.
+
+**Which renderer to take.** `fflame-render` renders every mode — 2D and
+3D flames, escape-time fractals and simulations — and is the one to
+embed if you do not know what the config will be. (A terrain config
+renders as its 2D picture in every gallery module: none is built with
+the `terrain` feature.) The three
 single-engine modules are the SAME SOURCE built with different Cargo
 features, and exist for one reason: download size. Turning off
 `engine-flame` drops the 646-variation catalogue and its 1.1 MB of
@@ -216,15 +223,14 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
   iterations **per pixel** — 30M at 512×512 (~115/px) is a good tile,
   and a 2× larger edge wants ~4× the iterations for the same look.
 - `iterationsPerThread` (optional, default 256, clamped to 64–4096) is
-  the trajectory depth per dispatch: trajectories don't survive across
-  dispatches. It does not change the total budget — `iterations` does
-  that — but it does change how the budget is spent: depth vs breadth.
-  Deeper orbits reach structure that only emerges many iterations in
-  and carry less restart overhead; orbits that sink to a point or
-  wander off-frame waste more budget before a restart resamples the
-  space. Flame-dependent, not monotonically better — and it changes
-  rendered pixels either way. The CLI export defaults to 1024; pass
-  1024 here for parity with it.
+  how many iterations each GPU thread runs in one dispatch. Orbits
+  **persist across dispatches** — each thread resumes where the last
+  dispatch left it, and burn-in is paid when the orbits start, not once
+  per dispatch — so this slices the budget rather than setting how deep an
+  orbit gets. It does not change the total budget (`iterations` does
+  that) and the picture does not depend on it; the exact pixels do,
+  because each dispatch seeds its own random streams. The CLI export
+  defaults to 1024; pass 1024 here for pixel parity with it.
 - **Inputs are treated as hostile**, because a config and a URL are both
   shareable artifacts:
   - dimensions are checked against the device's
@@ -242,13 +248,18 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
   nothing.
 - GPU renders are *not* bit-reproducible across machines/backends —
   the config JSON is the deterministic artifact, pixels are not.
-- Device lifecycle is internal: a device is created per render and
-  destroyed after, so long sessions don't accumulate GPU memory
-  (WebGPU defers dropped-buffer reclamation to the JS GC). The cost is
-  an adapter request plus one shader compile per call — milliseconds
-  against a typical multi-hundred-ms render. If you profile a future
-  need, the optimization is a persistent renderer + shader cache in
-  the module, not in the caller.
+- Device lifecycle is internal: **one device and one renderer are
+  reused across calls**, built on the first `render` and rebuilt only
+  when the tile size changes (the old renderer is destroyed
+  explicitly). A device per render was tried first and is what a long
+  gallery scroll exhausted — WebGPU leaves dropped buffers to the JS
+  GC, so `requestDevice` eventually failed with "Not enough memory
+  left". Reuse also keeps the shader cache warm across configs that
+  share a variation set. `render.release()` frees the device and
+  everything on it when the page is done; the next `render` builds a
+  new one. One exception for now: a simulation tile builds its grid
+  afresh on every call and nothing destroys it explicitly, so its
+  buffers wait for the JS GC.
 - 3D configs (`render_mode: "3d"`) render exactly like the desktop
   app; nothing extra to do. Animation is **not** in this module: it
   renders stills. An Animation-wing consumer renders frames by
@@ -277,7 +288,8 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
 ## Testing the modules
 
 ```bash
-cd wasm/script && cargo test          # CLI-parity: byte-identical fixtures
-cd wasm/render && cargo test          # GPU smoke test (skips without an adapter)
+cd wasm/script && cargo test --profile gallery-test   # CLI-parity: byte-identical fixtures
+cd wasm/render && cargo test --profile gallery-test   # GPU smoke test (skips without an adapter)
+cd wasm/sim    && cargo test --profile gallery-test   # likewise wasm/flame, wasm/escape
 node wasm/script/check_node_parity.mjs  # the BUILT wasm artifact vs the same fixtures
 ```

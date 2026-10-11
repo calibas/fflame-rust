@@ -541,7 +541,7 @@ engines by feature:
 | crate | package | engine features |
 | --- | --- | --- |
 | `wasm/script` | `fflame-script` | `engine-flame`, `engine-escape`, `engine-sim` — script + seed + params → config JSON |
-| `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape` |
+| `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape`, `engine-sim` |
 | `wasm/flame` | `fflame-flame` | `engine-flame` |
 | `wasm/escape` | `fflame-escape` | `engine-escape` |
 | `wasm/sim` | `fflame-sim` | `engine-sim` |
@@ -551,7 +551,8 @@ different features. An escape or simulation config sent to a module
 without that engine is refused with `RenderError::EngineMissing`
 ("this build has no simulation engine"); a flame config sent to a
 module without `engine-flame` renders against a catalog holding only
-`linear`. So `fflame-render` refuses simulations. The JavaScript API and its guarantees are in
+`linear`. `fflame-render` has all three engines and renders every
+mode. The JavaScript API and its guarantees are in
 [wasm/README.md](../../wasm/README.md); building and releasing them are
 in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 
