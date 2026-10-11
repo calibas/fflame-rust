@@ -72,7 +72,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 
 ### Colour, palettes, tone
 - **Colour modes**: Palette (Apophysis colour-coordinate evolution), Speed (distance per iteration), PathMap (colours by the word Focused Rendering draws through; needs it, 2D). [COLOR.md](docs/main/COLOR.md)
-- **Palette packs** (`assets/palettes/packs/*.json`): **the folder is the catalog** -- desktop scans it at startup (`enabled_by_default` inside each pack); `starter_pack.json` is also embedded as the offline fallback (`BUILTIN_PACK_FILE`; both discovery paths skip that name); WASM discovers packs via a manifest `build.rs` generates (guarded by `generated_manifest_matches_packs_folder`) and lazy-fetches them. Loose `assets/palettes/*.palette` files load into a "Local Files" pack. Clicking a library palette sets the config's palette to a copy; the editor's Save to Library writes `custom_palettes.json`. [PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md)
+- **Palette packs** (`assets/palettes/packs/*.json`): **the folder is the catalog** -- desktop scans it at startup (`enabled_by_default` inside each pack); `starter_pack.json` is also embedded as the offline fallback (`BUILTIN_PACK_FILE`; both discovery paths skip that name); WASM discovers packs via a manifest `build.rs` generates (guarded by `generated_manifest_matches_packs_folder`) and fetches them from `pkg/assets/palettes/packs/`. Loose `assets/palettes/*.palette` files load into a "Local Files" pack. Clicking a library palette sets the config's palette to a copy; the editor's Save to Library writes `custom_palettes.json`. [PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md)
 
 ### UI ([UI.md](docs/main/UI.md))
 - Dockable panels (`PanelType` in `src/ui/workspace.rs`: 30), each in its own `src/ui/*.rs`; cross-panel results bubble through `UiResponse` (`src/ui/response.rs`) and are handled in `src/app/ui_handlers.rs`. Menus: File, Edit, View, Mode, Rendering, Window, Help (`src/ui/menu_bar.rs`), the language (globe) menu on the right; `src/ui/compact_menu.rs` is the mobile equivalent. Both Window menus draw their rows from `visibility::WINDOW_MENU`.
@@ -99,7 +99,7 @@ A background export (PNG on its own device, high-res, video) **freezes the viewp
 ```bash
 cargo run --release                      # desktop app (binary: FractalArtEditor)
 # CLI subcommands: export, export-animation, generate (Rhai scripts), list-encoders
-cargo run --release -- export -i tests/visual/configs -o tests/visual/current
+cargo run --release -- export -i tests/visual/configs/2d -o output/visual-2d   # one folder (not recursive); the whole suite is run_tests.py
 ./build-wasm.sh                          # web app (or build-wasm.bat): --profile dist + wasm-bindgen, not wasm-pack
 wasm-pack build --target web --release   # gallery modules only: in wasm/render, script, flame, escape, sim
 ```
@@ -108,7 +108,7 @@ CLI flags (`--width`, `-H`, `--supersample`, `--transparent`, `--premultiplied`,
 ### Releasing, and changing anything the API sees
 **See [docs/RELEASE.md](docs/RELEASE.md).** Nothing runs on push or on a timer.
 ```bash
-python scripts/release.py check      # every fast gate (tests, wasm builds, contract, shader dumps, doc links, engine feature matrix, gallery parity)
+python scripts/release.py check      # every fast gate (versions agree, tests, wasm builds, contract, shader dumps, doc links, all five gallery crates' tests -- the single-engine ones are the engine feature matrix)
 python scripts/release.py            # ...and a changelog preview
 ```
 Two committed files are **generated**, and a stale one fails a test rather than failing silently -- regenerate deliberately and read the diff:

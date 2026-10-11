@@ -257,9 +257,8 @@ ctx.putImageData(new ImageData(new Uint8ClampedArray(t.pixels), t.width, t.heigh
   left". Reuse also keeps the shader cache warm across configs that
   share a variation set. `render.release()` frees the device and
   everything on it when the page is done; the next `render` builds a
-  new one. One exception for now: a simulation tile builds its grid
-  afresh on every call and nothing destroys it explicitly, so its
-  buffers wait for the JS GC.
+  new one. A simulation tile builds its grid afresh on every call and
+  destroys it when the call returns.
 - 3D configs (`render_mode: "3d"`) render exactly like the desktop
   app; nothing extra to do. Animation is **not** in this module: it
   renders stills. An Animation-wing consumer renders frames by
