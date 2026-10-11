@@ -56,7 +56,7 @@ echo "Generating JavaScript bindings..."
 #   LinkError: import object field '__wbindgen_object_drop_ref' is not
 #   a Function
 # Keeping it out of ./pkg entirely means the served bundle is never
-# touched, in any order, and the locator gets its second module.
+# touched, in any order.
 OUTDIR=./pkg
 if [ "$SYMBOLS" = "1" ]; then OUTDIR=./pkg-names; mkdir -p pkg-names; fi
 wasm-bindgen $BINDGEN_FLAGS --out-dir "$OUTDIR" --target web "./target/wasm32-unknown-unknown/$PROFILE/fractal_flame_wgpu.wasm"
@@ -66,14 +66,16 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Hand the names module to scripts/wasm-locate.py under the filename it
-# looks for, and leave everything else in ./pkg alone.
+# A names build stops here: nothing of it goes into ./pkg. (It used to
+# copy its module to pkg/*_bg.names.wasm for scripts/wasm-locate.py,
+# which has read only the shipped module since it stopped comparing
+# builds -- and the copy left a second 19 MiB module in the directory a
+# deploy uploads.)
 if [ "$SYMBOLS" = "1" ]; then
-    cp -f pkg-names/fractal_flame_wgpu_bg.wasm pkg/fractal_flame_wgpu_bg.names.wasm
     echo ""
-    echo "  names module -> pkg/fractal_flame_wgpu_bg.names.wasm"
+    echo "  names build -> ./pkg-names (module + JS glue, a matched pair)"
     echo "  ./pkg is untouched: the served bundle is still the shipped build."
-    echo "  Reproduce with it, then: python scripts/wasm-locate.py <offset>"
+    echo "  Serve ./pkg-names in place of ./pkg to reproduce; a trap names its function."
     exit 0
 fi
 
