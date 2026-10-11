@@ -1,6 +1,6 @@
 # Fractal Browser
 
-> **Archived 2026-10-10** -- finished. Read [PRESET-BROWSER.md](../../main/PRESET-BROWSER.md) for how it works now; this is the record of what was planned and measured when it was written.
+> **Archived 2026-10-10** -- finished. Read [FRACTAL-BROWSER.md](../../main/FRACTAL-BROWSER.md) for how it works now; this is the record of what was planned and measured when it was written.
 
 **Branch:** `feature/fractal-browser`
 **Status:** Complete - All phases done

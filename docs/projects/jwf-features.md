@@ -120,10 +120,19 @@ The deferred items are loosely coupled — the zoom math is the heaviest single 
 
 ## Deferred (not urgent)
 
+The first two entries below have since shipped and are kept here for
+their record of JWildfire's dispatch model; how they work now is in
+[VARIATIONS.md](../main/VARIATIONS.md) (phases, `fx_priority`) and
+[TRANSFORMS.md](../main/TRANSFORMS.md).
+
 ### `<var>_fx_priority` — per-variation priority / phase ordering
 
-**Status**: Not implemented. Silently ignored on import (we don't parse
-`*_fx_priority` at all — confirmed by grep over `src/flame_xml.rs`).
+**Status**: Shipped 2026-06-18 (commit `5824745e`): parsed on import
+(`parse_fx_priority` in `src/flame_xml.rs`) and written back on export.
+Open: an override on a Linked or Final transform is stored but never
+reaches the shader (`collect_phase_overrides` reads only the normal
+transforms). The text below is the original analysis; its "not
+implemented" framing predates the commit.
 
 **JWF XML attribute** (per variation, e.g. `combimirror_fx_priority="-1"`):
 an integer that controls the order variations are applied *within* a
@@ -252,6 +261,11 @@ equals `result = w·body`), so single-variation flames render identically;
 only multi-variation normal xforms change.
 
 ### Variation order preservation
+
+**Status**: Shipped. Under the sticky shader (2026-08-08), normal-phase
+flames compile against a sorted canonical variation map; a flame whose
+order matters (chained pre/post phases) falls back to its own order.
+See [SHADERS.md](../main/SHADERS.md).
 
 The dispatch now emits a flame's variations in **import order** (and UI
 add order), not registry order — because the running accumulator

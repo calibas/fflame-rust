@@ -147,9 +147,12 @@ resets the display driver for the whole desktop.
 
 - The video's deep-zoom memory check looks only at the base config, not
   at each frame's zoom.
-- The escape-time and simulation engines still allocate a flame
-  histogram they never read, which is what sets their export size
-  ceiling.
+- The export size ceiling for escape and simulation pictures is still
+  the flame histogram's (`route_custom_size_export`'s `TooLarge`,
+  `export_headless`), though `render_with` now gives them
+  `FlameRenderer::for_tail`, which allocates no histogram. The video
+  loop (`animation/export.rs`) still builds the full
+  `FlameRenderer::with_palette_size` for every engine.
 - No PNG input for `export` (a PNG's embedded config); flame-only
   metadata fields are written for escape and simulation pictures.
 - Browser exports don't generate texture layers, for a 2D or a terrain
