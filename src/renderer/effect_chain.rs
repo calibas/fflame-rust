@@ -109,8 +109,8 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 /// **Why 48 and not more.** Each effect gets one slot in a shared
 /// uniform buffer, and the slot stride is set by
 /// `UNIFORM_BUFFER_OFFSET_ALIGNMENT` (256 B), not by the struct — so
-/// everything up to 240 B of parameters is free, and the buffer stays
-/// 32 × 256 B = 8 KiB. 48 floats (192 B, + 16 B of width/height/pad =
+/// everything up to 240 B of parameters is free, and the buffer starts
+/// at 32 × 256 B = 8 KiB (`MAX_EFFECT_SLOTS`). 48 floats (192 B, + 16 B of width/height/pad =
 /// 208 B) sits inside that with room spare.
 ///
 /// Going much beyond ~60 stops being free and stops being possible:
@@ -120,8 +120,18 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 /// parameters to a storage buffer — a real change, not a constant bump.
 pub const MAX_EFFECT_PARAMS: usize = 48;
 
-/// Maximum number of effect slots in the shared params buffer
-/// Supports up to 32 effects running in a single frame
+/// The shared params buffer's INITIAL slot count (one slot per effect
+/// pass in a frame).
+///
+/// Not a ceiling: `reserve_slots` grows the buffer to the next power of
+/// two when a frame's chains need more. They can: `distance_field` alone
+/// takes its jump-flood pass count + 2 slots (13 at 1080p), so three of
+/// them and one more effect is 40. The runner used to clamp the 33rd
+/// allocation to slot 32 -- an offset equal to the buffer's size -- and
+/// the write and bind group there were validation errors that rejected
+/// the whole frame (a frozen viewport; a panic on an export device).
+/// Published in the engine contract as `effect_slots`; per-effect
+/// parameters (`MAX_EFFECT_PARAMS`) are the real fixed limit.
 pub const MAX_EFFECT_SLOTS: usize = 32;
 
 /// Alignment for uniform buffer dynamic offsets (256 bytes is typical minimum)
@@ -289,6 +299,9 @@ pub struct EffectChainRunner {
     /// Each effect writes to slot_index * UNIFORM_BUFFER_OFFSET_ALIGNMENT
     /// This allows multiple effects to have different params in a single submit
     params_buffer: Buffer,
+    /// Slots `params_buffer` holds: `MAX_EFFECT_SLOTS` until a frame
+    /// needs more (`reserve_slots`).
+    slot_capacity: usize,
     /// Current slot index for params buffer (reset each frame)
     current_slot: usize,
     /// Linear sampler for texture sampling
@@ -332,13 +345,7 @@ impl EffectChainRunner {
         // Single shared params buffer with slots for all effects
         // Each slot is aligned to UNIFORM_BUFFER_OFFSET_ALIGNMENT (256 bytes)
         // This allows multiple effects to have independent params in a single submit
-        let buffer_size = MAX_EFFECT_SLOTS as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT;
-        let params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Effect Params Buffer (Indexed)"),
-            size: buffer_size,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let params_buffer = Self::create_params_buffer(device, MAX_EFFECT_SLOTS);
 
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Effect Sampler"),
@@ -352,6 +359,7 @@ impl EffectChainRunner {
             density_textures: None,
             color_textures: None,
             params_buffer,
+            slot_capacity: MAX_EFFECT_SLOTS,
             current_slot: 0,
             sampler,
             width,
@@ -378,14 +386,47 @@ impl EffectChainRunner {
         self.params_buffer.destroy();
     }
 
-    /// Allocate a slot and return its buffer offset
-    fn allocate_slot(&mut self) -> u64 {
-        let slot = self.current_slot;
-        self.current_slot += 1;
-        if self.current_slot > MAX_EFFECT_SLOTS {
-            log::warn!("Effect slot overflow! Max {} effects per frame", MAX_EFFECT_SLOTS);
-            self.current_slot = MAX_EFFECT_SLOTS; // Clamp to avoid panic
+    fn create_params_buffer(device: &Device, slots: usize) -> Buffer {
+        device.create_buffer(&BufferDescriptor {
+            label: Some("Effect Params Buffer (Indexed)"),
+            size: slots as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Make room for `needed` more slots this frame, before any of them
+    /// is allocated.
+    ///
+    /// Grows the params buffer to the next power of two past what the
+    /// frame needs. The old buffer is dropped, not destroyed: bind groups
+    /// made earlier in this frame (the density chain's, say) and the
+    /// writes queued for them still reference it, and wgpu keeps it alive
+    /// until they are done. The new buffer's first `current_slot` slots go
+    /// unused this frame; `reset_slots` starts the next one at 0, and the
+    /// capacity stays, so a chain that needed it once grows it once.
+    fn reserve_slots(&mut self, device: &Device, needed: usize) {
+        let want = self.current_slot + needed;
+        if want <= self.slot_capacity {
+            return;
         }
+        let capacity = want.next_power_of_two().max(MAX_EFFECT_SLOTS);
+        log::debug!("Effect params buffer: {} -> {} slots", self.slot_capacity, capacity);
+        self.params_buffer = Self::create_params_buffer(device, capacity);
+        self.slot_capacity = capacity;
+    }
+
+    /// Allocate a slot and return its buffer offset. `reserve_slots`
+    /// must have made room first.
+    fn allocate_slot(&mut self) -> u64 {
+        // A slot past the buffer is an offset at or beyond its end: the
+        // write and the bind group there are validation errors that reject
+        // the whole frame. Reserving is the fix; this only keeps a missed
+        // reservation from becoming that (it reuses the last slot, so one
+        // effect may read another's parameters).
+        debug_assert!(self.current_slot < self.slot_capacity, "effect slot allocated without reserve_slots");
+        let slot = self.current_slot.min(self.slot_capacity - 1);
+        self.current_slot += 1;
         slot as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT
     }
 
@@ -874,6 +915,7 @@ impl EffectChainRunner {
         self.ensure_textures(device, EffectCategory::Density);
 
         // Pre-allocate slots for all effects (before borrowing textures)
+        self.reserve_slots(device, enabled_effects.len());
         let slot_offsets: Vec<u64> = enabled_effects.iter().map(|_| self.allocate_slot()).collect();
 
         // Extract data needed for effect execution
@@ -997,12 +1039,11 @@ impl EffectChainRunner {
         // The distance-field effect runs one pass per slot: seed +
         // jump floods + composite.
         let jfa_slots = Self::jfa_pass_count(self.width, self.height) as usize + 2;
+        let slots_of = |e: &EffectInstance| if e.effect_type == "distance_field" { jfa_slots } else { 1 };
+        self.reserve_slots(device, enabled_effects.iter().map(|e| slots_of(e)).sum());
         let slot_offsets: Vec<Vec<u64>> = enabled_effects
             .iter()
-            .map(|e| {
-                let count = if e.effect_type == "distance_field" { jfa_slots } else { 1 };
-                (0..count).map(|_| self.allocate_slot()).collect()
-            })
+            .map(|e| (0..slots_of(e)).map(|_| self.allocate_slot()).collect())
             .collect();
         // The JFA resources leave `self` for the loop below (the
         // color ping-pong holds the &mut borrow).
@@ -1384,22 +1425,23 @@ mod include_tests {
 mod gpu_tests {
     use super::*;
 
-    /// A device with `FLOAT32_FILTERABLE`, which the density chain needs
-    /// (None, and the test skips, without an adapter offering it).
-    fn device() -> Option<(Device, Queue)> {
+    /// A device with `features` (None, and the test skips, without an
+    /// adapter offering them). The density chain needs
+    /// `FLOAT32_FILTERABLE`; the colour chain nothing.
+    fn device_with(features: wgpu::Features) -> Option<(Device, Queue)> {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
                 ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
             let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
-            if !adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
+            if !adapter.features().contains(features) {
                 return None;
             }
             adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("effect chain test"),
-                    required_features: wgpu::Features::FLOAT32_FILTERABLE,
+                    required_features: features,
                     required_limits: wgpu::Limits::default(),
                     memory_hints: wgpu::MemoryHints::Performance,
                     experimental_features: Default::default(),
@@ -1439,7 +1481,7 @@ mod gpu_tests {
     /// black under the Log tone map.
     #[test]
     fn a_hit_count_past_half_float_survives_the_density_chain() {
-        let Some((device, queue)) = device() else {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
             eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
             return;
         };
@@ -1464,6 +1506,44 @@ mod gpu_tests {
             assert!((px[3] / 1.0e6 - 1.0).abs() < 1e-6, "texel {i}: alpha {} is not the million hits it was given", px[3]);
             assert!((px[0] - 0.5).abs() < 1e-6 && (px[2] - 0.75).abs() < 1e-6, "texel {i}: the colour changed: {px:?}");
         }
+        chain.destroy();
+    }
+
+    /// A frame's chains may need more parameter slots than the buffer
+    /// starts with. Three distance fields at 1080p take 13 slots each (11
+    /// jump floods + seed + composite), and a vignette one more: 40
+    /// against 32. The 33rd allocation used to be clamped to slot 32 --
+    /// an offset equal to the buffer's size -- so its write and bind group
+    /// were validation errors and the whole frame was rejected.
+    #[test]
+    fn a_chain_needing_more_than_the_initial_slots_validates() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 1920;
+        const H: u32 = 1080;
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[200, 120, 40, 255]);
+        let effects: Vec<EffectInstance> = ["distance_field", "distance_field", "distance_field", "vignette"]
+            .into_iter()
+            .map(EffectInstance::new)
+            .collect();
+        let mut chain = EffectChainRunner::new(&device, W, H);
+        let needed = 3 * (EffectChainRunner::jfa_pass_count(W, H) as usize + 2) + 1;
+        assert!(needed > MAX_EFFECT_SLOTS, "the fixture needs {needed} slots, not more than the initial {MAX_EFFECT_SLOTS}");
+        // Two frames: the first grows the buffer, the second reuses it.
+        for frame in 0..2 {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("color") });
+            chain.reset_slots();
+            let ran = chain.run_color_effects(&device, &queue, &mut encoder, &view, &effects);
+            queue.submit(Some(encoder.finish()));
+            let error = pollster::block_on(scope.pop());
+            assert!(error.is_none(), "frame {frame}: the colour chain failed validation: {error:?}");
+            assert!(ran, "frame {frame}: the chain ran");
+            assert!(chain.slot_capacity >= needed, "frame {frame}: {} slots for a chain of {needed}", chain.slot_capacity);
+        }
+        let _ = device.poll(PollType::wait_indefinitely());
         chain.destroy();
     }
 }
