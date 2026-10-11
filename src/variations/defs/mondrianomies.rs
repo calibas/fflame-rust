@@ -263,7 +263,7 @@ fn mnd_rot(v: vec2<f32>, ang: u32) -> vec2<f32> {
 }
 
 // MND_EXACT_STUB_BEGIN
-// Replaced by per-flame specialization (specialize_wgsl_2d/_3d below)
+// Replaced by per-flame specialization (specialize_mondrian_wgsl_2d/_3d below)
 // with baked rectangle tables from the CPU run of the R relational
 // pass. The stub keeps the static source valid; it reports "no table"
 // so Exact mode falls back to the Pairs fill until specialization
@@ -1022,12 +1022,12 @@ fn specialize(source: &str, flame: &Flame) -> String {
 /// 2D specialization entry point (see `variation_specialized_source` in
 /// the shader builder). Returns the static source untouched when no
 /// transform uses Exact fills — no rebuild churn.
-pub fn specialize_wgsl_2d(flame: &Flame) -> String {
+pub fn specialize_mondrian_wgsl_2d(flame: &Flame) -> String {
     specialize(MONDRIANOMIES.wgsl_2d, flame)
 }
 
 /// 3D specialization — same tables on the 3D body.
-pub fn specialize_wgsl_3d(flame: &Flame) -> String {
+pub fn specialize_mondrian_wgsl_3d(flame: &Flame) -> String {
     specialize(MONDRIANOMIES.wgsl_3d, flame)
 }
 
@@ -1117,7 +1117,7 @@ mod tests {
             .insert("mondrianomies.fill_mode".into(), 1.0);
         xf.variation_params.insert("mondrianomies.fill".into(), 0.9);
         xf.variation_params.insert("mondrianomies.seed".into(), 12.0);
-        let src = specialize_wgsl_2d(&flame);
+        let src = specialize_mondrian_wgsl_2d(&flame);
         assert!(src.contains("MND_XRECT"), "tables baked");
         assert!(!src.contains("MND_EXACT_STUB_BEGIN"), "stub replaced");
     }

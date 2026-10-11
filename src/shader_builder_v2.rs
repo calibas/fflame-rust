@@ -1673,9 +1673,9 @@ impl ShaderBuilder {
                     crate::variations::defs::synth::specialize_wgsl_2d(flame)
                 }),
                 "mondrianomies" => Some(if render_3d {
-                    crate::variations::defs::mondrianomies::specialize_wgsl_3d(flame)
+                    crate::variations::defs::mondrianomies::specialize_mondrian_wgsl_3d(flame)
                 } else {
-                    crate::variations::defs::mondrianomies::specialize_wgsl_2d(flame)
+                    crate::variations::defs::mondrianomies::specialize_mondrian_wgsl_2d(flame)
                 }),
                 _ => None,
             }
@@ -3039,7 +3039,6 @@ mod tests {
         assert!(wgsl.contains("const USE_INLINED_TRANSFORMS: bool = false;"));
     }
 
-    use super::*;
     use std::collections::{BTreeMap, HashMap};
 
     fn test_builder() -> ShaderBuilder {
@@ -3055,7 +3054,7 @@ mod tests {
     #[test]
     fn inlined_transforms_cover_all_pools_in_global_order() {
         use crate::scene::transforms::{Flame, Transform};
-        let mut mk = || {
+        let mk = || {
             let mut t = Transform::new();
             t.set_variation("linear", 1.0);
             t

@@ -984,7 +984,7 @@ mod tests {
         });
 
         let shading = SolidShadingSettings::default();
-        let mut go = |supplied: Option<ShadeGeometry<'_>>| -> ShadeParams {
+        let go = |supplied: Option<ShadeGeometry<'_>>| -> ShadeParams {
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("shade test"),
             });

@@ -274,8 +274,8 @@ mod tests {
             let deep = super::super::DeepZoom::default();
             let mut toggle = false;
             for _ in 0..2 {
-                let _ = ctx.run(Default::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
                         render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None);
                         ui.separator();
                         use super::super::view_controls as vc;

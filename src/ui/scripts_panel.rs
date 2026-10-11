@@ -969,7 +969,7 @@ impl ScriptsPanel {
                 // are joined into a paragraph and left for egui to wrap
                 // at whatever width the panel actually has.
                 let mut para: Vec<&str> = Vec::new();
-                let mut flush = |ui: &mut egui::Ui, para: &mut Vec<&str>| {
+                let flush = |ui: &mut egui::Ui, para: &mut Vec<&str>| {
                     if !para.is_empty() {
                         let text = crate::script::strip_markdown(&para.join(" "));
                         ui.label(egui::RichText::new(text).weak());

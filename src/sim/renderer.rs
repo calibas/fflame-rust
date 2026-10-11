@@ -25,7 +25,7 @@
 //!   phase 0 established that per-submit overhead is 0.8% across a
 //!   256x range, so batching is purely a watchdog and pacing device.
 
-use crate::config::sim::{SimConfig, SimGrid, MAX_COUPLINGS, MAX_LAYERS};
+use crate::config::sim::{SimConfig, MAX_COUPLINGS, MAX_LAYERS};
 
 /// One colour-stack layer as the colour shader reads it; mirrored in
 /// the assembler's `SimColorLayerGpu`.
@@ -3403,6 +3403,7 @@ struct TerrainInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::sim::SimGrid;
 
     #[test]
     fn a_bound_grid_follows_the_output_and_a_fixed_one_does_not() {

@@ -4422,7 +4422,6 @@ impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
         aux: f64,
     ) -> Option<Self> {
         use crate::scene::ifs_analysis::Map3;
-        use crate::scene::ifs_estimate::SeedPoint3;
         let out = match m {
             Map3::Affine(a) => self.apply_affine3(a),
             Map3::NonlinearInverse(r) => {
@@ -4519,7 +4518,6 @@ fn big_kernel_inverse(
 impl crate::scene::ifs_estimate::SeedPoint for [super::bigfloat::BigFloat; 2] {
     fn apply_map(&self, m: &crate::scene::ifs_analysis::Map2) -> Option<Self> {
         use crate::scene::ifs_analysis::Map2;
-        use crate::scene::ifs_estimate::SeedPoint;
         match m {
             Map2::Affine(a) => Some(self.apply_affine(a)),
             Map2::NonlinearInverse(r) => {
@@ -6417,12 +6415,6 @@ mod tests {
             let centre = [on_set[0] + 0.4 * span, on_set[1]];
             let basis = view_basis(span, span, 0.0);
             let px = span / 512.0;
-            use crate::scene::ifs_estimate::SeedPoint as _;
-            let steps: Vec<bool> = ifs
-                .maps
-                .iter()
-                .map(|m| centre.clone().apply_map(&m.inverse).is_some())
-                .collect();
             let seeds = crate::scene::ifs_estimate::seed_beam(
                 &ifs,
                 centre,
@@ -9921,7 +9913,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn the_shader_newton_is_the_cpu_newton() {
-        use crate::scene::ifs_analysis::{analyse_2d, Map2};
+        use crate::scene::ifs_analysis::analyse_2d;
         let guard = crate::variations::global_registry();
         let r = &*guard;
 
@@ -10396,7 +10388,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     #[test]
     #[ignore = "needs a GPU"]
     fn the_shader_jacobians_are_the_cpu_ones() {
-        use crate::scene::ifs_analysis::Map2;
         let (device, queue) = device();
 
         // One flame per kernel, so every arm of the switch is reached.
@@ -11965,7 +11956,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let dir = std::path::Path::new("output/ifs");
         std::fs::create_dir_all(dir).expect("output dir");
         let (device, queue) = device();
-        for (name, coloring, flame) in kernel_candidates() {
+        for (name, _coloring, flame) in kernel_candidates() {
             if !matches!(name, "Three Circles and a Seed" | "JuliaN Bubble" | "Julian Disc" | "Cup" | "Disc Spiral" | "Blob Flower") {
                 continue;
             }
@@ -14345,7 +14336,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         zoom: f64,
         n: u32,
     ) -> (u32, f64, usize, usize, usize, usize) {
-        let N = n;
+        let side = n;
         let flame = base.flame.clone();
         let _ = &flame;
         let levels = (zoom as u32 + 24).min(256);
@@ -14375,7 +14366,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         c.solid_shading.ssao_strength = 0.0;
         c.escape.zoom_log2 = zoom;
 
-        let job = crate::renderer::RenderJob::new(&c, N, N);
+        let job = crate::renderer::RenderJob::new(&c, side, side);
         let rgba = pollster::block_on(crate::renderer::render(
             device,
             queue,
@@ -14394,7 +14385,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // stopped shallower would read the difference in DEPTH as
         // a difference in precision.
         let cam = solid_camera(&c.escape, ifs3);
-        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / N as f64;
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / side as f64;
         let chain = crate::scene::ifs_estimate::seed_chain3(
             ifs3,
             super::target_at_precision(&c.escape, ifs3).expect("target parses"),
@@ -14416,13 +14407,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 finest
             );
         }
-        let mut refhit = vec![false; (N * N) as usize];
+        let mut refhit = vec![false; (side * side) as usize];
         let mut agree = 0usize;
         let mut hits = 0usize;
-        for y in 0..N {
-            for x in 0..N {
-                let u = (x as f64 + 0.5) / N as f64 - 0.5;
-                let v = (y as f64 + 0.5) / N as f64 - 0.5;
+        for y in 0..side {
+            for x in 0..side {
+                let u = (x as f64 + 0.5) / side as f64 - 0.5;
+                let v = (y as f64 + 0.5) / side as f64 - 0.5;
                 let mut dir = [0.0f64; 3];
                 for k in 0..3 {
                     dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half)
@@ -14455,7 +14446,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     let root = disc.sqrt();
                     let mut t = (-b - root).max(0.0);
                     let t_max = -b + root;
-                    let px_at = 2.0 * tan_half / N as f64;
+                    let px_at = 2.0 * tan_half / side as f64;
                     for _ in 0..steps {
                         if t > t_max {
                             break;
@@ -14480,18 +14471,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         t += d;
                     }
                 }
-                refhit[(y * N + x) as usize] = hit;
+                refhit[(y * side + x) as usize] = hit;
                 if hit {
                     hits += 1;
                 }
-                let i = ((y * N + x) * 4) as usize;
+                let i = ((y * side + x) * 4) as usize;
                 let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
                 if lit == hit {
                     agree += 1;
                 }
             }
         }
-        let total = (N * N) as usize;
+        let total = (side * side) as usize;
         let pct = 100.0 * agree as f64 / total as f64;
         // Where the disagreement sits. A precision fault shows at
         // the SILHOUETTE, where a pixel is a hair from the
@@ -14499,14 +14490,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // the interior.
         let mut edge_dis = 0usize;
         let mut interior_dis = 0usize;
-        for y in 1..N - 1 {
-            for x in 1..N - 1 {
-                let at = |xx: u32, yy: u32| refhit[(yy * N + xx) as usize];
+        for y in 1..side - 1 {
+            for x in 1..side - 1 {
+                let at = |xx: u32, yy: u32| refhit[(yy * side + xx) as usize];
                 let me = at(x, y);
                 let boundary = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
                     .iter()
                     .any(|(dx, dy)| at((x as i32 + dx) as u32, (y as i32 + dy) as u32) != me);
-                let i = ((y * N + x) * 4) as usize;
+                let i = ((y * side + x) * 4) as usize;
                 let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
                 if lit != me {
                     if boundary {
@@ -14966,7 +14957,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         c.solid_shading.shading_strength = 1.0;
         c.solid_shading.lights[0].enabled = true;
         let mut engines = crate::renderer::RenderEngines::default();
-        let mut go = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
+        let go = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
             let job = crate::renderer::RenderJob::new(c, 512, 512).with_engines(engines);
             let t0 = web_time::Instant::now();
             let _ = pollster::block_on(crate::renderer::render(

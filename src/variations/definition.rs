@@ -626,7 +626,6 @@ macro_rules! param {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::param;
 
     // Smoke test: the enum arm must produce a const-evaluable value
     // so it can live in a `pub static VariationDef`. If

@@ -4461,7 +4461,7 @@ mod tests {
         let s_e = sx.floor() as i32;
         let s_m = 2f64.powf(sx - s_e as f64) as f32;
         let bailout = 4.0f32;
-        let r2p = r2.clone();
+        let _r2p = r2.clone();
         let run = move |px: u32,
                         py: u32,
                         exact_rebase: bool,

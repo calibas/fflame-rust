@@ -15,7 +15,7 @@ use crate::effects::EffectInstance;
 fn lift_path_material(value: &mut serde_json::Value) {
     let Some(obj) = value.as_object_mut() else { return };
     let sim_first = obj.get("render_mode").and_then(|m| m.as_str()) == Some("simulation");
-    let mut take = |obj: &mut serde_json::Map<String, serde_json::Value>, sim: bool| -> serde_json::Map<String, serde_json::Value> {
+    let take = |obj: &mut serde_json::Map<String, serde_json::Value>, sim: bool| -> serde_json::Map<String, serde_json::Value> {
         let path = if sim {
             obj.get_mut("sim").and_then(|s| s.get_mut("terrain")).and_then(|t| t.get_mut("path"))
         } else {

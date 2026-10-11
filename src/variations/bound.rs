@@ -579,7 +579,7 @@ mod gpu_tests {
         let (device, queue) =
             pollster::block_on(lens::open_device_for_bounds()).expect("gpu");
 
-        let mut violations: std::collections::BTreeMap<String, (usize, String)> = Default::default();
+        let _violations: std::collections::BTreeMap<String, (usize, String)> = Default::default();
         let mut checked = 0usize;
         println!("  variation   params                  balls  points  worst fill");
         for def in BOUNDS {

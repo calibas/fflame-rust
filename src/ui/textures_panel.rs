@@ -179,7 +179,7 @@ impl TexturesPanel {
                     let picked = current.as_ref().is_some_and(|t| t.name == entry.name);
                     let clicked = match self.previews.get(key) {
                         Some(tex) => ui
-                            .add(egui::ImageButton::new(egui::load::SizedTexture::new(tex.id(), size)).selected(picked))
+                            .add(egui::Button::image(egui::load::SizedTexture::new(tex.id(), size)).selected(picked))
                             .on_hover_text(t!("textures_panel.pick_tip"))
                             .clicked(),
                         None => {

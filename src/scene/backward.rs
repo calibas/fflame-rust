@@ -4497,7 +4497,7 @@ impl Backward {
         let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
         let depth = merged.iter().map(|(c, _)| c.word.len()).max().unwrap_or(0);
         tr.t_after += t_after.elapsed();
-        let mut plan = Cylinders {
+        let plan = Cylinders {
             // Each word keeps the efficiency its replays measured. A
             // blur's word is drawn at the square root of it
             // (`Cylinder::draw`), floored at the replays' resolution.

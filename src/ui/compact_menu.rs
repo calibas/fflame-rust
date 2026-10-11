@@ -173,7 +173,7 @@ fn render_compact_menu_items(
             if ui
                 .add_enabled(
                     !signed_in || api_available,
-                    egui::SelectableLabel::new(false, t!("menu.save_online").as_ref()),
+                    egui::Button::selectable(false, t!("menu.save_online").as_ref()),
                 )
                 .clicked()
             {

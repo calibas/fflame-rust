@@ -368,7 +368,7 @@ fn cmp_for<P>(key: RankKey) -> fn(&Cand<P>, &Cand<P>) -> std::cmp::Ordering {
 }
 
 /// Keep `beam` of `next` under `key`, in place.
-fn keep_by_key<P: Clone>(next: &mut Vec<Cand<P>>, beam: usize, key: RankKey, radius: f64) {
+fn keep_by_key<P: Clone>(next: &mut Vec<Cand<P>>, beam: usize, key: RankKey, _radius: f64) {
     match key {
         RankKey::Auto => unreachable!("Auto is resolved before the walk"),
         RankKey::Position => {
@@ -6868,7 +6868,7 @@ mod tests {
                 let guard = global_registry();
                 analyse_2d(&flame, &guard).expect("qualifies")
             };
-            let maps = MeasureMaps::of(&ifs, &flame);
+            let _maps = MeasureMaps::of(&ifs, &flame);
             let (bc, br) = (ifs.ball.centre, ifs.ball.radius);
             let cpx = 2.0 * br / RES as f64;
 

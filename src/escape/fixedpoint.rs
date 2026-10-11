@@ -1790,7 +1790,6 @@ mod tests {
         assert!((v - (-0.375)).abs() < 1e-12, "{out}");
     }
 
-    #[test]
     /// The vector column core writes through RAW POINTERS, and what
     /// keeps those in range is arithmetic, not a bounds check. This
     /// pins that arithmetic on every platform — including the desktop,
