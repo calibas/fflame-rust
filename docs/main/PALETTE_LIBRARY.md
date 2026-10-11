@@ -1,395 +1,263 @@
 # Palette Library System
 
-## Overview
+Palettes come in **packs**. The Palette Library panel browses them, the
+Colors panel's palette dropdown lists the enabled ones, and the Palette
+Editor saves your own palettes into a **Custom** pack.
 
-The Palette Library provides hundreds of palettes organized into packs, with a visual browsing UI and duplicate-free loading system.
+- Library: `PaletteLibrary` and `PalettePack` in [src/scene/palette.rs](../../src/scene/palette.rs).
+- Pack discovery and load state: [src/resources/palettes.rs](../../src/resources/palettes.rs).
+- Panel: [src/ui/palette_library.rs](../../src/ui/palette_library.rs).
+- Editor: [src/ui/palette_editor.rs](../../src/ui/palette_editor.rs), with the
+  script generator in [src/ui/palette_generate.rs](../../src/ui/palette_generate.rs).
+- Custom palettes on disk: [src/storage/custom_palettes.rs](../../src/storage/custom_palettes.rs).
 
-**Discovery rule**: the `assets/palettes/packs/` folder IS the catalog. What ships in the repo is the default set; drop a pack JSON in the folder and it appears on the next launch. There is no committed index — the manifest WASM needs (a browser cannot list a directory) is generated from the folder by `build.rs` at compile time, so it cannot drift.
+**See also:** [COLOR.md](COLOR.md) (the palette structure, palette
+transforms, the GPU upload), [UI.md](UI.md), [ONLINE.md](ONLINE.md)
+(cloud palettes), [SCRIPTING.md](SCRIPTING.md) (palette calls and
+palette scripts). Design records:
+[palette-library-system.md](../archive/projects/palette-library-system.md),
+[palette-improvements.md](../archive/projects/palette-improvements.md),
+[palette-compact-format.md](../archive/projects/palette-compact-format.md).
 
-## Components
+---
 
-### 1. Palette Packs
+## Discovery
 
-**Location**: `assets/palettes/packs/*.json` — every JSON file in this folder is a pack.
+**The `assets/palettes/packs/` folder is the catalog.** What ships in
+the repo is the default set; drop a pack JSON in the folder and it
+appears on the next launch. There is no committed index: the manifest
+the web build needs (a browser cannot list a directory) is generated
+from the folder by `build.rs` at compile time, so it cannot drift.
 
-One of them is also embedded in the binary as the offline fallback, named once by `BUILTIN_PACK_FILE` (`src/resources/palettes.rs`, currently `starter_pack.json`). Both discovery paths skip that filename, because it is already loaded from the embedded copy — `no_pack_is_discovered_twice` fails if the two drift apart.
+One pack is also **embedded in the binary** as the offline fallback,
+named once by `BUILTIN_PACK_FILE` (currently `starter_pack.json`). Both
+discovery paths skip that filename, because it is already loaded from
+the embedded copy; `generated_manifest_matches_packs_folder` checks the
+manifest against the folder (names, counts, `enabled_by_default`, and
+that every pack parses). No other pack is embedded.
 
-**Shipped Packs**:
-- **Starter Pack** (16 palettes) - Enabled by default; also the embedded offline fallback
-- **IQ's Procedural Palettes** (11 palettes) - Enabled by default
-- **Apophysis Classic 1-4** (~700 palettes total) - Disabled by default; the classic Apophysis gradients
+### Shipped packs
 
-**JSON Format**:
+| File | Pack | Palettes | Stored as | Enabled by default |
+|---|---|---|---|---|
+| `starter_pack.json` | Starter Pack | 16 | `stops` | yes (and embedded) |
+| `iq_palettes.json` | IQ's Procedural Palettes | 11 | `indexed_colors` | yes |
+| `apophysis1.json` | Apophysis Classic 1 | 200 | `indexed_colors` | no |
+| `apophysis2.json` | Apophysis Classic 2 | 204 | `indexed_colors` | no |
+| `apophysis3.json` | Apophysis Classic 3 | 123 | `indexed_colors` | no |
+| `apophysis4.json` | Apophysis Classic 4 | 174 | `indexed_colors` | no |
+
+728 palettes in all, about 1.3 MB of JSON. Two more packs are made at
+run time:
+
+- **Custom** — your saved palettes (see [Your own palettes](#your-own-palettes)),
+  always first in the list, even when empty.
+- **Local Files** (desktop only) — loose `.palette` files in
+  `assets/palettes/` (the Palette Editor's export format), gathered into
+  one enabled pack. The repo ships one, `example.palette`.
+
+### Pack format
+
 ```json
 {
   "pack_name": "Starter Pack",
   "description": "Curated selection of versatile palettes for fractal flames",
   "enabled_by_default": true,
   "palettes": [
-    {
-      "name": "Fire",
-      "stops": [
-        {"position": 0.0, "color": [0.0, 0.0, 0.0]},
-        {"position": 1.0, "color": [1.0, 1.0, 1.0]}
-      ]
-    }
+    { "name": "Fire",
+      "stops": [ {"position": 0.0, "color": [0.0, 0.0, 0.0]},
+                 {"position": 1.0, "color": [1.0, 1.0, 1.0]} ] },
+    { "name": "IQ1",
+      "indexed_colors": "6DCD6B,72CD64,78CD5D,..." }
   ]
 }
 ```
 
-### 2. Palette Library Panel
+- `enabled_by_default` may be omitted; absent means enabled, so a
+  drop-in pack appears without its author knowing about the flag.
+- A palette has a `name` and either `stops` (positions 0..1, RGB 0..1)
+  or `indexed_colors`, a comma-separated list of `RRGGBB` values, one per
+  slot, slot `i` at position `i / 255` (every shipped indexed palette
+  has 256). An optional `locked` marks a fixed 256-colour palette.
+  Unknown fields are ignored.
+- When a palette is written out (a `.palette` file, a config, the Custom
+  pack), exactly 256 evenly spaced stops are written as
+  `indexed_colors` and anything else as `stops`.
 
-**Access**: Window → Show Palette Library
+---
 
-**Features**:
-- **Visual previews**: Horizontal gradient bars (200px × 20px)
-- **Grid layout**: Palette name on left, preview on right
-- **Pack controls**:
-  - Click pack name to expand/collapse
-  - Checkbox to enable/disable pack
-  - Collapse state independent of enable state
-- **Selection**: Click any palette or name to select
-- **Hover feedback**: Row highlighting + pointer cursor
+## Loading
 
-**Behavior**:
-- Selecting a palette creates an editable custom copy
-- Copy is named `"Name (Custom)"` or `"Name (Custom N)"`
-- Original palette in library remains unchanged
-- Same behavior as Colors panel dropdown
+`PaletteLibrary::new()` builds the packs, then the flat list.
 
-### 3. Loading System
+**Desktop**
 
-**Desktop Builds**:
-```
-Route 1: Embedded fallback pack (BUILTIN_PACK_FILE, always first)
-Route 2: Directory scan of assets/palettes/packs/*.json
-         (skips BUILTIN_PACK_FILE + manifest.json; all packs load
-          eagerly; each pack's enabled_by_default decides membership)
-Route 3: Loose assets/palettes/*.palette files -> "Local Files" pack
-Route 4: Runtime imports (editor, file picker, config load)
-```
-
-**WASM Builds**:
-```
-Route 1: Embedded fallback pack (BUILTIN_PACK_FILE)
-Route 2: Embedded manifest (generated by build.rs from the packs
-         folder) -> pack metadata, skipping BUILTIN_PACK_FILE;
-         content lazily fetched over HTTP from
-         assets/palettes/packs/ when a pack is enabled
-Route 3: Runtime imports (editor, JSON paste, config load)
-```
-
-**All routes use `add_or_update()`**:
-- Case-insensitive duplicate checking
-- First palette loaded with a name wins
-- Duplicates logged and skipped
-- Returns index of existing or newly added palette
-
-### 4. Data Structures
-
-**PalettePack** (`src/scene/palette.rs`):
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PalettePack {
-    pub pack_name: String,
-    pub description: String,
-    // Absent means enabled: a drop-in pack should appear without its
-    // author knowing about this flag.
-    #[serde(default = "default_pack_enabled")]
-    pub enabled_by_default: bool,
-    pub palettes: Vec<Palette>,
-}
-```
-
-**PalettePackInfo** (`src/resources/palettes.rs`) wraps a pack with
-load state (`NotLoaded`/`Loading`/`Loaded`/`Failed`) and the enabled
-flag; on desktop packs are always `Loaded`, on WASM disabled packs
-hold only manifest metadata until fetched.
-
-## Load Order Details
-
-### Initialization (PaletteLibrary::new())
-
-1. **Embedded builtin pack** — parsed from the binary, enabled.
-2. **Desktop: directory scan** — every other `*.json` in
-   `assets/palettes/packs/`, sorted by filename, fully loaded;
-   `enabled_by_default` read from each pack.
-   **WASM: embedded manifest** — metadata only; enabled packs fetch
-   immediately, disabled ones on first enable.
-3. **Desktop: loose `.palette` files** from `assets/palettes/`
-   gathered into a "Local Files" pack (enabled).
-4. **Pack ordering** — built-in first, then enabled packs, then
+1. The embedded pack (`BUILTIN_PACK_FILE`).
+2. Every other `*.json` in `assets/palettes/packs/`, in filename order,
+   loaded in full (a stray `manifest.json` is skipped). A pack that fails
+   to parse is logged and left out.
+3. Loose `assets/palettes/*.palette` files, as the Local Files pack.
+4. Ordering: the embedded pack, then the enabled packs, then the
    disabled ones; filename order within each group.
-5. **Flat list build** — enabled packs' palettes join the Colors
-   panel dropdown via `add_or_update()` (`built_in = true` except the
-   Custom pack).
+5. The Custom pack, inserted first.
 
-### Runtime Loading
+**Web**
 
-All runtime routes use `add_or_update()`:
+1. The embedded pack.
+2. The embedded manifest (generated by `build.rs`), skipping
+   `BUILTIN_PACK_FILE`: each pack starts as metadata only (name,
+   description, palette count, `enabled_by_default`), in filename order.
+3. The Custom pack, inserted first.
 
-**From Palette Editor**:
-- User modifies palette
-- Saved via `custom_palette` → `add_or_update()`
-- Preserves `built_in` flag
+Pack content is fetched over HTTP from `assets/palettes/packs/<file>`
+(the build scripts copy the pack JSONs next to `pkg/`). An enabled pack
+is fetched the first time the Palette Library panel is drawn, a disabled
+one when it is enabled. Until a pack arrives, its palettes are in
+neither the dropdown nor the flat list. While it loads the panel shows a
+spinner; a failure shows the error and a **Retry** button.
 
-**From Palette Library**:
-- User clicks palette
-- Creates custom copy with unique name
-- Sets `built_in = false`
-- Adds via `add_or_update()`
+### The flat list
 
-**From File Import**:
-- User loads `.palette` file
-- Parses JSON
-- Adds via `add_or_update()`
+`PaletteLibrary::palettes()` is one list: Grayscale first, then every
+enabled pack's palettes, added through `add_or_update()`:
 
-**From Config Import**:
-- Loads `.fflame` file
-- Extracts embedded palette
-- Adds via `add_or_update()`
+- names compare case-insensitively ("Fire" == "fire");
+- the first palette with a name wins, and a later duplicate is logged
+  ("Skipping duplicate palette ...") and skipped.
 
-## Usage
+If no pack loaded at all, four hardcoded palettes (Fire, Cool, Rainbow,
+Purple Pink) follow Grayscale.
 
-### Adding New Packs
+Toggling a pack, or saving or deleting a Custom palette, rebuilds the
+list (`rebuild_palette_list`): every pack palette is removed by name and
+the enabled packs' palettes are added again. Palettes added at run time
+from elsewhere (an imported file, JSON) stay. Pack palettes are marked
+`built_in`, except the Custom pack's.
 
-1. Create a JSON file in `assets/palettes/packs/` (pack format above)
-2. Restart the application — it appears in the Palette Library
+The flat list is what a random flame draws its palette from, and what
+scripts see (`palette_names()`, `flame.set_palette`,
+`flame.random_palette()`). The Colors panel's palette dropdown instead
+lists the enabled packs' palettes pack by pack, with the current palette
+at the top when it belongs to none of them.
 
-That is the whole procedure, on every platform: desktop scans the
-folder at startup, and the WASM build regenerates its embedded
-manifest from the same folder at compile time (`build.rs`), with pack
-content fetched on demand (`build-wasm.bat`/`.sh` copy the pack JSONs
-into `pkg/`). The `generated_manifest_matches_packs_folder` test fails
-if a pack is malformed.
+---
 
-### Enabling/Disabling Packs
+## The Palette Library panel
 
-**Via UI**:
-1. Open Palette Library (Window menu)
-2. Check/uncheck pack checkbox
-3. Palettes immediately added/removed from library
-4. State not persisted (resets on restart)
+Window ▸ Palette Library, or the Colors panel's **Palette Library**
+button, or the Palette Editor's **Open Palette Library**. The compact
+Window menu leaves it out; it is reachable from the Colors panel there.
 
-**Future**: Could add persistence via config file
+- An **Open Palette Editor** button at the top.
+- Per pack: a checkbox that enables or disables it, and a collapsible
+  header (open by default) with its name and palette count. Enabled and
+  loaded packs list their palettes as rows: the name and a 200 × 20
+  gradient preview. Previews are generated once and kept as egui
+  textures, keyed by pack and palette index; the Custom pack's key also
+  carries a counter that changes on every save and delete, so its
+  previews refresh.
+- **Pack state is not saved.** Every launch starts from each pack's
+  `enabled_by_default`.
 
-### Creating Custom Palettes
+**Selecting a palette** (a click on its name or its preview) sets
+`ConfigPath::Palette` to a clone of it with `built_in` cleared: the same
+name, stops and `locked` flag. It is one undo entry. No copy is added to
+the library, and the library's palette is not changed: editing
+afterwards changes only the config's palette, until you save it to the
+library.
 
-**Method 1: From Library**:
-1. Open Palette Library
-2. Click any palette
-3. Editable copy created automatically
-4. Edit in Palette Editor panel
+### Cloud palettes
 
-**Method 2: From Editor**:
-1. Open Palette Editor
-2. Modify current palette
-3. Auto-saved as custom palette
+In online mode the panel ends with a **Cloud Palettes** section,
+collapsed by default. On first expanding it fetches your palette
+library from the API (up to 100 entries, each a nickname and a content
+hash) and lists them with previews. A click loads one exactly as a pack
+palette loads; **X** removes the entry from your library without
+deleting the palette itself. Palettes reach that library with the
+flames you save online. See [ONLINE.md](ONLINE.md).
 
-**Method 3: Import JSON**:
-1. Palette Editor → Import/Export section
-2. Paste JSON or load file
-3. Palette added to library
+---
 
-## Implementation Notes
+## Your own palettes
 
-### Duplicate Prevention
+The Palette Editor edits the config's palette: its name, its stops, and
+Free or Fixed mode (Fixed resamples to 256 locked stops after a
+confirmation). Every edit is an ordinary undoable config change. **None
+of it reaches the library on its own.**
 
-All loading uses `add_or_update()`:
-```rust
-pub fn add_or_update(&mut self, palette: Palette) -> usize {
-    // Search for existing palette (case-insensitive)
-    for (i, lib_palette) in self.palettes.iter().enumerate() {
-        if lib_palette.name.to_lowercase() == palette.name.to_lowercase() {
-            log::warn!("Skipping duplicate palette '{}'", palette.name);
-            return i;  // Return existing index, don't update
-        }
-    }
-    // Add new palette
-    self.palettes.push(palette);
-    self.palettes.len() - 1
-}
-```
+- **Save to Library** writes the current palette into the Custom pack
+  under its name. If Custom already has that name (case-insensitive),
+  it asks before overwriting.
+- **Delete from Library** (enabled only when the name is in Custom)
+  asks, then removes it.
 
-**Key behaviors**:
-- Case-insensitive comparison ("Fire" == "fire")
-- First-wins policy (doesn't overwrite existing)
-- Logs warning for visibility
-- Returns index (existing or new)
+The Custom pack is stored as `custom_palettes.json`
+(`{ "version": 1, "palettes": [...] }`) through the storage backend: on
+desktop in the app data folder (on Windows
+`%APPDATA%\Fractals for All\Fractal Art Editor\data\`), on the web in
+`localStorage`.
 
-### Pack Toggle (rebuild_palette_list)
+### Import and export
 
-When user toggles pack checkbox:
-```rust
-fn rebuild_palette_list(&mut self) {
-    // Remove all pack palettes by name
-    let pack_names: HashSet<String> = self.packs.iter()
-        .flat_map(|pack| pack.palettes.iter().map(|p| p.name.clone()))
-        .collect();
+The Palette Editor's **Import/Export Palette** section:
 
-    self.palettes.retain(|p| !pack_names.contains(&p.name));
+| Control | Does |
+|---|---|
+| Save as .palette | writes the palette as JSON to a file |
+| Load .palette | desktop: reads a file and adds it to the flat list; web: copies the file's text to the clipboard, to paste into Import |
+| Export to Clipboard | copies the palette's JSON |
+| Import from JSON | parses pasted JSON, renames it `Name (Copy)` / `Name (Copy N)` if the name is taken, adds it to the flat list, and makes it the current palette |
 
-    // Re-add enabled pack palettes
-    for palette in enabled_pack_palettes {
-        pal.built_in = true;
-        self.add_or_update(pal);
-    }
-}
-```
+An imported palette is in the flat list for this session only; Save to
+Library keeps it.
 
-**Behavior**:
-- Removes ALL pack palettes (not just from toggled pack)
-- Re-adds only enabled pack palettes
-- Preserves non-pack palettes (hardcoded, legacy files, custom)
+On desktop, Load .palette also hands the file to the editor and uploads
+it to the renderer, but it selects it through the deprecated
+`ConfigPath::PaletteIndex`, which `ConfigManager` ignores (with a logged
+warning). The config's palette is therefore unchanged, and a save or
+export still carries the previous one. Import from JSON sets
+`ConfigPath::Palette` and does not have this problem.
 
-### Custom Copy Naming
+### Generating a palette from a script
 
-From Palette Library selection:
-```rust
-let base_name = &palette.name;
-let mut new_name = format!("{} (Custom)", base_name);
-let mut counter = 2;
+The editor's **Generate from script** section runs scripts that declare
+the `palette` flag (`script("Random Palette", "modifier", ["palette"])`);
+the shipped ones are `assets/scripts/modifiers/random_palette.rhai` and
+`iq_palette.rhai`, and any user script with the flag joins them. The
+section shows the chosen script's parameters, a seed, **Generate** and
+**Reroll** (the next seed). Only the result's palette is applied,
+through `ConfigPath::Palette`, so a script cannot change the flame from
+here. The palette calls themselves are in [SCRIPTING.md](SCRIPTING.md).
 
-while library.palettes().iter().any(|p| p.name == new_name) {
-    new_name = format!("{} (Custom {})", base_name, counter);
-    counter += 1;
-}
+### Palette transforms
 
-palette_copy.name = new_name;
-palette_copy.built_in = false;
-```
+Rotation, squeeze, reverse and the other palette transforms are config
+settings in the Colors panel, applied when the palette is looked up; they
+never change the palette itself. See [COLOR.md](COLOR.md).
 
-**Results**:
-- First copy: `"Fire (Custom)"`
-- Second copy: `"Fire (Custom 2)"`
-- Third copy: `"Fire (Custom 3)"`
-- Etc.
+---
 
-### UI Implementation
+## Adding a pack
 
-**Grid Layout** (`src/ui/palette_library.rs`):
-```rust
-egui::Grid::new(format!("palette_grid_{}", pack_idx))
-    .num_columns(2)
-    .spacing([10.0, 4.0])
-    .show(ui, |ui| {
-        // Column 1: Palette name (calculated width)
-        // Column 2: Preview gradient (200px)
-    });
-```
+1. Put a JSON file in `assets/palettes/packs/` (the format above).
+2. Restart the desktop app; it appears in the Palette Library.
 
-**Texture Caching**:
-- Uses `egui::TextureHandle` stored in `egui::Memory`
-- Unique ID per pack/palette: `("palette_preview", pack_idx, palette_idx)`
-- Generated once, reused across frames
-- Prevents texture destruction issues
-
-**Hover Effect**:
-```rust
-// Draw highlight FIRST (background layer)
-if response.hovered() {
-    ui.painter().rect_filled(rect, 2.0, hover_color);
-    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-}
-
-// Draw content on top (foreground layer)
-ui.painter().text(...);  // Palette name
-ui.put(rect, image);      // Gradient preview
-```
-
-## Performance
-
-**Binary Size**:
-- Apophysis pack: +2.9MB (desktop)
-- WASM embed: +~2KB (Starter Pack only)
-
-**Memory**:
-- 713 palettes × 256 colors × 3 × 4 bytes ≈ 2.1MB
-- Negligible for modern systems
-
-**Load Time**:
-- All packs: <10ms (filesystem read + JSON parse)
-- WASM embed: <1ms (compile-time string, runtime parse)
-
-**Render Impact**:
-- None - palette data already in GPU
-- Texture cache prevents regeneration
+On the web, rebuild: `build.rs` regenerates the manifest from the same
+folder, and the build scripts copy the pack JSONs next to `pkg/`. A
+malformed pack is skipped with a build warning and fails
+`generated_manifest_matches_packs_folder`.
 
 ## Troubleshooting
 
-### Palette Not Appearing
-
-**Check pack enabled**:
-- Open Palette Library
-- Ensure pack checkbox is checked
-
-**Check for duplicates**:
-- Look for warning in console: `"Skipping duplicate palette..."`
-- First palette loaded with that name wins
-
-**Check pack file**:
-- Valid JSON format
-- Correct field names (`pack_name`, `palettes`, etc.)
-- Palette stops have `position` (0.0-1.0) and `color` (RGB array)
-
-### WASM Missing Palettes
-
-**Pack listed but won't load**:
-- Pack content is fetched over HTTP from `assets/palettes/packs/` —
-  check the pack JSONs were deployed alongside `pkg/` (the build
-  scripts copy them; a partial upload loses them)
-- Check browser console for fetch/parse errors
-
-**Pack not listed at all**:
-- The embedded manifest is generated at build time — if the pack was
-  added after the last WASM build, rebuild
-- A malformed pack is skipped with a build warning (and fails
-  `generated_manifest_matches_packs_folder`)
-
-### Duplicate Warnings
-
-**Expected behavior**:
-- First palette loaded with a name is kept
-- Subsequent loads with same name (case-insensitive) are skipped
-- Warning logged for visibility
-
-**Common causes**:
-- Legacy file + pack have same palette name
-- Multiple packs with overlapping palettes
-- User imported palette that exists in pack
-
-**Solution**:
-- Warnings are informational, not errors
-- Rename palette in JSON if you want both versions
-- Disable conflicting pack if you prefer legacy file
-
-## Future Enhancements
-
-### Planned Features
-
-- **Persistent pack state**: Save enabled/disabled state to config
-- **Pack management UI**: Add/remove packs without filesystem access
-- **Search/filter**: Find palettes by name
-- **Favorites**: Bookmark frequently used palettes
-- **Categories/tags**: Organize palettes by theme
-- **Thumbnail cache**: Pre-generate preview images
-
-### WASM Enhancements
-
-- **Runtime pack loading**: Fetch packs from URLs
-- **User uploads**: Load custom `.json` packs via file picker
-- **IndexedDB storage**: Persist user packs in browser
-- **CDN integration**: Load community packs from server
-
-### Performance Optimizations
-
-- **Lazy texture generation**: Generate previews on-demand
-- **Virtual scrolling**: Only render visible palettes
-- **Pack lazy loading**: Load pack palettes when enabled
-- **Compression**: Compress pack JSON files
-
-## See Also
-
-- [COLOR.md](COLOR.md) - Full color system documentation
-- [UI.md](UI.md) - UI architecture and panels
-- [CONFIG.md](CONFIG.md) - Configuration and serialization
+- **A palette does not appear**: check that its pack is enabled, and
+  look for "Skipping duplicate palette" in the log — the first palette
+  with a name wins, case-insensitively. Rename one in its JSON to keep
+  both.
+- **A pack is missing**: check the JSON parses (`pack_name`,
+  `palettes`, and each palette's `name` plus `stops` or
+  `indexed_colors`); a parse failure is logged at startup.
+- **Web: a pack is listed but will not load**: its JSON must be deployed
+  under `assets/palettes/packs/` next to the app; the browser console
+  shows the fetch error.
+- **Web: a pack is not listed**: the manifest is generated at build
+  time, so a pack added after the last build needs a rebuild.
