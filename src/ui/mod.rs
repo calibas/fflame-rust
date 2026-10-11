@@ -2768,42 +2768,184 @@ fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager
     );
 }
 
+/// Every Colors-panel setting the panel's Reset to Defaults restores.
+///
+/// All of the panel's paths but three: the palette and the background
+/// colour are the picture's identity rather than its tone, and Focused
+/// Rendering is a renderer choice the panel only offers a shortcut to
+/// (PathMap's "turn it on" button). A source-scanning test holds this
+/// list to the panel, so a new control cannot be left out of the reset
+/// again -- twelve were, until this was a list.
+fn colors_reset_paths() -> Vec<crate::config::ConfigPath> {
+    use crate::config::ConfigPath as P;
+    vec![
+        // Colour mode
+        P::ColorMode,
+        P::SpeedFactor,
+        P::PathMapStyle,
+        P::PathMapLevel,
+        // Tone mapping
+        P::TonemapMode,
+        P::Exposure,
+        P::Gamma,
+        P::GammaThreshold,
+        P::Brightness,
+        P::Vibrancy,
+        P::WhiteLevel,
+        P::Saturation,
+        P::HueShift,
+        P::HighlightMode,
+        P::AlphaBlendLow,
+        P::AlphaBlendHigh,
+        P::DensityScale,
+        P::FilterRadius,
+        P::FilterBlurEdges,
+        // Tone curve
+        P::UseCurve,
+        P::TonemapCurve,
+        // Levels
+        P::LevelsEnabled,
+        P::LevelsLow,
+        P::LevelsHigh,
+        P::LevelsGamma,
+        // Palette settings (not the palette itself)
+        P::PaletteRotation,
+        P::PaletteSqueeze,
+        P::PaletteSqueezeMode,
+        P::PaletteSqueezeFalloff,
+        P::PaletteLogStrength,
+        P::PaletteReverse,
+        P::PaletteSize,
+    ]
+}
+
 /// Reset all color/tone mapping settings to their defaults (except palette and background)
 /// Returns the UpdateType so the caller can propagate GPU updates
+///
+/// The values are read from `FractalConfig::default()` through the
+/// manager's own getter, so each arrives in exactly the type its
+/// setter takes. A hand-written list passed Palette Size as a
+/// `ConfigValue::UInt` the setter rejects: the batch failed on it, so
+/// Palette Size never reset, the call returned `None` (no GPU update
+/// for the rest), and since the failing delta never matched, every
+/// click pushed another undo entry.
 fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -> crate::config::UpdateType {
-    use crate::config::{ConfigPath, defaults, UpdateType};
-    use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-    use crate::scene::palette::ColorMode;
+    use crate::config::{ConfigManager, EditingTarget, FractalConfig, UpdateType};
 
-    config_manager.update_batch(
-        vec![
-            // Color mode
-            (ConfigPath::ColorMode, ColorMode::Palette.into()),
-            // Tone mapping mode
-            (ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()),
-            // Tone mapping settings
-            (ConfigPath::Exposure, defaults::DEFAULT_EXPOSURE.into()),
-            (ConfigPath::Gamma, defaults::DEFAULT_GAMMA.into()),
-            (ConfigPath::GammaThreshold, defaults::DEFAULT_GAMMA_THRESHOLD.into()),
-            (ConfigPath::Brightness, defaults::DEFAULT_BRIGHTNESS.into()),
-            (ConfigPath::Vibrancy, 1.0f32.into()),
-            (ConfigPath::Saturation, defaults::DEFAULT_SATURATION.into()),
-            (ConfigPath::HueShift, defaults::DEFAULT_HUE_SHIFT.into()),
-            (ConfigPath::AlphaBlendLow, defaults::DEFAULT_ALPHA_BLEND_LOW.into()),
-            (ConfigPath::AlphaBlendHigh, defaults::DEFAULT_ALPHA_BLEND_HIGH.into()),
-            (ConfigPath::DensityScale, defaults::DEFAULT_DENSITY_SCALE.into()),
-            // Tone curve
-            (ConfigPath::UseCurve, true.into()),
-            (ConfigPath::TonemapCurve, ToneCurve::default().into()),
-            // Levels
-            (ConfigPath::LevelsLow, 0.0f32.into()),
-            (ConfigPath::LevelsHigh, defaults::DEFAULT_LEVELS_HIGH.into()),
-            (ConfigPath::LevelsGamma, defaults::DEFAULT_LEVELS_GAMMA.into()),
-            // Palette settings (not the palette itself or background)
-            (ConfigPath::PaletteRotation, defaults::DEFAULT_PALETTE_ROTATION.into()),
-            (ConfigPath::PaletteSqueeze, defaults::DEFAULT_PALETTE_SQUEEZE.into()),
-            (ConfigPath::PaletteSize, defaults::DEFAULT_PALETTE_SIZE.into()),
-        ],
-        "history.action.reset_colors".to_string()
-    ).unwrap_or(UpdateType::None)
+    let defaults = FractalConfig::default();
+    let changes: Vec<_> = colors_reset_paths()
+        .into_iter()
+        .filter_map(|path| {
+            match ConfigManager::get_value_from_config(&defaults, &path, EditingTarget::Main) {
+                Ok(value) => Some((path, value)),
+                Err(e) => {
+                    log::error!("Reset Colors: no default for {path}: {e}");
+                    None
+                }
+            }
+        })
+        .collect();
+
+    config_manager
+        .update_batch(changes, "history.action.reset_colors".to_string())
+        .unwrap_or_else(|e| {
+            log::error!("Reset Colors failed: {e}");
+            UpdateType::None
+        })
+}
+
+#[cfg(test)]
+mod reset_colors_tests {
+    use super::{colors_reset_paths, reset_colors_to_defaults};
+    use crate::config::{ConfigManager, ConfigPath, EditingTarget, FractalConfig, UpdateType};
+
+    /// Every field the reset covers is back at its default afterwards,
+    /// the reset says what to update, and a second reset is a no-op
+    /// with no undo entry.
+    #[test]
+    fn reset_restores_every_colors_field() {
+        use crate::scene::palette::{ColorMode, PathMapStyle, SqueezeMode};
+        use crate::scene::tonemap::{HighlightMode, ToneCurve, ToneMapMode};
+
+        let mut config = FractalConfig::default();
+        config.color_mode = ColorMode::Speed;
+        config.speed_factor = 0.9;
+        config.path_map_style = PathMapStyle::Depth;
+        config.path_map_level = 5;
+        config.tonemap_mode = ToneMapMode::Linear;
+        config.exposure = 3.0;
+        config.gamma = 1.5;
+        config.gamma_threshold = 40.0;
+        config.brightness = 20.0;
+        config.vibrancy = 0.3;
+        config.white_level = 900.0;
+        config.saturation = 2.0;
+        config.hue_shift = 90.0;
+        config.highlight_mode = HighlightMode::Reinhard;
+        config.alpha_blend_low = 0.1;
+        config.alpha_blend_high = 0.95;
+        config.density_scale = 3.0;
+        config.filter_radius = 2.0;
+        config.filter_blur_edges = 0.7;
+        config.use_curve = !config.use_curve;
+        config.tonemap_curve = ToneCurve::s_curve();
+        config.levels_enabled = !config.levels_enabled;
+        config.levels_low = 1.0;
+        config.levels_high = 50.0;
+        config.levels_gamma = 2.0;
+        config.palette_rotation = 0.4;
+        config.palette_squeeze = 3.0;
+        config.palette_squeeze_mode = SqueezeMode::Geometric;
+        config.palette_squeeze_falloff = 0.3;
+        config.palette_log_strength = 2.0;
+        config.palette_reverse = true;
+        config.palette_size = 1024;
+        let mut manager = ConfigManager::new(config);
+
+        let defaults = FractalConfig::default();
+        let read = |m: &ConfigManager, p: &ConfigPath| m.get_value(p).unwrap();
+        let want = |p: &ConfigPath| {
+            ConfigManager::get_value_from_config(&defaults, p, EditingTarget::Main).unwrap()
+        };
+        for p in colors_reset_paths() {
+            assert!(!read(&manager, &p).approx_eq(&want(&p)), "{p} was not set off its default by the test");
+        }
+
+        let update = reset_colors_to_defaults(&mut manager);
+        assert_ne!(update, UpdateType::None);
+        for p in colors_reset_paths() {
+            assert!(read(&manager, &p).approx_eq(&want(&p)), "{p} did not reset");
+        }
+
+        assert!(manager.can_undo());
+        manager.undo().unwrap();
+        manager.redo().unwrap();
+        assert_eq!(reset_colors_to_defaults(&mut manager), UpdateType::None);
+        manager.undo().unwrap();
+        assert!(
+            !read(&manager, &ConfigPath::Exposure).approx_eq(&want(&ConfigPath::Exposure)),
+            "a no-op reset pushed an undo entry"
+        );
+    }
+
+    /// The reset list is the panel: every `ConfigPath` the Colors panel
+    /// (tone_mapping.rs, and the levels controls in histogram.rs)
+    /// writes is either reset or deliberately left alone.
+    #[test]
+    fn the_reset_covers_every_colors_panel_control() {
+        const KEPT: &[&str] = &["Palette", "BackgroundColor", "CylinderTargeting"];
+        let reset: Vec<String> = colors_reset_paths().iter().map(|p| format!("{p:?}")).collect();
+        for src in [include_str!("tone_mapping.rs"), include_str!("histogram.rs")] {
+            for (i, _) in src.match_indices("ConfigPath::") {
+                let name: String = src[i + "ConfigPath::".len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                assert!(
+                    KEPT.contains(&name.as_str()) || reset.contains(&name),
+                    "the Colors panel writes ConfigPath::{name}, which Reset to Defaults does not restore"
+                );
+            }
+        }
+    }
 }

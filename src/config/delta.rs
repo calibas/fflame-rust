@@ -2174,6 +2174,12 @@ impl ConfigValue {
             (ConfigValue::ColorMode(a), ConfigValue::ColorMode(b)) => a == b,
             (ConfigValue::SqueezeMode(a), ConfigValue::SqueezeMode(b)) => a == b,
             (ConfigValue::RenderMode(a), ConfigValue::RenderMode(b)) => a == b,
+            // Without these two, setting a style or a curve to the value
+            // it already had was a change: the Colors panel's Reset to
+            // Defaults (which sets both) pushed an undo entry on every
+            // click, even with nothing to reset.
+            (ConfigValue::PathMapStyle(a), ConfigValue::PathMapStyle(b)) => a == b,
+            (ConfigValue::ToneCurve(a), ConfigValue::ToneCurve(b)) => a == b,
             // For complex types, do shallow comparison or always return false
             _ => false,
         }

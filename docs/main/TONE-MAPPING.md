@@ -475,9 +475,12 @@ and colour mode alone. Every preset is Logarithmic.
 
 The panel's *Reset to Defaults* button
 (`reset_colors_to_defaults` in [src/ui/mod.rs](../../src/ui/mod.rs))
-restores the colour mode, the tone-map mode and most tone-map and
-palette-transform settings to their `defaults.rs` values. It leaves the
-palette and the background alone.
+restores every setting the Colors panel edits to its
+`FractalConfig::default()` value, as one undo step -- the colour mode
+and its Speed and PathMap settings, the tone map, the spatial filter,
+the curve, Levels and the palette transforms (`colors_reset_paths`; a
+test holds the list to the panel's controls). It leaves the palette,
+the background and Focused Rendering alone.
 
 ---
 
