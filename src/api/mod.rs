@@ -98,13 +98,10 @@ pub enum HealthCheckOutcome {
 
 /// Percent-encode a query-string value.
 ///
-/// Written rather than pulled in: the only need is one parameter, and
-/// the unreserved set from RFC 3986 is short enough to state.
-///
-/// NOTE: `SearchFlamesParams::to_query_string` interpolates its values
-/// raw, so a flame name containing `&` or `#` still corrupts that URL.
-/// Left alone here because it is a live path with its own behaviour to
-/// re-check, not because it is correct.
+/// Written rather than pulled in: the need is a few free-text query
+/// values (this endpoint's, and `SearchFlamesParams::to_query_string`'s
+/// name and variation), and the unreserved set from RFC 3986 is short
+/// enough to state.
 pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {

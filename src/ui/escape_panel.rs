@@ -87,11 +87,7 @@ pub fn render_escape_content(
     let field = crate::escape::fields::get_field(&esc.formula);
     let ifs_def = crate::escape::ifs::get_ifs(&esc.formula);
     let formula = crate::escape::get_formula(&esc.formula);
-    let selected_label = match (ifs_def, field) {
-        (Some(d), _) => d.display_name,
-        (None, Some(f)) => f.display_name,
-        (None, None) => formula.display_name,
-    };
+    let selected_label = formula_display_name(&esc.formula);
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
         egui::ComboBox::from_id_salt("escape_formula")
@@ -2179,6 +2175,32 @@ fn show_ifs_criterion(ui: &mut egui::Ui, config_manager: &mut ConfigManager, sol
                 .weak(),
             );
         }
+    }
+}
+
+/// The name to show for an escape config's formula. Three registries
+/// share the formula name -- an IFS, a mode-B field, the iterated
+/// formulas -- and they are asked in the order the panel routes
+/// everything downstream, so the label always names what renders.
+pub(crate) fn formula_display_name(formula: &str) -> &'static str {
+    if let Some(d) = crate::escape::ifs::get_ifs(formula) {
+        d.display_name
+    } else if let Some(f) = crate::escape::fields::get_field(formula) {
+        f.display_name
+    } else {
+        crate::escape::get_formula(formula).display_name
+    }
+}
+
+/// The same for the coloring, which each formula family resolves in
+/// its own registry (with the def's fallback, as the dropdown does).
+pub(crate) fn coloring_display_name(esc: &crate::config::escape::EscapeConfig) -> &'static str {
+    if let Some(d) = crate::escape::ifs::get_ifs(&esc.formula) {
+        crate::escape::ifs::get_ifs_coloring(&esc.coloring, d).display_name
+    } else if let Some(f) = crate::escape::fields::get_field(&esc.formula) {
+        crate::escape::fields::get_field_coloring(&esc.coloring, f).display_name
+    } else {
+        crate::escape::get_coloring(&esc.coloring).display_name
     }
 }
 
