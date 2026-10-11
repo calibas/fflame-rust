@@ -987,7 +987,9 @@ fn project_3d_full(p: vec3<f32>) -> Projection3D {
     let scale = f32(min(params.width, params.height)) * 0.25;
     let center = vec2<f32>(f32(params.width), f32(params.height)) * 0.5;
     let pixel = center + transformed * scale;
-    return Projection3D(vec2<i32>(i32(pixel.x), i32(pixel.y)), camera_space);
+    // floor, not i32(): truncating toward zero would fold the strip just
+    // left of (above) the frame, (-1, 0), into column (row) 0.
+    return Projection3D(vec2<i32>(i32(floor(pixel.x)), i32(floor(pixel.y))), camera_space);
 }
 
 // Convert 2D fractal coords to pixel coords
@@ -1012,7 +1014,10 @@ fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
     let scale = f32(min(params.width, params.height)) * 0.25;
     let center = vec2<f32>(f32(params.width), f32(params.height)) * 0.5;
     let pixel = center + transformed * scale;
-    return vec2<i32>(i32(pixel.x), i32(pixel.y));
+    // floor, not i32(): truncating toward zero would fold the strip just
+    // left of (above) the frame, (-1, 0), into column (row) 0, which
+    // then gathered two pixels' worth. flam3 rejects those points.
+    return vec2<i32>(i32(floor(pixel.x)), i32(floor(pixel.y)));
 }
 
 // Apply post-symmetry to a 3D world-space sample. `k` indexes the

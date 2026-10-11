@@ -5779,7 +5779,7 @@ mod orbit_fuse_tests {
 mod memory_tests {
     use super::FlameRenderer;
 
-    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    pub(super) fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
@@ -5794,7 +5794,7 @@ mod memory_tests {
             adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("renderer memory test"),
-                    required_features: wgpu::Features::empty(),
+                    required_features: wgpu::Features::CLEAR_TEXTURE,
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                     experimental_features: Default::default(),
@@ -5829,5 +5829,47 @@ mod memory_tests {
         assert_eq!((out.width(), out.height()), (640, 480), "the output is the frame's");
         full.destroy();
         tail.destroy();
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use crate::config::FractalConfig;
+    use crate::renderer::render::{render, NoProgress, RenderJob};
+    use crate::scene::transforms::{Flame, RenderMode, Transform};
+
+    /// A 64x64 render of a flame whose every point is `x` (y = 0):
+    /// how many pixels light, and whether column 0 of the middle row does.
+    fn lit_by_a_point_at(device: &wgpu::Device, queue: &wgpu::Queue, x: f32) -> (usize, bool) {
+        let mut t = Transform::new();
+        t.variations.clear();
+        t.set_variation("linear", 1.0);
+        (t.a, t.b, t.c, t.d, t.e, t.f) = (0.0, 0.0, 0.0, 0.0, x, 0.0);
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::TwoD;
+        config.flame = Flame { transforms: vec![t], ..Flame::default() };
+        config.deterministic_rng = true;
+        let job = RenderJob::new(&config, 64, 64).with_iterations(200_000);
+        let px = pollster::block_on(render(device, queue, job, &mut NoProgress)).expect("render").rgba_data;
+        let lit = px.chunks(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).count();
+        let i = (32 * 64) * 4;
+        (lit, px[i] > 0 || px[i + 1] > 0 || px[i + 2] > 0)
+    }
+
+    /// A point just left of the frame is off it. The pixel conversion
+    /// truncated toward zero, so the strip (-1, 0) folded into column 0,
+    /// which gathered two pixels' worth; flam3 rejects those points.
+    /// At 64x64 and zoom 1 a pixel is 1/16 of a unit and x = 0 is at 32,
+    /// so x = -2.03125 is pixel -0.5 and x = -1.96875 is pixel 0.5.
+    #[test]
+    fn a_point_left_of_the_frame_is_not_plotted() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (lit, col0) = lit_by_a_point_at(&device, &queue, -1.96875);
+        assert!(col0 && lit == 1, "a point at pixel 0.5 lights column 0 alone: {lit} lit, column 0 {col0}");
+        let (lit, _) = lit_by_a_point_at(&device, &queue, -2.03125);
+        assert_eq!(lit, 0, "a point at pixel -0.5 is off the frame");
     }
 }
