@@ -97,7 +97,7 @@ actions by folding them into the frame's `UiResponse`.
 
 | Menu | Holds |
 |---|---|
-| File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
+| File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online features (the `online_mode` switch; [ONLINE.md](ONLINE.md)), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
 | **Mode** | The four render modes as radio rows, built from `RenderMode::ALL`, each with a hover description |

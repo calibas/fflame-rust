@@ -124,6 +124,10 @@ impl App {
             // that is about to change.
             return;
         }
+        if !self.config_manager.system_settings().online_mode {
+            self.script_cloud.fail(rust_i18n::t!("api.online_features_off").to_string());
+            return;
+        }
         self.script_cloud.busy = true;
         self.script_cloud.status = None;
 

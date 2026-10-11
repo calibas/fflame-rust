@@ -15,6 +15,8 @@ pub struct FileMenuActions {
     pub export_png: bool,
     pub export_png_transparent: bool,
     pub sign_out: bool,
+    /// The Online features checkbox was toggled to this value.
+    pub set_online_mode: Option<bool>,
     pub quit: bool,
 }
 

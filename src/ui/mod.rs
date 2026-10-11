@@ -2371,6 +2371,15 @@ impl EguiLayer {
             api_animation_save_action = action;
         }
 
+        // The Online features switch. A device preference: written to
+        // SystemSettings and saved at once, outside the undo history,
+        // as signing out does.
+        if let Some(on) = menu_actions.file.set_online_mode {
+            let settings = config_manager.system_settings_mut();
+            settings.online_mode = on;
+            let _ = settings.save();
+        }
+
         // Handle sign out action (from menu bar or account panel)
         if menu_actions.file.sign_out || sign_out_requested {
             // Clear auth from SystemSettings
