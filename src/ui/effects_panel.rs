@@ -6,7 +6,108 @@ use egui::Ui;
 
 use crate::animation::AnimationController;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};
-use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
+use crate::effects::{global_effect_registry, EffectCategory, EffectInstance, EffectParameter, EffectRegistry};
+use crate::variations::{ParamType, VariationParameter};
+
+use super::variation_params::{render_variation_params, ParamTarget};
+
+/// The name to show for an effect in the list and in undo entries: the
+/// registry's label (curated and translated for a built-in), or the raw
+/// key for an effect this build does not have. Rows used to show the
+/// key itself -- `sobel_edges` for "Edge Glow".
+fn effect_label(registry: &EffectRegistry, effect_type: &str) -> String {
+    registry
+        .get(effect_type)
+        .map(|info| info.translated_name())
+        .unwrap_or_else(|| effect_type.to_string())
+}
+
+/// Which list an effect sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectList {
+    Color,
+    Density,
+}
+
+/// One effect's parameters as a [`ParamTarget`], so they are drawn by
+/// the variation parameter renderer: an Integer gets an integer slider
+/// (Blend Mode 0-12), a Boolean a checkbox, an Angle degrees -- every
+/// parameter used to be a float slider -- and a value is written only
+/// when it actually changed, never merely by being drawn.
+struct EffectTarget {
+    list: EffectList,
+    index: usize,
+}
+
+impl ParamTarget for EffectTarget {
+    fn stored(
+        &self,
+        config_manager: &ConfigManager,
+        _var_name: &str,
+        param: &VariationParameter,
+    ) -> Option<f32> {
+        let config = config_manager.active_config();
+        let effects = match self.list {
+            EffectList::Color => &config.color_effects,
+            EffectList::Density => &config.density_effects,
+        };
+        let effect = effects.get(self.index)?;
+        Some(effect.params.get(&param.name).copied().unwrap_or(param.default_value))
+    }
+
+    fn path(&self, _var_name: &str, param_name: &str) -> ConfigPath {
+        let (index, param) = (self.index, param_name.to_string());
+        match self.list {
+            EffectList::Color => ConfigPath::ColorEffectParam { index, param },
+            EffectList::Density => ConfigPath::DensityEffectParam { index, param },
+        }
+    }
+}
+
+/// An effect parameter in the shape the parameter renderer draws. The
+/// two structs carry the same fields. A Float the effect left unranged
+/// keeps this panel's old 0..1 slider rather than the variations' -10..10.
+fn widget_param(p: &EffectParameter) -> VariationParameter {
+    let (min_value, max_value) = match p.param_type {
+        ParamType::Float => (p.min_value.or(Some(0.0)), p.max_value.or(Some(1.0))),
+        _ => (p.min_value, p.max_value),
+    };
+    VariationParameter {
+        name: p.name.clone(),
+        display_name: p.display_name.clone(),
+        param_type: p.param_type.clone(),
+        default_value: p.default_value,
+        min_value,
+        max_value,
+        description: p.description.clone(),
+    }
+}
+
+/// Draw the parameters of the effect at `index` in `list`.
+fn render_effect_params(
+    ui: &mut Ui,
+    config_manager: &mut ConfigManager,
+    list: EffectList,
+    index: usize,
+    effect_type: &str,
+) -> UpdateType {
+    // Copied out so the registry's lock is not held while the widgets
+    // write through the config manager.
+    let Some(params) = global_effect_registry()
+        .get(effect_type)
+        .map(|info| info.parameters.iter().map(widget_param).collect::<Vec<_>>())
+    else {
+        return UpdateType::None;
+    };
+    let salt = match list {
+        EffectList::Color => "effect_params",
+        EffectList::Density => "density_effect_params",
+    };
+    ui.indent(format!("{salt}_{index}"), |ui| {
+        render_variation_params(ui, config_manager, &EffectTarget { list, index }, effect_type, &params)
+    })
+    .inner
+}
 
 /// Render reorder buttons (up/down) for an effect
 /// Returns the action to take: None, MoveUp, or MoveDown
@@ -149,6 +250,10 @@ pub fn render_effects_panel(
         ui.add_space(4.0);
 
         let color_effects = config_manager.active_config().color_effects.clone();
+        let labels: Vec<String> = {
+            let registry = global_effect_registry();
+            color_effects.iter().map(|e| effect_label(&registry, &e.effect_type)).collect()
+        };
 
         // Show existing effects
         let mut effect_to_remove: Option<usize> = None;
@@ -176,7 +281,7 @@ pub fn render_effects_panel(
                     }
 
                     // Effect name
-                    ui.label(egui::RichText::new(&effect.effect_type).strong());
+                    ui.label(egui::RichText::new(&labels[idx]).strong());
 
                     // Spacer
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -189,39 +294,9 @@ pub fn render_effects_panel(
 
                 // Effect parameters (only show if enabled)
                 if effect.enabled {
-                    let registry = global_effect_registry();
-                    if let Some(info) = registry.get(&effect.effect_type) {
-                        ui.indent(format!("effect_params_{}", idx), |ui| {
-                            for param_def in &info.parameters {
-                                let current_value = effect.get_param(&param_def.name);
-                                let mut value = current_value;
-
-                                let slider = super::VkbSlider::new(
-                                    &mut value,
-                                    param_def.min_value.unwrap_or(0.0)
-                                        ..=param_def.max_value.unwrap_or(1.0),
-                                )
-                                .text(&param_def.display_name);
-
-                                let mut response = ui.add(slider);
-                                if let Some(desc) = &param_def.description {
-                                    response = response.on_hover_text(desc);
-                                }
-                                if response.changed() {
-                                    if let Err(e) = config_manager.update_param(
-                                        ConfigPath::ColorEffectParam {
-                                            index: idx,
-                                            param: param_def.name.clone(),
-                                        },
-                                        value.into(),
-                                    ) {
-                                        log::error!("Failed to update effect param: {}", e);
-                                    }
-                                    max_update = max_update.max(UpdateType::ToneMappingOnly);
-                                }
-                            }
-                        });
-                    }
+                    let update =
+                        render_effect_params(ui, config_manager, EffectList::Color, idx, &effect.effect_type);
+                    max_update = max_update.max(update);
                 }
             });
             ui.add_space(4.0);
@@ -233,7 +308,7 @@ pub fn render_effects_panel(
             let change = ConfigChange::delete_color_effect_snapshot(
                 idx,
                 effect,
-                format!("Remove Effect: {}", color_effects[idx].effect_type),
+                format!("Remove Effect: {}", labels[idx]),
             );
             if let Err(e) = config_manager.apply_structural_change(change) {
                 log::error!("Failed to remove effect: {}", e);
@@ -250,7 +325,7 @@ pub fn render_effects_panel(
                 ReorderAction::MoveDown => (idx, (idx + 1).min(num_color_effects.saturating_sub(1))),
             };
             if from_idx != to_idx {
-                let effect_name = color_effects[from_idx].effect_type.clone();
+                let effect_name = labels[from_idx].clone();
                 let change = ConfigChange::move_color_effect_snapshot(
                     from_idx,
                     to_idx,
@@ -327,12 +402,20 @@ pub fn render_effects_panel(
         );
         ui.add_space(4.0);
 
-        // Check if any density effects are registered
-        let registry = global_effect_registry();
-        let density_effects_available: Vec<_> = registry
-            .all()
-            .filter(|info| info.category == EffectCategory::Density)
-            .collect();
+        // Check if any density effects are registered. Names only, so the
+        // registry's lock is released before the widgets below write
+        // through the config manager.
+        let density_effects = config_manager.active_config().density_effects.clone();
+        let (density_effects_available, labels): (Vec<(String, String)>, Vec<String>) = {
+            let registry = global_effect_registry();
+            let available = registry
+                .all()
+                .filter(|info| info.category == EffectCategory::Density)
+                .map(|info| (info.name.clone(), info.translated_name()))
+                .collect();
+            let labels = density_effects.iter().map(|e| effect_label(&registry, &e.effect_type)).collect();
+            (available, labels)
+        };
 
         if density_effects_available.is_empty() {
             ui.label(
@@ -341,8 +424,6 @@ pub fn render_effects_panel(
                     .color(egui::Color32::GRAY),
             );
         } else {
-            let density_effects = config_manager.active_config().density_effects.clone();
-
             // Show existing density effects
             let mut effect_to_remove: Option<usize> = None;
             let mut effect_to_move: Option<(usize, ReorderAction)> = None;
@@ -367,7 +448,7 @@ pub fn render_effects_panel(
                             effect_to_move = Some((idx, action));
                         }
 
-                        ui.label(egui::RichText::new(&effect.effect_type).strong());
+                        ui.label(egui::RichText::new(&labels[idx]).strong());
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("X").clicked() {
@@ -377,38 +458,14 @@ pub fn render_effects_panel(
                     });
 
                     if effect.enabled {
-                        if let Some(info) = registry.get(&effect.effect_type) {
-                            ui.indent(format!("density_effect_params_{}", idx), |ui| {
-                                for param_def in &info.parameters {
-                                    let current_value = effect.get_param(&param_def.name);
-                                    let mut value = current_value;
-
-                                    let slider = super::VkbSlider::new(
-                                        &mut value,
-                                        param_def.min_value.unwrap_or(0.0)
-                                            ..=param_def.max_value.unwrap_or(1.0),
-                                    )
-                                    .text(&param_def.display_name);
-
-                                    let mut response = ui.add(slider);
-                                    if let Some(desc) = &param_def.description {
-                                        response = response.on_hover_text(desc);
-                                    }
-                                    if response.changed() {
-                                        if let Err(e) = config_manager.update_param(
-                                            ConfigPath::DensityEffectParam {
-                                                index: idx,
-                                                param: param_def.name.clone(),
-                                            },
-                                            value.into(),
-                                        ) {
-                                            log::error!("Failed to update effect param: {}", e);
-                                        }
-                                        max_update = max_update.max(UpdateType::ToneMappingOnly);
-                                    }
-                                }
-                            });
-                        }
+                        let update = render_effect_params(
+                            ui,
+                            config_manager,
+                            EffectList::Density,
+                            idx,
+                            &effect.effect_type,
+                        );
+                        max_update = max_update.max(update);
                     }
                 });
                 ui.add_space(4.0);
@@ -419,7 +476,7 @@ pub fn render_effects_panel(
                 let change = ConfigChange::delete_density_effect_snapshot(
                     idx,
                     effect,
-                    format!("Remove Effect: {}", density_effects[idx].effect_type),
+                    format!("Remove Effect: {}", labels[idx]),
                 );
                 if let Err(e) = config_manager.apply_structural_change(change) {
                     log::error!("Failed to remove effect: {}", e);
@@ -435,7 +492,7 @@ pub fn render_effects_panel(
                     ReorderAction::MoveDown => (idx, (idx + 1).min(num_density_effects.saturating_sub(1))),
                 };
                 if from_idx != to_idx {
-                    let effect_name = density_effects[from_idx].effect_type.clone();
+                    let effect_name = labels[from_idx].clone();
                     let change = ConfigChange::move_density_effect_snapshot(
                         from_idx,
                         to_idx,
@@ -455,10 +512,9 @@ pub fn render_effects_panel(
                 egui::ComboBox::from_label("Add effect")
                     .selected_text("Select...")
                     .show_ui(ui, |ui| {
-                        for info in density_effects_available {
-                            let translated = info.translated_name();
-                            if ui.selectable_label(false, &translated).clicked() {
-                                let effect = EffectInstance::new(&info.name);
+                        for (name, translated) in &density_effects_available {
+                            if ui.selectable_label(false, translated).clicked() {
+                                let effect = EffectInstance::new(name);
                                 let index = config_manager.active_config().density_effects.len();
                                 let change = ConfigChange::add_density_effect_snapshot(
                                     index,
@@ -479,4 +535,75 @@ pub fn render_effects_panel(
     render_effect_catalog(ui, catalog);
 
     max_update
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::FractalConfig;
+
+    #[test]
+    fn rows_show_the_effects_name_not_its_key() {
+        let registry = global_effect_registry();
+        let label = effect_label(&registry, "sobel_edges");
+        assert_ne!(label, "sobel_edges");
+        assert_eq!(label, registry.get("sobel_edges").unwrap().translated_name());
+        // An effect this build lacks still has a row.
+        assert_eq!(effect_label(&registry, "no_such_effect"), "no_such_effect");
+    }
+
+    /// Integer, Boolean and Angle parameters keep their type on the way
+    /// to the widget renderer: every one used to be a float slider.
+    #[test]
+    fn effect_parameters_keep_their_types() {
+        let registry = global_effect_registry();
+        let vignette = registry.get("vignette").expect("vignette");
+        let blend = vignette.get_param("blend_mode").expect("blend_mode");
+        let w = widget_param(blend);
+        assert!(matches!(w.param_type, ParamType::Integer));
+        assert_eq!((w.min_value, w.max_value), (Some(0.0), Some(12.0)));
+
+        let typed: Vec<_> = registry
+            .all()
+            .flat_map(|info| info.parameters.iter())
+            .map(|p| widget_param(p).param_type)
+            .collect();
+        assert!(typed.iter().any(|t| matches!(t, ParamType::Boolean)));
+        assert!(typed.iter().any(|t| matches!(t, ParamType::Angle)));
+    }
+
+    /// Drawing an effect's parameters must not edit it: values off a
+    /// slider's grid, or an integer, stay as stored, with no undo entry.
+    #[test]
+    fn drawing_effect_parameters_keeps_their_values() {
+        let mut effect = EffectInstance::new("vignette");
+        effect.params.insert("intensity".to_string(), 0.006);
+        effect.params.insert("blend_mode".to_string(), 3.0);
+        let mut config = FractalConfig::default();
+        config.color_effects = vec![effect.clone()];
+        config.density_effects = vec![];
+        let mut manager = ConfigManager::new(config);
+
+        for _ in 0..3 {
+            egui::__run_test_ui(|ui| {
+                render_effect_params(ui, &mut manager, EffectList::Color, 0, "vignette");
+            });
+        }
+        assert_eq!(manager.active_config().color_effects[0].params, effect.params);
+        assert!(!manager.can_undo());
+    }
+
+    #[test]
+    fn an_effect_target_writes_its_own_list() {
+        let color = EffectTarget { list: EffectList::Color, index: 2 };
+        assert_eq!(
+            color.path("x", "radius"),
+            ConfigPath::ColorEffectParam { index: 2, param: "radius".to_string() }
+        );
+        let density = EffectTarget { list: EffectList::Density, index: 0 };
+        assert_eq!(
+            density.path("x", "strength"),
+            ConfigPath::DensityEffectParam { index: 0, param: "strength".to_string() }
+        );
+    }
 }
