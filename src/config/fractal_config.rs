@@ -1466,14 +1466,17 @@ impl FractalConfig {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or_else(|| {
-                // A top-level escape or simulation mode dates the file:
-                // both modes came after v3 (2026-08 and 2026-09; v3 is
-                // 2026-06), so a file using one is at least v3 whatever
-                // wrote it without a version. Assuming less would run the
-                // v2 -> v3 migration, which takes the render mode from the
-                // flame -- 2D -- over the one the file names.
+                // A top-level render mode with none on the flame dates the
+                // file: the field moved there in v3 (2026-06-29, the same
+                // commit), so whatever wrote it without a version wrote a
+                // v3 config -- plain serde did, for a PNG's embedded config
+                // before it was stamped. Assuming less runs the v2 -> v3
+                // migration, which takes the render mode from the flame,
+                // finds none, and makes a 3D flame 2D. An escape or
+                // simulation mode dates it too: both came after v3.
                 let mode = value.get("render_mode").and_then(|m| m.as_str());
-                if matches!(mode, Some("escape") | Some("simulation")) {
+                let on_flame = value.pointer("/flame/render_mode").is_some();
+                if (mode.is_some() && !on_flame) || matches!(mode, Some("escape") | Some("simulation")) {
                     default_version.max(3)
                 } else {
                     default_version

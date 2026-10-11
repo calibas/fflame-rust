@@ -3918,7 +3918,7 @@ mod gpu_tests {
             }
             assert!(cfg.flame.transforms[0].variations.get(kind).is_some_and(|w| *w != 0.0), "seed {seed} is not a {kind} flame");
             let name = format!("free-{kind}-{seed}");
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             println!("== {name} (seed {seed}), a sample point outside the blob");
             // The blob's disc, on the generator's identity post: a
             // view inside it is the blob's smooth glow, where a renewal
@@ -3954,7 +3954,7 @@ mod gpu_tests {
             let cfg = host.run(text, &FractalConfig::default(), seed, Default::default()).expect("the script runs").config;
             assert!(!cfg.flame.final_transforms.is_empty(), "seed {seed} has no final");
             let name = format!("final-{seed}");
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.75, 0.3] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(&name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -3995,7 +3995,7 @@ mod gpu_tests {
             fin.set_variation(variation, weight);
             (fin.a, fin.b, fin.c, fin.d, fin.e, fin.f) = (0.6, 0.2, -0.2, 0.6, 0.3, 0.1);
             cfg.flame.final_transforms = vec![fin];
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.3, 0.7] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -4053,7 +4053,7 @@ mod gpu_tests {
         (last.a, last.b, last.c, last.d, last.e, last.f) = (0.6, 0.2, -0.2, 0.6, 0.3, 0.1);
         fin.flame.final_transforms = vec![last];
         for (name, cfg) in [("elliptic-splits-julian", &armed), ("elliptic-splits-final", &fin)] {
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.3, 0.7] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -4122,7 +4122,7 @@ mod gpu_tests {
         println!("  the cylinder's branches: {branches}");
         assert!(branches >= 4, "a cylinder reaching two turns has {branches} branches");
         for (name, cfg) in [("cylinder-blur-bipolar", &c6), ("cylinder-turns-julian", &turns)] {
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.3, 0.7] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -4179,7 +4179,7 @@ mod gpu_tests {
         if let Ok(text) = std::fs::read_to_string("output/JWF-rando32-simplified4.flame") {
             let mut cfg = crate::flame_xml::parse_flame_xml(&text).expect("parses").remove(0);
             cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
-            std::fs::write("output/flame-zoom/juliascope-rays.fflame", serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write("output/flame-zoom/juliascope-rays.fflame", cfg.to_json().expect("json")).expect("written");
             names.push("juliascope-rays");
         }
         for name in names {

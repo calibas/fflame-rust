@@ -151,7 +151,8 @@ impl WasmApi {
         let config = self.config.as_ref()
             .ok_or_else(|| JsValue::from_str("No config loaded"))?;
 
-        serde_json::to_string_pretty(config)
+        // The canonical saved form (versioned), as a `.fflame` holds it.
+        config.to_json()
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize config: {}", e)))
     }
 

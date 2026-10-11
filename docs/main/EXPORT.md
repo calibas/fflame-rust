@@ -494,12 +494,12 @@ the image data.
 The test category (`--category`) is a field of `PngMetadata` but is not
 written to a chunk.
 
-The `Config` chunk is `serde_json::to_string(config)` — the plain
-derive, not `FractalConfig::to_json` — so it has **no `version` key**.
-Reloading it through `FractalConfig::from_json` treats it as version 0
-and runs the v2 → v3 migration, which turns a 3D flame into 2D (see
-[CONFIG.md](CONFIG.md), *Versioning*). Escape and simulation configs are
-not affected.
+The `Config` chunk is the canonical saved form,
+`FractalConfig::to_json_value` (compact, with its `version`), so it
+reloads through `FractalConfig::from_json` exactly as a `.fflame` does.
+PNGs exported before that carry the plain serde derive with no
+`version`; `from_json` dates those by their top-level `render_mode` (see
+[CONFIG.md](CONFIG.md), *Versioning*).
 
 **Stripping.** The privacy switch is one process-global flag checked by
 the encoder itself, so no export path can forget it:

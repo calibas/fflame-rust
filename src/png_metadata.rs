@@ -68,7 +68,13 @@ impl PngMetadata {
         config: &crate::config::FractalConfig,
     ) -> Self {
         let version_info = crate::version::get_version_info();
-        let config_json = serde_json::to_string(config).unwrap_or_default();
+        // The canonical saved form, as a `.fflame` holds it: versioned, so
+        // it reloads through the same migration. Plain serde wrote no
+        // version, and an unversioned config is read as pre-versioning.
+        let config_json = config
+            .to_json_value()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
         let config_checksum = Self::calculate_checksum(&config_json);
 
         let (render_mode, projection) = match config.render_mode {
@@ -338,6 +344,37 @@ mod tests {
         let checksum1 = PngMetadata::calculate_checksum("config1");
         let checksum2 = PngMetadata::calculate_checksum("config2");
         assert_ne!(checksum1, checksum2);
+    }
+
+    /// A PNG's embedded config reloads as the config it was rendered
+    /// from. It was written with plain serde and no version, so it read
+    /// as pre-versioning, and the v2 -> v3 migration took the render
+    /// mode from the flame (where a v3 config has none): every 3D flame
+    /// recovered from a PNG came back 2D. Both the stamped form written
+    /// now and the unstamped form older PNGs carry must survive.
+    #[test]
+    fn a_pngs_config_reloads_as_rendered() {
+        use crate::config::FractalConfig;
+        use crate::scene::transforms::RenderMode;
+        let mut c = FractalConfig::default();
+        c.render_mode = RenderMode::ThreeD;
+        c.perspective_strength = 0.2;
+        c.preserve_z = false;
+        c.levels_gamma = 1.0;
+        let check = |json: &str, what: &str| {
+            let back = FractalConfig::from_json(json).expect(what);
+            assert_eq!(back.render_mode, RenderMode::ThreeD, "{what}");
+            assert_eq!(back.perspective_strength, 0.2, "{what}");
+            assert!(!back.preserve_z, "{what}");
+            assert_eq!(back.levels_gamma, 1.0, "{what}");
+        };
+        let meta = PngMetadata::from_app_state(64, 64, 0, 0.0, 256, 1.0, &c);
+        check(&meta.config_json, "stamped");
+        // What a v3 build wrote: plain serde, which skipped levels_gamma
+        // at 1.0 (its save rule then).
+        let mut old = serde_json::to_value(&c).unwrap();
+        old.as_object_mut().unwrap().remove("levels_gamma");
+        check(&old.to_string(), "unstamped, as older PNGs carry");
     }
 }
 
