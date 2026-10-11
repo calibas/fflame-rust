@@ -207,6 +207,12 @@ pub struct SubflameMeta {
 unsafe impl bytemuck::Pod for SubflameMeta {}
 unsafe impl bytemuck::Zeroable for SubflameMeta {}
 
+/// A per-pixel buffer's size, in u64: in u32, `width * height * 16`
+/// wraps to 0 at 16384x16384.
+pub(crate) fn pixel_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
+    width as u64 * height as u64 * bytes_per_pixel
+}
+
 /// Pack a flame's transforms into the unified GPU layout:
 /// parent xforms (normals, linkeds, finals) → zero-pad to `MAX_TRANSFORMS` →
 /// subflame xforms (per subflame: normals then finals) → zero-pad to
@@ -1609,7 +1615,7 @@ impl FlameBuffers {
         //   u32[3]: Density (full u32)
         // Size: width × height × 4 × sizeof(u32)
         // Memory: ~7.7MB @ 800×600 (was ~5.8MB with packed format)
-        let histogram_buffer_size = (width * height * 4 * std::mem::size_of::<u32>() as u32) as u64;
+        let histogram_buffer_size = pixel_bytes(width, height, 4 * std::mem::size_of::<u32>() as u64);
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
@@ -2469,7 +2475,7 @@ impl FlameBuffers {
         );
 
         // Create the path id buffer (one u32 per pixel: the path it was last drawn through)
-        let path_buffer_size = (self.width * self.height * std::mem::size_of::<u32>() as u32) as u64;
+        let path_buffer_size = pixel_bytes(self.width, self.height, std::mem::size_of::<u32>() as u64);
         self.path_buffer = Some(device.create_buffer(&BufferDescriptor {
             label: Some("Path Buffer"),
             size: path_buffer_size,
@@ -2771,6 +2777,11 @@ impl FlameBuffers {
 mod tests {
     use super::*;
     use crate::scene::transforms::Transform;
+
+    #[test]
+    fn a_per_pixel_size_does_not_wrap() {
+        assert_eq!(pixel_bytes(16384, 16384, 16), 1u64 << 32);
+    }
 
     /// `scene` mirrors these caps rather than depending on `gpu`; the
     /// capacity check every way in relies on the mirrors being right.
