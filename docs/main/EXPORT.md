@@ -490,9 +490,7 @@ the image data.
 | `RenderMode` | `2D`, `3D`, `Escape` or `Simulation` |
 | `Projection` | `Orthographic` or `Perspective{strength:…}` in 3D; `N/A` otherwise |
 | `ShaderVariations` | how many variations the flame uses |
-
-The test category (`--category`) is a field of `PngMetadata` but is not
-written to a chunk.
+| `TestName`, `TestCategory` | the CLI's test labels (`export --category`); written only when set |
 
 The `Config` chunk is the canonical saved form,
 `FractalConfig::to_json_value` (compact, with its `version`), so it
