@@ -276,7 +276,6 @@ pub struct PanelContext<'a> {
     pub variation_catalog: Option<&'a crate::storage::variation_catalog::CachedCatalog>,
 
     // Libraries
-    pub preset_library: &'a crate::scene::presets::PresetLibrary,
     pub palette_library: &'a mut crate::scene::palette::PaletteLibrary,
 
     // Renderer (optional, might not exist during init)
@@ -360,7 +359,6 @@ pub struct PanelContext<'a> {
     pub config_load_file: &'a mut bool,
     pub flame_xml_import_file: &'a mut bool,
     pub flame_xml_export_file: &'a mut bool,
-    pub open_config_dialog: &'a mut bool,
 
     // Selected preset config (from any browser)
     pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
@@ -462,12 +460,10 @@ pub struct PanelContext<'a> {
 
     // API animation state (for Save/Update Online buttons in animation panel)
     pub api_flame_id: &'a Option<String>,
-    pub api_animation_id: &'a Option<String>,
     pub flame_animations: &'a [crate::api::types::AnimationSummary],
     pub is_signed_in: bool,
 
     // API animation save action (from animation panel)
-    pub api_animation_save_action: &'a mut super::response::ApiAnimationSaveAction,
 
     // Open Save Online dialog (from animation panel)
     pub open_save_online_dialog: &'a mut bool,
@@ -1033,7 +1029,6 @@ impl<'a> PanelViewer<'a> {
         ui.separator();
         let api_context = super::animation_panel::AnimationApiContext {
             api_flame_id: self.context.api_flame_id,
-            api_animation_id: self.context.api_animation_id,
             flame_animations: self.context.flame_animations,
             is_signed_in: self.context.is_signed_in,
         };

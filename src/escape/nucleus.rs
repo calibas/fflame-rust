@@ -285,16 +285,6 @@ fn step_settled(step: &BigComplex, bits: i64) -> bool {
         && mag(&step.im).is_none_or(|e| e < threshold)
 }
 
-impl BigComplex {
-    /// Multiply both components by 2^k (exponent bump).
-    fn mul_scalar_pow2(&self, k: i64) -> Self {
-        Self {
-            re: self.re.mul_pow2(k),
-            im: self.im.mul_pow2(k),
-        }
-    }
-}
-
 /// One-call navigation helper: detect the period for the view, then
 /// Newton to its nucleus. `zoom_log2` is the escape config's zoom
 /// (view radius ≈ 2^(1 − zoom)).

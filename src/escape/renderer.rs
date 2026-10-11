@@ -318,6 +318,7 @@ mod tuning {
     #[cfg(not(test))]
     use std::sync::atomic::Ordering;
 
+    #[cfg(not(test))]
     fn path() -> Option<std::path::PathBuf> {
         Some(crate::storage::backend::get_app_data_dir().ok()?.join("gpu_tuning.json"))
     }

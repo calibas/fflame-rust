@@ -36,8 +36,6 @@ pub enum GalleryViewMode {
 pub struct GalleryResponse {
     /// Config was selected (clicked)
     pub selected: Option<FractalConfig>,
-    /// Request to close the panel
-    pub close_requested: bool,
     /// API flame ID (when loading from Online tab)
     pub api_flame_id: Option<String>,
     /// Whether the loaded flame is public (None = unknown)
@@ -115,6 +113,7 @@ impl FractalConfigGallery {
     }
 
     /// Add configs to the gallery (e.g., when loading a new library file)
+    #[cfg(target_arch = "wasm32")]
     pub fn add_configs(&mut self, configs: Vec<FractalConfig>) {
         for config in configs {
             self.items.push(GalleryItem::new(config));
@@ -122,6 +121,7 @@ impl FractalConfigGallery {
     }
 
     /// Get all configs
+    #[cfg(target_arch = "wasm32")]
     pub fn configs(&self) -> Vec<&FractalConfig> {
         self.items.iter().map(|item| &item.config).collect()
     }
@@ -132,6 +132,7 @@ impl FractalConfigGallery {
     }
 
     /// Check if gallery is empty
+    #[cfg(target_arch = "wasm32")]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }

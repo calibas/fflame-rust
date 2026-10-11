@@ -11,13 +11,11 @@ use rust_i18n::t;
 const HISTOGRAM_HEIGHT: f32 = 120.0;
 
 /// Render a density histogram visualization with levels from config
-///
-/// Returns the rect where the histogram was drawn (for overlay controls)
 pub fn render_histogram_with_config(
     ui: &mut egui::Ui,
     histogram: &DensityHistogram,
     config_manager: &ConfigManager,
-) -> HistogramResponse {
+) {
     let config = config_manager.active_config();
     let levels = LevelsDisplay {
         input_black: config.levels_low,
@@ -27,28 +25,12 @@ pub fn render_histogram_with_config(
     render_histogram_impl(ui, histogram, Some(&levels))
 }
 
-/// Render a density histogram visualization
-///
-/// Returns the rect where the histogram was drawn (for overlay controls)
-pub fn render_histogram(
-    ui: &mut egui::Ui,
-    histogram: &DensityHistogram,
-    levels: Option<&LevelsState>,
-) -> HistogramResponse {
-    let levels_display = levels.map(|l| LevelsDisplay {
-        input_black: l.input_black,
-        input_white: l.input_white,
-        midpoint: l.midpoint,
-    });
-    render_histogram_impl(ui, histogram, levels_display.as_ref())
-}
-
 /// Internal histogram rendering implementation
 fn render_histogram_impl(
     ui: &mut egui::Ui,
     histogram: &DensityHistogram,
     levels: Option<&LevelsDisplay>,
-) -> HistogramResponse {
+) {
     let available_width = ui.available_width().max(200.0);
     let (response, painter) = ui.allocate_painter(
         Vec2::new(available_width, HISTOGRAM_HEIGHT),
@@ -72,10 +54,7 @@ fn render_histogram_impl(
             egui::FontId::default(),
             Color32::from_gray(100),
         );
-        return HistogramResponse {
-            rect,
-            clicked_position: None,
-        };
+        return;
     }
 
     // Calculate scaling
@@ -127,21 +106,6 @@ fn render_histogram_impl(
         egui::FontId::proportional(10.0),
         Color32::from_gray(180),
     );
-
-    // Handle click to get density at position
-    let clicked_position = if response.clicked() {
-        response.interact_pointer_pos().map(|pos| {
-            let x_normalized = (pos.x - rect.left()) / rect.width();
-            x_normalized.clamp(0.0, 1.0)
-        })
-    } else {
-        None
-    };
-
-    HistogramResponse {
-        rect,
-        clicked_position,
-    }
 }
 
 /// Draw the levels markers (low/high/midpoint triangles)
@@ -236,14 +200,6 @@ fn density_color(t: f32) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// Response from rendering the histogram
-pub struct HistogramResponse {
-    /// The rect where the histogram was drawn
-    pub rect: Rect,
-    /// If clicked, the normalized X position (0-1) that was clicked
-    pub clicked_position: Option<f32>,
-}
-
 /// Display-only levels data for histogram markers
 struct LevelsDisplay {
     input_black: f32,
@@ -255,132 +211,6 @@ struct LevelsDisplay {
 /// gamma=1.0 -> midpoint=0.5 (linear)
 fn gamma_to_midpoint(gamma: f32) -> f32 {
     1.0 / (1.0 + gamma.clamp(0.1, 10.0))
-}
-
-/// State for the Levels controls
-///
-/// Note: In fractal flames, density represents opacity/coverage, NOT brightness:
-/// - Low density = transparent → shows BACKGROUND color (could be any color!)
-/// - High density = opaque → shows FRACTAL color from palette (could also be any color!)
-///
-/// A black palette on white background would show white in sparse areas.
-/// A bright palette on black background would show black in sparse areas.
-///
-/// The "black/white" terminology matches Photoshop's Levels UI convention for familiarity,
-/// but the actual effect is on transparency (background vs fractal), not darkness/lightness.
-#[derive(Clone, Debug)]
-pub struct LevelsState {
-    /// Input low threshold (density) - pixels below this show background color
-    /// UI shows as "Black" to match Photoshop Levels convention
-    pub input_black: f32,
-    /// Input high threshold (density) - pixels above this show full fractal color
-    /// UI shows as "White" to match Photoshop Levels convention
-    pub input_white: f32,
-    /// Midpoint/gamma (0-1, where 0.5 = linear)
-    /// Controls how density values between low and high are mapped
-    pub midpoint: f32,
-    /// Whether auto-levels is enabled
-    pub auto_enabled: bool,
-}
-
-impl Default for LevelsState {
-    fn default() -> Self {
-        Self {
-            input_black: 0.0,
-            input_white: 1.0, // × mean density; will be auto-set from histogram
-            midpoint: 0.5,    // Linear (gamma = 1.0)
-            auto_enabled: true,
-        }
-    }
-}
-
-impl LevelsState {
-    /// Create new levels state
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Update from histogram percentiles (auto-levels). Values are
-    /// normalized into "× mean density" units to match the shader's
-    /// scale-invariant Levels semantics.
-    pub fn update_from_histogram(&mut self, histogram: &DensityHistogram) {
-        if !histogram.valid || !self.auto_enabled {
-            return;
-        }
-
-        let mean = histogram.sample_density.max(f32::EPSILON);
-        self.input_black = histogram.percentile_1 / mean;
-        self.input_white = histogram.percentile_99 / mean;
-    }
-
-    /// Convert midpoint position (0-1) to gamma value
-    /// midpoint=0.5 -> gamma=1.0 (linear)
-    /// midpoint<0.5 -> gamma>1.0 (darken midtones)
-    /// midpoint>0.5 -> gamma<1.0 (brighten midtones)
-    pub fn gamma(&self) -> f32 {
-        // Map 0-1 to gamma range (approximately 0.1 to 10.0)
-        // Using: gamma = (1 - midpoint) / midpoint for midpoint in (0, 1)
-        // This gives gamma=1 at midpoint=0.5
-        let clamped = self.midpoint.clamp(0.01, 0.99);
-        (1.0 - clamped) / clamped
-    }
-
-    /// Set gamma and update midpoint
-    pub fn set_gamma(&mut self, gamma: f32) {
-        // Inverse of gamma(): midpoint = 1 / (1 + gamma)
-        self.midpoint = 1.0 / (1.0 + gamma.clamp(0.1, 10.0));
-    }
-}
-
-/// Render Levels controls (sliders for black/white/midpoint)
-pub fn render_levels_controls(
-    ui: &mut egui::Ui,
-    levels: &mut LevelsState,
-    histogram: &DensityHistogram,
-) -> bool {
-    let mut changed = false;
-
-    ui.horizontal(|ui| {
-        ui.label("Levels");
-        if ui.checkbox(&mut levels.auto_enabled, "Auto").changed() {
-            changed = true;
-            if levels.auto_enabled {
-                levels.update_from_histogram(histogram);
-            }
-        }
-    });
-
-    ui.add_enabled_ui(!levels.auto_enabled, |ui| {
-        // Black point slider
-        ui.horizontal(|ui| {
-            ui.label("Black:");
-            let range = 0.0..=histogram.max_density.max(100.0);
-            if ui.add(super::VkbSlider::new(&mut levels.input_black, range).logarithmic(true)).changed() {
-                changed = true;
-            }
-        });
-
-        // White point slider
-        ui.horizontal(|ui| {
-            ui.label("White:");
-            let range = 0.0..=histogram.max_density.max(100.0);
-            if ui.add(super::VkbSlider::new(&mut levels.input_white, range).logarithmic(true)).changed() {
-                changed = true;
-            }
-        });
-    });
-
-    // Midpoint/gamma slider (always enabled)
-    ui.horizontal(|ui| {
-        ui.label("Gamma:");
-        let mut gamma = levels.gamma();
-        if ui.add(super::VkbSlider::new(&mut gamma, 0.1..=10.0).logarithmic(true)).changed() {
-            levels.set_gamma(gamma);
-            changed = true;
-        }
-    });
-
-    changed
 }
 
 /// Render Levels controls using ConfigManager for state management

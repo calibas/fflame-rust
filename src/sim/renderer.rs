@@ -387,7 +387,6 @@ fn layer_models(cfg: &SimConfig) -> Vec<&'static ModelDef> {
 /// combination. Rebuilt when any of those change, which is rare —
 /// parameter edits do not touch it.
 struct Pipelines {
-    seed: ComputePipeline,
     /// Per layer, the dispatches of one step in order: `sim_step`,
     /// then `sim_step2`, and so on for as many as that layer's model
     /// declares. Layers sharing a model share the compiled pipelines.
@@ -1964,7 +1963,6 @@ impl SimRenderer {
         self.pipelines = Some(Pipelines {
             layer_warp,
             flame_layout,
-            seed: seed_pipelines[0].1.clone(),
             layer_seeds: models.iter().map(|m| {
                 seed_pipelines.iter().find(|(n, _)| *n == m.name).map(|(_, p)| p.clone()).expect("built above")
             }).collect(),

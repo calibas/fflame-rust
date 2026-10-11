@@ -84,6 +84,7 @@ pub struct FractalBrowserPanel {
     /// Gallery for presets
     presets_gallery: FractalConfigGallery,
     /// Whether preset thumbnails need generation
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     presets_needs_generation: bool,
 
     // --- Batch tab ---
@@ -181,6 +182,7 @@ impl FractalBrowserPanel {
     }
 
     /// Get the current tab
+    #[cfg(test)]
     pub fn current_tab(&self) -> BrowserTab {
         self.current_tab
     }
@@ -202,11 +204,6 @@ impl FractalBrowserPanel {
         self.batch_needs_generation = true;
         // Auto-switch to batch tab
         self.current_tab = BrowserTab::Batch;
-    }
-
-    /// Check if batch has any results
-    pub fn has_batch_results(&self) -> bool {
-        self.batch_gallery.len() > 0
     }
 
     // ========== Files tab methods ==========
@@ -236,6 +233,7 @@ impl FractalBrowserPanel {
     }
 
     /// Load configs from JSON string
+    #[cfg(target_arch = "wasm32")]
     pub fn load_json(&mut self, json: &str, source_name: &str) {
         self.files_error_message = None;
 
@@ -298,12 +296,6 @@ impl FractalBrowserPanel {
         self.online_error = None;
         self.online_search_name.clear();
         self.online_search_render_mode = None;
-    }
-
-    /// Reset online tab for a fresh session (used after sign-in).
-    /// Sets `online_fetched = false` so the next visit auto-fetches.
-    pub fn reset_online_for_new_session(&mut self) {
-        self.online_fetched = false;
     }
 
     // ========== Thumbnail generation (desktop) ==========
@@ -395,16 +387,6 @@ impl FractalBrowserPanel {
         // Files gallery starts generation when files are loaded
         self.files_gallery
             .start_async_thumbnail_generation(device, queue);
-    }
-
-    /// Get generation progress for the current tab
-    pub fn generation_progress(&self) -> (usize, usize) {
-        match self.current_tab {
-            BrowserTab::Presets => self.presets_gallery.generation_progress(),
-            BrowserTab::Batch => self.batch_gallery.generation_progress(),
-            BrowserTab::Files => self.files_gallery.generation_progress(),
-            BrowserTab::Online => (0, 0),
-        }
     }
 
     // ========== Rendering ==========
