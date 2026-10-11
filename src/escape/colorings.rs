@@ -797,7 +797,7 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 /// derivative. It also goes noisy the moment sampling is jittered,
 /// which is what Kalles Fraktaler's changelog records fixing by adding
 /// analytic differences. This is the version that survives temporal
-/// or stochastic sampling; see docs/projects/escape-new-families.md.
+/// or stochastic sampling; see docs/archive/escape-time/escape-new-families.md.
 pub static NORMAL_MAP: ColoringDef = ColoringDef {
     name: "normal_map",
     display_name: "Normal Map (3D relief)",

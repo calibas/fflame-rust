@@ -17,7 +17,7 @@
 //! State (4 slots, zero-initialized): `_x0, _y0, _theta, _phi`.
 //!
 //! First port to validate per-thread state infrastructure. See
-//! `docs/projects/intra-iteration-state-and-accum.md`.
+//! `docs/archive/intra-iteration-state-and-accum.md`.
 //!
 //! Source: `output/jwildfire-vars/output/curliecue2.cpp`.
 //! Reference: https://oolong.co.uk/curlicue.htm

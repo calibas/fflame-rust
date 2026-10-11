@@ -1,9 +1,9 @@
 //! Cylinder targeting — stage 2 of
-//! [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+//! [flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md).
 //!
 //! Stage 1 biases the chaos game's transform selection and corrects
 //! with a likelihood ratio. Its mechanism is exact and its payoff was
-//! not there ([§11](../../docs/projects/flame-deep-zoom.md)): a fixed
+//! not there ([§11](../../docs/projects/deep-zoom/flame-deep-zoom.md)): a fixed
 //! per-transform bias is still a polynomial share of the orbit, so it
 //! moves a constant that the weight's own variance swamps. This is
 //! the stage where the asymptotics change.

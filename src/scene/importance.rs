@@ -1,6 +1,6 @@
 //! Biased transform selection and the correction that makes it
 //! unbiased — stage 1 of
-//! [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+//! [flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md).
 //!
 //! The chaos game samples the invariant measure over the whole
 //! attractor, so the fraction of samples landing in a deep viewport

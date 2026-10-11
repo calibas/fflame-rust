@@ -429,7 +429,7 @@ pub struct FractalConfig {
     pub deterministic_rng: bool,
 
     /// Importance-sampled transform selection
-    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// ([flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md)
     /// stage 1). Off by default and skipped when off, so no existing
     /// config gains a field and the shader is byte-identical.
     #[serde(default, skip_serializing_if = "ImportanceSettings::is_default")]
@@ -437,7 +437,7 @@ pub struct FractalConfig {
 
     /// Cylinder targeting: force an enumerated prefix at plot time so
     /// every sample lands in the viewport
-    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// ([flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md)
     /// stage 2).
     ///
     /// Off by default and skipped when off. This only PERMITS it: a
@@ -505,7 +505,7 @@ pub struct FractalConfig {
 
 /// Biased transform selection with a windowed likelihood-ratio
 /// correction -- stage 1 of
-/// [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+/// [flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md).
 ///
 /// The chaos game samples the invariant measure over the WHOLE
 /// attractor, so the fraction of samples landing in a deep viewport
