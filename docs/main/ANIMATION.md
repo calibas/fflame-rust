@@ -193,11 +193,15 @@ ColorEffect | DensityEffect`).
   `Animation::rebind_targets` rewrites each track's index and
   `flame_target` to wherever its bound item now sits.
 - A track whose bound item is gone keeps its key and its binding, so an
-  undo that restores the item restores the track. The track list marks
-  it with a warning sign and the header counts them ("N broken").
+  undo that restores the item restores the track, and is marked
+  **broken** (`TrackBinding::broken`). The track list marks it with a
+  warning sign and the header counts them ("N broken").
 
-The apply path never reads the binding: it parses `target` and indexes
-directly. The binding's only job is keeping `target` current.
+The apply path parses `target` and indexes directly; the binding keeps
+`target` current. A broken track's `target` still holds the old index,
+which now names a different item, so evaluation skips broken tracks and
+the video exporter removes them (`remove_broken_tracks`) before binding
+afresh against its config.
 
 ---
 

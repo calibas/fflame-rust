@@ -221,7 +221,7 @@ pub fn render_track_editor(
             .on_hover_text(
                 "Tracks targeting parameters that don't exist in the current config \
                  (e.g. transform was deleted, subflame is missing). They still load \
-                 but won't apply until rebound.",
+                 but won't apply (in the preview or a video) until rebound.",
             );
         }
         ui.separator();

@@ -176,6 +176,11 @@ impl AnimationController {
             if matches!(track.source, TrackSource::Signal { .. }) {
                 continue; // Skip signal tracks when no manager available
             }
+            // Its target was deleted; the index it holds names another
+            // item now (`TrackBinding::broken`).
+            if track.bound.broken {
+                continue;
+            }
             if let Some(value) = Self::evaluate_track_pure(track, time) {
                 values.push((track.flame_target, track.target.clone(), value));
             }
@@ -197,10 +202,13 @@ impl AnimationController {
         };
 
         // Clone track info to avoid borrow conflicts with signal smoothing
+        // Broken tracks are skipped (`TrackBinding::broken`); the index
+        // stays the track's position, which smoothing state is keyed by.
         let track_info: Vec<_> = animation
             .tracks
             .iter()
             .enumerate()
+            .filter(|(_, track)| !track.bound.broken)
             .map(|(idx, track)| (idx, track.flame_target, track.target.clone(), track.source.clone(), track.interpolation))
             .collect();
 

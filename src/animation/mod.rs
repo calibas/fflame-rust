@@ -181,6 +181,13 @@ pub struct TrackBinding {
     /// non-list paths (View, Color, Tone, Rendering — anything not
     /// indexed into one of the six tracked lists).
     pub target: Option<TargetBinding>,
+    /// The bound subflame or item is gone (`rebind_one` could not find
+    /// its id). A broken track's `target` still holds the old index,
+    /// and whatever now sits there is a DIFFERENT item, so evaluation
+    /// skips the track rather than write to it, and the video exporter
+    /// leaves it out. Cleared when the id is found again (an undo that
+    /// restores the item) or the track is bound afresh.
+    pub broken: bool,
 }
 
 /// Single parameter track
@@ -414,6 +421,18 @@ impl Animation {
             rebind_one(track, config);
         }
     }
+
+    /// Take out the tracks `rebind_targets` marked broken, returning
+    /// them. For the video exporter, which binds afresh against its
+    /// config: `bind_to_config` resolves a track by its stale index, so
+    /// a broken track would be bound to whatever item now sits there
+    /// and animate it.
+    pub fn remove_broken_tracks(&mut self) -> Vec<Track> {
+        let (broken, kept): (Vec<Track>, Vec<Track>) =
+            std::mem::take(&mut self.tracks).into_iter().partition(|t| t.bound.broken);
+        self.tracks = kept;
+        broken
+    }
 }
 
 /// Resolve a `(flame_target, target_path)` pair to the runtime
@@ -441,7 +460,7 @@ pub fn resolve_track_binding(
     };
 
     let Some(path) = ConfigPath::from_string_key(target_path) else {
-        return TrackBinding { flame: flame_id, target: None };
+        return TrackBinding { flame: flame_id, target: None, broken: false };
     };
 
     // Map ConfigPath → which list it indexes into. Paths that don't
@@ -515,7 +534,7 @@ pub fn resolve_track_binding(
         _ => None,
     };
 
-    TrackBinding { flame: flame_id, target }
+    TrackBinding { flame: flame_id, target, broken: false }
 }
 
 /// Rewrite one track's index references to match where its `bound`
@@ -524,27 +543,34 @@ pub fn resolve_track_binding(
 fn rebind_one(track: &mut Track, config: &FractalConfig) {
     // Step 1: rebind flame_target. If the track is bound to a
     // subflame ID, find its current position; if the ID is gone,
-    // leave flame_target as-is (broken).
+    // leave flame_target as-is and mark the track broken.
     if let Some(flame_id) = track.bound.flame {
-        if let Some(new_index) = config
-            .flame
-            .subflames
-            .iter()
-            .position(|sub| sub.id == flame_id)
-        {
-            track.flame_target = EditingTarget::Subflame { index: new_index };
+        match config.flame.subflames.iter().position(|sub| sub.id == flame_id) {
+            Some(new_index) => {
+                track.flame_target = EditingTarget::Subflame { index: new_index };
+            }
+            None => {
+                track.bound.broken = true;
+                return;
+            }
         }
     }
 
     // Step 2: rebind the target path's list index. Need to look up
     // the bound item in the right pool *of the bound flame*. If the
-    // flame itself doesn't resolve, skip — track is broken.
-    let Some(target_binding) = track.bound.target else { return };
+    // flame itself doesn't resolve, the track is broken.
+    let Some(target_binding) = track.bound.target else {
+        track.bound.broken = false;
+        return;
+    };
     let flame = match track.flame_target {
         EditingTarget::Main => &config.flame,
         EditingTarget::Subflame { index } => match config.flame.subflames.get(index) {
             Some(sub) => sub,
-            None => return, // broken — leave target as-is
+            None => {
+                track.bound.broken = true; // leave target as-is
+                return;
+            }
         },
     };
 
@@ -556,10 +582,17 @@ fn rebind_one(track: &mut Track, config: &FractalConfig) {
         TargetBinding::DensityEffect(id) => config.density_effects.iter().position(|e| e.id == id),
     };
 
-    if let Some(new_index) = new_index {
-        if let Some(rewritten) = rewrite_path_index(&track.target, new_index) {
-            track.target = rewritten;
+    match new_index {
+        Some(new_index) => {
+            if let Some(rewritten) = rewrite_path_index(&track.target, new_index) {
+                track.target = rewritten;
+            }
+            track.bound.broken = false;
         }
+        // The item is gone. Its old index now names a different item
+        // (or nothing), so the track must not apply until it is
+        // rebound -- see `TrackBinding::broken`.
+        None => track.bound.broken = true,
     }
 }
 
@@ -773,6 +806,56 @@ mod tests {
             RenderMode::ThreeD,
             "unversioned base_config treated as v2 → render_mode lifted"
         );
+    }
+
+    /// A track on a deleted transform stops applying; it used to write
+    /// to whatever transform slid into the deleted one's index.
+    #[test]
+    fn a_track_on_a_deleted_transform_writes_to_nothing() {
+        use crate::scene::transforms::Transform;
+
+        let mut config = FractalConfig::default();
+        config.flame.transforms = (0..3)
+            .map(|i| {
+                let mut t = Transform::new();
+                t.weight = 1.0 + i as f32;
+                t
+            })
+            .collect();
+
+        let mut anim = Animation::new("Broken".into(), 1.0);
+        anim.add_track(Track::constant("Transform.1.Weight".into(), serde_json::json!(9.0)));
+        anim.add_track(Track::constant("Zoom".into(), serde_json::json!(2.0)));
+        anim.bind_to_config(&config);
+
+        // Delete the middle transform, as the editor does, then rebind.
+        let removed = config.flame.transforms.remove(1);
+        anim.rebind_targets(&config);
+        assert!(anim.tracks[0].bound.broken);
+        assert!(!anim.tracks[1].bound.broken, "a non-list track is never broken");
+
+        let mut controller = AnimationController::new();
+        controller.load(anim.clone());
+        let values = controller.evaluate_at_time(0.0);
+        assert!(values.iter().all(|(_, key, _)| key != "Transform.1.Weight"), "{values:?}");
+        crate::animation::export::apply_animation_values(&mut config, &values);
+        assert_eq!(config.flame.transforms[1].weight, 3.0, "the transform now at index 1 keeps its weight");
+        assert_eq!(config.zoom, 2.0, "the other track still applies");
+
+        // The exporter leaves it out before binding afresh.
+        let mut exported = anim.clone();
+        let dropped = exported.remove_broken_tracks();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(exported.tracks.len(), 1);
+
+        // Undo brings the transform back: the track un-breaks.
+        config.flame.transforms.insert(1, removed);
+        anim.rebind_targets(&config);
+        assert!(!anim.tracks[0].bound.broken);
+        controller.load(anim);
+        let values = controller.evaluate_at_time(0.0);
+        crate::animation::export::apply_animation_values(&mut config, &values);
+        assert_eq!(config.flame.transforms[1].weight, 9.0);
     }
 
     #[test]
