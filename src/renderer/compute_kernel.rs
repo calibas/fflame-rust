@@ -6175,4 +6175,27 @@ mod fog_tests {
             assert!((c - 1.0).abs() < 0.01, "a fully fogged sample over a white background is {rgb:?}, not white");
         }
     }
+
+    /// Fog blends a LINEAR sample colour toward the background, so the
+    /// background has to be decoded from the sRGB it is stored in, as the
+    /// tonemap decodes it before compositing. Mixing toward the raw value
+    /// made a 0.5 grey background's fog 0.5 linear -- about sRGB 0.73,
+    /// visibly lighter than the background around it. (The histogram
+    /// truncates each deposit to 1/100, so the decoded 0.2176 reads back
+    /// as 0.21.)
+    #[test]
+    fn fog_heads_for_the_decoded_background() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let rgb = fogged_mean_rgb(&device, &queue, [0.5, 0.5, 0.5]);
+        let decoded = 0.5f64.powf(2.2);
+        for c in rgb {
+            assert!(
+                (c - decoded).abs() < 0.015,
+                "a fully fogged sample over a 0.5 grey background is {rgb:?}; the decoded background is {decoded:.4}"
+            );
+        }
+    }
 }

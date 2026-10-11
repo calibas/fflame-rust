@@ -394,7 +394,11 @@ multiplies into it:
 | `1 − solid_strength` behind the surface, 0 in a priming batch | solid rendering |
 | `exp(−zdist² · far_density_fade)` | 3D far-density fade |
 
-Depth fog is not a weight: it blends the colour toward the background.
+Depth fog is not a weight: it blends the colour toward the background,
+decoded to linear (`srgb_to_linear`, the 2.2 power) as the tonemap
+decodes it before compositing -- the sample colour is linear, the
+background is stored as the sRGB the user picked. The shade pass (lit
+solids) and escape mode D's solid fog decode it the same way.
 
 **Why the scale cancels.** Colour is recovered by dividing the colour
 sums by the density sum, Σ(s · w · c) / Σ(s · w). The constant 100 and
