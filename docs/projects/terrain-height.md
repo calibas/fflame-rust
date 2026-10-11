@@ -1,6 +1,7 @@
 # Escape terrain: height quality
 
-**Status:** built on `terrain-height` (2026-10-10): H1 to H4.
+**Status:** built on `terrain-height` (2026-10-10): H1 to H6, and the
+export-memory work alongside (docs/main/EXPORT.md).
 
 The escape terrain's fine detail comes out as noise, its heights warp and
 shift as you zoom, and the Height slider did not always redraw. The
@@ -163,4 +164,8 @@ and `src/escape/terrain.rs` (`INGEST_WGSL`, `hf_f`).
   free. On a 6 GB card a 4K export holds 128 (1.66 texels a pixel, 108
   sections, peak 4.25 GB) -- visibly crisper. The viewport keeps 64. An
   export whose view wants no more than 64 is unchanged; one that wants
-  more is as fine as the card it is made on allows.
+  more is as fine as the card it is made on allows. Only a discrete card
+  is asked: a unified memory (Apple silicon, an integrated GPU) can grant
+  far past what is comfortable and pay in paging, a browser may not
+  allocate until a buffer is used, and a software renderer is the
+  reference -- they keep 64.

@@ -135,6 +135,7 @@
 
 ### Important Implementation Details
 - **Atomic u32 histogram accumulation** (thread-safe; 4×u32 per pixel) feeding an `Rgba32Float` accumulator — see Render Pipeline above and [docs/main/COLOR.md](docs/main/COLOR.md)
+- **GPU memory during exports** ([docs/main/EXPORT.md](docs/main/EXPORT.md), "GPU memory during an export"): a background export (PNG on its own device, high-res, video) **freezes the viewport** (`App::freeze_viewport`) — nothing renders, its last picture stays, the escape renderer and terrains are freed and rebuilt after. Renderers hold only what they draw: the solid shade pass's full-frame textures are made on its first run, escape/terrain/sim renders get `FlameRenderer::for_tail` (no flame histograms), a terrain's section renderer frees its pixels once the sections are in, and an export fits its terrain section cap (64–256) to the card (`fit_export_sections`)
 - Using **JSON** for serialization
 - **Precision Limitation (f32 vs Apophysis double):**
   - Apophysis/JWildfire use 64-bit `double` for variation weights and parameters (~15-16 digit precision)
