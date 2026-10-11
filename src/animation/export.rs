@@ -1865,6 +1865,15 @@ pub async fn export_animation(
     // resolved IDs.
     let mut controller = AnimationController::new();
     let mut animation = export_config.animation.clone();
+    // A track the app marked broken holds a stale index, and binding
+    // afresh would resolve that index onto whatever item now sits
+    // there -- so it is left out, as it is left out of the preview.
+    for track in animation.remove_broken_tracks() {
+        log::warn!(
+            "Video export: the track on `{}` lost its target (deleted) and is left out",
+            track.target
+        );
+    }
     animation.bind_to_config(&export_config.config);
     controller.load(animation);
     // The video steps one frame at a time. Signal smoothing is scaled
