@@ -390,23 +390,6 @@ impl App {
             max_binding,
             long_render,
         ) {
-            crate::export::CustomSizeRoute::TooLarge => {
-                // Both non-flame engines hit this for the same reason:
-                // the shared `FlameRenderer` whose tail they use
-                // allocates its histogram at the export size whatever
-                // the mode. Say which mode, since the remedy differs --
-                // escape tiling is unimplemented, while a simulation's
-                // grid is independent of the output and can simply be
-                // exported smaller.
-                let what = if escape_mode { "Escape-time" } else { "Simulation" };
-                let msg = format!(
-                    "{what} export at {}x{} exceeds this GPU's buffer limit -- try a smaller size",
-                    render_width, render_height
-                );
-                log::error!("{msg}");
-                self.egui_layer.show_api_notification(&msg, true);
-                return;
-            }
             crate::export::CustomSizeRoute::HighRes => {
                 println!(
                     "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",

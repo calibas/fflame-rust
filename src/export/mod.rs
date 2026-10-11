@@ -86,11 +86,6 @@ pub enum CustomSizeRoute {
     /// Hand off to the background `HighResExporter`: tiled, its own
     /// device, live progress. Flames only.
     HighRes,
-    /// Refuse. Both non-flame engines share the shared
-    /// `FlameRenderer`'s tail, and it allocates its histogram at the
-    /// export size whatever the mode — so past one storage binding
-    /// there is no path that renders the right thing.
-    TooLarge,
 }
 
 /// Pick the route. `hist_bytes` is the flame histogram this size would
@@ -103,11 +98,14 @@ pub fn route_custom_size_export(
     long_render: bool,
 ) -> CustomSizeRoute {
     if mode.is_non_flame() {
-        // `long_render` is deliberately ignored: it measures flame
+        // Always direct, whatever the size: `render()` gives these
+        // engines `FlameRenderer::for_tail`, which allocates no histogram,
+        // so the flame's binding limit says nothing about them, and
+        // `render()` itself refuses what this device cannot hold (a
+        // texture side, a grid's budget) before allocating. They were
+        // once refused here past one binding, for a histogram they no
+        // longer have. `long_render` is ignored too: it measures flame
         // iterations, which mean nothing here.
-        if hist_bytes > max_binding {
-            return CustomSizeRoute::TooLarge;
-        }
         return CustomSizeRoute::Direct;
     }
     if hist_bytes > max_binding || long_render {
@@ -417,11 +415,12 @@ mod custom_size_route_tests {
                     "{mode:?} with long_render={long} must render directly"
                 );
             }
-            // ...and past one binding it is refused, not mis-rendered.
+            // ...and past one binding too: the tail holds no histogram,
+            // and render() refuses what the device cannot hold.
             assert_eq!(
                 route_custom_size_export(mode, BINDING + 1, BINDING, false),
-                CustomSizeRoute::TooLarge,
-                "{mode:?} past the binding limit must be refused"
+                CustomSizeRoute::Direct,
+                "{mode:?} past the flame's binding limit still renders directly"
             );
         }
     }
