@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 
 use crate::script::{ScriptFlags, ScriptKind};
 use crate::variations::definition::Feature;
-use crate::variations::{VariationCategory, VariationPhase};
+use crate::variations::{ParamType, VariationCategory, VariationPhase};
 
 /// Where the generated contract lives, for the API repo to consume.
 ///
@@ -159,27 +159,19 @@ pub fn generate() -> serde_json::Value {
         }
     }
 
-    let categories: Vec<_> = [
-        VariationCategory::Basic2D,
-        VariationCategory::Advanced2D,
-        VariationCategory::Depth3D,
-        VariationCategory::Rotation3D,
-        VariationCategory::Full3D,
-        VariationCategory::Only3D,
-        VariationCategory::Plugin,
-    ]
-    .iter()
-    .map(|c| {
-        serde_json::json!({
-            "wire": c.to_api_str(),
-            "shipped_variations": category_counts.get(c.to_api_str()).copied().unwrap_or(0),
-            // The one category with behaviour attached: dropped from 2D
-            // shaders because it names variations with no meaningful 2D
-            // reading. Every other category is UI grouping.
-            "affects_compilation": matches!(c, VariationCategory::Only3D),
+    let categories: Vec<_> = VariationCategory::ALL
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "wire": c.to_api_str(),
+                "shipped_variations": category_counts.get(c.to_api_str()).copied().unwrap_or(0),
+                // The one category with behaviour attached: dropped from 2D
+                // shaders because it names variations with no meaningful 2D
+                // reading. Every other category is UI grouping.
+                "affects_compilation": matches!(c, VariationCategory::Only3D),
+            })
         })
-    })
-    .collect();
+        .collect();
 
     let phases: Vec<_> = VariationPhase::ALL
         .iter()
@@ -249,10 +241,7 @@ pub fn generate() -> serde_json::Value {
         "categories": categories,
         "phases": phases,
         "features": features,
-        "param_types": [
-            "float", "unlimited_float", "integer", "unlimited_integer",
-            "boolean", "angle", "enum"
-        ],
+        "param_types": ParamType::ALL.iter().map(|t| t.to_api_str()).collect::<Vec<_>>(),
         "render_modes": {
             "$comment": "The `render_mode` vocabulary, published so the API \
                          gets an AUTOMATIC signal when it grows. Adding a \
@@ -506,6 +495,73 @@ mod tests {
                 e["name"]
             );
         }
+    }
+
+    /// `VariationCategory::ALL` must list every variant: the contract
+    /// publishes it as the category vocabulary. Same arrangement as
+    /// `every_render_mode_is_published_in_the_contract` — a new variant
+    /// fails to compile in the exhaustive match, and the count makes
+    /// whoever adds it list it rather than delete an arm.
+    #[test]
+    fn every_variation_category_is_published_in_the_contract() {
+        for c in VariationCategory::ALL {
+            match c {
+                VariationCategory::Basic2D
+                | VariationCategory::Advanced2D
+                | VariationCategory::Depth3D
+                | VariationCategory::Rotation3D
+                | VariationCategory::Full3D
+                | VariationCategory::Only3D
+                | VariationCategory::Plugin => {}
+            }
+            assert_eq!(VariationCategory::from_api_str(c.to_api_str()), *c);
+        }
+        assert_eq!(
+            VariationCategory::ALL.len(),
+            7,
+            "a category was added: put it in VariationCategory::ALL, and tell the \
+             API directly (a new vocabulary value does not move the shape; RELEASE.md §3)"
+        );
+        let published = generate()["categories"].as_array().expect("categories").len();
+        assert_eq!(published, VariationCategory::ALL.len());
+    }
+
+    /// `ParamType::ALL` likewise, and its wire spelling must be
+    /// `ApiParamType`'s, since the API stores what the client parses.
+    #[test]
+    fn every_param_type_is_published_in_the_contract() {
+        use crate::api::types::ApiParamType;
+        for t in ParamType::ALL {
+            // Paired with the API's spelling of the same variant: the
+            // match is exhaustive, so a new ParamType fails to compile
+            // here until it has both.
+            let api = match t {
+                ParamType::Float => ApiParamType::Float,
+                ParamType::UnlimitedFloat => ApiParamType::UnlimitedFloat,
+                ParamType::Integer => ApiParamType::Integer,
+                ParamType::UnlimitedInteger => ApiParamType::UnlimitedInteger,
+                ParamType::Boolean => ApiParamType::Boolean,
+                ParamType::Angle => ApiParamType::Angle,
+                ParamType::Enum { .. } => ApiParamType::Enum { choices: Vec::new() },
+            };
+            // Unit variants serialise as their name, `Enum` as a
+            // one-key object (externally tagged): either way the wire
+            // name is the string or the key.
+            let wire = match serde_json::to_value(&api).expect("serialises") {
+                serde_json::Value::String(s) => s,
+                serde_json::Value::Object(m) => m.keys().next().expect("tagged").clone(),
+                other => panic!("unexpected ApiParamType encoding: {other}"),
+            };
+            assert_eq!(t.to_api_str(), wire);
+        }
+        assert_eq!(
+            ParamType::ALL.len(),
+            7,
+            "a parameter type was added: put it in ParamType::ALL, and tell the \
+             API directly (a new vocabulary value does not move the shape; RELEASE.md §3)"
+        );
+        let published = generate()["param_types"].as_array().expect("param_types").len();
+        assert_eq!(published, ParamType::ALL.len());
     }
 
     /// Every feature must be in `ALL`, or the contract silently omits it.

@@ -52,6 +52,35 @@ pub enum ParamType {
     },
 }
 
+impl ParamType {
+    /// Every variant, in declaration order, for contract generation.
+    /// `Enum` stands for every choice list: its choices are data, not
+    /// vocabulary. `every_param_type_is_published_in_the_contract`
+    /// holds this list to the enum.
+    pub const ALL: &'static [ParamType] = &[
+        ParamType::Float,
+        ParamType::UnlimitedFloat,
+        ParamType::Integer,
+        ParamType::UnlimitedInteger,
+        ParamType::Boolean,
+        ParamType::Angle,
+        ParamType::Enum { choices: &[] },
+    ];
+
+    /// The wire spelling — `ApiParamType`'s serde name for the variant.
+    pub fn to_api_str(&self) -> &'static str {
+        match self {
+            ParamType::Float => "float",
+            ParamType::UnlimitedFloat => "unlimited_float",
+            ParamType::Integer => "integer",
+            ParamType::UnlimitedInteger => "unlimited_integer",
+            ParamType::Boolean => "boolean",
+            ParamType::Angle => "angle",
+            ParamType::Enum { .. } => "enum",
+        }
+    }
+}
+
 /// Definition of a single variation parameter
 #[derive(Clone, Debug, Serialize)]
 pub struct VariationParameter {
@@ -427,6 +456,19 @@ fn api_phase_to_runtime(api: &crate::api::types::ApiVariationPhase) -> Variation
 }
 
 impl VariationCategory {
+    /// Every variant, in declaration order, for contract generation.
+    /// `every_variation_category_is_published_in_the_contract` holds
+    /// this list to the enum.
+    pub const ALL: &'static [VariationCategory] = &[
+        VariationCategory::Basic2D,
+        VariationCategory::Advanced2D,
+        VariationCategory::Depth3D,
+        VariationCategory::Rotation3D,
+        VariationCategory::Full3D,
+        VariationCategory::Only3D,
+        VariationCategory::Plugin,
+    ];
+
     /// Parse from API string (matches API's snake_case).
     /// Unknown values map to Plugin as a safe default.
     ///
