@@ -5,7 +5,8 @@
     python scripts/release.py check --fix        # ...and regenerate what is stale
     python scripts/release.py changelog          # from git, since the last tag
     python scripts/release.py build              # every shipping artifact
-    python scripts/release.py version 0.5.0      # bump all four crates together
+    python scripts/release.py version 0.5.0      # bump every version together
+    python scripts/release.py versions           # show them; exit 1 if they disagree
     python scripts/release.py                    # check, then changelog preview
 
 Nothing here runs on push, on commit, or on a timer. That is the point:
@@ -27,15 +28,37 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Every crate carrying a version, and the line that holds it. Kept
-# together because the release procedure recommends bumping in lockstep
-# — they are built from one commit and are not independently useful.
+# Every file carrying the app version, the pattern that finds it, and
+# how many matches are the version (1: the first; 0: all of them). Kept
+# together because the release procedure bumps in lockstep — they are
+# built from one commit and are not independently useful. The first
+# entry is the app's own and is what the others are checked against.
+#
+# A manifest's version is its FIRST `version =` line only: a Cargo.toml
+# can hold version strings further down (a `[dependencies.x]` table),
+# and rewriting those would be a disaster wearing the costume of a
+# version bump. python/Cargo.toml matters as much as pyproject.toml:
+# pyfflame.__version__ is CARGO_PKG_VERSION, read from the Cargo.toml.
+_MANIFEST_VERSION = re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)
 VERSION_FILES = [
-    ("Cargo.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)),
-    ("python/pyproject.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)),
-    ("wasm/render/Cargo.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)),
-    ("wasm/script/Cargo.toml", re.compile(r'^(version\s*=\s*")([^"]+)(")', re.M)),
+    ("Cargo.toml", _MANIFEST_VERSION, 1),
+    ("python/Cargo.toml", _MANIFEST_VERSION, 1),
+    ("python/pyproject.toml", _MANIFEST_VERSION, 1),
+    ("wasm/render/Cargo.toml", _MANIFEST_VERSION, 1),
+    ("wasm/script/Cargo.toml", _MANIFEST_VERSION, 1),
+    ("wasm/flame/Cargo.toml", _MANIFEST_VERSION, 1),
+    ("wasm/escape/Cargo.toml", _MANIFEST_VERSION, 1),
+    ("wasm/sim/Cargo.toml", _MANIFEST_VERSION, 1),
+    # The web app's cache-busters on css/ and js/ (every `?v=`): browsers
+    # keep those through ordinary reloads, so a new release must change
+    # the URL or a stale vkb.js silently downgrades the keyboard.
+    ("index.html", re.compile(r'(\?v=)(\d+\.\d+\.\d+)()'), 0),
 ]
+
+# Tracked files that look like they carry a version. Each must be in
+# VERSION_FILES, so a crate added later cannot quietly fall out of the
+# lockstep the way wasm/flame, wasm/escape, wasm/sim and python/ once did.
+VERSION_GLOBS = ["*Cargo.toml", "*pyproject.toml"]
 
 # `name: subject` — 141 of the last 150 commits use it, so a changelog
 # can be grouped by it. The rest fall into "Other", which is honest:
@@ -83,7 +106,10 @@ def run(cmd, capture=True, env=None, cwd=None):
 # ----------------------------------------------------------------- gates
 
 class Gate:
-    """One thing that must pass, and how to repair it if it can be."""
+    """One thing that must pass, and how to repair it if it can be.
+
+    `cmd` is a command to run, or a function returning (ok, output) for
+    a gate that is cheaper to answer here than in a subprocess."""
 
     def __init__(self, name, cmd, fix=None, why="", cwd=None):
         self.name, self.cmd, self.fix, self.why = name, cmd, fix, why
@@ -96,6 +122,10 @@ class Gate:
 
 
 GATES = [
+    # First because it takes no time: one version across every crate,
+    # and every version-carrying manifest in the list that bumps them.
+    Gate("versions agree", lambda: check_versions(),
+         why="one version for everything (RELEASE.md §1); `release.py versions` lists them"),
     Gate("unit tests", ["cargo", "test", "--release", "--lib"],
          why="the suite"),
     Gate("wasm builds", ["cargo", "check", "--release",
@@ -122,15 +152,23 @@ GATES = [
     #
     # Run from the crate directory, NOT --manifest-path from the root:
     # that is how cargo finds wasm/.cargo/config.toml, which shares one
-    # target directory between the two crates and drops the git
+    # target directory between the gallery crates and drops the git
     # provenance that used to invalidate them on every commit. And
     # `--profile gallery-test`, not `--release`: the crates' own
     # [profile.release] is tuned to ship a small .wasm (opt-level="z",
     # fat LTO, one codegen unit), so testing under it spent minutes
     # optimizing the parent crate for download size. Measured on the
     # parent-crate-changed case: 178s -> 73s from the profile alone.
-    # The single-engine feature combinations, which nothing else
-    # builds. wasm/escape, wasm/flame and wasm/sim each link the
+    Gate("gallery script parity",
+         ["cargo", "test", "--profile", "gallery-test"],
+         cwd="wasm/script",
+         why="script + seed is a shareable artifact; drift redefines every published seed"),
+    Gate("gallery renderer smoke",
+         ["cargo", "test", "--profile", "gallery-test"],
+         cwd="wasm/render",
+         why="the device-reuse regression froze real galleries once already"),
+    # The single-engine modules, which are also the engine feature
+    # matrix. wasm/escape, wasm/flame and wasm/sim each link the
     # library with default-features off and ONE engine on, and a
     # `#[cfg]` that drifted off its item is invisible in every other
     # build. That is not hypothetical: `render_sim` and `register_sim`
@@ -140,27 +178,29 @@ GATES = [
     # followed. Nothing failed until the first build with simulation
     # and no escape.
     #
-    # `check --lib`, not `test`: the bug class is "does this
-    # combination compile", the binary needs `web-app` by definition,
-    # and building the three wasm crates properly costs ~4 minutes
-    # against ~20 seconds each here.
-    Gate("engine feature matrix",
-         ["cargo", "check", "--lib", "--no-default-features", "--features", "engine-sim"],
-         why="wasm/sim links exactly this; a cfg on the wrong item compiles everywhere else"),
-    Gate("engine feature matrix (escape)",
-         ["cargo", "check", "--lib", "--no-default-features", "--features", "engine-escape"],
-         why="wasm/escape links exactly this"),
-    Gate("engine feature matrix (flame)",
-         ["cargo", "check", "--lib", "--no-default-features", "--features", "engine-flame"],
-         why="wasm/flame links exactly this"),
-    Gate("gallery script parity",
+    # These were `cargo check --lib --no-default-features --features
+    # engine-X` from the root (~20 s each), which catches that bug
+    # class but left the crates' own smoke tests running nowhere — and
+    # those are the only check that the dropped engines really are gone
+    # (the point of the crates) and that the module still renders. A
+    # test build compiles the library at exactly the same feature set,
+    # so it replaces the check rather than adding to it. The price is
+    # codegen instead of a check: estimated from wasm/render's 73 s
+    # above, about a minute more per crate when the parent crate
+    # changed (not measured for these three). The smoke tests skip
+    # without a GPU adapter.
+    Gate("gallery sim smoke",
          ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/script",
-         why="script + seed is a shareable artifact; drift redefines every published seed"),
-    Gate("gallery renderer smoke",
+         cwd="wasm/sim",
+         why="engine-sim alone: a cfg on the wrong item compiles everywhere else"),
+    Gate("gallery escape smoke",
          ["cargo", "test", "--profile", "gallery-test"],
-         cwd="wasm/render",
-         why="the device-reuse regression froze real galleries once already"),
+         cwd="wasm/escape",
+         why="engine-escape alone, and the flame catalog must be gone"),
+    Gate("gallery flame smoke",
+         ["cargo", "test", "--profile", "gallery-test"],
+         cwd="wasm/flame",
+         why="engine-flame alone, and an escape config must be refused"),
 ]
 
 
@@ -169,7 +209,7 @@ def cmd_check(args):
     failed = []
     for g in GATES:
         t0 = time.time()
-        ok, out = run(g.cmd, cwd=g.cwd)
+        ok, out = g.cmd() if callable(g.cmd) else run(g.cmd, cwd=g.cwd)
         secs = time.time() - t0
 
         if ok:
@@ -274,10 +314,76 @@ def cmd_changelog(args):
 
 # --------------------------------------------------------------- version
 
+def _read(path):
+    # Bytes, not text mode: text mode would turn a checkout's CRLF into
+    # the platform's newline on the way back out, and a version bump
+    # must change one string, not every line ending in the file.
+    return path.read_bytes().decode("utf-8")
+
+
+def versions_in(rel, pattern, count):
+    """The version strings `rel` carries (empty if it has none), or
+    None when the file is missing."""
+    path = ROOT / rel
+    if not path.exists():
+        return None
+    found = [m.group(2) for m in pattern.finditer(_read(path))]
+    return found[:count] if count else found
+
+
 def read_version():
-    text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-    m = VERSION_FILES[0][1].search(text)
-    return m.group(2) if m else "unknown"
+    rel, pattern, count = VERSION_FILES[0]
+    found = versions_in(rel, pattern, count)
+    return found[0] if found else "unknown"
+
+
+def unlisted_manifests():
+    """Tracked manifests that VERSION_FILES does not list, or None when
+    git cannot say (a source tarball)."""
+    ok, out = run(["git", "ls-files", "--", *VERSION_GLOBS])
+    if not ok:
+        return None
+    listed = {rel for rel, _, _ in VERSION_FILES}
+    return [l.strip() for l in out.splitlines()
+            if l.strip() and l.strip() not in listed]
+
+
+def check_versions():
+    """The `versions agree` gate. Returns (ok, report)."""
+    want = read_version()
+    lines, ok = [], True
+    for rel, pattern, count in VERSION_FILES:
+        found = versions_in(rel, pattern, count)
+        if found is None:
+            lines.append(f"{rel:<28} MISSING")
+            ok = False
+        elif not found:
+            lines.append(f"{rel:<28} no version found")
+            ok = False
+        else:
+            bad = sorted({v for v in found if v != want})
+            lines.append(f"{rel:<28} {', '.join(sorted(set(found)))}"
+                         + (f"   <- expected {want}" if bad else ""))
+            ok = ok and not bad
+    extra = unlisted_manifests()
+    if extra is None:
+        lines.append("(git unavailable: tracked manifests not checked against the list)")
+    for rel in extra or []:
+        lines.append(f"{rel:<28} not in release.py's VERSION_FILES, so `version` would skip it")
+        ok = False
+    return ok, "\n".join(lines)
+
+
+def cmd_versions(args):
+    ok, report = check_versions()
+    print(f"{BOLD}Versions{RESET}  {DIM}(the first is the app's; every other must match){RESET}\n")
+    print("\n".join("  " + l for l in report.split("\n")))
+    if not ok:
+        print(f"\n{RED}They disagree.{RESET} "
+              f"{DIM}`release.py version {read_version()}` brings them into line.{RESET}")
+        return 1
+    print(f"\n{GREEN}All agree.{RESET}")
+    return 0
 
 
 def cmd_version(args):
@@ -286,45 +392,70 @@ def cmd_version(args):
         print(f"{RED}`{new}` is not x.y.z{RESET}", file=sys.stderr)
         return 1
 
-    print(f"{BOLD}Bumping every crate to {new}{RESET}  "
+    print(f"{BOLD}Bumping every version to {new}{RESET}  "
           f"{DIM}(lockstep — see docs/RELEASE.md §1){RESET}\n")
-    for rel, pattern in VERSION_FILES:
+
+    # Two passes: read and validate EVERY file, then write. One loop
+    # that did both left the files before a bad one already rewritten —
+    # half a bump, which is the state the lockstep exists to prevent.
+    planned, failed = [], False
+    for rel, pattern, count in VERSION_FILES:
         path = ROOT / rel
         if not path.exists():
-            print(f"  {YELLOW}skip{RESET}  {rel} {DIM}(missing){RESET}")
+            print(f"  {RED}FAIL{RESET}  {rel} {DIM}missing{RESET}")
+            failed = True
             continue
-        text = path.read_text(encoding="utf-8")
-        m = pattern.search(text)
-        if not m:
-            print(f"  {RED}FAIL{RESET}  {rel} {DIM}no version line{RESET}")
-            return 1
-        old = m.group(2)
+        text = _read(path)
+        found = versions_in(rel, pattern, count)
+        if not found:
+            print(f"  {RED}FAIL{RESET}  {rel} {DIM}no version found{RESET}")
+            failed = True
+            continue
+        old = ", ".join(sorted(set(found)))
+        planned.append((rel, path, pattern.sub(rf"\g<1>{new}\g<3>", text, count=count), old))
+    extra = unlisted_manifests()
+    for rel in extra or []:
+        print(f"  {RED}FAIL{RESET}  {rel} {DIM}carries a version but is not in VERSION_FILES{RESET}")
+        failed = True
+    if failed:
+        print(f"\n{RED}Nothing written.{RESET} {DIM}Fix the list above, then run it again.{RESET}")
+        return 1
+
+    for rel, path, text, old in planned:
         if args.dry_run:
             print(f"  {DIM}would set{RESET} {rel:<28} {old} -> {new}")
             continue
-        # Only the FIRST match: a Cargo.toml's `[dependencies]` can hold
-        # version strings too, and rewriting those would be a disaster
-        # wearing the costume of a version bump.
-        path.write_text(pattern.sub(rf"\g<1>{new}\g<3>", text, count=1), encoding="utf-8")
+        path.write_bytes(text.encode("utf-8"))
         print(f"  {GREEN}set {RESET}  {rel:<28} {old} -> {new}")
 
     if not args.dry_run:
-        print(f"\n{DIM}Cargo.lock updates on the next build. "
-              f"Commit both.{RESET}")
+        print(f"\n{DIM}The Cargo.lock files update on the next build of each "
+              f"crate. Commit them too.{RESET}")
     return 0
 
 
 # ----------------------------------------------------------------- build
 
+# (name, command, note, directory). The five gallery modules are
+# five wasm-pack builds — the three single-engine ones are the same
+# source as wasm/render with fewer engines, and each is a module of its
+# own to ship. Each runs from its crate directory, where cargo finds
+# wasm/.cargo/config.toml and its shared target directory.
 BUILDS = [
     ("desktop (dist)", ["cargo", "build", "--profile", "dist", "--bin", "FractalArtEditor"],
-     "~7-10 min: LTO, one codegen unit, stripped"),
-    ("web app", ["bash", "build-wasm.sh"], "wasm-bindgen -> pkg/"),
+     "~7-10 min: LTO, one codegen unit, stripped", None),
+    ("web app", ["bash", "build-wasm.sh"], "wasm-bindgen -> pkg/", None),
     ("gallery: render", ["wasm-pack", "build", "--target", "web", "--release"],
-     "in wasm/render"),
+     "in wasm/render", "wasm/render"),
     ("gallery: script", ["wasm-pack", "build", "--target", "web", "--release"],
-     "in wasm/script"),
-    ("python wheel", ["maturin", "build", "--release"], "in python/"),
+     "in wasm/script", "wasm/script"),
+    ("gallery: flame", ["wasm-pack", "build", "--target", "web", "--release"],
+     "in wasm/flame", "wasm/flame"),
+    ("gallery: escape", ["wasm-pack", "build", "--target", "web", "--release"],
+     "in wasm/escape", "wasm/escape"),
+    ("gallery: sim", ["wasm-pack", "build", "--target", "web", "--release"],
+     "in wasm/sim", "wasm/sim"),
+    ("python wheel", ["maturin", "build", "--release"], "in python/", "python"),
 ]
 
 # Host-specific packaging. Separate from BUILDS because each CONSUMES
@@ -333,26 +464,22 @@ BUILDS = [
 # exists, so a stale one is silently shippable if they run first.
 PACKAGE = {
     "darwin": ("macOS bundle", [sys.executable, "scripts/make_macos_app.py", "--zip"],
-               "-> target/macos/*.app + .zip"),
+               "-> target/macos/*.app + .zip", None),
     "win32": ("Windows zip", [sys.executable, "scripts/make_windows_zip.py"],
-              "-> target/windows/*.zip"),
+              "-> target/windows/*.zip", None),
 }
 
 
 def cmd_build(args):
     print(f"{BOLD}Building every shipping surface{RESET}\n")
-    cwds = {"gallery: render": "wasm/render",
-            "gallery: script": "wasm/script",
-            "python wheel": "python"}
     builds = list(BUILDS)
     if sys.platform in PACKAGE:
         # After the desktop build, which it packages.
         builds.insert(1, PACKAGE[sys.platform])
     failed = []
-    for name, cmd, note in builds:
+    for name, cmd, note, sub in builds:
         if args.only and args.only not in name:
             continue
-        sub = cwds.get(name)
         print(f"  {DIM}{note}{RESET}")
         t0 = time.time()
         p = subprocess.run(cmd, cwd=ROOT / sub if sub else ROOT,
@@ -394,6 +521,9 @@ def main():
     v.add_argument("number")
     v.add_argument("--dry-run", action="store_true")
     v.set_defaults(fn=cmd_version)
+
+    vs = sub.add_parser("versions", help="list every version; exit 1 if they disagree")
+    vs.set_defaults(fn=cmd_versions)
 
     b = sub.add_parser("build", help="build every shipping surface")
     b.add_argument("--only", help="substring of one surface's name")

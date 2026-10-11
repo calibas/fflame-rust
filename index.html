@@ -18,7 +18,9 @@
     <!-- Query strings are cache-busters: WebKit clings to cached JS/CSS
          through ordinary reloads, and a stale vkb.js silently downgrades
          the keyboard (observed: the multiline textarea missing on iOS
-         while every wasm-side change landed). Bump with the version. -->
+         while every wasm-side change landed). They carry the app version:
+         `release.py version` bumps them, and its `versions agree` gate
+         fails while they lag. -->
     <link rel="stylesheet" href="css/vkb.css?v=0.5.0">
     <style>
         * {
