@@ -258,9 +258,9 @@ pub fn render_menu_bar(
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
                 rows_do_not_wrap(ui);
-                // Reset Workspace to Standard layout
+                // Reset Workspace: the mode's own layout, built fresh
                 if ui.button(t!("menu.reset_workspace")).clicked() {
-                    workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
+                    workspace.apply_layout(super::render_mode::workspace_for(menu_state.render_mode));
                 }
 
                 if ui.button(t!("menu.layout_compact")).clicked() {
