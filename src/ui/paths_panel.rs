@@ -99,28 +99,36 @@ pub(super) fn focused_rendering(
             line
         }
         TS::Declined(why) => {
-            use crate::scene::cylinder::NoCylinders as NC;
-            let reason = match why {
-                NC::Unbounded { index, why } => {
-                    t!("view.no_cyl_unbounded", index = index.to_string(), why = why.clone()).to_string()
-                }
-                NC::NoInvariantBall => t!("view.no_cyl_no_ball").to_string(),
-                NC::ColourNotAffine => t!("view.no_cyl_colour").to_string(),
-                NC::Xaos => t!("view.no_cyl_xaos").to_string(),
-                NC::NotContractive(i) => t!("view.no_cyl_expanding", index = i.to_string()).to_string(),
-                NC::Empty => t!("view.no_cyl_empty").to_string(),
-                NC::ViewIsEmpty => t!("view.no_cyl_off_attractor").to_string(),
-                NC::TimedOut { nodes } => t!("view.no_cyl_timed_out", nodes = nodes.to_string()).to_string(),
-                NC::TooManyWords(n) => t!("view.no_cyl_too_many", count = n.to_string()).to_string(),
-                NC::PostSymmetry => t!("view.no_cyl_post_symmetry").to_string(),
-            };
-            t!("view.targeting_declined", reason = reason).to_string()
+            t!("view.targeting_declined", reason = declined_reason(why)).to_string()
         }
     };
     // "Not running" beside "Generating" says the same thing twice, and
     // less.
     if !(deep_zoom.planning.is_some() && matches!(deep_zoom.targeting, TS::Off)) {
         ui.label(line);
+    }
+}
+
+/// Why Focused Rendering refused this flame, in words.
+///
+/// Transforms are numbered from 1, as this panel's paths (T1, T2) and
+/// the Transforms panel number them; the planner's indices are 0-based,
+/// and the message used to pass them through, so T1 was "transform 0".
+fn declined_reason(why: &crate::scene::cylinder::NoCylinders) -> String {
+    use crate::scene::cylinder::NoCylinders as NC;
+    match why {
+        NC::Unbounded { index, why } => {
+            t!("view.no_cyl_unbounded", index = (index + 1).to_string(), why = why.clone()).to_string()
+        }
+        NC::NoInvariantBall => t!("view.no_cyl_no_ball").to_string(),
+        NC::ColourNotAffine => t!("view.no_cyl_colour").to_string(),
+        NC::Xaos => t!("view.no_cyl_xaos").to_string(),
+        NC::NotContractive(i) => t!("view.no_cyl_expanding", index = (i + 1).to_string()).to_string(),
+        NC::Empty => t!("view.no_cyl_empty").to_string(),
+        NC::ViewIsEmpty => t!("view.no_cyl_off_attractor").to_string(),
+        NC::TimedOut { nodes } => t!("view.no_cyl_timed_out", nodes = nodes.to_string()).to_string(),
+        NC::TooManyWords(n) => t!("view.no_cyl_too_many", count = n.to_string()).to_string(),
+        NC::PostSymmetry => t!("view.no_cyl_post_symmetry").to_string(),
     }
 }
 
@@ -360,5 +368,16 @@ mod tests {
         assert_eq!(map_label(0, &armed), "T1");
         assert_eq!(map_label(1 | 2 << 8, &armed), "T2·3");
         assert_eq!(path_label(&[1 | 1 << 8, 0], &armed), "T2·2 > T1");
+    }
+
+    /// A refusal names the transform the way the panel's T1 does: the
+    /// planner's index 0 is transform 1.
+    #[test]
+    fn refusals_number_transforms_from_one() {
+        use crate::scene::cylinder::NoCylinders as NC;
+        let expanding = declined_reason(&NC::NotContractive(0));
+        assert!(expanding.contains("transform 1 "), "{expanding}");
+        let unbounded = declined_reason(&NC::Unbounded { index: 2, why: "x".to_string() });
+        assert!(unbounded.contains("transform 3:"), "{unbounded}");
     }
 }
