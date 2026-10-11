@@ -124,7 +124,7 @@ error.
 |---|---|
 | `weight` | Selection probability in the chaos game (normals only meaningfully). |
 | `color` | Palette position, 0–1. |
-| `color_speed` | 1 = keep incoming colour, 0 = jump fully to `color`. |
+| `color_speed` | How far each step pulls the colour toward `color`: 1 = keep the incoming colour, 0 = halfway (the Apophysis default), -1 = jump fully to `color`. |
 | `opacity` | Plot opacity. |
 | `direct_color` | Blend toward variation-written colour. |
 | `a`, `b`, `c`, `d`, `e`, `f` | Pre-affine coefficients: `x' = a·x + b·y + e`, `y' = c·x + d·y + f`. |
