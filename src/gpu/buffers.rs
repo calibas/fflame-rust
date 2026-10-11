@@ -1979,6 +1979,9 @@ impl FlameBuffers {
     /// Light-space shadow map resolution per axis (4 maps ride the
     /// solid histogram's tail — 16 MB total at 1024).
     pub const SHADOW_MAP_RES: u32 = 1024;
+    /// The histogram's tail past the solid depth region: the 8-word
+    /// bounds atomics and four SHADOW_MAP_RES² shadow maps (16 MiB).
+    pub const SOLID_TAIL_BYTES: u64 = 32 + 4 * (Self::SHADOW_MAP_RES as u64 * Self::SHADOW_MAP_RES as u64) * 4;
 
     /// Word offset of the shadow-map region inside the solid histogram
     /// (after RGBD + depth region + 8-word bounds tail).
@@ -2042,11 +2045,7 @@ impl FlameBuffers {
         //    ordered-float atomicMax depth toward each light) — shadows
         //    at SPLAT resolution, written by the main pass, read by the
         //    shade pass, cleared with the depth region.
-        let tail: u64 = if enabled {
-            32 + 4 * (Self::SHADOW_MAP_RES as u64).pow(2) * 4
-        } else {
-            0
-        };
+        let tail: u64 = if enabled { Self::SOLID_TAIL_BYTES } else { 0 };
         let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64 + tail;
         self.histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {

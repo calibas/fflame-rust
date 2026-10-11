@@ -408,8 +408,7 @@ impl ShaderCache {
                     config.render_mode,
                     config.preserve_z,
                 );
-                constants.solid_enabled = config.solid_strength > 0.0
-                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+                constants.solid_enabled = config.solid_depth_active();
                 constants.importance_sampling = config.importance.enabled;
                 constants.frame_coverage = config.auto_exposure;
                 constants.cylinder_replay = false;
@@ -451,8 +450,7 @@ impl ShaderCache {
             cylinder_offsets: false,
                 flatten_z_per_iter: matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD)
                     && !config.preserve_z,
-                solid_enabled: config.solid_strength > 0.0
-                    && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD),
+                solid_enabled: config.solid_depth_active(),
                 probe: false,
             census: false,
                 attachment_cap: config.flame.attachment_cap() as u32,

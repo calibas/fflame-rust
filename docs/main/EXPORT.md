@@ -209,8 +209,9 @@ viewport size, since the viewport's own image cannot be supersampled.
 
 ## Routing flames by size
 
-A flame histogram is 16 bytes a pixel, 20 with solid rendering
-(`histogram_size_bytes`). The direct path needs it in one storage
+A flame histogram is 16 bytes a pixel; with solid rendering (occluding
+or only lit, `FractalConfig::solid_depth_active`) 20, plus a 16 MiB
+tail of shadow maps (`histogram_size_bytes`). The direct path needs it in one storage
 binding, so routing compares it with the adapter's own
 `max_storage_buffer_binding_size` — probed from the adapter by the CLI
 (`probe_max_binding_size`), read from the app's device in the app — not

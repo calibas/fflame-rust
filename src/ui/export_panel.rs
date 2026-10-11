@@ -167,8 +167,7 @@ pub fn render_export_content(
     let spatial_filter = config_manager.active_config().filter_radius > 0.0;
     let (solid_on, lighting_on, dof_on) = {
         let c = config_manager.active_config();
-        let solid = c.solid_strength > 0.0
-            && matches!(c.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        let solid = c.solid_depth_active();
         (solid, solid && c.solid_shading.active(), solid && c.dof_blur_strength > 0.0)
     };
     // 2× supersampling renders at doubled dimensions: 4× the pixel

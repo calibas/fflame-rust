@@ -1115,8 +1115,7 @@ impl HighResExporter {
         //                  routing this is unreachable, but a future
         //                  caller hitting HighResExporter::new for a
         //                  small image (e.g. testing) shouldn't crash.
-        let solid_enabled = config.solid_strength > 0.0
-            && matches!(config.render_mode, RenderMode::ThreeD);
+        let solid_enabled = config.solid_depth_active();
         let hist_words: u64 = if solid_enabled { 5 } else { 4 };
         let strategy = crate::export::pick_strategy(width, height, &device.limits(), solid_enabled);
         let device_limits = device.limits();
