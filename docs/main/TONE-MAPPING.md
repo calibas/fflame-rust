@@ -100,7 +100,11 @@ It is chosen in the Colors panel under *Tone Mapping → Advanced → Tone
 Map Mode*.
 
 Every mode inverts `gamma`: the exponent is `1/gamma`, except that a
-gamma of exactly 0 gives an exponent of 0.
+gamma of exactly 0 gives an exponent of 0. The slider stops at 0.1, so
+neither that flat silhouette nor the inverted picture a negative gamma
+gives is offered; a file or script can still set them, and the slider
+shows such a value without rewriting it (`ConfigSlider` draws with
+`SliderClamping::Edits`).
 
 | mode | value | colour | alpha |
 | --- | --- | --- | --- |
@@ -485,7 +489,7 @@ means the control is read only by the logarithmic branch.
 | control | field | UI range | default | read by |
 | --- | --- | --- | --- | --- |
 | Exposure | `exposure` | 0.001–10 | 1.0 | all modes |
-| Gamma | `gamma` | −1–10 | 4.0 | all modes |
+| Gamma | `gamma` | 0.1–10 | 4.0 | all modes |
 | Gamma Threshold | `gamma_threshold` | 0–1000 | 5.0 | Log |
 | Brightness | `brightness` | 0.001–100 | 4.0 | Log |
 | Vibrancy | `vibrancy` | 0–30 | 1.0 | Log |

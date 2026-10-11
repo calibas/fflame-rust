@@ -5,6 +5,15 @@ use crate::renderer::DensityHistogram;
 use super::histogram::{render_histogram_with_config, render_levels_controls_managed};
 use rust_i18n::t;
 
+/// The Gamma slider's range.
+///
+/// Every mode raises to `1/gamma`, so 0 makes the exponent 0 -- a flat
+/// silhouette, every covered pixel white -- and below 0 the picture
+/// inverts; the old -1..10 range offered both. Apophysis 7X's UI keeps
+/// gamma to 1-5. Values under 1 stay: Linear mode's calibration is 1,
+/// and the tone presets go down to 0.3.
+const GAMMA_RANGE: std::ops::RangeInclusive<f32> = 0.1..=10.0;
+
 /// How close, in screen points, the pointer has to be to a control
 /// point to pick it up or remove it.
 const CURVE_POINT_HIT_RADIUS: f32 = 12.0;
@@ -299,7 +308,7 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=10.0, t!("tonemap.gamma").as_ref(), Some(t!("tonemap.tooltip_gamma").as_ref())) {
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, GAMMA_RANGE, t!("tonemap.gamma").as_ref(), Some(t!("tonemap.tooltip_gamma").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
 
@@ -908,6 +917,18 @@ mod tests {
 
         let empty_space = curve_to_screen(rect, 0.25, 0.9);
         assert_eq!(removable_point_at(&curve, rect, empty_space), None);
+    }
+
+    /// Gamma 0 is an exponent of 0 (a white silhouette) and below it the
+    /// picture inverts: neither belongs on the slider.
+    #[test]
+    fn the_gamma_slider_starts_above_zero() {
+        assert!(*GAMMA_RANGE.start() > 0.0);
+        assert!(GAMMA_RANGE.contains(&1.0), "Linear mode's gamma must be reachable");
+        assert!(GAMMA_RANGE.contains(&crate::config::defaults::DEFAULT_GAMMA));
+        for preset in crate::scene::tonemap_presets::TONEMAP_PRESETS {
+            assert!(GAMMA_RANGE.contains(&preset.gamma), "preset {} is off the slider", preset.name);
+        }
     }
 
     /// Two points within reach: the nearer one goes.
