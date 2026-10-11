@@ -690,14 +690,6 @@ fn render_track_editor_panel_content(
             ) {
                 state.new_track_target = path.to_string_key();
                 state.new_track_flame_target = flame_target;
-                // Zoom is perceived multiplicatively — a linear track
-                // from 1 to 100 spends half its time below 50.5, five
-                // and a half of its six-and-a-half doublings. Default
-                // new Zoom tracks to the equal-ratio curve; the
-                // dropdown still offers every other mode.
-                if !is_editing && matches!(path, crate::config::ConfigPath::Zoom) {
-                    state.preview_interpolation = Interpolation::Exponential;
-                }
                 // Auto-initialize values based on track type (Add mode only)
                 if !is_editing {
                     match state.new_track_type {
@@ -1640,7 +1632,22 @@ pub fn initialize_preview_keyframes(
         Keyframe { time: 0.0, value: serde_json::json!(start_value), easing: EasingFunction::Linear },
         Keyframe { time: duration, value: serde_json::json!(end_value), easing: EasingFunction::Linear },
     ];
-    state.preview_interpolation = Interpolation::Linear;
+    state.preview_interpolation = default_interpolation(&path);
+}
+
+/// The curve a new keyframe track starts with.
+///
+/// Zoom is perceived multiplicatively — a linear track from 1 to 100
+/// spends half its time below 50.5, five and a half of its six-and-a-
+/// half doublings — so a new Zoom track starts on the equal-ratio
+/// curve; everything else starts Linear. The dropdown still offers
+/// every mode. (This was once set by the target picker and then
+/// overwritten with Linear here, so Zoom tracks started Linear.)
+fn default_interpolation(path: &ConfigPath) -> Interpolation {
+    match path {
+        ConfigPath::Zoom => Interpolation::Exponential,
+        _ => Interpolation::Linear,
+    }
 }
 
 /// Where an index-based selection points after the item at `removed` is
@@ -1675,5 +1682,26 @@ mod tests {
         assert_eq!(adjust_index_after_removal(None, 0), None);
         // Deleting the first track while editing it.
         assert_eq!(adjust_index_after_removal(Some(0), 0), None);
+    }
+
+    /// A new Zoom track starts Exponential; it used to be set by the
+    /// picker and then reset to Linear by the keyframe initialiser.
+    #[test]
+    fn a_new_zoom_track_starts_exponential() {
+        use super::{initialize_preview_keyframes, TrackEditorState};
+        use crate::animation::Interpolation;
+        use crate::config::{ConfigPath, EditingTarget, FractalConfig};
+
+        let config = FractalConfig::default();
+        let mut state = TrackEditorState::default();
+        state.new_track_target = ConfigPath::Zoom.to_string_key();
+        initialize_preview_keyframes(&mut state, &config, EditingTarget::Main, 5.0);
+        assert_eq!(state.preview_interpolation, Interpolation::Exponential);
+        assert_eq!(state.preview_keyframes.len(), 2);
+
+        // Any other target starts Linear -- including after a Zoom pick.
+        state.new_track_target = ConfigPath::Exposure.to_string_key();
+        initialize_preview_keyframes(&mut state, &config, EditingTarget::Main, 5.0);
+        assert_eq!(state.preview_interpolation, Interpolation::Linear);
     }
 }

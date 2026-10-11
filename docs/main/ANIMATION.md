@@ -443,10 +443,9 @@ keyframes from the parameter's current value
 | `PaletteRotation` | start + 1 |
 | everything else | start (adjust by hand) |
 
-The picker sets the new track's interpolation to `Exponential` when the
-target is `Zoom`, but `initialize_preview_keyframes` then resets it to
-`Linear`, so a new Zoom keyframe track currently starts `Linear` and has
-to be switched by hand.
+A new keyframe track starts `Exponential` when the target is `Zoom`
+and `Linear` otherwise (`initialize_preview_keyframes`); the dropdown
+offers every mode.
 
 ---
 
