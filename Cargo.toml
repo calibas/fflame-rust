@@ -49,7 +49,7 @@ sha2 = "0.10"
 
 # Audio (for audio-reactive animations)
 cpal = "0.15"
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "pcm"] }
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "vorbis", "pcm"] }
 rustfft = "6.2"
 ringbuf = "0.4"
 # default-features would enable `ahash/runtime-rng`, which makes ahash
