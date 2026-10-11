@@ -24,7 +24,21 @@ pub enum ExportEngine {
     HighRes,
 }
 
+/// What a WASM headless export produced.
+#[cfg(target_arch = "wasm32")]
+pub struct WasmExport {
+    /// The encoded PNG, with metadata.
+    pub png: Vec<u8>,
+    /// Iterations the render actually ran.
+    pub total_iterations: u64,
+}
+
 /// Headless PNG export - WASM version
+///
+/// `target_iterations` overrides the config's `max_iterations` when
+/// `Some` (the `WasmApi`'s `set_target_iterations`); `premultiplied`
+/// picks premultiplied alpha for a transparent export, as the CLI's
+/// `--premultiplied` does.
 #[cfg(target_arch = "wasm32")]
 pub async fn export_headless_wasm(
     config: &FractalConfig,
@@ -32,7 +46,9 @@ pub async fn export_headless_wasm(
     height: u32,
     iterations_per_thread: u32,
     transparent: bool,
-) -> Result<Vec<u8>, String> {
+    premultiplied: bool,
+    target_iterations: Option<u64>,
+) -> Result<WasmExport, String> {
     // Create headless GPU instance
     let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::BROWSER_WEBGPU,
@@ -103,9 +119,13 @@ pub async fn export_headless_wasm(
         .map_err(|e| format!("Failed to create device: {:?}", e))?;
 
     // Use unified render API
-    let job = RenderJob::new(config, width, height)
+    let mut job = RenderJob::new(config, width, height)
         .with_iterations_per_thread(iterations_per_thread)
-        .with_transparent(transparent);
+        .with_transparent(transparent)
+        .with_premultiplied(premultiplied);
+    if let Some(n) = target_iterations {
+        job = job.with_iterations(n);
+    }
 
     let render_result = render(&device, &queue, job, &mut NoProgress).await;
 
@@ -132,14 +152,17 @@ pub async fn export_headless_wasm(
         config,
     );
 
+    let total_iterations = result.total_iterations;
+
     // Encode PNG
-    crate::renderer::compute_kernel::encode_png_from_rgba(
+    let png = crate::renderer::compute_kernel::encode_png_from_rgba(
         result.width,
         result.height,
         result.rgba_data,
         Some(metadata),
     )
-    .map_err(|e| format!("Failed to encode PNG: {}", e))
+    .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+    Ok(WasmExport { png, total_iterations })
 }
 
 /// Headless PNG export for CLI mode.

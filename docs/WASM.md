@@ -143,7 +143,7 @@ await init();
 const api = new WasmApi();
 api.load_config_json(JSON.stringify(config));       // a .fflame's JSON
 const png = await api.export_png(800, 600, 256, false);
-// width, height, iterations per thread, transparent -> Uint8Array (PNG, with metadata)
+// width, height, iterations per thread, transparent [, premultiplied] -> Uint8Array (PNG, with metadata)
 ```
 
 | method | does |
@@ -155,9 +155,9 @@ const png = await api.export_png(800, 600, 256, false);
 | `get_preset_names()` | JSON array of preset names |
 | `get_config_json()` | the loaded config, pretty-printed |
 | `has_config()` | whether one is loaded |
-| `export_png(w, h, ipt, transparent)` | async; render and encode a PNG |
-| `get_target_iterations()` / `set_target_iterations(n)` | the iteration target (set from the config's `max_iterations` on load) |
-| `get_current_iterations()` / `get_progress()` | progress counters; nothing in `export_png` advances them |
+| `export_png(w, h, ipt, transparent, premultiplied?)` | async; render and encode a PNG. `premultiplied` (optional, default false) is premultiplied alpha for a transparent export |
+| `get_target_iterations()` / `set_target_iterations(n)` | the iteration target the next `export_png` renders to (set from the config's `max_iterations` on load) |
+| `get_current_iterations()` / `get_progress()` | the **last export's** iterations, and that over the target; 0 before an export and after a load. An export is one awaited call, so there is nothing in flight to poll |
 | `api_get_auth_status()`, `api_validate_token()` | online account state (cookie session) |
 | `api_save_current_flame(name)`, `api_update_flame(id, name)`, `api_list_flames(page, per_page)`, `api_load_flame(id)`, `api_delete_flame(id)` | online flame storage, async ([ONLINE.md](main/ONLINE.md)) |
 | `api_set_base_url(url)` | no-op, kept for old callers; the API URL is a compile-time constant |
