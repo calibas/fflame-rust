@@ -191,6 +191,3 @@ cases were added to a browser built for flames.
   files, but the cache now writes `.jpg`, so it finds nothing to
   evict and the folder grows past 200 files. (`ThumbnailCache::clear`,
   unused, also deletes `.png` names.)
-- **Grid-card name truncation slices bytes.** The card cuts a long name
-  with `&name[..n]` on a byte count, which panics if the cut falls
-  inside a multi-byte character (a non-ASCII name longer than the card).
