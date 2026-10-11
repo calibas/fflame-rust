@@ -2017,6 +2017,15 @@ impl App {
         }
 
         let base_url = crate::api::API_BASE_URL.to_string();
+        // The signed-in token, so a private flame or animation of the
+        // user's own loads on desktop too (the web authenticates by
+        // cookie and gets an empty one either way). Signed out, empty:
+        // anonymous, which still reaches public content.
+        let token = self
+            .config_manager
+            .system_settings()
+            .get_auth_token()
+            .unwrap_or_default();
         let result_slot = self.url_load_result.clone();
         let window = self.window.clone();
         self.url_load_in_progress = true;
@@ -2024,7 +2033,7 @@ impl App {
 
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
-            let result = load_from_url(&base_url, flame_id, animation_id).await;
+            let result = load_from_url(&base_url, &token, flame_id, animation_id).await;
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
@@ -2034,7 +2043,7 @@ impl App {
 
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
-            let result = pollster::block_on(load_from_url(&base_url, flame_id, animation_id));
+            let result = pollster::block_on(load_from_url(&base_url, &token, flame_id, animation_id));
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
@@ -2275,12 +2284,15 @@ async fn update_animation_online(
 /// Prioritizes `animation_id` over `flame_id` if both are present.
 async fn load_from_url(
     base_url: &str,
+    token: &str,
     flame_id: Option<String>,
     animation_id: Option<String>,
 ) -> Result<super::UrlLoadedData, String> {
-    // WASM uses cookie auth — empty token is fine (require_token returns Ok(""))
+    // WASM uses cookie auth and ignores the token. On desktop it was
+    // always empty, so the request went out as `Bearer ` -- anonymous
+    // -- and a private animation of the user's own came back 404.
     let mut api = crate::api::ApiState::new(base_url);
-    api.set_token("");
+    api.set_token(token);
 
     if let Some(animation_id) = animation_id {
         // Load animation with embedded flame config (single request)

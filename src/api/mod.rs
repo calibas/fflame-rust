@@ -46,6 +46,24 @@ pub fn flame_update_visibility(make_public: bool, was_public: Option<bool>) -> O
     }
 }
 
+/// Make the server's copy of an animation's flame its `base_config`.
+///
+/// The flame embedded in the animation response is authoritative: an
+/// animation is tied to its flame online by `flame_id`, and the flame
+/// may have been updated since the animation stored a `base_config`
+/// (one is stored only if the animation already carried one). The
+/// stored copy was preferred whenever it existed, so such an animation
+/// loaded onto the flame as it was, not as it is. Without an embedded
+/// flame the animation's own `base_config` stands.
+pub fn adopt_server_flame(
+    animation: &mut crate::animation::Animation,
+    server_flame: Option<&FractalConfig>,
+) {
+    if let Some(config) = server_flame {
+        animation.base_config = Some(config.clone());
+    }
+}
+
 /// Hard-coded API base URL. Change this for release builds.
 pub const API_BASE_URL: &str = "https://fractalsforall.com";
 // pub const API_BASE_URL: &str = "http://localhost:3000";
@@ -505,13 +523,7 @@ impl ApiState {
             .transpose()?;
 
         let mut animation = sync::animation_response_to_animation(&resp);
-
-        // Use the embedded flame as the animation's base_config (authoritative source)
-        if animation.base_config.is_none() {
-            if let Some(ref config) = flame_config {
-                animation.base_config = Some(config.clone());
-            }
-        }
+        adopt_server_flame(&mut animation, flame_config.as_ref());
 
         Ok((animation, flame_config, flame_id))
     }
@@ -728,6 +740,28 @@ mod tests {
         // unlisted), or whose visibility is unknown: keep the server's.
         assert_eq!(flame_update_visibility(false, Some(false)), None);
         assert_eq!(flame_update_visibility(false, None), None);
+    }
+
+    /// The server's flame replaces an animation's stored base config;
+    /// without one, the stored config stands.
+    #[test]
+    fn the_server_flame_is_the_animations_base_config() {
+        let mut stored = FractalConfig::default();
+        stored.flame.name = "stored".into();
+        let mut server = FractalConfig::default();
+        server.flame.name = "server".into();
+
+        let mut anim = crate::animation::Animation::with_config("A".into(), 5.0, stored.clone());
+        adopt_server_flame(&mut anim, Some(&server));
+        assert_eq!(anim.base_config.as_ref().unwrap().flame.name, "server");
+
+        let mut anim = crate::animation::Animation::with_config("A".into(), 5.0, stored);
+        adopt_server_flame(&mut anim, None);
+        assert_eq!(anim.base_config.as_ref().unwrap().flame.name, "stored");
+
+        let mut anim = crate::animation::Animation::new("A".into(), 5.0);
+        adopt_server_flame(&mut anim, Some(&server));
+        assert_eq!(anim.base_config.as_ref().unwrap().flame.name, "server");
     }
 
     /// The modes the server knows pass the guard.

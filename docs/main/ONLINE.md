@@ -259,9 +259,12 @@ carries one (the local `.anim` save embeds the config, the online save
 does not add it).
 
 **Loading** (`load_animation_full`, `GET /api/animations/{id}`) returns
-the animation with the server's copy of its flame embedded. The
-animation's own `base_config` is used if it has one; otherwise the
-embedded flame becomes its `base_config`. The app loads that config
+the animation with the server's copy of its flame embedded. That flame
+is authoritative: it becomes the animation's `base_config`, replacing
+any stored one (`adopt_server_flame`), since the flame may have been
+updated since; without an embedded flame the stored one stands. The
+desktop request carries the signed-in token, so a private animation of
+your own loads. The app loads that config
 (undoable), loads and binds the animation, regenerates its signal
 generators, and switches to the Animation layout.
 
@@ -552,9 +555,9 @@ in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 - **Simulations cannot be saved online yet** — refused client-side
   until the server knows the mode; see *Render modes*.
 - **Loading an animation from the Animation panel's list goes through
-  the web deep-link loader**, which builds its `ApiState` with an empty
-  token. On the web the cookie authenticates it; on desktop the request
-  carries an empty bearer token.
+  the web deep-link loader** (`trigger_url_load`). It passes the
+  signed-in token (empty when signed out, and ignored on the web, where
+  the cookie authenticates).
 - **The search URL is not encoded.** `SearchFlamesParams::to_query_string`
   interpolates the name raw, so `&` or `#` in a search corrupts the
   query (noted at `api::urlencode`, which the script search does use).
