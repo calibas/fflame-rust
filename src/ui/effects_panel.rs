@@ -319,8 +319,8 @@ pub fn render_effects_panel(
         );
         ui.label(
             egui::RichText::new(
-                "Note: skipped on very large exports (above ~119 MP, e.g. larger than \
-                 ~10,900×10,900) to stay within GPU memory.",
+                "Note: skipped on very large exports (above ~83 MP, e.g. larger than \
+                 ~9,100×9,100) to stay within GPU memory.",
             )
             .small()
             .color(egui::Color32::GRAY),

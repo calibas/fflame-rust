@@ -352,7 +352,7 @@ both terrains. See [TERRAIN.md](TERRAIN.md).
 ### 8–11. Tone map and the tail
 
 - **Density effects** run on the HDR input before the tone map, in the
-  effect chain's `Rgba16Float` ping-pong, and need the device's
+  effect chain's `Rgba32Float` ping-pong, and need the device's
   `FLOAT32_FILTERABLE` feature (they are skipped without it). Colour
   effects run on the tone-mapped `Rgba8Unorm` image after it. See
   [EFFECTS.md](EFFECTS.md).
@@ -704,7 +704,7 @@ Per pixel, for a `with_palette_size` renderer at the frame's size:
 | shade pass (four `Rgba32Float`) | 64 | lazily, once a lit solid runs |
 | DoF pass (four `Rgba32Float`) | 64 | lazily, once solid DoF runs |
 | path ids | 4 | PathMap colour mode |
-| density effect ping-pong (`Rgba16Float` × 2) | 16 | an enabled density effect |
+| density effect ping-pong (`Rgba32Float` × 2) | 32 | an enabled density effect |
 | colour effect ping-pong (`Rgba8Unorm` × 2) | 8 | an enabled colour effect |
 
 Layouts and fixed-size buffers: [BUFFERS.md](BUFFERS.md).

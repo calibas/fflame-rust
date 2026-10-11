@@ -288,8 +288,8 @@ What `HighResExporter::new` does with each:
 Then the tone map, on the same `tonemap.wgsl`. Above a 1 GB
 accumulation (about 8000²) it runs in strips of at most 256 MB, so the
 `Rgba32Float` accumulation is never whole on the GPU. Density effects
-need a full-resolution set of about 36 bytes a pixel after the histogram
-is freed; above a 4 GiB budget (about 119 MP, ~10,900²) they are skipped
+need a full-resolution set of 52 bytes a pixel after the histogram
+is freed; above a 4 GiB budget (about 83 MP, ~9,100²) they are skipped
 with a warning. Colour effects always run.
 
 (The module's own header comment still describes the CPU-histogram path

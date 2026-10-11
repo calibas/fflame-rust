@@ -1,7 +1,7 @@
 //! Effect Chain Runner
 //!
 //! Executes shader effects in sequence using ping-pong textures.
-//! - Density effects: Run on Rgba16Float before tonemap
+//! - Density effects: Run on Rgba32Float before tonemap (`DENSITY_FORMAT`)
 //! - Color effects: Run on Rgba8Unorm after tonemap
 
 use std::collections::HashMap;
@@ -126,6 +126,24 @@ pub const MAX_EFFECT_SLOTS: usize = 32;
 
 /// Alignment for uniform buffer dynamic offsets (256 bytes is typical minimum)
 const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
+
+/// The density chain's ping-pong format: the accumulator's own.
+///
+/// The chain carries the accumulator's layout, whose alpha is a RAW
+/// cumulative hit count (`shaders/accumulate.wgsl`), and the density
+/// effects pass it through or average it. It was `Rgba16Float`, whose
+/// largest finite value is 65504: a pixel past 65504 hits -- which a
+/// filament flame reaches well inside the default budget -- became Inf
+/// (black under the Log tone map) or saturated. f32 holds any count
+/// the accumulator does.
+///
+/// `Rgba32Float` is renderable but not blendable (that needs
+/// `FLOAT32_BLENDABLE`), so the density pipelines write with
+/// `blend: None`; `BlendState::REPLACE` would fail pipeline creation.
+/// Sampling it with the chain's filtering sampler needs
+/// `FLOAT32_FILTERABLE`, which `run_density_effects` already requires to
+/// read the accumulation itself.
+const DENSITY_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 
 /// GPU uniform buffer for effect parameters
 ///
@@ -263,7 +281,7 @@ impl PingPongTextures {
 pub struct EffectChainRunner {
     /// Compiled effect pipelines by name
     compiled_effects: HashMap<String, CompiledEffect>,
-    /// Ping-pong textures for density effects (Rgba16Float)
+    /// Ping-pong textures for density effects (`DENSITY_FORMAT`)
     density_textures: Option<PingPongTextures>,
     /// Ping-pong textures for color effects (Rgba8Unorm)
     color_textures: Option<PingPongTextures>,
@@ -394,7 +412,7 @@ impl EffectChainRunner {
                         device,
                         self.width,
                         self.height,
-                        TextureFormat::Rgba16Float,
+                        DENSITY_FORMAT,
                         "Density Effect",
                     ));
                 }
@@ -713,8 +731,15 @@ impl EffectChainRunner {
 
         // Determine texture format based on category
         let texture_format = match category {
-            EffectCategory::Density => TextureFormat::Rgba16Float,
+            EffectCategory::Density => DENSITY_FORMAT,
             EffectCategory::Color => TextureFormat::Rgba8Unorm,
+        };
+        // Every pass overwrites its target, so no blending is wanted in
+        // either chain; the density format cannot blend at all (see
+        // `DENSITY_FORMAT`).
+        let blend = match category {
+            EffectCategory::Density => None,
+            EffectCategory::Color => Some(BlendState::REPLACE),
         };
 
         // Create bind group layout for effect
@@ -775,7 +800,7 @@ impl EffectChainRunner {
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format: texture_format,
-                    blend: Some(BlendState::REPLACE),
+                    blend,
                     write_mask: ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -895,6 +920,42 @@ impl EffectChainRunner {
     /// Get the output texture view from density effects (if any were run)
     pub fn get_density_output(&self) -> Option<&TextureView> {
         self.density_textures.as_ref().map(|t| t.read_view())
+    }
+
+    /// The density chain's output texels, row-major (test readback).
+    #[cfg(test)]
+    fn read_density_output_blocking(&self, device: &Device, queue: &Queue) -> Vec<[f32; 4]> {
+        let textures = self.density_textures.as_ref().expect("density effects ran");
+        let row = self.width * 16;
+        let padded = row.div_ceil(COPY_BYTES_PER_ROW_ALIGNMENT) * COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Density Output Readback"),
+            size: (padded * self.height) as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Density Output Readback") });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo { texture: textures.read_texture(), mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(self.height) },
+            },
+            Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(encoder.finish()));
+        buffer.slice(..).map_async(MapMode::Read, |_| {});
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let data = buffer.slice(..).get_mapped_range();
+        let mut out = Vec::with_capacity((self.width * self.height) as usize);
+        for y in 0..self.height {
+            let at = (y * padded) as usize;
+            for px in data[at..at + row as usize].chunks_exact(16) {
+                let f = |k: usize| f32::from_le_bytes([px[k], px[k + 1], px[k + 2], px[k + 3]]);
+                out.push([f(0), f(4), f(8), f(12)]);
+            }
+        }
+        out
     }
 
     /// Run color effects chain
@@ -1316,5 +1377,93 @@ mod include_tests {
     fn a_shader_without_the_marker_is_untouched() {
         let src = "fn a() {}".to_string();
         assert_eq!(process_shader_includes(src.clone()), src);
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+
+    /// A device with `FLOAT32_FILTERABLE`, which the density chain needs
+    /// (None, and the test skips, without an adapter offering it).
+    fn device() -> Option<(Device, Queue)> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+            if !adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
+                return None;
+            }
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("effect chain test"),
+                    required_features: wgpu::Features::FLOAT32_FILTERABLE,
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: Default::default(),
+                })
+                .await
+                .ok()
+        })
+    }
+
+    /// A `w` x `h` texture of `format`, every texel `texel` (as bytes).
+    fn filled(device: &Device, queue: &Queue, w: u32, h: u32, format: TextureFormat, texel: &[u8]) -> (Texture, TextureView) {
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some("effect chain test input"),
+            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let data: Vec<u8> = (0..w * h).flat_map(|_| texel.iter().copied()).collect();
+        queue.write_texture(
+            TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            &data,
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel.len() as u32), rows_per_image: Some(h) },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// A raw hit count past f16's 65504 survives the density chain. The
+    /// ping-pong was Rgba16Float, so sharpen at amount 0 -- which returns
+    /// its input untouched -- turned a pixel of a million hits into Inf,
+    /// black under the Log tone map.
+    #[test]
+    fn a_hit_count_past_half_float_survives_the_density_chain() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        const W: u32 = 64;
+        const H: u32 = 4;
+        let texel: Vec<u8> = [0.5f32, 0.25, 0.75, 1.0e6].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba32Float, &texel);
+        let mut sharpen = EffectInstance::new("sharpen");
+        sharpen.set_param("amount", 0.0);
+        let mut chain = EffectChainRunner::new(&device, W, H);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
+        chain.reset_slots();
+        let ran = chain.run_density_effects(&device, &queue, &mut encoder, &view, &[sharpen]);
+        queue.submit(Some(encoder.finish()));
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "the density chain failed validation: {error:?}");
+        assert!(ran, "the chain ran");
+        let out = chain.read_density_output_blocking(&device, &queue);
+        for (i, px) in out.iter().enumerate() {
+            assert!(px[3].is_finite(), "texel {i}: alpha {} is not finite", px[3]);
+            assert!((px[3] / 1.0e6 - 1.0).abs() < 1e-6, "texel {i}: alpha {} is not the million hits it was given", px[3]);
+            assert!((px[0] - 0.5).abs() < 1e-6 && (px[2] - 0.75).abs() < 1e-6, "texel {i}: the colour changed: {px:?}");
+        }
+        chain.destroy();
     }
 }
