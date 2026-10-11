@@ -2,69 +2,23 @@
 
 ## Overview
 
-**Quick Start:** This file provides a concise quick reference for AI assistants. For detailed documentation, see the docs below.
+A GPU fractal renderer (Rust, wgpu/WGSL, egui) with three engines and
+four render modes: **fractal flames** (`TwoD`, `ThreeD`), **escape-time
+fractals** (`Escape`) and **simulations** (`Simulation`). This file is the
+quick reference for AI assistants; the detail is in the docs below, which
+were refreshed against the code on 2026-10-10 -- still verify against the
+source when something looks off.
 
-**Core Documentation:**
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - System overview and navigation hub
-- [docs/main/](docs/main/) - Detailed topic documentation:
-  - [UI.md](docs/main/UI.md) - Windows, panels, input handling
-  - [BUFFERS.md](docs/main/BUFFERS.md) - GPU layouts, data structures
-  - [TRANSFORMS.md](docs/main/TRANSFORMS.md) - Flame algorithm, IFS, thread isolation
-  - [RENDERER.md](docs/main/RENDERER.md) - Render pipeline, FlameRenderer
-  - [SHADERS.md](docs/main/SHADERS.md) - WGSL modular system
-  - [VARIATIONS.md](docs/main/VARIATIONS.md) - Variation system, registry
-  - [COLOR.md](docs/main/COLOR.md) - Color modes, palette, histogram
-  - [CONFIG.md](docs/main/CONFIG.md) - FractalConfig, presets, undo/redo
-  - [SIMULATION.md](docs/main/SIMULATION.md) - Simulation engine: models, the grid, layers, the resolve
-  - [EXPORT.md](docs/main/EXPORT.md) - PNG export, metadata, CLI batch mode
-  - [SCRIPTING.md](docs/main/SCRIPTING.md) - Rhai script API reference — every callable function (kept honest by a staleness test)
-  - [SCRIPTING-GUIDE.md](docs/main/SCRIPTING-GUIDE.md) - Rhai language guide: syntax, running scripts, worked examples (CLI-verified)
-- [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) - Unit tests, regression, benchmarks
-- [docs/WASM.md](docs/WASM.md) - WebAssembly build guide
-- [docs/projects/](docs/projects/) - Per-feature design docs and plans
+**Documentation:**
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - system overview, module map, where to start for common changes
+- [docs/main/](docs/main/) - the reference docs:
+  - Flame engine: [RENDERER.md](docs/main/RENDERER.md) (pipeline, persistent orbits, governor, solid rendering), [SHADERS.md](docs/main/SHADERS.md) (shader assembly, sticky shaders, lints, cross-platform rules), [BUFFERS.md](docs/main/BUFFERS.md) (bindings, GPU structs), [TRANSFORMS.md](docs/main/TRANSFORMS.md) (the flame model, xaos, linked/final transforms), [VARIATIONS.md](docs/main/VARIATIONS.md) (registry, defs, features, plugins), [FOCUSED-RENDERING.md](docs/main/FOCUSED-RENDERING.md) (flame deep zoom)
+  - Other engines: [ESCAPE.md](docs/main/ESCAPE.md) (escape-time), [SIMULATION.md](docs/main/SIMULATION.md) + [SIMULATION-CATALOG.md](docs/main/SIMULATION-CATALOG.md), [TERRAIN.md](docs/main/TERRAIN.md) (3D terrains, render tiers, path tracer, materials), [CAMERA.md](docs/main/CAMERA.md) (every camera)
+  - Shared: [COLOR.md](docs/main/COLOR.md), [TONE-MAPPING.md](docs/main/TONE-MAPPING.md), [EFFECTS.md](docs/main/EFFECTS.md), [EXPORT.md](docs/main/EXPORT.md), [ANIMATION.md](docs/main/ANIMATION.md), [CONFIG.md](docs/main/CONFIG.md), [UI.md](docs/main/UI.md), [ONLINE.md](docs/main/ONLINE.md), [SCRIPTING.md](docs/main/SCRIPTING.md) (Rhai API reference, kept honest by a staleness test) + [SCRIPTING-GUIDE.md](docs/main/SCRIPTING-GUIDE.md), [PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md), [FRACTAL-BROWSER.md](docs/main/FRACTAL-BROWSER.md) (the Fractal Browser), [I18N.md](docs/main/I18N.md)
+- [docs/RELEASE.md](docs/RELEASE.md) (procedures, gates), [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md), [docs/WASM.md](docs/WASM.md)
+- [docs/projects/](docs/projects/) - work in progress and open lists ([README](docs/projects/README.md)); [docs/experimental/](docs/experimental/) - ideas; [docs/archive/](docs/archive/) - finished plans and history ([README](docs/archive/README.md)). Finished project docs go to `docs/archive/projects/` -- move them with `scripts/move_docs.py`, which rewrites references in code comments too.
 
-**Note:** Project history is tracked via git commits. Use `git log --oneline` to see recent changes.
-
-## Quick Reference
-
-### Project Structure
-
-- **Shaders** — dynamically assembled by `src/shader_builder_v2.rs` from modular components; only the active variations' WGSL is compiled into each flame's shader:
-  - `shaders/core/` - Modular shader components
-    - `header.wgsl` - Params struct, bind groups, Sample struct (template-gated for direct-histogram vs sample-emit output)
-    - `main_template.wgsl` - Main compute shader (template flags: RENDER_3D, OUTPUT_HISTOGRAM_DIRECT, PATH_TRACKING, HAS_POST_SYMMETRY, …)
-    - `utilities.wgsl` - Camera matrix, projection, world→pixel mapping, color helpers
-    - `rng.wgsl` - Random number generation (PCG)
-    - `affine.wgsl` / `affine_3d.wgsl` - Affine transform application
-    - `accumulate_samples.wgsl` - Sample-emit scatter pass (tiled high-res path)
-    - `noise.wgsl`, `voronoi.wgsl`, `complex.wgsl`, `fractwf.wgsl`, `subflame.wgsl` - Helper libraries pulled in by variations that need them
-  - `shaders/accumulate.wgsl` (+ `accumulate_tiled.wgsl`) - Histogram → accumulator fold (see Render Pipeline below)
-  - `shaders/tonemap.wgsl` - Display tone mapping pass
-  - `shaders/downsample.wgsl`, `shaders/histogram_blur.wgsl` - Supersample/density-estimation support
-  - **Note**: Variation WGSL lives inline in `src/variations/defs/*.rs`, not in shader files
-
-- **Core Modules**:
-  - `src/app/` - Application state and event handling (mod.rs core loop, input.rs, fly_camera.rs, export.rs, gpu_updates.rs)
-  - `src/camera/` - **Every camera, unified** (`docs/archive/3d-camera/camera-unification.md`): the seven cameras keep their own config fields behind adapters -- `view3d` (each 3D camera's angles as a `Convention` on the one Euler chain, `chain`, composed as a quaternion, `quat`), `gesture` (the viewport's pan/zoom/turn/orbit/pinch/reset per `ViewKind`), `fly` (one fly mode for every 3D camera) -- each returning a `CameraEdit` (writes + history entry) the caller applies
-  - `src/config/` - **Delta-based state management** (manager.rs ConfigManager + undo/redo, delta.rs ConfigPath/ConfigValue, fractal_config.rs, defaults.rs, slider.rs)
-  - `src/variations/` - **Variation system**: registry (mod.rs), static definitions with inline WGSL (`defs/*.rs`, 100+ files, 500+ variations)
-  - `src/scene/` - Flame/Transform model (transforms.rs), palettes, presets, randomize.rs
-  - `src/renderer/` - GPU orchestration (compute_kernel.rs), unified headless render API (render.rs), thumbnails
-  - `src/export/` - High-resolution export (high_res.rs: tiled + CPU-histogram paths)
-  - `src/shader_builder_v2.rs` - Per-flame WGSL assembly from templates + active variation defs
-  - `src/gpu/` - Buffer types and std140/std430 layouts (buffers.rs)
-  - `src/ui/` - **Dockable panel UI** (egui_dock): 25+ panels — viewport, transforms, triangle editor, view, colors, palette editor/library, fractal browser, history, animation, effects, xaos editor, random generator, variations browser, subflames, paths, signal, export, performance, …
-  - `src/animation/` - Track-based animation system + video export
-  - `src/audio/` - Audio analysis for audio-reactive animation (cpal/symphonia/rustfft)
-  - `src/signal/` - Signal/generator routing for animation inputs
-  - `src/effects/` - Post-effect chain (density/color effects)
-  - `src/api/` - Online sync API client (types.rs, sync.rs)
-  - `src/storage/` - Local storage: SystemSettings (settings.rs), cross-platform backend, thumbnail cache, custom palettes
-  - `src/resources/` - HTTP/filesystem resource fetching (lazy palette packs; WASM fetch API)
-  - `src/escape/` - **Escape-time fractal system** (Mandelbrot and kin; `docs/archive/escape-time/escape-time-fractals.md`): FormulaDef/ColoringDef registries mirroring the variation system (inline WGSL, append-only, feature flags), marker-splicing assembler, EscapeRenderer (one compute dispatch into an Rgba32Float image in flame-accumulator format, consumed by the shared tonemap/effects tail). Dispatch lives inside `render_with` (CLI/thumbnails/video inherit); the app holds a lazy `escape_renderer` (event-driven, `escape_dirty`). `RenderMode::Escape`; EscapeConfig center is exact decimal strings + `zoom_log2`; entering escape defaults tonemap Linear + resets exposure/gamma (flame presets carry Log-calibrated values that render Linear output invisibly). Online sync supports escape configs (`ApiRenderMode::Escape`): stored AS FLAMES on the same endpoints, told apart by `render_mode` alone, so `transform_count` is 0 and `variation_names` empty for them legitimately
-  - `src/sim/` - **Simulation system** (the third render mode; `docs/main/SIMULATION.md`, catalogue in `docs/main/SIMULATION-CATALOG.md`): a GRID of `vec4<f32>` cells stepped by a neighbour-coupled rule — reaction-diffusion, cellular automata, aggregation, growth. `ModelDef`/`SimColoringDef` registries mirroring the variation system (inline WGSL, append-only, feature flags); a marker-splicing assembler that splices one model and one colouring into a template and splices the BOUNDARY rule rather than branching on it; `SimRenderer` owning the field (an `Rgba32Float` texture ARRAY, one slice per layer, ping-ponged) and the step counter. 31 models, 13 colourings. Dispatch lives inside `render_with` (CLI/thumbnails/video/gallery inherit); the app holds a lazy `sim_renderer`. `RenderMode::Simulation`. **The picture is the state of a run at a step count** — `(model, params, seed, init, steps)` is in the config and the PNG metadata, so a still is reproducible, and there is no notion of "converged". The rule is NOT invertible, so reaching a lower step count means reseeding and re-running: that is why `sim.steps` is a CAP to the panel's transport and a TARGET to the animation timeline, and why a backward step track is held rather than played (`docs/main/UI.md`). Several layers can be coupled (`Signal` couplings are pre-rule via `sim_drive`, everything else post-rule), and `use_transforms` makes the flame's transforms the layers' per-step maps — the one place a simulation reaches into the variation registry
-  - `src/flame_xml.rs` - Apophysis/JWildfire `.flame` XML import/export
-  - `src/i18n.rs` - rust-i18n integration; translations in `locales/*.yml` (en, es, ja, zh-CN)
+Project history is in git: `git log --oneline`.
 
 ## Environment
 - Shell within VSCode: Git Bash (MSYS2 MinGW64)
@@ -73,276 +27,139 @@
 - **Use relative paths for file edits** (e.g., `src/ui/mod.rs` not `c:\projects\fflame-rust\src\ui\mod.rs`) - helps avoid "file unexpectedly modified" errors from IDE/linter race conditions
 - One-shot codemod scripts go in `scripts/`, not temp folders outside the repo
 
-### Key Concepts
-- **Fractal Flames**: IFS (Iterated Function System) with variations
-- **Render Modes**: four — `TwoD`, `ThreeD`, `Escape`, `Simulation`. The two flame modes share `main_template.wgsl`, specialized via the RENDER_3D template flag; the other two are different generators (`src/escape/`, `src/sim/`) that hand `render_with` an `Rgba32Float` image in the accumulator's layout and share everything from the tonemap on. `src/ui/render_mode.rs` owns the mode vocabulary and `src/ui/visibility.rs` owns what each mode makes available — add a case there, never a `matches!(render_mode, ...)` in a panel
-- **Variations**: registry holds 500+ ported variations (flam3 / Apophysis / JWildfire plugins)
-  - Definitions are `static VariationDef`s in `src/variations/defs/*.rs` with inline WGSL (2D + 3D bodies), parameters, and feature flags
-  - Up to `MAX_VARIATIONS_PER_FLAME = 100` active per flame; the shader builder compiles only the active set, with a **per-flame local index map** (no global fixed indices)
-  - UI ordering: by category, then registration order (the `defs/mod.rs` registration list is append-only)
-- **Variation Parameters**: per-transform values in a HashMap (`"varname.param"` keys)
-  - Uploaded via a packed storage buffer (`MAX_VARIATION_PARAM_SLOTS = 1600` floats, variable slots per variation: user params + init-derived + state slots)
-  - Shaders read via `get_param(xform_id, variation_id, slot)`; per-thread state via `get_state`/`set_state`
-  - UI sliders auto-generate from the param defs (Float, UnlimitedFloat, Integer, Angle, Boolean, Enum types)
-- **Render Pipeline** (each frame):
-  1. **Compute Pass** - chaos-game iteration; each plotted sample atomically adds into a per-pixel u32 histogram (R, G, B, density × `color_scale = 100`). Dispatch size = workgroups × 64 threads × `iterations_per_thread` (default 256). **Orbits persist** between dispatches (`docs/archive/projects/persistent-orbits.md`): each thread's point, colour, burn-in left, xaos state and variation registers live in an orbit buffer (binding 8) and a dispatch resumes them; only an edit to the dynamics (the orbit key: the whole flame, render mode, preserve_z, colour mode, speed factor) starts a new generation, never a pan or zoom -- except on a flame carrying VARIATION STATE, which restarts at every restart of the accumulation (pan, reset, each overwrite frame), as JWF re-inits variations per render: a state can be a clock (`curliecue2`'s walker), not a register that settles. So burn-in is paid once per restart, the picture does not depend on `iterations_per_thread`, and the plotted count comes from `OrbitFuses` (no readback) -- every sample-counting caller must use what `compute_pass` returns. Xaos flames with several closed groups get a stratified first pick, and a refresh where the walk picks the group (§3.7). flam3/JWF-style bad-value recovery: X/Y divergence respawns + re-fuses the point; Z saturates at ±1e32 with an amortized respawn (see `docs/archive/projects/preserve-z-semantics.md`). High-res exports above the 128 MB storage-binding limit switch to a sample-emit + tiled scatter path (`accumulate_samples.wgsl`) or CPU histogram (`export/high_res.rs`).
-  2. **Accumulate Pass** (`accumulate.wgsl`) - folds the frame histogram into an `Rgba32Float` accumulator: rgb = density-weighted running-mean color, a = raw cumulative hit count. Adaptive blend: `effective_blend = max(new_density/total_density, blend_factor)`; `blend_factor = 0` is the reference density-weighted mean, higher values keep late batches contributing (`use_dynamic_blend` toggles the adaptive mode).
-  3. **Tonemap Pass** (`tonemap.wgsl`) - flam3-style log mapping with `k1`/`k2` normalized by `sample_density = total_iters / pixel_count` (brightness is iteration-count invariant), plus exposure/gamma/brightness/vibrancy, scale-invariant Levels, optional tone curve, background blend.
-- **Color Modes**: Palette (Apophysis color-coordinate evolution), Speed (distance per iteration), PathMap (colours each part of the picture by its path -- the transforms Focused Rendering draws it through; needs Focused Rendering, 2D; see `docs/projects/deep-zoom/word-editing.md` §10)
-- **Focused Rendering** (deep zoom; config `cylinder_targeting`, code says "cylinder targeting"): 2D flames only, opt-in. A **plan** enumerates the *words* -- sequences of transforms -- whose images reach the view; each sample then runs the ordinary chaos game's free orbit and plots its point *forced* through a word drawn from the plan, so every sample lands in frame at zooms where the plain chaos game lands almost none. Brightness stays that of the unbiased render: the tone map's count is scaled by `Cylinders::iteration_scale` (`1/(mass · draw_scale)`), and a word drawn off its probability deposits the inverse of its draw rate. Works well for a narrow range of flames (affine IFS; `julian`/`disc`/blur families the inverse walk can arm); coverage work is paused, not finished
-  - **Planners** (`src/scene/`): `cylinder.rs` (`Cylinders`, the affine forward planner, `pack`/`pack_words` into the shader's table), `backward.rs` (the inverse walk for armed flames: level by level, GPU-answered via `plan_gpu.rs`, time budget `TIME_BUDGET`, plans on the way via `PlanOptions::deliver`), `word_tree.rs` (trim, removals, solo, PathMap colours), `final_map.rs` (finals pulled back)
-  - **Shader**: two arms -- *composed* (every map affine: one 2x2+translation per word) and *replay* (walk the word's symbols, `shaders/core/replay.wgsl`); past f32 precision the replay runs in offsets from reference orbits (`deep-zoom-precision.md`). Flags `CYLINDER_TARGETING/REPLAY/RELATIVE/OFFSETS`; WGSL byte-identical when off
-  - **Renderer** (`compute_kernel.rs`): expensive plans run on a worker thread (the web: a future polled a slice per frame); a *standby* plan for a 2x disc covers short pans; coarse *plans on the way* show while nothing covers the view; every landed plan resets the picture; the governor caps the dispatch while a plan is made (the planner shares the render's GPU queue). `plan_view` makes the same decisions for the tiled exporter
-  - **Comparing pictures**: by density, not the tone map -- a tone map darkens sparse light, so a sparse reference reads wrong in faint regions (`read_density_blocking`, `replicated_blocks`, `compare_blocks` in the cylinder GPU tests)
-  - **Docs**: status, measurements and order of work in [docs/projects/deep-zoom/deep-zoom-tracker.md](docs/projects/deep-zoom/deep-zoom-tracker.md); design in `flame-deep-zoom.md`, `gpu-cylinder-planning.md`, `deep-zoom-precision.md`, `inversive-targeting.md`, `word-editing.md`; the planned fix for restarted orbits in `persistent-orbits.md`
-- **Projection**: `perspective_strength: f32` (0 = orthographic; Apophysis `zr = 1 − persp·z` formula with behind-camera clipping)
-- **Camera**: full 4-angle Apophysis/JWildfire camera (pitch, yaw, bank, roll/rotation — effective chain `Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)`) plus world-space position (`camera_x/y/z`, JWF `cam_pos_*` round-trip)
-  - **Fly mode** (F2 / 🚀), for every 3D view (flame, solid, terrains): WASD/QE movement + look about the eye; two modes in SystemSettings — FreeLook (screen-relative, gimbal-free) and FPS (world-up anchored)
-- **Depth tools** (3D): DoF blur, depth fog, depth-density compensation (radiance-preserving splats), far-density fade
-- **Solid rendering** (3D): splat-native pipeline — occlusion = per-pixel nearest-depth culling (`solid_strength` 0 = classic transparency, 1 = hard surface, blendable via the per-sample `density_weight` channel; `surface_thickness` shell), lighting = deferred shade pass (Blinn-Phong + screen-space normals/AO), shadows = 4 light-space shadow maps at splat resolution (histogram tail, auto-fit from measured attractor bounds). Depth region lives inside the histogram buffer (5th u32/pixel, inverted ordered-float encoding, atomicMax); SOLID shader-builder flag ⇒ byte-identical WGSL when off; at-splat DoF compiles out in solid mode. All export paths supported (no shadow maps on the CPU-histogram fallback). Solid renders are NOT bit-reproducible (in-batch depth race) — the `solid-*` visual regression tests use tolerance compare. The Phase 2/3 density volume was removed 2026-07-16. See [docs/archive/projects/solid-rendering.md](docs/archive/projects/solid-rendering.md)
-- **Pan/rotation**: both render modes compose pan → rotate → zoom (Apophysis convention); all pan inputs share `FractalConfig::screen_delta_to_pan_frame`
+## Quick Reference
 
-### UI Architecture (egui_dock)
-- **Docking system**: all UI is dockable panels (`src/ui/workspace.rs` defines `PanelType` — 29 panels)
-- Main editing panels: Fractal Viewport, Transforms, Triangle Editor, View, Colors/Tone Mapping, Palette Editor/Library, Fractal Browser, History, Animation, Effects, Xaos Editor, Random Generator, Variations, Subflames, Escape Fractal, Simulation
-- **Menu bar**: File, Edit, View, Mode, Rendering, Window, Help (`src/ui/menu_bar.rs`); `src/ui/compact_menu.rs` is the mobile equivalent
-- **The render mode gates the UI.** `src/ui/render_mode.rs` is the only writer of `ConfigPath::RenderMode` (a source-scanning test enforces it) and holds the mode→workspace and engine-lifetime policy; `src/ui/visibility.rs` is the only answer to "is this panel/control available in this mode", exhaustive over both. **Add a case there, never a `matches!(render_mode, ...)` inside a panel.** Both Window menus draw their rows from `visibility::WINDOW_MENU`. See [docs/projects/ui-render-modes.md](docs/archive/projects/ui-render-modes.md)
-- Per-panel code lives in its own `src/ui/*.rs` file; `src/ui/mod.rs` coordinates docking and bubbles responses through `UiResponse`
+### Engines and render modes
+- **Four modes**: `TwoD`, `ThreeD` (flames: one `shaders/core/main_template.wgsl`, specialized by the RENDER_3D flag), `Escape` (`src/escape/`), `Simulation` (`src/sim/`). The escape and simulation generators hand `render_with` an `Rgba32Float` image in the flame accumulator's layout and share everything from the tonemap on (`FlameRenderer::for_tail` + `tonemap_pass_with_input`; effects, export, animation, scripting).
+- **The render mode gates the UI.** `src/ui/render_mode.rs` is the only writer of `ConfigPath::RenderMode` (a source-scanning test enforces it) and owns the mode->workspace and engine-lifetime policy; `src/ui/visibility.rs` is the only answer to "is this panel/control available in this mode". **Add a case there, never a `matches!(render_mode, ...)` inside a panel.** (Not to be confused with `src/app/render_mode.rs`, the Normal/Animating/Overwrite state machine.)
+- **Escape** ([ESCAPE.md](docs/main/ESCAPE.md)): FormulaDef/ColoringDef registries mirroring the variation system (inline WGSL, append-only, feature flags); a marker-splicing assembler; `EscapeRenderer` (direct and perturbed paths; deep zoom by perturbation with exact-decimal centres + `zoom_log2`, big-float references, BLA). Fragment modes: A (iterate & classify), B (fields), D (the flame as a distance field: the Flame Attractor and its 3D solid). The camera lens (`src/escape/lens.rs`) warps the view by any variation. Entering Escape or Simulation from a flame whose tonemap is Log switches it to Linear and resets exposure/gamma (`defaults::entry_tone_mapping`; flame presets carry Log-calibrated values that render Linear output invisibly). Online, escape configs are stored AS FLAMES, told apart by `render_mode` alone.
+- **Simulation** ([SIMULATION.md](docs/main/SIMULATION.md)): a grid of `vec4<f32>` cells stepped by a neighbour-coupled rule (31 models, 13 colourings), layers and couplings, textures. **The picture is the state of a run at a step count** -- `(model, params, seed, init, steps)` is in the config and PNG metadata, so a still is reproducible. The rule is not invertible: `sim.steps` is a CAP to the panel's transport and a TARGET to the animation timeline, and a backward step track is held rather than played.
+- **3D beyond the flame** ([TERRAIN.md](docs/main/TERRAIN.md)): escape and simulation terrains (height fields over sections to the horizon), mode D solids, render tiers Lit / PathTraced / Auto, a path tracer with a denoiser and sky, one material and light rig. **Cameras** ([CAMERA.md](docs/main/CAMERA.md)): `src/camera/` is the one model behind all seven cameras (`view3d`, `chain`, `quat`, `gesture` per `ViewKind`, `fly`), each edit a `CameraEdit`.
+- Dispatch for every engine lives inside `render_with` (`src/renderer/render.rs`), so CLI, thumbnails, video and the gallery inherit it; the app holds lazy `escape_renderer` / `escape_terrain` / `sim_renderer` / `sim_terrain`.
 
-### Palette Library System
-- **Pack-based organization** (`assets/palettes/packs/*.json`): **the folder is the catalog** — desktop scans it at startup (drop a pack JSON in, it appears; `enabled_by_default` inside each pack, absent = enabled); `starter_pack.json` is also embedded in the binary as the offline fallback (`BUILTIN_PACK_FILE` — both discovery paths skip that filename so it doesn't load twice); `apophysis1-4.json` ship disabled. WASM discovers packs via a manifest `build.rs` generates into OUT_DIR (browsers can't list directories; nothing committed, guarded by `generated_manifest_matches_packs_folder`) and lazy-fetches content via `src/resources/`. Loose `assets/palettes/*.palette` files load into a "Local Files" pack (desktop)
-- Palette Library panel: gradient previews, expand/collapse per pack, click-to-select creates an editable `"Name (Custom)"` copy
-- All load routes use `add_or_update()` with case-insensitive duplicate checking
-- **See**: [docs/main/COLOR.md](docs/main/COLOR.md) and [docs/main/PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md)
+### Module map
+- `src/app/` - the frame loop and event handling (mod.rs, ui_handlers.rs for `UiResponse`, gpu_updates.rs incl. `freeze_viewport`, input.rs, fly_camera.rs, export.rs, aa_governor.rs, config.rs, render_progress.rs, script_cloud.rs, variation/effect fetch)
+- `src/config/` - ConfigManager + undo (manager.rs), ConfigPath/ConfigValue/UpdateType (delta.rs), FractalConfig + versioned migration (fractal_config.rs), EscapeConfig (escape.rs), SimConfig (sim.rs), defaults.rs, slider.rs
+- `src/scene/` - the flame model (transforms.rs), xaos.rs, palettes, presets, randomize; the deep-zoom planners (cylinder, backward, plan_gpu, word_tree, final_map, importance) and IFS analysis (ifs_analysis, ifs_estimate, ifs_real)
+- `src/variations/` - registry (mod.rs, definition.rs), 647 defs in `defs/*.rs`, inverse/bound/derive (planner inputs), docs corpus
+- `src/renderer/` - FlameRenderer (compute_kernel.rs), the unified render API (render.rs), sticky.rs, shade_pass.rs, dof_pass.rs, effect_chain.rs, thumbnails
+- `src/shader_builder_v2.rs`, `src/shader_cache.rs`, `src/gpu/` (buffers.rs, pipelines.rs), `shaders/` - see [SHADERS.md](docs/main/SHADERS.md)
+- `src/escape/`, `src/sim/`, `src/camera/`, `src/textures/` (simulation recipes as textures)
+- `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
+- `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
+- `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; assets/scripts/)
+- `src/api/` (online client), `src/storage/` (settings, backend, caches, catalogs, plugins, credentials), `src/resources/` (HTTP/filesystem fetching, lazy palette packs)
+- `src/probe/`, `src/census/` - the variation math probe and reachability census; `src/contract.rs` (engine contract), `src/provenance.rs`, `src/shader_dumps.rs`
+- `src/flame_xml.rs` (.flame import/export), `src/png_metadata.rs`, `src/wasm_api.rs`, `src/i18n.rs`
+- `wasm/{render,script,flame,escape,sim}` - single-engine gallery modules; `python/` - pyfflame bindings
 
-### Internationalization (i18n)
-- **Framework**: rust-i18n with YAML translation files in `locales/` (compile-time embedding)
-- **Current languages**: English (en), Spanish (es), Japanese (ja), Simplified Chinese (zh-CN)
-- Language switcher in Settings → Preferences (persisted in SystemSettings)
-- **Font support** (egui default): full Latin/Cyrillic/Greek; CJK limited to basic characters unless a CJK font is added via `FontDefinitions`; no RTL
-- **See**: [docs/main/I18N.md](docs/main/I18N.md)
+### The flame pipeline (each frame; [RENDERER.md](docs/main/RENDERER.md))
+1. **Compute** - the chaos game; each plotted sample atomically adds into a per-pixel u32 histogram (R, G, B, density x `color_scale = 100`). Dispatch = workgroups x 64 threads x `iterations_per_thread` (default 256). **Orbits persist** between dispatches (orbit buffer, binding 8): only an edit to the dynamics (the orbit key: the flame, render mode, preserve_z, colour mode, speed factor) starts a new generation, never a pan or zoom -- except on a flame carrying variation STATE, which restarts with the accumulation (JWF re-inits variations per render). Burn-in is paid once per restart, and the plotted count comes from `OrbitFuses` -- every sample-counting caller must use what `compute_pass` returns. Bad-value recovery as flam3/JWF: X/Y divergence respawns; Z saturates at +/-1e32.
+2. **Accumulate** (`shaders/accumulate.wgsl`) - folds the histogram into an `Rgba32Float` accumulator: rgb = density-weighted mean colour (cumulative by default, or a fixed EMA), a = raw cumulative hit count.
+3. **Tonemap** (`shaders/tonemap.wgsl`) - Linear / Log (flam3 `k1`/`k2` normalised by `sample_density = total_iters / pixel_count`, so brightness is iteration-count invariant) / Density, then highlights, Levels, the curve LUT, background or transparency. [TONE-MAPPING.md](docs/main/TONE-MAPPING.md)
 
-### System Settings & Local Storage
-- **Architecture**: ConfigManager owns both
-  - **FractalConfig**: per-fractal artistic parameters (undo/redo enabled)
-  - **SystemSettings**: device preferences (no undo, persisted to disk immediately)
-- **System settings include**: VSync + target FPS, iterations per thread, the frame-time governor on/off + manual workgroups (Rendering menu), language, export defaults, fly-mode input preferences (sensitivity, speed, sprint, invert-Y, camera mode), online-mode credentials, compact mode
-- **Storage backend** (`src/storage/backend.rs`):
-  - Windows: `%APPDATA%\Fractals for All\Fractal Art Editor\data\`; macOS/Linux equivalents via `directories`
-  - WASM: browser localStorage
-- All changes flow through `config_manager.update_system_setting()` which returns an `UpdateType` for GPU synchronization
-- **See**: [docs/archive/projects/local-storage-system.md](docs/archive/projects/local-storage-system.md)
+Between them: analytic blur, the solid shade pass and DoF (3D), density effects; colour effects after the tonemap. The frame-time **governor** (`app/mod.rs`: `Batch`, `Knee`) shortens the dispatch first (to 64 iterations a thread), then sheds workgroups; off in the Rendering menu (`frame_governor`), every frame dispatches `manual_workgroups` at full length. During escape animation playback the same switch governs the viewport's supersampling (`app/aa_governor.rs`).
 
-### Important Implementation Details
-- **Atomic u32 histogram accumulation** (thread-safe; 4×u32 per pixel) feeding an `Rgba32Float` accumulator — see Render Pipeline above and [docs/main/COLOR.md](docs/main/COLOR.md)
-- **GPU memory during exports** ([docs/main/EXPORT.md](docs/main/EXPORT.md), "GPU memory during an export"): a background export (PNG on its own device, high-res, video) **freezes the viewport** (`App::freeze_viewport`) — nothing renders, its last picture stays, the escape renderer and terrains are freed and rebuilt after. Renderers hold only what they draw: the solid shade pass's full-frame textures are made on its first run, escape/terrain/sim renders get `FlameRenderer::for_tail` (no flame histograms), a terrain's section renderer frees its pixels once the sections are in, and an export fits its terrain section cap (64–256) to the card (`fit_export_sections`)
-- Using **JSON** for serialization
-- **Precision Limitation (f32 vs Apophysis double):**
-  - Apophysis/JWildfire use 64-bit `double` for variation weights and parameters (~15-16 digit precision)
-  - We use 32-bit `f32` (~7 digit precision) - **WGSL has no f64 support**
-  - Impact: minimal for typical flames, may cause slight differences at extreme values
-- **Undo/redo**: delta-based, 500-state history; rapid changes coalesce (500 ms inactivity threshold, 3 s max span); fly-mode camera gestures coalesce as a unit via a shared history marker
-- **Full WASM support** for web builds (including PNG export)
-- GPU buffers use **std430 layout** (storage buffers) and **std140 layout** (uniform buffers); struct fields in `GpuParams` must start on 16-byte boundaries — keep the explicit pad before `post_symmetry` in sync between `src/gpu/buffers.rs` and `shaders/core/header.wgsl`
-- **WASM shader compatibility:** Use `textureLoad()` instead of `textureSample()` inside non-uniform control flow (browser WebGPU strictly enforces the WGSL spec; desktop drivers are lenient)
-- **JWildfire/Apophysis is the gold standard**: when our rendering differs from theirs for the same `.flame`, ours is wrong (deliberate divergences — e.g. world-space `cam_pos`, 3D pan semantics — are documented in code comments and `docs/archive/3d-camera/free-camera-movement.md`)
+### Focused Rendering (flame deep zoom; [FOCUSED-RENDERING.md](docs/main/FOCUSED-RENDERING.md))
+Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeting"). A **plan** enumerates the words -- sequences of transforms -- whose images reach the view; each sample runs the free orbit and plots its point forced through a word drawn from the plan, so samples land in frame at zooms where the plain chaos game lands almost none. Brightness stays unbiased (`Cylinders::iteration_scale`; off-probability words deposit the inverse of their draw rate). Two shader arms: composed (affine words) and replay (`shaders/core/replay.wgsl`; offsets from reference orbits past f32). Works for a narrow range of flames; **coverage work is paused** -- status and order of work in [docs/projects/deep-zoom/deep-zoom-tracker.md](docs/projects/deep-zoom/deep-zoom-tracker.md). Compare pictures by density, not the tone map (`read_density_blocking`, `compare_blocks`). Unrelated to the escape engine's perturbation deep zoom.
 
-### Build Commands
+### Variations ([VARIATIONS.md](docs/main/VARIATIONS.md))
+- 647 `static VariationDef`s in `src/variations/defs/*.rs` (flam3 / Apophysis / JWildfire), inline WGSL (2D + 3D), registered by appending to `defs/mod.rs` (**append-only**: registration order is the stable ID order). With the `engine-flame` feature off only `linear` is registered.
+- `global_registry()` returns a read guard; the registry changes at runtime -- API-downloaded variations and local plugins register through `global_registry_mut()`.
+- Up to `MAX_VARIATIONS_PER_FLAME = 100` per flame, with a **per-flame local index map** (no global indices). The shader is the **sticky superset**: a canonical union of the flame's variations plus retained extras at weight 0, so edits rarely recompile (`src/renderer/sticky.rs`); chained pre/post order falls back to a specialized compile.
+- Parameters: per-transform `HashMap` with `"varname.param"` keys, packed into `MAX_VARIATION_PARAM_SLOTS = 1600` floats (user params, then `wgsl_init`-derived); shaders read `get_param(xform_id, variation_id, slot)`. Per-thread state (`state_count`) is not in that buffer: it is a `var<private> thread_state` array, read via `get_state`/`set_state` and saved with the orbit in the orbit buffer. ParamType: Float, UnlimitedFloat, Integer, UnlimitedInteger, Angle, Boolean, Enum.
+- UI ordering: by category, then registration order -- never HashMap order.
+
+### Colour, palettes, tone
+- **Colour modes**: Palette (Apophysis colour-coordinate evolution), Speed (distance per iteration), PathMap (colours by the word Focused Rendering draws through; needs it, 2D). [COLOR.md](docs/main/COLOR.md)
+- **Palette packs** (`assets/palettes/packs/*.json`): **the folder is the catalog** -- desktop scans it at startup (`enabled_by_default` inside each pack); `starter_pack.json` is also embedded as the offline fallback (`BUILTIN_PACK_FILE`; both discovery paths skip that name); WASM discovers packs via a manifest `build.rs` generates (guarded by `generated_manifest_matches_packs_folder`) and lazy-fetches them. Loose `assets/palettes/*.palette` files load into a "Local Files" pack. Clicking a library palette sets the config's palette to a copy; the editor's Save to Library writes `custom_palettes.json`. [PALETTE_LIBRARY.md](docs/main/PALETTE_LIBRARY.md)
+
+### UI ([UI.md](docs/main/UI.md))
+- Dockable panels (`PanelType` in `src/ui/workspace.rs`: 30), each in its own `src/ui/*.rs`; cross-panel results bubble through `UiResponse` (`src/ui/response.rs`) and are handled in `src/app/ui_handlers.rs`. Menus: File, Edit, View, Mode, Rendering, Window, Help (`src/ui/menu_bar.rs`), the language (globe) menu on the right; `src/ui/compact_menu.rs` is the mobile equivalent. Both Window menus draw their rows from `visibility::WINDOW_MENU`.
+- Input: one control set for every camera (`camera::gesture`): drag pans, Alt+drag or right-drag turns (2D rotates, 3D orbits), the wheel zooms toward the cursor (3D dollies; in fly mode it sets the speed). Touch: long press = right button, the viewport's Pan/Turn toggle = Alt. Fly mode (F2) in every 3D view: FreeLook or FPS. The table is in UI.md.
+- i18n: rust-i18n, `locales/*.yml` (en, es, ja, zh-CN; the non-English locales cover a fraction of the keys and fall back to English). Desktop loads Noto Sans JP/SC at runtime for CJK; WASM has no CJK font. [I18N.md](docs/main/I18N.md)
+
+### Config, state, storage ([CONFIG.md](docs/main/CONFIG.md))
+- **All configuration changes flow through ConfigManager**: `ConfigPath` identifies every parameter; the `UpdateType` it returns drives selective GPU updates. Undo: delta-based, 500 states; rapid changes coalesce (500 ms inactivity, 3 s max span); camera gestures coalesce by description.
+- `FractalConfig` (per fractal, undoable; versioned with `migrate_value`, now v3 -- `render_mode`, `perspective_strength`, `preserve_z` live on the config, not the flame) vs `SystemSettings` (device preferences, no undo, saved immediately via `update_system_setting()`): VSync/FPS, iterations per thread, burn-in, the governor and manual workgroups, orbit cache size, export defaults, fly-mode preferences, online credentials, compact mode.
+- Storage (`src/storage/backend.rs`): Windows `%APPDATA%\Fractals for All\Fractal Art Editor\data\`, macOS/Linux via `directories`, WASM localStorage. Presets are one bundled file, `assets/presets.fflame`.
+
+### GPU memory during exports ([EXPORT.md](docs/main/EXPORT.md))
+A background export (PNG on its own device, high-res, video) **freezes the viewport** (`App::freeze_viewport`): nothing renders, its last picture stays, the escape renderer and terrains are freed and rebuilt after. Renderers hold only what they draw: the solid shade pass's textures are made on its first run; escape/terrain/sim renders get `FlameRenderer::for_tail`; a terrain's section renderer frees its pixels once the sections are in; on a discrete GPU an export fits its terrain section cap (64-256) to the card (`fit_export_sections`).
+
+### Implementation details worth knowing
+- **JWildfire/Apophysis is the gold standard**: when our rendering differs from theirs for the same `.flame`, ours is wrong (deliberate divergences -- world-space `cam_pos`, 3D pan semantics -- are documented in [CAMERA.md](docs/main/CAMERA.md) and code comments).
+- **f32 vs Apophysis double**: WGSL has no f64, so weights and parameters are f32 (~7 digits); minimal impact on typical flames.
+- GPU buffers: std430 (storage) and std140 (uniform); fields in `GpuParams` must start on 16-byte boundaries -- keep the explicit pad before `post_symmetry` in sync between `src/gpu/buffers.rs` and `shaders/core/header.wgsl`.
+- Serialization is JSON; new config fields are skip-if-default so old files stay stable.
+- Full WASM support, including export; WebGL is impossible (compute shaders).
+
+## Build, Release, Test
+
 ```bash
-# Desktop GUI (Windows/macOS/Linux)
-cargo run --release
-
-# Headless CLI Export (batch PNG generation)
-cargo run --release -- export --input tests/visual/configs --output tests/visual/current
-# See CLI Export section below for details
-
-# WASM (Web app) — the scripts, not wasm-pack: they build `--profile dist`
-# (18% smaller than release, see docs/RELEASE.md §4c) and run wasm-bindgen.
-./build-wasm.sh          # or build-wasm.bat on Windows
-
-# WASM (gallery modules only — these DO use wasm-pack)
-wasm-pack build --target web --release   # in wasm/render, wasm/script
-
-# iOS / Android (experimental, not fully functional — see Mobile section)
-cargo build --target aarch64-apple-ios
-cargo build --target aarch64-linux-android
+cargo run --release                      # desktop app (binary: FractalArtEditor)
+# CLI subcommands: export, export-animation, generate (Rhai scripts), list-encoders
+cargo run --release -- export -i tests/visual/configs -o tests/visual/current
+./build-wasm.sh                          # web app (or build-wasm.bat): --profile dist + wasm-bindgen, not wasm-pack
+wasm-pack build --target web --release   # gallery modules only: in wasm/render, script, flame, escape, sim
 ```
+CLI flags (`--width`, `-H`, `--supersample`, `--transparent`, `--premultiplied`, `--strip-metadata`, `--engine`, `--category`, ...) and PNG metadata (`png_metadata::read_png_metadata(&bytes)`) are in [EXPORT.md](docs/main/EXPORT.md); the JS API (`WasmApi.export_png`) in [WASM.md](docs/WASM.md). iOS/Android builds cross-compile but do not run (`docs/experimental/ios-native-app.md`, `android-native-app.md`); phones use the web app's compact layout.
 
 ### Releasing, and changing anything the API sees
-
-**See [docs/RELEASE.md](docs/RELEASE.md)** — every procedure that has to
-run, in order, plus what is still undecided about packaging.
-
+**See [docs/RELEASE.md](docs/RELEASE.md).** Nothing runs on push or on a timer.
 ```bash
-python scripts/release.py check      # every fast gate, ~4s
+python scripts/release.py check      # every fast gate (tests, wasm builds, contract, shader dumps, doc links, engine feature matrix, gallery parity)
 python scripts/release.py            # ...and a changelog preview
 ```
-
-Nothing runs on push or on a timer. It is a command you type.
-
-The short version of the part that bites most often: three committed
-files are **generated**, and a stale one fails a test rather than
-failing silently. Regenerate deliberately and read the diff.
-
+Two committed files are **generated**, and a stale one fails a test rather than failing silently -- regenerate deliberately and read the diff:
 ```bash
 UPDATE_CONTRACT=1 cargo test --lib contract_is_current        # docs/generated/engine-contract.json
 UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps # tests/shader_dumps/
-cargo run --release --bin export_variations_json              # the corpus the API serves
-cargo run --release --bin export_scripts_json                 # built-in scripts, source included
-cargo run --release --bin export_effects_json
 ```
+The API's corpora come from `cargo run --release --bin export_variations_json` / `export_scripts_json` / `export_effects_json` (written to `output/`, gitignored). **A new `Feature`, `VariationCategory` or `ParamType` does NOT move the contract's shape fingerprint** -- tell the API repository directly (RELEASE.md §3). Release builds use `cargo build --profile dist` (31% smaller; the profile name is recorded in every PNG).
 
-**A new `Feature`, `VariationCategory` or `ParamType` does NOT move the
-contract's shape fingerprint** — it adds an array element, not a key
-path — so the API's staleness pin will not fire. Tell the API repository
-directly. See RELEASE.md §3.
-
-Release builds use `cargo build --profile dist`, not `--release`: 31%
-smaller, ~10 minutes, and the profile name is recorded in every exported
-PNG so a bug report identifies its binary.
-
-### Testing & Profiling
-
-See [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) for complete guide.
-
-```bash
-# Unit tests (embedded in source files; 240+ tests)
-cargo test
-
-# Unified benchmark suite (CPU + GPU + visual regression)
-python scripts/run_benchmarks.py          # Full suite
-python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
-```
-
-**Unified Benchmark Suite** (`scripts/run_benchmarks.py`):
-- CPU microbenchmarks (Criterion), GPU desktop + WASM render tests, visual regression via pixel-hash comparison, CSV performance history with color-coded regression output
-
-**What's tested:** transform math, variations, palette interpolation, XML round-trips (camera, variation-param unit conversions), camera-matrix/rotation math (fly-mode `to_euler_near` round-trips and pole handling), config storage keys, version info
-
-**Variation math probe** (`cargo run --release --bin variation_probe`):
-evaluates every shipped variation's shader arithmetic at a fixed
-adversarial input grid (all four signed zeros, values straddling the
-`1e32` bad-value threshold, subnormals) in 2D and 3D, and writes
-`docs/generated/variation-probe.txt`, plus a `-sweep.txt` companion that
-moves each parameter one at a time (both arms of every boolean, every
-enum choice, numeric extremes) — that sweep reaches NaN/Inf in 386 places
-the defaults never do. Diff two of them —
-`variation_probe -- compare OLD NEW` — to find cross-platform
-divergence; it is the tool for the fast-math class of bug that cost
-`npolar` 73% of its pixels on Metal. Compares **classes** (zero / finite
-/ NaN / inf / past-threshold), which no rounding difference can perturb,
-separately from quantised magnitudes; only a class change exits
-non-zero. The first run on a machine pays cold driver compiles (~4 min);
-subsequent runs are seconds. See
-[docs/archive/projects/variation-math-probe.md](docs/archive/projects/variation-math-probe.md).
-
-### CLI Export Mode
-
-The main app supports headless batch PNG export for testing and automation:
-
-```bash
-# Export single file
-FractalArtEditor export -i config.fflame -o output.png --width 1920 --height 1080
-
-# High-resolution export (automatically switches paths for large sizes)
-FractalArtEditor export -i config.fflame -o output.png --width 4000 --height 4000
-
-# Batch export directory
-FractalArtEditor export -i tests/visual/configs -o tests/visual/current
-
-# With test category metadata
-FractalArtEditor export -i tests/visual/configs/variations -o tests/visual/current --category variations
-```
-
-**Features:**
-- Any resolution (4K, 8K+); automatic path selection around the 128 MB storage-binding limit (direct histogram below it; tiled sample-emit / CPU histogram above — see `src/export/high_res.rs` and `docs/archive/projects/unified-render-pipeline.md`)
-- Renders exact `max_iterations` from config for reproducibility, with progress indicator
-- Full PNG metadata embedding; batch processes directories; headless (no window)
-
-### PNG Metadata
-
-All exported PNGs include metadata in tEXt chunks: build info (version, git hash, platform), render settings (resolution, iterations, time), the complete FractalConfig JSON + SHA256 checksum, display settings, and optional test name/category for visual regression.
-
-```rust
-use fractal_flame_wgpu::png_metadata::read_png_metadata;
-let metadata = read_png_metadata("output.png")?;
-```
-
-### WASM API
-
-The WASM build exposes a JavaScript API (`src/wasm_api.rs`) for headless PNG export in browsers:
-
-```javascript
-import init, { WasmApi } from './pkg/fractal_flame_wgpu.js';
-await init();
-const api = new WasmApi();
-const config = await fetch('config.fflame').then(r => r.json());
-api.load_config_json(JSON.stringify(config));
-const pngData = await api.export_png(800, 600, 256, false); // w, h, iters/thread, transparent
-```
-
-**Browser compatibility:** Chrome/Chromium 113+ and Firefox 121+ fully tested; Safari WebGPU experimental; mobile browsers limited. WebGL fallback is impossible (compute shaders required).
+### Testing ([docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md))
+- `cargo test --release --lib` - ~1,900 tests; GPU tests skip without an adapter.
+- `python tests/visual/run_tests.py` - the visual suite (~375 configs in 2d/3d/escape/sim/solid/tonemap/variations, tolerance compare). **It does not build**: run `cargo build --release` first, and note a running app locks the binary.
+- Render configs for inspection without the binary: `INSPECT="a.fflame=a.png" INSPECT_SIZE=WxH cargo test --release --lib -- --ignored render_configs_for_inspection`.
+- `python scripts/run_benchmarks.py --quick` - CPU + GPU benchmarks (its exact-hash tables are informational).
+- `cargo run --release --bin variation_probe` - every variation's arithmetic at adversarial inputs in 2D and 3D (`docs/generated/variation-probe*.txt`); `variation_probe -- compare OLD NEW` finds cross-platform divergence by value class. The first run on a machine pays cold driver compiles (~4 min).
 
 ## Coding Guidelines
 
 ### GPU Code
-- All shaders use **WGSL**; follow std140/std430 layout rules for buffers
-- **WASM Compatibility**: `textureSample()` only from uniform control flow; use `textureLoad()` inside conditionals (desktop drivers are lenient, browsers fail silently with black output)
-- **The flame compute layout holds only the bindings its shader uses** (`gpu::pipelines::used_bindings`, read from the generated WGSL; `a_layout_holds_every_binding_its_shader_uses` holds it to naga). A browser counts the layout's storage buffers against `max_storage_buffers_per_shader_stage` whether the shader reads them or not -- a fixed layout of 11 broke every flame on a laptop Chrome that allows 10. A new binding goes in `compute_layout_entries` / `compute_entries` and costs a storage buffer only where the shader uses it; `a_flame_renders_within_a_browsers_storage_limit` renders at 8 and 10
-- **Metal runs shaders with fast-math ON, so IEEE NaN/Inf rules do not hold there.** wgpu never clears `MTLCompileOptions.fastMathEnabled`, which defaults to true. Measured on an M2: `x != x` returns **false** for a real NaN, and `Inf/Inf` returns **1.0** instead of NaN — so a bad value can pass a guard *and* survive as a plausible finite number.
-  - Never detect non-finite values with a self-compare (`x != x`) or by expecting `Inf` arithmetic to poison a result. Use `!(abs(x) <= 1e32)`, the idiom `main_template.wgsl`'s bad-value recovery uses — it is negated-comparison based, so NaN fails the comparison and the negation fires. Verified to survive the optimizer.
-  - Never write a bare self-division (`x / x`) either: it is 1.0 except at 0/0 and Inf/Inf, and fast-math folds those to **1.0 too** — a plausible finite value no later guard can catch. Write the intended value explicitly and reproduce the reference's zero-case behaviour (worked example: `cut_btree` in `defs/cut_simple.rs`). **Both idioms are enforced**: the `shader_lint` tests (`src/variations/mod.rs`) reject self-compares and self-divisions in every registered variation's WGSL and all `shaders/*.wgsl` files, alongside the subnormal-literal lint.
-  - **Metal's `atan2` is broken at zero pairs in both ways** (measured): same-sign zeros give **π/4** — a plausible finite value that silently relocates the point (cost `apo-misc7` 73% of its lit pixels via `npolar`) — and *mixed*-sign zeros give **NaN**, which kills the point in bad-value recovery (cost `circular`/`circular2`/`ex`/`flower_db` their origin behaviour and `hypercrop` its n-gon corners). Away from zero pairs it agrees to ≤1 ulp. The guard is `ff_atan2` in `shaders/core/utilities.wgsl` — always in scope, IEEE-exact for all four sign pairs; adopted wherever a zero pair is reachable (npolar, ho, log_db, circular, circular2, ex, flower_db, hypercrop). Sign-of-zero **laundering** matters too: affine sums and FTZ can turn any zero into either sign, so "same-sign only" is not a safe assumption at any reachable origin.
-    - When guarding it, reproduce IEEE rather than returning 0: `atan2(+0,-0)` is `+π` and `atan2(-0,-0)` is `-π`. Flattening all four sign cases to 0 changes the render on Vulkan — measured, it moved the image. Read the sign via `bitcast<u32>` (`x < 0.0` is false for `-0.0`, and integer ops are immune to fast-math).
-    - **616 `atan2` call sites across 86 variation files are unaudited.** Only those that can reach exactly (0,0) are affected; `npolar` was found by bisection, not by audit.
-  - **Trig of huge arguments is garbage everywhere, differently.** Measured at `sin/cos(1e20·π)`: Metal fast-math gives `(+0, +0)`, NVIDIA gives `(0, garbage)`, f64 IEEE gives a scattered finite pair — three mutually-incompatible answers, because past ~2²⁴ adjacent f32s differ by more than the whole period. Do not guard these (there is no reference class to guard toward — see the third clause in `docs/accepted-divergences.txt`); do flag ports whose *reachable* inputs feed trig unbounded arguments.
-  - This is a real rendering difference, not just rounding. Disabling fast-math globally is not the answer — measured **1.4x slower** typical, **5.2x** worst case, and it merely traded which tests failed. Fix at the shader level and verify the guard is bit-identical under IEEE so Windows is unaffected.
-- **Trust the shader compiler for optimization**: modern GPU compilers perform aggressive CSE — write clear code, don't hand-hoist (see [docs/SHADER_COMPILER_CSE_ANALYSIS.md](docs/archive/optimization-attempt-2025-11-02/SHADER_COMPILER_CSE_ANALYSIS.md))
+- All shaders are **WGSL**; follow std140/std430 layout rules.
+- **WASM**: `textureSample()` only from uniform control flow; use `textureLoad()` inside conditionals (browsers fail silently with black output where desktop drivers are lenient).
+- **The flame compute layout holds only the bindings its shader uses** (`gpu::pipelines::used_bindings`; `a_layout_holds_every_binding_its_shader_uses`). Browsers count a layout's storage buffers against `max_storage_buffers_per_shader_stage` whether the shader reads them or not -- a fixed layout of 11 broke every flame on a Chrome that allows 10. A new binding goes in `compute_layout_entries` / `compute_entries`; `a_flame_renders_within_a_browsers_storage_limit` renders at 8 and 10.
+- **Metal runs shaders with fast-math ON** (wgpu never clears `fastMathEnabled`), so IEEE NaN/Inf rules do not hold there -- measured on an M2, `x != x` is false for a real NaN and `Inf/Inf` is 1.0:
+  - Never detect non-finite values with a self-compare; use `!(abs(x) <= 1e32)`, the idiom bad-value recovery uses.
+  - Never write a bare self-division (`x / x`): fast-math folds 0/0 and Inf/Inf to 1.0. Write the intended value and reproduce the reference's zero case (worked example: `cut_btree` in `defs/cut_simple.rs`). The `shader_lint` tests (`src/variations/mod.rs`) reject both, and subnormal literals, in every variation and `shaders/*.wgsl`.
+  - **Metal's `atan2` is wrong at zero pairs**: same-sign zeros give pi/4, mixed-sign zeros give NaN. Use `ff_atan2` (`shaders/core/utilities.wgsl`, IEEE-exact for all four sign pairs) wherever a zero pair is reachable -- affine sums and FTZ can launder any zero's sign. When guarding, reproduce IEEE (`atan2(+0,-0) = +pi`, `atan2(-0,-0) = -pi`; read the sign with `bitcast<u32>`), never 0. Most raw `atan2` call sites are unaudited; `npolar` was found by bisection.
+  - Trig of huge arguments (past ~2^24) is garbage on every platform, differently; do not guard it (`docs/accepted-divergences.txt`), but flag ports whose reachable inputs feed it.
+  - Fix at the shader level, bit-identical under IEEE; disabling fast-math globally measured 1.4x-5.2x slower and only moved the failures.
+- **Trust the shader compiler's CSE**: write clear code, don't hand-hoist ([analysis](docs/archive/optimization-attempt-2025-11-02/SHADER_COMPILER_CSE_ANALYSIS.md)).
+- **Feature flags keep WGSL byte-identical when off** (SOLID, CYLINDER_*, ...): the shader dumps prove it.
 
 ### Rust Code
-- Use `bytemuck::Pod` and `bytemuck::Zeroable` for GPU data structures
-- GPU struct alignment: vec3 needs 16-byte alignment; add explicit padding and mirror it in the WGSL header
-- Prefer `Queue::write_buffer()` over buffer mapping for updates
+- `bytemuck::Pod` / `Zeroable` for GPU structs; vec3 needs 16-byte alignment -- add explicit padding and mirror it in the WGSL header.
+- Prefer `Queue::write_buffer()` over buffer mapping for updates.
+- Cargo features `web-app`, `engine-flame`, `engine-escape`, `engine-sim`, `terrain` (all default) gate whole engines for the gallery modules: new engine code needs its `#[cfg]`, and `release.py check` builds each combination.
 
 ### State Management
-**All configuration changes flow through ConfigManager** - see [docs/main/CONFIG.md](docs/main/CONFIG.md).
-
-**Core principles:**
-- Type-safe `ConfigPath` enum identifies all parameters; `UpdateType` return value drives selective GPU updates
-- All updates are immediate; coalescing merges rapid changes (500 ms inactivity / 3 s span) into one undo point
-- A brief overwrite window after parameter changes keeps real-time updates smooth before the iteration reset
-
-**UI patterns:**
-
 ```rust
 // 1. Single parameter change
 if response.changed() {
     config_manager.update_param(path, value.into())?;
 }
-
 // 2. Batch update (one undo point, e.g. triangle editor, color pickers)
 config_manager.update_batch(changes, "description".to_string())?;
 ```
-
-Structural actions (transform add/delete, config import/export, preset loading) are intentionally outside ConfigManager.
-
-### Variation Registry Architecture
-- **Global singleton**: `global_registry()` returns `&'static VariationRegistry` (once_cell)
-- **Definitions**: `static VariationDef` consts in `src/variations/defs/*.rs`; registered by appending to the list at the end of `defs/mod.rs` (**append-only** — registration order is the stable ID order)
-- **Per-flame local index mapping**: `Flame::get_id_mapping()` / `compute_local_index_map()` assign shader indices to only the flame's active variations (max 100); the shader is compiled with exactly that set
-- **Param packing**: variable slots per variation (user params, then init-derived, then per-thread state) packed into a 1600-float buffer
-- **UI ordering rule**: sort by category first, then registration order — iterate `ordered_names`, never HashMap order
-
-### Performance
-- Target 60+ FPS at 1080p; progressive refinement adds samples every frame
-- Dispatch = workgroups × 64 threads × `iterations_per_thread` (SystemSettings, default 256). In the app a frame-time governor sizes it: it shortens the dispatch first (down to 64 iterations a thread -- orbits persist, so that costs no trajectory depth), then sheds workgroups, to a floor of one workgroup of the shortest dispatch (`app/mod.rs`: `Batch`, `Batch::min_scale`, `Knee`). It can be switched off in the Rendering menu (`frame_governor`): every frame then dispatches `manual_workgroups` at the full length (`Batch::fixed`). During **escape-time animation playback** the same switch also governs the viewport's supersampling (`app/aa_governor.rs`): it sheds a step when recent settled frames drop (a frame more than 1.5 budgets late; vsync jitter alone stays under that), probes back up after a clean run, and backs off after a failed probe. Stills, exports and video always render at the config's factor. While a tight plan is made it caps the dispatch short and holds, since the planner shares the render's GPU queue (`Batch::while_planning`, tracker P10)
-- Track total iterations for quality measurement; histogram density is iteration-count-normalized in the tonemap, so brightness is stable as accumulation runs
+Structural actions (transform add/delete, config import/export, preset loading) are intentionally outside ConfigManager. A brief overwrite window after parameter changes keeps real-time updates smooth before the accumulation resets.
 
 ## Common Tasks
 
-### Adding a New Variation
-
-1. Create `src/variations/defs/<name>.rs` with a `static VariationDef` (see `defs/octapol.rs` or `defs/szubieta.rs` for recent examples):
+### Adding a New Variation ([VARIATIONS.md](docs/main/VARIATIONS.md))
+1. Create `src/variations/defs/<name>.rs` with a `static VariationDef` (recent examples: `defs/octapol.rs`, `defs/szubieta.rs`):
    ```rust
    pub static MYVAR: VariationDef = VariationDef {
        name: "myvar",
@@ -350,7 +167,7 @@ Structural actions (transform add/delete, config import/export, preset loading) 
        display_name: "My Var",
        category: VariationCategory::Plugin,
        phase: VariationPhase::Normal,      // or Pre / Post
-       features: &[],                      // NeedsRng, NeedsTransform, NeedsAccum, WritesColor, WritesRgb, AlwaysZ, NeverZ
+       features: &[],                      // NeedsRng, NeedsTransform, NeedsAccum, WritesColor, WritesRgb, AlwaysZ, NeverZ, ...
        parameters: &[
            param!("power", "Power", float, 2.0, -10.0, 10.0, "Tooltip text."),
        ],
@@ -362,114 +179,38 @@ Structural actions (transform add/delete, config import/export, preset loading) 
        wgsl_3d: r#" fn variation_myvar(p: vec3<f32>, ...) -> vec3<f32> { ... } "#,
    };
    ```
-2. Register in `src/variations/defs/mod.rs`: `mod <name>;`, `pub use <name>::*;`, and append `&MYVAR` to the END of the registration list (append-only!)
-3. Signature rules (enforced by the shader builder):
-   - parameters present → `xform_id: u32, variation_id: u32` args; read via `get_param(xform_id, variation_id, slot)`
-   - `NeedsRng` → `rng: ptr<function, RngState>` arg
-   - `NeedsAccum` → `accum: vec2/3<f32>` right after `p` (the running weighted sum — for JWF variations that read or clobber `pVarTP`)
-   - weight-inside-the-formula JWF variations: read `transforms[xform_id].variations[variation_id]` and pre-divide the result by it (idisc pattern) so the dispatcher's outer `result += w * f(p)` cancels
-   - helper functions must be name-prefixed (`fn myvar_helper(...)`) to avoid collisions
-4. Port faithfully from the JWF/Apo source (keep quirks; cite the source file in the module docs); the variation auto-appears in the UI under its category
-5. If the foreign app stores a parameter in different units, add a conversion pair in `flame_xml.rs` (`variation_param_from_xml` / `_to_xml` — see radial_blur)
-6. **Z semantics**: if the JWF source writes `pVarTP.z` UNCONDITIONALLY (no `isPreserveZCoordinate()` gate), add `Feature::AlwaysZ` — otherwise its z contribution is zeroed under `preserve_z = false`. `scripts/audit_z_write_semantics.py` classifies automatically from `output/variation-jwf-source/`. See `docs/archive/projects/preserve-z-semantics.md`.
+2. Register in `src/variations/defs/mod.rs`: `mod <name>;`, `pub use <name>::*;`, and append `&MYVAR` to the END of the registration list (append-only!).
+3. Signature rules (enforced by the shader builder): parameters -> `xform_id: u32, variation_id: u32`, read via `get_param`; `NeedsRng` -> `rng: ptr<function, RngState>`; `NeedsAccum` -> `accum: vec2/3<f32>` right after `p` (for JWF variations that read or clobber `pVarTP`); weight-inside-the-formula JWF variations read `transforms[xform_id].variations[variation_id]` and pre-divide by it (the idisc pattern); helper functions are name-prefixed (`fn myvar_helper`).
+4. Port faithfully from the JWF/Apo source (keep quirks; cite the source file in the module docs).
+5. Foreign parameter units: a conversion pair in `flame_xml.rs` (`variation_param_from_xml` / `_to_xml`; see radial_blur).
+6. **Z semantics**: if the JWF source writes `pVarTP.z` unconditionally (no `isPreserveZCoordinate()` gate), add `Feature::AlwaysZ`, or its z is zeroed under `preserve_z = false` (`scripts/audit_z_write_semantics.py` classifies from `output/variation-jwf-source/`).
 
-### Adding a New Palette
-**Option 1: Code-based** — add to `src/scene/palette.rs` + `PaletteLibrary::new()`
-**Option 2: File-based** — `.palette` file in `assets/palettes/` (desktop auto-load), or a pack JSON in `assets/palettes/packs/`
-**Option 3: Import/Export** — Palette Editor → Import/Export (clipboard or `.palette` file)
-
-### Adding a New Preset
-**Option 1: Code-based** — `src/scene/presets.rs` + `PresetLibrary::new()`
-**Option 2: File-based** — `.fflame` in `assets/presets/` (desktop auto-load)
-**Option 3: Export current state** — Save Config → place in `assets/presets/`
-
-### Modifying Tone Mapping
-1. Edit `shaders/tonemap.wgsl`
-2. Update `TonemapParams` in `src/gpu/buffers.rs` if adding parameters
-3. Expose controls in `src/ui/tone_mapping.rs`
-
-### Adding UI Controls
-- Each panel lives in its own `src/ui/*.rs` file; add controls there and write through `config_manager.update_param` / `update_batch`
-- Cross-panel results bubble via `UiResponse` (`src/ui/response.rs`) and are handled in `src/app/mod.rs`
-
-### Creating 3D Presets
-1. Set `flame.render_mode = RenderMode::ThreeD`
-2. Set `flame.perspective_strength` (0.0 = orthographic; ~0.1-0.3 typical, higher = stronger)
-3. Use 3D variations (zcone, flatten, hemisphere, zscale, pre/post rotations, …) for Z structure; `Transform::g` is the Z offset
-4. Variations are set by name: `xform.variations.insert("zcone".into(), 0.5);`
-5. Give transforms different `g` values to create layers; verify with camera pitch/yaw (or fly mode)
+### Other additions
+- **An escape formula or colouring**: [ESCAPE.md](docs/main/ESCAPE.md). **A simulation model or colouring**: [SIMULATION.md](docs/main/SIMULATION.md). **An effect**: [EFFECTS.md](docs/main/EFFECTS.md). All registries are append-only.
+- **A palette**: a pack JSON in `assets/palettes/packs/` (it appears on the next start), a loose `.palette` in `assets/palettes/`, or the Palette Editor's import/Save to Library.
+- **A preset**: add the config to `assets/presets.fflame` (one JSON array; desktop reads it at runtime, the binary embeds it as the fallback).
+- **Tone mapping**: `shaders/tonemap.wgsl`, `TonemapParams` in `src/gpu/buffers.rs`, controls in `src/ui/tone_mapping.rs`.
+- **UI controls**: in the panel's own `src/ui/*.rs`, writing through `update_param` / `update_batch`; cross-panel results via `UiResponse`, handled in `src/app/ui_handlers.rs`; availability per mode in `src/ui/visibility.rs`.
+- **3D flame presets**: set the config's `render_mode = RenderMode::ThreeD` and `perspective_strength` (0 orthographic; ~0.1-0.3 typical); give Z structure with 3D variations (zcone, flatten, hemisphere, zscale, ...) and per-transform `g` offsets (`xform.variations.insert("zcone".into(), 0.5)`); check with camera pitch/yaw or fly mode.
 
 ## Dependencies
-See @Cargo.toml for the full list. Key dependencies:
-- **wgpu 29.0** - WebGPU API (desktop: vulkan/metal/gles — dx12 deliberately omitted; WASM: webgpu only)
-- **winit 0.30** - Window management
-- **egui 0.34** + **egui_dock 0.19** - UI and docking
-- **serde / serde_json** - Serialization; **quick-xml** - .flame import
-- **rust-i18n 3.1** - Internationalization
-- **image / png** - PNG export; **bytemuck** - GPU data layout
-- **cpal / symphonia / rustfft / ringbuf** - audio-reactive animation stack
-- **rayon** - CPU-parallel export paths; **ureq** - desktop HTTP
+See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberately omitted; WASM webgpu only), **winit 0.30**, **egui 0.34** + **egui_dock 0.19**, **serde/serde_json**, **quick-xml** (.flame), **rust-i18n 3.1**, **image/png**, **bytemuck**, **cpal/symphonia/rustfft/ringbuf** (audio), **rayon** (CPU export paths), **ureq** (desktop HTTP), **rhai** + **rand_pcg** (scripting; the PCG stream is what `script + seed` means, so it is pinned).
 
 ## File Formats
-
-### Palette Files (.palette)
-JSON with `name` + `stops` (position 0-1, RGB 0-1 colors).
-
-### Config Files (.fflame)
-JSON containing full fractal state (see `src/config/fractal_config.rs`). Includes **everything needed for exact reproduction**: flame definition (transforms, variations + params, colors), view state (zoom/pan/rotation, 4-angle camera + position), rendering settings (`max_iterations`, `deterministic_rng`), color settings (mode, embedded palette data, background), tone mapping (mode, curve, exposure, gamma, levels), depth effects. New fields are skip-if-default so old files stay stable.
-
-### Flame Files (.flame)
-Apophysis/JWildfire XML (`src/flame_xml.rs`). Round-trips camera (`cam_pitch/yaw`, `cam_roll`→bank rename quirk, `rotate`→rotation, `cam_pos_x/y/z` + legacy `cam_zpos`), perspective, DoF, post-symmetry, xaos, palettes, and variation parameters (with per-param unit conversions where JWF units differ — see `variation_param_from_xml`). Our own extensions (depth-density compensation, far-density fade) are `.fflame`-only and deliberately not written to XML.
-
-## Important Implementation Notes
-
-### Preset System
-Presets store **complete FractalConfig** (not just the Flame). Transform buffers are pre-allocated for `MAX_TRANSFORMS` (128) with zero-padding of unused slots; `FlameRenderer::load_config()` synchronizes all GPU state atomically; `reset()` only clears accumulation.
-
-### Asset Loading
-Desktop builds auto-load `assets/palettes/packs/*.json` (pack scan), `assets/palettes/*.palette` (the "Local Files" pack) and `assets/presets/*.fflame` at startup; WASM embeds the builtin pack + a build-generated manifest and lazy-loads the rest via `src/resources/`.
-
-### Pan / Zoom / Rotation Input
-One set of controls for every camera (`camera::gesture`, deciding by `ViewKind`): drag pans, Alt+drag or a right drag turns (a 2D view rotates, a 3D camera orbits), the wheel zooms toward the cursor (a 3D camera dollies; in fly mode it sets the speed). Touch: one finger pans, a long press is the right button, the viewport's Pan/Turn toggle is the Alt, two fingers pinch/twist/pan. The flame's pan inputs convert screen deltas through `FractalConfig::screen_delta_to_pan_frame` — rotation-aware, identical in 2D and 3D because both pipelines compose pan → rotate → zoom. The table is in `docs/main/UI.md` (Input Handling).
-
-### 3D Rendering System
-- Single `main_template.wgsl` specialized at build time via the RENDER_3D flag; 3D tracks `vec3` through the chaos game
-- **Camera**: JWildfire's 4-angle matrix built in `utilities.wgsl::build_camera_matrix` — effective chain `Rz(rotation)·Rx(pitch)·Ry(bank)·Rz(−yaw)` applied as `M·(p − camera_pos)`. JWF applies its matrix transposed, which is why the call-site slot mapping looks swapped; see the comments there before touching it.
-- **Projection**: Apophysis `zr = 1 − persp·z` with behind-camera clipping (`zr < 1e-3` discarded, matches JWF)
-- **Fly mode**: `src/camera/fly.rs` (the keys and drags in `src/app/fly_camera.rs`) — a look is a world rotation composed on the camera's quaternion and written back as pitch/yaw/bank with the roll held (singular only at bank ±90°); every camera's stored point (a flame's `camera_x/y/z`, `1/persp` in front of its viewpoint; a target) moves by the forward's change times its distance, so the eye stays put
-- **Depth effects** at plot time: DoF blur, fog (color blend toward background), depth-density compensation and far-density fade (per-sample density weighting; carried through all accumulation paths)
-- **preserve_z**: JWF flag; default false flattens Z each iteration to keep Z-scaling variations from diverging
-- Old presets with array-style variations are migrated by the custom deserializers
-
-### Histogram Color Accumulation
-Thread-safe atomic u32 accumulation (4×u32 per pixel: R, G, B, density), fixed internal `color_scale = 100` (the former user-tunable slider was removed — the value cancels in color recovery). Per-sample density weights (depth-density compensation / far-density fade) scale all four channels so recovered color is weight-invariant. **See [docs/main/COLOR.md](docs/main/COLOR.md).**
+- **.fflame** - JSON, the complete FractalConfig (see `src/config/fractal_config.rs`): everything needed for exact reproduction -- the flame, view and camera, rendering settings, colour and palette data, tone mapping, depth effects, and the escape/sim/terrain blocks. Versioned (`CURRENT_CONFIG_VERSION`, migrated on load); new fields are skip-if-default.
+- **.flame** - Apophysis/JWildfire XML (`src/flame_xml.rs`): round-trips the camera (`cam_pitch/yaw`, the `cam_roll`->bank rename quirk, `rotate`->rotation, `cam_pos_x/y/z` + legacy `cam_zpos`), perspective, DoF, post-symmetry, xaos, palettes and variation parameters (with per-parameter unit conversions). Our own extensions (depth-density compensation, far-density fade) are `.fflame`-only.
+- **.palette** / pack JSON - a palette's name and its colours (stops, or `indexed_colors` hex in most packs).
 
 ## Known Issues
-- No error handling for invalid `.fflame` or `.palette` file imports
-- Transparent PNG export applies tone mapping on CPU from the accumulation buffer (the tonemap shader blends RGB with background before alpha)
-- Density effects on the `HighResExporter` path are gated by a resolution budget: they run in Phase B (after the histogram buffer is freed) on full-res ping-pong textures, costing ~36 B/px on top of the accumulation. Above a ~4 GiB budget (≈119 MP, ~10,900² square) they're skipped (export still completes, warning logged) to avoid OOM on limited-VRAM GPUs. Below that they apply identically to the FlameRenderer/in-app path.
-- **Focused Rendering's open gaps** (tracker, all opt-in-feature only): a forced sample is plotted by the free orbit's transform's **opacity**, not its word's last transform's, so flames with a transform below full opacity draw wrong targeted; in **Speed** colour mode it wears the free orbit's speed colour; the GPU planner's f32 can drop children at 1e5-1e6 (C16) (short dispatches no longer move light: P11 was fixed by persistent orbits)
-- Topic docs under `docs/main/` may lag the code; verify against source when something looks off
-- **macOS is not green, and both entries are known and tabled.** (1) `renderer::sticky::extras_alone_never_change_pixels` fails on Metal — it asserts that dead, branch-skipped variations are BIT-identical, but their presence changes codegen, so 44% of bytes differ (mean 1.8, max 40 on 64×64). Visually harmless: every flame visual test passes. The test body is identical on `main`, so this is not an escape-time regression; the fix is a tolerance compare, as the equally non-reproducible `solid-*` visual tests already use. It is the only failing `scripts/release.py check` gate on macOS. (2) The visual suite reads **217/238** on macOS against **238/238** on Windows — 21 escape-time renders differ. Fully investigated in [docs/archive/escape-time/escape-time-fractals.md](docs/archive/escape-time/escape-time-fractals.md): the df fold and trig range reduction were found and fixed (both were wrong on BOTH platforms), and reassociation and ulp-amplification were both measured and ruled out. The residual is unexplained and deliberately parked — perceptually the renders are indistinguishable. Next lead recorded there: `normalize`/`inversesqrt`, the `clamp(dot(...))` discontinuity, `pow`, and palette texture filtering.
-
-## Mobile Platform Support (Experimental)
-
-**Status:** Cross-compilation works; runtime needs dependency fixes.
-
-- **iOS** (`aarch64-apple-ios`): blocked on `rfd` (file dialogs) — needs conditional compilation or native pickers
-- **Android** (`aarch64-linux-android`): needs `android-activity` features + manifest/packaging work (`cargo-apk`/`xbuild`)
-- General: touch controls, mobile GPU iteration defaults, small-screen UI (compact mode exists), platform storage APIs
-
-**Feasibility:** Medium-High — wgpu supports mobile GPUs; the surrounding infrastructure needs platform adaptations.
+- **macOS is not green**, both known and parked: `renderer::sticky::extras_alone_never_change_pixels` fails on Metal (dead variations change codegen; visually harmless; the fix is a tolerance compare), and 21 escape-time visual renders differ from Windows -- investigated, perceptually indistinguishable, next leads recorded in the escape design record.
+- **The chosen language is not persisted**: the globe menu calls `i18n::set_locale` only; `SystemSettings.language` exists but nothing writes or reads it.
+- **Config v1 files** saved before two unit changes (`levels_high`, `dof_blur_strength`) load with the wrong values: the v1->v2 migration arm never got its planned translations (`docs/projects/config-v2-migration.md`).
+- **Focused Rendering's open gaps** (opt-in only): a forced sample is plotted by the free orbit's transform's opacity, not its word's last transform's; in Speed colour mode it wears the free orbit's colour; the GPU planner's f32 can drop children at 1e5-1e6 (C16).
+- Density effects on the `HighResExporter` path are skipped above a ~4 GiB budget (~10,900^2) to avoid OOM; below it they apply as in the app.
+- No error handling for invalid `.fflame` or `.palette` imports.
 
 ## Optional/Future Features
-
-### Medium Priority
-- **Async export progress UI** - a custom-size export of a 2D escape or simulation picture still blocks the UI while it renders (flame high-res/long renders and 3D terrains already run in the background with the progress bar)
-- **EXR/HDR export** - high dynamic range output for compositing
-
-### Low Priority / Future Expansions
-- **Layered compositing** - multiple flames blended together
-- **Adaptive sampling** - focus iterations on high-detail areas
-- **Denoising** - faster convergence
-- **Orbital camera mode** (JWF `cam_*focus`) and camera-path "tour mode" for fly mode
+- **Async export** for a custom-size 2D escape or simulation export (flame high-res and terrain exports already run in the background).
+- **EXR/HDR export**; **layered compositing**; **motion blur**; **denoising for flames** (the path tracer has one).
+- **Orbital camera** from JWF `cam_*focus` (a 3D turn already orbits the target) and camera-path tours.
+- The camera lens in every mode: planned in `docs/projects/camera-lens-everywhere.md`.
