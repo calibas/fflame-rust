@@ -172,7 +172,7 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn export_animation_mode(
-    config_path: &str,
+    config_path: Option<&str>,
     animation_path: &str,
     output_path: &str,
     width: u32,
@@ -303,7 +303,7 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn export_animation_async(
-    config_path: &str,
+    config_path: Option<&str>,
     animation_path: &str,
     output_path: &str,
     width: u32,
@@ -320,7 +320,10 @@ async fn export_animation_async(
 
     println!("Fractal Flame Animation Export");
     println!("===============================");
-    println!("Config: {}", config_path);
+    match config_path {
+        Some(path) => println!("Config: {}", path),
+        None => println!("Config: the animation's embedded base config"),
+    }
     println!("Animation: {}", animation_path);
     println!("Output: {}", output_path);
     println!("Resolution: {}x{} @ {} FPS", width, height, fps);
@@ -347,14 +350,21 @@ async fn export_animation_async(
         return Err("FFmpeg not found".into());
     }
 
-    // Load config file
-    let config = config::FractalConfig::load_from_file(Path::new(config_path))?;
-    println!("Loaded config: {}", config.flame.name);
-
     // Load animation file
     let animation_contents = std::fs::read_to_string(animation_path)?;
     let anim = Animation::from_json(&animation_contents)?;
     println!("Loaded animation: {} ({:.1}s duration)", anim.name, anim.duration);
+
+    // The base config: -c, else the one the .anim embeds.
+    let from_flag = match config_path {
+        Some(path) => Some(config::FractalConfig::load_from_file(Path::new(path))?),
+        None => None,
+    };
+    if from_flag.is_some() && anim.base_config.is_some() {
+        println!("Note: the animation embeds a base config; -c is used instead");
+    }
+    let config = animation::export::cli_base_config(from_flag, anim.base_config.as_ref())?;
+    println!("Loaded config: {}", config.flame.name);
 
     let total_frames = (anim.duration * fps as f64).ceil() as u32;
     println!("Total frames: {}", total_frames);
@@ -371,8 +381,16 @@ async fn export_animation_async(
         iterations_per_thread,
         video_settings,
         audio,
-        signals: std::collections::HashMap::new(), // CLI: no signal data (TODO: load from signal files)
+        // No signals of its own: the exporter renders the animation's
+        // generators. Audio analysis and .signal files are app-side.
+        signals: std::collections::HashMap::new(),
     };
+    // The exporter logs these too, but the CLI's logger shows errors
+    // only unless RUST_LOG says otherwise.
+    let signals = animation::export::export_signals(&export_config.animation, &export_config.signals);
+    for (target, signal) in animation::export::tracks_missing_signals(&export_config.animation, &signals) {
+        println!("Note: the track on `{target}` reads signal `{signal}`, which the CLI does not have; it will not move");
+    }
 
     // Run export (pipes directly to FFmpeg)
     let mut reporter = ConsoleReporter;

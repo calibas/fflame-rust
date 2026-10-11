@@ -46,6 +46,12 @@ impl std::fmt::Display for WaveformType {
     }
 }
 
+/// The rate generators render at. 100 Hz is plenty for a control
+/// signal, and every caller -- the Signals panel, an animation load, a
+/// video export -- must use the same one, or a generator would differ
+/// between the preview and the video.
+pub const SAMPLE_RATE: f64 = 100.0;
+
 /// Configuration for a procedural signal generator
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratorConfig {

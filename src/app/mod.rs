@@ -2998,7 +2998,23 @@ impl App {
                             bitrate_kbps: export_settings.audio_bitrate,
                         }
                     }),
-                    signals: self.signal_manager.clone_signals(),
+                    signals: {
+                        let mut signals = self.signal_manager.clone_signals();
+                        // The offset moves the muxed audio; the
+                        // audio-analysis signals move with it, or the
+                        // tracks react to sound the viewer hears
+                        // `offset` seconds away. Generators and
+                        // `.signal` files are not audio and stay put.
+                        let offset = export_settings.audio_offset;
+                        if export_settings.audio_file.is_some() && offset != 0.0 {
+                            for name in self.audio_manager.available_signals() {
+                                if let Some(signal) = signals.get_mut(name) {
+                                    *signal = signal.shifted(offset);
+                                }
+                            }
+                        }
+                        signals
+                    },
                 };
 
                 println!("Starting animation export (background thread)...");
