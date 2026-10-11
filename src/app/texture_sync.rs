@@ -1,5 +1,5 @@
 //! Keeping the viewport's escape renderer holding the texture its config
-//! names (`EscapeConfig::texture`, docs/projects/sim-textures.md).
+//! names (`EscapeConfig::texture`, docs/archive/projects/sim-textures.md).
 //!
 //! The config carries the texture's recipe, never its pixels; the image
 //! comes from the cache or is generated. Desktop does that blocking -- a

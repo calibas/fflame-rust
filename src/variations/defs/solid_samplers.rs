@@ -1,6 +1,6 @@
 //! Surface-sampler variations for solid rendering.
 //!
-//! Motivation (docs/projects/solid-rendering.md, field feedback): shell
+//! Motivation (docs/archive/projects/solid-rendering.md, field feedback): shell
 //! variations like `bubble` map the incoming measure onto an
 //! infinitely thin surface — wherever the incoming fractal is sparse,
 //! the shell has HOLES you can see straight through, and no amount of

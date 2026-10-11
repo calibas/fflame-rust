@@ -719,7 +719,7 @@ With 32 transforms:
 ## Related Documentation
 
 - `docs/main/TRANSFORMS.md` - Transform system reference
-- `docs/projects/apophysis-remaining-features.md` - Feature #6 (Xaos)
+- `docs/archive/projects/apophysis-remaining-features.md` - Feature #6 (Xaos)
 - Apophysis Source: `XForm.pas:96`, `ControlPoint.pas:434-457`, `RenderingImplementation.pas:306`
 
 ---

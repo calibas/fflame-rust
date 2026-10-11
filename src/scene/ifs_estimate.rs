@@ -1,5 +1,5 @@
 //! The IFS distance estimate, on the CPU
-//! ([docs/projects/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md)
+//! ([docs/archive/escape-time/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md)
 //! §2.2, phase 1).
 //!
 //! Inverse iteration (see the plan's §9 for the lineage): apply

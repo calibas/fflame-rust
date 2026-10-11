@@ -1,0 +1,1356 @@
+# Simulation Mode — master plan
+
+**Status:** Phases 0–5 shipped, and phase 6 is all but done as of
+2026-09-10 — the script, the WASM module and the documentation landed
+that day. What is left is at the end of §5 and is three items, none of
+them engine work: translations (deferred as their own project), a
+display-time view (held), and the online browser's render-mode filter
+(a gap shared with escape). 31 models and 11 colourings were in the
+registry, on branch `simulation-mode`.
+
+**§5 is where the per-phase status lives**, and each wave records what
+it measured there rather than here. (This header once said "no code
+has been written" until phase 5 wave 1 — four phases after it stopped
+being true. Hence the rule.) The plan's decisions (§3) are
+unchanged; where a measurement contradicted one, the phase note says
+so.
+
+This is the plan of record for the third fractal family — the
+neighbour-coupled simulations (reaction–diffusion, cellular automata,
+aggregation and growth models) proposed in
+[field-type-fractals.md](../escape-time/field-type-fractals.md). It is split across
+four documents so each can be read for one purpose:
+
+| document | answers |
+|---|---|
+| **this file** | what is being built, why these decisions, in what order, with what risks and open questions |
+| [simulation-pipeline.md](simulation-pipeline.md) | how the GPU renders it: state, stages, driver, colouring, determinism, feasibility numbers |
+| [simulation-integration.md](simulation-integration.md) | every file the mode touches, mapped from where `RenderMode::Escape` reaches today |
+| [simulation-catalog.md](../../main/SIMULATION-CATALOG.md) | every model: rule as the source states it, discretisation, parameters, presets, sources with verification labels |
+
+---
+
+## 1. Analysis of the seed document
+
+The seed document is right on the architectural point it makes: these
+patterns are **whole-image feedback**. An escape-time formula computes
+each pixel from its own coordinates and never reads a neighbour; a
+Turing pattern, a BZ spiral or a DLA cluster exists *only* as a
+relationship between neighbouring cells across time. They cannot be
+escape formulas, and forcing them into that registry would produce a
+one-off hack per pattern. A third render mode with its own registry,
+renderer and panel is the correct shape, and the seed document's
+"one shader per rule" instinct is the right granularity — it is the
+same instinct that gave the variation and formula registries.
+
+Points where planning changed or corrected the seed document:
+
+1. **The Reusser quotation is not verbatim.** The seed document
+   quotes Ricky Reusser describing McCabe's algorithm; the text
+   could not be matched to his page. What his implementation does that
+   matters here: the multi-scale averages are computed with analytic
+   kernels **in the frequency domain inside an FFT pipeline**. That is
+   the standard high-quality route and it is not free on the GPU. The
+   plan ships a mip-pyramid approximation first and parks the FFT
+   (pipeline §3.4); the catalogue flags the box-vs-disc comparison as a
+   phase-3 check.
+2. **McCabe's paper gives no radius table and no colouring.** The
+   radii ladders and the "colour by winning scale" look are from later
+   implementations (Softology and others). The catalogue keeps that
+   distinction so presets are not attributed to the paper.
+3. **Kobayashi's phase-field dendrite is a dense-stencil PDE**, not a
+   different category from the reaction–diffusion models; it lands in
+   the same `update` stage with two passes. The seed document's
+   "crystal growth" bucket splits into three mechanisms: PDE
+   (Kobayashi), mass-transfer CA (Gravner–Griffeath), and aggregation
+   (DLA, DBM) — each has a different cost profile and phase.
+4. **Walkers are the chaos game.** DLA, Physarum and every other
+   agent model is "many independent particles depositing into a
+   grid" — precisely the atomic-histogram mechanism the flame renderer
+   already has (`accumulate_samples.wgsl` and the u32 histogram). The
+   agent stage in pipeline §4.4 is that mechanism with a field texture
+   folded in; it is the least novel part of the pipeline.
+5. **The name "Field" collides with escape-time vocabulary and
+   inverts its meaning.** See §2.
+6. **The grid is a quantity of its own, separate from the viewport**,
+   unlike escape (which renders at the viewport size). A simulation's
+   behaviour depends on its cell count — Gray–Scott at 256² and 2048²
+   are different pictures — so colouring at grid resolution and
+   scaling to the output are separate stages, and the grid is either
+   fixed in the config or bound to the viewport by an explicit option
+   (decided 2026-09-01; pipeline §7).
+
+Everything else in the seed document — the model list, the "third
+mode" framing, the wish for a custom workspace — carried through
+unchanged.
+
+---
+
+## 2. Naming: `Simulation`
+
+**Decided 2026-09-01, signed off by the user.** The seed document
+calls the mode "Field". Inside the escape-time
+engine that word already has a precise and opposite meaning:
+`src/escape/fields.rs` is escape's **mode B, "field evaluation"** —
+`FieldDef`, `FIELDS`, `FIELD_COLORINGS`, `FieldState`,
+`assemble_field`, `get_field`, the colouring wire names `field_value`,
+`field_diverging`, `field_hillshade`, and the `ShadingField` enum. The
+docs define mode B as evaluating a function of the pixel's own
+coordinates that *never reads a neighbour*. Naming the neighbour-only
+mode "Field" would put two `fields.rs` modules, two `FieldDef`s and two
+"field colourings" in one codebase with reversed meanings.
+
+Three names had zero hits across `src/`, `docs/`, `locales/` and
+`assets/`: **`Simulation`**, `Automata`, `Reaction`. `Automata` and
+`Reaction` each exclude half the catalogue (DLA is neither; Gray–Scott
+is not an automaton). **`Simulation`** covers all 27 models, reads
+naturally in a menu ("Fractal Viewport · Simulation"), and is what the
+literature calls every one of them. It is used throughout the four
+documents:
+
+| surface | name |
+|---|---|
+| enum / wire | `RenderMode::Simulation` / `"simulation"` |
+| module | `src/sim/` (short, like `src/escape/`) |
+| config | `FractalConfig.sim: SimConfig`, `ConfigPath::Sim*`, string keys `Sim.*` |
+| UI | `PanelType::Simulation`, `WorkspaceLayout::Simulation`, panel title "Simulation" |
+| feature flag | `engine-sim` |
+| script | global `sim`, type `Sim` |
+| tests | `tests/visual/configs/sim/` |
+
+The name was the one decision that had to be signed off before any
+identifier was typed, because it is the one that is expensive to
+change afterwards. It is settled.
+
+---
+
+## 3. Decision record
+
+Each decision names the alternative it rejected. Details and
+measurements are in the pipeline document.
+
+- **D1 — A third `RenderMode`, not a sub-mode of Escape.** Escape's
+  renderer is "one dispatch, every pixel independent"; a simulation is
+  "many dispatches, every pixel dependent". Sharing the enum arm would
+  force every escape branch site (25 of them, integration §1) to
+  sub-branch. Cost: every exhaustive match gains an arm — which is the
+  safety net, not the price.
+- **D2 — Mirror escape's registry pattern exactly.** `ModelDef` /
+  `SimColoringDef` statics with inline WGSL, append-only registration,
+  feature flags, a marker-splicing assembler, naga validation of every
+  model × colouring in tests. The team already knows this shape; it
+  exports to the API corpus the same way; the `choices` dropdowns and
+  `param_control` come for free.
+- **D3 — Two Rgba32Float field textures, ping-pong.** Read-write
+  storage on `rgba32float` is rejected by wgpu; two textures with
+  write-only storage on the destination is the only portable shape.
+  Four channels per texel covers every model in the catalogue (max
+  three state channels + one scratch). Integer states are bitcast.
+- **D4 — The grid is separate from the viewport; binding is an
+  option** (decided with the user, 2026-09-01). `sim.grid` is
+  `Fixed { width, height }` or `Viewport { scale }`; colouring runs at
+  grid resolution and the resolve stage scales to the output with
+  chosen up/down filters. Bound grids resample on resize and
+  re-simulate at the output size on export; fixed grids are
+  reproducible from the config at any output size. Default
+  `Viewport { scale: 1.0 }`. Rejected: viewport-only (no reproducible
+  grid) and config-only (no fill-the-window behaviour) — the enum is
+  both (§1 point 6; pipeline §7).
+- **D5 — The renderer is stateful; export is "exactly N steps from
+  the seed".** Interactive use runs, pauses and steps; a still is
+  reproducible because `steps` and `seed` are in the config and the
+  PNG metadata. Video export keeps one renderer alive and advances it
+  per frame (integration §6). Rejected: re-running from the seed every
+  frame (quadratic; and it makes "never stills" models impossible to
+  export as video).
+  - *Done, 2026-09-09.* Both video paths now work this way, and there
+    is only one of them. Getting there is
+    [video-loop-and-sim-timeline.md](video-loop-and-sim-timeline.md);
+    the short version:
+    - There were **two** video loops. The app's kept the renderer
+      alive as this decision says, but also ran the flame's full
+      `max_iterations` of chaos game on every simulation frame, into a
+      histogram nothing read — 364 ms of a 381 ms frame at 720p. The
+      CLI's rendered each frame through the still path, which is
+      exactly the quadratic form rejected above: a 100-frame ramp to
+      20,000 steps ran 1,000,000 steps instead of 20,000 (18.3 s
+      against 4.6 s).
+    - The fix is a `RenderEngines` slot on `RenderJob` (engine state
+      the caller keeps across frames) plus one loop built on
+      `render_with`. `SimRenderer::advance_to` owns the
+      seed-or-step decision, so the exporter and the app's frame
+      driver share it.
+    - **Both loops had also been dropping density effects**, by two
+      independent mechanisms: the app's never called the stage, and
+      the export device never requested `FLOAT32_FILTERABLE`, so the
+      stage declined for the CLI's. Video output is now bit-identical
+      to a PNG of the same config.
+  - *And D5b arrived, 2026-09-09.* A `Sim.Steps` track now drives the
+    grid **in the app** as well as in export — the same
+    `advance_to`, budgeted per display frame so it never blocks the
+    UI. Because the rule is not invertible, a falling target is held
+    under continuous motion and applied only on a discrete event; see
+    D4–D9 in the archived plan, and **The timeline and the simulation
+    grid** in [UI.md](../../main/UI.md).
+- **D5b — The timeline animates a cumulative STEP COUNT, not a rate**
+  (decided 2026-09-04, prompted by asking whether the progression
+  itself can be animated — it can, and this is how). A `Sim.StepCount`
+  track makes the state at time *t* equal `round(track(t))` steps from
+  the seed, so a frame stays a function of its time the way every other
+  animatable quantity is. Advancing `steps_per_frame` per rendered
+  frame instead would have made the simulation **frame-rate
+  dependent**: the same project at 30 and 60 fps would differ at the
+  same timestamp, and in-app playback (which advances by wall-clock
+  delta) would diverge from export (which advances by `frame / fps`).
+  Easing the track gives slow-in/slow-out on the simulation itself and
+  a hold gives a freeze-frame that keeps animating colour; a decrease
+  costs a reseed and re-run, the honest price of a non-invertible rule.
+  `steps_per_frame` remains the interactive Run speed only, and is not
+  an animation target. Integration §6.
+- **D6 — Linear tonemap on entry, the coverage-alpha output
+  convention.** The tonemap shader interprets alpha as hit count;
+  simulations write alpha = 1 for covered cells and rgb in [0, 1] so
+  the existing tonemap/effects/export tail works unchanged (the same
+  contract escape adopted). Levels stay hidden (density-calibrated).
+  A per-model auto-scale (running min/max) is a colouring option, not a
+  tonemap mode.
+- **D7 — Agents deposit through a u32 atomic buffer** resolved into
+  the field by the update pass. Rejected: float atomics (absent on
+  WebGPU, non-deterministic where present) and per-agent texture
+  writes (racy).
+- **D8 — No FFT in v1.** Kernel LUT gathers up to R ≈ 32 (Lenia,
+  SmoothLife); the mip pyramid for box multi-scale averages (McCabe).
+  FFT is parked with a defined trigger: McCabe ladders above 64 px or
+  Lenia R > 32.
+- **D9 — Determinism is per-GPU exact.** Every stochastic kernel uses
+  the PCG in `rng.wgsl` keyed by (seed, cell/agent, step); integer
+  deposits are order-independent; visual baselines are exact hashes on
+  one machine and class-compared across drivers, like the variation
+  probe.
+- **D10 — Feature flag `engine-sim`**, default on, gating the module,
+  the render branch, the script handle and the video-export branch, so
+  the gallery WASM crates opt in per engine.
+- **D11 — Online save refuses the mode client-side until the server's
+  enum knows it.** Escape's precedent (2026-08-29): the Postgres
+  `render_mode` enum is the API repository's to change; the client
+  keeps `FetchError::Unsupported` in front of it until then.
+  Confirmed for phase 1 by the user, 2026-09-01.
+- **D12 — Fix, do not copy, escape's integration gaps** (integration
+  doc, every row marked **gap**): CLI export routing by histogram size,
+  layout not switching on file load, the 2D/3D menu bool, missing
+  `history.param` keys, stale "refuses escape" prose, no escape
+  mention in ARCHITECTURE.md.
+
+---
+
+## 4. What was measured
+
+Two rules were run in NumPy to validate the discretisations the plan
+ships and to size the step budgets. Images are in `output/sim_proto/`
+(`gs_sheet.png`, `mccabe_sheet.png`), scripts alongside them.
+
+**Gray–Scott** (Sims' scheme: D_A = 1, D_B = 0.5, dt = 1, 3×3 weights
+−1 / 0.2 / 0.05, clamp to [0, 1]; 256², six 24-px seeds, periodic):
+
+| pair | at 500 | at 5000 | at 10000 |
+|---|---|---|---|
+| mitosis 0.0367 / 0.0649 | dividing spots | lattice growing | hexagonal spot field |
+| coral 0.0545 / 0.062 | branching | labyrinth | labyrinth, still growing |
+| 0.030 / 0.057 | stripes + holes | maze | maze, filled |
+| worms 0.046 / 0.065 | worm tips | worms | worms, filled |
+| 0.010 / 0.041 | blobs | blank | blank — died; needs noise seeding |
+
+Two findings changed the plan: the **clamp** is mandatory (NaN within
+a few thousand steps without it at some pairs), and **seed size**
+decides survival (12-px blobs died at mitosis, 24-px survived
+everywhere). The settle metric (mean |Δv| < 10⁻⁴ for 200 steps) fires
+long before the picture is finished — growth patterns keep advancing
+into empty field at a fixed cells-per-step speed — so the driver's
+budget is sized from the images: **thousands of steps for a still,
+proportional to grid size; tens per frame interactively.**
+
+**McCabe** (paper rule, five scales (1,2) … (16,32), FFT disc
+averages, uniform-noise seed, 256²): the texture is present by step 20
+and developed by 100; 5-fold symmetry gives the paper's rosettes;
+9.0 ms/step plain, 101 ms/step symmetric in NumPy (the symmetry cost
+is Python's rotation, not intrinsic). It never stills.
+
+Codebase facts that constrained the pipeline were checked directly
+(pipeline §1): read-write `rgba32float` storage is rejected; one
+`Queue::write_buffer` per submission is visible, so per-step uniforms
+use a ring with dynamic offsets; `FLOAT32_FILTERABLE` is optional, so
+the pyramid samples manually; compute workgroups are (8, 8, 1)
+everywhere; the tonemap reads alpha as a hit count; `is_rendering`
+excludes escape, so continuous redraw needs its own term.
+
+---
+
+## 5. Phases and gates
+
+Each phase ends at a gate that must pass before the next starts. The
+escape-time mode took about 120 commits from its plan document to
+today; this mode is comparable in surface and larger in models, and
+the phases are ordered so that a usable product exists from the end of
+phase 1 onward.
+
+### Phase 0 — measure (no product code) — DONE 2026-09-03
+
+Every item ran, and the gate is met: a step-cost table with no entry
+marked "estimate". The grid axis is the GPU microbenchmark; the model
+axis is one NumPy prototype per Tier-1 model plus the sandpile, all
+under `scripts/sim_prototypes/` with a README, every number recorded
+against its model in the [catalogue](../../main/SIMULATION-CATALOG.md) with the
+date and the method.
+
+**ms per step, the shared 3×3 `rgba32float` ping-pong** (GTX 1660
+SUPER, Vulkan; bandwidth-bound at 3–4 cells/ns, so it carries across
+the Tier-1 models, which differ only in arithmetic):
+
+| 256² | 512² | 1024² | 1920×1080 | 3840×2160 |
+|---|---|---|---|---|
+| 0.022 | 0.077 | 0.284 | 0.495 | 2.04 |
+
+**Steps to a still, or to a developed picture for models that never
+still** (256² unless stated; "never" means the churn plateaus rather
+than decays, and the number is where the picture stops changing
+character):
+
+| model | steps | note |
+|---|---|---|
+| Gray–Scott | thousands, ∝ grid | settle metric fires early; sized from images |
+| FitzHugh–Nagumo (excitable) | never · developed ≈ 4,000 | spirals need a broken-wave seed; dt cap 0.75 on the spiral |
+| Brusselator (spots) | **1,180** | dt cap 0.04 |
+| Brusselator (oscillating) | never | |
+| Schnakenberg (spots) | **4,900** | dt cap 0.02; steps ∝ D, ∝ λ² |
+| Hodgepodge | never · developed ≈ 200 | |
+| Cyclic CA 1/1/14 · 1/3/3 | never · ≈ 300 · ≈ 7 | per-model defaults |
+| Spatial RPS | never · ≈ 27 | three species coexist |
+| Ising T=1.5 · T_c · T=3.5 | ≈ 436 · ≈ 27 · ≈ 1 sweeps | T_c figure is a coarsening snapshot, not equilibrium |
+| Wolfram ECA | = grid height | exact by construction |
+| Packard snowflake | = radius (125) | exact; rule changes density, not timing |
+| Eden | radius/p · 127 → 1,158 for p 1 → 0.05 | overestimates ~2× at small p |
+| Ballistic deposition | ≈ 1.4–1.8 × grid height | 361 / 452 to fill 256 rows |
+| Percolation labels, p_c | 645 (256²) · 1,409 (512²) · ≈ 3,250 (1024², fit) | **4× spread between samples**; needs `settle`, not a count |
+| Abelian sandpile, 2²⁰ grains | **190,006 rounds** | ∼ N^0.978; ≈ 55 s of GPU dispatches |
+| McCabe | never · developed ≈ 100 | pyramid stage, phase 3 |
+
+Tiers 2–4 (Oregonator, Swift–Hohenberg, Cahn–Hilliard, Lenia,
+SmoothLife, Kobayashi, the snowfake, DLA, DBM, Saffman–Taylor, invasion
+percolation, Physarum) are outside this gate by design — each needs a
+stage the skeleton does not have yet, and its budget is measured when
+that stage exists.
+
+**What the measurements changed** — the reason the phase exists:
+
+- A FitzHugh–Nagumo Turing preset that produces a **flat field**
+  (spatial sd 0.0000) is struck. The excitable preset is confirmed and
+  needs its broken-wave seed as the default.
+- Three dt caps corrected: Brusselator 0.04 (was an untested 0.02),
+  Schnakenberg 0.02 (every rung now run), FHN 0.75 (a first probe on a
+  resting field said 0.5).
+- Percolation's budget was **3–5× low**, and the sample-to-sample
+  spread (332 vs 1,232 at one size) means a fixed `steps` cannot serve
+  it.
+- The sandpile's cost, which the catalogue could not estimate, is
+  rounds ∝ radius² — mass diffuses rather than propagates.
+- Submission batching is worth **0.8%** (pipeline §10), so the driver
+  may submit one step at a time and re-read the clock.
+- Turing feature size costs steps **linearly in D, quadratically in
+  wavelength**, exactly as the dt argument predicts. A first
+  measurement said the opposite and is retracted in the catalogue —
+  its settle criterion loosened with dt.
+
+**Traps the shader's `settle` stage inherits**, each found by falling
+into it: a step that changes nothing is not the end of a run; the
+settle metric fires during nucleation before a pattern exists (require
+an amplitude floor); the window is counted in steps and the onset is
+what gets reported; where a model clamps, count cells at the rails
+rather than watching for NaN; probe stability on the active
+configuration; one stochastic sample gives neither an exponent nor a
+budget.
+
+### Phase 1 — skeleton (the whole vertical slice, one model)
+
+- `RenderMode::Simulation` and every exhaustive match (integration §1).
+- `SimConfig`, `ConfigPath::Sim*`, manager arms, `UpdateType::SimRerender`
+  / `SimReseed`, undo coalescing, round-trip tests (integration §2).
+- `src/sim/`: registry (`ModelDef`, `SimColoringDef`), assembler,
+  `SimRenderer` with seed / update / color / resolve — **Gray–Scott**
+  and the `channel` colouring only.
+- `SimGrid` with both variants, the one-off resample pass for
+  bound-grid resizes, and the resolve filters nearest / bilinear / box
+  (bicubic and pyramid downscaling wait for phase 3). The export panel
+  states which grid an export will use (pipeline §7).
+- App: renderer field, frame branch, run/pause/step/reset, continuous
+  redraw term, device-loss handling (integration §3).
+- UI: `sim_panel.rs`, `PanelType::Simulation`, `WorkspaceLayout::Simulation`,
+  menus, compact menu, hide lists in both directions, viewport overlay,
+  Linear tonemap on entry through the shared `switch_render_mode`,
+  Levels hint, i18n keys in `en.yml` (integration §5, §10).
+- Headless: `render_sim` in `render.rs`, OOM precheck, CLI export
+  routing fixed on mode, thumbnails with a step cap, PNG metadata
+  (integration §4, §7).
+- Tests: repro test (two runs byte-identical; export at N equals N
+  single steps; OOM refusal), config tests, contract regenerated with
+  `len() == 4`, `tests/visual/configs/sim/gray-scott-*.fflame` with
+  exact-hash baselines, `run_tests.py` choices and metadata exemption.
+- Fix the six escape gaps D12 lists while the same files are open.
+
+**Gate: MET 2026-09-04** (GTX 1660 SUPER, Vulkan;
+`cargo test --release --lib sim::app_repro_test::phase1 -- --ignored
+--nocapture --test-threads=1`).
+
+| requirement | measured |
+|---|---|
+| 1080p, ≥ 4 steps/frame, ≥ 60 fps | **1.38 ms/frame at 4 steps — 723 fps** |
+| — at 8 / 16 steps per frame | 2.44 ms (409 fps) / 4.57 ms (219 fps) |
+| 4K export, 10,000 steps, no watchdog reset | **12.6 s, 1.26 ms/step**, field finite and patterned |
+| byte-identical repeat runs | asserted, plus its converse (a different seed must differ) |
+
+Twelve times the interactive headroom the gate asks for, and the 4K
+step is faster than phase 0's bare-stencil estimate (1.26 against 2.04
+ms) because the shipped kernel is one pass over a smaller working set
+than the microbenchmark's.
+
+**Measure GPU timings with `--test-threads=1`.** cargo runs tests in
+parallel; sharing the device with the 13-second 4K gate reported the
+interactive frame at 72.64 ms instead of 1.38 — a 50× error that reads
+exactly like a real regression, and one that cost a round of
+investigation before the contention was measured rather than assumed.
+
+### Phase 2 — Tier-1 breadth
+
+FitzHugh–Nagumo, Brusselator, Schnakenberg, hodgepodge, cyclic CA,
+spatial RPS, Wolfram row mode, Packard snowflake (hex addressing),
+Eden, ballistic deposition, Ising (checkerboard), percolation (label
+propagation + settle reduction). Infrastructure they bring: integer
+channels via bitcast, per-cell PCG, row-mode dispatch, hex offset-row
+helper and resolve sampler, the settle reduction. Colourings
+`two_channel`, `age`, `hillshade`. Init variants (noise, blobs, ring,
+line, centre). Presets for every model — only pairs verified against
+their source (catalogue labels).
+
+**Gate: MET 2026-09-04.** All twelve Tier-1 models ship, with four
+colourings (`channel`, `two_channel`, `age`, `label`).
+
+- Every model × colouring × boundary × resolve combination
+  naga-validates: 13 × 4 × 4 × 8 in one test, which caught a WGSL
+  reserved keyword (`target`) before it could reach a device.
+- Correctness is checked against something falsifiable per model,
+  because a baseline image cannot catch a rule that is wrong in a
+  plausible-looking way:
+  - Gray–Scott against a CPU mirror of one step (< 1e-6).
+  - Ising against **Onsager's exact** nearest-neighbour correlation at
+    T_c, 1/√2: measured 0.952 / 0.691 / 0.332 across the transition.
+  - Wolfram rule 90 against binomials mod 2 — 2,079 of 2,079 cells.
+  - Percolation against a CPU flood fill, both directions, over 122
+    components.
+  - Ballistic deposition's lateral sticking against interface width
+    (2.71 correlated vs 7.30 uncorrelated).
+- 30 visual baselines under `tests/visual/configs/sim/`; the full suite
+  reads 268/268.
+
+Infrastructure this phase actually needed turned out to be small: a
+float-modulo helper for cyclic integer state, an offset-row hex
+neighbourhood, a preset that can carry an initial field, and per-model
+`dt` defaults. The settle reduction was **not** needed — percolation's
+labels only decrease, so over-running is safe and a settle is an
+optimisation rather than a correctness requirement.
+
+**Review (2026-09-04), what it found and measured:**
+
+- **The dt cap was not a cap.** `max_dt` was measured at each model's
+  default diffusion rates, and phase 2's sliders reach 4–5× above
+  them; explicit Euler's bound scales as 1/D. Measured at the slider
+  maxima under the enforced cap, 128² after 200 steps: Brusselator and
+  Schnakenberg **infinite in half their cells**, FitzHugh–Nagumo
+  railed at ±3 by its clamp. The clamps in every kernel are what kept
+  this invisible — a lattice of rails, not a NaN. The cap is now
+  `ModelDef::max_dt_for(params)`: linear stability of the checkerboard
+  mode, `dt · (λ_reaction + 1.6·D) < 2`, with `λ_reaction` inferred
+  from the measured cap at the default D. A diffusion-only bound was
+  tried first and FitzHugh–Nagumo still railed under it (the reaction
+  term contributes at rest, `1 − v²`). Caps at the maxima: Gray–Scott
+  1.2, FHN 0.257, Brusselator 0.019, Schnakenberg 0.0117 — all clean
+  on the Nyquist-amplitude gate. The cap carries a 0.96 margin because
+  AT the bound the mode is neutral, not damped: Gray–Scott at exactly
+  2.00 held a 0.445-rms checkerboard in its [0,1] clamp. Enforced at
+  the manager (both the dt arm and the model-param arm, since raising
+  D pulls dt down), the panel slider and the renderer uniform.
+- **Per-model step cost at 1080p** (`phase2_review_step_cost_per_model`,
+  `--test-threads=1`): every model 0.24–0.38 ms/step except two.
+  Hodgepodge cost 0.77 with its 3×3 loop and if/else chain; selects
+  alone took it to 0.69, unrolling to **0.29** — the loop was the
+  cost. Cyclic CA at R = 1 cost 0.44 through the same kind of loop;
+  the default radius is now unrolled and reads **0.32**. At R = 5
+  Moore it is **9.7 ms/step** — 121 reads a cell, memory-bound — and
+  that is the shared-memory tile phase 3's large kernels need anyway,
+  not a review item.
+- **Which found a device-loss bug.** The probe first read R = 5 at
+  4.7 ms/step, and 512 steps took exactly as long as 256: both runs
+  were being cut off at ~2.3 s. That is Windows' GPU watchdog (TDR,
+  2 s): `STEPS_PER_SUBMIT` was a fixed 256, one submit of 256 R = 5
+  steps at 1080p is 2.5 s, the device is reset, the fence signals
+  anyway, and the process aborts at teardown with
+  `STATUS_STACK_BUFFER_OVERRUN`. Pinned between 192 steps (1.8 s,
+  clean) and 224 (2.3 s, abort), and reproduced with the shipped
+  binary: `export` of that config fails with "Parent device is lost".
+  `run_steps` now sizes each submit from the measured cost of the
+  previous one (a 250 ms budget, first submit small), which is what
+  its comment had promised all along. Phase 3's kernels are slower
+  still, so this would have surfaced there regardless.
+- Nothing else moved: the rules were re-read against their sources
+  (hodgepodge's `S/(A+B+1)+g`, Ising's checkerboard and Metropolis
+  ratio, RPS's cycle, Packard's parity offsets, percolation's
+  open-only propagation and root read), and all 30 sim baselines are
+  unchanged by the two unrollings, as integer counts must be.
+
+### Phase 3 — pyramid and large kernels
+
+Mip pyramid stage with manual trilinear reads and symmetry in the
+reads; McCabe with symmetry and the min/max renormalisation; Lenia and
+SmoothLife via kernel LUT gathers; Swift–Hohenberg, Cahn–Hilliard and
+Kobayashi as two-pass stencils with dt clamped at the stability bound;
+Oregonator sub-stepping; `scale_mix` colouring. The box-vs-disc check
+for McCabe against the NumPy images.
+
+**Gate:** McCabe 1080p at the interactive budget; Lenia R = 13 at
+512² ≥ 60 steps/s; baselines.
+
+#### Wave 1 — the two-pass stage, and the two fourth-order PDEs
+
+**Done 2026-09-05.** Swift–Hohenberg and Cahn–Hilliard ship;
+`ModelDef::passes` is the infrastructure they needed.
+
+- **Two passes, one WGSL.** A fourth-order operator cannot be one
+  dispatch: the derivative of a derivative needs the *neighbours'*
+  first-pass values, which do not exist until every cell is written.
+  So `passes: 2` compiles the model's WGSL into two modules whose
+  entry points call `sim_step` and `sim_step2`; the whole string goes
+  into both, so a helper is written once. Both passes of step *i*
+  carry the same `sim_step_index()` and share one uniform ring slot —
+  a step is a step whatever it costs — and the double ping-pong lands
+  the field back where it started, so nothing downstream knows how
+  many passes a model has.
+- **A per-model `dt_bound`.** The Sims-diffusion cap from the phase-2
+  review does not describe a fourth-order operator, so `ModelDef` now
+  carries an optional `fn(&Params) -> f32`. It composes with the same
+  0.96 margin and the same three enforcement points.
+- **They do NOT use the Sims Laplacian.** Its Fourier symbol is
+  −0.3k², a Laplacian scaled by 0.3 — invisible in a second-order
+  model, where the scale is absorbed into a free diffusion constant.
+  Swift–Hohenberg *selects* the wavelength at which ∇² = −q₀², so the
+  scale would move it by 1/√0.3 and make the documented λ = 2π/q₀
+  wrong by 83%. Both use the standard 5-point kernel.
+- **What the prototype refuted**, which is the point of running one
+  (details and numbers in the catalogue, §6 and §7):
+  - Swift–Hohenberg's `r = 0.2` makes no pattern at all — the drive
+    has to be read relative to q₀⁴, and the shipped model exposes
+    `wavelength` and a relative `drive` because of it.
+  - Its `hexagons` preset makes a *uniform field*. Hexagons are
+    subcritical and did not order from a noise seed in any of eight
+    focused runs; `spots` ships instead, named for what was measured.
+  - Cahn–Hilliard's dt bound was too loose by 50% **and failed
+    slowly** — finite at 400 steps, infinite by 1,000 — so the first
+    ladder called it stable. Ladders now run 4,000 steps.
+- **Falsifiable per model**, as phase 2 established: a CPU mirror of
+  both passes (3.7e-9 — it catches a ping-pong that lost a swap, which
+  still looks like a PDE); Cahn–Hilliard's exact conservation of mean
+  composition (3e-9 over 4,000 GPU steps while the field separates to
+  sd 0.83); and Swift–Hohenberg's wavelength tracking its parameter,
+  measured by zero crossings against the line-scan bias of an
+  isotropic 2-D pattern.
+- Six new visual baselines; the sim suite reads 36/36.
+
+#### Wave 2 — the two models whose papers had to be read first
+
+**Done 2026-09-05.** Oregonator and Kobayashi ship. Both catalogue
+entries were written from memory and marked `[verify]`, Kobayashi's
+saying outright that "the paper must be read before any of this
+ships"; both papers were supplied and read before a line was written.
+Full findings in the catalogue (§4 and §16).
+
+- **Kobayashi verified almost entirely.** Every equation and every
+  remembered constant holds — ε̄ = 0.01, τ = 0.0003, α = 0.9, γ = 10,
+  dx = 0.03 on a 300² mesh. The paper added two things memory had
+  lost: a noise term a·p(1−p)·χ that section 1 calls crucial to side
+  branching, and θ₀ = π/2 for the ice dendrite. Since the paper fixes
+  everything except K, δ, j and θ₀, those four are what the model
+  exposes.
+- **The plan's discretisation for it was wrong, and wrong in the way
+  that hides.** §4.3's "one pass takes a gradient, the next its
+  divergence" with central differences composes to a stencil that
+  skips the immediate neighbour; the sublattices decouple and the
+  field fills with a checkerboard while staying finite and inside
+  [0, 1]. The prototype caught it — an `isfinite` ladder had called it
+  stable at every dt. The shipped scheme stages the flux on cell
+  faces, forward across the face and backward for the divergence,
+  which composes to the compact Laplacian.
+- **Oregonator's equations verified; its spirals refuted.** Tyson &
+  Fife eq. (17) is confirmed verbatim, but the paper is analytic and
+  carries no numeric set for a 2-D run, so ε, q and f were measured.
+  The remembered spirals did not appear at any (ε, f) tried — a broken
+  front retracts and heals into a closed loop — and the paper's own
+  subject, target patterns, needs a pacemaker heterogeneity that the
+  model has no channel for. What ships is what was measured: one
+  excitation wave per seed, travelling at constant speed.
+- **Falsifiable per model.** Kobayashi's symmetry is pinned by the
+  angular harmonics of the crystal's reach (dominant harmonic 4 at
+  11.46 vs 0.04 for k = 6; 6 at 9.66 vs 4.21 for k = 4) and by a
+  Nyquist-amplitude check that would fail on the discretisation above.
+  The Oregonator's front radius is measured at three times — 20.8,
+  38.3, 56.1 cells, increment ratio 1.018 — which separates a
+  travelling wave from diffusion (0.41).
+- Four new visual baselines; 17 models.
+
+#### Wave 3 — the large-kernel gathers, and the phase's gate
+
+**Done 2026-09-05.** Lenia and SmoothLife ship, and the gate is met
+with room to spare.
+
+- **The kernel LUT.** `ModelDef::kernel` builds a `(2R+1)²` weight
+  table on the CPU; the renderer uploads it beside the parameters and
+  the step shader gathers against it. A model that needs two kernels
+  (SmoothLife's disc and annulus) appends the second block after the
+  first and offsets into it, which keeps each gather's reads
+  contiguous. The buffer is sized once for the largest kernel allowed
+  (R = 32, two blocks, 34 KB) so it never resizes, and the binding is
+  always present — only the models that gather declare it in WGSL.
+- **GATE MET.** Lenia R = 13 at 512² is 729 taps a cell, 1.91e8 taps a
+  step, measured at **3.36 ms/step = 298 steps/s** against the
+  required 60. The direct gather is enough and the **shared-memory
+  tile held in reserve is not needed** — which also settles the
+  question the phase-2 review left open about range-5 cyclic CA.
+- **A four-year-old bug in the periodic boundary.** SmoothLife's CPU
+  mirror disagreed by 0.228 at the edges while the interior was
+  bit-exact. The wrap read `((p % g) + g) % g` — correct arithmetic
+  that measurably behaved like a bare `p % g` on the device, byte for
+  byte. Subtracting the truncated quotient instead agrees with the
+  mirror exactly. Offsets of ±1 are demonstrably unaffected (all 33
+  periodic visual baselines are byte-identical across the change), so
+  it needed a large kernel to become visible: SmoothLife's annulus
+  carries its weight at the outer radius, while Lenia's ring has
+  almost none there and its growth term saturates exactly where the
+  gather is wrong. **Why the original form failed is not
+  established**, and the code says so rather than guessing. The old
+  guard was a test asserting the SOURCE TEXT contained that idiom —
+  which is why it passed throughout.
+- **Falsifiable per model**: both gathers are compared against a CPU
+  mirror using the exact table the GPU was handed, so a transposed
+  index, a wrong radius, a mis-offset second block or a broken wrap
+  all fail — 6.0e-8 for Lenia and 6.6e-7 for SmoothLife.
+- What is deliberately not shipped: Orbium (needs a `Pattern` init),
+  Lenia's multi-ring kernels and its polynomial and rectangular cores
+  (formulas still `[verify]`), and SmoothLife's discrete time form.
+- Two new visual baselines; 19 models.
+
+#### Wave 4 — the pyramid, the reduction, and McCabe
+
+**Done 2026-09-05.** McCabe ships with `scale_mix`, and both phase 3
+gates are met. Every Tier-1 and Tier-2 model the phase named now
+ships except none — 20 models.
+
+- **The box-vs-disc question is answered, against the plan.** A box
+  pyramid's McCabe texture is visibly axis-aligned (its spectrum half
+  as peaked as the disc reference's); the shipped pyramid is
+  **Gaussian**, one 25-tap blur-and-decimate dispatch per level, and
+  with its level mapping calibrated to `log2(0.55 r)` it reproduces
+  the exact-disc reference's feature size to 0.1% and amplitude to
+  1%. Recorded in `proto_mccabe_pyramid.py` and the catalogue (§10).
+- **Two new stages behind two features.** `NeedsPyramid` builds the
+  pyramid before every step (separate textures per level, seven above
+  the field, each with its own size uniform so the shared boundary
+  wrap applies at every scale); `NeedsMinMax` reduces the new field's
+  range after every step into a 257-slot ring — 64 cells per
+  workgroup in shared memory, then one atomic min and max on an
+  integer-ordered encoding, so 1080p is ~32,000 atomics. The next step
+  normalises by the previous slot, which is the reference's own
+  dependency. The ring has one more slot than the largest batch so the
+  slot a step reads is never among the ones its batch clears.
+- **All of it is pinned by CPU mirrors**: each pyramid level (6e-8),
+  the reduce (bit-exact), and the whole McCabe step from the GPU's own
+  seed — 4,096 of 4,096 cells to 1.2e-7 with zero tie disagreements.
+- **GATE MET: McCabe at 1080p is 5.25 ms/step (191 steps/s)** against
+  the 8 ms fallback threshold, after hoisting a per-level size loop
+  out of the bilinear reads (7.78 before).
+- Three new visual baselines; 20 models, 5 colourings.
+
+**Phase 3 is complete.** What it deliberately did not ship, all
+recorded in the catalogue: Orbium and Lenia's multi-ring kernels and
+alternative cores, SmoothLife's discrete time form, Oregonator
+spirals and target patterns, McCabe's `variation_blur`, and the
+`hillshade` colouring the plan listed for three models.
+
+**Review (2026-09-05) of the six phase-3 commits, what it found and
+measured:**
+
+- **The seed pass read a stale kernel radius.** `seed()` wrote its
+  uniform BEFORE the parameter arrays, and building the kernel is
+  what sets `kernel_radius` — so Lenia's seed, which sizes its noise
+  patches by that radius, used whatever the previous model had left
+  (1 on a fresh renderer, i.e. per-cell noise, the very thing its own
+  docs say the ring averages flat). Every export is a fresh renderer,
+  so the shipped soup baseline was the wrong seed. Order swapped; the
+  baseline regenerated; exactly one baseline moved.
+- **The pyramid was allocated for every model.** A third of a field
+  texture again — 11 MB at 1080p, 44 MB at 4K — for the nineteen
+  models that never read it. Now allocated by `ensure_pyramid` only
+  for a `NeedsPyramid` model and freed when the model changes away.
+- **McCabe 5.25 → 4.41 ms/step at 1080p** (227 steps/s) by computing
+  the level count and every level's size once per invocation instead
+  of by loop in each of the twenty bilinear reads. The CPU mirror is
+  unchanged at 1.2e-7.
+- **The per-frame kernel rebuild is not worth caching**: measured at
+  8 µs (Lenia R = 13) to 49 µs (R = 32) per build, twice a frame.
+- **Nothing exercised the min/max ring's wrap.** The clearing write
+  splits in two when a batch straddles slot 257, and a wrong split
+  would not fail — the range would fall back to [−1, 1] and the
+  picture would drift. The reduce test now runs 600 steps across two
+  wraps and checks the last slot bit-exact.
+- **A new registry invariant**: every `mparam(N)` and `cparam(N)` in
+  a definition's WGSL must index a declared parameter. The buffer is
+  padded, so an index past the end reads 0.0 silently. All 25
+  definitions pass; the check was run by hand in this review and
+  belongs in the suite.
+- **A false claim in Kobayashi's docs**: "the presets pin a 300 × 300
+  grid". A preset carries no grid. The grid sets the vessel's size,
+  not the crystal's; corrected to say so.
+- Re-read against their sources with nothing else moving: the
+  Oregonator kernel against the prototype's step, the Swift–Hohenberg
+  and Cahn–Hilliard bounds, SmoothLife's anti-alias band, and the
+  Lenia core; and every CPU mirror still holds.
+
+**Hodgepodge corrected (2026-09-05), a phase-2 model.** The same batch
+of papers settled a `[verify]` flag that had been open since the model
+shipped: the rule everybody quotes is not the one Gerhardt & Schuster
+state. Theirs divides the ILL count by k₁ (not the infected), averages
+over the INFECTED cells alone (not every cell), and divides by that
+count (not A + B + 1) — three differences, each of which still renders
+plausible BZ scrolls, which is exactly why the baseline could not
+catch it. Both rules now ship behind a `variant` parameter with the
+paper's as the default, pinned by a CPU mirror of each published form
+(0 mismatches in 4,096 cells; the two differ in 3,563 of them). The
+paper's rule runs faster and wants g = 25 where the circulated one
+wants 70.
+
+### Phase 4 — agents
+
+Agent buffer, deposit buffer, resolve-into-field; Physarum and DLA;
+`occupancy` colouring; agent state carried through video export.
+
+**Gate:** deposit-order determinism test (two runs identical with
+10⁶ agents); DLA cluster dimension ≈ 1.7 measured by box counting in a
+test at 512².
+
+#### Wave 1 — the agent stage, Physarum and DLA
+
+**Done 2026-09-05.** Both of phase 4's gates are met, and phase 4's
+models ship.
+
+- **The agent stage.** `ModelDef::agents` declares a population: a
+  storage buffer of 16-byte records that move themselves and deposit
+  into a per-cell integer buffer, which the step pass folds into the
+  field and clears. Two model-supplied shaders, `sim_agent_seed` and
+  `sim_agent`, with `agent_deposit`, `agent_rand` and the claim
+  helpers provided. The population is allocated to the count the
+  parameters ask for — a function of the GRID, so a percentage means
+  the same density at any size — and a change of count reseeds,
+  because half a new population is not a state.
+- **GATE MET: reproducible with a million agents.** 1,048,576 agents
+  on a 2048² grid, 40 steps, two independent renderers: **0 of
+  4,194,304 cells differ**. This is what the integer deposit is for —
+  agents land in one cell in an order the hardware chooses, and
+  `atomicAdd` on a u32 does not care about that order. The exclusion
+  is resolved the same way, by an atomic MINIMUM over agent indices.
+- **Jones' exclusion turned out to be load-bearing.** The catalogue's
+  GPU sketch dropped it; measured both ways on the same seed, without
+  it the population collapses onto a few thick arcs and with it the
+  same parameters give the paper's polygonal network. So Physarum
+  declares two agent passes. Every one of the paper's Table 1 values
+  is confirmed.
+- **GATE MET: DLA's box-counting dimension is 1.753** at 512² (DLA is
+  ≈1.71), with 39,000 particles clear of the walls. Getting there
+  needed a fix the plan did not anticipate: any sensible walker count
+  saturates a small cluster's launch circle and freezes a solid disc,
+  so the ACTIVE population now tracks the circle's circumference and
+  `crowding` is exposed as the speed-against-fidelity knob. A second
+  bug fell out of the sweep — a kill radius smaller than the launch
+  radius killed every walker at birth.
+- `occupancy` colouring; 5 new visual baselines; 22 models, 6
+  colourings.
+
+**Review (2026-09-05) of the phase-4 commit, what it found and
+measured:**
+
+- **The turn rule was not Jones'.** When both sensors beat the front,
+  figure 3 turns at RANDOM whichever side is stronger; the shader
+  turned toward the stronger side. The prototype that validated every
+  parameter had it right, so the two disagreed, and a network still
+  formed either way — which is why neither gate caught it. Fixed, the
+  three Physarum baselines regenerated, and a full CPU mirror of a
+  Physarum step (sense, turn, claim-by-minimum, move, deposit,
+  diffuse, decay, with the shader's PCG mirrored so the random draws
+  match) now compares agents and field to float precision. It would
+  have failed on the old shader.
+- **Walls were not walls.** The position wrapped periodically under
+  every boundary while the deposit clamped, so under Clamp an agent
+  that walked off one edge reappeared on the other. Jones: an
+  unsuccessful move leaves the agent where it is with a new random
+  heading, and a wall is an unsuccessful move. Each boundary body now
+  declares `SIM_PERIODIC`, and a test checks no agent moves further
+  than its step size in one step — an in-range check could not catch
+  a wrap, since a wrapped position is in range.
+  **That test failed on its first run, and the fix had two bugs of
+  its own.** The one the test caught: a destination of x = −0.4 is
+  inside cell 0 and passes the wall check, and the float wrap that
+  followed put it at 63.6 — agents crossed the low edge and reappeared
+  on the high one. The wrap is now periodic-only. The one found
+  reading the code while chasing that: refusing the move in pass 2
+  while still claiming the clamped edge cell in pass 1 leaks the
+  claim, because only the owner's check releases one. Measured with
+  the guard removed: **129 stale claims** on a 64² grid after 140
+  steps, most of the edge, each cell closed for ever to any agent of
+  higher index. Now a move that cannot happen is not claimed, the
+  contract is written where `agent_claim` lives, and the test reads
+  the claim buffer back and asserts it is empty (it does fire on the
+  unguarded claim).
+- **The agent seed ran before the reduce it reads.** DLA's launch
+  radius comes from the seed field's range; the seed pass ran first
+  and read the previous run's slot. Reordered. No baseline moved,
+  because a fresh renderer's slot happens to give the same answer as
+  a centred seed.
+- **The deposit is diffused one step late, and that is now measured
+  rather than assumed.** Jones deposits, then applies the 3×3 mean,
+  then decays; the step pass takes the mean of the old trail and adds
+  the raw deposit, so a fresh deposit is spread on the following step.
+  Run both ways on the prototype from the same seed: sd 3.58 against
+  3.67, lit fraction 28.4% against 28.7%, and the same polygonal
+  network with slightly grainier filaments. Matching Jones exactly
+  would need a second deposit buffer (a cell cannot read its
+  neighbours' deposits while they are being cleared, without a race),
+  and the difference does not justify it. Recorded in the model.
+- **Cost, at 1080p**: Physarum 1.39 ms/step at the paper's 5%
+  population (103,680 agents) and 2.72 at 15% (311,040); DLA
+  0.42 ms/step at 4% (82,944 walkers, most of them dormant by
+  design). All well inside the interactive budget.
+- Noted, not changed: `occupancy` draws `.w`, which Physarum's step
+  fills with the step's deposit and DLA's does not, so the catalogue's
+  "vapour halo" for DLA is not there yet — it would need walkers to
+  mark their presence each step, a second deposit channel.
+
+### Phase 5 — growth and Laplacian models
+
+DBM (parallel selection, then exact via scan), Saffman–Taylor as DBM +
+curvature, invasion percolation (rising threshold), sandpile (bulk
+toppling), Gravner–Griffeath snowfake — **after Part II has been
+read**; its parameters are unverified today.
+
+**Gate:** step budgets measured, not estimated; DBM η = 1 visually
+matches the DLA of phase 4.
+
+**Papers, as of 2026-09-05:** Part II, the DBM paper
+(Niemeyer–Pietronero–Wiesmann) and Saffman–Taylor 1958 are all in
+`output/pdf/`. Nothing in this phase is now blocked on a source.
+
+**What the phase needs that does not exist yet**, found by reading the
+code against these five models before starting:
+
+1. ~~`ModelDef::passes` is capped at 1 or 2 — the snowfake has FOUR
+   substeps.~~ **Not needed, found by reading Part II.** Two of the
+   four substeps read no neighbour, so they fold into the two that do,
+   and a CPU mirror keeping all four separate agrees with the two-pass
+   shader exactly. The cap stays until something actually needs it.
+2. ~~There is no per-step repeat count.~~ **Built in wave 3.**
+   `ModelDef::repeat` names a pass and a parameter, and the renderer
+   runs that pass that many times per step. `passes` went from a
+   1-or-2 special case to 1..=`MAX_PASSES` at the same time, with the
+   entry points `sim_step`, `sim_step2`, `sim_step3`, …
+3. ~~There is no scan, so exact selection waits for Tier 4.~~ **Not
+   needed — found in wave 3.** Drawing E ~ Exp(1) per candidate and
+   taking the argmin of E/w samples exactly in proportion to w, and
+   argmin over the grid is the min/max reduce that already exists. The
+   paper's rule ships, not an approximation of it.
+
+Hex addressing (phase 2), the min/max reduce and the pyramid (phase 3)
+cover everything else these models ask for.
+
+#### Wave 1 — the two that needed nothing built
+
+**Done 2026-09-05.** Sandpile and invasion percolation, both on
+machinery already shipped, both held by a CPU mirror rather than by a
+picture.
+
+- **The sandpile is checked against an exact-integer mirror of the
+  same parallel schedule**: 0 cells differ at 2¹², mass conserved to
+  the grain, and the round count pinned from both sides (stable after
+  `rounds`, over-full after `rounds − 1`). The prototype's counts are
+  the shader's — 787 at 2¹², 12,837 at 2¹⁶ — so the presets' step
+  counts are measurements. The Moore variant was measured rather than
+  guessed and came out the opposite way round to the guess: denser,
+  smaller and SOONER (4,652 rounds, 133 cells across, against 12,837
+  and 189).
+- **Invasion percolation's rising-threshold rule is checked against a
+  flood fill** of the shader's own threshold field: 0 sites missing, 0
+  extra, front finished at 1,640 of 2,000 steps. Measurement changed
+  the design twice — a point seed turned out to be a lottery (three of
+  five seeds gave a ~90-site cluster), so the presets inject from an
+  edge as the paper does; and box counting at 256² does not resolve
+  91/48, so the dimension is kept as a ramification check and the
+  catalogue's D ≈ 1.89 is qualified rather than quoted.
+- Two pictures were rendered and rejected rather than shipped: the
+  spanning cluster (reads as noise at 50% occupancy) and the
+  last-avalanche age field (nearly black). The odometer and the
+  wrapped invasion contours took their places.
+- 24 models, 5 new visual baselines, no existing baseline moved.
+
+#### Wave 3 — the dielectric breakdown model, and one that did not work
+
+**Done 2026-09-05.** DBM ships, with its dimension gate met against
+the paper's own table. Saffman–Taylor does not ship, and the
+measurements saying why are in the catalogue rather than in a preset.
+
+- **Two prerequisites this phase listed turned out differently.** The
+  per-step repeat count was built (`ModelDef::repeat`, and `passes`
+  generalised to `MAX_PASSES` while it was open). The prefix scan was
+  NOT built, because it is not needed: an exponential race — argmin of
+  E/w with E ~ Exp(1) — samples exactly in proportion to w using the
+  min/max reduce phase 3 already had. So the paper's exact rule ships,
+  one bond per step, rather than the parallel approximation the plan
+  had scheduled.
+- **The parallel rule ships too, as a second `selection` mode**, not
+  as an approximation: one site per step is a branching discharge,
+  every candidate advancing at once is a moving interface. They are
+  different processes.
+- **GATE MET.** Measured the paper's way, N(r) against r, three
+  samples of 5,000 sites each: D = 1.980, 1.856 and 1.689 at η = 0,
+  0.5 and 1, against Table I's 2, 1.89 ± 0.01 and 1.75 ± 0.02. η = 1
+  is within 0.06 of phase 4's DLA (1.753), which is the phase gate —
+  the same dimension reached by a completely different mechanism. We
+  read systematically low by up to 0.05, and it is not the solver: the
+  η = 1 value does not move between 20 and 150 relaxation sweeps. η = 2
+  is reported and not gated, because the paper's value there is quoted
+  from another reference and ours varies by 0.14 between samples.
+- **Saffman–Taylor was implemented, measured and withdrawn.** The
+  paper gives λ ≈ 0.5, rising to 0.87 as surface tension grows. The
+  catalogue's lattice recipe gives 0.02–0.23 and moves the wrong way
+  with d₀, stopping growth entirely above 0.05. The knob survives
+  renamed as a tip penalty, for what it does; there is no preset named
+  for a phenomenon it does not reproduce, and §23 stays open with the
+  numbers and a note on what a working version would need.
+- Three presets, four visual baselines, 26 models.
+
+**Review (2026-09-05) of the three phase-5 commits, what it found and
+measured:**
+
+- **Cost at 1080p**: sandpile 0.25 ms/step, invasion percolation 0.25,
+  snowfake 0.74, dielectric breakdown 1.8 / 5.5 / 12.8 at 5 / 20 / 50
+  relaxation sweeps. DBM's cost is its sweep count, so the review
+  measured how few the pattern survives: the η = 1 dimension over
+  three samples is 1.696, 1.692, 1.707, 1.689 at 3, 5, 10, 20 sweeps
+  — inside sample noise, as it already was from 20 to 150. **The
+  default dropped from 20 to 10**, inside the paper's "5 to 50" and
+  twice as fast; the visual configs pin their own value and did not
+  move.
+- **The blind first submit counted steps, and a step is now up to 200
+  dispatches.** DBM at 4K with 200 sweeps would have put ~1.6 s into
+  one submission against a 2 s watchdog. It is sized in dispatches
+  now — the same sixteen as before, so nothing else changes.
+- Two sentences in the DBM still promised the viscous finger wave 3
+  withdrew. Gone.
+- The passes generalisation, the repeat, and the exponential race
+  were read again and stand: every pass of a step reads the same
+  ring slot, the live field is `field[current]` whatever the flip
+  parity, and the race key round-trips the ordered-u32 map exactly.
+- **§23 is no longer open.** The review had a second brief: fix
+  Saffman–Taylor if it was not a huge effort, with Holzbecher's paper.
+  It was not: his miscible formulation is a PDE that fits two passes
+  on the wave-3 machinery, with the flow normalised to peak speed by
+  the same reduce DBM's rate mode uses. The `fingering` model ships,
+  gated by Saffman and Taylor's own sentence: the same disturbance
+  pushed by a thinner fluid roughens 0 → 6.39 cells, by a thicker one
+  0 → 0.59. The DBM tip penalty stays as the record of why the first
+  route could not work. 27 models.
+
+#### Wave 2 — Part II, and the snowfake
+
+**Done 2026-09-05.** The Gravner–Griffeath snowfake ships, from the
+paper rather than from the plan's memory of it, and the passes
+generalisation the wave was scheduled around turned out to be
+unnecessary.
+
+- **Part II's rule is not Part III's**, and the catalogue had been
+  carrying Part III's. Four fields rather than three, a one-cell seed
+  rather than a hexagon, freezing that spends all the vapour rather
+  than keeping κ of it, single constants where the entry had
+  neighbour-count functions, and two parameters (α, θ — the knife-edge
+  instability) with no Part III analogue at all. Reading the paper
+  changed the model's shape, not just its numbers.
+- **The four substeps fit two dispatches**, because freezing and
+  melting read no neighbour. A CPU mirror that keeps all four separate
+  agrees with the shader on every attachment over 400 steps, so the
+  merge is exact rather than close.
+- **The paper contradicts itself on α and θ**, and the fix came from
+  measurement: under equation (3b) with the APPENDIX's values all
+  three case studies reproduce the morphology their text describes,
+  and under the same equation with section 6's values the first grows
+  a featureless plate at every size tried, 40,000 steps on 1024²
+  included. Two of the three case studies have text and table
+  agreeing, so the table is the systematic source and it is what
+  ships.
+- **The paper's own conservation check is now a test.** Its drift is
+  f32 and not the rule — about 1e-4 over 4,000 steps, in either
+  direction — and the CPU mirror in the same precision drifts
+  identically, which is what says so rather than assuming it.
+- Four presets, each an unmodified row of the appendix; 4 new visual
+  baselines at 512²; 25 models. A day spent on a stale binary: the
+  first nine renders were Gray–Scott, which the CLI had been warning
+  about in a log line nobody was reading.
+
+### Phase 6 — polish and reach
+
+**Warp stage done 2026-09-05**, on its own, ahead of the rest of the
+phase. `SimWarp { zoom, rotation, pan_x, pan_y, flow, filter }` on the
+config, identity by default and absent from the file then; six
+`ConfigPath::SimWarp*` through all five delta tables, the manager, the
+animation exporter and the target selector (the five rates animate, the
+filter does not); a Warp section on the panel; `history.param` and
+panel keys in `en.yml`. The renderer dispatches one resample first in
+the step when the warp is not the identity and none otherwise, so
+every existing run is bit-identical (`an_identity_warp_changes_nothing`).
+The shader is pipeline §4.1 as written — the inverse affine about the
+grid centre, four `sim_read` taps so the boundary rule decides what
+comes in from beyond the edge — plus the swirl as an analytic flow
+(rotation growing linearly with radius, zero at the centre, `flow` at
+the rim) and a `filter` the spec did not have: nearest for integer
+state, which bilinear would smear into values a sandpile or an
+automaton has no meaning for. Checked against a CPU resample of the
+same field through the same affine with every term on at once —
+nearest exact, bilinear to 2e-5 — on invasion percolation's threshold
+channel, which the seed draws and the step never writes, so there is
+no assumption about the model in it.
+
+**What the stage measurably does to a pattern, which the spec did not
+anticipate:** a fractional-pixel bilinear resample is a small blur —
+weights (1−f, f) per axis, variance f(1−f) — and a step applies one.
+Over a run they add: a 0.4 %/step zoom on the coral preset for its
+4,000 steps is σ ≈ 14–27 cells of accumulated smoothing on a pattern
+5 cells wide, and it came out a single dot; FitzHugh–Nagumo under a
+0.003 rad/step bilinear rotation came out uniform white, Gray–Scott
+under a 0.1 %/step outward zoom uniform black. Nearest has the
+opposite failure: at a rate that moves a cell by less than half a
+cell it is the identity, so a slow nearest warp does nothing except
+near the rim. So the regimes that work are the ones the two baselines
+show — nearest at a rate that actually moves cells (the FHN spiral
+under 0.01 rad/step is wound into a vortex, 4,000 steps, pattern
+intact; the hodgepodge under a 0.03 rad/step swirl), and integer
+pans, which are exact under either filter. Bilinear is for short runs
+or for a look in which the smoothing IS the texture; over thousands of
+steps it erases reaction–diffusion. The tooltips say so.
+
+Two things it does not do, both deliberate: it moves the field and
+not an agent population's positions, and it is not yet the bound-grid
+resize resampler of §7, which the same kernel could be. The uniform
+grew by 32 bytes for it (a `vec4` and a `vec2`, 16-aligned). The
+engine contract did not move — it fingerprints vocabularies, not
+config fields — so there is nothing to tell the API.
+
+**Matte done 2026-09-05**, asked for as "separate the fractal from the
+background": colour the dendrites by the palette and leave the space
+behind them the background colour. The mechanism was already there and
+unreachable — a sim colouring returns `(rgb, coverage)` and the shared
+tonemap composites the background wherever coverage is 0, which is how
+a region outside the grid and `label`'s unlabelled cells already
+worked — but the general colourings return coverage 1 for every cell,
+so nothing inside the grid could ever be empty.
+
+`SimMatte { channel, cutoff, softness, invert }` on the config, off by
+default and absent from the file then; four `ConfigPath::SimMatte*`
+through the same five tables, the manager, the exporter and the target
+selector (cutoff and softness animate — a cutoff sweeping down is the
+figure growing into the background — the channel and the direction do
+not); a Matte section under Colouring. The uniform grew one `vec4`.
+
+It is applied in `sim_shade`, **per grid cell, before the resolve
+filter**, so a magnified edge is antialiased by the same filter that
+magnifies it rather than being a staircase the filter never sees; and
+it MULTIPLIES the colouring's coverage, so a colouring that already
+reports empty cells keeps saying so. For a growth model the occupancy
+channel is the matte — DLA's `.x`, the snowfake's `.x`, the breakdown
+model's `.w` — at a cutoff of 0.5. For a continuous field a soft matte
+floats the pattern over the background, which is a look those models
+did not have. Checked at 1:1 against the field it mattes: every cell
+on the right side, the feather exact to 0 error, a figure cell's
+colour untouched, and inverting swaps exactly the two sides. Two
+baselines, one of each kind.
+
+Transparent PNG export follows for free, since alpha is the same
+channel.
+
+**Max Steps done 2026-09-06.** `steps` was the export contract and
+nothing else: the app free-ran at `steps_per_frame` and whatever was
+on screen when the user stopped looking had no particular relation to
+what an export produced. It is now shown as **Max Steps** and
+enforced. `SimRenderer::render_frame` clamps a frame's batch to what
+is left of the cap, so a cap of 250 with 100 a frame runs 100, 100,
+50 rather than overshooting to 300; the app then auto-pauses on
+arrival. Measured, that makes the paused frame BYTE-IDENTICAL to
+`render_still` on the same config, which is the point.
+
+Reaching the cap PAUSES rather than ends: `steps_remaining` stops
+holding the run back once the index is at or past the cap, so a second
+Run press carries on freely, and a reseed arms the pause again. The
+rule that decides it is `sim::should_pause_at_limit`, a function
+rather than three lines inside the winit closure, so the table it
+implements — uncapped never pauses, arriving pauses, already-past does
+not re-pause — is unit-tested without a window.
+
+**0 is the no-cap sentinel** and restores the old free-running
+behaviour; the slider goes down to it because egui's integer sliders
+set `smallest_positive` to 1 and its logarithmic sliders accept a zero
+bound, so no second control was needed. The one asymmetry is stated in
+the panel rather than left to be discovered: an export runs Max Steps
+from the seed, so at 0 it renders the seed.
+
+**Two reset bugs, 2026-09-06.**
+
+*A loaded file inherited the previous run.* `import_config` — the
+funnel for every file load, preset, undo and redo — synchronised the
+flame renderer and said nothing about the simulation, and a
+whole-config replacement never passes through the delta path that
+computes `UpdateType::SimReseed`. So the old field, step count and
+transport state carried straight into the new config. The serde half
+was already right (`FractalConfig.sim` is `#[serde(default)]` and
+`SimConfig` from `{}` is the default, both asserted now); it was the
+renderer that ignored what it had been handed.
+
+Fixed at the renderer, where it covers every route in rather than
+just the one that was reported: `SeedIdentity` is the part of a
+`SimConfig` the FIELD's meaning depends on — model, boundary, init,
+seed — recorded at each seed and compared every frame, so a config
+arriving from a file, a preset, a script, the API or the animation
+exporter cannot inherit a field that does not belong to it. Model and
+colouring parameters are deliberately absent (turning Gray–Scott's
+feed rate is what the slider is for), and the grid is absent because
+`resize` already reseeds. `import_config` additionally restarts the
+transport on a LOAD — running, from step zero — while undo and redo
+pass `false` and let the identity decide, so undoing a colour change
+does not throw away a ten-thousand-step run.
+
+*The window slept on a stale panel.* The UI is built earlier in the
+frame than the simulation steps, so the frame that auto-paused at Max
+Steps drew a panel still saying "Pause" over the previous step count —
+and, with nothing left running, that was the last frame drawn. The
+pause now asks for one more redraw.
+
+Found while fixing it: the snowfake's ρ tooltip claimed "changing it
+reseeds", which no model parameter does. ρ is read by the seed alone,
+so the tooltip now says it takes effect on the next Reset. The general
+version of that — a parameter that only the seed reads should say so,
+or reseed — is not built.
+
+**Presets carry their colouring, 2026-09-06**, asked for so a user
+does not have to work out which colouring a model wants. They should
+not have to: it is a property of the model's STATE LAYOUT — which
+channel holds the thing worth drawing, over what range — and the
+preset that knows the parameters knows this too. A sandpile's heights
+want a scale of 1/3 and a Moore sandpile's 1/7; the snowfake's crystal
+is channel `.z`; percolation wants `label`, McCabe's multiscale wants
+`scale_mix`.
+
+`SimPreset` gains `coloring`, `coloring_params` and `matte`, and
+applying a preset now also sets the model's `dt` — a preset is a whole
+recipe, and Lenia at the dt of whatever model preceded it dies. All 56
+presets are filled in from the colouring its model's visual config was
+rendered and inspected through, so none of it is a guess.
+
+**Two invariants and a probe.** Colouring parameters live in one map
+keyed by name for whichever colouring is current, so a preset that
+switched to `occupancy` without setting its `scale` would inherit
+`channel`'s — `preset_colorings_are_complete` requires every parameter
+of the named colouring, and rejects names it does not have.
+`every_preset_names_a_colouring` keeps the point of the feature.
+Neither can see whether the choice DRAWS anything, so
+`every_preset_draws_something` renders all 56 at their own step counts
+and fails any that comes out flat.
+
+It earned its place at once: it caught Lenia's soup rendering black
+(the probe's own fault — it had not applied the model's `dt`, which is
+what made presets carry dt) and the Oregonator flat at 128² but fine
+at 256. It also showed what no name check could: `age` cannot tell a
+cell that NEVER grew from one that grew long ago, both being at one
+end of the palette, so every growth model came up as a white sheet
+with dark tracery on it. Hence the matte on the seven models where
+"empty" is unambiguous — and NOT on the sandpile, whose height 0 is
+one of its four colours and appears inside the pile, nor on Wolfram,
+whose 0 cells are half the diagram. Rendered, the last one to hold out
+was the dielectric breakdown model: at 8% coverage its oldest, inner
+branches sat at the palette end that matches the background and the
+trunk vanished, so its three presets draw a flat figure over the matte
+instead — which is what the paper's own photograph of a Lichtenberg
+figure looks like.
+
+**The rest of the phase, re-checked against the code 2026-09-09.**
+The list below was written on 2026-09-06 and had gone stale in both
+directions, so it is split into what has since been built and what
+genuinely remains.
+
+**Since built:** the flat animation targets (`src/ui/target_selector.rs`
+offers the sim parameter categories); video-export semantics
+(`src/animation/export.rs` steps and renders the grid per frame); the
+script `sim` handle with its SCRIPTING.md rows
+(`src/script/api.rs:359,1450`); and the API enum — `src/api/sync.rs`
+now maps both non-flame modes in both directions, and the test that
+pinned the client-side refusal was replaced by one pinning the round
+trip. The UI documentation was rewritten by the render-mode project
+([../archive/projects/ui-render-modes.md](ui-render-modes.md)).
+
+**Still to do** — every line below re-verified against the code
+2026-09-09, and two that used to be here have gone because they were
+already fixed (see *Closed* below):
+
+- **`es` / `ja` / `zh-CN` keys** — zero simulation keys in all three.
+  Smaller than it reads, and not a simulation problem: those files
+  carry 232 / 222 / 222 translated lines against `en.yml`'s 1,894.
+  They are stubs for the whole app, and escape has the same hole
+  (integration checklist §12). **Deferred deliberately, 2026-09-10:**
+  translation is its own project.
+- **Display-only pan/zoom into the grid.** Scoped and deliberately not
+  built: the warp is a per-step transform of the field, not a camera,
+  so viewport navigation is *refused* in Simulation rather than
+  misdirected (`ui::visibility::Control::ViewNavigation`, with tests
+  pinning the refusal and a comment saying this arm becomes `Show`
+  when the feature exists). **Held, 2026-09-10** — there are ideas for
+  how, but it is not scheduled.
+- **The online browser's render-mode filter** offers All / 2D / 3D
+  only (`src/ui/fractal_browser.rs:559-567`), so neither non-flame
+  mode can be filtered for. Pre-existing with escape; the integration
+  checklist §8 flagged it for both.
+
+**Two directions, one built.** The flame's transforms as the FIELD's
+per-step maps has existed since layers phase 3 — `sim.use_transforms`:
+transform *i* warps layer *i* by its affine and its variations, at a
+rate that is its weight.
+
+The other direction — **the field as a transform inside the FLAME**, the
+IFS phase of
+[simulation-derived-fields.md](simulation-derived-fields.md)
+— is wanted and **not scheduled** (confirmed 2026-09-10). What it needs,
+so the work above builds toward it rather than away: a variation that
+samples a texture (a bind group entry in the flame compute shader and a
+`Feature` for variations that read one); the simulation renderer kept
+alive beside the flame renderer, which `RenderEngines` now makes
+routine; and a decision about the field's coordinate frame, its
+behaviour past the grid edge, and whether it is frozen at a step or
+live. The natural reading of a texel is a **local affine** — the flame's
+own `(a, b, c, d)` — so the field becomes a spatially varying transform,
+and the derived-field texture phases A–D produce is exactly what such a
+variation would sample.
+
+Note this couples `engine-flame` and `engine-sim`, so it belongs in the
+main renderer rather than in either single-engine WASM module.
+
+**Closed since this list was written:**
+
+- **A shipped `sim_sweep.rhai`** (2026-09-10). The scripting API was
+  already complete; the example was what was missing. Writing it found
+  that `sim.preset()` applied parameters, steps and init but not the
+  colouring, matte, warp or dt, so a preset from script rendered flat
+  where the same preset from the panel did not.
+- **A `wasm/sim` gallery module** (2026-09-10), 0.43 MB gzipped
+  against the full renderer's 0.80. Building it found two `#[cfg]`
+  attributes attached to the wrong item — `render_sim` and
+  `register_sim` had silently required the ESCAPE feature since
+  `37531133` — which nothing had ever compiled. `release.py check` now
+  builds each single-engine combination.
+- **Docs** (2026-09-10). [SIMULATION.md](../../main/SIMULATION.md) is the
+  engine's topic doc; RENDERER, CONFIG, BUFFERS, SHADERS and COLOR
+  carry pointers saying what does and does not apply to the other two
+  engines; ARCHITECTURE has a three-engine section; CLAUDE.md has its
+  `src/sim/` entry; RELEASE, WASM and TESTING-GUIDE cover the module
+  and the per-engine gates.
+
+- Layer-scoped animation targets — done in
+  [simulation-panel.md](simulation-panel.md) §5.
+- CLI export routing by render mode (`src/app/export.rs:192`), which
+  the checklist flagged as a gap escape had.
+- Loading a `.fflame` switches to the mode's workspace
+  (`src/app/mod.rs:1450`), the other flagged gap.
+- The whole video-export story, which turned out to be two problems
+  rather than one:
+  [video-loop-and-sim-timeline.md](video-loop-and-sim-timeline.md).
+
+The panel reorganisation is done:
+[simulation-panel.md](simulation-panel.md).
+
+---
+
+## 6. Risks
+
+| risk | consequence | mitigation |
+|---|---|---|
+| API server enum lag (D11) | Save Online refuses the mode until the API repo ships the value | file the server change at phase-1 start; client refusal keeps it honest meanwhile |
+| GPU watchdog (~2 s) on long exports | device loss mid-export | step batches sized by measured ms/step with a hard cap (pipeline §5); the phase-1 gate exercises a 4K 10k-step export |
+| WASM limits | 128 MB storage bindings, no timestamp queries, main-thread blocking on long runs | deposit buffer sized under the limit; time by wall clock; chunk per animation frame as the escape WASM loop does |
+| Explicit-scheme instability | NaN fields from a careless dt | dt sliders capped at the stability bound; every kernel clamps; the NaN idiom is the negated-comparison one (Metal fast-math) |
+| Memory at 4K (~490 MB with pyramid + agents) | OOM on 4 GB cards | `allocation_error` precheck in `render()` and in the app before a bound-grid resize; a `Fixed` grid or a bound `scale` below 1 keeps a 4K output from forcing a 4K grid; at scale 1 the precheck refuses what the card cannot hold |
+| Bound-grid export surprises | a picture tuned on screen re-simulates differently at export size | the export panel states the grid it will use; `Fixed` is one click away and keeps the on-screen picture |
+| Cross-GPU divergence | baselines differ between machines | exact hashes per machine, class comparison across (the variation-probe discipline); no `x != x` |
+| Unverified constants (catalogue `[verify]`) | a preset named after a paper that does not match it | nothing ships from memory; the catalogue lists exactly which papers still need reading (Part II, Kobayashi, Jones, Tyson–Fife, Gerhardt–Schuster) |
+| "Never stills" models vs. the still-export contract | a user expects a settled image | `steps` is the contract and is shown in the panel; the model's tooltip says it is an animated subject |
+| Vocabulary confusion with escape's field colourings | two things called "field" in the UI | §2; the escape panel keeps its names, the new mode never uses the word |
+| Stateful export semantics | scrubbing backwards in the animation panel re-runs from the seed | documented in integration §6; the timeline shows a "re-simulating" state |
+
+---
+
+## 7. Test strategy
+
+- **Unit:** `SimConfig` serde (default serialises to nothing; string
+  keys; animation value conversion); registry invariants (append-only
+  order, unique names, `choices` labelled across their range);
+  assembler naga validation of every model × colouring; `shader_lint`
+  over any new `shaders/*.wgsl`.
+- **CPU mirrors:** one GPU step vs a Rust reference for three cheap
+  rules, class-compared (zero / finite / NaN / inf) so no rounding
+  difference can flake them.
+- **GPU repro** (`src/sim/app_repro_test.rs`): the app's frame
+  sequence on a fresh renderer; byte-identical repeat runs; export at
+  N equals N single steps (batching invariance); OOM refusal at an
+  absurd grid; agent determinism.
+- **Visual regression:** `tests/visual/configs/sim/` at 256² grids
+  with fixed `steps`, exact-hash baselines; the escape metadata
+  exemption extended to the new mode.
+- **Performance:** steps/s per model at 1080p recorded in the
+  benchmark CSV next to the flame numbers.
+- **Doc staleness:** the SCRIPTING.md test fails until every `sim.*`
+  method is documented; the contract test fails until it is
+  regenerated.
+
+---
+
+## 8. Open questions
+
+Answers change the work; defaults are stated so nothing blocks.
+Questions 1–3 were decided by the user on 2026-09-01.
+
+1. **Name.** Decided: `Simulation` (§2).
+2. **Grid.** Decided: the grid is separate from the viewport, with a
+   `Viewport { scale }` option that binds them; colouring and
+   up/down-scaling are separate stages (D4, pipeline §7).
+3. **API timing.** Decided: phase 1 ships with the client-side
+   refusal, exactly as escape did (D11).
+4. **Hex lattices in v1?** Packard and the snowfake need them; DLA
+   benefits. Default: yes, in phase 2 (one helper, one sampler).
+5. **FFT.** Park (D8) or plan a phase? Default: park with the stated
+   trigger.
+6. **Which papers can you obtain?** Gravner–Griffeath Part II
+   (Physica D 237), Kobayashi 1993 (Physica D 63), Jones 2010
+   (Artificial Life 16), Tyson–Fife 1980, Gerhardt–Schuster 1989. Each
+   unlocks a preset set the catalogue is holding back.
+7. **Per-model default `steps`** (each model declares its own) or one
+   global default? Default: per-model, declared on the `ModelDef`.
+8. **Prototypes into `scripts/sim_prototypes/` now** (a repo change,
+   but Python only) or at phase-0 start? Default: at phase-0 start;
+   they are safe in `output/sim_proto/` until then.
+9. **Tonemap.** Linear only on entry (as escape) or also expose the
+   sim auto-scale as a first-class control on the Colors panel?
+   Default: a colouring parameter, not a tonemap mode (D6).

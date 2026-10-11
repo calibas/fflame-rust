@@ -457,7 +457,7 @@ pub struct App {
     /// tonemap tail but owns its own pipelines and output.
     pub(super) escape_renderer: Option<crate::escape::EscapeRenderer>,
     /// The 3D terrain view of the escape picture
-    /// (docs/projects/heightfield-3d.md): its footprint's renderer and
+    /// (docs/archive/terrain/heightfield-3d.md): its footprint's renderer and
     /// the terrain renderer. Held instead of `escape_renderer` while
     /// the config draws a terrain, and freed when it does not.
     #[cfg(feature = "terrain")]
@@ -1095,7 +1095,7 @@ impl App {
         // Using the entry point that does not depend on an abandoned
         // stack frame staying readable removes the hazard rather than
         // reasoning about whether it fires. See
-        // docs/projects/wasm-load-crash.md.
+        // docs/archive/projects/wasm-load-crash.md.
         let handler = move |event: Event<()>, elwt: &ActiveEventLoop| {
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
@@ -3087,7 +3087,7 @@ impl App {
                 self.egui_layer.update_escape_aa(None);
             }
             // The 3D terrain view of the escape picture
-            // (docs/projects/heightfield-3d.md): a footprint -- the 2D
+            // (docs/archive/terrain/heightfield-3d.md): a footprint -- the 2D
             // picture at the view -- rendered when its picture changes,
             // and the terrain drawn from it every frame something moves,
             // accumulating the antialiasing grid while nothing does.
@@ -3653,7 +3653,7 @@ impl App {
                 //
                 // The governor SHORTENS the dispatch first, then sheds
                 // workgroups (`Batch`): orbits persist across dispatches
-                // (docs/projects/persistent-orbits.md), so a shorter
+                // (docs/archive/projects/persistent-orbits.md), so a shorter
                 // dispatch costs no trajectory depth, and a full-width one
                 // keeps the GPU occupied. Where shedding width stops
                 // shortening the frame, the width is grown back while that
@@ -4321,7 +4321,7 @@ const KNEE_FREE: f64 = 1.25;
 /// it.** The scale SHORTENS the dispatch first, down to `ipt_floor`, and
 /// only then sheds workgroups.
 ///
-/// Orbits persist across dispatches (`docs/projects/persistent-orbits.md`),
+/// Orbits persist across dispatches (`docs/archive/projects/persistent-orbits.md`),
 /// so `iterations_per_thread` only slices the work: a shorter dispatch
 /// costs no trajectory depth, and full width keeps the GPU occupied. And
 /// one thread's iterations alone can outlast the frame -- a targeted

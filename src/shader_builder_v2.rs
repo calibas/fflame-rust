@@ -304,30 +304,30 @@ pub struct ShaderConstants {
     /// deposit are all stripped and the shader is byte-identical to a
     /// build without the feature. Tracked here so toggling it triggers
     /// a rebuild via the cache's constants-changed check. See
-    /// docs/projects/flame-deep-zoom.md stage 1.
+    /// docs/projects/deep-zoom/flame-deep-zoom.md stage 1.
     pub importance_sampling: bool,
 
     /// Whether the forced prefix plots in VIEW-RELATIVE coordinates
-    /// (`docs/projects/flame-deep-zoom.md`). Only ever set together
+    /// (`docs/projects/deep-zoom/flame-deep-zoom.md`). Only ever set together
     /// with the composed arm, and only for a flame whose plot path
     /// has nothing else that works in world coordinates.
     pub cylinder_relative: bool,
 
     /// Whether the forced prefix is REPLAYED symbol by symbol rather
     /// than applied as one composed matrix
-    /// (`docs/projects/flame-deep-zoom.md`). Set when the flame has a
+    /// (`docs/projects/deep-zoom/flame-deep-zoom.md`). Set when the flame has a
     /// map that is bounded but not affine, where no single matrix
     /// exists. Only read when `cylinder_targeting` is on.
     pub cylinder_replay: bool,
 
     /// Whether the replay's last steps run in OFFSETS from reference
-    /// orbits (`docs/projects/deep-zoom-precision.md`), which the plan
+    /// orbits (`docs/projects/deep-zoom/deep-zoom-precision.md`), which the plan
     /// carries where the view is too deep for f32. Only with the replay,
     /// in 2D, and with `cylinder_relative`, whose plot it feeds.
     pub cylinder_offsets: bool,
 
     /// Whether the frame-coverage counters are compiled in (auto
-    /// exposure — `docs/projects/flame-deep-zoom.md`). Drives
+    /// exposure — `docs/projects/deep-zoom/flame-deep-zoom.md`). Drives
     /// `FRAME_COVERAGE`; when false the binding, the per-thread
     /// tallies and the flush are all stripped, so a render that is
     /// not auto-exposing is byte-identical to one built before the
@@ -335,7 +335,7 @@ pub struct ShaderConstants {
     pub frame_coverage: bool,
 
     /// Whether cylinder targeting runs for this flame and view
-    /// (`docs/projects/flame-deep-zoom.md` stage 2). Drives
+    /// (`docs/projects/deep-zoom/flame-deep-zoom.md` stage 2). Drives
     /// `CYLINDER_TARGETING` — when false the binding, the word draw
     /// and the forced prefix are stripped. Tracked here so entering
     /// and leaving targeting triggers a rebuild through the cache's
@@ -343,7 +343,7 @@ pub struct ShaderConstants {
     pub cylinder_targeting: bool,
 
     /// Whether each thread's orbit persists between dispatches
-    /// (`docs/projects/persistent-orbits.md`). Drives `PERSISTENT_ORBITS`:
+    /// (`docs/archive/projects/persistent-orbits.md`). Drives `PERSISTENT_ORBITS`:
     /// the orbit buffer at binding 8, read at the top of `main` and
     /// written back after the loop, so a dispatch resumes where the last
     /// one left its thread. Off, the shader is byte-identical to one
@@ -357,7 +357,7 @@ pub struct ShaderConstants {
     /// feature (adding/removing an `analytic_*` blur, or a change that
     /// breaks the linear-plot-path gate) triggers a shader rebuild via the
     /// cache's constants-changed check. See
-    /// `docs/projects/analytic-blur-buffer.md`.
+    /// `docs/archive/projects/analytic-blur-buffer.md`.
     pub has_analytic_blur: bool,
 
     /// JWF `preserve_z = false` z-semantics flag. Derived:
@@ -383,7 +383,7 @@ pub struct ShaderConstants {
     /// `solid_off_is_byte_identical`). Only honored on the
     /// direct-histogram output path; the sample-emit/tiled exporters
     /// don't carry a depth region yet (see
-    /// docs/projects/solid-rendering.md, Phase 0 export notes).
+    /// docs/archive/projects/solid-rendering.md, Phase 0 export notes).
     pub solid_enabled: bool,
 
     /// Emit the numerical probe's `probe_main` entry point alongside the
@@ -1005,7 +1005,7 @@ impl ShaderBuilder {
         format!(
             "// Multi-emit collector (Feature::PlotEmits): up to {cap} extra
              // plot points per iteration, reset by the main loop. See
-             // docs/projects/multi-emit-stereograms.md.
+             // docs/archive/projects/multi-emit-stereograms.md.
              var<private> plot_emit_points: array<vec4<f32>, {cap}u>;
              var<private> plot_emit_count: u32;
              // Bit k set = emission k is an OFFSET from the iteration's
@@ -1693,7 +1693,7 @@ impl ShaderBuilder {
         processor.set("HAS_POST_SYMMETRY", constants.has_post_symmetry);
         // HAS_ANALYTIC_BLUR gates the mean-splat routing in main_template's
         // plot section. False ⇒ byte-identical to a non-blur build. See
-        // docs/projects/analytic-blur-buffer.md.
+        // docs/archive/projects/analytic-blur-buffer.md.
         processor.set("HAS_ANALYTIC_BLUR", constants.has_analytic_blur);
         // PROBE appends `probe_main` (see the block at the end of
         // main_template.wgsl). It reuses this same processor, so its
@@ -1704,7 +1704,7 @@ impl ShaderBuilder {
         processor.set("PROBE", constants.probe);
         // IMPORTANCE_SAMPLING gates biased transform selection and the
         // windowed likelihood-ratio correction that makes it unbiased
-        // (docs/projects/flame-deep-zoom.md stage 1). Off strips the
+        // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Off strips the
         // binding, both biased selection functions, the per-thread
         // window state and the stochastic deposit -- the shader is the
         // text it was before the feature existed, which
@@ -1714,13 +1714,13 @@ impl ShaderBuilder {
         processor.set("IMPORTANCE_SAMPLING", constants.importance_sampling);
         // CYLINDER_TARGETING forces an enumerated prefix at plot time
         // so every sample lands in the viewport
-        // (docs/projects/flame-deep-zoom.md stage 2). Off strips the
+        // (docs/projects/deep-zoom/flame-deep-zoom.md stage 2). Off strips the
         // binding, the draw and the prefix.
         processor.set("CYLINDER_TARGETING", constants.cylinder_targeting);
         processor.set("PERSISTENT_ORBITS", constants.persistent_orbits);
         // FRAME_COVERAGE tallies plot attempts and in-frame landings so
         // the tone map can be told what share of the work the viewport
-        // holds (docs/projects/flame-deep-zoom.md).
+        // holds (docs/projects/deep-zoom/flame-deep-zoom.md).
         processor.set("FRAME_COVERAGE", constants.frame_coverage);
         // CYLINDER_REPLAY picks which arm of the forced prefix is
         // emitted: the composed matrix, or the symbol walk.
@@ -1729,7 +1729,7 @@ impl ShaderBuilder {
         // coordinates so a deep zoom is not quantised by f32.
         processor.set("CYLINDER_RELATIVE", constants.cylinder_relative);
         // CYLINDER_OFFSETS carries the replay's deep steps as offsets from
-        // reference orbits (docs/projects/deep-zoom-precision.md).
+        // reference orbits (docs/projects/deep-zoom/deep-zoom-precision.md).
         processor.set("CYLINDER_OFFSETS", constants.cylinder_offsets && constants.cylinder_replay);
         // FLATTEN_Z_PER_ITER used to insert a blanket `current.z = 0.0;`
         // at the end of each iteration under preserve_z=false. That
@@ -1754,7 +1754,7 @@ impl ShaderBuilder {
         // The header.wgsl gates bindings 2 and 6 on this same flag —
         // direct mode binds histogram + iteration_counts; sample-emit
         // mode binds samples + sample_counter. See
-        // docs/projects/unified-render-pipeline.md.
+        // docs/archive/projects/unified-render-pipeline.md.
         processor.set("OUTPUT_HISTOGRAM_DIRECT", output_histogram_direct);
         // SOLID gates the solid-rendering code at the splat site (Phase 0).
         // 3D only (depth is a camera-space concept). In direct-histogram
@@ -2003,7 +2003,7 @@ impl ShaderBuilder {
     }
 
     /// The planner's GPU kernel for `flame` -- see
-    /// `docs/projects/gpu-cylinder-planning.md` and `scene::plan_gpu`.
+    /// `docs/projects/deep-zoom/gpu-cylinder-planning.md` and `scene::plan_gpu`.
     ///
     /// The flame's definitions, built with the replay flag on so the
     /// armed variations' draws read a forced arm, followed by

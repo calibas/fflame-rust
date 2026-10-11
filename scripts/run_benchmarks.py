@@ -620,7 +620,7 @@ class UnifiedBenchmarkRunner:
 
     # Solid-rendering tests are NOT bit-reproducible: the occlusion test
     # races its own batch's depth writes, so shell-marginal samples accept
-    # or reject on GPU scheduling (see docs/projects/solid-rendering.md,
+    # or reject on GPU scheduling (see docs/archive/projects/solid-rendering.md,
     # "Known limitation"). Tests named `solid-*` therefore compare with a
     # tolerance instead of an exact pixel hash. Thresholds sit well above
     # the measured run-to-run noise (mean ~2-5/255) and far below any real

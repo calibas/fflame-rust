@@ -81,7 +81,7 @@ would need to carry a flat track onto layer 0.
 sample takes **6.2 s** in the viewport, **4.7 s** in an export; the lit
 picture of the same view takes **0.6 s**. The default 256 samples is
 about 25 minutes. The 2026-10-08 fix (`a73c481d`, see
-[heightfield-3d.md](heightfield-3d.md), "Losing the device, and
+[heightfield-3d.md](../archive/terrain/heightfield-3d.md), "Losing the device, and
 re-banded") made it safe and faster on narrow viewports, but not
 faster at full width.
 
@@ -162,7 +162,7 @@ resets the display driver for the whole desktop.
 ## The escape engine: not built
 
 Moved here from the escape engine's design record (now
-[escape-time-fractals.md](escape-time-fractals.md), archived) when its
+[escape-time-fractals.md](../archive/escape-time/escape-time-fractals.md), archived) when its
 main doc, [docs/main/ESCAPE.md](../main/ESCAPE.md), was written. Everything
 else in that record is built. These are not:
 
@@ -194,7 +194,7 @@ else in that record is built. These are not:
   plan. Full costing in the archived new-families research (§7).
 - **GPU reference-orbit computation (the NTT direction)** —
   measurement-gated go/no-go, never run. See
-  [escape-ntt-reference.md](../experimental/escape-ntt-reference.md).
+  [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md).
 - **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
   since before 2026-09-02; verified pre-existing against a stashed
   tree. Unrelated to the tiers.

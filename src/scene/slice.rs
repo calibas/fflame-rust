@@ -1,6 +1,6 @@
 //! **Doing long work a frame at a time.**
 //!
-//! `docs/projects/gpu-cylinder-planning.md` phase 3. On the web a
+//! `docs/projects/deep-zoom/gpu-cylinder-planning.md` phase 3. On the web a
 //! cylinder plan runs on the page's only thread, polled once a frame, so
 //! the work under it -- the inverse walk (`backward.rs`), and the flame
 //! analysis it starts from (`ifs_analysis.rs`) -- is written as futures

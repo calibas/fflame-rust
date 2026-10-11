@@ -5,7 +5,7 @@
 //! (append-only). Phase 1 ships Gray–Scott alone; the rest of the
 //! Tier-1 set follows in phase 2, and every one of them has already
 //! been measured on the CPU (`scripts/sim_prototypes/`, results in
-//! `docs/projects/simulation-catalog.md`).
+//! `docs/main/SIMULATION-CATALOG.md`).
 //!
 //! The template provides, and a model must use rather than
 //! reimplement:
@@ -87,7 +87,7 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
         },
     ],
     // Every preset here was run on the CPU prototype at 256x256 before
-    // being written down (docs/projects/simulation-catalog.md section 1);
+    // being written down (docs/main/SIMULATION-CATALOG.md section 1);
     // `steps` is the measured settle point, not an estimate.
     presets: &[
         SimPreset {

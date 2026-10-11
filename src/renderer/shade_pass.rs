@@ -7,7 +7,7 @@
 //!
 //! Zero cost when off: the pass is simply not dispatched (and this
 //! module's output texture is the only standing allocation, created
-//! lazily on first use). See docs/projects/solid-rendering.md.
+//! lazily on first use). See docs/archive/projects/solid-rendering.md.
 
 use egui_wgpu::wgpu::*;
 
@@ -67,7 +67,7 @@ struct ShadeParams {
     shadow_res: u32,
     shadow_count: u32,
     projection: u32,
-    // The material's coat and glow (docs/projects/materials.md): every
+    // The material's coat and glow (docs/archive/projects/materials.md): every
     // tier reads them; the flame's shade pass is a lit tier.
     gloss: f32,
     roughness: f32,
@@ -930,7 +930,7 @@ mod tests {
     /// This is asserted of the PARAMETER BYTES rather than of the
     /// pixels, and that is not a weaker claim here — it is the only
     /// available one. A solid flame is not bit-reproducible (the
-    /// in-batch depth race, see docs/projects/solid-rendering.md), so
+    /// in-batch depth race, see docs/archive/projects/solid-rendering.md), so
     /// two renders of the same flame differ whether or not anything
     /// changed and a pixel comparison could not tell the two apart.
     /// What the extension could actually break is the block of bytes

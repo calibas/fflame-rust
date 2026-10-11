@@ -660,7 +660,7 @@ pub static JULIAC: VariationDef = VariationDef {
     // range and makes the variation unable to render: `re_recip` becomes
     // 1/1e-30 = 1e30, so `mod2 = exp(lnmod · 1e30)` is +inf for every
     // point outside the unit circle and 0 for every point inside it.
-    // Found by the numerical probe (docs/projects/variation-math-probe.md),
+    // Found by the numerical probe (docs/archive/projects/variation-math-probe.md),
     // which flagged juliac returning inf/NaN at all four diagonals and
     // exactly (0,0) at ordinary inputs.
     parameters: &[

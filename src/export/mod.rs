@@ -50,7 +50,7 @@ impl ExportReporter for ConsoleReporter {
 /// Histogram buffer size in bytes for a full-resolution image: 4 channels
 /// (R, G, B, density) × 4 bytes per u32 = 16 bytes per pixel, plus one
 /// u32 per pixel for the solid-rendering nearest-depth region when solid
-/// rendering is active (see docs/projects/solid-rendering.md).
+/// rendering is active (see docs/archive/projects/solid-rendering.md).
 pub fn histogram_size_bytes(width: u32, height: u32, solid: bool) -> u64 {
     let bytes_per_pixel: u64 = if solid { 20 } else { 16 };
     (width as u64) * (height as u64) * bytes_per_pixel
@@ -124,7 +124,7 @@ pub fn route_custom_size_export(
 /// picker further chooses between binding all tiles simultaneously
 /// (parallel scatter) or sequencing one tile at a time (serial re-iterate).
 ///
-/// See `docs/projects/unified-render-pipeline.md`.
+/// See `docs/archive/projects/unified-render-pipeline.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderStrategy {
     /// Single full-resolution histogram fits in one binding. The
@@ -213,7 +213,7 @@ pub fn pick_strategy(width: u32, height: u32, limits: &Limits, solid: bool) -> R
     // SerialTiles would mean re-iterating the chaos game per tile
     // — N× iter cost, only worth it if even tile-sized GPU
     // histograms aren't workable. Per
-    // docs/projects/parallel-tiles.md we don't actually build it:
+    // docs/archive/projects/parallel-tiles.md we don't actually build it:
     // when total exceeds one buffer, HighResExporter's CPU path
     // (1× iter cost, main-RAM histogram) beats SerialTiles on
     // wall time. The SerialTiles enum variant survives as a

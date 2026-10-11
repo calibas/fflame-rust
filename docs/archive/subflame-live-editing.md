@@ -224,9 +224,9 @@ The work is broad but each phase is shippable and reversible.
 - Nested subflames (subflame containing subflame_wf). v1 disallowed
   this and the un-swap refactor doesn't change that — it's a
   separate state-allocation / shader-codegen problem from
-  [docs/projects/subflames.md](subflames.md).
+  [docs/archive/projects/subflames.md](subflames.md).
 - Apophysis XML import of `subflame_wf` resources. Tracked
-  separately in [docs/projects/subflames.md](subflames.md).
+  separately in [docs/archive/projects/subflames.md](subflames.md).
 - Per-subflame palettes. Same.
 
 ## Risks

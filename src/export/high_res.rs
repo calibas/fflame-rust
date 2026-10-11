@@ -52,7 +52,7 @@ pub struct HistogramPixel {
 /// Cubic B-spline basis weights for the four taps at offsets (-1,0,1,2) around
 /// fractional position `t`. Sum to 1; smooth, no ringing. Identical to
 /// `bspline4` in `blur_upscale.wgsl` (the analytic-blur CPU fold must match the
-/// GPU upscale math). See docs/projects/analytic-blur-buffer.md.
+/// GPU upscale math). See docs/archive/projects/analytic-blur-buffer.md.
 fn bspline4(t: f32) -> [f32; 4] {
     let t2 = t * t;
     let t3 = t2 * t;
@@ -120,7 +120,7 @@ pub struct HighResExporter {
     variation_params_buffer: Buffer,
     xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
     // Biased selection weights + likelihood ratios
-    // (docs/projects/flame-deep-zoom.md stage 1). Always allocated
+    // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Always allocated
     // and filled neutrally when the feature is off, because an
     // export must render what the app renders -- the same table,
     // from the same `build_table`.
@@ -255,7 +255,7 @@ pub struct HighResExporter {
     /// (`gpu::pipelines::used_bindings`): its layout and bind group hold
     /// those and no others, as `FlameRenderer`'s do.
     used_bindings: Vec<u32>,
-    /// **Persistent orbits** (`docs/projects/persistent-orbits.md` §3.8):
+    /// **Persistent orbits** (`docs/archive/projects/persistent-orbits.md` §3.8):
     /// each thread's orbit, kept between the export's dispatches, at
     /// binding 8. `orbit_words` is its stride, 0 when the shader was built
     /// without them, and then the buffer is a placeholder.
@@ -334,7 +334,7 @@ impl HighResExporter {
     }
 
     /// `new`, with each thread's orbit kept between the export's dispatches
-    /// (`docs/projects/persistent-orbits.md`), as `new` does, or restarted
+    /// (`docs/archive/projects/persistent-orbits.md`), as `new` does, or restarted
     /// every dispatch, as a gate's baseline does.
     pub(crate) async fn new_with_orbits(
         config: &FractalConfig,
@@ -417,7 +417,7 @@ impl HighResExporter {
             width, height, workgroups, samples_per_dispatch, buffer_size_mb
         );
 
-        // **Targeting** (docs/projects/flame-deep-zoom.md): ONE plan, for
+        // **Targeting** (docs/projects/deep-zoom/flame-deep-zoom.md): ONE plan, for
         // the whole export view. Every dispatch emits samples for the whole
         // image and the tiles only scatter them, so there is one view to
         // plan however the image is tiled. Planned here, before anything
@@ -756,7 +756,7 @@ impl HighResExporter {
         // hashing in the old export shader and is gated out here. Configs
         // exporting in PathMap COLOR_MODE will fall back to the white
         // default initialized in main_template.wgsl. See
-        // docs/projects/unified-render-pipeline.md.
+        // docs/archive/projects/unified-render-pipeline.md.
         let analytic_active = config.flame.analytic_blur_active(&global_registry(), config.render_mode);
         // NeedsW variations break the "Z=0 falls through unchanged" invariant
         // that lets the 3D shader stand in for 2D: their 2D and 3D bodies are
@@ -1118,7 +1118,7 @@ impl HighResExporter {
         //                  offset+size. Single iteration loop.
         //
         // `SerialTiles`:   total exceeds one buffer → CPU fallback.
-        //                  See docs/projects/parallel-tiles.md on why
+        //                  See docs/archive/projects/parallel-tiles.md on why
         //                  we don't build SerialTiles GPU (N× iter
         //                  cost loses to CPU's 1× iter + main-RAM
         //                  histogram).
@@ -2255,7 +2255,7 @@ impl HighResExporter {
         // Analytic-blur fold: read the low-res splat buffer back, convolve +
         // upscale it (the SAME bicubic+dither math as blur_upscale.wgsl) and
         // ADD into the CPU histogram — serving BOTH tiled strategies through
-        // this one inject point. See docs/projects/analytic-blur-buffer.md.
+        // this one inject point. See docs/archive/projects/analytic-blur-buffer.md.
         if self.blur_setup.is_some() {
             self.fold_analytic_blur(&mut histogram, color_scale_f).await?;
         }
@@ -3426,7 +3426,7 @@ impl HighResExporter {
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
         // Sample density: running iterations-per-pixel (Ember/Apophysis
-        // formula). See docs/projects/accumulator-unification.md and
+        // formula). See docs/archive/projects/accumulator-unification.md and
         // the matching site in compute_kernel.rs::update_tonemap. The
         // shader's `k2 = 1 / (area × white_level × sample_density)`
         // combined with `area = pixels / ppu²` and this `sample_density`

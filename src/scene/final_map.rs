@@ -1,5 +1,5 @@
 //! **A flame's final transforms, for the inverse walk** (tracker item
-//! C2c, `docs/projects/deep-zoom-tracker.md`).
+//! C2c, `docs/projects/deep-zoom/deep-zoom-tracker.md`).
 //!
 //! A final transform reshapes what is plotted and feeds nothing forward:
 //! the chaos game's orbit is the normal transforms' alone, and each point

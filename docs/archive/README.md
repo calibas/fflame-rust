@@ -40,7 +40,7 @@ Archive is organized by topic area in subdirectories:
 - The seed document for the third fractal family, superseded by the
   `simulation-*` documents in projects/
 - The device-loss (TDR) plan, all items shipped
-- Superseded by [projects/escape-time-fractals.md](../projects/escape-time-fractals.md),
+- Superseded by [projects/escape-time-fractals.md](escape-time/escape-time-fractals.md),
   which is still ACTIVE and deliberately not archived — it carries the
   measurement log and the remaining work
 - See [escape-time/README.md](escape-time/README.md) for what each one is
@@ -49,7 +49,7 @@ Archive is organized by topic area in subdirectories:
 redesign (4 documents)
 - Auth, flame/palette sync, desktop vs browser transports
 - The v2 root-transform split, inline palettes, version-keyed config migration
-- Superseded by [projects/api-shared-resources.md](../projects/api-shared-resources.md),
+- Superseded by [projects/api-shared-resources.md](projects/api-shared-resources.md),
   which is still ACTIVE and deliberately not archived
 - See [api-v1-v2/README.md](api-v1-v2/README.md) for what each one is
   outdated about

@@ -5,7 +5,7 @@
 //!
 //! The WGSL offset formulas are byte-identical to their parents; the host
 //! kernel sampler in `src/variations/analytic_blur.rs` mirrors them. See
-//! `docs/projects/analytic-blur-buffer.md`.
+//! `docs/archive/projects/analytic-blur-buffer.md`.
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},
@@ -18,7 +18,7 @@ use crate::param;
 // carrying parameters introduces. The host reads them from the transform's
 // variation params and packs them into GpuTransform (strength scales the
 // mean-splat density; residual routes the next N plots through the blur
-// buffer). See docs/projects/analytic-blur-buffer.md.
+// buffer). See docs/archive/projects/analytic-blur-buffer.md.
 
 /// Analytic counterpart of `blur` (uniform-radius disc). Same fuzz, but
 /// eligible for the analytic blur buffer.

@@ -1,5 +1,5 @@
 //! Exact circle geometry for the inversive family — family M of
-//! `docs/projects/inversive-targeting.md`.
+//! `docs/projects/deep-zoom/inversive-targeting.md`.
 //!
 //! # Why this exists
 //!
@@ -1085,7 +1085,7 @@ impl Region {
     ///
     /// **Both directions are sound only up to the accounted leak**,
     /// and that is the whole bargain of
-    /// `docs/projects/inversive-targeting.md`. The true image
+    /// `docs/projects/deep-zoom/inversive-targeting.md`. The true image
     /// `S_w(A)` lies in `A`, and `A` lies in the root region except
     /// for a tail whose measure the leak probe reports — so clipping
     /// to the root, and cutting out holes the attractor is known to
@@ -1128,7 +1128,7 @@ impl Region {
 /// How big a hole to punch at each pole, as a fraction of the
 /// attractor's measured extent.
 ///
-/// Decision A of `docs/projects/inversive-targeting.md`: a fixed
+/// Decision A of `docs/projects/deep-zoom/inversive-targeting.md`: a fixed
 /// radius, with the measured leak reported beside it, rather than a
 /// loop that shrinks holes until some target is met. One render
 /// decides.
@@ -1479,7 +1479,7 @@ impl MobiusMap {
 /// **A union of small discs covering the attractor**, in place of one
 /// big region enclosing it.
 ///
-/// Why: `docs/projects/inversive-targeting.md` §8. A single disc minus
+/// Why: `docs/projects/deep-zoom/inversive-targeting.md` §8. A single disc minus
 /// a hole per pole is exact but hopeless — its near-pole annulus is
 /// attractor-free space that blows up to `1/h` at every inversion, so
 /// the bound is pinned while the true cylinder image falls by five
@@ -1583,7 +1583,7 @@ pub const ROOT_SAMPLE: usize = 40000;
 ///   a picture missing most of itself.
 ///
 /// Neither number is a bug to chase. §15 of
-/// `docs/projects/inversive-targeting.md` measured why: the flame's
+/// `docs/projects/deep-zoom/inversive-targeting.md` measured why: the flame's
 /// measure does not concentrate on few cylinders, which is the one
 /// thing cylinder targeting needs, and no bound however tight fixes
 /// that.

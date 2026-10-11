@@ -1,5 +1,5 @@
 //! Analytic-blur kernel metadata — the host-side counterpart to
-//! `Feature::AnalyticBlur`. See `docs/projects/analytic-blur-buffer.md`.
+//! `Feature::AnalyticBlur`. See `docs/archive/projects/analytic-blur-buffer.md`.
 //!
 //! Each input-independent blur variation provides a Rust **offset sampler**
 //! that mirrors its WGSL offset formula (the random displacement it adds to
@@ -189,7 +189,7 @@ pub struct BlurSetup {
 
 /// Pick the downscale `D` from the convolution cost (`W·H·support²/D⁴ ≤
 /// budget`) and Monte-Carlo each slot's low-res kernel. Deterministic (no
-/// `rand`). See docs/projects/analytic-blur-buffer.md.
+/// `rand`). See docs/archive/projects/analytic-blur-buffer.md.
 pub fn compute_blur_setup(
     width: u32,
     height: u32,

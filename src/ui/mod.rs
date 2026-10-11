@@ -786,7 +786,7 @@ pub enum AaReason {
 }
 
 /// What the deep-zoom machinery is doing, for the View panel to
-/// report (docs/projects/flame-deep-zoom.md).
+/// report (docs/projects/deep-zoom/flame-deep-zoom.md).
 ///
 /// Both halves are MEASURED rather than requested: a ticked checkbox
 /// does not mean targeting is running (the renderer declines per
@@ -900,7 +900,7 @@ pub struct EguiLayer {
     density_histogram: crate::renderer::DensityHistogram,
 
     // What the deep-zoom machinery decided for the current view
-    // (docs/projects/flame-deep-zoom.md). Set by App each frame; read
+    // (docs/projects/deep-zoom/flame-deep-zoom.md). Set by App each frame; read
     // only to DESCRIBE what is happening, never to drive it.
     deep_zoom: DeepZoom,
     /// The escape viewport's antialiasing, while in escape mode.

@@ -1,5 +1,5 @@
 //! The escape producer of the 3D terrain view
-//! (docs/projects/heightfield-3d.md, sections 5 and 12).
+//! (docs/archive/terrain/heightfield-3d.md, sections 5 and 12).
 //!
 //! **The ground to the horizon** (section 12, the user's design). The
 //! plane is cut into square SECTIONS on a dyadic grid fixed in the
@@ -13,7 +13,7 @@
 //! ground ends at `far` view widths, where the fog has reached the
 //! background.
 //!
-//! **A section's texels** (docs/projects/terrain-height.md, H4) are its
+//! **A section's texels** (docs/archive/terrain/terrain-height.md, H4) are its
 //! render's samples -- or with a prefilter, the mean of `prefilter²` of
 //! them over each texel's footprint -- softened by a Gaussian of
 //! `softness` texels, for which the render has a border of three sigmas
@@ -52,7 +52,7 @@
 //! detail -- the terrain at every zoom looks like itself. A count's or a
 //! relief's range is the ground's own, measured as it is set.
 //!
-//! **Unless locked** (docs/projects/terrain-height.md, H3): then they are
+//! **Unless locked** (docs/archive/terrain/terrain-height.md, H3): then they are
 //! fractions of the LOCK's view width ([`EscapeConfig::terrain_scale`]),
 //! and the range is the one pinned at the lock -- one landscape, fixed
 //! in the plane, which a dolly approaches.
@@ -1163,7 +1163,7 @@ impl EscapeTerrain {
     }
 
     /// The ground's count or relief range as last measured: what a lock
-    /// pins (docs/projects/terrain-height.md, H3).
+    /// pins (docs/archive/terrain/terrain-height.md, H3).
     pub fn measured_range(&self) -> Option<[f32; 2]> {
         self.terrain.measured_range()
     }

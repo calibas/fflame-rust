@@ -332,7 +332,7 @@ fn one(
     }
 
     // Otherwise derive one from the variation's shipped WGSL
-    // (`docs/projects/forward-bounds.md`).
+    // (`docs/projects/deep-zoom/forward-bounds.md`).
     //
     // **The weight is applied here, not there.** A derived bound is
     // of the body alone -- `V(p)` -- because that is what the WGSL

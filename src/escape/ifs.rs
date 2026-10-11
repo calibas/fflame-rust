@@ -1,5 +1,5 @@
 //! Mode D — the flame as a distance field
-//! ([docs/projects/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md),
+//! ([docs/archive/escape-time/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md),
 //! phase 1).
 //!
 //! A fourth registry pair on the escape engine's one pattern (D1).

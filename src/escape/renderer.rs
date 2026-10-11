@@ -3304,7 +3304,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// The formula whose derivative the perturbed path carries on this
     /// rung, when one is wanted (a colouring that reads it, or analytic
     /// relief) and it can be: the formula defines one, and its tier is a
-    /// single-term recurrence (docs/projects/derivative-under-perturbation.md).
+    /// single-term recurrence (docs/archive/escape-time/derivative-under-perturbation.md).
     pub(crate) fn perturbed_derivative(escape: &EscapeConfig, floatexp: bool) -> Option<&'static super::FormulaDef> {
         let wanted = Self::colourings_have(escape, super::ColoringFeature::NeedsDerivative)
             || escape.wants_derivative();
@@ -3798,7 +3798,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return Some(DerivativeGap::Formula);
         }
         // Both perturbed rungs carry the derivative of a single-term
-        // formula (docs/projects/derivative-under-perturbation.md). The
+        // formula (docs/archive/escape-time/derivative-under-perturbation.md). The
         // two-term ones (Phoenix, Manowar) define none, so the formula
         // test above has already answered for them.
         if Self::wants_perturbation(escape) {

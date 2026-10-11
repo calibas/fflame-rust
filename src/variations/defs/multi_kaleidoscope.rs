@@ -1,7 +1,7 @@
 //! `multi_kaleidoscope` — N-fold kaleidoscope by multi-emit: every
 //! iteration plots all N sector copies at once (original).
 //!
-//! Phase 3 of [docs/projects/multi-emit-stereograms.md]. Differs from
+//! Phase 3 of [docs/archive/projects/multi-emit-stereograms.md]. Differs from
 //! post-symmetry in kind, not just degree: it is an ordinary variation,
 //! so its parameters ride the animation system's variation-param tracks
 //! (a breathing `spiral`, a slowly winding `twist`), it attaches

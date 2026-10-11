@@ -412,7 +412,7 @@ if ui_response.preset_changed {
 
 ## The View panel
 
-One panel, in every mode (docs/projects/camera-unification.md, C5):
+One panel, in every mode (docs/archive/3d-camera/camera-unification.md, C5):
 [view.rs](../../src/ui/view.rs) lays it out by the shown camera's
 `ViewKind`, from the shared widgets in
 [view_controls.rs](../../src/ui/view_controls.rs).
@@ -431,7 +431,7 @@ One panel, in every mode (docs/projects/camera-unification.md, C5):
   fog, a flame's depth weighting, a terrain's far and haze; a flame's
   focus and blur or the path tracer's lens; the render tier and the
   path tracer, a terrain's shadows, the lights, and the picture's one
-  material (docs/projects/materials.md).
+  material (docs/archive/projects/materials.md).
 - **The flame's own**: deep zoom, the 2D/3D switch, Preserve Z, post
   symmetry.
 

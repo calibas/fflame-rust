@@ -353,7 +353,7 @@ Not every formula zooms equally deep: `mandelbrot`, `multibrot`, the
 `burning_ship` variants, `tricorn`, `phoenix` and `manowar` perturb and
 go essentially arbitrarily deep, while the rest stop around zoom 14
 where the direct path's f32 pixel mapping runs out. See
-[the escape-time project doc](../projects/escape-time-fractals.md).
+[the escape-time project doc](../archive/escape-time/escape-time-fractals.md).
 
 ## The `anim` object
 

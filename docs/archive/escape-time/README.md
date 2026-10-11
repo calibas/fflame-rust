@@ -1,7 +1,7 @@
 # Escape-time: the finished plans
 
 Four documents whose work is done. The living design record is
-[projects/escape-time-fractals.md](../../projects/escape-time-fractals.md),
+[projects/escape-time-fractals.md](escape-time-fractals.md),
 which is NOT archived: it carries the dated history of how each piece
 was built and what was measured, plus a **What is left** section at the
 top listing the handful of things these four did not finish.

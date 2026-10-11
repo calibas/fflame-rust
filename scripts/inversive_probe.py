@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hard measurement for annulus support (docs/projects/forward-bounds.md).
+"""Hard measurement for annulus support (docs/projects/deep-zoom/forward-bounds.md).
 
 Two questions about the inversive flames -- the ones whose maps have a
 pole at a finite point, so no DISC can be invariant -- answered by

@@ -27,7 +27,7 @@ generators that share one tail.
 | mode | generator | lives in | plan |
 | --- | --- | --- | --- |
 | `TwoD` / `ThreeD` | the chaos game — sample, splat, accumulate | `src/renderer/`, `src/variations/` | [RENDERER.md](main/RENDERER.md) |
-| `Escape` | one compute dispatch per pixel, iterated to escape | `src/escape/` | [escape-time-fractals.md](projects/escape-time-fractals.md) |
+| `Escape` | one compute dispatch per pixel, iterated to escape | `src/escape/` | [escape-time-fractals.md](archive/escape-time/escape-time-fractals.md) |
 | `Simulation` | a grid of cells stepped by a neighbour-coupled rule | `src/sim/` | [SIMULATION.md](main/SIMULATION.md) |
 
 **The tail is shared and that is the point.** Each generator produces an

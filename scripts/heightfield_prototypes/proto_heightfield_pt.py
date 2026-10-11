@@ -1,4 +1,4 @@
-"""3D height-field mode, prototype (docs/projects/heightfield-3d.md).
+"""3D height-field mode, prototype (docs/archive/terrain/heightfield-3d.md).
 
 A 2D fractal as a terrain: a height map and an albedo map on a grid, lit
 by a small path tracer -- a sun with soft shadows, a sky, and one bounce

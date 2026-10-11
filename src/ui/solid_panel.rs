@@ -25,7 +25,7 @@ pub fn render_solid_panel_content(
 /// `flame` is the 3D flame pipeline's set: occlusion (solid strength and
 /// surface thickness) and the splat shade pass's own controls (SSAO
 /// radius, normal smoothing, gap fill, shadow maps) -- our own extension,
-/// see docs/projects/solid-rendering.md. A solid and the terrains read
+/// see docs/archive/projects/solid-rendering.md. A solid and the terrains read
 /// the shading, the material, the occlusion strength and the lights, and
 /// an untouched set lights them with a default sun.
 pub fn lighting_rig(
@@ -188,7 +188,7 @@ pub fn lighting_rig(
         }
     }
 
-    // The material (docs/projects/materials.md): one per picture, and
+    // The material (docs/archive/projects/materials.md): one per picture, and
     // every tier reads all of it -- the lit tiers and the path tracer
     // alike. Its coat and glow show wherever a surface is lit; the
     // diffuse and the highlight are the rig's, so over a solid's or a

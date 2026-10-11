@@ -3,7 +3,7 @@
 Targeted port pass for variations that appear in JWildfire's stock
 "script vars" set but aren't in our registry. Tracked separately from
 the broader long-tail in
-[`variation-bulk-port.md`](variation-bulk-port.md) because this batch
+[`variation-bulk-port.md`](../archive/projects/variation-bulk-port.md) because this batch
 is bounded (~24 names) and visible to users — a JWF flame using any of
 these silently drops the variation on import.
 
@@ -332,7 +332,7 @@ workflow are recorded in the `project_cut_family_campaign` memory.
 
 ## Related docs
 
-- [variation-bulk-port.md](variation-bulk-port.md) — long-tail port
+- [variation-bulk-port.md](../archive/projects/variation-bulk-port.md) — long-tail port
   log; this batch is a focused subset.
 - [variation-port-blockers.md](variation-port-blockers.md) — the
   ones we *can't* port because of missing framework features. Cross-

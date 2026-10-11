@@ -1718,7 +1718,7 @@ impl<'a> PanelViewer<'a> {
             });
     }
 
-    /// Render the Paths panel (docs/projects/word-editing.md §6)
+    /// Render the Paths panel (docs/projects/deep-zoom/word-editing.md §6)
     fn render_paths_panel(&mut self, ui: &mut egui::Ui) {
         super::paths_panel::render_paths_content(
             ui,

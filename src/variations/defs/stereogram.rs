@@ -35,7 +35,7 @@
 //! `emit_suppress_main` (NOT CanHide, which aborts the whole iteration
 //! on normal transforms); only the emitted panels appear.
 //!
-//! Requirements & limits (see docs/projects/multi-emit-stereograms.md):
+//! Requirements & limits (see docs/archive/projects/multi-emit-stereograms.md):
 //! 3D render mode with `perspective_strength > 0` (orthographic has no
 //! parallax — physically correct, artistically useless). Solid-mode
 //! occlusion/shadows are unsupported (two interleaved "objects" fight

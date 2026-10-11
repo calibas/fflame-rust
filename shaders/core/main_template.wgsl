@@ -93,7 +93,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
 {{#if IMPORTANCE_SAMPLING}}
     // The window's likelihood ratio and how many choices it covers
-    // (docs/projects/flame-deep-zoom.md stage 1). `is_weight` is the
+    // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). `is_weight` is the
     // product of `p/q` over the choices since the last epoch reset,
     // which is what a deposit carries instead of 1.
     var is_weight = 1.0;
@@ -281,7 +281,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // plot routes the deterministic mean to this transform's blur buffer.
         // Only declared (and threaded into apply_variations) when the feature
         // is active — a non-blur build is byte-identical to one without it.
-        // See docs/projects/analytic-blur-buffer.md.
+        // See docs/archive/projects/analytic-blur-buffer.md.
 {{#if HAS_ANALYTIC_BLUR}}
 {{#if RENDER_3D}}
         var blur_contribution = vec3<f32>(0.0, 0.0, 0.0);
@@ -348,7 +348,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Gated by HAS_ATTACHMENTS — when no Linked or Final exists in
         // the flame, the per-iteration `attachments[xform_idx]` load is
         // stripped from the compiled shader entirely.
-        // See docs/projects/per-transform-linked-and-final.md.
+        // See docs/archive/projects/per-transform-linked-and-final.md.
         let attach = attachments[xform_idx];
         for (var li = 0u; li < attach.linked_count; li = li + 1u) {
             let lid = attach.linked[li];
@@ -503,7 +503,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             fuse = fuse - 1u;
         } else {
 {{#if CYLINDER_TARGETING}}
-            // The FORCED PREFIX (docs/projects/flame-deep-zoom.md
+            // The FORCED PREFIX (docs/projects/deep-zoom/flame-deep-zoom.md
             // stage 2). The free orbit above is the true chaos game
             // and has `current ~ mu`; this carries that point through
             // one enumerated word, whose image is inside the
@@ -931,7 +931,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // jitter would land samples at pixels whose depth they don't
             // belong to, corrupting the nearest-depth buffer AND the
             // occlusion test. Post-DoF from the depth buffer is the
-            // planned replacement (docs/projects/solid-rendering.md,
+            // planned replacement (docs/archive/projects/solid-rendering.md,
             // Phase 3).
 {{else}}
             // Apply depth of field blur (3D mode only)
@@ -990,7 +990,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // stochastic splat by construction. The chaos game still advances
             // on the realized `current`. 2D-only / no-attachments / no
             // post-symmetry is guaranteed by the host gate
-            // (analytic_blur_active). See docs/projects/analytic-blur-buffer.md.
+            // (analytic_blur_active). See docs/archive/projects/analytic-blur-buffer.md.
             // `slot < count` gates against the actually-allocated buffer count
             // (the memory cap may allocate fewer slices than transforms have
             // slots) — a transform past the cap falls through to the stochastic
@@ -1237,7 +1237,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Direct-histogram path (sub-4K single-tile render). Atomic
                 // accumulation into a single full-resolution histogram buffer.
                 // Gated by OUTPUT_HISTOGRAM_DIRECT. See
-                // docs/projects/unified-render-pipeline.md.
+                // docs/archive/projects/unified-render-pipeline.md.
                 //
 {{#if SOLID}}
                 // Occluded (weight 0) and priming samples skip the histogram
@@ -1310,7 +1310,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // pass scatters samples into per-tile histograms. Used when
                 // the full-resolution histogram exceeds the storage-buffer
                 // binding size limit. See
-                // docs/projects/unified-render-pipeline.md.
+                // docs/archive/projects/unified-render-pipeline.md.
                 //
                 // Allocate a slot via atomic counter and write the sample.
                 // Same plot-time coords + final_color the direct path uses
