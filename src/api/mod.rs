@@ -25,6 +25,27 @@ pub struct FlameLoadResult {
     pub animations: Vec<types::AnimationSummary>,
 }
 
+/// The visibility a flame **Update** sends, from the Save Online
+/// dialog's "Make public" box and what the flame was when the dialog
+/// opened (`was_public`: `Some(true)` public, `Some(false)` private or
+/// unlisted, `None` unknown).
+///
+/// `update_flame` reads `None` as "keep what the server has", which is
+/// right for an unchecked box on a flame that was not public (an
+/// unlisted flame stays unlisted) but wrong for one that was: the
+/// dialog opens with the box checked for a public flame, so unchecking
+/// it is the user asking to make it private. Sending `None` there left
+/// the flame public while the app recorded it as private.
+pub fn flame_update_visibility(make_public: bool, was_public: Option<bool>) -> Option<ApiVisibility> {
+    if make_public {
+        Some(ApiVisibility::Public)
+    } else if was_public == Some(true) {
+        Some(ApiVisibility::Private)
+    } else {
+        None
+    }
+}
+
 /// Hard-coded API base URL. Change this for release builds.
 pub const API_BASE_URL: &str = "https://fractalsforall.com";
 // pub const API_BASE_URL: &str = "http://localhost:3000";
@@ -690,6 +711,23 @@ mod tests {
             matches!(update, Err(FetchError::Unsupported(_))),
             "update must refuse client-side: {update:?}"
         );
+    }
+
+    /// What a flame Update sends for "Make public". The case that was
+    /// wrong: a public flame with the box unchecked sent nothing, and
+    /// `update_flame` read that as "keep public".
+    #[test]
+    fn unchecking_make_public_on_a_public_flame_makes_it_private() {
+        use types::ApiVisibility::{Private, Public};
+        assert_eq!(flame_update_visibility(false, Some(true)), Some(Private));
+        // Checked is public whatever it was.
+        for was in [Some(true), Some(false), None] {
+            assert_eq!(flame_update_visibility(true, was), Some(Public), "{was:?}");
+        }
+        // Unchecked on a flame that was not public (private or
+        // unlisted), or whose visibility is unknown: keep the server's.
+        assert_eq!(flame_update_visibility(false, Some(false)), None);
+        assert_eq!(flame_update_visibility(false, None), None);
     }
 
     /// The modes the server knows pass the guard.
