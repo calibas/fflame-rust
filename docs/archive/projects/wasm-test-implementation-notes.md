@@ -1,5 +1,7 @@
 # WASM Testing Implementation Notes
 
+> **Archived 2026-10-11** -- superseded: the blocker it describes is gone. The web build exports `WasmApi` (`src/wasm_api.rs`), whose headless `export_png` is what `tests/visual/wasm/test_wasm.py` drives. Read [TESTING-GUIDE.md](../../TESTING-GUIDE.md) §4 and [WASM.md](../../WASM.md) for how it works now; this is the record of what was planned when it was written.
+
 ## Current Blocker
 
 The WASM build (`src/lib.rs::wasm_main()`) creates a full interactive app with egui UI, not a headless renderer. It:
