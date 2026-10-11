@@ -1,47 +1,51 @@
-# Complete Testing & Profiling Guide
+# Testing Guide
 
-Quick reference for running all types of tests, benchmarks, and profiling tools.
+Every test, gate, benchmark and diagnostic tool in the repository, what
+each one covers, and how to run it.
 
-## Quick Command Reference
+**Nothing runs automatically.** There is no CI, on purpose:
+`scripts/release.py check` does what CI would do, when you type it. See
+[RELEASE.md §7](RELEASE.md) for the reasoning and §2 for what a release
+requires.
+
+## Quick command reference
 
 ```bash
-# Unit Tests (built into modules)
-cargo test
+# Unit tests (~1,900 in the library; GPU tests skip or are #[ignore]d)
+cargo test --release --lib
 
-# Unified Benchmark Suite (CPU + GPU + visual regression)
-python scripts/run_benchmarks.py          # Full suite
-python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
+# Every fast gate: tests, wasm build, generated files, doc links,
+# engine feature matrix, gallery crates
+python scripts/release.py check
+python scripts/release.py check --fix      # ...and regenerate stale generated files
 
-# Run Main App (GUI)
-cargo run --release
+# Visual regression suite (needs a GPU; does NOT build the binary)
+cargo build --release && python tests/visual/run_tests.py
 
-# Run Main App (CLI export mode)
-cargo run --release -- export --input config.fflame --output output.png
+# Benchmarks: Criterion + desktop GPU renders (+ WASM unless --quick)
+python scripts/run_benchmarks.py --quick
+
+# Variation math probe (per-platform shader arithmetic report)
+cargo run --release --bin variation_probe
+
+# Render configs to PNG through the library, without the release exe
+INSPECT="a.fflame=a.png" INSPECT_SIZE=1280x720 \
+  cargo test --release --lib render_configs_for_inspection -- --ignored --nocapture
 ```
-
-**The unified benchmark suite replaces:**
-- `cargo bench` - CPU benchmarks (Criterion)
-- `python tests/visual/run_tests.py` - Desktop visual tests
-- `python tests/visual/wasm/test_wasm.py` - WASM visual tests
-- `cargo run --bin simple_benchmark` - Simple CPU benchmark
-- Manual hash/image comparison scripts
-
-**All in one place with:**
-- Performance tracking (previous 2 runs)
-- Visual regression (pixel hash comparison)
-- Color-coded regression detection
 
 ---
 
 ## Per-engine tests
 
-Most of what follows is engine-agnostic. Two things are worth knowing
+Most of what follows is engine-agnostic. Three things are worth knowing
 before you go looking for a simulation or escape failure:
 
 - **GPU tests need `--test-threads=1`.** The heavier simulation tests
   live in `src/sim/app_repro_test.rs` and replay the app's exact frame
   call order against a fresh renderer; several are `#[ignore]`d and run
-  deliberately.
+  deliberately. The escape engine has the same kind of file,
+  `src/escape/app_repro_test.rs`, and nearly all of its tests are
+  `#[ignore = "needs a GPU"]`.
 - **The preset probes are the simulation's real safety net, and one of
   them does not run by default.** `every_preset_draws_something`
   renders every shipped preset and fails any whose image is flat, but
@@ -53,484 +57,182 @@ before you go looking for a simulation or escape failure:
   ```
 
   It has caught a model rendering black that no name check could. See
-  [SIMULATION.md](main/SIMULATION.md).
+  [SIMULATION.md](main/SIMULATION.md) ("Adding a model").
 - **`release.py check` compiles the library at each single-engine
   feature combination** (`engine-flame`, `engine-escape`, `engine-sim`
   alone). Those are what the WASM gallery modules link, and a `#[cfg]`
   attached to the wrong item compiles fine in every other build.
 
-## 1. Unit Tests
-
-**What:** Tests embedded in source files (transforms.rs, palette.rs, etc.)
-
-**Location:** Bottom of source files in `#[cfg(test)] mod tests { ... }`
-
-**Run:**
-```bash
-# All unit tests
-cargo test
-
-# Specific module
-cargo test --lib transforms
-cargo test --lib palette
-cargo test --lib version
-
-# With output
-cargo test -- --nocapture
-
-# Release mode (faster)
-cargo test --release
-```
-
-**Example Output:**
-```
-running 15 tests
-test scene::transforms::tests::test_affine_identity ... ok
-test scene::transforms::tests::test_point_calculations ... ok
-test scene::palette::tests::test_palette_interpolation ... ok
-test version::tests::test_version_info ... ok
-...
-test result: ok. 15 passed; 0 failed; 0 ignored
-```
-
-**What's Tested:**
-- Transform math (affine, variations)
-- Point calculations (r, θ, φ)
-- Palette interpolation
-- Version info capture
-- Config serialization
+Engine-specific testing notes live with each engine:
+[ESCAPE.md](main/ESCAPE.md), [SIMULATION.md](main/SIMULATION.md),
+[TERRAIN.md](main/TERRAIN.md), [FOCUSED-RENDERING.md](main/FOCUSED-RENDERING.md).
 
 ---
 
-## 2. Unified Benchmark Suite
-
-**What:** Complete performance and visual regression testing system
-
-**Location:** [scripts/run_benchmarks.py](../scripts/run_benchmarks.py)
-
-**Run:**
-```bash
-# Full suite (CPU + Desktop GPU + WASM GPU)
-python scripts/run_benchmarks.py
-
-# Quick mode (CPU + Desktop GPU only, skip WASM)
-python scripts/run_benchmarks.py --quick
-```
-
-**What It Does:**
-
-1. **CPU Microbenchmarks** (Criterion)
-   - Runs `cargo bench` with statistical analysis
-   - 5 runs per benchmark (1 warmup + 4 measurement)
-   - Benchmarks: affine transforms, variations, point calculations
-
-2. **Desktop GPU Rendering** (Headless CLI)
-   - Exports 8 test configs as PNG (800×600)
-   - Multiple runs with warmup for accurate timing
-   - Extracts render time and iterations from PNG metadata
-   - Tests: variations, presets, 3D, tone mapping
-
-3. **WASM GPU Rendering** (Browser Automation)
-   - Runs same 8 tests in Chrome via Selenium
-   - Headless WebGPU export (800×600)
-   - Same timing extraction as desktop
-
-4. **Visual Regression** (Hash Comparison)
-   - SHA256 hash of pixel data (ignores PNG compression)
-   - Three comparisons:
-     - Baseline vs Current (desktop)
-     - Baseline WASM vs Current WASM
-     - Desktop vs WASM (current only)
-   - Detects pixel-perfect changes
-
-5. **Performance Tracking**
-   - Saves results to CSV with timestamp
-   - Compares to previous 2 full runs
-   - Color-coded regression detection:
-     - 🟢 Green: >2% faster
-     - 🟡 Yellow: >5% slower
-     - 🔴 Red: >10% slower
-
-**Example Output:**
-```
-======================================================================
-Unified Performance Benchmark Suite
-======================================================================
-
-Platform: Windows
-Quick Mode: No
-
-[1/3] Running CPU Microbenchmarks (Criterion)...
-----------------------------------------------------------------------
-Building Criterion benchmarks...
-Running 24 benchmarks with statistical analysis...
-✅ Parsed 24 CPU benchmarks
-
-[2/3] Running GPU Rendering Tests (Desktop CLI)...
-----------------------------------------------------------------------
-Building release binary...
-Running 8 tests with 3 iterations each (warmup + measurement)...
-  simple-linear: 45.2ms, 45.1ms, 45.3ms
-  misc-variations: 52.7ms, 52.5ms, 52.6ms
-  ...
-✅ Completed 8 desktop rendering tests
-
-[3/3] Running GPU Rendering Tests (WASM Browser)...
-----------------------------------------------------------------------
-Building WASM module...
-Starting Chrome browser (headless)...
-  simple-linear: 48.3ms
-  misc-variations: 55.1ms
-  ...
-✅ Completed 8 WASM rendering tests
-
-======================================================================
-Benchmark Results
-======================================================================
-
-CPU Microbenchmarks (Criterion):
-Benchmark                                          Mean            Ops/sec         % Change        Previous #1     Previous #2
----------------------------------------------------------------------------------------------------------------------------------
-affine_transform                                   26.4 ns         37,878,788      +1.2%           37,500,000      37,000,000
-variation_linear                                   26.5 ns         37,735,849      -0.5%           37,900,000      38,000,000
-...
-
-GPU Rendering Benchmarks:
-Test                           Type       Time            Throughput           % Change        Previous #1          Previous #2
----------------------------------------------------------------------------------------------------------------------------------
-simple-linear                  desktop    45.2ms          221.2 Miter/s        +2.3%           216.1 Miter/s        210.5 Miter/s
-simple-linear                  wasm       48.3ms          207.0 Miter/s        +1.8%           203.4 Miter/s        199.8 Miter/s
-...
-
-Baseline vs Current Comparison:
-Test                           Baseline Hash        Current Hash         Match
--------------------------------------------------------------------------------------
-simple-linear                  a1b2c3d4e5f6...      a1b2c3d4e5f6...      ✓ MATCH
-misc-variations                f6e5d4c3b2a1...      f6e5d4c3b2a1...      ✓ MATCH
-...
-
-Summary:
-  Matches: 8
-  Mismatches: 0
-
-Baseline WASM vs Current WASM Comparison:
-...
-
-Desktop vs WASM Comparison:
-...
-
-Summary:
-  Total benchmarks: 40
-  CPU benchmarks: 24
-  GPU benchmarks: 16
-
-Results saved to: benchmark_results/unified_benchmarks.csv
-Baseline updated: benchmark_results/last_run.json
-```
-
-**Files Generated:**
-- `benchmark_results/unified_benchmarks.csv` - Full history (timestamped rows)
-- `benchmark_results/last_run.json` - Current run (for next comparison)
-- `tests/visual/current/*.png` - Desktop renders
-- `tests/visual/current/wasm/*.png` - WASM renders
-
-**Use Cases:**
-- Pre-commit verification (--quick mode)
-- Full regression testing (CI/CD)
-- Performance tracking over time
-- Visual regression detection
-
----
-
-## 3. Unit Tests (Legacy - Still Available)
-
-**What:** Integration tests to prevent breaking changes
-
-**Location:** [tests/regression.rs](tests/regression.rs)
-
-**Run:**
-```bash
-# Run regression test suite
-cargo test --test regression
-
-# With verbose output
-cargo test --test regression -- --nocapture
-
-# Release mode
-cargo test --release --test regression
-```
-
-**Example Output:**
-```
-running 12 tests
-test test_2d_variations ... ok
-test test_affine_identity ... ok
-test test_cpu_reference_deterministic ... ok
-test test_point_calculations ... ok
-test test_projection_types ... ok
-test test_render_mode ... ok
-test test_all_variations_no_panic ... ok
-test test_color_blending ... ok
-test test_variation_symmetries ... ok
-test test_preset_configs_valid ... ok
-test test_config_serialization ... ok
-test test_transform_weights_valid ... ok
-
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured
-```
-
-**What's Tested:**
-- CPU reference determinism
-- All 24 variations work without panicking
-- Transform weights are valid
-- Affine identity transform
-- All presets are well-formed
-- Variation symmetries
-- Color blending math
-- Point calculations
-- Config serialization round-trip
-
----
-
-## 3. CPU Benchmarks (Criterion)
-
-**What:** Precise microbenchmarks for CPU code
-
-**Location:** [benches/flame_bench.rs](benches/flame_bench.rs)
-
-**Run:**
-```bash
-# All benchmarks
-cargo bench
-
-# Specific benchmark group
-cargo bench cpu_iteration
-cargo bench variations
-cargo bench affine_transform
-cargo bench point_calculations
-
-# Save baseline for comparison
-cargo bench -- --save-baseline before-optimization
-
-# Compare against baseline
-cargo bench -- --baseline before-optimization
-```
-
-**Example Output:**
-```
-cpu_iteration/single_iter/Complex
-                        time:   [1.234 µs 1.245 µs 1.256 µs]
-                        change: [-2.34% -1.23% +0.12%] (p = 0.23 > 0.05)
-                        No change in performance detected.
-
-variations/apply/Linear time:   [26.4 ns 26.5 ns 26.6 ns]
-variations/apply/Spherical
-                        time:   [26.3 ns 26.4 ns 26.5 ns]
-```
-
-**What's Benchmarked:**
-- **CPU iteration** - Full flame iteration (all presets)
-- **Variations** - Each of 24 variation functions
-- **Affine transform** - Matrix multiplication
-- **Point calculations** - r, r², θ, φ
-
-**Understanding Output:**
-- `time: [min, estimate, max]` - Measurement range in µs/ns/ms
-- `change: [min, estimate, max]` - Performance change vs previous run
-- `p = 0.23` - Statistical significance (< 0.05 = significant change)
-
----
-
-## 4. Simple CPU Benchmark
-
-**What:** Quick, human-readable CPU performance test
-
-**Location:** [src/bin/simple_benchmark.rs](src/bin/simple_benchmark.rs)
-
-**Run:**
-```bash
-cargo run --release --bin simple_benchmark
-```
-
-**Example Output:**
-```
-=== Fractal Flame CPU Benchmark ===
-
-Preset: Complex (4 transforms)
-  10000 iterations in 0.81ms
-  12.34 M iter/sec
-  Final point: (0.4989, -0.1983)
-
-Preset: Spherical (2 transforms)
-  10000 iterations in 0.44ms
-  22.61 M iter/sec
-  Final point: (0.5050, 0.5050)
-
-=== Variation Performance Test ===
-Linear: 37.87 M ops/sec (result: 0.7000, 0.3000)
-Sinusoidal: 32.01 M ops/sec (result: 0.0017, 0.0017)
-Spherical: 38.01 M ops/sec (result: 0.8908, 0.3816)
-...
-
-=== Affine Transform Test ===
-Affine only: 259.67 M ops/sec
-Affine + variations: 31.85 M ops/sec
-```
-
-**What's Benchmarked:**
-- All presets (full iteration)
-- All 24 variations individually
-- Affine transform performance
-
-**Use Cases:**
-- Quick sanity check
-- Before/after optimization comparison
-- Platform comparison (Windows vs Linux vs macOS)
-
----
-
-## 5. GPU Profiling (Desktop)
-
-**What:** Detailed GPU pass timing using timestamp queries
-
-**Requires:** GPU with TIMESTAMP_QUERY support (most modern GPUs)
-
-**Status:** Infrastructure in place, not yet integrated into UI
-
-**Code Location:** [src/profiler.rs](src/profiler.rs)
-
-**How to Use (in code):**
-```rust
-use fractal_flame_wgpu::profiler::GpuProfiler;
-
-let profiler = GpuProfiler::new(&device);
-
-// In render loop
-profiler.begin_scope(&mut encoder, 0); // Start timing
-// ... GPU compute pass ...
-profiler.end_scope(&mut encoder, 0);   // End timing
-
-profiler.resolve(&mut encoder);
-queue.submit(encoder.finish());
-
-// Read results (async)
-if let Some(timestamps) = profiler.read_timestamps(&queue).await {
-    let period = queue.get_timestamp_period();
-    let duration_ms = GpuProfiler::calculate_duration(&timestamps, 0, period);
-    println!("GPU compute: {:.2}ms", duration_ms);
-}
-```
-
-**Query Indices:**
-- 0: Compute (trajectory shader)
-- 1: Accumulate pass
-- 2: Tonemap pass
-- 3: UI pass
-- 4: Present
-
-**Note:** Full integration into the app is planned but not yet implemented. Currently requires manual code additions.
-
----
-
-## 6. CPU Profiling (Desktop)
-
-**What:** Real-time CPU timing displayed in UI
-
-**Always Running:** Performance metrics tracked automatically
-
-**View:**
-- Run the app: `cargo run --release`
-- Look at the **Performance** window
-- Shows:
-  - FPS
-  - Frame time (min/max/avg)
-  - Component timings (compute, accumulate, tonemap, UI)
-  - Version and build number
-
-**Export Snapshot:**
-```rust
-let metrics = PerformanceMetrics::new();
-// ... run app ...
-let snapshot = metrics.snapshot();
-let json = serde_json::to_string_pretty(&snapshot)?;
-println!("{}", json);
-```
-
-**Output:**
-```json
-{
-  "version": "0.1.0 (build #9)",
-  "build_number": 9,
-  "git_hash": "dba27e8",
-  "fps": 250.5,
-  "frame_time_ms": 3.99,
-  "compute_time_ms": 2.5,
-  "accumulate_time_ms": 0.8,
-  "tonemap_time_ms": 0.3,
-  "ui_time_ms": 0.4,
-  "timestamp": "2025-10-21T23:45:00Z"
-}
-```
-
----
-
-## 7. WASM Profiling
-
-**What:** Browser-based performance monitoring
-
-**See:** [WASM-PROFILING.md](archive/WASM-PROFILING.md) for complete guide
-
-**Quick Start:**
-```bash
-# Build WASM
-./build-wasm.bat  # Windows
-./build-wasm.sh   # Linux/macOS
-
-# Serve
-python -m http.server 8080
-
-# Open http://localhost:8080
-# Open browser console (F12)
-```
-
-**Browser Console Methods:**
-```javascript
-// Automatic logging (already in code)
-// Check console for performance snapshots
-
-// Manual export (if exposed)
-metrics.export_to_console();
-```
-
-**Browser DevTools:**
-1. F12 → Performance tab
-2. Click Record 🔴
-3. Interact with renderer
-4. Click Stop
-5. Analyze flame graph
-
----
-
-## 8. Visual Regression Testing
-
-**Status:** ✅ Fully implemented - Desktop CLI + WASM browser tests with automated comparison
-
-### Quick Start
+## 1. Unit tests
+
+**Where:** `#[cfg(test)]` modules inside the source files under `src/`,
+plus one integration file, `tests/regression.rs` (12 tests: transform
+defaults, core variations registered, presets load and validate, config
+serialization, multi-config files).
+
+**Scale:** the library holds 1,927 tests, of which 370 are `#[ignore]`d
+(`cargo test --release --lib -- --list` and `-- --list --ignored` count
+them).
 
 ```bash
-# Run all visual tests (desktop + WASM) with performance tracking
-python tests/visual/run_all_tests.py
+cargo test --release --lib                  # the library (what release.py runs)
+cargo test --release --lib palette          # tests whose path contains "palette"
+cargo test --release --test regression      # the integration file
+cargo test --release --lib some_test -- --nocapture   # see println! output
+```
 
-# Desktop CLI tests only (800x600, pixel-perfect comparison)
-python tests/visual/run_tests.py
+Release mode is the normal way to run them: many tests render, and a
+debug build is far slower.
 
-# WASM browser tests only (Playwright automation)
-python tests/visual/wasm/test_wasm.py
+### GPU tests
 
-# Update baselines after verifying changes are correct
+Tests that touch the GPU follow a few conventions.
+
+- **Two ways to need a GPU.** A test that runs by default asks a local
+  helper for a device and **returns early when there is no adapter**:
+  `fn device() -> Option<(Device, Queue)>`, used as
+  `let Some((device, queue)) = device() else { return; }` (for example
+  `src/renderer/sticky.rs`, `src/renderer/compute_kernel.rs`,
+  `src/escape/terrain.rs`'s `gpu_tests::device`). So on a machine
+  without a GPU the suite passes without exercising them. The heavier
+  ones are instead `#[ignore = "needs a GPU"]` and call
+  `device().expect("gpu")`; they run only when asked.
+- **One at a time, where it matters.** `cargo test` runs tests in
+  parallel. Tests that share global state or need a lot of memory take
+  a static `Mutex<()>` first:
+  - `gpu()` in `src/escape/footprint.rs` hands out a device together
+    with a turn — each terrain test holds an atlas of hundreds of MB,
+    and two at once ran a 6 GB card out of memory;
+  - `DIAG_LOCK` in `src/escape/app_repro_test.rs` guards the global
+    escape diagnostics snapshot between a render and its assertion;
+  - `BREAKER_LOCK` in `src/escape/renderer.rs`.
+
+  The locks recover from poisoning (`lock().unwrap_or_else(|e|
+  e.into_inner())`), so one failing test does not fail every test
+  queued behind it. Running ignored GPU tests with `--test-threads=1`
+  is still the safe default.
+- **`--ignored` is a menu, not a dustbin.** The ignore reason says what
+  a test is for: `"needs a GPU"`, `"prints a measurement"`,
+  `"a survey; run with --ignored --nocapture"`, `"diagnostic"`,
+  `"reads output/flame-zoom"` (local files that the tests marked
+  `"writes output/flame-zoom"`, in `src/scene/cylinder.rs`, produce).
+  Measurements and surveys assert little and print a lot; run them
+  with `--nocapture`.
+
+  ```bash
+  cargo test --release --lib some_measurement -- --ignored --nocapture --test-threads=1
+  ```
+
+### Rendering a config for inspection (INSPECT)
+
+`render_configs_for_inspection` (`src/sim/terrain.rs`, ignored) renders
+config files through the same `renderer::render` the CLI export uses —
+for when the release executable is locked by a running app:
+
+```bash
+INSPECT="a.fflame=a.png;b.fflame=b.png" INSPECT_SIZE=1280x720 \
+  cargo test --release --lib render_configs_for_inspection -- --ignored --nocapture
+```
+
+`INSPECT` is a `;`-separated list of `input=output` pairs;
+`INSPECT_SIZE` defaults to 1920x1080. Write the outputs under `output/`
+(gitignored).
+
+---
+
+## 2. Release gates — `scripts/release.py check`
+
+The fast gates, run in this order from the repository root. Each prints
+pass or FAIL with its time; any failure exits 1.
+
+| gate | command |
+|---|---|
+| unit tests | `cargo test --release --lib` |
+| wasm builds | `cargo check --release --target wasm32-unknown-unknown --lib` |
+| generated contract | `cargo test --release --lib contract_is_current` |
+| shader dumps | `cargo test --release --lib canonical_shader_dumps` |
+| doc links | `python scripts/check_doc_links.py` |
+| engine feature matrix | `cargo check --lib --no-default-features --features engine-sim` |
+| engine feature matrix (escape) | `... --features engine-escape` |
+| engine feature matrix (flame) | `... --features engine-flame` |
+| gallery script parity | `cargo test --profile gallery-test`, in `wasm/script` |
+| gallery renderer smoke | `cargo test --profile gallery-test`, in `wasm/render` |
+
+`--fix` regenerates the two generated files below when their gate
+fails, then tells you to read the diff. No other gate has a fix.
+
+What `check` does not run, because each needs a GPU and minutes: the
+visual suite (§3), the benchmarks (§5) and the variation probe (§6).
+The other `release.py` subcommands (`changelog`, `version`, `build`) are
+described in [RELEASE.md](RELEASE.md).
+
+### Generated files
+
+Two committed files are compared against what the code produces now.
+Regenerate deliberately, and read the diff: the point of the gate is
+that somebody looks.
+
+| file | test | regenerate |
+|---|---|---|
+| `docs/generated/engine-contract.json` (what the API reads) | `contract_is_current` (`src/contract.rs`) | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` |
+| `tests/shader_dumps/*.wgsl` (8 canonical flame shaders: in-app vs export, 2D/3D, solid, multi-emit, path/xaos) | `canonical_shader_dumps` (`src/shader_dumps.rs`) | `UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps` |
+
+The shader dumps make codegen visible in review: a commit that changes
+the generated WGSL carries the before and after next to the source
+change. See [SHADERS.md](main/SHADERS.md).
+
+### Doc links
+
+`scripts/check_doc_links.py` finds Markdown links to `.md` files that do
+not exist, in `docs/**/*.md` and `CLAUDE.md`. Broken links inside
+`docs/archive/` are counted but do not fail the check (an archived doc
+records what it said at the time); a broken link in a live doc does.
+
+---
+
+## 3. Visual regression suite
+
+**Where:** `tests/visual/run_tests.py`; full detail in
+[tests/visual/README.md](../tests/visual/README.md).
+
+```bash
+cargo build --release                       # run_tests.py does not build
+python tests/visual/run_tests.py            # everything (~375 renders)
+python tests/visual/run_tests.py --category escape
 python tests/visual/run_tests.py --update-baseline
-python tests/visual/wasm/test_wasm.py --update-baseline
 ```
+
+- **Renders** each config under `tests/visual/configs/` through the
+  binary's CLI export (`target/release/FractalArtEditor(.exe)` by
+  default, `--binary` to override) at 800x600 and 256 iterations per
+  thread.
+- **Categories** (subdirectories of `configs/`): `2d` (6), `3d` (15),
+  `escape` (119), `sim` (105), `solid` (6), `tonemap` (2),
+  `variations` (121) — 374 configs, plus `configs/warmup.fflame`, which
+  is rendered first as a warmup and is then also run as the test
+  `general-warmup`.
+- **Compares with a tolerance, not a hash.** Baselines in
+  `tests/visual/baseline/` are 160x120 metadata-free thumbnails; each
+  render is downscaled and passes when the mean channel difference is
+  at most 2.0 and at most 1% of pixels differ by more than 40 (0-255
+  scale). Small thumbnails keep the baselines git-trackable, the
+  tolerance survives GPU and driver rounding, and the `solid-*` tests
+  need it because solid rendering is not bit-reproducible (an in-batch
+  depth race). The header of `run_tests.py` has the full reasoning.
+- **Throughput:** a render more than 12x below the run's median
+  iterations per second fails. Escape and simulation renders are left
+  out of that check (their `Iterations` metadata is not a sample count).
+- **Updating:** `--update-baseline` runs the suite, then rewrites only
+  the baselines whose renders moved beyond the tolerance; the rest stay
+  byte-identical. It considers every PNG in `tests/visual/current/`.
+- **Every config must set `"deterministic_rng": true`**, or it is
+  skipped.
 
 **Running the suite while the app is open.** Windows locks a running
 executable, so `cargo build --release` fails with `Access is denied`
@@ -546,306 +248,196 @@ python tests/visual/run_tests.py --binary target-verify/release/FractalArtEditor
 after that it is incremental like any other tree.
 
 One symptom worth recognising: contending with a running app for the
-GPU shows up as a THROUGHPUT failure (`below 4 Miter/s floor`) rather
-than a pixel mismatch. Observed 4 Miter/s against a busy GPU versus
-52 Miter/s on the same commit with the GPU free — so treat a lone
-throughput failure as a measurement to repeat, not a regression to
-chase.
+GPU shows up as a THROUGHPUT failure (`below N Miter/s floor`) rather
+than a pixel mismatch. Treat a lone throughput failure as a measurement
+to repeat, not a regression to chase.
 
-### Architecture
-
-**Test Infrastructure:**
-- **Desktop Tests** - CLI headless export with pixel-perfect SHA256 comparison
-- **WASM Tests** - Browser automation (Playwright) with headless PNG export
-- **Unified Runner** - Runs both test suites + performance comparison + CSV tracking
-
-**Test Configs:** `tests/visual/configs/*.fflame`
-- Small test cases (500K-1B iterations)
-- Deterministic RNG enabled (`"deterministic_rng": true`)
-- Covers: basic variations, 3D mode, tonemap curves, multi-variation
-
-**Resolution:** 800x600 (faster testing, sufficient for visual regression detection)
-
-### Features
-
-**Pixel-Perfect Comparison:**
-- SHA256 hash of pixel data (not PNG file)
-- Ignores compression artifacts
-- Requires PIL/Pillow: `pip install Pillow numpy`
-
-**Performance Tracking:**
-- Extracts render time from PNG metadata
-- Compares baseline vs current (time delta, throughput delta)
-- Saves to `tests/visual/performance_history.csv`
-- Tracks both desktop and WASM performance
-
-**PNG Metadata (Embedded in every export):**
-```
-RenderTime: 1234.56ms          # Total export time (device + render + encode)
-Iterations: 10000000           # Total iteration count
-Resolution: 800x600            # Image dimensions
-Config: <full JSON>            # Complete FractalConfig
-TestCategory: variations       # Optional test grouping
-```
-
-**Reading Metadata (Python):**
-```python
-from PIL import Image
-
-img = Image.open('output.png')
-render_time = float(img.info.get('RenderTime', '0ms').replace('ms', ''))
-iterations = int(img.info.get('Iterations', '0'))
-```
-
-### Test Process
-
-**Desktop Workflow:**
-1. Build release binary: `cargo build --release`
-2. Run test script: `python tests/visual/run_tests.py`
-3. For each config in `tests/visual/configs/`:
-   - Execute CLI export: `fractal_flame_wgpu export -i config.fflame -o current/test.png --width 800 --height 600`
-   - Calculate SHA256 of pixel data
-   - Compare against baseline SHA256
-   - Extract performance metrics from PNG metadata
-4. Generate console report with pass/fail + performance deltas
-5. Update `performance_history.csv` with timestamped results
-
-**WASM Workflow:**
-1. Build WASM: `./build-wasm.bat` (or `wasm-pack build --target web --release`)
-2. Run test script: `python tests/visual/wasm/test_wasm.py`
-3. For each config in `tests/visual/configs/`:
-   - Launch headless browser (Chrome or Firefox)
-   - Load WASM module via Playwright
-   - Call JavaScript API: `export_headless_wasm(config, 800, 600, 256, 4)`
-   - Download PNG blob
-   - Calculate SHA256 of pixel data
-   - Compare against baseline SHA256
-   - Extract performance metrics from PNG metadata
-4. Generate console report with pass/fail + performance stats
-
-**Unified Workflow:**
-1. Run both test suites: `python tests/visual/run_all_tests.py`
-2. Extract PNG metadata from both desktop and WASM outputs
-3. Compare baseline vs current for all tests
-4. Generate performance report (render time, throughput, deltas)
-5. Update CSV with both desktop and WASM performance data
-
-### Current Status
-
-- ✅ Desktop CLI tests (8 test cases, pixel-perfect comparison)
-- ✅ WASM browser tests (7 test cases, Chrome + Firefox tested)
-- ✅ Automated test runner (unified desktop + WASM)
-- ✅ PNG metadata embedding (total export time, iterations, config)
-- ✅ Performance tracking (CSV history, baseline comparison)
-- ✅ Baseline management (update/regenerate commands)
-
-**Browser Compatibility (WASM):**
-- ✅ Chrome/Chromium 113+ - Fully tested, all features working
-- ✅ Firefox 121+ - Fully tested, all features working
-- ⚠️ Safari - WebGPU experimental, not tested
-- ❌ Mobile - WebGPU support limited/experimental
+`tests/visual/run_all_tests.py` runs this suite and the WASM suite (§4)
+one after the other and appends render timings to
+`tests/visual/performance_history.csv`.
 
 ---
 
-## Typical Workflow
+## 4. WASM browser tests
 
-### 1. Before Making Changes
-
-```bash
-# Run all tests to establish baseline
-cargo test
-cargo test --test regression
-cargo bench -- --save-baseline before
-
-# Note current version
-cargo run --example show_version
-```
-
-### 2. After Making Changes
+**Where:** `tests/visual/wasm/`. Selenium driving Chrome (needs
+`chromedriver` on PATH, and `pip install selenium Pillow numpy`); see
+[tests/visual/wasm/README.md](../tests/visual/wasm/README.md).
 
 ```bash
-# Quick validation
-cargo test
-
-# Regression check
-cargo test --test regression
-
-# Performance comparison
-cargo bench -- --baseline before
-
-# Manual testing
-cargo run --release
+python tests/visual/wasm/test_wasm.py
+python tests/visual/wasm/test_wasm.py --update-baseline
 ```
 
-### 3. Performance Investigation
+`test_wasm.py`:
 
-```bash
-# Quick check
-cargo run --release --bin simple_benchmark
+1. builds the web app by running `build-wasm.bat` (so, as written, it
+   runs on Windows);
+2. serves the repository root on port 8080 and opens
+   `tests/visual/wasm/test.html` in a Chrome window with WebGPU flags;
+3. for each config in the `2d`, `3d`, `tonemap`, `variations` and
+   `escape` categories, calls `WasmApi.load_config_json` and
+   `await WasmApi.export_png(800, 600, 256, false)`
+   ([WASM.md](WASM.md) lists the API);
+4. compares an **exact** SHA-256 of the pixels against
+   `tests/visual/baseline/wasm/<name>.png`. Seven baselines are
+   committed; a config with no baseline passes with a note.
 
-# Detailed benchmarks
-cargo bench
+`test_plan.py` is a separate gate for Focused Rendering's planner in
+the browser: it drives `PlanBench` (`src/wasm_api.rs`) one step per
+animation frame from `tests/visual/wasm/plan.html` and fails any step
+over 16 ms. Build first (`./build-wasm.sh` or `build-wasm.bat`).
 
-# Profile specific variation
-cargo bench variations/apply/YourVariation
-```
-
-### 4. Before Release
-
-```bash
-# Full test suite
-cargo test --release
-cargo test --release --test regression
-
-# Benchmark all presets
-cargo bench
-
-# Manual testing
-cargo run --release
-
-# Check version
-cargo run --example show_version
-
-# Note build number for release notes
-```
+Neither runs in `release.py check`. The check's `wasm builds` gate only
+compiles the library for `wasm32-unknown-unknown`.
 
 ---
 
-## Performance Targets
+## 5. Benchmarks — `scripts/run_benchmarks.py`
 
-### Desktop (Release Build)
+```bash
+python scripts/run_benchmarks.py              # CPU + desktop GPU + WASM
+python scripts/run_benchmarks.py --quick      # skip WASM, Criterion --quick, 3 runs per config
+python scripts/run_benchmarks.py --wasm-only  # only the WASM stage
+python scripts/run_benchmarks.py --no-save    # do not write the CSV or last_run.json
+```
 
-| Test | Target | Good | Excellent |
-|------|--------|------|-----------|
-| Unit tests | All pass | All pass | All pass |
-| Regression tests | All pass | All pass | All pass |
-| FPS (1080p) | 60+ | 100-200 | 200-400 |
-| Frame time | <16.67ms | 5-10ms | 2.5-5ms |
-| CPU iteration | >5 M/s | 10-20 M/s | 20-40 M/s |
-| Variations | >15 M/s | 25-35 M/s | 35-60 M/s |
+Three stages:
 
-### WASM (Release Build)
+1. **CPU microbenchmarks** — `cargo bench --bench flame_bench`
+   (Criterion; `benches/flame_bench.rs`). These measure CPU-side
+   helpers only — affine maps, point helpers (r, θ, φ), colour
+   blending, a preset's iteration step, variation-weight lookup,
+   registry lookups, transform creation. Variation math runs on the
+   GPU and is not here.
+2. **Desktop GPU renders** — runs `cargo build --release` itself, then
+   renders every config in `tests/visual/configs/` with
+   `cargo run --release -- export ... --width 800 --height 600 --iterations-per-thread 1024`,
+   5 runs each (3 with `--quick`), the first discarded as warmup. Times
+   come from each PNG's `RenderTime` metadata. Output:
+   `tests/visual/current/<name>.png`.
+3. **WASM renders** — runs `tests/visual/wasm/test_wasm.py` repeatedly
+   and reads the times from its PNGs. A failure here is a warning, not
+   a failed run.
 
-| Test | Target | Good | Excellent |
-|------|--------|------|-----------|
-| FPS (1080p) | 30+ | 45-55 | 55-60 |
-| FPS (720p) | 60 | 60 | 60+ |
-| Frame time | <33ms | 16-20ms | <16.67ms |
+The report compares each benchmark with the previous run
+(`benchmark_results/last_run.json`) and the two previous full runs in
+`benchmark_results/unified_benchmarks.csv`, colouring more than 10%
+slower red, more than 5% slower yellow and more than 2% faster green.
+
+**The hash tables are informational.** The report ends with
+Baseline-vs-Current, WASM-vs-WASM and Desktop-vs-WASM tables of exact
+pixel hashes (tolerance for `solid-*`). They do not affect the exit
+status, and the "baseline" they read is the visual suite's 160x120
+thumbnails, which a full-size render never matches exactly. Use
+`tests/visual/run_tests.py` for regressions.
+
+### Other measurement binaries
+
+| binary | what |
+|---|---|
+| `cargo run --release --bin simple_benchmark` | quick CPU timing of the presets, the CPU-side variation helpers and affine maps |
+| `cargo run --release --bin shader_bench` | shader-compilation measurements behind sticky compilation ([record](archive/projects/sticky-shader-compilation.md)) |
+| `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png [--output diff.png] [--threshold N]` | pixel diff of two PNGs, with their metadata |
 
 ---
 
-## Continuous Integration
+## 6. Variation math probe and reachability census
 
-### Recommended CI Pipeline
+Both live in one binary, `src/bin/variation_probe.rs`, and write
+committed reports under `docs/generated/`. They exist because a visual
+test can say a picture changed but not which variation, at which input,
+computed what — the class of bug where Metal's fast-math returns a
+plausible wrong value. The rules they back are in
+[SHADERS.md](main/SHADERS.md).
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-      - name: Run tests
-        run: cargo test --release
-      - name: Run regression tests
-        run: cargo test --release --test regression
-      - name: Run benchmarks (no comparison)
-        run: cargo bench --no-run
+```bash
+cargo run --release --bin variation_probe                  # probe -> docs/generated/variation-probe.txt (+ -sweep.txt)
+cargo run --release --bin variation_probe -- --no-sweep    # skip the parameter sweep
+cargo run --release --bin variation_probe -- compare OLD NEW
+cargo run --release --bin variation_probe -- census flame.fflame [iterations]
+cargo run --release --bin variation_probe -- census --corpus [iterations] [seeds]
+cargo run --release --bin variation_probe -- rank OLD NEW [census-report]
 ```
+
+- **The probe** (`src/probe/`) evaluates every variation's shader
+  arithmetic at a fixed adversarial input grid (signed zeros, values
+  around the 1e32 bad-value threshold, subnormals), in 2D and 3D, and
+  writes `variation-probe.txt`. The sweep companion,
+  `variation-probe-sweep.txt`, moves each parameter one at a time.
+  The first run on a machine pays cold driver compiles (minutes).
+- **`compare OLD NEW`** diffs two reports. It reports value **classes**
+  (zero, finite, NaN, infinite, past-threshold), which no rounding
+  difference can change, separately from quantised magnitudes. It exits
+  1 only for a class change or a variation present in one report alone;
+  magnitude-only differences are printed and exit 0.
+- **The census** (`src/census/`) instruments the generated
+  `apply_variations` dispatcher and counts which input classes real
+  renders actually feed each variation. `census <file>` measures one
+  config (default 100M iterations); `census --corpus` sweeps a corpus
+  (defaults: 50M iterations, 100 seeds) and writes
+  `docs/generated/variation-census-<os>.txt` — per platform, because it
+  is a measurement of that GPU. `cargo run --release --bin
+  census_dumpseed -- N` prints the config behind a corpus entry
+  `random:N`.
+- **`rank`** joins two probe reports with the census into a worklist.
+  `docs/accepted-divergences.txt` records what has been examined and
+  deliberately left alone.
+
+Design records: [variation-math-probe.md](archive/projects/variation-math-probe.md),
+[variation-reachability-census.md](archive/projects/variation-reachability-census.md).
+
+---
+
+## 7. Profiling
+
+- **In the app:** the Performance panel (`src/ui/performance.rs`) shows
+  version, build profile, FPS, frame time and its range, the per-pass
+  timings (compute, accumulate, tonemap, UI, submit, present),
+  accumulated frames and total iterations. The metrics live in
+  `PerformanceMetrics` (`src/util.rs`).
+- **GPU timestamps:** `GpuProfiler` in `src/profiler.rs` wraps
+  timestamp queries, but nothing in the app uses it; wiring it in is
+  manual.
+- **In the browser:** the developer tools' Performance tab; the old
+  guide is archived as [WASM-PROFILING.md](archive/WASM-PROFILING.md).
 
 ---
 
 ## Troubleshooting
 
-### Tests Fail
-
 ```bash
-# Run with backtrace
-RUST_BACKTRACE=1 cargo test
-
-# Run specific failing test
-cargo test test_name -- --nocapture
-
-# Check test in isolation
-cargo test --test regression test_affine_identity -- --exact
+RUST_BACKTRACE=1 cargo test --release --lib failing_test -- --nocapture
+cargo test --release --lib some::module::path::exact_test -- --exact
 ```
 
-### Benchmarks Unstable
-
-```bash
-# Increase sample size
-cargo bench -- --sample-size 1000
-
-# Increase warmup
-cargo bench -- --warm-up-time 5
-
-# Close other applications
-# Disable CPU frequency scaling
-# Use performance power profile
-```
-
-### Can't Build Benchmarks
-
-```bash
-# Check Criterion is in dev-dependencies
-grep criterion Cargo.toml
-
-# Try clean build
-cargo clean
-cargo bench
-```
+- **A GPU test fails only when run with others:** rerun it alone and
+  with `--test-threads=1`; see the locks in §1.
+- **The visual suite reports a whole category off at once:** check that
+  the binary is current (`run_tests.py` does not build), and that
+  nothing else is using the GPU.
+- **Criterion numbers are noisy:** close other applications;
+  `cargo bench -- --sample-size 200` or `--warm-up-time 5` for more
+  stable runs.
 
 ---
 
-## Summary: Testing Checklist
+## Files reference
 
-Before committing code:
-- [ ] `cargo test` - Unit tests pass
-- [ ] `cargo test --test regression` - Regression tests pass
-- [ ] `python tests/visual/run_all_tests.py` - Visual regression tests pass (desktop + WASM)
-- [ ] `cargo clippy` - No warnings
-- [ ] `cargo run --release` - App works
-- [ ] `cargo bench` - No major performance regression
-
-Before releasing:
-- [ ] All tests pass
-- [ ] Benchmarks meet targets
-- [ ] Manual testing on all platforms
-- [ ] Version incremented
-- [ ] `cargo run --example show_version` - Note build number
-- [ ] WASM build tested
-
----
-
-## Files Reference
-
-| Type | Location | Command |
-|------|----------|---------|
-| Unit tests | `src/**/*.rs` (bottom of files) | `cargo test` |
-| Regression | `tests/regression.rs` | `cargo test --test regression` |
-| Visual (Desktop) | `tests/visual/run_tests.py` | `python tests/visual/run_tests.py` |
-| Visual (WASM) | `tests/visual/wasm/test_wasm.py` | `python tests/visual/wasm/test_wasm.py` |
-| Visual (Unified) | `tests/visual/run_all_tests.py` | `python tests/visual/run_all_tests.py` |
-| Benchmarks | `benches/flame_bench.rs` | `cargo bench` |
-| Simple bench | `src/bin/simple_benchmark.rs` | `cargo run --release --bin simple_benchmark` |
-| CLI export | `src/lib.rs`, `src/app/export.rs` | `cargo run --release -- export -i config.fflame -o out.png` |
-| WASM API | `src/wasm_api.rs`, `src/app/export.rs` | See WASM.md for build instructions |
-| Image compare | `src/bin/compare_images.rs` | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png` |
-| Profiler | `src/profiler.rs` | (used in code) |
-| Metrics | `src/util.rs` | (automatic in app) |
-| Version | `examples/show_version.rs` | `cargo run --example show_version` |
-
-**Note:** Old export tools (`export_preset`, `test_export`) have been removed. Use the main CLI export mode instead.
-
----
-
-**Last Updated:** 2025-11-16
-**Current Build:** (check with `cargo run --example show_version`)
-**Test Coverage:** Unit tests ✅, Regression ✅, Visual (Desktop + WASM) ✅, Benchmarks ✅, Profiling ✅
+| what | where | run |
+|---|---|---|
+| unit tests | `src/**/*.rs` | `cargo test --release --lib` |
+| integration tests | `tests/regression.rs` | `cargo test --release --test regression` |
+| release gates | `scripts/release.py` | `python scripts/release.py check` |
+| doc links | `scripts/check_doc_links.py` | `python scripts/check_doc_links.py` |
+| engine contract | `src/contract.rs` → `docs/generated/engine-contract.json` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` |
+| shader dumps | `src/shader_dumps.rs` → `tests/shader_dumps/` | `UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps` |
+| visual suite | `tests/visual/run_tests.py` | `python tests/visual/run_tests.py` |
+| visual + WASM + CSV | `tests/visual/run_all_tests.py` | `python tests/visual/run_all_tests.py` |
+| WASM suite | `tests/visual/wasm/test_wasm.py` | `python tests/visual/wasm/test_wasm.py` |
+| WASM planner gate | `tests/visual/wasm/test_plan.py` | `python tests/visual/wasm/test_plan.py` |
+| benchmarks | `scripts/run_benchmarks.py`, `benches/flame_bench.rs` | `python scripts/run_benchmarks.py` |
+| variation probe / census | `src/bin/variation_probe.rs`, `src/probe/`, `src/census/` | `cargo run --release --bin variation_probe` |
+| gallery module tests | `wasm/*/tests/` | `cargo test --profile gallery-test` in the crate directory |
+| CLI export | `src/main.rs`, `src/app/export.rs` | `cargo run --release -- export -i config.fflame -o out.png` |
+| image diff | `src/bin/compare_images.rs` | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png` |
