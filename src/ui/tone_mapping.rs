@@ -581,11 +581,12 @@ pub fn render_colors_content(
             }
 
             let current_color_mode = config_manager.active_config().color_mode;
-            // Neither non-flame generator reads the colour mode, and a
-            // config left on PathMap would otherwise hide the palette
-            // picker they both genuinely use.
-            if !show_color_mode
-                || matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed)
+            // The palette controls, in every colour mode: Palette and
+            // Speed look colours up in the transformed palette, and so
+            // does PathMap -- a path's colour is a palette coordinate --
+            // so hiding them under PathMap hid controls that still
+            // changed the picture. The non-flame engines read the
+            // palette too.
             {
                 let current_palette_name = config_manager.active_config().palette.name.clone();
 
