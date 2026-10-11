@@ -447,10 +447,3 @@ flame's alpha is a raw hit count, which a filament flame pushes past
 until 2026-10: its largest finite half float is 65504, so those
 pixels became Inf (black under Log) or saturated. Full floats cost
 the tiled exporter's budget its ceiling (above).
-
-**A label in the list is the registry key.** The panel's rows show
-`effect_type` (`sobel_edges`); only the Add combo shows the curated
-label (Edge Glow).
-
-**Every parameter is a float slider.** The panel draws Boolean,
-Integer and Angle parameters the same way, over their min and max.
