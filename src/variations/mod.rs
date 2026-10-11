@@ -663,6 +663,11 @@ impl VariationRegistry {
         let removed = self.variations.remove(name).is_some();
         if removed {
             self.aliases.retain(|_, target| target != name);
+            // `names()` is the registry's ID order and what the UI and
+            // the corpus export list; a removed name left here would
+            // still be listed (and would hold its slot) with no
+            // variation behind it. `clear_api` prunes the same way.
+            self.ordered_names.retain(|n| n != name);
             self.version = self.version.wrapping_add(1);
         }
         removed
