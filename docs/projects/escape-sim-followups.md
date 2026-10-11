@@ -158,3 +158,43 @@ resets the display driver for the whole desktop.
   most panels.
 - The animation picker's View and Rendering categories are not yet
   gated by render mode -- deferred to the camera/View panel work.
+
+## The escape engine: not built
+
+Moved here from the escape engine's design record (now
+[escape-time-fractals.md](escape-time-fractals.md), archived) when its
+main doc, [docs/main/ESCAPE.md](../main/ESCAPE.md), was written. Everything
+else in that record is built. These are not:
+
+- **Perturbation tiers for the transcendental formulas** —
+  `tetration`, `exponential`, `trig`, `collatz`. The deltas exist
+  (`exp(Z+d) = exp(Z)·exp(d)`); each needs its own error analysis.
+  Ducks' trig variants 1-3 (Secant among them) sit here too: they
+  want big-float `sin`/`cos`/`exp` on the reference side, which is
+  comparable groundwork to the `ln`/`atan2` already done.
+- **Chebyshev over the two non-unity Newton functions** DECLINES the
+  tier, by measurement rather than omission: its `r` is
+  asymptotically constant, so the quotient rule loses the delta, and
+  the symbolic cancellation that fixes it exists only for `z^p - 1`.
+  Recorded so it is not re-attempted blind.
+- **Series approximation** — absent, and still unmeasured against
+  BLA. Worth a Phase-0 measurement before any building.
+- **Kaliset's zoom-24 floor** — it perturbs correctly above zoom 24
+  and declines below it, because the inversion amplifies the delta
+  faster than the rung holds. The panel's depth hint does not yet
+  express that nuance (it reads "unlimited" from zoom 14).
+- **Row banding of the perturbed path** — would let a frame exceed a
+  device's buffer limit by sizing the per-pixel state to a band, as
+  the direct path already does via `tile_y0`. Only needed where a
+  device's real `max_buffer_size` is under the frame's state (398 MB
+  at 4K); accumulation covers the antialiasing case. Not built.
+- **Temporal antialiasing / spectral rendering** — motion blur and
+  wavelength-correlated fringing on a zoom. Planned, never scheduled;
+  it is an export-loop feature, not a shader one, and wants its own
+  plan. Full costing in the archived new-families research (§7).
+- **GPU reference-orbit computation (the NTT direction)** —
+  measurement-gated go/no-go, never run. See
+  [escape-ntt-reference.md](../experimental/escape-ntt-reference.md).
+- **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
+  since before 2026-09-02; verified pre-existing against a stashed
+  tree. Unrelated to the tiers.
