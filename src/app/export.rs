@@ -205,8 +205,7 @@ pub async fn export_headless(
     };
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
-    let solid_active = config.solid_strength > 0.0
-        && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+    let solid_active = config.solid_depth_active();
     let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
 
     // Route on the MODE first. The high-res path is the tiled

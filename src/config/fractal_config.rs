@@ -1137,6 +1137,19 @@ impl FractalConfig {
         }
     }
 
+    /// Whether this config renders a 3D flame through the solid depth
+    /// region: occluding (`solid_strength`) OR lit (`solid_shading`) --
+    /// lighting works without occlusion, and needs the depth either way.
+    /// The one test for SOLID compilation, the histogram's depth tail,
+    /// export routing and the export size budget; the interactive
+    /// renderer always used it, but the one-shot paths tested
+    /// `solid_strength` alone, so an export of a lit-only flame came out
+    /// unlit.
+    pub fn solid_depth_active(&self) -> bool {
+        (self.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(self.render_mode, crate::scene::transforms::RenderMode::ThreeD)
+    }
+
     pub fn effective_levels_enabled(&self) -> bool {
         self.levels_enabled && !self.render_mode.is_non_flame()
     }
