@@ -261,7 +261,18 @@ pub fn export_headroom(config: &FractalConfig, w: u32, h: u32) -> u64 {
 /// pieces, stopping at the first refused, and giving it all back at once.
 /// Measured on a 6 GB card: an export ran out of memory where nothing
 /// said it would, and the atlas is most of what it holds.
+///
+/// Only on a discrete card, whose own memory refuses what it does not
+/// have. Elsewhere the viewport's [`MAX_SECTIONS`], as before: a unified
+/// memory (Apple silicon, an integrated GPU) can grant far past what is
+/// comfortable and pay for it in paging; a browser may not allocate a
+/// buffer until it is used, so the probe would measure nothing; and a
+/// software renderer is the reference, whose pictures should not depend
+/// on the machine.
 pub async fn fit_export_sections(device: &Device, config: &FractalConfig, w: u32, h: u32) -> u32 {
+    if cfg!(target_arch = "wasm32") || device.adapter_info().device_type != DeviceType::DiscreteGpu {
+        return MAX_SECTIONS;
+    }
     let lim = device.limits();
     let layer = TerrainRenderer::atlas_layer_bytes(SECTION_SAMPLES, SECTION_SAMPLES);
     let headroom = export_headroom(config, w, h) + (256 << 20);
@@ -1459,7 +1470,8 @@ mod tests {
 
     /// An export's section cap is fitted to the card: one of the halvings
     /// from [`EXPORT_MAX_SECTIONS`] to [`MAX_SECTIONS`], never past the
-    /// device's layers -- and a larger export never fits more.
+    /// device's layers -- and a larger export never fits more. Off a
+    /// discrete card, the viewport's.
     #[test]
     fn an_exports_section_cap_fits_the_card() {
         let Some((_one_at_a_time, device, _queue)) = gpu() else {
@@ -1469,6 +1481,9 @@ mod tests {
         let c = terrain_config();
         let cap = pollster::block_on(fit_export_sections(&device, &c, 1920, 1080));
         println!("1080p export: {cap} sections");
+        if device.adapter_info().device_type != DeviceType::DiscreteGpu {
+            assert_eq!(cap, MAX_SECTIONS);
+        }
         assert!([64, 128, 256].contains(&cap) && cap <= device.limits().max_texture_array_layers.max(MAX_SECTIONS), "{cap}");
         let mut huge = c.clone();
         huge.escape.terrain.prefilter = 3;
