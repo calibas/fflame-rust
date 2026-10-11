@@ -27,7 +27,7 @@ which rewrites the references in code comments too).
 
 | Doc | What it tracks |
 |---|---|
-| [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code: likely bugs, UI and comment mismatches, dead code. None fixed yet. |
+| [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code, and what the fix pass that followed left open (its *Still open* section). |
 | [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, the path tracer's speed, known gaps, and what the escape engine has not built. |
 | [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |
 | [VARIATIONS_TODOS.md](VARIATIONS_TODOS.md) | The variation backlog. |
