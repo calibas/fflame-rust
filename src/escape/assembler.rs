@@ -6800,8 +6800,11 @@ fn ifs_has_nonlinear() -> bool {
 // The beam's ranking key: sigma-weighted position when the CPU that
 // seeds this walk chose it, which it does when every map is an
 // inversion. See `ifs_estimate::RankKey::Auto` for the measurement.
+// Not in fdata[3].w as on the plane: the solid's camera rows carry
+// the material there (`ifs_gloss`), so it sits in the handover row's
+// pad (`escape::ifs::SOLID_RANK_KEY`).
 fn ifs_weighted_key() -> bool {
-    return params.fdata[3].w > 0.5;
+    return params.fdata[7].w > 0.5;
 }
 
 fn ifs_count() -> u32 {
@@ -8062,6 +8065,40 @@ mod tests {
     use super::*;
     use crate::escape::{COLORINGS, FORMULAS};
     use egui_wgpu::wgpu::naga;
+
+    /// The `fdata` slot (row, component) a one-line accessor reads.
+    fn fdata_slot(src: &str, name: &str) -> (usize, usize) {
+        let at = src.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+        let rest = &src[at..];
+        let i = rest.find("params.fdata[").expect("reads fdata") + "params.fdata[".len();
+        let close = rest[i..].find(']').expect("closing bracket");
+        let row: usize = rest[i..i + close].parse().expect("row");
+        let comp = match rest.as_bytes()[i + close + 2] {
+            b'x' => 0,
+            b'y' => 1,
+            b'z' => 2,
+            b'w' => 3,
+            c => panic!("component {}", c as char),
+        };
+        (row, comp)
+    }
+
+    /// The solid's beam ranks by the key `pack_globals3` packs, in a slot
+    /// none of the rig's settings share. It once read the forward row's
+    /// pad, which the renderer fills with the material's gloss, so a
+    /// solid glossier than 0.5 ranked by a key its CPU seeding never
+    /// chose.
+    #[test]
+    fn a_solid_ranks_by_its_own_slot_not_the_materials() {
+        let key = fdata_slot(IFS_3D_TEMPLATE, "ifs_weighted_key");
+        assert_eq!(key, crate::escape::ifs::SOLID_RANK_KEY);
+        for f in ["ifs_gloss", "ifs_rough", "ifs_glow"] {
+            assert_ne!(key, fdata_slot(IFS_RIG, f), "{f} shares the ranking key's slot");
+        }
+        for f in ["ifs_has_nonlinear", "ifs_count", "ifs_link_levels", "ifs_beam_slots", "ifs_cap", "ifs_light_count"] {
+            assert_ne!(key, fdata_slot(IFS_3D_TEMPLATE, f), "{f} shares the ranking key's slot");
+        }
+    }
 
     #[test]
     fn every_field_coloring_combination_validates() {
