@@ -530,6 +530,51 @@ impl Default for PaletteTransform {
 }
 
 impl PaletteTransform {
+    /// The transform a config's palette settings describe. One reading
+    /// of them for the GPU upload, the export, the Colors panel's
+    /// preview and the Transforms panel's swatches, so none can drift.
+    pub fn from_config(config: &crate::config::FractalConfig) -> Self {
+        Self::from_settings(
+            config.palette_squeeze_mode,
+            config.palette_squeeze,
+            config.palette_squeeze_falloff,
+            config.palette_log_strength,
+            config.palette_rotation,
+            config.palette_reverse,
+        )
+    }
+
+    /// [`Self::from_config`] from the loose settings, for a caller that
+    /// holds them rather than a config. The squeeze factor is the one
+    /// the mode reads: the repeat count for Linear, the octave ratio
+    /// (`palette_squeeze_falloff`) for Geometric.
+    pub fn from_settings(
+        squeeze_mode: SqueezeMode,
+        squeeze: f32,
+        squeeze_falloff: f32,
+        log_strength: f32,
+        rotation: f32,
+        reverse: bool,
+    ) -> Self {
+        let squeeze_factor = match squeeze_mode {
+            SqueezeMode::Linear => squeeze,
+            SqueezeMode::Geometric => squeeze_falloff,
+        };
+        Self { squeeze_mode, squeeze_factor, log_strength, rotation, reverse }
+    }
+
+    /// The colour the renderer gives palette coordinate `t`, after this
+    /// transform -- what a swatch should show. Read from a small lookup
+    /// table built the way the GPU's is ([`render_palette_lookup`]), so
+    /// it cannot disagree with the picture; `palette.sample_color(t)`
+    /// alone ignores rotation, squeeze, log and reverse.
+    pub fn sample_color(&self, palette: &Palette, t: f32) -> [f32; 3] {
+        const LEN: usize = 256;
+        let lut = render_palette_lookup(palette, self, LEN);
+        let i = (t.clamp(0.0, 1.0) * (LEN - 1) as f32).round() as usize;
+        [lut[i * 4], lut[i * 4 + 1], lut[i * 4 + 2]]
+    }
+
     /// True if this transform is the identity — every stage is a no-op.
     /// `update_palette` and the UI preview can skip the helper entirely
     /// in this case, and consumers can short-circuit reupload work.
@@ -1595,6 +1640,35 @@ mod tests {
 
         // Nothing new: nothing to do.
         assert!(!app.sync_packs_from(&global));
+    }
+
+    /// A swatch sampled through the transform shows what the renderer
+    /// shows: reversed, the start of the palette is its end colour. The
+    /// Transforms panel's swatch sampled the raw palette and ignored
+    /// rotation, squeeze, log and reverse.
+    #[test]
+    fn a_transformed_sample_follows_reverse() {
+        let palette = Palette::fire();
+        let mut config = crate::config::FractalConfig::default();
+        config.palette_reverse = true;
+        let reversed = PaletteTransform::from_config(&config);
+        assert_eq!(reversed.sample_color(&palette, 0.0), palette.sample_color(1.0));
+        assert_eq!(reversed.sample_color(&palette, 1.0), palette.sample_color(0.0));
+
+        let identity = PaletteTransform::from_config(&crate::config::FractalConfig::default());
+        assert!(identity.is_identity());
+        for t in [0.0, 0.2, 1.0] {
+            assert_eq!(identity.sample_color(&palette, t), palette.sample_color(t));
+        }
+    }
+
+    /// The squeeze factor is the one the mode reads.
+    #[test]
+    fn from_settings_picks_the_squeeze_the_mode_reads() {
+        let lin = PaletteTransform::from_settings(SqueezeMode::Linear, 3.0, 0.5, 0.0, 0.0, false);
+        assert_eq!(lin.squeeze_factor, 3.0);
+        let geo = PaletteTransform::from_settings(SqueezeMode::Geometric, 3.0, 0.5, 0.0, 0.0, false);
+        assert_eq!(geo.squeeze_factor, 0.5);
     }
 
     #[test]
