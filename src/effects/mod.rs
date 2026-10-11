@@ -1652,6 +1652,64 @@ mod tests {
         assert!(shader_lint::subnormal_literals(src).is_empty());
     }
 
+    /// Effects sample with an explicit level, never an implicit
+    /// derivative.
+    ///
+    /// `textureSample` (like `textureSampleBias` and
+    /// `textureSampleCompare`) takes screen-space derivatives, which WGSL
+    /// allows only in uniform control flow. Chrome's Tint enforces that;
+    /// naga, which validates the desktop build, does not check fragment
+    /// uniformity. So density_blur -- a per-pixel early return on a
+    /// density-dependent radius, then samples in its blur loop -- and
+    /// tunnel -- a return at the centre pixel, then a sample -- compiled
+    /// on desktop and failed in the browser. The effect textures have
+    /// one mip, so `textureSampleLevel(.., 0.0)` reads exactly what
+    /// `textureSample` did, in any control flow; every effect uses it
+    /// now, so a new branch cannot reintroduce the failure.
+    ///
+    /// Effects are also published to the API, whose publish check could
+    /// apply the same rule to downloaded ones.
+    #[test]
+    fn effects_never_sample_with_implicit_derivatives() {
+        fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path, &str)) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, f);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("wgsl") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        f(&path, &text);
+                    }
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/effects");
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+        visit(&root, &mut |path, text| {
+            checked += 1;
+            let code = crate::variations::shader_lint::strip_wgsl_comments(text);
+            for builtin in ["textureSample(", "textureSampleBias(", "textureSampleCompare("] {
+                for (at, _) in code.match_indices(builtin) {
+                    let before = code[..at].bytes().next_back();
+                    if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
+                        continue; // part of a longer identifier
+                    }
+                    let line = code[..at].matches('\n').count() + 1;
+                    violations.push(format!("{}:{line}: {builtin}..)", path.display()));
+                }
+            }
+        });
+        assert!(checked > 10, "scanned only {checked} effect shaders -- the walk is broken");
+        assert!(
+            violations.is_empty(),
+            "implicit-derivative sampling in an effect (a uniformity error in Chrome \
+             wherever control flow depends on the pixel); use textureSampleLevel(.., 0.0):\n  {}",
+            violations.join("\n  ")
+        );
+    }
+
     #[test]
     fn test_registry_has_builtin_effects() {
         let registry = global_effect_registry();

@@ -102,7 +102,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let blend_mode = i32(get_param(4u));
     let direction = get_param(5u) * PI / 180.0;
 
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     // Compute directional time offset
     let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
@@ -110,7 +110,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Apply domain warping to UV coordinates
     let warp = domain_warp_calc(input.uv * scale, time_offset, octaves);
     let warped_uv = clamp(input.uv + warp * intensity, vec2<f32>(0.0), vec2<f32>(1.0));
-    let warped = textureSample(input_texture, input_sampler, warped_uv);
+    let warped = textureSampleLevel(input_texture, input_sampler, warped_uv, 0.0);
 
     // Apply blend mode between original and warped
     let result = apply_blend(original.rgb, warped.rgb, blend_mode, intensity * 2.0);

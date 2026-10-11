@@ -52,7 +52,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(4u);
     let blend_mode = i32(get_param(5u));
 
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     // Center coordinates and correct for aspect ratio
     let aspect = f32(effect_params.width) / f32(effect_params.height);
@@ -63,7 +63,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let angle = atan2(p.y, p.x) / PI;
     let radius = length(p);
 
-    // Avoid division by zero at center
+    // Avoid division by zero at center. A per-pixel return, so the
+    // sample below is in non-uniform control flow and must name its
+    // level: an implicit-derivative textureSample there is a uniformity
+    // error in Chrome (Tint), though naga accepts it (see density_blur).
     if (radius < 0.001) {
         return original;
     }
@@ -79,7 +82,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     tunnel_uv = fract(tunnel_uv);
 
     // Sample with tunnel coordinates
-    let tunnel_color = textureSample(input_texture, input_sampler, tunnel_uv);
+    let tunnel_color = textureSampleLevel(input_texture, input_sampler, tunnel_uv, 0.0);
 
     // Darken toward center for depth effect
     let depth_fade = smoothstep(0.0, 0.5, radius);

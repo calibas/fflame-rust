@@ -115,7 +115,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(8u);
     let blend_mode = i32(get_param(9u));
 
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     // Convert UV to fractal coordinates
     // Correct for aspect ratio

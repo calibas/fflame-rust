@@ -61,7 +61,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel_size = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
 
     // Sample center pixel
-    let center = textureSample(input_texture, input_sampler, input.uv);
+    let center = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
     let density = center.a;
 
     // Calculate blur amount based on density
@@ -75,7 +75,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let radius = max_radius * blur_factor;
 
-    // If no blur needed, return original
+    // If no blur needed, return original. The radius depends on this
+    // pixel's density, so past this return the control flow is
+    // NON-UNIFORM: every sample below must name its level
+    // (textureSampleLevel). An implicit-derivative textureSample here is
+    // a WGSL uniformity error that Chrome's Tint rejects -- the whole
+    // effect fails to compile in the browser -- while naga, which does
+    // not check fragment uniformity, accepts it on desktop. The effect
+    // textures have one mip, so level 0 is what textureSample read.
     if (radius < 0.5) {
         return center;
     }
@@ -99,7 +106,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             if (dist <= radius) {
                 let offset = sample_offset * pixel_size;
                 let weight = gaussian(dist, sigma);
-                let sample_color = textureSample(input_texture, input_sampler, input.uv + offset);
+                let sample_color = textureSampleLevel(input_texture, input_sampler, input.uv + offset, 0.0);
                 color_sum += sample_color * weight;
                 weight_sum += weight;
             }
