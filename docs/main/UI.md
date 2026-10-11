@@ -61,8 +61,10 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 - Window ▸ Workspace Layout offers Standard, Animation and Scripting.
   Escape Time and Simulation are not offered there: they arrive with
   their mode (`render_mode::layout_for`).
-- Window ▸ Reset Workspace applies Standard, in every mode. Window ▸
-  Mobile View applies Compact.
+- Window ▸ Reset Workspace rebuilds the mode's own workspace (Standard
+  for the flame modes, Escape Time, Simulation;
+  `render_mode::workspace_for`), as does the compact menu's Desktop
+  View. Window ▸ Mobile View applies Compact.
 - The layouts other than Standard and Compact re-add the Help panel as a
   floating window if it was open.
 - A newly built layout raises each side dock to at least 260 points

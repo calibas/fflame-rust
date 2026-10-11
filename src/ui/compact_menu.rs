@@ -295,7 +295,8 @@ fn render_compact_menu_items(
     // --- Layout switch ---
     ui.separator();
     if ui.button(t!("menu.desktop_view")).clicked() {
-        workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
+        // The mode's own desktop workspace, not always Standard.
+        workspace.apply_layout(super::render_mode::workspace_for(menu_state.render_mode));
         ui.close();
     }
 }
