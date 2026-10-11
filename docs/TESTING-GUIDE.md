@@ -14,8 +14,8 @@ requires.
 # Unit tests (~1,900 in the library; GPU tests skip or are #[ignore]d)
 cargo test --release --lib
 
-# Every fast gate: tests, wasm build, generated files, doc links,
-# engine feature matrix, gallery crates
+# Every fast gate: versions, tests, wasm build, generated files, doc
+# links, the five gallery crates (also the engine feature matrix)
 python scripts/release.py check
 python scripts/release.py check --fix      # ...and regenerate stale generated files
 
@@ -153,16 +153,24 @@ pass or FAIL with its time; any failure exits 1.
 
 | gate | command |
 |---|---|
+| versions agree | `python scripts/release.py versions` (run in-process) |
 | unit tests | `cargo test --release --lib` |
 | wasm builds | `cargo check --release --target wasm32-unknown-unknown --lib` |
 | generated contract | `cargo test --release --lib contract_is_current` |
 | shader dumps | `cargo test --release --lib canonical_shader_dumps` |
 | doc links | `python scripts/check_doc_links.py` |
-| engine feature matrix | `cargo check --lib --no-default-features --features engine-sim` |
-| engine feature matrix (escape) | `... --features engine-escape` |
-| engine feature matrix (flame) | `... --features engine-flame` |
 | gallery script parity | `cargo test --profile gallery-test`, in `wasm/script` |
 | gallery renderer smoke | `cargo test --profile gallery-test`, in `wasm/render` |
+| gallery sim smoke | the same, in `wasm/sim` (the library with only `engine-sim`) |
+| gallery escape smoke | the same, in `wasm/escape` (only `engine-escape`) |
+| gallery flame smoke | the same, in `wasm/flame` (only `engine-flame`) |
+
+The last three are the engine feature matrix: each single-engine crate
+links the library with `default-features` off and one engine on, so
+building its tests catches a `#[cfg]` on the wrong item that every
+all-engines build hides, and the tests assert the other engines are
+really gone. The gallery gates run from the crate directory, where
+cargo finds `wasm/.cargo/config.toml` ([RELEASE.md §5](RELEASE.md)).
 
 `--fix` regenerates the two generated files below when their gate
 fails, then tells you to read the diff. No other gate has a fix.

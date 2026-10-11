@@ -243,9 +243,10 @@ that gave confident wrong answers on the way — is recorded in
 ## Testing
 
 - `python scripts/release.py check` compiles the library for
-  `wasm32-unknown-unknown`, and at each single-engine feature
-  combination the gallery modules link; it also runs the gallery
-  crates' script-parity and renderer smoke tests.
+  `wasm32-unknown-unknown` and runs all five gallery crates' tests:
+  script parity, and the smoke tests of `wasm/render` and of the three
+  single-engine modules, which also build the library at each
+  single-engine feature combination.
 - `tests/visual/wasm/test_wasm.py` renders the visual-suite configs in
   Chrome through `WasmApi.export_png`, driven by Selenium, and
   compares exact pixel hashes against `tests/visual/baseline/wasm/`.
