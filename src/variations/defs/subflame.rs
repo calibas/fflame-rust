@@ -91,11 +91,11 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
     ],
     init_param_count: 0,
     wgsl_init: None,
-    // 5 slots per instance — see module doc. Zero-init is OK; the
-    // chaos game self-corrects within ~50 iterations. (JWildfire's
-    // reference does an explicit 42-iteration prefuse at variation
-    // setup time; we get the same effect from cumulative-mean
-    // dilution at the histogram level.)
+    // 5 slots per instance — see module doc. Zero-init is the "fresh"
+    // sentinel: subflame_iterate's first call on a thread starts from a
+    // random point and walks JWildfire's 42-step prefuse, as
+    // SubFlameWFFunc.prefuseIter does at setup time (and again after a
+    // walk goes non-finite).
     state_count: 5,
     wgsl_state_init: None,
     // P4b: real subflame_wf body. Calls subflame_iterate() to advance

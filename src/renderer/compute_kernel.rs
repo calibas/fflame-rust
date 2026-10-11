@@ -6199,3 +6199,75 @@ mod fog_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod subflame_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+    use crate::scene::transforms::{Flame, RenderMode, Transform};
+
+    fn linear(a: f32, e: f32) -> Transform {
+        let mut t = Transform::new();
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation("linear", 1.0);
+        (t.a, t.b, t.c, t.d, t.e, t.f) = (a, 0.0, 0.0, a, e, 0.0);
+        t.weight = 1.0;
+        t
+    }
+
+    /// A subflame's finals shape its OUTPUT, not its walk. JWF's
+    /// SubFlameWFFunc steps p -> p with the normal transforms and maps p
+    /// through the finals to the q it returns; ours ran the finals inside
+    /// the step and stored the result as the walk's state, so they fed
+    /// the walk. A subflame of p -> 0.5p + (1, 0) with a final +(10, 0):
+    /// the walk settles at x = 2 and JWF plots 12; with the finals in the
+    /// walk, p -> 0.5(p + 10) + 1 settles at 22.
+    ///
+    /// 64x64 at zoom 1 is 16 pixels a unit, so a view panned to (12, 0)
+    /// spans x in [10, 14], 12 at column 32, and 22 is far outside it.
+    #[test]
+    fn a_subflame_final_maps_the_output_not_the_walk() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const N: u32 = 64;
+        let mut parent = Transform::new();
+        parent.variations.clear();
+        parent.variation_order.clear();
+        parent.set_variation("subflame_wf", 1.0);
+        for (k, v) in [("subflame_id", 0.0), ("scale", 1.0), ("angle", 0.0), ("offset_x", 0.0), ("offset_y", 0.0), ("color_mode", -1.0)] {
+            parent.variation_params.insert(format!("subflame_wf.{k}"), v);
+        }
+        parent.weight = 1.0;
+        let sub = Flame { transforms: vec![linear(0.5, 1.0)], final_transforms: vec![linear(1.0, 10.0)], ..Flame::default() };
+        let mut cfg = FractalConfig::default();
+        cfg.render_mode = RenderMode::TwoD;
+        cfg.flame = Flame { transforms: vec![parent], subflames: vec![sub], ..Flame::default() };
+        (cfg.zoom, cfg.pan_x, cfg.pan_y) = (1.0, 12.0, 0.0);
+        cfg.levels_enabled = false;
+
+        let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        for _ in 0..2 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, &queue, &device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, &queue, &device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let density = r.read_density_blocking(&device, &queue);
+        r.destroy();
+        let total: f64 = density.iter().sum();
+        assert!(total > 0.9, "only {total:.3} of the subflame's points landed in a view around x = 12 (JWF's); the finals fed the walk");
+        let column = density.iter().enumerate().map(|(i, d)| (i % N as usize) as f64 * d).sum::<f64>() / total;
+        assert!((column - 32.0).abs() < 2.0, "the subflame's points centre on column {column:.1}, not 32 (x = 12)");
+    }
+}
