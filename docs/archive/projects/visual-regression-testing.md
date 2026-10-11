@@ -20,7 +20,7 @@
 - **Blocker**: WASM build doesn't expose test APIs (runs full UI app, not headless renderer)
 - Created scaffolding (`test_wasm.py`, `test.html`, `IMPLEMENTATION_NOTES.md`)
 - Requires wasm_bindgen exports for headless rendering
-- See `tests/visual/wasm/IMPLEMENTATION_NOTES.md` for required changes
+- See `docs/archive/projects/wasm-test-implementation-notes.md` for required changes
 - **Recommendation**: Defer to later phase after expanding desktop test coverage
 
 **Next Steps:**

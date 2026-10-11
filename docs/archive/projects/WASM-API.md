@@ -187,7 +187,7 @@ While the WASM API is fully functional, automated browser testing is deferred du
 - Manual browser testing sufficient for WASM-specific issues
 - Test infrastructure remains in `tests/visual/wasm/` for future use
 
-See [tests/visual/wasm/IMPLEMENTATION_NOTES.md](../../tests/visual/wasm/IMPLEMENTATION_NOTES.md) for details.
+See [wasm-test-implementation-notes.md](wasm-test-implementation-notes.md) for details.
 
 ## Future Enhancements
 
@@ -210,5 +210,5 @@ See [tests/visual/wasm/IMPLEMENTATION_NOTES.md](../../tests/visual/wasm/IMPLEMEN
 
 - [docs/main/EXPORT.md](../main/EXPORT.md) - PNG export implementation
 - [docs/WASM.md](../WASM.md) - WASM build guide
-- [tests/visual/wasm/IMPLEMENTATION_NOTES.md](../../tests/visual/wasm/IMPLEMENTATION_NOTES.md) - Testing notes
+- [wasm-test-implementation-notes.md](wasm-test-implementation-notes.md) - Testing notes
 - [docs/projects/visual-regression-testing.md](visual-regression-testing.md) - Testing plan
