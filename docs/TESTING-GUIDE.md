@@ -274,22 +274,31 @@ one after the other and appends render timings to
 
 ```bash
 python tests/visual/wasm/test_wasm.py
+python tests/visual/wasm/test_wasm.py --category 2d
 python tests/visual/wasm/test_wasm.py --update-baseline
 ```
 
 `test_wasm.py`:
 
-1. builds the web app by running `build-wasm.bat` (so, as written, it
-   runs on Windows);
-2. serves the repository root on port 8080 and opens
-   `tests/visual/wasm/test.html` in a Chrome window with WebGPU flags;
-3. for each config in the `2d`, `3d`, `tonemap`, `variations` and
-   `escape` categories, calls `WasmApi.load_config_json` and
+1. builds the web app with `build-wasm.bat` on Windows and
+   `build-wasm.sh` elsewhere;
+2. serves the repository root on port 8080 (with the running Python)
+   and opens `tests/visual/wasm/test.html` in a Chrome window with
+   WebGPU flags (ANGLE's D3D11 backend on Windows only);
+3. for each config in the `2d`, `3d`, `tonemap`, `variations`, `escape`
+   and `sim` categories, calls `WasmApi.load_config_json` and
    `await WasmApi.export_png(800, 600, 256, false)`
-   ([WASM.md](WASM.md) lists the API);
-4. compares an **exact** SHA-256 of the pixels against
+   ([WASM.md](WASM.md) lists the API). `solid` is left out: solid
+   rendering is not bit-reproducible, and this suite compares exact
+   hashes;
+4. names each test `<category>-<stem>`, as `run_tests.py` does, writes
+   `tests/visual/current/wasm/<name>.png` (deleting the old one first)
+   and compares an **exact** SHA-256 of the pixels against
    `tests/visual/baseline/wasm/<name>.png`. Seven baselines are
-   committed; a config with no baseline passes with a note.
+   committed. A config with no baseline is reported as `[NONE]` and
+   counted as "no baseline", not as a pass, and the run exits 1 unless
+   `--update-baseline` wrote it; `--update-baseline` writes baselines
+   only for the configs that rendered in that run.
 
 `test_plan.py` is a separate gate for Focused Rendering's planner in
 the browser: it drives `PlanBench` (`src/wasm_api.rs`) one step per
