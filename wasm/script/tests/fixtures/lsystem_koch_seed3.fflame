@@ -56,7 +56,6 @@
       }
     ]
   },
-  "levels_gamma": 0.5,
   "palette": {
     "locked": false,
     "name": "Fire",
@@ -105,6 +104,6 @@
   },
   "preserve_z": false,
   "render_mode": "2d",
-  "version": 3,
+  "version": 4,
   "zoom": 2.7
 }
