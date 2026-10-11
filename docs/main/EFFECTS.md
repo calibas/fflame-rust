@@ -52,7 +52,7 @@ Research survey of candidate effects:
 
 ```
 generator ──▶ [density effects] ──▶ tonemap ──▶ [colour effects] ──▶ display / readback
-  flame: accumulator          Rgba16Float      fractal       Rgba8Unorm
+  flame: accumulator          Rgba32Float      fractal       Rgba8Unorm
          (or solid shade/DoF)   ping-pong        texture        ping-pong
   escape: its image
   sim:    its resolved field
@@ -78,9 +78,9 @@ adapter offers it; where it does not, `run_density_effects` logs a
 warning and skips the whole chain.
 
 **The tiled exporter's density budget.** Density effects there run at
-full resolution after the histogram is freed, at about 36 bytes a pixel
+full resolution after the histogram is freed, at 52 bytes a pixel
 (the accumulation, the density ping-pong pair, the tonemap output).
-Above 4 GiB of that -- about 119 MP, roughly 10,900 × 10,900 -- they are
+Above 4 GiB of that -- about 83 MP, roughly 9,100 × 9,100 -- they are
 skipped with a warning and the export continues
 (`DENSITY_EFFECT_PHASE_B_BUDGET_BYTES`). The Effects panel says so.
 Colour effects are not gated.
@@ -178,10 +178,13 @@ runs one chain at a time:
    includes spliced (below). An effect the registry does not know is
    recorded with `note_missing_effect` and skipped.
 2. Allocates a ping-pong texture pair for the chain on first use:
-   `Rgba16Float` for density, `Rgba8Unorm` for colour.
+   `Rgba32Float` for density, `Rgba8Unorm` for colour.
 3. Runs the enabled effects in list order. The first reads the chain's
    input; each later one reads the previous one's output. Every pass is
-   a fullscreen triangle with `BlendState::REPLACE`.
+   a fullscreen triangle that overwrites its target: `BlendState::REPLACE`
+   for colour, no blend state for density (`Rgba32Float` is not
+   blendable without `FLOAT32_BLENDABLE`, and asking for REPLACE would
+   fail pipeline creation).
 4. The caller takes the result (`get_density_output`,
    `get_color_output`) or reads it back (`read_color_output_pixels`).
 
@@ -422,10 +425,12 @@ non-uniform control flow, read the input with `textureLoad`, not
 
 ## Gotchas
 
-**The density chain's output is `Rgba16Float`.** It reads the
-`Rgba32Float` accumulation and writes half floats, whose largest finite
-value is 65504. A flame's alpha is a raw hit count, which a long render
-can push past that in its densest pixels.
+**The density chain is `Rgba32Float`, like the accumulation.** A
+flame's alpha is a raw hit count, which a filament flame pushes past
+65504 well inside the default budget. The ping-pong was `Rgba16Float`
+until 2026-10: its largest finite half float is 65504, so those
+pixels became Inf (black under Log) or saturated. Full floats cost
+the tiled exporter's budget its ceiling (above).
 
 **A label in the list is the registry key.** The panel's rows show
 `effect_type` (`sobel_edges`); only the Add combo shows the curated

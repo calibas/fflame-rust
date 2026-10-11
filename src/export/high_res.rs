@@ -2733,17 +2733,26 @@ impl HighResExporter {
     /// when density effects are applied. By this point the histogram buffer has
     /// been freed (drop+poll in the render loop), so Phase B is the peak. At
     /// full resolution it allocates the accumulation texture (Rgba32Float,
-    /// 16 B/px) + the density ping-pong pair (2× Rgba16Float, 16 B/px) + the
-    /// tonemap output (Rgba8, 4 B/px) = 36 B/px. ~4 GB lets density effects
-    /// apply through ~10K² exports; beyond that we skip them (the marginal
-    /// ~16 B/px over the always-present accumulation) rather than risk OOM on
-    /// limited-VRAM GPUs. Color effects and the accumulation texture are
-    /// already unconditional, so this gates only the density addition.
+    /// 16 B/px) + the density ping-pong pair (2× Rgba32Float, 32 B/px) + the
+    /// tonemap output (Rgba8, 4 B/px) = 52 B/px. ~4 GB lets density effects
+    /// apply through ~9.1K² exports (9,088²); beyond that we skip them (the
+    /// marginal 32 B/px over the always-present accumulation) rather than
+    /// risk OOM on limited-VRAM GPUs. Color effects and the accumulation
+    /// texture are already unconditional, so this gates only the density
+    /// addition.
+    ///
+    /// The ping-pong was Rgba16Float (36 B/px, ~10.9K²) until it overflowed
+    /// a raw hit count past 65504; see `effect_chain::DENSITY_FORMAT`.
     const DENSITY_EFFECT_PHASE_B_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    /// Bytes per pixel of the Phase-B texture set with density effects
+    /// (see `DENSITY_EFFECT_PHASE_B_BUDGET_BYTES`).
+    const DENSITY_EFFECT_PHASE_B_BYTES_PER_PIXEL: u64 = 16 + 2 * 16 + 4;
 
     /// Whether the Phase-B texture set with density effects fits the budget.
     fn density_effects_fit(width: u32, height: u32) -> bool {
-        (width as u64) * (height as u64) * 36 <= Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES
+        (width as u64) * (height as u64) * Self::DENSITY_EFFECT_PHASE_B_BYTES_PER_PIXEL
+            <= Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES
     }
 
     /// Above this full-accumulation size, the tonemap runs strip-tiled so the
@@ -3541,7 +3550,7 @@ impl HighResExporter {
         // ping-pong textures don't coexist with it. Mirrors the FlameRenderer
         // path (render.rs): first effect reads the Rgba32Float accumulation
         // (needs FLOAT32_FILTERABLE — run_density_effects guards that), writes
-        // the Rgba16Float ping-pong, and the result feeds tonemap's binding 0
+        // the Rgba32Float ping-pong, and the result feeds tonemap's binding 0
         // (textureLoad, so no filtering needed). Guarded by a resolution
         // ceiling so the extra texture memory doesn't OOM at extreme sizes.
         let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
@@ -3575,12 +3584,12 @@ impl HighResExporter {
                      without them to avoid OOM.",
                     self.width,
                     self.height,
-                    (self.width as u64 * self.height as u64 * 36) / (1024 * 1024),
+                    (self.width as u64 * self.height as u64 * Self::DENSITY_EFFECT_PHASE_B_BYTES_PER_PIXEL) / (1024 * 1024),
                     Self::DENSITY_EFFECT_PHASE_B_BUDGET_BYTES / (1024 * 1024),
                 );
             }
         }
-        // Density output (Rgba16Float) when effects ran, else the raw
+        // Density output (Rgba32Float) when effects ran, else the raw
         // accumulation. Held by `density_chain`, which must outlive the tonemap
         // pass below (it owns the ping-pong textures the bind group samples).
         let tonemap_input_view: &TextureView = density_chain
