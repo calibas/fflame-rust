@@ -275,6 +275,34 @@ fn config_set_reports_problems() {
     assert!(err.message.contains("`flame` object"), "{err}");
 }
 
+/// A group still at its defaults is omitted from the saved JSON, which
+/// `config.set` walks, so setting anything inside one failed with
+/// "unknown setting group" -- a script could not set up a simulation's
+/// terrain or a solid's lighting at all, only adjust them once on.
+#[test]
+fn config_set_reaches_a_group_at_its_defaults() {
+    let script = r#"
+        script("Groups", "generator");
+        config.set("sim.use_transforms", true);
+        config.set("sim.terrain.height", 0.75);
+        config.set("solid_shading.shading_strength", 0.5);
+    "#;
+    let out = run(script, 1).unwrap();
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    let defaults = FractalConfig::default();
+    assert!(out.config.sim.use_transforms);
+    assert_eq!(out.config.sim.terrain.height, 0.75);
+    assert_eq!(out.config.solid_shading.shading_strength, 0.5);
+    // Everything else in the groups it created is still the default.
+    let mut sim = out.config.sim.clone();
+    sim.use_transforms = defaults.sim.use_transforms;
+    sim.terrain.height = defaults.sim.terrain.height;
+    assert_eq!(serde_json::to_value(&sim).unwrap(), serde_json::to_value(&defaults.sim).unwrap());
+    // A misspelt group is still reported, now as a change of nothing.
+    let out = run("config.set(\"sim.terain.height\", 0.75);", 1).unwrap();
+    assert!(out.warnings.iter().any(|w| w.contains("terain")), "{:?}", out.warnings);
+}
+
 #[test]
 fn transform_handles_survive_and_report_removal() {
     let script = r#"
