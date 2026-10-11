@@ -535,7 +535,7 @@ The *Color & Appearance* section of the Colors panel
 | control | shown |
 | --- | --- |
 | Color Mode | flame modes |
-| Palette picker, Edit Palette, Palette Library, preview strip, the palette transforms, Palette Size | Palette and Speed modes, and every non-flame mode |
+| Palette picker, Edit Palette, Palette Library, preview strip, the palette transforms, Palette Size | always: Palette, Speed and PathMap all look colours up in the transformed palette, and so do the non-flame engines |
 | Speed Blend Factor | Speed mode |
 | Path Style, Path level, the Focused Rendering notice | PathMap mode |
 | Background Color | always (used by the tone map) |
