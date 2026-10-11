@@ -215,6 +215,80 @@ impl TemplateProcessor {
     }
 }
 
+/// A helper library the shader builder splices in when a variation that
+/// needs it is active — decided by variation NAME.
+///
+/// One table, read by both sides that care: the builder, to decide what
+/// to emit, and the engine contract (`helper_libraries.name_gated` in
+/// `src/contract.rs`), which tells the API that a server-hosted
+/// variation can never reach these and must be self-contained. They
+/// were two hand-written lists, and the contract's fell behind: it never
+/// listed `polyhedra.wgsl` or `polychora.wgsl`, nor `crackle_fast` among
+/// `noise.wgsl`'s users.
+pub(crate) struct NameGatedLibrary {
+    /// The file under `shaders/core/`, as the contract names it.
+    pub file: &'static str,
+    pub source: &'static str,
+    /// The variation names that pull the library in. A `*` stands for
+    /// any run of characters (the `fract_*_wf` family).
+    pub users: &'static [&'static str],
+}
+
+impl NameGatedLibrary {
+    pub fn is_used_by(&self, name: &str) -> bool {
+        self.users.iter().any(|user| match user.split_once('*') {
+            Some((prefix, suffix)) => name.starts_with(prefix) && name.ends_with(suffix),
+            None => name == *user,
+        })
+    }
+}
+
+/// The name-gated libraries, in EMISSION order (see `NameGatedLibrary`).
+pub(crate) const NAME_GATED_LIBRARIES: &[NameGatedLibrary] = &[
+    // The fract_*_wf family's shared escape-time helpers (iterate loop,
+    // output mapping, per-iterator next-step switch). Variation bodies
+    // just call into these.
+    NameGatedLibrary {
+        file: "fractwf.wgsl",
+        source: include_str!("../shaders/core/fractwf.wgsl"),
+        users: &["fract_*_wf"],
+    },
+    // Noise tables: 1024-entry tables auto-generated from JWildfire's
+    // NoiseTools.java by `scripts/extract_noise_tables.py`. Before
+    // voronoi.wgsl, which calls its `simplex_noise_3d`. crackle_fast
+    // needs voronoi.wgsl but not the noise itself -- its cell offsets
+    // are hashed, never simplex -- yet voronoi.wgsl's simplex path still
+    // references simplex_noise_3d, so the noise module rides along
+    // wherever voronoi goes. (The dead simplex path costs compile bytes,
+    // not runtime.)
+    NameGatedLibrary {
+        file: "noise.wgsl",
+        source: include_str!("../shaders/core/noise.wgsl"),
+        users: &["dc_perlin", "crackle", "dc_crackle_wf", "crackle_fast"],
+    },
+    NameGatedLibrary {
+        file: "voronoi.wgsl",
+        source: include_str!("../shaders/core/voronoi.wgsl"),
+        users: &["crackle", "dc_crackle_wf", "crackle_fast"],
+    },
+    // Polyhedron radial-support helpers, shared by the `polyhedron`
+    // surface projection and the `polyhedron_volume` occluder so the
+    // pair can coexist in one flame without duplicate symbols.
+    NameGatedLibrary {
+        file: "polyhedra.wgsl",
+        source: include_str!("../shaders/core/polyhedra.wgsl"),
+        users: &["polyhedron", "polyhedron_volume"],
+    },
+    // Regular 4-polytope vertex tables for the `polychoron` chaos-game
+    // variation, plus the Menger Tesseract 4-gap point set used by
+    // `menger`'s third dimension mode.
+    NameGatedLibrary {
+        file: "polychora.wgsl",
+        source: include_str!("../shaders/core/polychora.wgsl"),
+        users: &["polychoron", "menger"],
+    },
+];
+
 /// Inlined transform data for shader compilation
 ///
 /// Contains all per-transform data that will be compiled as shader constants
@@ -1920,63 +1994,17 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 7b. fract_*_wf family: inject the shared escape-time helpers
-        //     (iterate loop, output mapping, per-iterator next-step
-        //     switch) when any of the family is active. Variation bodies
-        //     just call into these — see `shaders/core/fractwf.wgsl`.
-        let has_fractwf = active.iter().any(|(name, _)| name.starts_with("fract_") && name.ends_with("_wf"));
-        if has_fractwf {
-            shader.push_str(include_str!("../shaders/core/fractwf.wgsl"));
-            shader.push('\n');
-        }
-
-        // 7c. Noise + Voronoi helpers — emitted when any variation in the
-        //     crackle / perlin family is active. `noise.wgsl` first because
-        //     `voronoi.wgsl` calls `simplex_noise_3d`. The noise module is
-        //     1024-entry tables (auto-generated from JWildfire's NoiseTools.java
-        //     by `scripts/extract_noise_tables.py`); a flame with no
-        //     noise/voronoi variation pays nothing.
-        let needs_noise = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "dc_perlin" | "crackle" | "dc_crackle_wf")
-        });
-        // crackle_fast needs voronoi.wgsl but NOT noise.wgsl — its cell
-        // offsets are hashed, never simplex. voronoi.wgsl's simplex
-        // path still references simplex_noise_3d though, so the noise
-        // module rides along whenever voronoi does. (The dead simplex
-        // path costs compile bytes, not runtime.)
-        let needs_voronoi = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "crackle" | "dc_crackle_wf" | "crackle_fast")
-        });
-        if needs_noise || needs_voronoi {
-            shader.push_str(include_str!("../shaders/core/noise.wgsl"));
-            shader.push('\n');
-        }
-        if needs_voronoi {
-            shader.push_str(include_str!("../shaders/core/voronoi.wgsl"));
-            shader.push('\n');
-        }
-
-        // 7d. Polyhedron radial-support helpers — shared by the
-        //     `polyhedron` surface projection and `polyhedron_volume`
-        //     occluder so the pair can coexist in one flame without
-        //     duplicate symbols.
-        let needs_polyhedra = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "polyhedron" | "polyhedron_volume")
-        });
-        if needs_polyhedra {
-            shader.push_str(include_str!("../shaders/core/polyhedra.wgsl"));
-            shader.push('\n');
-        }
-
-        // 7e. Regular 4-polytope vertex tables for the `polychoron`
-        //     chaos-game variation, plus the Menger Tesseract 4-gap
-        //     point set used by `menger`'s third dimension mode.
-        let needs_polychora = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "polychoron" | "menger")
-        });
-        if needs_polychora {
-            shader.push_str(include_str!("../shaders/core/polychora.wgsl"));
-            shader.push('\n');
+        // 7b-7e. Helper libraries gated on variation NAMES: the fract_*_wf
+        //     helpers, noise + Voronoi (the crackle / perlin family),
+        //     polyhedra, polychora. Each is emitted once when any active
+        //     variation uses it, in table order, and a flame using none
+        //     of them pays nothing. The table is shared with the engine
+        //     contract — see `NAME_GATED_LIBRARIES`.
+        for lib in NAME_GATED_LIBRARIES {
+            if active.iter().any(|(name, _)| lib.is_used_by(name)) {
+                shader.push_str(lib.source);
+                shader.push('\n');
+            }
         }
 
         // 7f. SL(2,C) Mobius-group machinery (Bagula) — the SuMat helpers,

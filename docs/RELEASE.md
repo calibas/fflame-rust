@@ -190,9 +190,22 @@ the two there is an automatic signal where there was none.
 `RenderMode::ALL` feeds that list, and
 `every_render_mode_is_published_in_the_contract` keeps it honest: Rust
 cannot iterate a plain enum, so a fourth mode fails to compile in that
-test's exhaustive match rather than quietly missing the contract. The
-same trick would work for the other vocabularies whenever they are
-worth the same treatment.
+test's exhaustive match rather than quietly missing the contract.
+`VariationCategory::ALL` and `ParamType::ALL` have the same guard
+(`every_variation_category_is_published_in_the_contract`,
+`every_param_type_is_published_in_the_contract`), as `Feature::ALL` has
+its count test, so no vocabulary in the contract is transcribed by hand
+any more. That keeps a new value from going missing from the contract;
+it still does not move the fingerprint, so the API still has to be told.
+
+**The fingerprint moved again on 2026-10-11** (`81a4d090385275c0` →
+`23a163e0bf37ffe9`): `helper_libraries.name_gated` is now read from the
+shader builder's own table (`NAME_GATED_LIBRARIES` in
+`src/shader_builder_v2.rs`), and that published two libraries the
+hand-written list had left out, `polyhedra.wgsl` and `polychora.wgsl`
+(plus `crackle_fast` among `noise.wgsl`'s users). New keys, so the API
+re-pins. From now on a library the builder gates on a name cannot be
+missing from the contract.
 
 Also update `docs/main/openapi.json` when the client's expectations of
 the API change — it is the wire authority for both repositories, and it
@@ -768,6 +781,8 @@ Quick reference — the full reasoning is in §3.
 |---|---|
 | a variation | shader dumps if WGSL changed; contract; variation corpus |
 | a variation *feature* | `Feature::ALL` + its count test; contract; **tell the API** (§3) |
+| a variation category or parameter type | `VariationCategory::ALL` / `ParamType::ALL` + their tests in `src/contract.rs`; contract; **tell the API** (§3) |
+| a helper library the builder splices by variation name | an entry in `NAME_GATED_LIBRARIES` (`src/shader_builder_v2.rs`), which the contract reads; contract (shape moves, API re-pins) |
 | an effect | contract; effect corpus; check `locales/en.yml` has its label |
 | a wire struct | contract (shape moves, API re-pins); `VARIATIONS_WIRE_FORMAT.md` §11 |
 | `FractalConfig` structure | bump `CURRENT_CONFIG_VERSION`, add a `migrate_value` arm |

@@ -401,7 +401,10 @@ The rules and their reasons are in [SHADERS.md](SHADERS.md).
 | `su_mobius.wgsl` | any active variation has `NeedsMobiusLib` |
 
 All but `su_mobius.wgsl` are gated on **names**, in
-`ShaderBuilder::build_definitions`. A downloaded variation can therefore
+`ShaderBuilder::build_definitions`; the name-gated libraries from
+`fractwf.wgsl` on are one table, `NAME_GATED_LIBRARIES`
+(`src/shader_builder_v2.rs`), which the engine contract publishes as
+`helper_libraries.name_gated`. A downloaded variation can therefore
 reach only `complex.wgsl` and the Möbius library; anything else it
 needs must be in its own body.
 
