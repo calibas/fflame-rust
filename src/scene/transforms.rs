@@ -160,7 +160,7 @@ pub fn total_packed_slots(
 /// variation_local_id)` rather than just `variation_local_id` — the
 /// same variation in different transforms gets independent state.
 ///
-/// See [`docs/projects/intra-iteration-state-and-accum.md`](../../../docs/projects/intra-iteration-state-and-accum.md).
+/// See [`docs/archive/intra-iteration-state-and-accum.md`](../../../docs/archive/intra-iteration-state-and-accum.md).
 #[derive(Debug, Clone)]
 pub struct PackedStateEntry {
     pub xform_idx: u32,

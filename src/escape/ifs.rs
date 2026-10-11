@@ -1,5 +1,5 @@
 //! Mode D — the flame as a distance field
-//! ([docs/archive/escape-time/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md),
+//! ([docs/archive/escape-time/ifs-distance-rendering.md](../../docs/archive/escape-time/ifs-distance-rendering.md),
 //! phase 1).
 //!
 //! A fourth registry pair on the escape engine's one pattern (D1).
@@ -2052,7 +2052,7 @@ pub fn solid_analysis(
 /// The other four colourings paint a DISTANCE. This paints the
 /// MEASURE -- what the flame actually looks like -- and it does not
 /// starve at depth, because no forward sample is drawn at the zoom.
-/// See [`ifs-measure-by-inverse-walk.md`](../../docs/projects/ifs-measure-by-inverse-walk.md).
+/// See [`ifs-measure-by-inverse-walk.md`](../../docs/archive/projects/ifs-measure-by-inverse-walk.md).
 ///
 /// The walk hands `res.distance` the density per unit area and
 /// `res.color` the palette coordinate, which is the one place mode D

@@ -1197,7 +1197,7 @@ impl ShaderBuilder {
             "// Per-thread variation state. var<private> is per-invocation and\n\
              // zero-initialized by WGSL spec. Persists across the inner iteration\n\
              // loop within a single main() call. See\n\
-             // docs/projects/intra-iteration-state-and-accum.md.\n\
+             // docs/archive/intra-iteration-state-and-accum.md.\n\
              var<private> thread_state: array<f32, {total}u>;\n\n",
             total = total
         ));
@@ -1927,7 +1927,7 @@ impl ShaderBuilder {
 
         // 8a. Per-thread variation state (only emits if any active variation
         //     declares state_count > 0; empty string for stateless flames).
-        //     See docs/projects/intra-iteration-state-and-accum.md.
+        //     See docs/archive/intra-iteration-state-and-accum.md.
         let (state_block, state_slots) = self.build_state_accessors(flame, &active);
         shader.push_str(&state_block);
         // Each thread's variation slots, which a persistent orbit carries
@@ -1961,7 +1961,7 @@ impl ShaderBuilder {
 
         // 8b. Complex arithmetic + 2x2 complex matrix helpers. Always
         //     injected (~90 LoC, dead-code-eliminated when unused).
-        //     See docs/projects/complex-math-and-klein-group.md.
+        //     See docs/archive/complex-math-and-klein-group.md.
         shader.push_str(include_str!("../shaders/core/complex.wgsl"));
         shader.push('\n');
 

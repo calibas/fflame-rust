@@ -384,7 +384,7 @@ pub struct VariationDef {
     /// access their slots via the generated `get_state` / `set_state`
     /// accessors. Default 0 (no state).
     ///
-    /// See [`docs/projects/intra-iteration-state-and-accum.md`](../../docs/projects/intra-iteration-state-and-accum.md).
+    /// See [`docs/archive/intra-iteration-state-and-accum.md`](../../docs/archive/intra-iteration-state-and-accum.md).
     pub state_count: usize,
 
     /// Optional WGSL fragment that runs once at thread start (inside main(),

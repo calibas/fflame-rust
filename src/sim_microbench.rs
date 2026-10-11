@@ -2,7 +2,7 @@
 //!
 //! Test-only (`#[cfg(test)]` at the module declaration) — this is not
 //! product code and nothing links it. It exists to replace the
-//! estimates in `docs/projects/simulation-pipeline.md` §5 and §10 with
+//! estimates in `docs/archive/projects/simulation-pipeline.md` §5 and §10 with
 //! measurements *before* the driver is designed around them, which is
 //! the phase-0 gate in the master plan.
 //!

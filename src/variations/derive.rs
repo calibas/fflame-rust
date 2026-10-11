@@ -1,6 +1,6 @@
 //! Deriving a variation's forward bound from its shipped WGSL.
 //!
-//! [forward-bounds.md](../../docs/projects/forward-bounds.md), phase
+//! [forward-bounds.md](../../docs/projects/deep-zoom/forward-bounds.md), phase
 //! 1. [`bound`](super::bound) holds bounds written by hand; the corpus
 //! meter says that supply cannot reach far enough — 14 hand-derived
 //! bounds free 19 of 45 flames, and there are 55 distinct blockers
