@@ -460,13 +460,18 @@ parent transform.
   keyed by the parent transform and variation: the point, the last
   transform picked, and the colour. So two parent transforms using the
   same subflame walk it independently. The first call on a thread —
-  detected by the state still being exactly the origin — runs 20 extra
-  steps (`SUBFLAME_PREFUSE_ITERS`) to reach the attractor.
+  detected by the state still being exactly the origin — starts from a
+  random point in [-0.5, 0.5]² with a random colour and runs 42 extra
+  steps (`SUBFLAME_PREFUSE_ITERS`, JWildfire's prefuse) to reach the
+  attractor; a state that has gone non-finite is prefused again.
 - **One step:** pick a normal by raw weight; blend the colour with the
   `color_speed` rule; affine, variations, post-affine; then the
-  subflame's Finals in order; then the direct-colour blend. The point
-  after the Finals is what the state keeps, so inside a subflame the
-  Finals **do** feed the next step.
+  direct-colour blend. That point is the state. The subflame's Finals
+  then map it, in order, to the point the parent receives -- they do
+  **not** feed the next step, as in JWildfire's `subflameIter` and as
+  the parent's own Finals don't, and they leave the colour alone.
+  (Until 2026-10 they ran inside the step and their output was stored,
+  so they fed the walk.)
 - **Variations inside** run through `apply_subflame_variations`, a
   second dispatcher without the subflame variations (which is what
   forbids nesting). Hiding is a no-op there, `NeedsW` does not commit
