@@ -48,6 +48,7 @@ python scripts/run_benchmarks.py --quick
 - Console report with color-coded results
 - CSV append to `unified_benchmarks.csv`
 - Baseline cache to `last_run.json`
+- The desktop renders, in `renders/<category>-<stem>.png` (gitignored)
 
 **Regression Thresholds:**
 - 🟢 **Improvement**: >2% speedup (green)

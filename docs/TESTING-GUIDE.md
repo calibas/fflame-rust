@@ -332,22 +332,31 @@ Three stages:
    `cargo run --release -- export ... --width 800 --height 600 --iterations-per-thread 1024`,
    5 runs each (3 with `--quick`), the first discarded as warmup. Times
    come from each PNG's `RenderTime` metadata. Output:
-   `tests/visual/current/<name>.png`.
+   `benchmark_results/renders/<category>-<stem>.png` (gitignored), the
+   names `run_tests.py` uses; the benchmark rows carry the same names.
 3. **WASM renders** — runs `tests/visual/wasm/test_wasm.py` repeatedly
-   and reads the times from its PNGs. A failure here is a warning, not
-   a failed run.
+   and reads the times from the PNGs it writes to
+   `tests/visual/current/wasm/`. Its exit status is not used — it exits
+   1 for any config without a WASM baseline — only whether it rendered.
+   A failure here is a warning, not a failed run.
 
 The report compares each benchmark with the previous run
 (`benchmark_results/last_run.json`) and the two previous full runs in
 `benchmark_results/unified_benchmarks.csv`, colouring more than 10%
 slower red, more than 5% slower yellow and more than 2% faster green.
 
-**The hash tables are informational.** The report ends with
-Baseline-vs-Current, WASM-vs-WASM and Desktop-vs-WASM tables of exact
-pixel hashes (tolerance for `solid-*`). They do not affect the exit
-status, and the "baseline" they read is the visual suite's 160x120
-thumbnails, which a full-size render never matches exactly. Use
-`tests/visual/run_tests.py` for regressions.
+**The hash table is informational.** The report ends with one table of
+exact pixel hashes: the WASM renders against `tests/visual/baseline/wasm/`,
+the one pair rendered the same way. It does not affect the exit status.
+There is no desktop table: the benchmark renders at ipt 1024 and full
+size, while the visual suite's baselines are 160x120 thumbnails of
+ipt-256 renders, so an exact match was impossible (the Baseline-vs-Current
+and Desktop-vs-WASM tables it used to print could only ever mismatch).
+Use `tests/visual/run_tests.py` for regressions.
+
+The benchmark names became `<category>-<stem>` on 2026-10-11 (they were
+bare stems, and the two `affine3d-smoke` configs shared one), so the
+previous-run columns show "—" until two runs with the new names exist.
 
 ### Other measurement binaries
 
