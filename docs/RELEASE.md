@@ -591,7 +591,7 @@ no deploy script.
 
 | upload | from | changes |
 |---|---|---|
-| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, ~16 MiB of wasm) | every release |
+| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, ~16 MiB of wasm, and the palette packs under `pkg/assets/`) | every release |
 | `index.html` | repo root | rarely |
 | `css/`, `js/` | repo root | rarely — the virtual-keyboard bridge |
 

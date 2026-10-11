@@ -113,9 +113,10 @@ python -m http.server 8080      # or: npx serve
 ```
 
 `index.html` imports `./pkg/fractal_flame_wgpu.js`. Palette packs are
-fetched relative to the page, at `assets/palettes/packs/<file>`
-(`load_pack` in `src/resources/palettes.rs`), which a server rooted at
-the repository finds in `assets/` itself.
+fetched relative to the page, at `pkg/assets/palettes/packs/<file>`
+(`WEB_PACKS_DIR`, read by `load_pack` in `src/resources/palettes.rs`) —
+where the build copied them, so a local server and a deploy find them
+the same way.
 
 ### Deploy
 
@@ -123,10 +124,14 @@ Upload `pkg/`, `index.html`, `css/` and `js/` (the virtual-keyboard
 bridge). The list and the checks after an upload are in
 [RELEASE.md §5](RELEASE.md).
 
-The build copies the palette packs to `pkg/assets/palettes/packs/`,
-but `load_pack` requests `assets/palettes/packs/<file>` relative to the
-page, not to `pkg/`. After a deploy, open a pack other than the
-embedded starter pack in the Palette Library and check that it loads.
+The palette packs travel inside `pkg/` (`pkg/assets/palettes/packs/`),
+which is where the web build fetches them; a unit test
+(`both_wasm_build_scripts_copy_the_packs_where_the_web_build_fetches_them`)
+holds both build scripts to that path. Builds before this fetched
+`assets/palettes/packs/` beside the page, which the live site served
+only from a hand-uploaded `/editor/assets/` copy; that copy is no longer
+read. After a deploy, open a pack other than the embedded starter pack
+in the Palette Library and check that it loads.
 
 ## JavaScript API — `WasmApi`
 
