@@ -417,9 +417,16 @@ send the result to the API repository ([RELEASE.md](../RELEASE.md) §3).
 
 The shader lints in `src/variations/mod.rs` walk all of `shaders/`, so
 an effect shader is held to the same rules as a variation: no
-self-compares, no self-divisions, no subnormal literals. Inside
-non-uniform control flow, read the input with `textureLoad`, not
-`textureSample` (see [SHADERS.md](SHADERS.md) on browser WebGPU).
+self-compares, no self-divisions, no subnormal literals. Sample the
+input with `textureSampleLevel(.., 0.0)` (or read it with
+`textureLoad`), never `textureSample`: the implicit-derivative forms
+are valid only in uniform control flow, which a browser's WebGPU
+enforces and naga does not check, so a per-pixel branch before one
+compiles on desktop and fails in Chrome (see [SHADERS.md](SHADERS.md)).
+The effect textures have one mip, so level 0 is what `textureSample`
+read. `effects_never_sample_with_implicit_derivatives`
+(`src/effects/mod.rs`) rejects the implicit forms anywhere under
+`shaders/effects/`.
 
 ---
 

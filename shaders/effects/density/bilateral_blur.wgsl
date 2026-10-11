@@ -54,7 +54,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let texel = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
 
     // Sample center pixel
-    let center = textureSample(input_texture, input_sampler, input.uv);
+    let center = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
     let center_lum = luminance(center.rgb);
 
     var color_sum = vec3<f32>(0.0);
@@ -65,7 +65,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     for (var y = -radius; y <= radius; y++) {
         for (var x = -radius; x <= radius; x++) {
             let offset = vec2<f32>(f32(x), f32(y)) * texel;
-            let sample_color = textureSample(input_texture, input_sampler, input.uv + offset);
+            let sample_color = textureSampleLevel(input_texture, input_sampler, input.uv + offset, 0.0);
 
             // Spatial weight (distance from center)
             let spatial_dist = length(vec2<f32>(f32(x), f32(y)));

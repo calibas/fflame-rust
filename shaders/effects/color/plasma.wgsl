@@ -71,7 +71,7 @@ fn plasma_color(v: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     let intensity = get_param(0u);
     let scale = max(0.5, get_param(1u));

@@ -41,7 +41,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 fn sample_lum(uv: vec2<f32>) -> f32 {
-    return luminance(textureSample(input_texture, input_sampler, uv).rgb);
+    return luminance(textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb);
 }
 
 @fragment
@@ -74,7 +74,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     edge = smoothstep(threshold * 0.5, threshold, edge);
 
     // Get original color
-    let original = textureSample(input_texture, input_sampler, uv);
+    let original = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
 
     // Create edge color (use original hue or white, boost with glow)
     let edge_color = mix(vec3<f32>(1.0), original.rgb, preserve_color) * (1.0 + glow * 2.0) * edge;
