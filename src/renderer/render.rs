@@ -290,7 +290,6 @@ impl std::error::Error for RenderError {}
 
 // Constants for render loop
 const NUM_WORKGROUPS: u32 = 128;
-const THREADS_PER_WORKGROUP: u64 = 64;
 const BATCH_SIZE: u32 = 4;
 
 /// Unified rendering function
@@ -551,8 +550,19 @@ pub async fn render_with(
         queue.submit(std::iter::once(enc.finish()));
     }
 
-    // Render loop
+    // Render loop. `total_rendered` counts PLOTTED samples, as the app
+    // does: it is what stops the loop and what the output reports. It
+    // once counted dispatched iterations, burn-in included, so an export
+    // stopped short of the app's count for the same `max_iterations`
+    // (by a burn-in, or ~2% on flames whose orbits refresh) and its PNG
+    // metadata over-reported.
     let mut total_rendered = 0u64;
+    // Dispatches in a row that plotted nothing. Restarted orbits whose
+    // burn-in is no shorter than a dispatch plot nothing, ever; without
+    // this the loop would never end. Persistent orbits plot once their
+    // burn-in, which may span dispatches, is paid: allow that and a margin.
+    let mut empty_dispatches = 0u32;
+    let stall_limit = job.burn_in / job.iterations_per_thread.max(1) + 4;
     let mut batch_frame_count = 0u32;
     // The samples the batch plotted, which the tone map normalises by:
     // what the renderer says plotted, as the app counts -- a thread's
@@ -594,11 +604,19 @@ pub async fn render_with(
             clear_paths,
         );
 
-        let samples_this_frame =
-            NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * job.iterations_per_thread as u64;
-        total_rendered += samples_this_frame;
+        total_rendered += plotted;
         batch_samples += plotted;
         batch_frame_count += 1;
+        empty_dispatches = if plotted == 0 { empty_dispatches + 1 } else { 0 };
+        let stalled = empty_dispatches >= stall_limit;
+        if stalled {
+            log::warn!(
+                "Render: {stall_limit} dispatches in a row plotted nothing \
+                 ({} iterations a thread, burn-in {}); stopping at {total_rendered}",
+                job.iterations_per_thread,
+                job.burn_in,
+            );
+        }
 
         // Accumulate when batch is complete
         if batch_frame_count >= BATCH_SIZE {
@@ -613,7 +631,7 @@ pub async fn render_with(
         progress.on_progress(total_rendered, target);
 
         // Check if we've reached target
-        if total_rendered >= target {
+        if total_rendered >= target || stalled {
             // Final accumulation for partial batch
             if batch_frame_count > 0 {
                 let mut final_encoder = device.create_command_encoder(&CommandEncoderDescriptor {

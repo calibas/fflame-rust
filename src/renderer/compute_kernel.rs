@@ -5901,6 +5901,34 @@ mod edge_tests {
         r.destroy();
     }
 
+    /// A render stops on samples PLOTTED, as the app does, and reports
+    /// that count; and a job that can never plot ends instead of hanging.
+    #[test]
+    fn a_render_counts_what_it_plotted() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let config = FractalConfig::default();
+        // Persistent orbits, a burn-in spanning two dispatches: the
+        // first two plot nothing, then the count catches up to target.
+        let job = RenderJob::new(&config, 32, 32)
+            .with_iterations(4_000_000)
+            .with_iterations_per_thread(16)
+            .with_burn_in(30);
+        let out = pollster::block_on(render(&device, &queue, job, &mut NoProgress)).expect("render");
+        assert!(out.total_iterations >= 4_000_000, "{}", out.total_iterations);
+        // Restarted orbits with a burn-in no shorter than a dispatch plot
+        // nothing, ever.
+        let job = RenderJob::new(&config, 32, 32)
+            .with_iterations(1_000_000)
+            .with_iterations_per_thread(16)
+            .with_burn_in(16)
+            .with_persistent_orbits(false);
+        let out = pollster::block_on(render(&device, &queue, job, &mut NoProgress)).expect("render");
+        assert_eq!(out.total_iterations, 0, "nothing plotted, and it says so");
+    }
+
     /// A flame with more transforms than the GPU buffers hold is refused
     /// with a reason; it used to panic packing them.
     #[test]
