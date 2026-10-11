@@ -372,24 +372,11 @@ pub async fn render(
     // 64 bytes a pixel never read, 2.1 GB of an 8K export (measured: a
     // terrain export at 8K ran out of memory on a 6 GB card).
     let surface_format = TextureFormat::Rgba8Unorm;
-    let tail_only = matches!(
-        job.config.render_mode,
-        crate::scene::transforms::RenderMode::Escape | crate::scene::transforms::RenderMode::Simulation
-    );
-    let build = if tail_only { FlameRenderer::for_tail } else { FlameRenderer::with_palette_size };
     // Caught here, not by an engine's own scope: wgpu reports a failed
     // allocation as an error that stops nothing, and the renderer is made
     // before any engine's scope is pushed.
     let alloc = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let mut renderer = build(
-        device,
-        queue,
-        surface_format,
-        job.width,
-        job.height,
-        &job.config.flame,
-        job.config.palette_size,
-    );
+    let mut renderer = FlameRenderer::for_job(device, queue, surface_format, job.width, job.height, job.config);
     if let Some(err) = alloc.pop().await {
         renderer.destroy();
         return Err(RenderError::OutOfMemory(err.to_string()));

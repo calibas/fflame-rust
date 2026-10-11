@@ -1917,14 +1917,15 @@ pub async fn export_animation(
     let mut first_config = export_config.config.clone();
     apply_animation_values(&mut first_config, &first_values);
 
-    let mut renderer = FlameRenderer::with_palette_size(
+    // The render mode is not a track target, so the first frame's holds
+    // for the whole video.
+    let mut renderer = FlameRenderer::for_job(
         &device,
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
         export_config.width,
         export_config.height,
-        &first_config.flame,
-        first_config.palette_size,
+        &first_config,
     );
     renderer.set_sticky_enabled(false);
 
