@@ -240,11 +240,11 @@ What **Make public** sends:
 | action | checked | unchecked |
 | --- | --- | --- |
 | flame Save / Save as Copy | `public` | no visibility (the server's default) |
-| flame Update | `public` | no visibility — `update_flame` then reads the flame's current visibility and sends it back, so the flame **keeps** what it had |
+| flame Update | `public` | `private` if the flame was public; otherwise no visibility — `update_flame` then reads the flame's current visibility and sends it back, so a private or unlisted flame **keeps** what it had |
 | animation Save / Update | `public` | `private` |
 
-So unchecking the box on a flame update does not make a public flame
-private.
+The dialog opens with the box checked for a public flame, so unchecking
+it on an update makes the flame private (`flame_update_visibility`).
 
 ---
 

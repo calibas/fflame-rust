@@ -1764,11 +1764,13 @@ impl App {
                     let upload_thumbnail = *upload_thumbnail;
                     let make_public = *make_public;
 
-                    let visibility = if make_public {
-                        Some(crate::api::types::ApiVisibility::Public)
-                    } else {
-                        None
-                    };
+                    // Unchecking the box on a PUBLIC flame makes it
+                    // private; otherwise an unchecked box keeps what
+                    // the server has (see the fn).
+                    let visibility = crate::api::flame_update_visibility(
+                        make_public,
+                        self.api_state.flame_is_public,
+                    );
 
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = false;
