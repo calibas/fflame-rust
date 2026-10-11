@@ -1,6 +1,6 @@
 //! Biased transform selection and the correction that makes it
 //! unbiased — stage 1 of
-//! [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+//! [flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md).
 //!
 //! The chaos game samples the invariant measure over the whole
 //! attractor, so the fraction of samples landing in a deep viewport
@@ -227,7 +227,7 @@ mod gpu_tests {
     }
 
     /// `render`, with each thread's orbit kept between dispatches or not
-    /// (`docs/projects/persistent-orbits.md`).
+    /// (`docs/archive/projects/persistent-orbits.md`).
     fn render_orbits(cfg: &FractalConfig, n: u32, iters: u64, persistent: bool) -> Vec<u8> {
         let (device, queue) = device();
         let job = crate::renderer::RenderJob::new(cfg, n, n).with_iterations(iters).with_persistent_orbits(persistent);
@@ -260,7 +260,7 @@ mod gpu_tests {
     /// `the_correction_renders_the_true_measure` below, where it is
     /// on and the answer still has to be right.
     ///
-    /// **With persistent orbits too** (`docs/projects/persistent-orbits.md`):
+    /// **With persistent orbits too** (`docs/archive/projects/persistent-orbits.md`):
     /// the window and its weight are then carried from one dispatch to
     /// the next, and carrying them must be as neutral as restarting them.
     #[test]

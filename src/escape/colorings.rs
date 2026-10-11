@@ -676,7 +676,7 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 ///
 /// One case reaches it: the formulas that define no derivative. The
 /// perturbed rungs carry one since P11
-/// (docs/projects/derivative-under-perturbation.md), so a Mandelbrot dive
+/// (docs/archive/escape-time/derivative-under-perturbation.md), so a Mandelbrot dive
 /// keeps it at any depth. The escape panel says when you are in it.
 ///
 /// A finite-difference distance estimate would cover both (the
@@ -797,7 +797,7 @@ fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {
 /// derivative. It also goes noisy the moment sampling is jittered,
 /// which is what Kalles Fraktaler's changelog records fixing by adding
 /// analytic differences. This is the version that survives temporal
-/// or stochastic sampling; see docs/projects/escape-new-families.md.
+/// or stochastic sampling; see docs/archive/escape-time/escape-new-families.md.
 pub static NORMAL_MAP: ColoringDef = ColoringDef {
     name: "normal_map",
     display_name: "Normal Map (3D relief)",
@@ -2531,7 +2531,7 @@ fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32
 ///   out (`SkipsEscapingIterate`).
 ///
 /// The image is the config's simulation texture
-/// (docs/projects/sim-textures.md). It is opaque, so the trap is its
+/// (docs/archive/projects/sim-textures.md). It is opaque, so the trap is its
 /// rectangle.
 ///
 /// Not ported:

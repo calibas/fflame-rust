@@ -2,7 +2,7 @@
 
 Companion to [`jwf-common-variations-port.md`](jwf-common-variations-port.md) (variations) and [`variation-port-blockers.md`](variation-port-blockers.md) (blocked variations). This doc tracks JWildfire features that are **not variations** — XML attributes on `<flame>` / `<xform>`, per-transform settings, plot-time mechanisms, etc. — that affect how a JWF flame renders but aren't yet wired up in our import or pipeline.
 
-Same shape as [`apophysis-remaining-features.md`](apophysis-remaining-features.md) but for JWildfire's extensions to the Apophysis baseline.
+Same shape as [`apophysis-remaining-features.md`](../archive/projects/apophysis-remaining-features.md) but for JWildfire's extensions to the Apophysis baseline.
 
 Each feature listed below has a status, what it does in JWildfire, what it would take to implement, and how its absence currently manifests when importing a JWF flame.
 
@@ -116,14 +116,23 @@ The deferred items are loosely coupled — the zoom math is the heaviest single 
 - Pure JWF/Apo camera math reproduction would land all four slider directions naturally. We needed empirical sign tuning to get it right — JWildfire almost certainly applies their matrix with a different convention internally (M^T·v or different basis vectors). The tuning is documented at `project_3d_to_2d_apophysis` in `shaders/core/utilities.wgsl`.
 - The 2D `rotation` field doubles as the 3D `roll` angle in our model (mirroring JWildfire's `rotate` ↔ `roll` mapping). 2D mode still applies `rotation` as a post-projection screen rotation since there's no camera matrix there.
 
-**Stage 2 — free camera movement**. With rotation done, the natural next project is FPS-style free-fly: WASD + mouse-look + Q/E for up/down. See [`free-camera-movement.md`](free-camera-movement.md) for the full plan.
+**Stage 2 — free camera movement**. With rotation done, the natural next project is FPS-style free-fly: WASD + mouse-look + Q/E for up/down. See [`free-camera-movement.md`](../archive/3d-camera/free-camera-movement.md) for the full plan.
 
 ## Deferred (not urgent)
 
+The first two entries below have since shipped and are kept here for
+their record of JWildfire's dispatch model; how they work now is in
+[VARIATIONS.md](../main/VARIATIONS.md) (phases, `fx_priority`) and
+[TRANSFORMS.md](../main/TRANSFORMS.md).
+
 ### `<var>_fx_priority` — per-variation priority / phase ordering
 
-**Status**: Not implemented. Silently ignored on import (we don't parse
-`*_fx_priority` at all — confirmed by grep over `src/flame_xml.rs`).
+**Status**: Shipped 2026-06-18 (commit `5824745e`): parsed on import
+(`parse_fx_priority` in `src/flame_xml.rs`) and written back on export.
+Open: an override on a Linked or Final transform is stored but never
+reaches the shader (`collect_phase_overrides` reads only the normal
+transforms). The text below is the original analysis; its "not
+implemented" framing predates the commit.
 
 **JWF XML attribute** (per variation, e.g. `combimirror_fx_priority="-1"`):
 an integer that controls the order variations are applied *within* a
@@ -252,6 +261,11 @@ equals `result = w·body`), so single-variation flames render identically;
 only multi-variation normal xforms change.
 
 ### Variation order preservation
+
+**Status**: Shipped. Under the sticky shader (2026-08-08), normal-phase
+flames compile against a sorted canonical variation map; a flame whose
+order matters (chained pre/post phases) falls back to its own order.
+See [SHADERS.md](../main/SHADERS.md).
 
 The dispatch now emits a flame's variations in **import order** (and UI
 add order), not registry order — because the running accumulator
@@ -445,4 +459,4 @@ Defaults are all `0.0` — they're opt-in modulators.
 
 - [`jwf-common-variations-port.md`](jwf-common-variations-port.md) — JWF "script vars" variation subset (188/190 implemented).
 - [`variation-port-blockers.md`](variation-port-blockers.md) — Per-variation porting blockers + framework features needed to unblock them.
-- [`apophysis-remaining-features.md`](apophysis-remaining-features.md) — Apophysis-baseline features (XAOS, 3D camera, etc.); same shape as this doc but for the Apo side.
+- [`apophysis-remaining-features.md`](../archive/projects/apophysis-remaining-features.md) — Apophysis-baseline features (XAOS, 3D camera, etc.); same shape as this doc but for the Apo side.

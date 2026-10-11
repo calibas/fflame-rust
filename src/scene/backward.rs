@@ -1,6 +1,6 @@
 //! Cylinder planning by the inverse walk.
 //!
-//! `docs/projects/inversive-targeting.md` §24–§26. The forward planner
+//! `docs/projects/deep-zoom/inversive-targeting.md` §24–§26. The forward planner
 //! in [`cylinder`](super::cylinder) pushes a disc through a word's
 //! maps and asks whether it meets the view; for a flame like
 //! `grand-julian` that cannot work, and the reason is structural
@@ -325,14 +325,14 @@ pub struct PlanOptions<'a> {
     /// now -- the web is phase 3 of `gpu-cylinder-planning.md`.
     #[cfg(not(target_arch = "wasm32"))]
     pub gpu: Option<&'a Mutex<crate::scene::plan_gpu::GpuPlanner>>,
-    /// Pieces of the picture removed (`docs/projects/word-editing.md`
+    /// Pieces of the picture removed (`docs/projects/deep-zoom/word-editing.md`
     /// §5): patterns of symbols matched against a word's last-applied
     /// maps (`scene::word_tree::removed`). The walk makes no word ending
     /// with one, and refines a word that holds one rather than keeping it
     /// whole.
     pub removals: &'a [Vec<u32>],
     /// Pieces opened in the Pieces panel to see inside
-    /// (`docs/projects/word-editing.md` §6): the walk splits each, and
+    /// (`docs/projects/deep-zoom/word-editing.md` §6): the walk splits each, and
     /// every piece holding one, rather than keeping it whole. The picture
     /// is the same; only how finely the plan divides it changes.
     pub refine: &'a [Vec<u32>],
@@ -1134,7 +1134,7 @@ fn finite(p: [f64; 2]) -> bool {
     p[0].is_finite() && p[1].is_finite()
 }
 
-/// **The replay in offsets** (`docs/projects/deep-zoom-precision.md` §2):
+/// **The replay in offsets** (`docs/projects/deep-zoom/deep-zoom-precision.md` §2):
 /// a forced sample runs its word in absolute f32 up to step `m`, then as
 /// an offset from a reference orbit the CPU ran in f64.
 ///
@@ -6982,7 +6982,7 @@ mod tests {
         }
     }
 
-    /// **A removal holds at every zoom** (`docs/projects/word-editing.md`
+    /// **A removal holds at every zoom** (`docs/projects/deep-zoom/word-editing.md`
     /// §5's gate), on the first animation frame. Two removals: the
     /// flicker's (`t1a0`), and one a map longer than a word the plain plan
     /// cuts whole, which the walk must refine to take out. At the frame's

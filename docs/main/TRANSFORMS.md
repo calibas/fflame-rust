@@ -1,641 +1,631 @@
-# Transform and Flame Algorithm
+# Flames and Transforms
 
-**Overview:** Complete reference for the fractal flame algorithm, transform structure, and IFS (Iterated Function System) implementation.
+**Overview:** The flame model and the chaos game that draws it. A
+**flame** is an iterated function system: a set of **transforms**, each
+an affine map followed by a weighted blend of nonlinear **variations**.
+The renderer runs the chaos game on the GPU — every thread carries one
+point, picks a transform at random each iteration, applies it, and
+deposits the result into a histogram — and the picture is the density
+of where the points land.
 
 **See also:**
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
-- [BUFFERS.md](BUFFERS.md) - GpuTransform data structure
-- [SHADERS.md](SHADERS.md) - Shader implementation *(coming soon)*
-- [VARIATIONS.md](VARIATIONS.md) - Variation functions *(coming soon)*
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — overall system design
+- [VARIATIONS.md](VARIATIONS.md) — the variation registry, phases and
+  features that `apply_variations` is built from
+- [RENDERER.md](RENDERER.md) — dispatch sizing, persistent orbits,
+  accumulation and tone mapping
+- [SHADERS.md](SHADERS.md) — how the per-flame shader is assembled
+- [BUFFERS.md](BUFFERS.md) — `GpuTransform`, `GpuVariationParams`, the
+  attachment buffer
+- [CAMERA.md](CAMERA.md) — the 3D camera and the view mapping
+- [COLOR.md](COLOR.md) — colour modes and the palette
+- [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) — the forced-prefix plot
+  for deep zooms
+- [ESCAPE.md](ESCAPE.md) — the escape engine, whose IFS distance mode
+  (mode D) renders the flame's transforms
+- [CONFIG.md](CONFIG.md) — `FractalConfig`, `ConfigPath`, undo
 
 **Code locations:**
-- [src/scene/transforms.rs](../../src/scene/transforms.rs) - Transform struct and Flame algorithm
-- [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) - GPU compute shader template
-- [shaders/core/affine.wgsl](../../shaders/core/affine.wgsl) - 2D affine transform
-- [shaders/core/affine_3d.wgsl](../../shaders/core/affine_3d.wgsl) - 3D affine transform
+- [src/scene/transforms.rs](../../src/scene/transforms.rs) — `Flame`,
+  `Transform`, `PostSymmetry`, `RenderMode`, the per-flame local index
+  map and the packed parameter/state layouts
+- [src/scene/xaos.rs](../../src/scene/xaos.rs) — xaos matrix
+  maintenance, closed-group analysis, xaos-linked pairs
+- [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl)
+  — the chaos-game kernel
+- [shaders/core/affine.wgsl](../../shaders/core/affine.wgsl),
+  [shaders/core/affine_3d.wgsl](../../shaders/core/affine_3d.wgsl) —
+  pre- and post-affine
+- [shaders/core/utilities.wgsl](../../shaders/core/utilities.wgsl) —
+  transform selection, projection, `world_to_pixel`, post-symmetry
+- [shaders/core/subflame.wgsl](../../shaders/core/subflame.wgsl) — the
+  nested chaos game behind `subflame_wf`
+- [src/gpu/buffers.rs](../../src/gpu/buffers.rs) — packing the flame
+  into GPU buffers
+- [src/flame_xml.rs](../../src/flame_xml.rs) — Apophysis / JWildfire
+  `.flame` import and export
 
 ---
 
-## What is a Fractal Flame?
+## The model
 
-A fractal flame is an **Iterated Function System (IFS)** that generates intricate patterns through:
-1. **Random point iteration** - Start with random point, repeatedly transform it
-2. **Weighted transform selection** - Choose transforms probabilistically
-3. **Affine transformation** - Linear 2D transform (rotation, scale, translation)
-4. **Variation blending** - Apply nonlinear "variation" functions (sin, spherical, swirl, etc.)
-5. **Color blending** - Accumulate colors based on transform selection
-6. **Histogram accumulation** - Plot point density across the canvas
+`FractalConfig.flame` holds the flame. The whole-render settings that
+used to sit on it — `render_mode`, `perspective_strength`, `preserve_z`,
+`depth_density_compensation`, `far_density_fade`,
+`far_density_fade_start` — moved to `FractalConfig` in config v3 (the
+v2→v3 migration lifts them; a nested copy left in an old blob is
+ignored on load). The view and the camera — four angles and a
+world-space position — are `FractalConfig` fields too
+([CAMERA.md](CAMERA.md)).
 
-The result: Beautiful, organic-looking fractals with infinite detail.
+### `Flame`
 
-**Key Insight:** Instead of plotting a mathematical function, we plot the *attractor* of a chaotic dynamical system.
+| field | means |
+| --- | --- |
+| `id` | Session-local identity for animation tracks. Never serialized; `FractalConfig::fixup_ids` assigns one after load. |
+| `name` | Display name. |
+| `transforms` | The **normal** transforms — the ones the chaos game selects by weight. |
+| `linked_transforms` | The Linked pool, referenced by index from each normal's `linked_attachments`. |
+| `final_transforms` | The Final pool, referenced by index from each normal's `final_attachments`. |
+| `xaos` | `Option<Vec<Vec<f32>>>`, `xaos[src][dst]` over the normals. `None` means every entry is 1. |
+| `solo_transform` | `Option<usize>`: plot only this normal (see *Opacity and solo*). |
+| `subflames` | Nested flames that `subflame_wf` iterates (see *Subflames*). |
+| `post_symmetry` | JWildfire's plot-time symmetry (see *Post-symmetry*). |
+
+### `Transform`
+
+The same struct serves all three pools; which fields matter depends on
+the pool.
+
+| group | fields | notes |
+| --- | --- | --- |
+| identity | `id` | Runtime only, like `Flame::id`. |
+| affine | `a b c d e f`, `g` | `x' = a·x + b·y + e`, `y' = c·x + d·y + f`; in 3D `z' = z + g`. |
+| selection | `weight` | Normals only. Linked and Final members are never selected. |
+| variations | `variations`, `variation_params`, `variation_order`, `variation_priorities` | Weight per variation name; parameters as a flat map keyed `"variation.param"`; the dispatch-order hint; sparse JWildfire `fx_priority` overrides. See [VARIATIONS.md](VARIATIONS.md). |
+| colour | `color`, `color_speed`, `opacity`, `direct_color` | Palette position 0–1; Apophysis "symmetry" (−1…1); plot probability; direct-colour blend. Read from the **normal** only. |
+| post-affine | `post_affine_enabled`, `post_a … post_f`, `post_g` | Applied after the variations. |
+| JWildfire planes | `yz_coefs`, `zx_coefs`, `yz_post_coefs`, `zx_post_coefs` | Six floats each in JWF's positional `a c b d e f` order; identity `[1, 0, 0, 1, 0, 0]`. 3D only. |
+| attachments | `linked_attachments`, `final_attachments` | Indexes into the flame's pools. Normals only. |
+
+**Variation weights are a map, and zero is a value.** `set_variation`
+keeps an entry at weight 0, so a variation can sit on a transform —
+and be compiled into the shader — while contributing nothing; the
+dispatcher skips it at run time. `remove_variation` scrubs the weight,
+its `variation_order` entry, every `"name.*"` parameter and any
+priority override. A parameter that is absent reads as the variation
+definition's default (`variation_param_or_default`).
+
+**Per-flame local indices.** The GPU never sees variation names. Each
+flame gets a local index map (`compute_local_index_map`) from its active
+variation names in flame order — normals, then linked, then finals,
+then subflames, each transform contributing its `variation_order` and
+then any remaining names in registry order. Local indices run `0..N`
+with `N ≤ MAX_VARIATIONS_PER_FLAME = 100`; past the cap the overflow is
+dropped with a warning. The shader builder and every buffer packer
+derive the same map, so `xform.variations[i]` and `variation_id = i`
+agree everywhere.
+
+In the app the map is usually not the flame's own. The renderer's
+**sticky superset** (`src/renderer/sticky.rs`) compiles the flame
+against a canonical map — the sorted union of its variations and
+recently used extras at weight 0 — by writing that map into transform
+0's `variations` and `variation_order` before compiling and packing.
+A flame where order could change the result falls back to its own map:
+a transform with two or more pre or post variations, any `fx_priority`
+override, two `Replace` or two colour-writing variations, or a
+`NeedsAccum` variation beside another. One-shot renders (CLI export,
+the visual suite) turn the superset off. See
+[SHADERS.md](SHADERS.md#the-sticky-variation-superset).
+
+### `.fflame` serialization
+
+`Transform` has hand-written serde:
+- Maps are written as sorted maps, so a config's JSON is byte-stable.
+- Optional groups are written only when they differ from the default:
+  the post-affine block when `post_affine_enabled`, each plane array
+  when it is not identity, attachments, priorities and the order hint
+  when non-empty, `direct_color` when non-zero.
+- `direct_color` defaults to **1.0** for a new transform, but a file
+  that omits it loads as **0.0**, because files from before the default
+  changed omitted it at 0.
+- Legacy shapes still load: `variations` as an array (indexed by
+  registry order), `color` as an RGB triple (averaged to a palette
+  position), and a singular `final_transform` on the flame (moved into
+  the Final pool and attached to every normal by
+  `Flame::migrate_legacy_final`).
+- Every name-keyed field is canonicalised through the registry's alias
+  table on load, so a config saved under a renamed variation keeps its
+  weights and parameters.
+
+### Affine conventions
+
+The six coefficients follow Apophysis. The `.flame` `coefs` attribute
+writes them in the order `a c b d e f`. The triangle editor shows a
+transform as the image of the unit triangle in Apophysis's y-down
+display: `to_triangle_apophysis` gives `O = (e, −f)`,
+`X = (e + a, −f − c)`, `Y = (e − b, −f + d)`. The same mapping drives
+the post-affine and the plane-affine triangles
+(`post_to_triangle_apophysis`, `plane_to_triangle_apophysis`).
 
 ---
 
-## Transform Structure
+## The chaos game
 
-### Rust Definition
+One compute dispatch is `workgroups × 64` threads
+(`@workgroup_size(64, 1, 1)`), each running `iterations_per_thread`
+iterations of one orbit. Threads share nothing but the histogram
+atomics. How many workgroups and iterations a frame gets is the
+renderer's business ([RENDERER.md](RENDERER.md)).
 
-**Location:** [src/scene/transforms.rs](../../src/scene/transforms.rs)
+### A thread starting
 
-```rust
-pub struct Transform {
-    // Affine transformation (2D matrix + translation)
-    pub a: f32, pub b: f32,  // First row: affects x
-    pub c: f32, pub d: f32,  // Second row: affects y
-    pub e: f32, pub f: f32,  // Translation: [e, f]
+- `rng_init(thread_id, params.seed)` seeds a PCG stream.
+- The point starts uniform in `[-1, 1]²` (2D) or `[-1, 1]³` (3D);
+  `color_index` starts at 0.
+- `fuse` is set to the burn-in count (`SystemSettings::burn_in`,
+  default 20): iterations that run but do not plot.
+- With xaos, `prev_xform_idx` gets an unconditioned weighted pick.
+- Variations with a `wgsl_state_init` fragment initialise their
+  per-thread state.
 
-    // Z offset (3D mode only)
-    pub g: f32,              // Z translation
+**Persistent orbits.** With `PERSISTENT_ORBITS` on (always, in the
+app), a thread whose stored generation matches the current one
+**resumes** instead: the point, the 4th coordinate, the colour and
+colour index, the burn-in left, the previous transform, and every
+variation state slot come back from the orbit buffer and are written
+back after the loop. Only a change to the dynamics starts a new
+generation — the flame, the render mode, `preserve_z`, the colour mode,
+the speed factor — not a pan or zoom. A flame carrying variation state
+restarts at every restart of the accumulation. So burn-in is paid once
+per generation, not once per dispatch. See [RENDERER.md](RENDERER.md)
+and the [design record](../archive/projects/persistent-orbits.md).
 
-    // Transform selection probability
-    pub weight: f32,         // Probability weight (normalized to sum=1.0)
+### One iteration
 
-    // Variation weights (26 core + 24 plugin slots)
-    pub variations: HashMap<String, f32>,  // Name → weight
+1. **Select** a normal transform (*Transform selection*).
+2. **Opacity draw:** `should_plot = u < opacity`, with the selected
+   normal's opacity. Opacity never changes the dynamics.
+3. **Affine:** `apply_affine(xform, current)`.
+4. **Variations:** `apply_variations` — pre, normal and post phases
+   ([VARIATIONS.md](VARIATIONS.md)).
+5. **Post-affine**, if the transform has one.
+6. **Linked chain:** each attached Linked transform, in list order:
+   affine, variations, post-affine. Its output is the new `current`.
+7. **Hide:** if a `CanHide` variation in steps 4–6 set the hide flag,
+   `current` reverts to the point the iteration started from and the
+   iteration ends — no colour update, no plot, no burn-in countdown.
+8. **Bad-value recovery** (below). A respawned point ends the iteration.
+9. **Colour update** (below).
+10. **Burn-in:** while `fuse > 0` it counts down and nothing is plotted.
+11. **Plot:**
+    - Focused Rendering, when on, carries the point through a planned
+      word first and restores the free orbit afterwards
+      ([FOCUSED-RENDERING.md](FOCUSED-RENDERING.md)).
+    - The **Final chain** runs on a copy of the point.
+    - A hide from a Final variation suppresses the splat only.
+    - Each **post-symmetry copy** (and, with multi-emit, each emitted
+      point) is projected, weighted by the depth effects in 3D, and
+      deposited.
 
-    // Variation parameters (for parameterized variations)
-    pub variation_params: HashMap<String, HashMap<String, f32>>,  // Variation → (param → value)
+The 2D and 3D kernels are the same template compiled with and without
+`RENDER_3D`; the point is a `vec2` or a `vec3`.
 
-    // Color
-    pub color: [f32; 3],     // RGB [0.0-1.0]
-    pub color_speed: f32,    // Color blend rate [0.0-1.0]
-}
+### Transform selection
+
+`select_transform_const` normalises by the total weight: it draws
+`target = u × Σweight` and returns the first transform whose running sum
+reaches it, falling through to the last. `NUM_TRANSFORMS` — the normal
+count, at least 1 — is compiled in, so changing the number of
+transforms rebuilds the shader. A flame whose weights sum to zero always
+picks transform 0.
+
+| function | used when |
+| --- | --- |
+| `select_transform_const(u)` | no xaos |
+| `select_transform_xaos(u, prev)` | xaos: weights are `weight[dst] × xaos[prev][dst]` |
+| `select_transform_biased(u)`, `select_transform_biased_xaos(u, prev)` | `IMPORTANCE_SAMPLING`: biased weights, with the likelihood ratio folded into the deposit ([flame-deep-zoom.md](../projects/deep-zoom/flame-deep-zoom.md), stage 1) |
+
+`select_transform(u)`, which reads `params.num_transforms` instead of
+the constant, is still in `utilities.wgsl` but nothing calls it.
+
+### Colour
+
+The palette index evolves by Apophysis's rule, with
+`s = color_speed`:
+
+```
+color_index = color_index · (1 + s)/2 + color · (1 − s)/2
 ```
 
-**Key Points:**
-- Affine matrix stored as 6 scalars (a, b, c, d, e, f) instead of 2×3 matrix
-- Variations stored as HashMap (flexible, supports plugins)
-- GPU upload converts HashMap to fixed-size array (indices 0-49)
+`s = 1` keeps the incoming index, `s = −1` replaces it with the
+transform's `color`, `s = 0` averages them. Only the selected normal's
+`color` and `color_speed` take part; Linked and Final members' colour
+fields are not read.
 
-### Affine Transformation
+**Direct colour** (`HAS_DC`, compiled in when any active variation has
+`WritesColor`): the rule above gives `c_base` before the variations
+run; `WritesColor` variations on the normal and its Linked chain write
+an iteration-local `vc`; afterwards
+`color_index = c_base + direct_color · (vc − c_base)`, with the
+normal's `direct_color`. Writes from Final variations are discarded.
 
-The affine transform is a 2D linear transformation plus translation:
+**Direct RGB** (`HAS_RGB`): `WritesRgb` variations write `vrc`, which
+starts at a sentinel; at the plot, when something wrote it,
+`final_color = mix(palette_color, vrc, direct_color)`. Not in PathMap
+mode. Final writes are discarded.
 
-```
-[x']   [a  b] [x]   [e]
-[y'] = [c  d] [y] + [f]
+The colour mode (`FractalConfig::color_mode`) is compiled in as
+`COLOR_MODE`: Palette (0) and PathMap (2) run the palette-index flow
+above; Speed (1) mixes a speed colour — from the distance the point
+moved this iteration, after the Linked chain — into a running RGB by
+`speed_factor`. At the plot the palette is sampled at `color_index` and
+converted from sRGB to linear. See [COLOR.md](COLOR.md).
 
-// Expanded:
-x' = a*x + b*y + e
-y' = c*x + d*y + f
-```
+### Opacity and solo
 
-**Special Cases:**
-- **Identity**: `a=1, d=1, b=c=e=f=0` (no change)
-- **Translation**: `a=1, d=1, b=c=0, e≠0, f≠0` (shift only)
-- **Scale**: `a=s, d=s, b=c=e=f=0` (uniform scale by s)
-- **Rotation**: `a=cos(θ), b=-sin(θ), c=sin(θ), d=cos(θ), e=f=0`
+`opacity` is the probability that an iteration through this transform
+is plotted. A transform at opacity 0 still moves the point — it is an
+invisible step in the dynamics, the trick xaos-linked "pre" transforms
+rely on. A Linked or Final member's own `opacity` is not read; the
+normal's draw covers the whole chain.
 
-**Visual Interpretation:**
-- The affine transform maps the unit triangle `[(0,0), (1,0), (0.5, 0.866)]` to a new triangle
-- Triangle editor in UI visualizes this mapping
-- Dragging triangle vertices updates the affine coefficients
+**Solo** (`Flame::solo_transform`, the Transforms panel's Solo box,
+`.flame` `soloxform`) does not change selection.
+`GpuTransform::from_flame` uploads every other normal with an effective
+opacity of 0, so the attractor is the same and only the soloed
+transform's share of it is drawn.
 
-### 3D Extension
+### Bad-value recovery
 
-In 3D mode, the affine transform includes Z offset:
+flam3 / JWildfire style, in two tiers, after the Linked chain:
+- **X or Y** not within ±1e32 (NaN included — the test is
+  `!(abs(x) <= 1e32)`, which survives fast-math): the point respawns
+  uniform in `[-1, 1]²` with `z = 0`, and `fuse` resets to the burn-in,
+  as JWildfire re-fuses a re-randomised point.
+- **Z** (3D) saturates at ±1e32 instead, because z compounds
+  legitimately through `AlwaysZ` variations under `preserve_z = true`
+  and respawning would starve the attractor. A NaN z becomes 0. While z
+  sits on the rail, each iteration has a 1/256 chance of respawning,
+  standing in for JWildfire's eventual f64 overflow.
+- **The 4th coordinate** (`NeedsW` variations) gets the same rail, and
+  resets to 0 on respawn.
 
-```
-[x']   [a  b] [x]   [e]
-[y'] = [c  d] [y] + [f]
-[z']   [0  0] [z]   [g]
+See [preserve-z-semantics.md](../archive/projects/preserve-z-semantics.md).
 
-// Expanded:
-x' = a*x + b*y + e
-y' = c*x + d*y + f
-z' = z + g  // Simple Z offset (no rotation in affine)
-```
+### Post-affine
 
-**Note:** Z rotation happens in variation functions (PreRotateY, PostRotateY, etc.)
+`GpuTransform::post_enabled` is `Transform::has_post_step()`: the XY
+post-affine is enabled, **or** a YZ/ZX post plane is not identity.
+JWildfire gates the three post planes independently, so a transform
+can carry `zxPost` with no `post` attribute at all. In 2D only the XY
+part exists.
+
+### 3D affines
+
+`affine_3d.wgsl` has two paths, chosen per transform by the
+host-computed `plane_flags` (bit 0 YZ, 1 ZX, 2 YZ post, 3 ZX post):
+- **Flat** (no plane flags): the Apophysis affine plus `z' = z + g`.
+  Every Apophysis flame takes this path.
+- **Full:** JWildfire's `TransformationAffineFullStep`. The XY, YZ and
+  ZX linear parts are applied in that order, then all the offsets are
+  summed unrotated: `x + e + zx[4]`, `y + f + yz[4]`, `z + yz[5] + zx[5]`.
+  `g` (and `post_g` on the post side) has no place in it and is lost —
+  a known limitation for a flame that mixes `g` with plane affines.
+
+The plane coefficients are ignored in 2D.
+
+### `preserve_z`
+
+A `FractalConfig` field, compiled into the shader for 3D. With
+`preserve_z = false` — the Apophysis/JWildfire default and the default
+for new flames — the normal-phase dispatcher zeroes the z of every
+variation contribution except `AlwaysZ` ones, so z compounds only
+through true-3D variations. `NeverZ` variations contribute no z either
+way. A config that omits the field loads as `true`, which keeps flames
+authored before it looking as they did.
+
+One consequence for `g`: under `preserve_z = false` only normal-phase
+`AlwaysZ` variations carry the affine's z — `g` included — into the
+transform's output. A post-phase variation or the post-affine's
+`post_g` can still add z of its own. The template still has a
+`FLATTEN_Z_PER_ITER` block that zeroes z at the end of every iteration;
+the builder never enables it. See [VARIATIONS.md](VARIATIONS.md) for
+the z features.
+
+### Projection and the view
+
+- **2D**, `world_to_pixel`: pan → rotate → zoom. The point minus
+  `(pan_x, pan_y)` is rotated by `rotation`, scaled by `zoom`, then by
+  `min(width, height) / 4`, and offset to the image centre. Under
+  `CYLINDER_RELATIVE` the forced point arrives already relative to the
+  view, and the pan is not subtracted again.
+- **3D**, `project_3d_full`: the point minus the camera position,
+  through the camera matrix built from pitch, yaw and bank, then
+  Apophysis's perspective `zr = 1 − persp · z` with `perspective_strength`
+  (0 = orthographic). A sample with `zr < 1e-3`, behind the camera or at
+  the singularity, is clipped. Then the same pan → rotate → zoom, with
+  `rotation` as the camera's roll. See [CAMERA.md](CAMERA.md).
+
+In 3D the camera-space depth then feeds depth-density compensation, the
+depth-of-field jitter, far-density fade, fog and, with solid rendering,
+the depth buffer ([RENDERER.md](RENDERER.md)).
+
+### The deposit
+
+A sample in bounds adds `colour × 100 × density_weight` to each of R, G
+and B and `100 × density_weight` to the density word of its pixel, as
+`u32` atomics. `density_weight` starts at 1 and carries multi-emit
+weights, the Focused Rendering word weight, the importance-sampling
+ratio and the 3D depth weights. On the sample-emit export path the
+sample is written to a stream instead and scattered per tile later.
+The accumulate and tone-map passes are in [RENDERER.md](RENDERER.md).
 
 ---
 
-## Flame Algorithm
+## Linked and Final transforms
 
-### High-Level Overview
+Every normal transform can carry two ordered lists:
 
-```
-1. Start with random point p
-2. Burn-in: Iterate N times without plotting (settle attractor)
-3. For each iteration:
-   a. Select transform T_i randomly (weighted by T_i.weight)
-   b. Apply affine: p' = affine(p)
-   c. Apply variations: p'' = blend_variations(p')
-   d. Update color based on color mode
-   e. Plot p'' to histogram (increment density + accumulate color)
-   f. p = p'' (iterate)
-4. Repeat millions of times
-```
+| | Linked | Final |
+| --- | --- | --- |
+| pool | `Flame::linked_transforms` | `Flame::final_transforms` |
+| attachment list | `linked_attachments` | `final_attachments` |
+| runs | after the normal's post-affine | after the Linked chain, at plot time |
+| feeds the next iteration | yes | no |
+| `WritesColor` / `WritesRgb` writes | kept | discarded |
+| hide (`CanHide`) | aborts the iteration | suppresses the splat |
+| 4th coordinate | kept | restored after the chain |
 
-**Result:** Points cluster around the attractor, creating fractal structure.
+Linked is part of the dynamics: deterministic extra steps after the
+normal fires. Final is a view filter: it reshapes what is plotted and
+nothing else. A pool member can be attached to any number of normals.
+A pool member's `weight`, `opacity` and colour fields are not read; it
+inherits them from the normal that fired.
 
-**Key Insight: One Iteration = One Point Drawn**
+**On the GPU** there is one transforms buffer with `MAX_TRANSFORMS = 128`
+parent slots: normals at `[0, N)`, Linked at `[N, N + L)`, Finals at
+`[N + L, N + L + F)`, zero-padded. Subflame transforms follow from slot
+128 (*Subflames*). The attachment buffer has one entry per normal
+holding the **global** slot ids of its Linked and Final members. Its
+per-side array length is `Flame::attachment_cap()` — the longest list
+in the flame, at least 1 — compiled into the shader; a list longer than
+`MAX_ATTACHMENTS_PER_TRANSFORM = 32` is truncated with a warning.
+`HAS_ATTACHMENTS` strips the per-iteration attachment load and both
+chain loops from a flame with empty pools.
 
-Each iteration through the algorithm (steps 3a-3f) produces **one point** that is plotted to the histogram. If a thread performs 256 iterations, it draws approximately 236 points (256 total iterations minus 20 burn-in iterations that are discarded).
+**Old flames.** A config with the singular `final_transform`, and every
+`<finalxform>` in a `.flame` file, becomes a pool member attached to
+every normal — the old "global final" behaviour.
 
-**The point "walks" through transform space:**
-- Iteration 1: p₀ → Transform → p₁ (drawn)
-- Iteration 2: p₁ → Transform → p₂ (drawn)
-- Iteration 3: p₂ → Transform → p₃ (drawn)
-- ...
-- Iteration 256: p₂₅₅ → Transform → p₂₅₆ (drawn)
-
-The same point variable is reused throughout the loop (step 3f: `p = p''`), creating a chaotic trajectory through the fractal's attractor. Each position along this trajectory is plotted, building up the final image through density accumulation.
-
-### CPU Reference Implementation (2D only)
-
-**Location:** [src/scene/transforms.rs](../../src/scene/transforms.rs) - `Flame::iterate()`
-
-```rust
-pub fn iterate(&self, p: [f32; 2], color_index: &mut f32) -> [f32; 2] {
-    // 1. Select transform randomly (weighted)
-    let xform = self.select_random_transform();
-
-    // 2. Apply affine transformation
-    let x = xform.a * p[0] + xform.b * p[1] + xform.e;
-    let y = xform.c * p[0] + xform.d * p[1] + xform.f;
-    let p_affine = [x, y];
-
-    // 3. Apply variation blending
-    let mut result = [0.0, 0.0];
-    for (var_name, weight) in &xform.variations {
-        if *weight == 0.0 { continue; }
-        let varied = apply_variation(var_name, p_affine, xform);
-        result[0] += weight * varied[0];
-        result[1] += weight * varied[1];
-    }
-
-    // 4. Update color (Transform mode example)
-    *color_index = *color_index * (1.0 - xform.color_speed) + xform.color_speed;
-
-    result
-}
-```
-
-**Key Details:**
-- Transform selection uses cumulative probability (binary search or linear scan)
-- Variations are applied to post-affine point, then blended by weight
-- Color evolves via exponential moving average
-- This is reference only; GPU implementation is much faster
-
-### GPU Implementation (2D Mode)
-
-**Location:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) (compiled with `RENDER_3D=false`)
-
-```wgsl
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let thread_id = global_id.y * 8u + global_id.x;
-
-    // 1. Initialize RNG with unique seed
-    var rng = init_rng(params.seed + thread_id);
-
-    // 2. Random starting point
-    var p = random_point_in_circle(&rng);
-    var color_index = pcg_float(&rng);
-
-    // 3. Burn-in (settle attractor)
-    for (var i = 0u; i < params.burn_in; i++) {
-        let xform_id = select_transform(&rng);
-        p = apply_transform(p, xform_id, &rng, &color_index);
-    }
-
-    // 4. Accumulation iterations
-    for (var i = 0u; i < params.iterations_per_thread; i++) {
-        let xform_id = select_transform(&rng);
-        p = apply_transform(p, xform_id, &rng, &color_index);
-
-        // Project to screen space
-        let screen_pos = world_to_pixel(p, params);
-
-        if (in_bounds(screen_pos, params)) {
-            // Get color based on color mode
-            let color = get_color(color_index, xform_id);
-
-            // Accumulate to histogram (atomic u32)
-            let pixel_idx = screen_pos.y * params.width + screen_pos.x;
-            let base_idx = pixel_idx * 4u;
-            let scale = params.histogram_color_scale;
-
-            atomicAdd(&histogram[base_idx + 0u], u32(color.r * scale));
-            atomicAdd(&histogram[base_idx + 1u], u32(color.g * scale));
-            atomicAdd(&histogram[base_idx + 2u], u32(color.b * scale));
-            atomicAdd(&histogram[base_idx + 3u], u32(scale));
-        }
-    }
-}
-
-fn apply_transform(
-    p: vec2<f32>,
-    xform_id: u32,
-    rng: ptr<function, RngState>,
-    color_index: ptr<function, f32>
-) -> vec2<f32> {
-    let xform = transforms[xform_id];
-
-    // Affine transformation
-    let x = xform.affine[0][0] * p.x + xform.affine[0][1] * p.y + xform.offset.x;
-    let y = xform.affine[1][0] * p.x + xform.affine[1][1] * p.y + xform.offset.y;
-    let p_affine = vec2(x, y);
-
-    // Variation blending (dynamically generated by ShaderBuilder)
-    let p_varied = apply_variations(p_affine, xform_id, rng);
-
-    // Color update
-    *color_index = *color_index * (1.0 - xform.color_speed) + xform.color_speed;
-
-    return p_varied;
-}
-```
-
-**Performance:**
-- Default: 128 workgroups × 64 threads × 256 iterations = 2M iterations/frame
-- At 60 FPS: 120M iterations/second
-- Each thread is independent (fully parallel)
-
-**Thread Isolation and Parallelism:**
-
-Each of the **8,192 threads** (128 workgroups × 64 threads) operates **completely independently** with no communication during iteration:
-
-**Per Thread:**
-- **Own random seed:** `init_rng(params.seed + thread_id)` - ensures unique random sequence
-- **Own starting point:** Random position in [-1, 1] range, different for each thread
-- **Own iteration chain:** 256 iterations producing ~236 drawn points (after 20 burn-in)
-- **Own point trajectory:** The point variable `p` is local to the thread, reused each iteration
-
-**No Inter-Thread Communication:**
-- Thread A's point never influences Thread B's point
-- Threads do not share intermediate results
-- Each thread follows its own chaotic path through transform space
-
-**Only Synchronization Point:**
-- Atomic writes to shared histogram buffer: `atomicAdd(&histogram[...], ...)`
-- Multiple threads can hit the same pixel - atomics ensure thread-safe accumulation
-- This is where all threads' work combines to form the final image
-
-**Total Points Per Frame:**
-- 8,192 threads × 236 points/thread ≈ **1.9 million points drawn**
-- Each point increments density at one pixel location
-- High-density areas (many points) become bright, low-density areas stay dark
-
-**Why This Works:**
-Despite each thread starting randomly and following an independent chaotic path, they all converge to draw the **same fractal structure**. This is the mathematical property of the IFS (Iterated Function System) - the attractor is the same regardless of starting point.
-
-### GPU Implementation (3D Mode)
-
-**Location:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) (compiled with `RENDER_3D=true`)
-
-**Key Differences from 2D:**
-```wgsl
-// 1. Point is vec3<f32> instead of vec2<f32>
-var p = random_point_in_sphere(&rng);  // 3D starting point
-
-// 2. Affine includes Z offset
-fn apply_transform_3d(p: vec3<f32>, xform_id: u32, ...) -> vec3<f32> {
-    let xform = transforms[xform_id];
-
-    // Affine (2D XY + Z offset)
-    let x = xform.affine[0][0] * p.x + xform.affine[0][1] * p.y + xform.offset.x;
-    let y = xform.affine[1][0] * p.x + xform.affine[1][1] * p.y + xform.offset.y;
-    let z = p.z + xform.g;  // Z offset
-    let p_affine = vec3(x, y, z);
-
-    // Variations (includes 3D variations that modify Z)
-    let p_varied = apply_variations_3d(p_affine, xform_id, rng);
-
-    return p_varied;
-}
-
-// 3. Camera rotation before projection
-fn world_to_pixel_3d(p: vec3<f32>, params: GpuParams) -> vec2<u32> {
-    // Apply camera rotation (pitch, yaw)
-    let p_rotated = rotate_camera(p, params.camera_pitch, params.camera_yaw);
-
-    // Apply projection (orthographic or perspective)
-    var p_2d: vec2<f32>;
-    if (params.projection_type == 0u) {
-        // Orthographic: ignore Z
-        p_2d = p_rotated.xy;
-    } else {
-        // Perspective: divide by Z
-        let depth_factor = 1.0 + p_rotated.z * params.perspective_strength;
-        p_2d = p_rotated.xy / depth_factor;
-    }
-
-    // Apply 2D view transform (zoom, pan, rotation)
-    // ... same as 2D mode
-}
-```
-
-**3D Variation Behavior:**
-- **2D variations (0-15)**: Pass Z through unchanged `vec3(new_x, new_y, p.z)`
-- **Z-only variations (16, 17, 23)**: Modify `result.z` directly (avoid affecting XY)
-- **Full 3D variations (18)**: Modify all axes (Hemisphere)
-- **Rotation variations (19-22)**: Apply rotation matrix to full vector
+Design record:
+[per-transform-linked-and-final.md](../archive/projects/per-transform-linked-and-final.md),
+[final-transform-implementation.md](../archive/projects/final-transform-implementation.md),
+[post-affines.md](../archive/post-affines.md).
 
 ---
 
-## Point Calculations
+## Xaos
 
-Helper functions for polar coordinates (used by many variations).
+`Flame::xaos[src][dst]` multiplies the selection weight of `dst` when
+the previous transform was `src`, so
+`P(src → dst) ∝ weight[dst] · xaos[src][dst]`. The matrix covers the
+normals only; Linked and Final members are outside the chaos game.
 
-### Cartesian to Polar
+- **`has_xaos()`** is true when any entry differs from 1. It compiles
+  `XAOS_ENABLED`, and the matrix is uploaded flat, row-major
+  (`xaos_flat`). A row whose products are all zero selects transform 0.
+- **Matrix upkeep.** `on_transform_added`, `on_transform_cloned` and
+  `on_transform_deleted` resize it with the transform list. Adding keeps
+  existing xaos-linked pairs intact; deleting clears the matrix if it
+  is back to all ones.
+- **Closed groups.** Xaos can split the normals into closed groups — sets
+  the walk, once inside, never leaves. Under persistent orbits a
+  starting thread's first pick is **stratified** across threads (a
+  Kronecker sequence in the thread index), so each group gets its share
+  of orbits. Where the walk itself, not the first pick, decides the
+  group (`xaos_walk_splits_orbits`), every dispatch restarts about one
+  thread in `ORBIT_REFRESH_PERIOD = 4` to redraw it.
+  See [persistent-orbits.md](../archive/projects/persistent-orbits.md) §3.7.
+- **`.flame`**: each `<xform>`'s `chaos` attribute is its row.
 
-```rust
-// Distance from origin
-pub fn r(p: [f32; 2]) -> f32 {
-    (p[0] * p[0] + p[1] * p[1]).sqrt()
-}
-
-// Angle (theta) in radians
-pub fn theta(p: [f32; 2]) -> f32 {
-    p[1].atan2(p[0])
-}
-
-// Phi (used in 3D)
-pub fn phi(p: [f32; 3]) -> f32 {
-    p[2].atan2((p[0] * p[0] + p[1] * p[1]).sqrt())
-}
-```
-
-**WGSL equivalents** in [shaders/core/utilities.wgsl](../../shaders/core/utilities.wgsl):
-```wgsl
-fn calc_r(p: vec2<f32>) -> f32 {
-    return length(p);
-}
-
-fn calc_theta(p: vec2<f32>) -> f32 {
-    return atan2(p.y, p.x);
-}
-
-fn calc_phi(p: vec3<f32>) -> f32 {
-    return atan2(p.z, length(p.xy));
-}
-```
+**Xaos-linked transforms** are a different thing from the Linked pool,
+despite the name. They are an Apophysis convention inferred from the
+matrix: `pre` routes only to `post`, and `post` is reachable only from
+`pre`. The Xaos editor's Link Transforms dialog applies
+`link_transforms_changes`, which returns the xaos edits as one batch
+for the ConfigManager; `on_transform_added` uses `detect_linked_pairs`
+to keep existing links intact. `detect_linked_chains` and
+`unlink_chain_changes` exist, but nothing outside `xaos.rs` calls them
+yet. See [linked-transforms.md](../archive/projects/linked-transforms.md)
+and [xaos-implementation.md](../archive/xaos/xaos-implementation.md).
 
 ---
 
-## Render Modes
+## Subflames
 
-### 2D Mode (Classic)
+A **subflame** is a whole `Flame` nested inside a parent and iterated by
+a variation: `subflame_wf` (normal phase) or `pre_subflame_wf` (pre
+phase), whose `subflame_id` parameter picks the subflame. It is not a
+separate render; each call runs the subflame's chaos game one step and
+contributes the resulting point (and optionally its colour) to the
+parent transform.
 
-**Settings:**
-- `render_mode = RenderMode::TwoD`
-- Uses `main_template.wgsl` compiled with `RENDER_3D=false`
-- Points are `vec2<f32>`
-- Projection: Direct 2D screen mapping
+- **Limits.** `MAX_SUBFLAMES = 8`, and at most
+  `MAX_SUBFLAME_TRANSFORMS_TOTAL = 256` transforms across all of them.
+  Only a subflame's normals and Finals are used — its Linked pool,
+  attachment lists, xaos, opacity and solo are not — and a subflame
+  variation inside a subflame contributes nothing.
+- **Its state** lives in the variation's five per-thread state slots,
+  keyed by the parent transform and variation: the point, the last
+  transform picked, and the colour. So two parent transforms using the
+  same subflame walk it independently. The first call on a thread —
+  detected by the state still being exactly the origin — runs 20 extra
+  steps (`SUBFLAME_PREFUSE_ITERS`) to reach the attractor.
+- **One step:** pick a normal by raw weight; blend the colour with the
+  `color_speed` rule; affine, variations, post-affine; then the
+  subflame's Finals in order; then the direct-colour blend. The point
+  after the Finals is what the state keeps, so inside a subflame the
+  Finals **do** feed the next step.
+- **Variations inside** run through `apply_subflame_variations`, a
+  second dispatcher without the subflame variations (which is what
+  forbids nesting). Hiding is a no-op there, `NeedsW` does not commit
+  the 4th coordinate, and analytic blurs render stochastically.
+- **One id space.** Subflame transforms occupy slots
+  `[SUBFLAME_XFORM_ID_BASE = 128, …)` in the transforms, parameter and
+  state buffers, normals then Finals per subflame. Their variations are
+  part of the parent's local index map, so parameters, init dispatch
+  and state all work as they do for parent transforms.
+- **Editing.** The Subflames panel sets the ConfigManager's
+  `EditingTarget`; the Transforms panel and triangle editor then edit
+  that subflame in place. The viewport keeps rendering the parent with
+  the edits live, unless "View subflame in isolation" is ticked.
+- **`.flame`**: JWildfire's `subflame_wf_flame` attribute carries the
+  child flame as hex-encoded XML. Import decodes it into
+  `Flame::subflames` and points `subflame_id` at it; export re-encodes
+  it.
 
-**Use Case:** Traditional fractal flames (most presets)
-
-### 3D Mode (Pseudo-3D)
-
-**Settings:**
-- `render_mode = RenderMode::ThreeD`
-- Uses `main_template.wgsl` compiled with `RENDER_3D=true`
-- Points are `vec3<f32>`
-- Projection: Orthographic or Perspective
-
-**Projection Types:**
-1. **Orthographic** (`ProjectionType::Orthographic`)
-   - Ignores Z coordinate (parallel projection)
-   - Good for flat 3D structures
-
-2. **Perspective** (`ProjectionType::Perspective { strength }`)
-   - Divides XY by `(1 + Z * strength)`
-   - Creates depth illusion
-   - Strength 2.0-5.0 typical
-
-**Camera Controls:**
-- **Pitch** (camera_pitch): X-axis rotation (up/down orbit, -π to π)
-- **Yaw** (camera_yaw): Y-axis rotation (left/right orbit, -π to π)
-
-**Creating 3D Fractals:**
-1. Enable 3D mode
-2. Set projection to Perspective with strength ~3.0
-3. Add 3D variations (Zcone, Flatten, Hemisphere, etc.)
-4. Use different `g` values per transform for layering
-5. Rotate camera to verify 3D structure
-
----
-
-## Transform Selection
-
-### Weighted Random Selection
-
-Transforms are selected proportionally to their `weight` field.
-
-**Algorithm:**
-```rust
-// 1. Normalize weights to sum to 1.0
-let total_weight: f32 = transforms.iter().map(|t| t.weight).sum();
-let normalized: Vec<f32> = transforms.iter()
-    .map(|t| t.weight / total_weight)
-    .collect();
-
-// 2. Build cumulative distribution
-let mut cumulative = vec![0.0];
-for w in normalized {
-    cumulative.push(cumulative.last().unwrap() + w);
-}
-// cumulative = [0.0, w0, w0+w1, w0+w1+w2, ..., 1.0]
-
-// 3. Select transform
-let r = random(0.0, 1.0);
-let idx = cumulative.iter().position(|&x| x > r).unwrap() - 1;
-let selected = transforms[idx];
-```
-
-**GPU Implementation:**
-```wgsl
-fn select_transform(rng: ptr<function, RngState>) -> u32 {
-    let r = pcg_float(rng);
-    var sum = 0.0;
-    for (var i = 0u; i < params.num_transforms; i++) {
-        sum += transforms[i].weight;
-        if (r < sum) {
-            return i;
-        }
-    }
-    return params.num_transforms - 1u;  // Fallback
-}
-```
-
-**Note:** Weights don't need to sum to 1.0 (GPU normalizes implicitly).
+Design record: [subflame-variations-v2.md](../archive/subflame-variations-v2.md),
+[subflame-live-editing.md](../archive/subflame-live-editing.md),
+[subflames.md](../archive/projects/subflames.md).
 
 ---
 
-## Variation Blending
+## Post-symmetry
 
-### Additive Blending
+`Flame::post_symmetry` deposits each sample `K` times — the original
+and `K − 1` copies — after the Final chain and before projection. The
+dynamics never see the copies.
 
-Variations are applied to the post-affine point and summed:
+| `ty` | K | copy |
+| --- | --- | --- |
+| `None` | 1 | — (`HAS_POST_SYMMETRY` off; the loop compiles out) |
+| `XAxis` | 2 | reflected across `y = center_y` |
+| `YAxis` | 2 | reflected across `x = center_x` |
+| `Point` | `order` (clamped 1–32) | rotated by `k · 2π / order` about the centre |
 
-```rust
-let mut result = [0.0, 0.0];
-for (var_name, weight) in &xform.variations {
-    let varied = apply_variation(var_name, p_affine);
-    result[0] += weight * varied[0];
-    result[1] += weight * varied[1];
-}
-```
-
-**Example:**
-```
-p_affine = [0.5, 0.3]
-variations = { "linear": 0.5, "sinusoidal": 0.5 }
-
-linear(p) = [0.5, 0.3]
-sinusoidal(p) = [sin(0.5), sin(0.3)] = [0.479, 0.296]
-
-result = 0.5 * [0.5, 0.3] + 0.5 * [0.479, 0.296]
-       = [0.25, 0.15] + [0.240, 0.148]
-       = [0.490, 0.298]
-```
-
-**GPU Implementation:**
-
-The shader builder generates a `apply_variations()` function with a switch statement for active variations:
-
-```wgsl
-fn apply_variations(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    var result = vec2(0.0, 0.0);
-    let xform = transforms[xform_id];
-
-    // Dynamically generated based on active variations
-    if (xform.variations[0] != 0.0) {
-        result += xform.variations[0] * variation_linear(p);
-    }
-    if (xform.variations[1] != 0.0) {
-        result += xform.variations[1] * variation_sinusoidal(p);
-    }
-    // ... etc for all active variations
-
-    return result;
-}
-```
-
-**Note:** Only active variations (weight > 0) are included in the generated shader.
+- In the axis modes the original moves by `+distance/2` and rotates by
+  the angle, and the mirror by the opposite. `distance` is therefore
+  the total separation, as in JWildfire's `PostAxisSymmetryWFFunc`.
+- `rotation_deg` is negated inside the shader so the on-disk value
+  means what it means in JWildfire.
+- **Axis names are swapped on the wire.** Internally `XAxis` reflects
+  across the X axis (flips Y). JWildfire's `X_AXIS` flips X. The XML
+  token mapping swaps them, so JWF files round-trip.
+- Every copy deposits at full weight, so symmetry multiplies density.
+  The palette colour is computed once per sample, not per copy.
 
 ---
 
-## Color Modes
+## `.flame` XML
 
-### Transform Color Mode (mode=0)
+[src/flame_xml.rs](../../src/flame_xml.rs) reads the Apophysis core,
+JWildfire's extensions and `<jwf-flame>` files (only the first
+`<layer>`), and writes the Apophysis dialect plus the JWF attributes we
+model. JWildfire and Apophysis are the reference: where a flame renders
+differently from them, ours is wrong unless the difference is
+documented as deliberate.
 
-Colors blend via exponential moving average:
+### Import
 
-```rust
-color_index = color_index * (1.0 - xform.color_speed) + xform.color_speed;
-final_color = xform.color;  // RGB from transform
-```
+**Flame attributes:**
 
-**Behavior:**
-- Each transform has an associated color
-- Color evolves slowly as transforms are selected
-- `color_speed` controls blend rate (0.0=slow, 1.0=instant)
+| XML | becomes |
+| --- | --- |
+| `scale`, `cam_zoom` | `zoom = scale / 200 × cam_zoom` |
+| `center` | `pan_x`, `pan_y` |
+| `rotate` (degrees) | `rotation` (radians) |
+| `cam_pitch`, `cam_yaw` | `camera_rotation_x`, `camera_rotation_y` |
+| `cam_roll` | `camera_bank` — JWildfire writes its bank under this name |
+| `cam_pos_x/y/z` (`cam_zpos` if `cam_pos_z` is absent) | `camera_x/y/z`, as a world-space position — a deliberate divergence from JWF's camera-space offset |
+| `cam_perspective`, `cam_persp` | `perspective_strength` (absolute value) |
+| `cam_dof` | `dof_blur_strength` |
+| `preserve_z` | `preserve_z` (absent ⇒ `false`) |
+| `post_symmetry_*` | `post_symmetry` |
+| `soloxform` | `solo_transform` |
+| `sld_render_*` | solid rendering settings, where a correspondence exists |
 
-### Palette Color Mode (mode=1)
+Every imported flame is **3D** (`RenderMode::ThreeD`), deliberately:
+Apophysis and JWildfire treat every variation as 3D-capable.
 
-Color looked up from palette texture:
+**Transform attributes:**
+- `coefs` and `post` in `a c b d e f` order; `post` sets
+  `post_affine_enabled`.
+- `weight`, `opacity`, `symmetry` / `color_speed` → `color_speed`,
+  `pluginColor` → `direct_color`.
+- `color`: the palette position, quantised to 1/255 (and only when the
+  file has a `<palette>`).
+- `yzCoefs`, `zxCoefs`, `yzPost`, `zxPost`; `chaos` (the xaos row).
+- **Variations:** any attribute naming a registered variation or alias.
+  It is stored under the canonical name — weights for two aliases of
+  one variation add — and its position in the attribute list is
+  recorded in `variation_order`.
+- **Parameters:** `<variation>_<param>`, split at the longest prefix
+  that names a variation with that parameter.
+- `<variation>_fx_priority`: kept only where it differs from the
+  variation's natural phase.
+- `subflame_wf_flame`: see *Subflames*.
+- `<finalxform>`: same attributes without `weight` and `opacity`; every
+  one is attached to every normal.
 
-```rust
-final_color = palette.sample(color_index);  // color_index ∈ [0, 1]
-```
+**Unit conversions** (`variation_param_from_xml` / `_to_xml`):
+`radial_blur.angle` is half-turns in the file and degrees here (×180).
+The `*plot_wf` family's `preset_id = −1` (a custom formula string we
+cannot evaluate) imports as 0.
 
-**Behavior:**
-- Palette is 1D texture (256 RGB samples)
-- `color_index` evolves same as Transform mode
-- Allows smooth color gradients across fractal
+### Export
 
-### Speed Color Mode (mode=2)
+`write_flame_xml` writes one `<flame>`:
+- The camera and view inverse to the import, with `cam_roll` for bank
+  and both `cam_pos_z` and `cam_zpos`.
+- `post_symmetry_*`, `preserve_z="1"` when set, `soloxform`.
+- Each normal as `<xform>`, its variations in `variation_order` first
+  and then sorted, its priority overrides, `coefs`, `post` when enabled,
+  non-identity planes, user parameters (converted), and the `chaos` row
+  when it is not all ones.
+- Each Final as `<finalxform>`.
+- `subflame_wf_flame` payloads, and a 256-entry palette.
 
-Color based on point movement speed:
+**What does not survive a `.flame` round trip:**
+- The Linked pool, and which normals a Final is attached to (on
+  re-import every Final attaches to every normal).
+- The render mode: a re-import is always 3D.
+- `g` and `post_g`.
+- The tone curve (written as identity) and everything that is ours
+  alone: effects, Levels, palette squeeze, fog, depth-density
+  compensation, far-density fade.
 
-```rust
-let speed = distance(p_after, p_before);
-let normalized_speed = speed * speed_factor;
-final_color = palette.sample(normalized_speed);
-```
+Use `.fflame` for a lossless save.
 
-**Behavior:**
-- Fast-moving points → different colors than slow-moving
-- Creates heat map effect
-- `speed_factor` controls sensitivity
-
----
-
-## View Transformation
-
-The view transform maps fractal coordinates to screen pixels.
-
-### World to Screen Mapping
-
-```rust
-// 1. Apply zoom
-let scaled_x = p.x * zoom;
-let scaled_y = p.y * zoom;
-
-// 2. Apply 2D rotation
-let cos_r = rotation.cos();
-let sin_r = rotation.sin();
-let rotated_x = scaled_x * cos_r - scaled_y * sin_r;
-let rotated_y = scaled_x * sin_r + scaled_y * cos_r;
-
-// 3. Apply pan (fractal space)
-let translated_x = rotated_x - pan_x;
-let translated_y = rotated_y - pan_y;
-
-// 4. Map to screen pixels (center at [width/2, height/2])
-let screen_x = (translated_x * height / 2.0 + width / 2.0) as u32;
-let screen_y = (translated_y * height / 2.0 + height / 2.0) as u32;
-```
-
-**WGSL implementation** in [shaders/core/utilities.wgsl](../../shaders/core/utilities.wgsl):
-```wgsl
-fn world_to_pixel(p: vec2<f32>, params: GpuParams) -> vec2<u32> {
-    // Zoom
-    var scaled = p * params.zoom;
-
-    // Rotation
-    let cos_r = cos(params.rotation);
-    let sin_r = sin(params.rotation);
-    let rotated = vec2(
-        scaled.x * cos_r - scaled.y * sin_r,
-        scaled.x * sin_r + scaled.y * cos_r
-    );
-
-    // Pan
-    let translated = rotated - vec2(params.pan_x, params.pan_y);
-
-    // Screen mapping
-    let aspect = f32(params.width) / f32(params.height);
-    let screen_x = (translated.x * f32(params.height) * 0.5 + f32(params.width) * 0.5);
-    let screen_y = (translated.y * f32(params.height) * 0.5 + f32(params.height) * 0.5);
-
-    return vec2<u32>(u32(screen_x), u32(screen_y));
-}
-```
+**Compatibility trackers:**
+[jwf-features.md](../projects/jwf-features.md) (non-variation JWildfire
+features),
+[jwf-common-variations-port.md](../projects/jwf-common-variations-port.md),
+[apophysis-remaining-features.md](../archive/projects/apophysis-remaining-features.md).
 
 ---
 
-## Common Flame Modification Tasks
+## Where to change what
 
-| Task | Files to Modify |
-|------|-----------------|
-| Add new variation | See [VARIATIONS.md](VARIATIONS.md) *(coming soon)* |
-| Change affine algorithm | [transforms.rs](../../src/scene/transforms.rs), shaders (main_2d/3d) |
-| Add transform parameter | [transforms.rs](../../src/scene/transforms.rs), [buffers.rs](../../src/gpu/buffers.rs) |
-| Change color blending | [transforms.rs](../../src/scene/transforms.rs), shaders (main_2d/3d) |
-| Modify world-to-screen | [utilities.wgsl](../../shaders/core/utilities.wgsl) |
-| Add new color mode | [transforms.rs](../../src/scene/transforms.rs), shaders, [ui/mod.rs](../../src/ui/mod.rs) |
-| Change transform selection | [transforms.rs](../../src/scene/transforms.rs), shaders (select_transform) |
+| task | where |
+| --- | --- |
+| a transform field | `Transform` and its serde in [transforms.rs](../../src/scene/transforms.rs); `GpuTransform` and the WGSL `Transform` struct ([BUFFERS.md](BUFFERS.md)); a `ConfigPath` ([CONFIG.md](CONFIG.md)); `flame_xml.rs` if it has an XML attribute |
+| the iteration | [main_template.wgsl](../../shaders/core/main_template.wgsl); a new compile-time gate goes through `ShaderConstants` ([SHADERS.md](SHADERS.md)) |
+| selection | `select_transform_*` in [utilities.wgsl](../../shaders/core/utilities.wgsl) |
+| the affine | [affine.wgsl](../../shaders/core/affine.wgsl), [affine_3d.wgsl](../../shaders/core/affine_3d.wgsl) |
+| the view mapping | `world_to_pixel`, `project_3d_full` in [utilities.wgsl](../../shaders/core/utilities.wgsl) ([CAMERA.md](CAMERA.md)) |
+| xaos | [xaos.rs](../../src/scene/xaos.rs); the Xaos editor in `src/ui/xaos_editor.rs` |
+| `.flame` | [flame_xml.rs](../../src/flame_xml.rs) |
 
----
+## Design record
 
-**Last Updated:** 2025-10-28
-**Related Documentation:**
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
-- [BUFFERS.md](BUFFERS.md) - GpuTransform structure details
-- [VARIATIONS.md](VARIATIONS.md) - Variation function reference *(coming soon)*
-- [SHADERS.md](SHADERS.md) - Shader implementation details *(coming soon)*
+- [VARIATION-SYSTEM-V2.md](../archive/VARIATION-SYSTEM-V2.md) — named variations
+- [transform-color-system-redesign.md](../archive/transform-color/transform-color-system-redesign.md) — colour as a palette position
+- [needs-transform-and-direct-color.md](../archive/needs-transform-and-direct-color.md) — direct colour
+- [post-affines.md](../archive/post-affines.md)
+- [xaos-implementation.md](../archive/xaos/xaos-implementation.md), [linked-transforms.md](../archive/projects/linked-transforms.md)
+- [per-transform-linked-and-final.md](../archive/projects/per-transform-linked-and-final.md)
+- [subflame-variations-v2.md](../archive/subflame-variations-v2.md), [subflame-live-editing.md](../archive/subflame-live-editing.md)
+- [preserve-z-semantics.md](../archive/projects/preserve-z-semantics.md)
+- [persistent-orbits.md](../archive/projects/persistent-orbits.md)
+- [config-versioning.md](../archive/config-versioning.md)

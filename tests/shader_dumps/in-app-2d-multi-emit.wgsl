@@ -190,7 +190,7 @@ struct VariationParams {
 // these after the chaos game picks a normal transform: linkeds advance
 // the dynamics state (their output feeds the next iteration), finals
 // shape the plotted point only (output discarded for IFS).
-// See docs/projects/per-transform-linked-and-final.md.
+// See docs/archive/projects/per-transform-linked-and-final.md.
 struct AttachmentList {
     linked: array<u32, 1>,
     linked_count: u32,
@@ -224,7 +224,7 @@ struct AttachmentList {
 @group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
 
 // Binding 8 intentionally unused: the path filters, which word editing
-// replaced (docs/projects/word-editing.md).
+// replaced (docs/projects/deep-zoom/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
@@ -237,7 +237,7 @@ struct AttachmentList {
 
 
 // **Each thread's orbit, kept between dispatches**
-// (docs/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
+// (docs/archive/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
 //
 //   0..4   x, y, z, point_w        4..8   speed rgb, color_index
 //   8      generation              9      burn-in left
@@ -461,7 +461,7 @@ const ORBIT_SLOTS: u32 = 0u;
 
 // Multi-emit collector (Feature::PlotEmits): up to 16 extra
              // plot points per iteration, reset by the main loop. See
-             // docs/projects/multi-emit-stereograms.md.
+             // docs/archive/projects/multi-emit-stereograms.md.
              var<private> plot_emit_points: array<vec4<f32>, 16u>;
              var<private> plot_emit_count: u32;
              // Bit k set = emission k is an OFFSET from the iteration's
@@ -1282,7 +1282,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // plot routes the deterministic mean to this transform's blur buffer.
         // Only declared (and threaded into apply_variations) when the feature
         // is active — a non-blur build is byte-identical to one without it.
-        // See docs/projects/analytic-blur-buffer.md.
+        // See docs/archive/projects/analytic-blur-buffer.md.
 
 
 
@@ -1493,7 +1493,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Direct-histogram path (sub-4K single-tile render). Atomic
                 // accumulation into a single full-resolution histogram buffer.
                 // Gated by OUTPUT_HISTOGRAM_DIRECT. See
-                // docs/projects/unified-render-pipeline.md.
+                // docs/archive/projects/unified-render-pipeline.md.
                 //
 
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision).

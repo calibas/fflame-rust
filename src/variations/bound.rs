@@ -2,8 +2,8 @@
 //! stretch a ball.
 //!
 //! The sibling of [`inverse`](super::inverse), and the piece both
-//! plans named and neither built: [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
-//! §7 item 1, [ifs-general.md](../../docs/projects/ifs-general.md) §8's
+//! plans named and neither built: [flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md)
+//! §7 item 1, [ifs-general.md](../../docs/projects/deep-zoom/ifs-general.md) §8's
 //! second lever. Cylinder targeting enumerates words by pushing a ball
 //! through the flame's maps and asking which images still reach the
 //! viewport. For an affine map that push is exact and free — the
@@ -34,7 +34,7 @@
 //!
 //! Three of the first five bounds are for maps that draw a random
 //! number per sample, and the inverse walks refuse all of them for
-//! exactly that reason ([ifs-general.md](../../docs/projects/ifs-general.md)
+//! exactly that reason ([ifs-general.md](../../docs/projects/deep-zoom/ifs-general.md)
 //! §8: `juliascope`, `rays` and `boarders` are stochastic maps and so
 //! are the blurs). A FORWARD bound does not care. `julian` picks one
 //! of `|power|` angular branches, but every branch has the same

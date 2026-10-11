@@ -14,8 +14,8 @@ bicubic and a distance field
 ([simulation-derived-fields.md](simulation-derived-fields.md)).
 
 **Was:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](../../projects/simulation-fractals.md) (the master plan),
-[simulation-catalog.md](../../projects/simulation-catalog.md) (every model, with
+[simulation-fractals.md](simulation-fractals.md) (the master plan),
+[simulation-catalog.md](../../main/SIMULATION-CATALOG.md) (every model, with
 sources) and [simulation-integration.md](simulation-integration.md)
 (the file-by-file checklist).
 

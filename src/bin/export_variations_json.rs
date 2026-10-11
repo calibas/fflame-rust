@@ -1,7 +1,7 @@
 //! Dump the shipped variation corpus as JSON, for the API's bulk import.
 //!
 //! The Rust half of the hybrid exporter specified in
-//! `docs/projects/VARIATIONS_BULK_METADATA_IMPORT.md` §4.1. This walks
+//! `docs/archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md` §4.1. This walks
 //! the loaded registry and emits every variation's **structural** data —
 //! the things that live in code and would be miserable to re-parse from
 //! outside (raw-string WGSL bodies, macro-expanded parameter tables,

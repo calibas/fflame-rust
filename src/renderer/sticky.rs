@@ -1,5 +1,5 @@
 //! The sticky variation superset — Layer B of
-//! `docs/projects/sticky-shader-compilation.md`.
+//! `docs/archive/projects/sticky-shader-compilation.md`.
 //!
 //! The renderer remembers which variations recent flames used and
 //! compiles every flame against one **canonical map**: the sorted union

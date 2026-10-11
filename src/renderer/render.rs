@@ -72,7 +72,7 @@ pub struct RenderJob<'a> {
     pub engines: Option<&'a mut RenderEngines>,
 
     /// Restart every orbit every dispatch, as before orbits persisted
-    /// (`docs/projects/persistent-orbits.md`): a gate's baseline.
+    /// (`docs/archive/projects/persistent-orbits.md`): a gate's baseline.
     #[cfg(test)]
     pub(crate) restarted_orbits: bool,
 }
@@ -1431,7 +1431,7 @@ async fn prepare_escape(
         escape_renderer.set_solid_sky(crate::escape::path_core::sky_seen(&config.escape.path, config));
         escape_renderer.set_solid_material(crate::escape::path_core::lit_material(config));
     }
-    // The texture's image (docs/projects/sim-textures.md): the
+    // The texture's image (docs/archive/projects/sim-textures.md): the
     // config carries the recipe, and the image comes from the cache or
     // is generated here, so a saved file renders the same anywhere.
     if config.escape.uses_texture() {
@@ -1449,7 +1449,7 @@ async fn prepare_escape(
     }
 }
 
-/// The 3D terrain view of an escape picture (docs/projects/heightfield-3d.md,
+/// The 3D terrain view of an escape picture (docs/archive/terrain/heightfield-3d.md,
 /// phase T2): the footprint -- the 2D picture at the view, square, at
 /// the terrain's resolution -- rendered to settlement and ingested as a
 /// tile, then the terrain drawn in the lit tier. Antialiasing is the

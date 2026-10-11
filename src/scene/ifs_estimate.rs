@@ -1,5 +1,5 @@
 //! The IFS distance estimate, on the CPU
-//! ([docs/projects/ifs-distance-rendering.md](../../docs/projects/ifs-distance-rendering.md)
+//! ([docs/archive/escape-time/ifs-distance-rendering.md](../../docs/archive/escape-time/ifs-distance-rendering.md)
 //! §2.2, phase 1).
 //!
 //! Inverse iteration (see the plan's §9 for the lineage): apply
@@ -1534,7 +1534,7 @@ pub(crate) fn chaos_sample_for_test(ifs: &Ifs2, count: usize) -> Vec<[f64; 2]> {
 /// coordinate summed over the same hits.
 ///
 /// This is the "coarse pass" of
-/// [`ifs-measure-by-inverse-walk.md`](../../docs/projects/ifs-measure-by-inverse-walk.md)
+/// [`ifs-measure-by-inverse-walk.md`](../../docs/archive/projects/ifs-measure-by-inverse-walk.md)
 /// D1 -- view-independent, made once per flame, and covering the
 /// ball. A grid too coarse for the attractor stops being a measure:
 /// 64 across the ball reads 0.52 of the truth on a bubble pair where
@@ -1953,7 +1953,7 @@ pub fn estimate_measure(
 
 /// The invariant measure at one pixel, by the BACKWARD CHAOS GAME --
 /// [`estimate_measure`]'s answer without its beam
-/// ([ifs-measure-by-inverse-walk.md](../../docs/projects/ifs-measure-by-inverse-walk.md)
+/// ([ifs-measure-by-inverse-walk.md](../../docs/archive/projects/ifs-measure-by-inverse-walk.md)
 /// D3).
 ///
 /// The beam sum keeps the `beam` largest contributions and drops the

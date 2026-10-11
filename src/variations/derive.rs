@@ -1,6 +1,6 @@
 //! Deriving a variation's forward bound from its shipped WGSL.
 //!
-//! [forward-bounds.md](../../docs/projects/forward-bounds.md), phase
+//! [forward-bounds.md](../../docs/projects/deep-zoom/forward-bounds.md), phase
 //! 1. [`bound`](super::bound) holds bounds written by hand; the corpus
 //! meter says that supply cannot reach far enough — 14 hand-derived
 //! bounds free 19 of 45 flames, and there are 55 distinct blockers
@@ -2075,7 +2075,7 @@ mod branch_tests {
     /// **Does pinning the arm make a julia bound shrink?**
     ///
     /// `grand-julian` is refused today with "`julian` has no forward
-    /// bound", and §2 of `docs/projects/inversive-targeting.md` says
+    /// bound", and §2 of `docs/projects/deep-zoom/inversive-targeting.md` says
     /// why: the body picks one of `|power|` arms with a random draw,
     /// so a bound that covers every draw covers a whole annulus about
     /// the origin — `O(1)` however small the input. A word through it

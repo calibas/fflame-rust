@@ -106,7 +106,7 @@ Legend: ● works · ◐ shown but partly or wholly inert · ○ hidden today
 > Editor and Variations now **Show** in Escape mode, not grey. The
 > table below records what was true when escape mode was formulas and
 > fields alone and the flame was genuinely inert there; escape **mode
-> D** ([ifs-distance-rendering.md](../../projects/ifs-distance-rendering.md))
+> D** ([ifs-distance-rendering.md](../escape-time/ifs-distance-rendering.md))
 > renders the flame's attractor as a distance field, so editing a
 > transform edits the picture. `src/ui/visibility.rs` is the live
 > answer, as it always was.
@@ -309,7 +309,7 @@ The `&'static str` is an i18n key naming the reason, so a greyed
 control explains itself and the three wrong uses of the single shared
 hint (§1.2) are replaced by per-case text. `RenderMode` is the only
 axis built now; the signature leaves room for the skill level that
-`docs/projects/ux-improvements.md` §2 proposes and for the compact flag
+`docs/archive/projects/ux-improvements.md` §2 proposes and for the compact flag
 already threaded through `PanelViewerContext`
 (`src/ui/panel_viewer.rs:400`), without building either.
 

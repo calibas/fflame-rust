@@ -19,42 +19,51 @@ where a release actually stalls.
 
 ## 1. What ships
 
-Four artifacts, built four different ways, from one repository.
+Four surfaces, built four different ways, from one repository.
 
 | surface | built by | output | version source |
 |---|---|---|---|
 | Desktop app | `cargo build --profile dist` | `target/dist/FractalArtEditor(.exe)` | `Cargo.toml` |
 | Web app | `build-wasm.bat` / `.sh` — `--profile dist` | `pkg/` + `index.html`, `css/`, `js/` | `Cargo.toml` |
 | Gallery modules | `wasm-pack build` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | `wasm/*/pkg/` | each crate's `Cargo.toml` |
+| Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
 
 The three single-engine renderer modules (`flame`, `escape`, `sim`) are
 the SAME SOURCE as `wasm/render` built with different Cargo features;
 each drops the engines it does not need, which is roughly half the
-gzipped download. `release.py check` compiles the library at each of
-those feature combinations, because a `#[cfg]` attached to the wrong
-item is invisible in every build that has all three engines on — that
-has happened, and only a build with simulation and no escape caught
-it. See [wasm/README.md](../wasm/README.md).
-| Python | `maturin build` in `python/` | a wheel | `python/pyproject.toml` |
+gzipped download. (`wasm/render` itself is built with the flame and
+escape-time engines, not simulation.) `release.py check` compiles the
+library at each of those feature combinations, because a `#[cfg]`
+attached to the wrong item is invisible in every build that has all
+three engines on — that has happened, and only a build with simulation
+and no escape caught it. See [wasm/README.md](../wasm/README.md).
 
 ### The version problem
 
-There are **four independent version numbers** and nothing relates them:
+Eight files carry a version number, and nothing but this procedure
+relates them. Since 0.5 all but one agree:
 
 ```
-Cargo.toml            0.4.4     ← desktop + web app, and what PNG metadata records
-python/pyproject.toml 0.1.0
-wasm/render           0.1.0
-wasm/script           0.1.0
+Cargo.toml                 0.5.0   ← desktop + web app, and what PNG metadata records
+python/pyproject.toml      0.5.0
+python/Cargo.toml          0.1.0
+wasm/render/Cargo.toml     0.5.0
+wasm/script/Cargo.toml     0.5.0
+wasm/flame/Cargo.toml      0.5.0
+wasm/escape/Cargo.toml     0.5.0
+wasm/sim/Cargo.toml        0.5.0
 ```
 
-A user reporting "0.4.4 crashes" is describing the app. A user reporting
+A user reporting "0.5.0 crashes" is describing the app. A user reporting
 "pyfflame 0.1.0 gives a different flame" is describing a build that could
 have come from any app version, because nothing records which.
 
 **Decided: lockstep.** One version for everything, bumped together.
-`release.py version` implements it — it sets all four files or none, and
-says so when it runs.
+`release.py version` implements it for the four files in its
+`VERSION_FILES` list — `Cargo.toml`, `python/pyproject.toml`,
+`wasm/render/Cargo.toml` and `wasm/script/Cargo.toml` — and says so
+when it runs. It does not touch `wasm/flame`, `wasm/escape`, `wasm/sim`
+or `python/Cargo.toml`; until it does, bump those by hand.
 
 The artifacts are not independently useful: a `pyfflame` wheel and the
 app it matches come from one commit, and pretending otherwise creates a
@@ -64,17 +73,23 @@ crates that did not change, which is cheap and visible.
 The alternative considered was independent versions with each crate
 recording the app version it was built from (the way `build.rs` records
 the git hash). It buys accuracy nobody needs at the price of the matrix.
-The first `version` bump makes lockstep true — until then the numbers
-above are the historical drift, not a scheme.
 
 ---
 
 ## 2. Gates — what must pass
 
 ```bash
-python scripts/release.py check          # ~4s: tests, wasm, contract, dumps, doc links
-python scripts/release.py check --fix    # ...and regenerate what is stale
+python scripts/release.py check          # every gate below
+python scripts/release.py check --fix    # ...and regenerate the generated files if stale
 ```
+
+The gates, in order: unit tests (`cargo test --release --lib`), the
+library compiled for `wasm32-unknown-unknown`, the generated contract,
+the shader dumps, doc links, the engine feature matrix (the library
+compiled with only `engine-sim`, only `engine-escape`, only
+`engine-flame`), and the two gallery crates' test suites
+(`wasm/script` parity, `wasm/render` smoke). The commands are in
+[TESTING-GUIDE.md §2](TESTING-GUIDE.md).
 
 **Nothing runs on push, on commit, or on a timer.** That is deliberate:
 the work CI would do is worth automating, the *triggering* is what gets
@@ -89,15 +104,18 @@ cargo build --release && python tests/visual/run_tests.py
 python scripts/run_benchmarks.py --quick
 ```
 
-Three of the tests are **generated-artifact gates** — they fail when a
+Two of the gates are **generated-artifact gates** — they fail when a
 committed file no longer matches what the code produces, and each has an
-env var to regenerate:
+env var to regenerate (which is what `--fix` runs):
 
-| gate | regenerate with |
-|---|---|
-| `contract_is_current` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` |
-| `canonical_shader_dumps` | `UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps` |
-| `every_shipped_effect_has_a_curated_label` | add the missing `locales/en.yml` entry |
+| gate | committed file | regenerate with |
+|---|---|---|
+| `contract_is_current` | `docs/generated/engine-contract.json` | `UPDATE_CONTRACT=1 cargo test --lib contract_is_current` |
+| `canonical_shader_dumps` | `tests/shader_dumps/*.wgsl` | `UPDATE_SHADER_DUMPS=1 cargo test --lib canonical_shader_dumps` |
+
+A third test in the unit-test gate behaves the same way without a
+generated file: `every_shipped_effect_has_a_curated_label` fails until
+the missing `locales/en.yml` entry is added.
 
 **Regenerate deliberately, and read the diff.** These exist because a
 stale generated file fails *silently* otherwise — the whole point is that
@@ -115,6 +133,12 @@ The API is a separate repository. What it consumes from here:
 | the variation corpus | `cargo run --release --bin export_variations_json` | any variation added or edited |
 | the script corpus | `cargo run --release --bin export_scripts_json` | any built-in script added or edited |
 | the effect corpus | `cargo run --release --bin export_effects_json` | any effect added or edited |
+
+Only the contract is committed. The three corpus binaries write to
+`output/variations-corpus.json`, `output/scripts-corpus.json` and
+`output/effects-corpus.json` by default (gitignored; a path given as
+the first argument overrides it), and no gate checks them — they are
+regenerated for the API when it needs them.
 
 The variation and script corpora carry the prose too — descriptions and
 authors from `///` doc comments, script descriptions from the header
@@ -201,23 +225,24 @@ cut most of it.
 release; the repository's record of what changed is the commit history
 the changelog was generated from.
 
-**On the version numbers.** Nothing has been tagged yet, so
-`release.py changelog` has no "since the last tag" to work from until
-the first tag exists. The first release should tag whatever it ships,
-even if the number is arbitrary, so every release after it has a
-boundary to diff against.
+**On the tags.** One tag exists: `0.5`, a lightweight tag on the merge
+commit of the 0.5 release (`7e6dacad`, 2026-08-24). `release.py
+changelog` finds the last tag with `git describe --tags --abbrev=0`, so
+it now lists what changed since `0.5`. That tag's form differs from the
+annotated `v0.5.0` that §4.6 shows; which form later releases use is
+not decided here, but `git describe --tags` finds either.
 
 ### 4.2 — Gates
 
 ```bash
-python scripts/release.py check     # ~4s: tests, wasm, contract, dumps, doc links
+python scripts/release.py check     # the gates listed in §2
 ```
 
 Then the two it deliberately does not run, because they need a GPU and
 minutes:
 
 ```bash
-cargo build --release && python tests/visual/run_tests.py    # 148 tests
+cargo build --release && python tests/visual/run_tests.py    # 375 renders
 python scripts/run_benchmarks.py --quick
 ```
 
@@ -248,11 +273,15 @@ cargo run --release --bin variation_probe -- census --corpus
 ### 4.4 — Build
 
 ```bash
-python scripts/release.py build     # every surface, in order
+python scripts/release.py build     # desktop, packaging, web, two gallery modules, wheel
+python scripts/release.py build --only desktop   # only surfaces whose name contains this
 ```
 
 Host-specific packaging runs automatically as the second step — the
-`.app` bundle on macOS, the zip on Windows. Individually:
+`.app` bundle on macOS, the zip on Windows. The web app step runs
+`bash build-wasm.sh`. Of the gallery modules, `release.py build` builds
+only `wasm/render` and `wasm/script`; build `wasm/flame`, `wasm/escape`
+and `wasm/sim` by hand. Individually:
 
 | surface | command | where |
 |---|---|---|
@@ -260,7 +289,7 @@ Host-specific packaging runs automatically as the second step — the
 | macOS bundle | `python3 scripts/make_macos_app.py --zip` | macOS |
 | Windows zip | `python scripts/make_windows_zip.py` | Windows |
 | web app | `./build-wasm.sh` / `build-wasm.bat` (they build `--profile dist`) | either |
-| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/script` | either |
+| gallery modules | `wasm-pack build --target web --release` in `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim`, `wasm/script` | either |
 | python wheel | `maturin build --release` in `python/` | per-platform wheel |
 
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
@@ -282,8 +311,8 @@ Building is not shipping.
   Tier 2 — the interactive surface (audio, video export, dialogs,
   shortcuts, DPI). Most of it only needs re-running when something in
   that area changed.
-- **web:** serve `pkg/`, load in Chrome and Firefox. Check undo (⌘/Ctrl+Z)
-  and one export.
+- **web:** serve the repository root (`index.html` loads `./pkg/`), load
+  in Chrome and Firefox. Check undo (⌘/Ctrl+Z) and one export.
 - **python:** `import pyfflame`, run a script, compare against the app.
 - **gallery modules:** `wasm/README.md` has an end-to-end example.
 
@@ -378,11 +407,18 @@ binary that says `release` is indistinguishable from a developer's
 build, and the profile name is recorded in every exported PNG *and* in
 the web Performance panel, which §4.7 tells you to read after a deploy.
 
+The figures in the table above are from when `dist` was first used; the
+module has grown
+since (the comment on `[profile.dist-symbols]` in `Cargo.toml` measured
+`dist` at 16.0 MiB). `dist-symbols` and `dist-debug` inherit from
+`dist` for crash hunting and never ship; [WASM.md](WASM.md) describes
+them.
+
 **Still on the table, unmeasured:** `[profile.dist]` inherits `release`'s
-`opt-level = 3`. The gallery crates (`wasm/render`, `wasm/script`) chose
+`opt-level = 3`. The gallery crates under `wasm/` chose
 `opt-level = "z"` and add `wasm-opt -Oz` through wasm-pack, which the app
-build bypasses entirely. So 13.4 MB is a floor on the win, not a ceiling
-— both levers are untried on the app.
+build bypasses entirely. So the measured saving is a floor on the win,
+not a ceiling — both levers are untried on the app.
 
 `panic = "abort"` means no unwinding. Nothing in the codebase relies on
 `catch_unwind`, and the GPU error path uses wgpu's uncaptured-error
@@ -550,7 +586,7 @@ no deploy script.
 
 | upload | from | changes |
 |---|---|---|
-| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, 13.4 MB) | every release |
+| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, ~16 MiB of wasm) | every release |
 | `index.html` | repo root | rarely |
 | `css/`, `js/` | repo root | rarely — the virtual-keyboard bridge |
 
@@ -572,22 +608,24 @@ build. Retiring it is a release step, not a cleanup task — a redirect to
 `fractalsforall.com/editor/` is better than a 404 for anyone holding the
 old link.
 
-### Gallery modules — two `pkg/` directories, built with wasm-pack
+### Gallery modules — five `pkg/` directories, built with wasm-pack
 
-The Endless Gallery's renderer and script engine. Separate crates, so
+The Endless Gallery's renderers and script engine. Separate crates, so
 they are the one surface that does **not** use `build-wasm.sh`:
 
 ```bash
-cd wasm/render && wasm-pack build --target web --release   # -> wasm/render/pkg/
-# ...and the engine-specific pair, same source, different Cargo features:
-cd wasm/flame  && wasm-pack build --target web --release   # flame only,  0.73 MB gzip
-cd wasm/escape && wasm-pack build --target web --release   # escape only, 0.41 MB gzip
-cd wasm/script && wasm-pack build --target web --release   # -> wasm/script/pkg/
+cd wasm/render && wasm-pack build --target web --release   # flame + escape-time
+# ...and the single-engine modules, same source, different Cargo features:
+cd wasm/flame  && wasm-pack build --target web --release   # flame only
+cd wasm/escape && wasm-pack build --target web --release   # escape-time only
+cd wasm/sim    && wasm-pack build --target web --release   # simulation only
+cd wasm/script && wasm-pack build --target web --release   # script + seed -> config
 ```
 
-Roughly 1.5 minutes each. Each `pkg/` is a self-contained ES module
-(`.js` + `.wasm` + `.d.ts` + `package.json`); `wasm/README.md` has the
-JS API and an end-to-end example wiring script → render.
+Each writes `wasm/<crate>/pkg/`, a self-contained ES module (`.js` +
+`.wasm` + `.d.ts` + `package.json`). [wasm/README.md](../wasm/README.md)
+has the module sizes, the JS API and an end-to-end example wiring
+script → render.
 
 **`--release`, not `--profile dist`** — the one exception to §4c, and
 not an oversight: each crate's own `[profile.release]` already sets
@@ -606,11 +644,16 @@ rustc's bulk-memory default and rejects the module without them.
 (`gallery script parity`, `gallery renderer smoke`) — the CLI-parity
 fixtures §6 names as the guard for `script + seed` reproducibility now
 run in every check. The renderer smoke tests skip cleanly on a machine
-with no GPU adapter. To run one by hand:
+with no GPU adapter. The single-engine crates have smoke tests of
+their own (`wasm/flame/tests/flame_smoke.rs`, `wasm/escape/tests/escape_smoke.rs`,
+`wasm/sim/tests/sim_smoke.rs`, which assert the dropped engines really
+are gone); no gate runs them — `check` only compiles the library at
+their feature combinations. To run one by hand:
 
 ```bash
 cd wasm/script && cargo test --profile gallery-test   # byte-identical flames
 cd wasm/render && cargo test --profile gallery-test   # GPU smoke + device reuse
+cd wasm/sim    && cargo test --profile gallery-test   # likewise wasm/flame, wasm/escape
 ```
 
 **Run them from the crate directory, and with that profile** — both
@@ -626,9 +669,9 @@ matter, and neither is cosmetic:
 - **From the crate directory**, because cargo discovers
   `.cargo/config.toml` by current directory. `--manifest-path` from the
   repo root silently misses `wasm/.cargo/config.toml`, and with it both
-  wins it carries: one shared `wasm/target-gallery` for the pair (the
-  parent crate compiled once instead of once each, and ~10 GB less on
-  disk) and `FFLAME_SKIP_GIT_PROVENANCE`, which stops `build.rs`
+  wins it carries: one shared `wasm/target-gallery` for every crate
+  under `wasm/` (the parent crate compiled once instead of once each,
+  and ~10 GB less on disk) and `FFLAME_SKIP_GIT_PROVENANCE`, which stops `build.rs`
   re-emitting `GIT_HASH`/`BUILD_TIME` into these builds on every commit.
   That last one was the real cost: a commit touches no gallery code, but
   it changed the hash, which invalidated the parent crate in each
@@ -690,10 +733,10 @@ Honest list, so nobody assumes these exist:
   raw material; deciding what mattered to a user is still a person's
   job.
 - **No signing or notarization** for any platform (§5).
-- **No release tags.** `git tag` returns nothing, so `release.py
-  changelog` has no boundary to diff from until the first one exists
-  (§4.1). Every exported PNG records a git *hash*, so builds are already
-  traceable — tags are what make them nameable.
+- **One release tag, in its own form.** `0.5` is the only tag, a
+  lightweight one, where §4.6 shows an annotated `v0.5.0`; the naming
+  is not settled (§4.1). Every exported PNG records a git *hash*, so
+  builds are traceable either way — tags are what make them nameable.
 - **No web deploy step.** `pkg/` is gitignored and the upload to
   `fractalsforall.com/editor/` is manual (§5). A manual upload is also
   how the retired `calibas.github.io` mirror drifted five months behind

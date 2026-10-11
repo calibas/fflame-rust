@@ -10,7 +10,7 @@
 //!
 //! (The former `DensityStats` Σalpha reduction lived here until the
 //! renorm switched to occlusion-only counters — see
-//! docs/projects/solid-rendering.md.)
+//! docs/archive/projects/solid-rendering.md.)
 
 use std::sync::{Arc, Mutex};
 

@@ -4,7 +4,7 @@ Inventory of the variations we haven't ported and what feature(s) would
 need to be added to unblock them.
 
 This document is the companion to
-[`variation-bulk-port.md`](variation-bulk-port.md), which tracks what
+[`variation-bulk-port.md`](../archive/projects/variation-bulk-port.md), which tracks what
 *has* been ported. As of `variation-features-and-rgb` (2026-06-05,
 +16 glsl_* variations: the 4 fractals, 6 tilings, and 6 fields
 detailed in blocker #1's "Not JIT-blocked" RESOLVED section), the

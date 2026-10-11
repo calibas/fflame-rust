@@ -28,7 +28,7 @@ system's per-xform lookups all key off `xform_id`:
 The synthetic id was a v1 shortcut documented in
 [`shaders/core/subflame.wgsl:27-37`](../../shaders/core/subflame.wgsl#L27-L37)
 and
-[`docs/projects/subflames.md`](subflames.md). The shape of the fix is
+[`docs/archive/projects/subflames.md`](subflames.md). The shape of the fix is
 "give subflame xforms real slots in the buffers, just like parent
 xforms have."
 
@@ -254,7 +254,7 @@ loops to cover subflame xforms. Risk concentrates in:
   bounded-depth flattening pass. Separate project.
 - **Per-subflame palettes**. Each subflame's color blend still uses
   the parent's palette — independent palettes are tracked in
-  [`docs/projects/subflames.md`](subflames.md).
+  [`docs/archive/projects/subflames.md`](subflames.md).
 - **Xaos in subflames**. Still weight-only selection.
 
 ## Phasing

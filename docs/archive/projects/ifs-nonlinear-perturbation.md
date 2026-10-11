@@ -11,7 +11,7 @@ set already does.
 shipped -- a nonlinear set hands over and zooms, where before it
 handed over at level 0 -- and the repairs its §17a review called for
 all landed. What replaced it is the DESIGN, not the code: see
-[ifs-perturbation-delta.md](../../projects/ifs-perturbation-delta.md)
+[ifs-perturbation-delta.md](ifs-perturbation-delta.md)
 §2a for the audit of this plan's objective and §3 for the shape that
 follows from it. Kept for the measurements, which are still the only
 record of what was tried.

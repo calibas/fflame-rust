@@ -3,7 +3,7 @@
 // `F(z + δ) − F(z)` computed without forming the difference. The copy
 // of `scene::forward_delta` the shader runs, gated against it
 // (`the_shader_forward_forms_are_the_cpu_ones`). See
-// docs/projects/deep-zoom-precision.md.
+// docs/projects/deep-zoom/deep-zoom-precision.md.
 //
 // A map is a ROW the CPU fills from the flame's analysis
 // (`Backward::forward_rows`), CT_ROW floats per transform, read from

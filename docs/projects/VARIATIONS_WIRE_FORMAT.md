@@ -655,7 +655,7 @@ copy would be a derivation of a derivation, able to go stale against
 something the client re-reads on every load. Scripts therefore carry
 only the markdown `description`, and `script::strip_markdown` produces
 the plain form locally. See
-[api-shared-resources §5.4.1](api-shared-resources.md).
+[api-shared-resources §5.4.1](../archive/projects/api-shared-resources.md).
 
 **Versioning policy.** The whole initial corpus ships at `version =
 1`. The app and the API are released in lockstep — there's no in-flight
@@ -669,7 +669,7 @@ change rendering or recompilation). See §8.
 **Bulk import.** The initial values come from the client's
 [src/variations/defs/](../../src/variations/defs/) corpus (494
 variations across 133 files). Implementation plan is in
-[VARIATIONS_BULK_METADATA_IMPORT.md](VARIATIONS_BULK_METADATA_IMPORT.md):
+[VARIATIONS_BULK_METADATA_IMPORT.md](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md):
 structured doc-comments on each `pub static VariationDef`, parsed by a
 script that emits a one-shot SQL migration.
 
@@ -749,7 +749,7 @@ corpus is `version = 1` and the field rarely changes.
   effect check must equal 48 exactly. Accepting more would let effects
   upload cleanly and then render wrong, since parameters past the end
   of the uniform are silently dropped. See
-  [api-shared-resources.md §4.3](api-shared-resources.md).
+  [api-shared-resources.md §4.3](../archive/projects/api-shared-resources.md).
 
 ---
 

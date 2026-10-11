@@ -441,7 +441,7 @@ fn esc_px_per_unit() -> f32 {
 // A render pixel's size in the plane. `OrbitSummary.dz` is the derivative
 // PER RENDER PIXEL (dz/dc times this), on every path: at escape that is
 // about |z| ln|z| / DE_px, a moderate number at any depth, where dz/dc
-// itself grows past f32's range (docs/projects/derivative-under-perturbation.md).
+// itself grows past f32's range (docs/archive/escape-time/derivative-under-perturbation.md).
 fn esc_render_px() -> f32 {
     return params.span.y / f32(params.height);
 }
@@ -614,7 +614,7 @@ fn layer_wgsl(layer: Option<&ColoringDef>, stretched: bool) -> String {
     )
 }
 
-/// The terrain's height sources (docs/projects/heightfield-3d.md,
+/// The terrain's height sources (docs/archive/terrain/heightfield-3d.md,
 /// section 5), the relief source codes past the relief's own: 8 the
 /// distance estimate, 9 the smooth escape count. Read by
 /// `esc_relief_source` into the height field's green channel while a
@@ -1198,7 +1198,7 @@ fn dzfe_to_f32(d: DzFe) -> vec2<f32> {
 "#;
 
 /// The derivative's splices into a perturbed template, per rung
-/// (docs/projects/derivative-under-perturbation.md). `None` without a
+/// (docs/archive/escape-time/derivative-under-perturbation.md). `None` without a
 /// derivative: the declaration keeps the constant seed and the rest
 /// splice nothing, so those shaders are byte-identical.
 struct DerivSplices {
@@ -4945,7 +4945,7 @@ pub fn assemble_perturbed_layered(
 /// [`assemble_perturbed_layered`] carrying the derivative of `derivative`
 /// (a formula that defines one): dz/dc stepped with its snippet at the
 /// full iterate, through BLA skips and chunk boundaries, reported per
-/// render pixel (docs/projects/derivative-under-perturbation.md).
+/// render pixel (docs/archive/escape-time/derivative-under-perturbation.md).
 pub fn assemble_perturbed_full(
     coloring: &ColoringDef,
     layer: Option<&ColoringDef>,

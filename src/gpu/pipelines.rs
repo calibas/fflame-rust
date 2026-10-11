@@ -467,7 +467,7 @@ impl FlamePipelines {
     /// Ensure shaders are up-to-date with current flame configuration
     /// Returns true if shaders were recompiled
     /// (rebuilds, cache hits, total compile ms) from the flame shader
-    /// cache — docs/projects/sticky-shader-compilation.md.
+    /// cache — docs/archive/projects/sticky-shader-compilation.md.
     pub fn shader_rebuild_stats(&self) -> (u64, u64, f64) {
         self.shader_cache.rebuild_stats()
     }
@@ -535,7 +535,7 @@ impl FlamePipelines {
         // add to -- which reads as "no leak" rather than as an error.
         constants.frame_coverage = constants.frame_coverage || leak_probe;
         // Renderer state too, until it is on for every render
-        // (docs/projects/persistent-orbits.md step 5).
+        // (docs/archive/projects/persistent-orbits.md step 5).
         constants.persistent_orbits = persistent_orbits;
         self.shader_cache.ensure_current_full(
             device,
@@ -893,7 +893,7 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
                 count: None,
             },
             // Each thread's orbit, kept between dispatches
-            // (PERSISTENT_ORBITS; docs/projects/persistent-orbits.md).
+            // (PERSISTENT_ORBITS; docs/archive/projects/persistent-orbits.md).
             // Binding 8 was the path filters, which word editing replaced.
             BindGroupLayoutEntry {
                 binding: 8,
@@ -943,7 +943,7 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
                 },
                 count: None,
             },
-            // Enumerated cylinders (docs/projects/flame-deep-zoom.md
+            // Enumerated cylinders (docs/projects/deep-zoom/flame-deep-zoom.md
             // stage 2). Declared by the shader only under
             // CYLINDER_TARGETING; the layout always carries it.
             BindGroupLayoutEntry {
@@ -957,7 +957,7 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
                 count: None,
             },
             // Biased selection weights + likelihood ratios
-            // (docs/projects/flame-deep-zoom.md stage 1). Slot 11
+            // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Slot 11
             // was the legacy subflame_transforms buffer, removed in
             // v2 of the subflame work and empty since; this takes
             // it rather than extending the layout.
@@ -994,7 +994,7 @@ fn compute_layout_entries() -> Vec<BindGroupLayoutEntry> {
             },
             // Analytic-blur mean-splat histograms (read_write). Always in
             // the layout; a 1-element dummy is bound when the feature is
-            // inactive. See docs/projects/analytic-blur-buffer.md.
+            // inactive. See docs/archive/projects/analytic-blur-buffer.md.
             BindGroupLayoutEntry {
                 binding: 13,
                 visibility: ShaderStages::COMPUTE,

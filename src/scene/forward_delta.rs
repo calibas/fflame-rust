@@ -1,7 +1,7 @@
 //! **The forward maps' difference forms**: `F(z + δ) − F(z)` computed
 //! without forming the difference, so a sample carried as an offset `δ`
 //! from a reference orbit keeps every digit f32 gives it, however deep
-//! the view (`docs/projects/deep-zoom-precision.md` §3).
+//! the view (`docs/projects/deep-zoom/deep-zoom-precision.md` §3).
 //!
 //! The inverse direction's forms, which the escape engine's delta walk
 //! uses, are `kernel_difference_gen` in `ifs_analysis.rs`. These go the

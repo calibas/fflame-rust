@@ -1,7 +1,7 @@
 # pylint: skip-file
 #!/usr/bin/env python3
 """
-The browser's gate for phase 3 of docs/projects/gpu-cylinder-planning.md.
+The browser's gate for phase 3 of docs/projects/deep-zoom/gpu-cylinder-planning.md.
 
 A cylinder plan is made in the browser the way the app makes one on the
 web -- a future polled a slice at a time, the GPU's answers awaited across
@@ -20,7 +20,7 @@ Expect one long frame (~40-50 ms) in a flame's first cold case: the GPU
 process compiles the planner's kernels -- synchronously, since wgpu has no
 async pipeline creation -- on the thread that also serves the editor's
 rendering, and the editor's next frame waits for it. Traced and explained
-in docs/projects/gpu-cylinder-planning.md §17.
+in docs/projects/deep-zoom/gpu-cylinder-planning.md §17.
 
 The first case waits --settle seconds after the page loads, so the
 editor's boot is over before any plan starts.

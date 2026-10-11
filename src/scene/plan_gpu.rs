@@ -1,6 +1,6 @@
 //! The planner's arithmetic on the GPU.
 //!
-//! `docs/projects/gpu-cylinder-planning.md`. The inverse-walk planner
+//! `docs/projects/deep-zoom/gpu-cylinder-planning.md`. The inverse-walk planner
 //! (`backward.rs`) spends three quarters of its time on one operation:
 //! apply a chosen word to chosen sample points and ask which land in the
 //! view. This does that operation in batches on the GPU, with the

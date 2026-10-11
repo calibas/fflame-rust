@@ -113,7 +113,7 @@ pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.label(shortcut("play_pause_animation").as_ref());
 
     // The viewport's controls, one set in every mode
-    // (docs/projects/camera-unification.md, C3).
+    // (docs/archive/3d-camera/camera-unification.md, C3).
     ui.separator();
     ui.label(t!("help.mouse_controls"));
     ui.label(shortcut("drag_pan").as_ref());

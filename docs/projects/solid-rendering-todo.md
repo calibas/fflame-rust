@@ -1,7 +1,7 @@
 # Solid Rendering & Lighting — deferred / future work
 
 Items deliberately skipped on the `solid-rendering` branch (shipped
-2026-07-16, see [solid-rendering.md](solid-rendering.md)) that are worth
+2026-07-16, see [solid-rendering.md](../archive/projects/solid-rendering.md)) that are worth
 revisiting later. Roughly ordered by expected user value.
 
 ## Features

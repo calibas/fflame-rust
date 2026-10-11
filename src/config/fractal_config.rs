@@ -4,7 +4,7 @@ use crate::scene::palette::{ColorMode, Palette, PathMapStyle};
 use crate::scene::tonemap::{HighlightMode, ToneMapMode, ToneCurve};
 use crate::effects::EffectInstance;
 
-/// The material moved beside the lights (docs/projects/materials.md
+/// The material moved beside the lights (docs/archive/projects/materials.md
 /// §4.2). A picture saved before keeps its coat and glow in a path
 /// tracer's settings -- `escape.path` or `sim.terrain.path` -- as
 /// `gloss`, `roughness` and `emission`; they are lifted into
@@ -218,7 +218,7 @@ pub struct FractalConfig {
     /// depth region is allocated); 1 = hard surface (samples behind the
     /// nearest-depth shell are dropped); values between render a
     /// translucent solid. 3D only. `.fflame` only — see
-    /// docs/projects/solid-rendering.md.
+    /// docs/archive/projects/solid-rendering.md.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub solid_strength: f32,
     /// Solid rendering: world-space thickness of the depth shell accepted
@@ -233,7 +233,7 @@ pub struct FractalConfig {
     /// Lighting works with OR without occlusion: any nonzero
     /// `shading_strength` activates the depth capture even at
     /// `solid_strength == 0`, so classic transparent flames can be lit.
-    /// 3D only. See docs/projects/solid-rendering.md.
+    /// 3D only. See docs/archive/projects/solid-rendering.md.
     #[serde(default, skip_serializing_if = "SolidShadingSettings::is_default")]
     pub solid_shading: SolidShadingSettings,
 
@@ -290,7 +290,7 @@ pub struct FractalConfig {
     /// Color settings
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// PathMap colouring style (docs/projects/word-editing.md §10)
+    /// PathMap colouring style (docs/projects/deep-zoom/word-editing.md §10)
     #[serde(default, skip_serializing_if = "PathMapStyle::is_default")]
     pub path_map_style: PathMapStyle,
     /// How many transforms of each path decide its PathMap colour, for
@@ -429,7 +429,7 @@ pub struct FractalConfig {
     pub deterministic_rng: bool,
 
     /// Importance-sampled transform selection
-    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// ([flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md)
     /// stage 1). Off by default and skipped when off, so no existing
     /// config gains a field and the shader is byte-identical.
     #[serde(default, skip_serializing_if = "ImportanceSettings::is_default")]
@@ -437,7 +437,7 @@ pub struct FractalConfig {
 
     /// Cylinder targeting: force an enumerated prefix at plot time so
     /// every sample lands in the viewport
-    /// ([flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md)
+    /// ([flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md)
     /// stage 2).
     ///
     /// Off by default and skipped when off. This only PERMITS it: a
@@ -458,7 +458,7 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub cylinder_always: bool,
 
-    /// **Trim** (docs/projects/word-editing.md §4): drop the branches of
+    /// **Trim** (docs/projects/deep-zoom/word-editing.md §4): drop the branches of
     /// the plan's word tree, within `cylinder_trim_levels` levels of the
     /// view, whose share of the view is under this times their largest
     /// sibling's. An artistic choice -- it removes real parts of the
@@ -473,7 +473,7 @@ pub struct FractalConfig {
     #[serde(default = "default_trim_levels", skip_serializing_if = "is_default_trim_levels")]
     pub cylinder_trim_levels: u32,
 
-    /// **Removals** (docs/projects/word-editing.md §5): pieces of the
+    /// **Removals** (docs/projects/deep-zoom/word-editing.md §5): pieces of the
     /// picture taken out by their words, each a pattern of maps matched
     /// against a word's last-applied maps -- `"t1a1 t1a0"`, transform and
     /// arm in the order the chaos game applies them, the map nearest the
@@ -484,7 +484,7 @@ pub struct FractalConfig {
 
     /// Auto exposure: normalise the tone map by the density of the
     /// pixels actually IN FRAME rather than by total iterations
-    /// (`docs/projects/flame-deep-zoom.md`).
+    /// (`docs/projects/deep-zoom/flame-deep-zoom.md`).
     ///
     /// The shipped normalisation is `total_iters / pixel_count`, which
     /// assumes the frame holds all the work. A zoomed-in view does
@@ -505,7 +505,7 @@ pub struct FractalConfig {
 
 /// Biased transform selection with a windowed likelihood-ratio
 /// correction -- stage 1 of
-/// [flame-deep-zoom.md](../../docs/projects/flame-deep-zoom.md).
+/// [flame-deep-zoom.md](../../docs/projects/deep-zoom/flame-deep-zoom.md).
 ///
 /// The chaos game samples the invariant measure over the WHOLE
 /// attractor, so the fraction of samples landing in a deep viewport
@@ -914,7 +914,7 @@ pub struct SolidShadingSettings {
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
     pub lights: [SolidLight; 4],
-    /// The material's coat (docs/projects/materials.md): its reflectance
+    /// The material's coat (docs/archive/projects/materials.md): its reflectance
     /// at normal incidence (0, the default, is none; 0.04 a dielectric's)
     /// and its roughness (GGX's alpha is its square) -- and the albedo's
     /// glow. Every tier reads them: the lit tiers and the path tracer
@@ -1565,7 +1565,7 @@ fn fixup_flame_ids(flame: &mut Flame) {
 #[cfg(test)]
 mod tests {
     /// A picture saved with its coat and glow in a path tracer's
-    /// settings keeps them (docs/projects/materials.md §4.2): they are
+    /// settings keeps them (docs/archive/projects/materials.md §4.2): they are
     /// lifted beside the lights, the shown engine's first, and the
     /// lighting's own values win.
     #[test]

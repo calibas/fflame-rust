@@ -3,7 +3,7 @@
 //!     cargo run --release --bin shader_bench
 //!
 //! Three measurements, written for
-//! `docs/projects/sticky-shader-compilation.md` (which carries the
+//! `docs/archive/projects/sticky-shader-compilation.md` (which carries the
 //! results):
 //!
 //! 1. **Baseline** — 20 random seeds rendered on one persistent

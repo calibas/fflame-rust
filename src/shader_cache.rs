@@ -101,7 +101,7 @@ pub struct ShaderCache {
 
     /// How many times the pipelines have been rebuilt, and the wall time
     /// spent doing it (WGSL generation + module + pipeline creation).
-    /// Phase 0 of docs/projects/sticky-shader-compilation.md: the point
+    /// Phase 0 of docs/archive/projects/sticky-shader-compilation.md: the point
     /// of the sticky superset is driving this counter to a constant, so
     /// it has to be observable. Includes the initial build in `new`.
     rebuilds: u64,
@@ -117,7 +117,7 @@ pub struct ShaderCache {
 
 /// One compiled pipeline set, keyed by the WGSL that produced it.
 ///
-/// Layer A of docs/projects/sticky-shader-compilation.md. The key is the
+/// Layer A of docs/archive/projects/sticky-shader-compilation.md. The key is the
 /// generated source itself (main + init), which subsumes every change
 /// detector `ensure_current_full` performs and any added later — codegen
 /// is a pure function of (flame, flags, constants), so identical text IS
@@ -935,7 +935,7 @@ impl ShaderCache {
 // The flame renderer's caches, which need the variation catalog.
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "engine-flame"))]
 mod pipeline_lru_tests {
-    //! Layer A of docs/projects/sticky-shader-compilation.md, tested
+    //! Layer A of docs/archive/projects/sticky-shader-compilation.md, tested
     //! through the real path: a FlameRenderer on a real device, configs
     //! loaded the way the app loads them. Skip cleanly without a GPU.
 

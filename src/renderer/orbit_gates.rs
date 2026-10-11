@@ -1,4 +1,4 @@
-//! **The gates of persistent orbits** (docs/projects/persistent-orbits.md
+//! **The gates of persistent orbits** (docs/archive/projects/persistent-orbits.md
 //! §6): each thread's orbit is kept between dispatches, so the picture no
 //! longer depends on how the work is sliced into them. Every gate runs the
 //! same measurement with the feature off too, which is the baseline it is

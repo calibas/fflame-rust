@@ -4,7 +4,7 @@
 // replay arm (`main_template.wgsl`) and the planner's GPU kernel
 // (`plan_eval.wgsl`) call the same function: a plan decides a word
 // lands in the view by the very arithmetic the render then plots with.
-// See docs/projects/gpu-cylinder-planning.md.
+// See docs/projects/deep-zoom/gpu-cylinder-planning.md.
 
 // The arm a replayed symbol forces on a many-valued variation, or -1
 // between symbols so the free orbit draws its own. A word's symbol

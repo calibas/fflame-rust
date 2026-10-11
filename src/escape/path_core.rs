@@ -1,4 +1,4 @@
-//! The path tracer's core (docs/projects/heightfield-3d.md, T3): the
+//! The path tracer's core (docs/archive/terrain/heightfield-3d.md, T3): the
 //! sampling, the material, the lens and the integrator, shared by the
 //! two geometries that render through it -- a terrain's height field
 //! (`terrain.rs`) and mode D's distance field (`renderer/solid_path.rs`).
@@ -147,7 +147,7 @@ fn shown(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
     c.map(|v| v.max(0.0).powf(2.2).powf(gamma) / exposure)
 }
 
-/// A picture's material (docs/projects/materials.md): the coat -- its
+/// A picture's material (docs/archive/projects/materials.md): the coat -- its
 /// reflectance at normal incidence and its roughness -- and the albedo's
 /// glow, beside the lights, which every tier reads.
 pub fn lit_material(config: &FractalConfig) -> [f32; 3] {

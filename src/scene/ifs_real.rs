@@ -1,7 +1,7 @@
 //! One number, three ways: the scalar trait the IFS kernels are
 //! written over.
 //!
-//! `docs/projects/ifs-general.md` D1 and D2. Three of this month's
+//! `docs/projects/deep-zoom/ifs-general.md` D1 and D2. Three of this month's
 //! bugs were in hand derivations of the same kernel at a different
 //! type -- Bubble's σ_min 21× too large, Bubble's inverse 102% wrong
 //! from a cancellation, `big_kernel_inverse` conjugating on the wrong

@@ -1,6 +1,6 @@
 //! `spray_blur` — K-sample stochastic blur by multi-emit (original).
 //!
-//! Phase 3 of [docs/projects/multi-emit-stereograms.md]. A conventional
+//! Phase 3 of [docs/archive/projects/multi-emit-stereograms.md]. A conventional
 //! stochastic blur deposits ONE jittered sample per iteration, so the
 //! blur's own noise converges no faster than the flame. This one emits
 //! `count` jittered copies per iteration at weight `brightness/count` —

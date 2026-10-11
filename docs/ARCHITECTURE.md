@@ -1,1132 +1,501 @@
-# Architecture Overview
+# Architecture
 
-Quick reference guide to understanding the codebase structure and data flow.
+The system overview and the map to everything else. It says what the
+parts are, how they connect, and which document holds the detail. It
+does not repeat that detail: when a reference doc in [main/](main/)
+covers a topic, this page links to it.
 
-**Detailed Documentation:**
-- [UI.md](main/UI.md) - Panels, menus, render-mode gating, input handling
-- [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
-- [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
-- [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
-- [SHADERS.md](main/SHADERS.md) - WGSL modular system, ShaderBuilder, dynamic compilation
-- [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
-- [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
-- [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
-- [SIMULATION.md](main/SIMULATION.md) - The simulation engine: models, the grid, layers, the resolve
-- [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode, video export
-- [SCRIPTING.md](main/SCRIPTING.md) - Rhai script API reference (generators, modifiers, animation)
-- [PRESET-BROWSER.md](main/PRESET-BROWSER.md) - Gallery UI system for browsing fractals
-- [TESTING-GUIDE.md](TESTING-GUIDE.md) - Unit tests, regression tests, benchmarks, profiling
+The program is a GPU fractal editor written in Rust on wgpu (WGSL
+compute shaders) and egui. One library crate (`fractal_flame_wgpu`,
+`src/lib.rs`) is built five ways: the desktop app, which is also a
+headless CLI; the web app (WASM on WebGPU); the single-purpose gallery
+modules in `wasm/`; and the Python bindings in `python/`.
 
 ---
 
-## Three render engines
+## 1. Three engines, four render modes, one tail
 
-`RenderMode` on the config picks one, and they are genuinely different
-generators that share one tail.
+`RenderMode` (`src/scene/transforms.rs`) has four values, served by
+three generators that really are different algorithms:
 
-| mode | generator | lives in | plan |
+| mode | generator | lives in | read |
 | --- | --- | --- | --- |
-| `TwoD` / `ThreeD` | the chaos game — sample, splat, accumulate | `src/renderer/`, `src/variations/` | [RENDERER.md](main/RENDERER.md) |
-| `Escape` | one compute dispatch per pixel, iterated to escape | `src/escape/` | [escape-time-fractals.md](projects/escape-time-fractals.md) |
+| `TwoD` / `ThreeD` | the chaos game: iterate points, splat them into a histogram, accumulate | `src/renderer/`, `src/variations/`, `src/scene/` | [RENDERER.md](main/RENDERER.md), [TRANSFORMS.md](main/TRANSFORMS.md) |
+| `Escape` | one compute pass that iterates every pixel to escape | `src/escape/` | [ESCAPE.md](main/ESCAPE.md) |
 | `Simulation` | a grid of cells stepped by a neighbour-coupled rule | `src/sim/` | [SIMULATION.md](main/SIMULATION.md) |
 
-**The tail is shared and that is the point.** Each generator produces an
-`Rgba32Float` image in the flame accumulator's layout, and everything
-after — density effects, tone mapping, the effect chain, readback, PNG
-metadata — is the flame renderer's. `render_with` in
-[src/renderer/render.rs](../src/renderer/render.rs) is where the swap
-happens, so a new pass added to the tail reaches all three modes, and
-CLI export, thumbnails, video and the gallery inherit every engine for
-free.
+**The tail is shared, and that is the point.** Every generator produces
+an `Rgba32Float` image in the flame accumulator's layout (`rgb` =
+colour, `a` = density or coverage). Everything after that belongs to the
+flame renderer: density effects, the tone map, colour effects, readback,
+PNG metadata.
+
+```
+ FLAME (TwoD / ThreeD)                ESCAPE                              SIMULATION
+ FractalConfig.flame                  FractalConfig.escape                FractalConfig.sim
+   |                                    |                                   |
+ shader_builder_v2: template +        escape::assembler: one formula      sim::assembler: one model
+ active variations' inline WGSL       (or field / IFS def) + one          + one colouring spliced
+   |                                  colouring spliced into a template   into a template
+ shader_cache: pipelines keyed          |                                   |
+ by the generated WGSL                EscapeRenderer: one dispatch;       SimRenderer: ping-pong
+   |                                  deep zoom by perturbation           texture array, one slice
+ FlameRenderer::compute_pass          (reference.rs, bla.rs,              per layer, N steps per
+ chaos game, persistent orbits        fixedpoint.rs)                      frame, then a colour pass
+   -> atomic u32 histogram              |                                   |
+ FlameRenderer::accumulate_pass       [terrain: footprint.rs ->           [terrain: sim/terrain.rs]
+   -> Rgba32Float accumulator          terrain.rs, lit or path traced]      |
+ [solid 3D: shade_pass, dof_pass]       |                                   |
+   |                                    |                                   |
+   +------------------------------------+-----------------------------------+
+                                        |
+                       Rgba32Float image, accumulator layout
+                                        |
+             density effects (renderer/effect_chain.rs, EffectChainRunner)
+                                        |
+             tone map (FlameRenderer::tonemap_pass / tonemap_pass_with_input,
+                       shaders/tonemap.wgsl; transparency is a tonemap mode)
+                                        |
+             colour effects (EffectChainRunner)
+                                        |
+             viewport  |  readback -> PNG + metadata  |  video frame  |  thumbnail
+```
+
+`render_with` in `src/renderer/render.rs` is where a non-interactive
+render picks its generator. CLI export, thumbnails, the Fractal Browser,
+video export and the gallery modules all go through it, so they render
+every engine the build has. The tail's stages are shared, but the
+sequence that calls them is written out per generator: the flame path
+in `render_with`, `render_sim`, and `escape_tail` (shared by the escape
+picture and its terrain), plus the app's own frame loop. A new tail
+stage must be added to each.
 
 Each engine is a Cargo feature (`engine-flame`, `engine-escape`,
-`engine-sim`), all on by default. Off, that engine's registry and
-shaders are unreachable and the linker drops them — which is what the
-single-engine WASM modules in [wasm/](../wasm/README.md) are for.
-`release.py check` compiles the library at each combination, because a
-`#[cfg]` on the wrong item is invisible in every other build.
+`engine-sim`), all on by default; see [section 5](#5-cargo-features-and-build-targets).
+
+**3D views beyond the flame.** A 3D flame can render as a lit solid
+(`solid_strength`, `renderer/shade_pass.rs`, `renderer/dof_pass.rs`).
+The escape engine also renders a flame as a distance field ("mode D",
+`escape/ifs.rs`, path tracer in `escape/renderer/solid_path.rs`). An
+escape or simulation picture can be shown as a lit height field, the
+terrain view (feature `terrain`; `escape/footprint.rs`,
+`escape/terrain.rs`, `escape/terrain_tiers.rs`, `escape/path_core.rs`,
+`sim/terrain.rs`). See [TERRAIN.md](main/TERRAIN.md).
 
 ---
 
-## 🏗️ Module Organization
+## 2. Module map
 
-```
-fractal_flame_wgpu/
-├── Core Entry Points
-│   ├── main.rs                 Desktop entry → CLI parser + GUI/export mode
-│   │                           - clap subcommand: export (headless batch PNG)
-│   │                           - No args: launches GUI via lib::desktop_main()
-│   │
-│   └── lib.rs                  Library root + WASM entry
-│                               - desktop_main() → GUI mode
-│                               - export_mode() → headless batch export
-│                               - export_async() → batch processing loop
-│
-├── Application Layer
-│   ├── app/                    Main App module (refactored into 4 files)
-│   │   ├── mod.rs              Core App struct (832 lines)
-│   │   │                       - Event loop and window management
-│   │   │                       - Render function + UI response handling
-│   │   │                       - update() performance tracking
-│   │   │
-│   │   ├── input.rs            Input handlers (208 lines)
-│   │   │                       - handle_keyboard() - Arrow keys, zoom, undo/redo
-│   │   │                       - handle_mouse_button() - Drag state management
-│   │   │                       - handle_mouse_move() - Rotation-aware panning
-│   │   │                       - handle_mouse_wheel() - Zoom to cursor
-│   │   │
-│   │   ├── config.rs           Config management (122 lines)
-│   │   │                       - export_config() → FractalConfig
-│   │   │                       - import_config() + palette library sync
-│   │   │                       - capture_state() for undo
-│   │   │                       - undo/redo/can_undo/can_redo
-│   │   │
-│   │   └── export.rs           Headless export (126 lines)
-│   │                           - export_headless() → CLI PNG export
-│   │                           - Creates headless GPU instance
-│   │                           - Renders to max_iterations
-│   │                           - Embeds PNG metadata
-│   │
-│   └── util.rs                 PerformanceMetrics
-│                               - FPS tracking
-│                               - Frame time statistics
-│
-├── UI Layer (egui + egui_dock - Migrated 2025-11-13)
-│   ├── ui/
-│   │   ├── mod.rs              EguiLayer + main UI coordinator
-│   │   │                       - DockArea integration
-│   │   │                       - Fractal texture management
-│   │   │                       - Panel rendering dispatcher
-│   │   │
-│   │   ├── workspace.rs        Docking layout management
-│   │   │                       - Workspace struct with DockState
-│   │   │                       - Panel tabs (Settings, Transforms, View, etc.)
-│   │   │                       - Default layout configuration
-│   │   │                       - Future: Save/restore layouts
-│   │   │
-│   │   ├── settings.rs         Settings panel
-│   │   │                       - File & Project (presets, undo/redo)
-│   │   │                       - Rendering controls
-│   │   │                       - Export options
-│   │   │                       - Preferences (language selector)
-│   │   │
-│   │   ├── transforms.rs       Transform editor panel
-│   │   │                       - Transform list with controls
-│   │   │                       - Add/delete transforms
-│   │   │                       - Affine parameters
-│   │   │
-│   │   ├── triangle_editor.rs  Visual triangle editor panel
-│   │   │                       - Interactive affine editing
-│   │   │                       - Drag handles for pre/post triangles
-│   │   │                       - Batch updates via ConfigManager
-│   │   │
-│   │   ├── view.rs             View controls panel
-│   │   │                       - Zoom, pan, rotation
-│   │   │                       - 3D camera controls
-│   │   │                       - Projection settings
-│   │   │
-│   │   ├── tone_mapping.rs     Tone mapping & color panel
-│   │   │                       - Color mode selection
-│   │   │                       - Palette controls
-│   │   │                       - Tone curve settings
-│   │   │                       - Background color
-│   │   │
-│   │   ├── palette_editor.rs   Palette editor panel
-│   │   │                       - Color stop editing
-│   │   │                       - Palette import/export
-│   │   │                       - Gradient preview
-│   │   │
-│   │   ├── undo_history.rs     Undo history browser panel
-│   │   │                       - Visual state preview
-│   │   │                       - Jump to any config state
-│   │   │                       - ConfigManager integration
-│   │   │
-│   │   ├── random_generator.rs Random Generator panel (Added PR #40)
-│   │   │                       - Configurable flame generation settings
-│   │   │                       - Symmetry options (bilateral, rotational, dihedral)
-│   │   │                       - Batch generation with File Browser integration
-│   │   │
-│   │   ├── menu_bar.rs         Top menu bar
-│   │   │                       - File, Edit, View, Fractal, Rendering, Window, Help
-│   │   │                       - Keyboard shortcuts documented
-│   │   │                       - Future: Full menu action implementation
-│   │   │
-│   │   ├── variation_controls.rs  Variation weight UI
-│   │   ├── variation_params.rs    Variation parameter UI
-│   │   ├── performance.rs         Performance metrics display
-│   │   ├── config_dialog.rs       Config import/export dialog
-│   │   ├── help.rs                Help/about dialogs
-│   │   ├── helpers.rs             UI utility functions
-│   │   ├── formatting.rs          Number formatting helpers
-│   │   └── response.rs            UiResponse struct (legacy)
-│   │
-│   └── i18n.rs                 Internationalization (Added 2025-11-13)
-│                               - rust-i18n integration
-│                               - Locale management (current_locale, set_locale)
-│                               - LocaleInfo struct for UI display
-│                               - Translation macro re-exports
-│
-├── Scene Layer
-│   └── scene/
-│       ├── mod.rs              Module exports
-│       │
-│       ├── transforms.rs       🔥 CORE ALGORITHM
-│       │                       - Transform struct (affine + variations + variation_params + g field)
-│       │                       - RenderMode (2D/3D) and ProjectionType
-│       │                       - Point calculations (r, θ, φ)
-│       │                       - Flame struct (transform collection + name + 3D settings)
-│       │                       - CPU iteration reference (2D only)
-│       │
-│       ├── presets.rs          Preset system
-│       │                       - PresetLibrary (stores Vec<FractalConfig>)
-│       │                       - Built-in preset creation functions
-│       │                       - Auto-loads from assets/presets/ (desktop)
-│       │                       - flame_to_config() helper
-│       │
-│       ├── assets.rs           Asset loading (desktop only)
-│       │                       - load_palettes_from_dir()
-│       │                       - load_configs_from_dir()
-│       │                       - Filesystem-based asset discovery
-│       │
-│       ├── palette.rs          Color system
-│       │                       - ColorMode enum (Transform/Palette/Speed)
-│       │                       - ColorStop gradient system
-│       │                       - Palette with interpolation
-│       │                       - PaletteLibrary (auto-loads from assets/)
-│       │
-│       ├── randomize.rs        Random flame generation (Extended PR #40)
-│       │                       - RandomGeneratorSettings struct
-│       │                       - SymmetryType enum (None/Bilateral/Rotational/Dihedral)
-│       │                       - generate_random_flame_with_settings()
-│       │                       - generate_batch() for exploration
-│       │
-│       └── variations/         Variation system
-│           ├── mod.rs          VariationRegistry (global singleton)
-│           │                   - VariationInfo (name, display_name, category, parameters)
-│           │                   - VariationParameter (name, type, default, min/max)
-│           │                   - ParamType enum (Float, Integer, Angle)
-│           │                   - Registration system for all 26 variations
-│           │                   - ordered_names: Vec<String> (defines numerical IDs)
-│           │                   - global_registry() function for singleton access
-│           │
-│           └── (future)        Plugin variations (wgsl + metadata)
-│
-├── GPU Layer
-│   └── gpu/
-│       ├── mod.rs              Module exports
-│       │
-│       ├── device.rs           GpuContext
-│       │                       - wgpu instance, surface, device, queue
-│       │                       - Window resize handling
-│       │
-│       ├── pipelines.rs        FlamePipelines
-│       │                       - Compute pipeline (trajectory 2D)
-│       │                       - Compute pipeline (trajectory 3D)
-│       │                       - Compute pipeline (accumulate)
-│       │                       - Render pipeline (tonemap)
-│       │                       - Bind group layouts
-│       │                       - Runtime pipeline selection based on render mode
-│       │
-│       └── buffers.rs          FlameBuffers + GPU data structures
-│                               - Transform buffer (storage, 32 slots)
-│                               - Variation params buffer (storage, 400 floats: 50 variations × 8 params)
-│                               - Histogram buffer (storage, 4× u32 per pixel for atomic color accumulation)
-│                               - Palette texture (1D)
-│                               - Params uniform buffers
-│                               - Accumulation textures (ping-pong)
-│                               - GpuTransform, GpuParams, TonemapParams, GpuVariationParams
-│
-├── Renderer Layer
-│   └── renderer/
-│       ├── mod.rs              Module exports
-│       │
-│       └── compute_kernel.rs  🎨 RENDERING CORE
-│                               FlameRenderer
-│                               - Manages rendering state
-│                               - Orchestrates GPU passes:
-│                                 1. compute_pass() - generate samples (2D or 3D shader)
-│                                 2. accumulate_pass() - blend samples
-│                                 3. tonemap_pass() - display
-│                               - Tracks samples/iterations
-│                               - PNG capture (dual path):
-│                                 • Transparent: Read Rgba16Float accumulation buffer
-│                                 • Opaque: Render with tonemap shader
-│                               - Parameter updates:
-│                                 • update_flame() - individual flame updates
-│                                 • load_config() - atomic FractalConfig loading
-│                                 • reset() - clear accumulation only (no params)
-│
-├── Shader Generation
-│   └── shader_builder_v2.rs   ShaderBuilder
-│                               - Dynamic WGSL generation based on active variations
-│                               - Detects variation needs (RNG, parameters)
-│                               - Generates correct function signatures
-│                               - Builds apply_variations() switch statement
-│                               - Separate builders for 2D and 3D modes
-│                               - Enables variation plugins (future)
-│
-├── State Management - **See [CONFIG.md](main/CONFIG.md)** for complete documentation
-│   ├── config/
-│   │   ├── mod.rs              Module exports and re-exports
-│   │   ├── defaults.rs         Default value constants (single source of truth)
-│   │   ├── fractal_config.rs   FractalConfig (per-fractal artistic state), JSON serialization
-│   │   ├── delta.rs            ConfigPath, ConfigValue, ConfigDelta enums
-│   │   ├── manager.rs          ConfigManager (unified state, undo/redo, coalescing)
-│   │   │                       - Manages FractalConfig (undo/redo enabled)
-│   │   │                       - Manages SystemSettings (no undo, persistent)
-│   │   │                       - update_param() for fractal changes
-│   │   │                       - update_system_setting() for device settings
-│   │   │                       - Returns UpdateType for GPU synchronization
-│   │   └── slider.rs           Slider/DragValue UI helpers
-│   ├── storage/                Local storage system (Added 2025-11-23, PR #27)
-│   │   ├── mod.rs              Module exports
-│   │   ├── settings.rs         SystemSettings struct (device-specific settings)
-│   │   │                       - VSync, target FPS, iterations per thread
-│   │   │                       - Language preference, export defaults
-│   │   │                       - Recent files (desktop only)
-│   │   └── backend.rs          Cross-platform storage implementation
-│   │                           - Desktop: JSON files in user data directory
-│   │                           - WASM: browser localStorage
-│   │                           - StorageBackend trait for platform abstraction
-│   │
-│   ├── resources/              HTTP resource fetching (Added PR #39)
-│   │   ├── mod.rs              Core types (LoadState, PalettePackInfo, ResourceManifest)
-│   │   ├── fetch.rs            Platform-specific fetch
-│   │   │                       - Desktop: filesystem read
-│   │   │                       - WASM: fetch API with async/await
-│   │   ├── palettes.rs         Palette pack loading with manifest
-│   │   │                       - Lazy loading of large packs (701 Apophysis palettes)
-│   │   │                       - Auto-load enabled packs on startup
-│   │   └── error.rs            FetchError type for cross-platform errors
-│   │
-│   └── png_metadata.rs         PNG metadata embedding, tEXt chunks
-│
-├── Profiling & Version Tracking
-│   ├── profiler.rs             GpuProfiler + CPU timing
-│   │                           - GPU timestamp queries (TIMESTAMP_QUERY feature)
-│   │                           - CPU scope timing with RAII
-│   │                           - FrameProfile with version metadata
-│   │                           - JSON export for performance data
-│   │
-│   └── version.rs              VersionInfo
-│                               - Version from Cargo.toml
-│                               - Auto-incrementing build numbers
-│                               - Git hash, branch, build time
-│                               - Platform and architecture info
-│                               - Global singleton via get_version_info()
-│
-├── Testing & Benchmarking - **See [TESTING-GUIDE.md](TESTING-GUIDE.md)** for complete guide
-│   ├── tests/regression.rs         12 regression tests (CPU determinism, variations, presets)
-│   ├── tests/visual/               Visual regression testing (desktop + WASM)
-│   │   ├── run_all_tests.py        Unified test runner (desktop + WASM + performance tracking)
-│   │   ├── run_tests.py            Desktop CLI visual tests (pixel-perfect comparison)
-│   │   ├── wasm/test_wasm.py       WASM browser tests (Playwright automation)
-│   │   ├── configs/                Test configurations (.fflame files)
-│   │   ├── baseline/               Reference images (desktop + wasm/)
-│   │   ├── current/                Test outputs (desktop + wasm/)
-│   │   └── performance_history.csv Performance tracking over time
-│   ├── benches/flame_bench.rs      Criterion benchmarks (statistical microbenchmarking)
-│   └── bin/simple_benchmark.rs     CLI benchmark tool (human-readable performance)
-│
-└── Shaders (WGSL) - **See [SHADERS.md](main/SHADERS.md)** for complete shader documentation
-    ├── core/                       Modular components (assembled by ShaderBuilder)
-    │   ├── header.wgsl             Bind groups and structs (interactive)
-    │   ├── header_export.wgsl      Header for headless export
-    │   ├── header_tiled.wgsl       Header for high-res tiled rendering
-    │   ├── rng.wgsl                PCG random number generator
-    │   ├── utilities.wgsl          Helper functions (r/θ/φ, projection)
-    │   ├── utilities_tiled.wgsl    Utilities for tiled rendering
-    │   ├── affine.wgsl             2D affine transform
-    │   ├── affine_3d.wgsl          3D affine transform with Z
-    │   ├── main_template.wgsl      Main compute shader ({{VARIATIONS_CODE}} placeholder)
-    │   ├── main_2d_export.wgsl     2D export entry point
-    │   ├── main_3d_export.wgsl     3D export entry point
-    │   ├── main_2d_tiled.wgsl      2D high-res tiled entry point
-    │   └── main_3d_tiled.wgsl      3D high-res tiled entry point
-    │   (Note: Variation functions generated dynamically, not stored as files)
-    │
-    ├── ShaderBuilder               Dynamic compilation (only active variations)
-    ├── accumulate.wgsl             Ping-pong progressive refinement
-    └── tonemap.wgsl                Display rendering pass
-```
+From the module list in `src/lib.rs`. Gating is noted where it applies.
+
+### Entry points
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/main.rs` | The `FractalArtEditor` binary. With no subcommand it launches the GUI (`desktop_main`). Subcommands: `generate` (run a Rhai script to a `.fflame`), `export` (headless PNG, one file or a directory), `export-animation` (video through ffmpeg), `list-encoders` | [EXPORT.md](main/EXPORT.md) |
+| `src/lib.rs` | Library root: module list, `desktop_main`, `export_mode`, `export_animation_mode`, the WASM entry point `wasm_main`, and the `prelude` | |
+| `src/wasm_api.rs` | `WasmApi`, the JavaScript API of the web app (config load, progress, `export_png`, online calls), plus a `PlanBench` for timing deep-zoom planning in a browser. wasm32 + `web-app` only | [WASM.md](WASM.md) |
+| `src/web_clipboard.rs`, `src/web_text_agent.rs` | Browser clipboard bridge and virtual-keyboard bridge for egui. wasm32 only | |
+| `src/bin/` | Tools: `variation_probe` (variation math probe and census), `export_variations_json`, `export_scripts_json`, `export_effects_json` (API corpora), `compare_images`, `shader_bench`, `simple_benchmark`, `census_dumpseed`, `test_curve` | [TESTING-GUIDE.md](TESTING-GUIDE.md) |
+
+### Application and UI (feature `web-app`)
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/app/` | The running editor. `mod.rs` (about 4,800 lines) holds `App`, the winit event loop, the frame (`App::render`) and the frame governor (`Batch`, `Knee`, `adjust_iter_scale`). Beside it: `ui_handlers.rs` (acting on `UiResponse`), `gpu_updates.rs` (applying `UpdateAction` to the GPU, the overwrite window, `freeze_viewport`), `config.rs` (load/import/export, undo/redo glue, background export launch), `export.rs` (headless export and `ExportEngine`), `input.rs` (keyboard, fullscreen), `fly_camera.rs`, `animation_update.rs`, `aa_governor.rs` (escape playback supersampling), `render_mode.rs` (the Normal/Animating/Overwrite state machine; not the render-mode policy), `render_progress.rs`, `texture_sync.rs`, `variation_fetch.rs`, `effect_fetch.rs`, `script_cloud.rs` | [UI.md](main/UI.md), [RENDERER.md](main/RENDERER.md) |
+| `src/ui/` | 51 files: the egui_dock workspace and every panel. Coordination: `mod.rs`, `workspace.rs` (`PanelType`, 30 panels; `WorkspaceLayout`), `panel_viewer.rs`, `menu_bar.rs`, `compact_menu.rs`, `response.rs` (`UiResponse`). Policy: `render_mode.rs`, `visibility.rs`. Panels include `transforms`, `triangle_editor`, `view` and `view_controls`, `tone_mapping`, `palette_editor`, `palette_library`, `fractal_browser` (with `fractal_gallery`), `escape_panel`, `sim_panel`, `textures_panel`, `solid_panel`, `effects_panel`, `animation_panel`, `track_editor`, `signal_panel`, `scripts_panel`, `paths_panel`, `xaos_editor`, `subflames`, `variations`, `random_generator`, `undo_history`, `export_panel` | [UI.md](main/UI.md), [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) |
+| `src/i18n.rs` | rust-i18n setup and locale switching; strings in `locales/*.yml` | [I18N.md](main/I18N.md) |
+
+### Model and state
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/config/` | `FractalConfig` (`fractal_config.rs`), with `EscapeConfig` (`escape.rs`) and `SimConfig` (`sim.rs`) inside it; `ConfigManager` (`manager.rs`); `ConfigPath`, `ConfigValue`, `UpdateType` (`delta.rs`); defaults; the f32 precision policy (`precision.rs`); slider widgets (`slider.rs`, `web-app` only) | [CONFIG.md](main/CONFIG.md) |
+| `src/scene/` | The flame model: `Flame`, `Transform`, `RenderMode` (`transforms.rs`); palettes and `ColorMode` (Palette, Speed, PathMap) (`palette.rs`); tone-map types and presets; xaos; the preset library (`presets.rs`, from `assets/presets.fflame`); random flames (`randomize.rs`). Also the Focused Rendering planners: `cylinder.rs`, `backward.rs`, `plan_gpu.rs`, `word_tree.rs`, `final_map.rs`, `importance.rs`, `slice.rs`, and the IFS analysis they rest on (`ifs_analysis.rs`, `ifs_estimate.rs`, `ifs_ball.rs`, `ifs_real.rs`, `mobius.rs`, `forward_delta.rs`) | [TRANSFORMS.md](main/TRANSFORMS.md), [COLOR.md](main/COLOR.md), [FOCUSED-RENDERING.md](main/FOCUSED-RENDERING.md) |
+| `src/camera/` | Every camera behind one interface: `quat`, `chain`, `view3d`, `gesture`, `fly`. Returns a `CameraEdit` the caller applies | [CAMERA.md](main/CAMERA.md) |
+
+### Flame engine
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/variations/` | The variation registry (`mod.rs`, `global_registry()`), `VariationDef` and `Feature` (`definition.rs`), 647 definitions with inline WGSL in `defs/*.rs` (registered in `defs/mod.rs`'s `ALL_VARIATIONS`, append-only), bounds and inverses for the planners (`bound.rs`, `inverse.rs`, `derive.rs`), `analytic_blur.rs`, `docs.rs`. With `engine-flame` off the registry holds `linear` alone | [VARIATIONS.md](main/VARIATIONS.md) |
+| `src/shader_builder_v2.rs` | Assembles a flame's WGSL from `shaders/core/` templates and the active variations, with a per-flame local index map and template flags | [SHADERS.md](main/SHADERS.md) |
+| `src/shader_cache.rs` | Compiled pipelines keyed by the WGSL that produced them, each with a bind-group layout holding only the bindings its shader uses (`gpu::pipelines::used_bindings`) | [SHADERS.md](main/SHADERS.md) |
+| `src/renderer/` | `FlameRenderer` (`compute_kernel.rs`: compute, accumulate and tonemap passes, targeting state); the unified render API (`render.rs`); `effect_chain.rs`; `shade_pass.rs` and `dof_pass.rs` (solid 3D); `sticky.rs` (sticky variation superset, to avoid recompiles); `thumbnail.rs`; `histogram.rs` (density histogram for the UI); `density_stats.rs` (attractor bounds for shadow fit). Test-only: `density_gates.rs`, `orbit_gates.rs` | [RENDERER.md](main/RENDERER.md) |
+| `src/gpu/` | `GpuContext` (`device.rs`), `FlamePipelines` and the compute layout (`pipelines.rs`), `FlameBuffers` and the GPU structs (`buffers.rs`) | [BUFFERS.md](main/BUFFERS.md) |
+
+### Escape and simulation engines
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/escape/` (`engine-escape`) | `FormulaDef` and `ColoringDef` registries (`formulas.rs`, `colorings.rs`, lists in `mod.rs`), fields (`fields.rs`), the flame as a distance field (`ifs.rs`), `assembler.rs`, `EscapeRenderer` (`renderer.rs`), deep zoom (`reference.rs`, `bla.rs`, `fixedpoint.rs`, `bigfloat.rs`, `nucleus.rs`, `orbit_store.rs` on desktop), the camera lens (`lens.rs`), presets, and the terrain files (feature `terrain`) | [ESCAPE.md](main/ESCAPE.md), [TERRAIN.md](main/TERRAIN.md) |
+| `src/sim/` (`engine-sim`) | `ModelDef` and `SimColoringDef` registries (`models.rs`, `colorings.rs`, lists in `mod.rs`), `assembler.rs`, `SimRenderer` (`renderer.rs`), GPU FFT for exact convolutions (`fft.rs`, `spectral.rs`), `terrain.rs` | [SIMULATION.md](main/SIMULATION.md), [SIMULATION-CATALOG.md](main/SIMULATION-CATALOG.md) |
+| `src/textures/` | Simulation configs used as textures by escape configs; the shipped set is embedded by `build.rs` from `assets/textures/`, the generated images cached | [ESCAPE.md](main/ESCAPE.md) |
+
+### Shared rendering, export and media
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/effects/` | `EffectRegistry`, the built-in effects (`register_builtin_effects`), density and colour chains; WGSL in `shaders/effects/` | [EFFECTS.md](main/EFFECTS.md) |
+| `src/export/` | High-resolution export: `pick_strategy` (`Direct`, `ParallelTiles`, `SerialTiles`), `HighResExporter` (`high_res.rs`, tiled and CPU-histogram paths), the sample-scatter pass (`accumulate.rs`), 2x supersampling (`supersample.rs`) | [EXPORT.md](main/EXPORT.md) |
+| `src/png_metadata.rs` | Writing and reading the tEXt chunks every exported PNG carries | [EXPORT.md](main/EXPORT.md) |
+| `src/animation/` | `Animation`, `Track`, keyframes and interpolation; `AnimationController` (playback); `export.rs`, the one video loop | [ANIMATION.md](main/ANIMATION.md) |
+| `src/signal/` | `SignalManager`, the `.signal` format, generators; inputs for animation tracks | [ANIMATION.md](main/ANIMATION.md) |
+| `src/audio/` | Decoding (symphonia), analysis (rustfft), playback and live capture (cpal on desktop, Web Audio in the browser); produces signals | [ANIMATION.md](main/ANIMATION.md) |
+| `src/flame_xml.rs` | Apophysis / JWildfire / Chaotica `.flame` XML import and export | [CONFIG.md](main/CONFIG.md) |
+
+### Content, persistence and the network
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/storage/` | `SystemSettings`, the storage backend (files on desktop, localStorage in the browser), custom palettes, the thumbnail cache, caches and catalogs of API-loaded variations and effects, local plugins, encrypted credentials (desktop) | [CONFIG.md](main/CONFIG.md), [ONLINE.md](main/ONLINE.md) |
+| `src/resources/` | Fetching shipped and remote resources on both platforms: palette packs (`palettes.rs`), presets, where `assets/` lives at runtime (`bundled.rs`) | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md) |
+| `src/api/` | The online API client: auth, HTTP client, health, `FractalConfig` to API conversion (`sync.rs`), wire types | [ONLINE.md](main/ONLINE.md) |
+| `src/provenance.rs` | Where a variation or effect came from: `Builtin`, `Api { version }`, `Local` | [ONLINE.md](main/ONLINE.md) |
+| `src/contract.rs` | Generates the client/API contract, `docs/generated/engine-contract.json` | [RELEASE.md](RELEASE.md) |
+| `src/script/` | Sandboxed Rhai scripting: the host and seeded RNG (`host.rs`), the registered API (`api.rs`, `builtins.rs`, `color.rs`, `anim.rs`), the script library and store, the `generate` CLI (`cli.rs`) | [SCRIPTING.md](main/SCRIPTING.md), [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md) |
+
+### Verification and diagnostics
+
+| path | what it is | read |
+| --- | --- | --- |
+| `src/probe/` | The variation math probe: every variation's shader math at fixed adversarial inputs, compared across platforms by class | [TESTING-GUIDE.md](TESTING-GUIDE.md) |
+| `src/census/` | Which input classes real renders feed each variation; run through `variation_probe` | [TESTING-GUIDE.md](TESTING-GUIDE.md) |
+| `src/shader_dumps.rs` | Golden dumps of the generated flame WGSL in `tests/shader_dumps/` (test-only) | [SHADERS.md](main/SHADERS.md) |
+| `src/sim_microbench.rs` | Stencil-step cost measurement (test-only) | |
+| `src/profiler.rs`, `src/util.rs`, `src/version.rs` | GPU timestamp and CPU scope profiling; frame metrics; build information captured by `build.rs` | |
+
+`src/undo.rs` is in the tree but not in `src/lib.rs`'s module list, so
+it is not compiled. Undo lives in `ConfigManager`.
+
+### Outside `src/`
+
+| path | what it is |
+| --- | --- |
+| `shaders/` | `core/` (the flame template and its helpers: `header`, `main_template`, `utilities`, `rng`, `affine`, `affine_3d`, `accumulate_samples`, `noise`, `voronoi`, `complex`, `fractwf`, `polychora`, `polyhedra`, `su_mobius`, `subflame`, and for Focused Rendering `replay`, `replay_delta`, `plan_eval`, `plan_gather`, `plan_offsets`); `accumulate`, `accumulate_tiled`, `tonemap`, `downsample`, `histogram_blur`, `blur_convolve`, `blur_upscale`; solid shading `shade`, `normals`, `atrous`, `dof`; `effects/{density,color,common}/`. Variation, escape and simulation WGSL is inline in Rust |
+| `assets/` | `presets.fflame`, `palettes/` (packs and loose files), `scripts/`, `textures/`, `fonts/`, `branding/`, `plugins-example/` |
+| `build.rs` | Build provenance (version, git hash, profile), the WASM palette manifest, embedded texture presets, asset and shader copies into the target directory, the Windows icon |
+| `wasm/` | Gallery crates `script`, `render`, `flame`, `escape`, `sim`; see [wasm/README.md](../wasm/README.md) |
+| `python/` | `pyfflame`, PyO3 bindings built with maturin: config editing, `.flame` conversion, scripts; no rendering |
+| `tests/` | `regression.rs`, `shader_dumps/`, `test_configs/`, and `visual/` (374 configs in `2d`, `3d`, `escape`, `sim`, `solid`, `tonemap`, `variations`) |
+| `benches/` | `flame_bench.rs` (Criterion) |
+| `scripts/` | `release.py`, `run_benchmarks.py`, `check_doc_links.py`, audits and one-shot codemods |
 
 ---
 
-## 🔄 Data Flow
+## 3. Cross-cutting systems
 
-### Initialization Flow
-```
-main()
-  → desktop_main() [lib.rs]
-    → App::run() [app.rs]
-      → GpuContext::new() [gpu/device.rs]
-      → EguiLayer::new() [ui/mod.rs]
-      → FlameRenderer::new() [renderer/compute_kernel.rs]
-        → FlamePipelines::new() [gpu/pipelines.rs]
-        → FlameBuffers::new() [gpu/buffers.rs]
-          - Creates transform buffer
-          - Creates palette texture
-          - Creates accumulation textures (ping-pong)
-          - Creates params UBO
-      → Event loop starts
-```
+### Registries
 
-### Per-Frame Render Flow
+Variations, escape formulas and colourings, simulation models and
+colourings, and effects all follow one pattern: a `static` definition
+per entry carrying its WGSL inline and its parameters described well
+enough for the UI to build controls, collected in an ordered,
+append-only list and looked up by name. The shader for a frame is
+assembled from the entries it uses. Variations and effects can also
+arrive at runtime from the online API or from local plugins
+(`storage::load_installed_resources`, called by every entry point that
+renders), which is why `global_registry()` and `global_effect_registry()`
+return lock guards.
 
-**See [RENDERER.md](main/RENDERER.md)** for detailed pipeline documentation.
+### Configuration and undo
 
-**Quick overview:**
-```
-1. Compute Pass → Generate samples (write to histogram)
-2. Accumulate Pass → Blend with history (ping-pong buffers)
-3. Tonemap Pass → Display rendering (log/linear + gamma)
-4. UI Pass → Render egui panels
-5. Handle UI responses → Update state
-```
+All editable state is one `FractalConfig`, serialised as JSON
+(`.fflame`). Device preferences are `SystemSettings`, which has no undo.
+`ConfigManager` owns both.
 
-### Event Handling Flow
-```
-User Input
-  ↓
-WindowEvent
-  ↓
-egui.handle_event() → consumed?
-  ↓
-If NOT consumed:
-  - Mouse drag → pan_x/pan_y
-  - Mouse wheel → zoom (toward cursor)
-  - Arrow keys → pan_x/pan_y
-  - +/- keys → zoom
-  - Ctrl+Z → undo()
-  - Ctrl+Y → redo()
-  ↓
-Set view_changed_by_keyboard flag
-  ↓
-Next frame: trigger reset() if changed
-```
+- A UI control writes through `update_param(ConfigPath, ConfigValue)` or
+  `update_batch(...)` (one undo step for several paths). `ConfigPath` in
+  `src/config/delta.rs` names every editable parameter (several hundred
+  variants) and knows its history label, its animation key and its
+  `UpdateType`.
+- `UpdateType` says how much work a change costs: `None`, `ViewOnly`,
+  `ToneMappingOnly`, `ShadingOnly`, `ColorOnly`, `IterationReset`,
+  `EscapeRerender`, `SimRerender`, `SimResample`, `SimReseed`. Several
+  merge to the strongest. The app collects pending changes as an
+  `UpdateAction` and applies them in `app/gpu_updates.rs`.
+- History holds 500 states. Rapid edits coalesce: a new entry after
+  500 ms without changes, or after a 3 s span.
+- Structural actions (adding or deleting transforms, loading a preset
+  or file) go through `apply_config_edit` / `apply_structural_change`.
 
-### State Change Flow (Delta-Based System)
+Detail: [CONFIG.md](main/CONFIG.md).
 
-**See [CONFIG.md](main/CONFIG.md)** for complete ConfigManager documentation.
+### Render-mode policy
 
-**Modern Flow (Delta-Based):**
-```
-UI Change (e.g., edit transform parameter)
-  ↓
-Slider/control binds to ConfigManager via helper:
-  config_slider(ui, config_manager, ConfigPath::TransformAffine { index, param })
-  ↓
-On value change:
-  1. ConfigManager computes delta (old value vs new value)
-  2. LazyUndoHelper throttles undo captures (500ms minimum between captures)
-  3. Applies change to active_config
-  4. Returns UpdateType (View/Color/Flame/etc.)
-  ↓
-UI returns UpdateType to App
-  ↓
-App handles UpdateType:
-  - View: renderer.update_view() → reset()
-  - Color: renderer.update_palette() → reset()
-  - Flame: renderer.update_flame() → reset()
-  - ToneMap: renderer.update_tonemap() (no reset)
-  ↓
-ConfigManager maintains undo/redo stack:
-  - Undo: ConfigManager.undo() → App applies deltas
-  - Redo: ConfigManager.redo() → App applies deltas
-```
+The mode decides which panels, menu items and controls exist.
 
-**Legacy Flow (Flag-Based, deprecated):**
-```
-UI Change → Set flags → capture_state() → Apply changes
-(Still used for some operations like preset loading, being phased out)
-```
+- `src/ui/render_mode.rs` is the only writer of
+  `ConfigPath::RenderMode` (a source-scanning test enforces it). It
+  maps each mode to a workspace layout and decides which engines stay
+  resident.
+- `src/ui/visibility.rs` answers "is this available in this mode" for
+  every panel × mode and control × mode. Both Window menus draw their
+  rows from `visibility::WINDOW_MENU`. Add a case there, never a
+  `matches!(render_mode, ...)` inside a panel.
 
----
+`src/app/render_mode.rs` is unrelated despite the name: it is the
+Normal / Animating / Overwrite state machine of the frame loop.
 
-## 💾 GPU Buffer Layout
+Detail: [UI.md](main/UI.md).
 
-**See [BUFFERS.md](main/BUFFERS.md)** for complete buffer documentation including:
-- Bind group layouts (Compute, Accumulate, Tonemap)
-- GPU data structures (GpuTransform, GpuParams, TonemapParams, AccumulateParams)
-- Memory layout rules (std140 vs std430)
-- Buffer update patterns
-- Common modification tasks
+### UI organisation
 
-**Quick reference - Bind Group 0 (Compute Pass):**
-```
-@group(0) @binding(0) - transforms: array<GpuTransform>      (storage buffer, read)
-@group(0) @binding(1) - params: GpuParams                   (uniform buffer, read)
-@group(0) @binding(2) - histogram: array<atomic<u32>>       (storage buffer, read_write)
-@group(0) @binding(3) - palette_texture: texture_1d         (texture, sample)
-@group(0) @binding(4) - palette_sampler: sampler            (sampler)
-@group(0) @binding(5) - variation_params: array<VariationParams> (storage buffer, read)
-```
+- All UI is dockable panels (egui_dock). `PanelType` in
+  `src/ui/workspace.rs` defines 30 panels; `WorkspaceLayout` holds the
+  presets (Standard, Animation, Scripting, Escape Time, Simulation,
+  Compact). Layouts are session-only: switching layout keeps the one
+  left in memory, and nothing about the dock tree is written to disk.
+- Menu bar: File, Edit, View, Mode, Rendering, Window, Help, plus a
+  language selector. The Mode menu is built from `RenderMode::ALL`.
+  `src/ui/compact_menu.rs` is the small-screen equivalent.
+- Panels return a `UiResponse` (`src/ui/response.rs`) for actions that
+  are not config edits (file I/O, palette library, transport, exports);
+  `src/app/ui_handlers.rs` acts on it.
+- Translations: English is complete; es, ja and zh-CN are partial
+  ([I18N.md](main/I18N.md)).
 
+### Cameras
 
----
+The app has seven cameras (`ViewKind` in `src/camera/gesture.rs`): the
+2D flame view, the 3D flame camera, the escape plane, the escape solid
+(mode D), the escape terrain, the simulation view and the simulation
+terrain. Each keeps its own config fields. `src/camera/` is the one
+place that knows what they mean: viewport gestures, the View panel and
+fly mode call into it and get back a `CameraEdit` (config writes plus a
+history label) to apply through `ConfigManager`, so undo, animation and
+scripts see ordinary edits. Detail: [CAMERA.md](main/CAMERA.md).
 
-## 🎨 Histogram Color Accumulation System (Added 2025-10-27)
+### The unified render API
 
-### Overview
-The renderer uses a **histogram-based atomic accumulation** system to safely collect color data from thousands of parallel GPU threads. This replaced the previous direct texture writes which couldn't safely handle concurrent access.
+`src/renderer/render.rs`:
 
-### Architecture
+- `RenderJob` describes a render (config, size, iteration target,
+  iterations per thread, transparency, optional engines).
+- `render` builds a `FlameRenderer` per call; `render_with` reuses a
+  caller's renderer, which matters on WebGPU where dropped GPU memory
+  lingers until garbage collection.
+- `RenderEngines` is engine state a looping caller keeps alive between
+  renders (the simulation's field, the escape renderer's reference
+  orbit, the terrains), so a video continues a simulation instead of
+  reseeding it every frame.
 
-**3-Stage Pipeline:**
-```
-1. Compute Pass (main_template.wgsl - dynamically compiled)
-   - Each thread generates 256-1024 iterations
-   - Converts final_color (RGB f32) to u32 with fixed scale
-   - Atomically adds to histogram buffer
-   - Atomically increments iteration_counts per pixel (for convergence tracking)
+Users: `app/export.rs` (CLI and headless export), `renderer/thumbnail.rs`,
+`animation/export.rs`, `wasm/render` and its siblings. The interactive
+viewport does not use it; `App::render` drives the renderers directly.
 
-2. Accumulate Pass (accumulate.wgsl)
-   - Reads histogram buffer (non-atomic)
-   - Reads iteration_counts per pixel
-   - Decodes u32 back to f32 RGB
-   - Applies accumulation controls: low-density smoothing, density compression, iteration limiting
-   - Blends with previous accumulation using adjusted blend factor
-   - Clears histogram for next frame (iteration_counts persist)
+### Export
 
-3. Tonemap Pass (tonemap.wgsl)
-   - Reads accumulation texture
-   - Applies tone mapping, gamma, background blending
-   - Outputs to screen
-```
+- Still PNG: a viewport-size flame export reads back the live renderer;
+  custom sizes and 2x supersampling go through the custom-size path. Above the
+  storage-binding limit `pick_strategy` routes to tiled rendering or a
+  CPU histogram (`src/export/`). `--engine` on the CLI forces a path.
+  Transparency is a mode of the tonemap shader (`transparent_mode`), with
+  straight or premultiplied alpha.
+- Every PNG embeds build information, render settings and the complete
+  config (`src/png_metadata.rs`), so an image reproduces itself.
+- **Video** goes through one loop, `animation::export::export_animation`,
+  shared by the app's dialog and the CLI and built on `render_with`. Add
+  a stage to the render tail and video gets it; do not add a second loop
+  (the two that existed until 2026-09-09 disagreed about density
+  effects, depth of field and which engine was running).
+- While an export runs in the background, the viewport freezes (below).
 
-### Histogram Format (U32 Unpacked - Current)
+Detail: [EXPORT.md](main/EXPORT.md).
 
-**Layout:** 4× u32 per pixel (separate R, G, B, Density channels)
-```
-Pixel Index: i = y * width + x
-Base Index:  base = i * 4
+### Persistence and storage
 
-histogram[base + 0] = R (u32, 0 to 4,294,967,295)
-histogram[base + 1] = G (u32, 0 to 4,294,967,295)
-histogram[base + 2] = B (u32, 0 to 4,294,967,295)
-histogram[base + 3] = Density (u32, count of hits)
-```
+| what | where |
+| --- | --- |
+| Device settings, custom palettes, user scripts, thumbnails, cached downloads | `src/storage/`: on desktop the platform data directory (`ProjectDirs` "Fractals for All" / "Fractal Art Editor"), in the browser localStorage |
+| Shipped content | `assets/`, embedded or copied by `build.rs`; located at runtime by `resources::bundled` |
+| Palette packs | the pack folder is the catalog on desktop; WASM uses a manifest `build.rs` generates ([PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md)) |
+| Deep-zoom reference orbits | `escape/orbit_store.rs` (desktop only) |
 
-**Memory Usage:** `width × height × 4 × 4 bytes`
-- 1920×1080: ~31.5 MB
-- 800×600: ~9.2 MB
+### Online
 
-**Encoding (Compute Shader):**
-```wgsl
-let color_scale = params.histogram_color_scale;  // Default: 100.0
+`src/api/` talks to the Fractal Flame API: flames (escape and simulation
+configs are stored as flames, distinguished by `render_mode`),
+animations, palettes, scripts, and the variation and effect catalogs.
+A flame that names a variation or effect this build lacks triggers a
+fetch (`app/variation_fetch.rs`, `app/effect_fetch.rs`); the downloads
+are cached in `src/storage/`. The Scripts panel's cloud library is
+`app/script_cloud.rs`. `src/contract.rs` keeps the generated contract
+the API checks against. Detail: [ONLINE.md](main/ONLINE.md); release
+procedure in [RELEASE.md](RELEASE.md).
 
-let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
-let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
-let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
-let density_u32 = u32(color_scale);
+### Scripting
 
-atomicAdd(&histogram[base_idx + 0u], r_u32);
-atomicAdd(&histogram[base_idx + 1u], g_u32);
-atomicAdd(&histogram[base_idx + 2u], b_u32);
-atomicAdd(&histogram[base_idx + 3u], density_u32);
-```
+Rhai scripts generate a config (generators) or change a copy of the
+current one (modifiers), under execution budgets and with a pinned PRNG,
+so script plus seed reproduces a flame byte for byte on desktop, web and
+Python. Scripts may declare animation. They run from the Scripts panel,
+the `generate` subcommand, `wasm/script` and `pyfflame.run_script`.
+Reference: [SCRIPTING.md](main/SCRIPTING.md); language guide:
+[SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md).
 
-**Decoding (Accumulate Shader):**
-```wgsl
-let r_sum = f32(histogram[base_idx + 0u]);
-let g_sum = f32(histogram[base_idx + 1u]);
-let b_sum = f32(histogram[base_idx + 2u]);
-let density = f32(histogram[base_idx + 3u]);
+### Animation, signals and audio
 
-let color = vec3(r_sum, g_sum, b_sum) / (density + 1e-6);
-```
-
-### Evolution History
-
-**Original (Removed):** Direct texture writes
-- Used `textureStore()` to write colors directly
-- **Problem:** Race conditions with concurrent writes (undefined behavior per WebGPU spec)
-- **Symptom:** Visual artifacts, incorrect colors
-
-**First Histogram (2025-10-26):** U16 packed RGB + U32 density
-- Format: `[u32: (R16|G16), u32: B16, u32: density]` (3× u32 per pixel)
-- **Problem:** RGB channels overflow after ~1,310 hits at scale=50
-- **Symptom:** Bright areas wrap to dark colors (0xFFFF → 0x0000)
-- Capacity: 65,535 max value per channel
-
-**Second Histogram (2025-10-27):** U32 unpacked (current)
-- Format: `[R32, G32, B32, density32]` (4× u32 per pixel)
-- **Benefit:** Eliminates overflow - 4.2 billion max value per channel
-- **Tradeoff:** 33% larger memory footprint (3→4 words)
-- Capacity: 42.9M hits before overflow (at scale=100) = 91 minutes continuous rendering
-
-### Performance Characteristics
-
-**Benchmark Results (simple3 @ 1920×1080, 1024 iters/thread):**
-```
-Commit    Description                  Time (ms)  Throughput (Giter/s)
-------    -----------                  ---------  --------------------
-dd80003   textureStore (baseline)      ~6800      ~5.86  [had race conditions]
-9ac278a   u16 packed histogram         1570       25.36  [overflow issues]
-a8301de   u32 unpacked histogram       1607       24.76  [current, no overflow]
-```
-
-**Performance vs Baseline:**
-- U32 histogram: **2.4% slower** than u16 packed (acceptable tradeoff)
-- 76% of memory bandwidth: 4 words vs 3 words, but better cache locality
-
-**Why Acceptable:**
-- Eliminates visual artifacts (overflow wraparound)
-- Proper HDR behavior (bright areas stay bright)
-- Clean, maintainable codebase (no complex workarounds)
-- Future-proof for high iteration counts
-
-### Key Design Decisions
-
-**Why U32 instead of F32?**
-- Atomic operations on f32 are undefined in WGSL/WebGPU
-- Integer atomics are guaranteed to be safe and correct
-- Scale factor provides adequate precision for color accumulation
-
-**Why Global Scale instead of Per-Pixel Adaptive?**
-- Simpler implementation (single uniform constant)
-- Faster access (uniform vs storage buffer read)
-- Eliminated 1.9 MB scale_buffer overhead
-- Avoids complex convergence detection logic
-
-**Why Separate Density Channel?**
-- Allows correct averaging: `color = sum / density`
-- Preserves HDR information for tone mapping
-- Matches traditional flame renderer architecture
-
-### UI Control
-
-**Location:** Settings window → Rendering section → "Histogram Color Scale" slider
-- Range: 1.0 to 1000.0
-- Default: 100.0
-- Higher values: Better precision, faster overflow (not an issue with u32)
-- Lower values: Less precision, more headroom (unnecessary with u32)
-
-### Related Documentation
-- [archive/histogram/](archive/histogram/) - Complete histogram evolution and optimization attempts (15 historical docs)
-  - HISTOGRAM_FINAL.md - Complete evolution timeline
-  - HISTOGRAM_OPTIMIZATION_ATTEMPTS.md - Failed optimization attempts
-  - U32_HISTOGRAM_CLEANUP.md - Cleanup plan (completed)
+Tracks bind config parameters to keyframes or to signals (generators,
+audio analysis). During playback the controller writes the config
+without creating undo entries. For simulations the step count is a
+target the timeline drives. Detail: [ANIMATION.md](main/ANIMATION.md).
 
 ---
 
-## 🔥 Flame Algorithm
+## 4. The frame
 
-**See [TRANSFORMS.md](main/TRANSFORMS.md)** for complete flame algorithm documentation including:
-- What is a fractal flame (IFS explanation)
-- Transform structure (affine + variations + color)
-- Flame algorithm (CPU reference + GPU implementation)
-- Point calculations (r, θ, φ)
-- Render modes (2D vs 3D)
-- Transform selection (weighted random)
-- Variation blending (additive)
-- Color modes (Transform, Palette, Speed)
-- View transformation (world to screen)
+`App::render` in `src/app/mod.rs`, once per redraw:
 
-**Quick reference - Algorithm overview:**
+1. **UI first.** egui runs and shows the previous frame's picture.
+2. **Responses and config updates.** `UiResponse` handling, animation
+   playback, then `process_gpu_updates` applies the frame's
+   `UpdateAction` to the GPU.
+3. **Render.** One read of the final config, then the active engine:
+   flame compute, accumulate and tonemap; or an escape re-render when
+   `escape_dirty`; or simulation steps. Then present.
 
-```
-1. Random starting point → Burn-in (settle) → Accumulation loop:
-   - Select transform (weighted random)
-   - Apply affine (2D matrix + translation, + Z offset in 3D)
-   - Apply variations (additive blending)
-   - Update color (Transform/Palette/Speed mode)
-   - Project to screen (view transform + camera rotation in 3D)
-   - Write to histogram (atomic u32 accumulation)
-```
+**Event-driven.** The loop sleeps (`ControlFlow::Wait`) unless something
+needs frames: an unfinished render, recent input, animation or audio, a
+running simulation, fly-mode movement, or an export's progress bar
+(redrawn ten times a second).
 
----
+**Persistent orbits.** Each flame thread's orbit survives between
+dispatches, so burn-in is paid once per restart and the picture does
+not depend on how work is sliced ([RENDERER.md](main/RENDERER.md)).
 
-## 🔢 Key Constants
+**The frame governor** sizes each flame dispatch to the frame budget:
+it shortens iterations per thread first (to 64, or three burn-ins),
+then sheds workgroups, down to one workgroup (`Batch`, `Knee`,
+`adjust_iter_scale` in `src/app/mod.rs`). The Rendering menu turns it
+off (`frame_governor`), and the dispatch is then `manual_workgroups` at
+full length. During escape animation playback the same switch governs
+the viewport's supersampling (`src/app/aa_governor.rs`).
 
-```rust
-MAX_VARIATIONS = 24              // Number of variation slots (16 basic 2D + 8 3D)
-MAX_PARAMS_PER_VARIATION = 8     // Parameter slots per variation
-MAX_TRANSFORMS = 32              // Max transforms in a flame (buffer limit)
-PALETTE_SIZE = 256               // 1D palette texture resolution
-WORKGROUP_SIZE = 64              // 8x8 threads per workgroup
-DEFAULT_ITERATIONS = 256         // Iterations per thread
-DEFAULT_WORKGROUPS = 128         // Workgroups per dispatch
-BURN_IN = 20                     // Initial iterations to discard
-MAX_UNDO_HISTORY = 50            // Undo stack depth
-```
+**The overwrite window.** After a view, palette or flame edit the
+accumulator is overwritten rather than blended, and this continues for
+100 ms after the last change so a drag shows no blank frames; then the
+iteration counter resets for a clean rebuild (`src/app/gpu_updates.rs`).
+Escape mode has no accumulator and skips this.
 
----
-
-## 🖼️ UI Organization (egui + egui_dock)
-
-**Docking System:**
-- All UI is dockable panels; users can rearrange, detach and dock anywhere
-- `PanelType` in `src/ui/workspace.rs` defines **29 panels**
-- `WorkspaceLayout` holds the presets (Standard, Animation, Scripting,
-  Escape Time, Simulation, Compact). Layouts are session-only —
-  nothing about the dock tree is persisted
-
-**Render modes drive the UI.** The four modes (2D and 3D flame, Escape
-Time, Simulation) decide which panels, menu items and individual
-controls are available:
-- `src/ui/render_mode.rs` — the only writer of `ConfigPath::RenderMode`,
-  plus the mode → workspace mapping and the engine-lifetime policy
-- `src/ui/visibility.rs` — the only answer to "is this available in
-  this mode", exhaustive over panel × mode and control × mode
-- Add a case there rather than a `matches!` inside a panel
-
-**Menu Bar:**
-- File, Edit, View, **Mode**, Rendering, Window, Help
-- The Mode menu is built from `RenderMode::ALL`
-- Both Window menus draw their panel rows from `visibility::WINDOW_MENU`
-
-**Internationalization:**
-- rust-i18n v3.1 with YAML translation files in `locales/`
-- Language selector in the menu bar's right strip
-- English is complete; es, ja and zh-CN are partial
-- See [I18N.md](main/I18N.md) for the translation guide
-
-**See [UI.md](main/UI.md)** for complete UI documentation including:
-- Panels, workspace layouts and the render-mode machinery
-- Input handling (keyboard, mouse, wheel)
-- UiResponse system
-- Common UI modification tasks
+**Frozen during exports.** While a background export runs,
+`freeze_viewport` stops viewport rendering, keeps the last picture on
+screen, and releases the escape renderer and terrains' GPU memory,
+since the export competes for the same GPU.
 
 ---
 
-## 🎯 Critical Code Paths
+## 5. Cargo features and build targets
 
-### Hot Path (Every Frame)
-1. [app.rs:354-373](app.rs#L354-L373) - Compute + accumulate passes
-2. [renderer/compute_kernel.rs:102-141](renderer/compute_kernel.rs#L102-L141) - Compute dispatch
-3. [renderer/compute_kernel.rs:144-181](renderer/compute_kernel.rs#L144-L181) - Accumulate dispatch
-4. [shaders/trajectory.wgsl:125-220](shaders/trajectory.wgsl#L125-L220) - Flame iteration loop
-5. [shaders/tonemap.wgsl:50-100](shaders/tonemap.wgsl#L50-L100) - Tone mapping
+| feature | default | gates |
+| --- | --- | --- |
+| `web-app` | on | `mod app`, `mod ui`, the editor's wasm-bindgen exports (`wasm_main`, `WasmApi`) |
+| `engine-flame` | on | the variation catalog; off, the registry holds `linear` alone |
+| `engine-escape` | on | `src/escape/` |
+| `engine-sim` | on | `src/sim/` |
+| `terrain` | on | the terrain view; implies `engine-escape` |
 
-### State Update Path
-1. [ui/mod.rs:82-712](ui/mod.rs#L82-L712) - UI rendering + input
-2. [app.rs:572-621](app.rs#L572-L621) - Handle UI responses
-3. [renderer/compute_kernel.rs:207-232](renderer/compute_kernel.rs#L207-L232) - Update flame
-4. [gpu/buffers.rs](gpu/buffers.rs) - Write GPU buffers
+With an engine off, `render_with` returns `RenderError::EngineMissing`
+for configs in that mode. `python scripts/release.py check` compiles the
+library with each single engine (`--no-default-features --features
+engine-X`), because a `#[cfg]` on the wrong item compiles in every other
+combination.
 
-### Configuration Path
-1. [config.rs:29-36](config.rs#L29-L36) - Serialize to JSON
-2. [app.rs:630-644](app.rs#L630-L644) - Export config
-3. [app.rs:647-680](app.rs#L647-680) - Import config
-4. [undo.rs:19-31](undo.rs#L19-L31) - Push to undo stack
+| target | how | notes |
+| --- | --- | --- |
+| Desktop app and CLI | `cargo run --release`; release builds use `cargo build --profile dist` | wgpu backends: Vulkan, Metal, GLES (no DX12) |
+| Web app | `./build-wasm.sh` (or `.bat`): `--profile dist` plus wasm-bindgen | WebGPU only; [WASM.md](WASM.md) |
+| Gallery modules | `wasm-pack build --target web --release` in `wasm/script`, `wasm/render`, `wasm/flame`, `wasm/escape`, `wasm/sim` | each depends on the library with `default-features = false`; [wasm/README.md](../wasm/README.md) |
+| Python | maturin in `python/` | standalone crate, default features; [projects/pyfflame.md](projects/pyfflame.md) |
 
-### PNG Export Path
-
-**See [EXPORT.md](main/EXPORT.md)** for complete PNG export documentation.
-
-**Quick overview:** Dual export paths for different use cases:
-- **Transparent:** Read from accumulation buffer, apply CPU tone mapping, preserve alpha
-- **Opaque:** Render via tonemap shader, background pre-blended, faster
-- **Metadata:** All PNGs include build info, config JSON, render stats in tEXt chunks
-
-**Video** goes through **one** loop — `animation::export::export_animation`
-— shared by the app's dialog and the CLI, built on the same
-`render_with` a still uses. Add a pass to the render tail and video
-gets it for free; do not add a second loop (the two that existed until
-2026-09-09 silently disagreed about density effects, depth of field and
-which engine was even running).
+Profiles in `Cargo.toml`: `release`; `dist` (fat LTO, stripped,
+`panic = "abort"`); `dist-symbols` (dist with names kept); `dist-debug`
+(assertions and overflow checks). The profile name is recorded in every
+exported PNG. Release procedure: [RELEASE.md](RELEASE.md).
 
 ---
 
-## 🐛 Common Modification Points
+## 6. Where to start for common changes
 
-| Task | Files to Modify |
-|------|-----------------|
-| Add new 2D variation | [variations/mod.rs](src/variations/mod.rs), [shader_builder.rs](src/renderer/shader_builder.rs) (generates WGSL) |
-| Add new 3D variation | [variations/mod.rs](src/variations/mod.rs), [shader_builder.rs](src/renderer/shader_builder.rs) (generates WGSL) |
-| Add variation parameters | [variations/mod.rs](src/variations/mod.rs) - use `registry.add_parameters()` |
-| Change color algorithm | [main_template.wgsl](shaders/core/main_template.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
-| Add UI panel/window | [ui/mod.rs](src/ui/mod.rs) - add to menu bar and window rendering |
-| Add preset | [presets.rs](src/scene/presets.rs) or create `.fflame` file in `assets/presets/` |
-| Modify accumulation | [accumulate.wgsl](shaders/accumulate.wgsl), [compute_kernel.rs](src/renderer/compute_kernel.rs) |
-| Change tone mapping | [tonemap.wgsl](shaders/tonemap.wgsl) |
-| Add export format | [compute_kernel.rs](src/renderer/compute_kernel.rs) |
-| Modify GPU params | [buffers.rs](src/gpu/buffers.rs), corresponding shader module |
-| Add keyboard shortcut | [app.rs](src/app.rs) handle_keyboard() |
-| Add built-in palette | [palette.rs](src/scene/palette.rs) or create `.palette` file in `assets/palettes/` |
-| Import/export palette | Use Palette Editor UI (Added 2025-10-20) |
-| Add/delete transforms | Use "➕ Add Transform" / "🗑 Delete Transform" buttons (Added 2025-10-20) |
-| Edit transform visually | Use Triangle Editor window (Added 2025-10-21) |
-| Toggle window visibility | Use "View" menu in menu bar (Added 2025-10-21) |
-| Run unit tests | `cargo test` |
-| Run regression tests | `cargo test --test regression` |
-| Run benchmarks | `cargo bench` |
-| Run CLI benchmark | `cargo run --bin simple_benchmark --release` |
-| Display version info | `cargo run --example show_version` |
-| Export presets | `cargo run --example export_presets` |
+| change | files | read |
+| --- | --- | --- |
+| Add a variation | new `src/variations/defs/<name>.rs`; register at the end of `ALL_VARIATIONS` in `src/variations/defs/mod.rs` (append-only); unit conversions in `src/flame_xml.rs` if the foreign app differs | [VARIATIONS.md](main/VARIATIONS.md) |
+| Add an escape formula or colouring | `src/escape/formulas.rs` or `colorings.rs`; append to `FORMULAS` / `COLORINGS` in `src/escape/mod.rs` | [ESCAPE.md](main/ESCAPE.md) |
+| Add a simulation model or colouring | `src/sim/models.rs` or `colorings.rs`; append to `MODELS` / `COLORINGS` in `src/sim/mod.rs` | [SIMULATION.md](main/SIMULATION.md) |
+| Add an effect | WGSL in `shaders/effects/density/` or `color/`; register in `register_builtin_effects` in `src/effects/mod.rs`; regenerate with `export_effects_json` | [EFFECTS.md](main/EFFECTS.md) |
+| Add a panel | `src/ui/<panel>.rs`; a `PanelType` in `src/ui/workspace.rs`; dispatch in `src/ui/panel_viewer.rs`; availability in `visibility::panel` and a `WINDOW_MENU` row | [UI.md](main/UI.md) |
+| Add a config field | the struct in `src/config/fractal_config.rs` (or `escape.rs`, `sim.rs`), skip-if-default so old files stay stable | [CONFIG.md](main/CONFIG.md) |
+| Make a field editable | a `ConfigPath` variant in `src/config/delta.rs` (history label, string key, `update_type`); read and write in `get_value` / `set_value` in `src/config/manager.rs` | [CONFIG.md](main/CONFIG.md) |
+| Gate a control by mode | a case in `src/ui/visibility.rs` | [UI.md](main/UI.md) |
+| Change tone mapping | `shaders/tonemap.wgsl`; `TonemapParams` in `src/gpu/buffers.rs`; controls in `src/ui/tone_mapping.rs` | [TONE-MAPPING.md](main/TONE-MAPPING.md) |
+| Add a GPU binding to the flame shader | `compute_layout_entries` / `compute_entries` in `src/gpu/pipelines.rs`, the declaration in `shaders/core/header.wgsl` | [BUFFERS.md](main/BUFFERS.md) |
+| Add a stage to the render tail | the flame path in `render_with`, `render_sim` and `escape_tail` in `src/renderer/render.rs`, and the viewport in `src/app/mod.rs` | [RENDERER.md](main/RENDERER.md) |
+| Add a keyboard shortcut | `handle_keyboard` in `src/app/input.rs` | [UI.md](main/UI.md) |
+| Add a palette or preset | a pack in `assets/palettes/packs/` or a `.palette` file; presets in `assets/presets.fflame` | [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md), [CONFIG.md](main/CONFIG.md) |
+| Expose something to scripts | `src/script/api.rs` | [SCRIPTING.md](main/SCRIPTING.md) |
+| Change what the API sees | regenerate the contract and corpora | [RELEASE.md](RELEASE.md) |
 
 ---
 
-## ⚡ Speed Multiplier System (Added 2025-10-25)
+## 7. Testing
 
-### Overview
-The speed multiplier system decouples **rendering throughput** from **accumulation quality**, solving a fundamental quality degradation issue at high `iterations_per_thread` settings.
+- Unit tests live beside the code: `cargo test`.
+- Visual regression: `tests/visual/run_tests.py` renders 374 configs
+  through the CLI and compares them with a tolerance against small,
+  metadata-free baseline thumbnails; `run_all_tests.py` adds WASM
+  (Playwright). It does not build the binary first.
+- Golden files that fail when stale: the generated WGSL
+  (`tests/shader_dumps/`) and the API contract
+  (`docs/generated/engine-contract.json`).
+- `variation_probe` writes `docs/generated/variation-probe*.txt` for
+  cross-platform comparison of variation maths; the census writes
+  `docs/generated/variation-census-*.txt`.
+- `python scripts/release.py check` runs the fast gates (unit tests,
+  WASM check, contract, shader dumps, doc links, the engine feature
+  matrix, the gallery crates' tests).
 
-### The Problem
-- **Observation**: High `iterations_per_thread` (4096) causes 60-70% visual quality degradation vs baseline (256)
-- **Root Cause**: Fewer accumulation passes → large density jumps → sqrt() tone mapping artifacts
-- **Impact**: Progressive rendering looks "chunky" instead of smooth
-- **Critical Issue**: Would cause temporal flickering in animations with adaptive iteration counts
-
-### The Solution: Two Approaches
-
-#### 1. Interactive App (Frame Rate Control)
-**Location**: [src/app/mod.rs](../src/app/mod.rs#L228-L256)
-
-**Mechanism**:
-```rust
-// Speed multiplier controls target FPS
-let target_fps = 60.0 * speed_multiplier as f64;
-
-// Frame rate limiter using ControlFlow::WaitUntil
-if elapsed >= target_frame_time {
-    window.request_redraw();  // Time for next frame
-} else {
-    set_control_flow(WaitUntil(next_frame_time));  // Sleep until deadline
-}
-```
-
-**How it works**:
-- Each frame does ONE full compute+accumulate at full `iterations_per_thread`
-- Speed multiplier increases frame rate: 1x=60fps, 2x=120fps, ... 16x=960fps
-- More frames per second → more accumulation passes per second
-- When idle (paused/finished): Falls back to 60 FPS to save CPU
-- PresentMode: `Mailbox` for smooth uncapped rendering
-
-**UI Controls**: Settings window → Speed selector (1x/2x/4x/8x/16x buttons)
-
-#### 2. CLI Export (Explicit Chunking)
-**Location**: [src/app/export.rs](../src/app/export.rs#L72-L107)
-
-**Mechanism**:
-```rust
-// Calculate iterations per chunk
-let iterations_per_frame = iterations_per_thread / speed_multiplier;
-
-// Render multiple chunks per "batch"
-for _ in 0..speed_multiplier {
-    compute_pass(iterations_per_frame, ...);  // Smaller chunk
-    accumulate_pass(samples_this_chunk);      // Accumulate immediately
-    // Ping-pong buffers swap - chunk is a complete frame
-}
-```
-
-**How it works**:
-- No frame rate concept in headless export
-- Speed multiplier chunks iterations into smaller batches
-- Each chunk: compute → accumulate → swap (complete frame cycle)
-- Example: 4096 iters with 16x speed = 16 chunks of 256 iterations each
-
-**CLI Usage**: `--speed-multiplier` parameter
-```bash
-FractalArtEditor export -i config.fflame -o output.png \
-  --iterations-per-thread 4096 --speed-multiplier 16
-```
-
-### Verification
-**Test Results**: Pixel-perfect identical (PSNR = inf, SSIM = 1.0)
-- 256 iters (1x speed) vs 4096 iters (16x speed): 0.00% pixel difference
-- Formula for equivalent quality: `speed_multiplier = iterations_per_thread / 256`
-
-### Architecture Impact
-
-**Data Flow Changes**:
-```
-Before:
-  iterations_per_thread=4096 → 1 compute(4096) → 1 accumulate → chunky quality
-
-After (Interactive):
-  speed_multiplier=16x → 16 frames/sec at 960fps
-  Each frame: compute(4096) → accumulate → smooth quality
-
-After (Export):
-  speed_multiplier=16 → 16 chunks of 256 iters
-  Each chunk: compute(256) → accumulate → smooth quality
-```
-
-**Key Design Principles**:
-1. **Orthogonal Concerns**: Throughput (`iterations_per_thread`) vs Quality (`speed_multiplier`)
-2. **Context-Appropriate**: Frame rate for interactive, chunking for export
-3. **No Shader Changes**: All logic is CPU-side
-4. **Animation-Ready**: Foundation for future adaptive rendering with consistent quality
-
-### Performance Characteristics
-
-**Interactive App**:
-- Higher frame rate = more frequent screen updates
-- Each frame has full `iterations_per_thread` work
-- Total throughput unchanged, distributed over more frames
-- GPU utilization: Spiky (brief compute bursts at high FPS)
-
-**Export**:
-- More chunks per batch = more accumulate passes
-- Each chunk has smaller `iterations_per_frame` work
-- Total throughput unchanged, same time to completion
-- GPU utilization: Sustained (continuous compute+accumulate)
-
-### Future: Animation System
-The speed multiplier enables **adaptive rendering** with **consistent quality**:
-```rust
-for frame in animation {
-    let iterations = calculate_adaptive_iterations(frame.motion);
-    let speed = iterations / base_iterations;  // Maintain constant accumulation frequency
-    render_frame(iterations_per_thread: iterations, speed_multiplier: speed);
-}
-```
-Result: Variable throughput based on motion, but constant visual quality.
-
-### References
-- Complete analysis: [ITERATIONS_PER_THREAD_QUALITY.md](archive/ITERATIONS_PER_THREAD_QUALITY.md)
-- Root cause investigation: 4 failed attempts documented
-- Implementation details: Frame rate control vs iteration chunking
+Detail: [TESTING-GUIDE.md](TESTING-GUIDE.md).
 
 ---
 
-## 🔄 Delta-Based State Management System (Completed 2025-11-17)
+## 8. Documentation map
 
-### Overview
-The application uses a **simplified delta-based state management system** (ConfigManager) that has **completely replaced** the previous flag-based approach. All configuration changes flow through a single centralized gateway that tracks deltas, manages undo/redo with automatic coalescing, and determines selective GPU updates.
+### Reference (`docs/main/`)
 
-**Status**: ✅ **COMPLETE** - All UI controls simplified, preview mode removed, real-time rendering with 100ms overwrite window
+| doc | covers |
+| --- | --- |
+| [RENDERER.md](main/RENDERER.md) | `FlameRenderer`, the passes, persistent orbits, the render API |
+| [SHADERS.md](main/SHADERS.md) | WGSL templates, the shader builder, flags, the cache |
+| [BUFFERS.md](main/BUFFERS.md) | bind groups (up to 17 compute bindings), GPU structs, layout rules |
+| [TRANSFORMS.md](main/TRANSFORMS.md) | the flame algorithm, transforms, xaos |
+| [VARIATIONS.md](main/VARIATIONS.md) | the variation registry and how to port a variation |
+| [COLOR.md](main/COLOR.md) | colour modes, palettes, the histogram and accumulator |
+| [TONE-MAPPING.md](main/TONE-MAPPING.md) | the tone map and its controls |
+| [CONFIG.md](main/CONFIG.md) | `FractalConfig`, `ConfigManager`, undo, presets, file formats |
+| [UI.md](main/UI.md) | panels, menus, render-mode gating, input |
+| [CAMERA.md](main/CAMERA.md) | the unified cameras, gestures, fly mode |
+| [EXPORT.md](main/EXPORT.md) | PNG, high-res and video export, CLI, metadata |
+| [EFFECTS.md](main/EFFECTS.md) | density and colour effects |
+| [ANIMATION.md](main/ANIMATION.md) | tracks, signals, audio, playback |
+| [ESCAPE.md](main/ESCAPE.md) | the escape-time engine |
+| [TERRAIN.md](main/TERRAIN.md) | the 3D terrain view |
+| [SIMULATION.md](main/SIMULATION.md), [SIMULATION-CATALOG.md](main/SIMULATION-CATALOG.md) | the simulation engine and its models |
+| [FOCUSED-RENDERING.md](main/FOCUSED-RENDERING.md) | deep-zoom targeting for flames |
+| [SCRIPTING.md](main/SCRIPTING.md), [SCRIPTING-GUIDE.md](main/SCRIPTING-GUIDE.md) | the Rhai API and the language guide |
+| [PALETTE_LIBRARY.md](main/PALETTE_LIBRARY.md) | palette packs and the library panel |
+| [FRACTAL-BROWSER.md](main/FRACTAL-BROWSER.md) | the Fractal Browser |
+| [ONLINE.md](main/ONLINE.md) | the online API, sync and downloads |
+| [I18N.md](main/I18N.md) | translations |
 
-**See [CONFIG.md](main/CONFIG.md)** for complete ConfigManager documentation.
+### Elsewhere
 
-### Architecture
-
-**Core Components:**
-- **ConfigManager** ([src/config/manager.rs](../src/config/manager.rs)) - Central state manager
-  - Stores current (current state)
-  - Maintains undo_history (50 ConfigChange entries)
-  - Automatic coalescing (2 second window for same parameter)
-  - Computes deltas on every change
-  - Returns UpdateType for selective GPU updates
-
-- **ConfigPath** ([src/config/delta.rs](../src/config/delta.rs)) - Type-safe parameter identifiers
-  - Examples: `Zoom`, `Exposure`, `TransformAffine { index, param }`
-  - 100+ paths covering all editable parameters
-  - Display trait for human-readable undo descriptions
-
-- **ConfigValue** ([src/config/delta.rs](../src/config/delta.rs)) - Type-safe value container
-  - Wraps all value types (Float, Int, Bool, ColorRgb, enums, etc.)
-  - Enables generic parameter updates
-
-- **ConfigDelta** ([src/config/delta.rs](../src/config/delta.rs)) - Change record
-  - Records (path, old_value, new_value)
-  - Used for undo/redo operations
-
-- **UpdateType** - Selective update classification
-  - `None` - No GPU update needed
-  - `ViewOnly` - Camera/zoom changed, use overwrite mode
-  - `ColorOnly` - Palette changed, use overwrite mode
-  - `IterationReset` - Transform/variation changed, use overwrite + reset iteration counter after 100ms
-  - `ToneMappingOnly` - Tone mapping changed, no accumulation buffer changes
-
-- **100ms Overwrite Window** ([src/app/mod.rs](../src/app/mod.rs)) - Real-time rendering without blank frames
-  - Triggered by ViewOnly, ColorOnly, or IterationReset updates
-  - Sets `blend_factor=1.0` (replace buffer instead of blend)
-  - Sets `batch_size=1` (accumulate every frame, not every 4th)
-  - Keeps overwrite ON for 100ms after last change (~6 frames at 60fps)
-  - After window expires: return to normal accumulation and optionally reset iteration counter
-
-### UI Integration
-
-**Standard Pattern** (simple immediate updates with automatic coalescing):
-```rust
-// Read current value
-let mut value = config_manager.current().exposure;
-
-// Show UI control
-let response = ui.add(egui::Slider::new(&mut value, 0.1..=5.0).text("Exposure"));
-
-// Update if changed
-if response.changed() {
-    config_manager.update_param(ConfigPath::Exposure, value.into())?;
-}
-```
-
-**That's it!** No lazy parameters, no force_commit calls, no preview mode logic.
-
-**Batch Updates** (multiple related parameters):
-```rust
-let changes = vec![
-    (ConfigPath::TransformAffine { index, param: A }, a.into()),
-    (ConfigPath::TransformAffine { index, param: B }, b.into()),
-    // ... more params
-];
-config_manager.update_batch(changes, "Transform affine update")?;
-```
-
-**How It Works**:
-- Every `update_param()` call creates a ConfigChange
-- Coalescing automatically merges changes to **same ConfigPath** within 2 seconds
-- Changes to **different ConfigPath** always create separate undo entries
-- Result: Slider drags create 1 undo entry (not 100+)
-
-### Key Benefits
-
-**Compared to old flag-based system:**
-1. **Single Source of Truth** - All changes go through ConfigManager
-2. **Automatic Undo/Redo** - No manual capture_state() calls needed
-3. **Selective Updates** - UpdateType determines minimal GPU work
-4. **Human-Readable History** - ConfigPath::Display shows "Transform 2 → Affine a"
-5. **Type Safety** - Compile-time verification of parameter types
-6. **Automatic Coalescing** - Merges rapid changes (2s window) prevents undo stack bloat
-7. **Real-Time Rendering** - 100ms overwrite window eliminates blank frames
-
-### Migration Status: ✅ COMPLETE
-
-**All UI Controls Simplified (2025-11-17):**
-- ✅ View controls (zoom, pan, rotation, camera) - Real-time updates
-- ✅ Settings sliders (iterations, blend, compression, etc.) - Coalescing
-- ✅ Tone mapping controls (exposure, gamma, curves) - No accumulation reset
-- ✅ Variation weights and parameters - Real-time updates
-- ✅ Color controls (palette, background, color mode) - Real-time updates
-- ✅ **Triangle Editor** - Batch updates for multi-param changes
-- ✅ Palette editor - Direct updates (no separate preview mode)
-
-**Simplification (PR #23 - 2025-11-17):**
-- Removed preview mode system and lazy parameter complexity
-- All updates now immediate with automatic coalescing
-- 100ms overwrite window provides smooth real-time updates
-- No blank frames during any parameter changes
-- UI code dramatically simplified (no lazy/force_commit logic)
-
-**Non-Config Actions** (intentionally separate):
-- Transform add/delete (structural changes)
-- Config import/export (file I/O)
-- Preset loading (bulk replacement)
-
-### Project Documentation
-
-**COMPLETED - All documentation archived to [docs/archive/delta-migration/](archive/delta-migration/)**
-
-**Historical Reference (Archived):**
-- [delta-based-state-management.md](archive/delta-migration/delta-based-state-management.md) - Original 2,600-line plan
-- [delta-system-completed.md](archive/delta-migration/delta-system-completed.md) - Completed work summary (Phases 1-10)
-- [complete-delta-migration.md](archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
-- [MIGRATION-STATUS.md](archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
-- [remove-preview-mode.md](archive/remove-preview-mode.md) - Preview mode removal plan (PR #23)
-
-**Current Documentation:**
-- [CONFIG.md](main/CONFIG.md) - Complete ConfigManager reference
-- [palette-system-redesign.md](archive/projects/palette-system-redesign.md) - Palette architecture
-
-### Performance Characteristics
-
-**Memory:**
-- Undo stack: 50 × sizeof(FractalConfig) ≈ 50 × 10KB = 500KB
-- Delta computation: O(1) per change (direct field access)
-- No heap allocations for simple value changes
-
-**CPU:**
-- ConfigPath matching: Single match statement (< 100ns)
-- Value extraction: Direct field access (< 50ns)
-- Undo/redo: Clone FractalConfig (< 10μs)
-
-**Overhead vs Flag-Based:**
-- Negligible - delta computation is trivial compared to GPU work
-- Benefits far outweigh costs (cleaner code, better UX)
-
----
-
-## 🌐 WebAssembly (WASM) Support
-
-### Overview
-The project has **full WASM support** including interactive rendering and headless PNG export in browsers.
-
-**See [WASM.md](WASM.md)** for complete WASM build documentation.
-
-### Architecture
-
-**Entry Points:**
-- **Interactive App** ([src/lib.rs](../src/lib.rs):run()) - Full GUI in browser via egui
-- **Headless Export** ([src/app/export.rs](../src/app/export.rs):export_headless_wasm()) - PNG generation without window
-- **WASM Bindings** ([src/wasm_api.rs](../src/wasm_api.rs)) - JavaScript API via wasm-bindgen
-
-**JavaScript API:**
-```javascript
-// Exposed function: export_headless_wasm(config, width, height, ipt, speed)
-const pngData = await export_headless_wasm(config, 800, 600, 256, 4);
-```
-
-**Browser Compatibility:**
-- ✅ Chrome/Chromium 113+ (fully tested)
-- ✅ Firefox 121+ (fully tested)
-- ⚠️ Safari (experimental WebGPU support)
-- ❌ Mobile (limited WebGPU support)
-
-**Key Differences from Desktop:**
-
-1. **GPU Limits** - Uses `downlevel_webgl2_defaults()` instead of desktop defaults
-   - Reduced buffer sizes and texture dimensions
-   - Ensures compatibility with browser WebGPU implementations
-
-2. **Texture Format** - 1D textures → 2D with height=1
-   - Browser WebGPU doesn't support `textureSampleLevel` on 1D textures
-   - Palette and curve LUTs use 2D textures with `vec2(x, 0.5)` sampling
-
-3. **Surface Creation** - Direct canvas approach on macOS
-   - Uses `SurfaceTarget::Canvas(canvas)` instead of window-based surface
-   - Fixes compatibility issues with macOS Safari/Chrome
-
-4. **Timing** - Uses `web_time` crate instead of `std::time`
-   - Provides accurate timestamps in WASM environment
-
-### Visual Regression Testing
-
-**Test Infrastructure:**
-- **Desktop Tests** ([tests/visual/run_tests.py](../tests/visual/run_tests.py)) - CLI headless export
-- **WASM Tests** ([tests/visual/wasm/test_wasm.py](../tests/visual/wasm/test_wasm.py)) - Browser automation via Playwright
-- **Unified Runner** ([tests/visual/run_all_tests.py](../tests/visual/run_all_tests.py)) - Runs both + performance comparison
-
-**Test Process:**
-1. Playwright launches headless Chrome/Firefox
-2. Loads WASM module and test configs
-3. Calls `export_headless_wasm()` for each config
-4. Downloads PNG via blob URL
-5. Compares pixel data (SHA256 hash) against baseline
-6. Extracts performance metrics from PNG metadata
-7. Saves results to `performance_history.csv`
-
-**Coverage:**
-- 8 desktop visual tests (800x600, pixel-perfect comparison)
-- 7 WASM visual tests (800x600, pixel-perfect comparison)
-- Performance tracking: render time, throughput (M iter/sec)
-- Baseline comparison: time delta, throughput delta
-
-**Performance:**
-- Desktop: ~500-3500ms total export time (device + render + encode)
-- WASM: ~500-3500ms total export time (same as desktop)
-- PNG metadata: Stores total export time (user-facing performance)
-
----
-
-**Last Updated:** 2025-11-17
-**Project:** fflame-rust
-
-**Major Recent Changes:**
-- **Simplified state management system** (2025-11-17, PR #23)
-  - Removed preview mode and lazy parameter complexity
-  - 100ms overwrite window for real-time rendering without blank frames
-  - Automatic coalescing (2 second window) for undo history
-  - All UI controls simplified to immediate updates
-  - ConfigManager with automatic undo/redo and delta tracking (2025-10-31, PR #22)
-  - Selective GPU updates via UpdateType classification
-  - 100+ type-safe ConfigPath variants for all parameters
-  - Visual undo history window with human-readable descriptions
-  - Replaces flag-based system (flame_changed, etc.)
-- **U32 histogram color accumulation** for overflow-free rendering (2025-10-27)
-  - Atomic u32 accumulation eliminates RGB overflow artifacts
-  - 4× u32 per pixel: separate R, G, B, Density channels
-  - 2.4% performance cost vs u16 packed, but eliminates visual artifacts
-  - Cleaned up all failed optimization attempts (per-pixel adaptive scaling, convergence masking)
-- **Speed multiplier system** for quality-independent throughput control (2025-10-25)
-  - Frame rate control (interactive app) and iteration chunking (export)
-  - Pixel-perfect quality at any iterations_per_thread setting
-  - Foundation for future animation system
-- Variation registry system with parameters (2025-10-22)
-- Dynamic shader generation via ShaderBuilder v2 (2025-10-21)
-- Triangle editor with visual transform editing (2025-10-21)
-- UI refactoring into 5 windows with menu bar (2025-10-21)
-- 26 total variations (16 basic 2D + 8 3D + 2 parameterized)
+| where | what |
+| --- | --- |
+| [RELEASE.md](RELEASE.md) | release procedure and generated files |
+| [TESTING-GUIDE.md](TESTING-GUIDE.md) | tests, benchmarks, probes |
+| [WASM.md](WASM.md) | building and running the web app |
+| [tutorials/](tutorials/README.md) | user-facing introductions |
+| [projects/](projects/README.md) | active plans; the paused flame deep-zoom work is in [projects/deep-zoom/](projects/deep-zoom/deep-zoom-tracker.md) |
+| [experimental/](experimental/README.md) | ideas not yet planned |
+| [archive/](archive/README.md) | finished projects and history, e.g. [the histogram's evolution](archive/histogram/README.md), [persistent orbits](archive/projects/persistent-orbits.md), [the delta-based config migration](archive/delta-migration/) |
+| `docs/generated/` | generated reports and the API contract; do not edit by hand |

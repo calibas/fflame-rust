@@ -7,7 +7,7 @@
 //! if/when the preset library gets large enough to warrant it.
 //!
 //! Initial set derived from the corpus survey performed during the
-//! `levels-scale-invariance` project (docs/projects/tonemap-and-palette-improvements.md):
+//! `levels-scale-invariance` project (docs/archive/projects/tonemap-and-palette-improvements.md):
 //! ~90% of 141 .fflame files use identical defaults; the deviants
 //! cluster into 3 named recipes (Apophysis Bubble / Apophysis Discus /
 //! Subtle Gamma 2.2). The "Vivid / High Contrast / Low-Key" entries
