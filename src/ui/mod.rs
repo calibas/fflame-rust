@@ -109,6 +109,51 @@ pub fn vkb_sync_full(
     }
 }
 
+/// Shorten `s` to at most `max_chars` characters, ending in "..." when cut.
+///
+/// Counts `char`s, never bytes: a name is user text in any script, and
+/// slicing a `&str` at a byte budget panics mid-character (a CJK name of
+/// six characters is eighteen bytes and took the app down). Characters,
+/// not grapheme clusters -- a combining mark can be split from its base,
+/// which looks slightly wrong but cannot panic.
+pub fn ellipsize(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
+#[cfg(test)]
+mod ellipsize_tests {
+    use super::ellipsize;
+
+    #[test]
+    fn short_text_is_unchanged() {
+        assert_eq!(ellipsize("Spiral", 10), "Spiral");
+        assert_eq!(ellipsize("", 10), "");
+        assert_eq!(ellipsize("exactly10!", 10), "exactly10!");
+    }
+
+    #[test]
+    fn long_text_is_cut_to_the_budget() {
+        assert_eq!(ellipsize("abcdefghijkl", 10), "abcdefg...");
+        assert_eq!(ellipsize("abcdefghijkl", 10).chars().count(), 10);
+    }
+
+    #[test]
+    fn cjk_text_is_cut_on_character_boundaries() {
+        // Each of these is three bytes in UTF-8: a byte-budget slice at 7
+        // lands inside the third character and panics.
+        let name = "螺旋状の炎の銀河です";
+        assert_eq!(ellipsize(name, 10), name);
+        assert_eq!(ellipsize(name, 9), "螺旋状の炎の...");
+        assert_eq!(ellipsize("火焰分形图案", 5), "火焰...");
+        // A budget below the ellipsis still yields valid text.
+        assert_eq!(ellipsize("火焰分形图案", 2), "...");
+    }
+}
+
 /// Builder for a DragValue with automatic VKB sync.
 /// Display form for an integral value that arrived as `f64`.
 ///
