@@ -1367,6 +1367,8 @@ impl FlameBuffers {
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
+        if let Some(b) = &self.orbit_buffer { b.destroy(); }
+        self.dummy_orbit_buffer.destroy();
         // Small uniform/param/dummy buffers + 1D LUT textures (KB each, but
         // tidy them too so nothing is left dangling on the device).
         self.transform_buffer.destroy();
