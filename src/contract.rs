@@ -203,6 +203,19 @@ pub fn generate() -> serde_json::Value {
 
     without_3d.sort();
 
+    // The libraries the builder splices in by variation name, read from
+    // the table the builder itself decides from, so the two cannot drift.
+    // Subflame support is the one entry not decided by a name: it rides on
+    // the flame using a subflame, whatever its variations.
+    let mut name_gated = serde_json::Map::new();
+    for lib in crate::shader_builder_v2::NAME_GATED_LIBRARIES {
+        name_gated.insert(lib.file.to_string(), serde_json::json!(lib.users));
+    }
+    name_gated.insert(
+        "subflame.wgsl".to_string(),
+        serde_json::json!(["(any flame using a subflame)"]),
+    );
+
     // The reserved stems. Read from the embedded starters rather than
     // listed here, so adding a shipped script cannot leave the API
     // accepting a name that is already taken.
@@ -283,12 +296,7 @@ pub fn generate() -> serde_json::Value {
                          server-hosted variation cannot reach them — its WGSL \
                          must be self-contained. No SQL check can verify this; \
                          it is a curation constraint.",
-            "name_gated": {
-                "noise.wgsl": ["dc_perlin", "crackle", "dc_crackle_wf"],
-                "voronoi.wgsl": ["crackle", "dc_crackle_wf", "crackle_fast"],
-                "fractwf.wgsl": ["fract_*_wf"],
-                "subflame.wgsl": ["(any flame using a subflame)"],
-            },
+            "name_gated": name_gated,
             "always_present": ["complex.wgsl"],
             "feature_gated": { "needs_mobius_lib": "SL(2,C) Mobius library" },
         },
@@ -562,6 +570,52 @@ mod tests {
         );
         let published = generate()["param_types"].as_array().expect("param_types").len();
         assert_eq!(published, ParamType::ALL.len());
+    }
+
+    /// The contract's name-gated helper libraries are the builder's own
+    /// table, and that table covers exactly the libraries the builder
+    /// splices by name: every `shaders/core/*.wgsl` the builder source
+    /// includes is either in the table or one of the files it emits on
+    /// other grounds.
+    #[test]
+    fn the_contract_lists_every_name_gated_helper_library() {
+        let doc = generate();
+        let gated = doc["helper_libraries"]["name_gated"]
+            .as_object()
+            .expect("name_gated is an object");
+        for lib in crate::shader_builder_v2::NAME_GATED_LIBRARIES {
+            let users: Vec<&str> = gated[lib.file]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} missing from the contract", lib.file))
+                .iter()
+                .map(|u| u.as_str().expect("a user is a string"))
+                .collect();
+            assert_eq!(users, lib.users, "{}", lib.file);
+        }
+
+        // The builder must not include a core helper outside the table
+        // without the contract hearing of it. These are the files it
+        // emits for reasons other than a variation's name: the kernel
+        // itself, always-present complex.wgsl, subflame support, the
+        // feature-gated Mobius library, and Focused Rendering's arms.
+        let not_name_gated = [
+            "header.wgsl", "utilities.wgsl", "rng.wgsl", "affine.wgsl", "affine_3d.wgsl",
+            "complex.wgsl", "main_template.wgsl", "subflame.wgsl", "su_mobius.wgsl",
+            "plan_eval.wgsl", "replay.wgsl", "replay_delta.wgsl",
+        ];
+        let builder = include_str!("shader_builder_v2.rs");
+        for piece in builder.split("include_str!(\"../shaders/core/").skip(1) {
+            let file = piece.split('"').next().expect("a path");
+            let in_table = crate::shader_builder_v2::NAME_GATED_LIBRARIES
+                .iter()
+                .any(|lib| lib.file == file);
+            assert!(
+                in_table || not_name_gated.contains(&file),
+                "the shader builder includes shaders/core/{file}, which is neither in \
+                 NAME_GATED_LIBRARIES nor known to be emitted on other grounds — \
+                 if a variation's name pulls it in, add it to the table"
+            );
+        }
     }
 
     /// Every feature must be in `ALL`, or the contract silently omits it.

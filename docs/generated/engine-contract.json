@@ -120,7 +120,16 @@
       "noise.wgsl": [
         "dc_perlin",
         "crackle",
-        "dc_crackle_wf"
+        "dc_crackle_wf",
+        "crackle_fast"
+      ],
+      "polychora.wgsl": [
+        "polychoron",
+        "menger"
+      ],
+      "polyhedra.wgsl": [
+        "polyhedron",
+        "polyhedron_volume"
       ],
       "subflame.wgsl": [
         "(any flame using a subflame)"
@@ -284,7 +293,7 @@
       "modifier"
     ]
   },
-  "shape": "81a4d090385275c0",
+  "shape": "23a163e0bf37ffe9",
   "shipped_variations": 647,
   "shipped_without_shader_3d": []
 }

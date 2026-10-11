@@ -55,7 +55,7 @@ cached and bound with a layout of exactly the bindings it names.
 | `main_template.wgsl` | the entry point `main` (and `probe_main` under `PROBE`) | always, last |
 | `subflame.wgsl` | `subflame_iterate` | `subflame_wf` or `pre_subflame_wf` active |
 | `fractwf.wgsl` | the shared escape-time loop of the `fract_*_wf` family | any `fract_*_wf` active |
-| `noise.wgsl` | simplex and Perlin noise tables (from JWildfire's `NoiseTools.java`) | `dc_perlin`, `crackle`, `dc_crackle_wf`, or whenever `voronoi.wgsl` is |
+| `noise.wgsl` | simplex and Perlin noise tables (from JWildfire's `NoiseTools.java`) | `dc_perlin`, `crackle`, `dc_crackle_wf`, `crackle_fast` (every `voronoi.wgsl` user too) |
 | `voronoi.wgsl` | Voronoi cells for the crackle family | `crackle`, `dc_crackle_wf`, `crackle_fast` |
 | `polyhedra.wgsl` | polyhedron radial-support tables | `polyhedron`, `polyhedron_volume` |
 | `polychora.wgsl` | regular 4-polytope vertex tables, the Menger tesseract set | `polychoron`, `menger` |
@@ -156,7 +156,9 @@ with a real 2D body is kept.
 8. When a subflame variation is active, `apply_subflame_variations`
    and the processed `subflame.wgsl`.
 9. The helper libraries: `fractwf`, `noise`, `voronoi`, `polyhedra`,
-   `polychora`, `su_mobius`, each only when the table above says so.
+   `polychora` (one loop over `NAME_GATED_LIBRARIES`, the table the
+   engine contract also reads), then `su_mobius`, each only when the
+   table above says so.
 10. The per-flame `get_param`.
 11. The per-thread state: `thread_state`, `get_state`, `set_state`;
     `const ORBIT_SLOTS` when orbits persist. `HAS_THREAD_STATE` is set
