@@ -17,4 +17,5 @@ decided and measured -- the place to look before re-attempting something.
 | 3D views | materials (the terrain and camera records are in [../terrain/](../terrain/) and [../3d-camera/](../3d-camera/)) |
 | Animation and audio | animation-system, animation-overhaul, audio-system, signal-panel, track-editor, embedded-animation-config |
 | UI | ui-render-modes, ui-improvements-docking, dynamic-docking-refactor, mouse-input-routing, mobile-ui-redesign, ux-improvements, fractal-browser, random-generator-panel, presets |
+| Config | config-v2-migration (closed without a value migration) |
 | App, online, web | app-mod-refactor, api-shared-resources, endless-gallery, flame-scripting, effects-system, local-storage-system, WASM-API, wasm-load-crash, visual-regression-testing |

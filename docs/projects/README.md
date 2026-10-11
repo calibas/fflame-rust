@@ -30,7 +30,6 @@ which rewrites the references in code comments too).
 | [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code: likely bugs, UI and comment mismatches, dead code. None fixed yet. |
 | [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, the path tracer's speed, known gaps, and what the escape engine has not built. |
 | [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |
-| [config-v2-migration.md](config-v2-migration.md) | Config value translations planned for the v1 -> v2 bump. The bump shipped without the `levels_high` and `dof_blur_strength` translations: open. |
 | [VARIATIONS_TODOS.md](VARIATIONS_TODOS.md) | The variation backlog. |
 | [variation-port-blockers.md](variation-port-blockers.md) | Why particular variations are not ported yet. |
 | [jwf-common-variations-port.md](jwf-common-variations-port.md) | Porting JWildfire's common variations (and the cut family). |

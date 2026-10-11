@@ -203,13 +203,15 @@ JSON older PNGs carry in their `Config` chunk, which has no `version`.
 And an animation's embedded `base_config` is read as v2
 (`from_json_value_with_default_version`).
 
-**The v1 → v2 arm is a no-op that should not be.** Two value
-translations were tracked for it and never applied: `levels_high`
-divided by 1000 when above 100 (its units changed from raw density to
-multiples of the mean), and `dof_blur_strength` multiplied by 10 (the
-shader now scales it by 0.1). A v1 file saved before those changes, with
-either value set explicitly, renders differently today. The open
-decision is in [config-v2-migration.md](../projects/config-v2-migration.md).
+**The v1 → v2 arm is a no-op, by decision.** Two unit changes landed
+while files were stamped v1: Levels values became multiples of the mean
+(2026-05-12) and the shader started scaling `dof_blur_strength` by 0.1
+(2026-05-29). A v1 file with Levels values set explicitly between
+2026-01-15 and 2026-05-12, or a blur strength set between 2026-01-24 and
+2026-05-29, renders differently today. A version-1 stamp cannot tell
+those files from later v1 saves or from hand-written v1 configs in the
+new units, so nothing translates them; they are fixed by hand. The
+record is [config-v2-migration.md](../archive/projects/config-v2-migration.md).
 
 `SystemSettings` has its own version (`CURRENT_SETTINGS_VERSION` = 4,
 `src/storage/settings.rs`); all four of its migration arms are no-ops.
