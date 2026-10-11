@@ -4,7 +4,7 @@
 // you already have. Good for nudging a flame you almost like.
 //
 // From the command line, pass the flame to modify with --base:
-//   fractal_flame_wgpu generate --script jitter.rhai --base mine.fflame --seed 7
+//   FractalArtEditor generate --script jitter.rhai --base mine.fflame --seed 7
 
 script("Jitter", "modifier");
 
