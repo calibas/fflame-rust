@@ -445,12 +445,9 @@ fn render_tracks_visual(
                 let is_broken = is_track_broken(config, track);
                 // Convert to 1-based display + prepend flame prefix
                 let full_display = target_display(flame_target, &path);
-                // Truncate label if too long (show more characters)
-                let display_name = if full_display.len() > 14 {
-                    format!("{}...", &full_display[..14])
-                } else {
-                    full_display.clone()
-                };
+                // Truncate label if too long (by characters: a flame or
+                // parameter name can be any script)
+                let display_name = super::ellipsize(&full_display, 17);
                 let label_color = if is_broken {
                     Color32::from_rgb(220, 140, 60)
                 } else {

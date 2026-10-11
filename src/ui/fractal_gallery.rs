@@ -506,13 +506,9 @@ impl FractalConfigGallery {
                 Vec2::new(side, 20.0),
             );
 
-            // Truncate name if too long
+            // Truncate name if too long (by characters: names are any script)
             let max_chars = (side / 8.0) as usize;
-            let display_name = if name.len() > max_chars {
-                format!("{}...", &name[..max_chars.saturating_sub(3)])
-            } else {
-                name.to_string()
-            };
+            let display_name = super::ellipsize(name, max_chars);
 
             ui.painter().text(
                 name_rect.center_top() + Vec2::new(0.0, 2.0),
