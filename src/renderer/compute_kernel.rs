@@ -717,6 +717,24 @@ impl FlameRenderer {
         Self::build(device, queue, surface_format, width, height, flame, palette_size, (1, 1))
     }
 
+    /// The renderer a job at `width x height` needs: a flame's full one,
+    /// or for an escape or simulation config, which use only the tail,
+    /// one without the flame's per-pixel state (`for_tail`). The one
+    /// choice for every one-shot path -- `render()` and the video loop
+    /// both -- so they cannot drift apart again: the video loop built
+    /// the full renderer for every engine, 64 bytes a pixel never read.
+    pub fn for_job(
+        device: &Device,
+        queue: &Queue,
+        surface_format: TextureFormat,
+        width: u32,
+        height: u32,
+        config: &FractalConfig,
+    ) -> Self {
+        let build = if config.render_mode.is_non_flame() { Self::for_tail } else { Self::with_palette_size };
+        build(device, queue, surface_format, width, height, &config.flame, config.palette_size)
+    }
+
     /// The renderer at `width x height`, its flame state at `state`.
     #[allow(clippy::too_many_arguments)]
     fn build(
@@ -5838,6 +5856,20 @@ mod memory_tests {
         assert_eq!((out.width(), out.height()), (640, 480), "the output is the frame's");
         full.destroy();
         tail.destroy();
+
+        // `for_job`, the choice every one-shot path makes (`render()` and
+        // the video loop): the tail for the non-flame engines.
+        let mut config = crate::config::FractalConfig::default();
+        for (mode, state) in [
+            (crate::scene::transforms::RenderMode::TwoD, (640, 480)),
+            (crate::scene::transforms::RenderMode::Escape, (1, 1)),
+            (crate::scene::transforms::RenderMode::Simulation, (1, 1)),
+        ] {
+            config.render_mode = mode;
+            let r = FlameRenderer::for_job(&device, &queue, format, 640, 480, &config);
+            assert_eq!(r.buffers.size_for_test(), state, "{mode:?}");
+            r.destroy();
+        }
     }
 }
 
