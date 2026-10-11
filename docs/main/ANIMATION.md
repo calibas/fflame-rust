@@ -670,11 +670,11 @@ simulation itself*).
 
 ## Gotchas
 
-- **A boolean target gets numeric keyframes from the editor.**
-  Auto-fill and **Add at current** store the current value as `1.0` or
-  `0.0`, while `json_to_config_value` accepts only a JSON `true`/`false`
-  for boolean paths (effect Enabled, PostAffineEnabled). Such a track
-  converts to nothing and applies nothing, in the app or the video.
+- **A boolean target takes numbers.** Auto-fill and **Add at current**
+  store the current value as `1.0` or `0.0`, so the offered booleans
+  (effect Enabled, PostAffineEnabled) read a number as on from 0.5 up
+  (`json_as_bool`): a Linear 0 -> 1 track switches halfway. Booleans
+  the picker does not offer still accept only `true`/`false`.
 - **A signal track outside its window, or on a missing signal, applies
   nothing** rather than a default: the parameter keeps whatever the
   config or another track set.

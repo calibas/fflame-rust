@@ -4433,6 +4433,20 @@ fn json_as_round_u64(json: &serde_json::Value) -> Option<u64> {
         .or_else(|| json.as_f64().map(|f| f.max(0.0).round() as u64))
 }
 
+/// A boolean from a track value, which is a NUMBER more often than a
+/// bool: the track editor reads a bool target's current value as
+/// 1.0 / 0.0 (`get_current_value`), so its keyframes, and anything
+/// interpolated between them, are numbers.
+///
+/// Asking `as_bool` alone dropped all of them, so a post-affine or
+/// effect on/off track applied nothing in the app or the video. A
+/// number is on from 0.5 up -- the midpoint, so a Linear 0 -> 1 track
+/// switches halfway, as a Step track would. NaN compares false, so a
+/// wild signal lands on off.
+fn json_as_bool(json: &serde_json::Value) -> Option<bool> {
+    json.as_bool().or_else(|| json.as_f64().map(|f| f >= 0.5))
+}
+
 pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Option<ConfigValue> {
     use serde_json::Value;
 
@@ -4639,15 +4653,20 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
-        | ConfigPath::TransformPostAffineEnabled { .. }
-        | ConfigPath::LinkedTransformPostAffineEnabled { .. }
-        | ConfigPath::FinalTransformPostAffineEnabled { .. }
         | ConfigPath::SystemVsyncEnabled
         | ConfigPath::SystemFrameGovernor
         | ConfigPath::SystemShowHelpOnStartup
         | ConfigPath::PreserveZ
         => {
             json.as_bool().map(ConfigValue::Bool)
+        }
+
+        // Booleans offered as track targets: their keyframes are
+        // numbers (see `json_as_bool`).
+        ConfigPath::TransformPostAffineEnabled { .. }
+        | ConfigPath::LinkedTransformPostAffineEnabled { .. }
+        | ConfigPath::FinalTransformPostAffineEnabled { .. } => {
+            json_as_bool(json).map(ConfigValue::Bool)
         }
 
         // UInt parameters
@@ -4729,10 +4748,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 .map(ConfigValue::RenderMode)
         }
 
-        // Effect enabled flags (bool)
+        // Effect enabled flags (bool). The effect ones are offered as
+        // track targets, so their keyframes are numbers (see
+        // `json_as_bool`); a light's on/off is not offered.
         ConfigPath::DensityEffectEnabled { .. }
-        | ConfigPath::ColorEffectEnabled { .. }
-        | ConfigPath::SolidLightEnabled { .. } => {
+        | ConfigPath::ColorEffectEnabled { .. } => {
+            json_as_bool(json).map(ConfigValue::Bool)
+        }
+        ConfigPath::SolidLightEnabled { .. } => {
             json.as_bool().map(ConfigValue::Bool)
         }
 
@@ -5115,6 +5138,29 @@ mod tests {
             json_to_config_value(&json!(0.6), &ConfigPath::SimSteps),
             Some(ConfigValue::UInt(1))
         );
+    }
+
+    /// A boolean track's keyframes are numbers -- the track editor
+    /// reads the current on/off as 1.0 / 0.0 -- and every one of them
+    /// used to be dropped, so the track applied nothing.
+    #[test]
+    fn a_numeric_track_value_switches_an_offered_boolean() {
+        use serde_json::json;
+        let paths = [
+            ConfigPath::DensityEffectEnabled { index: 0 },
+            ConfigPath::ColorEffectEnabled { index: 0 },
+            ConfigPath::TransformPostAffineEnabled { index: 0 },
+            ConfigPath::LinkedTransformPostAffineEnabled { index: 0 },
+            ConfigPath::FinalTransformPostAffineEnabled { index: 0 },
+        ];
+        for path in paths {
+            for (v, want) in [(json!(1.0), true), (json!(0.0), false), (json!(0.5), true), (json!(0.49), false)] {
+                assert_eq!(json_to_config_value(&v, &path), Some(ConfigValue::Bool(want)), "{path:?} = {v}");
+            }
+            // A real bool still works.
+            assert_eq!(json_to_config_value(&json!(true), &path), Some(ConfigValue::Bool(true)));
+        }
+        assert_eq!(json_as_bool(&json!(f64::NAN)), None, "serde_json holds NaN as null");
     }
     use super::*;
 

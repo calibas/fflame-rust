@@ -2745,13 +2745,32 @@ mod escape_export_tests {
         sim.render_mode = RenderMode::Simulation;
         sim.sim.terrain.enabled = true;
         configs.push(sim);
+        // One effect of each kind, so their on/off and parameters are
+        // offered too.
+        let mut effected = FractalConfig::default();
+        {
+            use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
+            let registry = global_effect_registry();
+            let density = registry.names_by_category(EffectCategory::Density).first().map(|n| n.to_string());
+            let color = registry.names_by_category(EffectCategory::Color).first().map(|n| n.to_string());
+            drop(registry);
+            effected.density_effects.extend(density.map(|n| EffectInstance::new(&n)));
+            effected.color_effects.extend(color.map(|n| EffectInstance::new(&n)));
+        }
+        configs.push(effected);
         let mut differ = Vec::new();
+        // A target that refuses every probe applies nowhere -- not a
+        // difference between the two paths, so it used to pass here
+        // while every on/off track (stored as 1.0 / 0.0) did nothing.
+        let mut refused = Vec::new();
         for base in &configs {
             for item in crate::ui::target_selector::all_items_for_test(base) {
+                let mut carried = false;
                 for probe in [serde_json::json!(0.375), serde_json::json!(3.0), serde_json::json!(-1.25)] {
                     let Some(value) = crate::config::delta::json_to_config_value(&probe, &item) else {
                         continue;
                     };
+                    carried = true;
                     let mut video = base.clone();
                     apply_config_value(&mut video, EditingTarget::Main, &item, &value);
                     let mut app = base.clone();
@@ -2760,8 +2779,19 @@ mod escape_export_tests {
                         differ.push(format!("{} = {probe} ({:?})", item.to_string_key(), base.render_mode));
                     }
                 }
+                if !carried {
+                    refused.push(format!("{} ({:?})", item.to_string_key(), base.render_mode));
+                }
             }
         }
+        refused.sort();
+        refused.dedup();
+        assert!(
+            refused.is_empty(),
+            "{} offered targets cannot carry a track value:\n  {}",
+            refused.len(),
+            refused.join("\n  ")
+        );
         differ.sort();
         differ.dedup();
         assert!(differ.is_empty(), "{} targets differ between the video and the app:\n  {}", differ.len(), differ.join("\n  "));
