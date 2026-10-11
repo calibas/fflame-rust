@@ -62,8 +62,9 @@ all closed:
 
 Item 2 is the one with a tail: eight formula families perturb, and the
 transcendentals, Chebyshev's two non-unity functions and the
-series-approximation measurement do not. That tail moved to the living
-doc rather than staying here. Its per-tier verification table — every
+series-approximation measurement do not. That tail moved to
+escape-time-fractals.md (archived too since; what is still open is in
+[escape-sim-followups.md](../../projects/escape-sim-followups.md)). Its per-tier verification table — every
 family with the error measured against exact orbits — is the reason to
 keep this document readable rather than delete it.
 
@@ -74,8 +75,8 @@ its seven items shipped: golden-spiral orbit trap, Cantor sine
 bouquets, Origami Butterfly, analytic normal shading, relief shading,
 Lattès maps and the sphere average. §7, temporal antialiasing and
 spectral rendering, is planned and never scheduled — its costing is
-still the best writeup of that feature and is referenced from the
-living doc. §4 concluded that multi-scale Turing patterns and BZ are
+still the best writeup of that feature and is referenced from
+escape-time-fractals.md. §4 concluded that multi-scale Turing patterns and BZ are
 NOT escape-time fractals, which is what started the third family.
 
 **field-type-fractals.md** — the seed document for that third family,
