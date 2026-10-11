@@ -614,15 +614,16 @@ forward pictures exactly only when the model parameters are constant.
 
 ## The web build
 
-**`WasmApi.export_png(width, height, iterations_per_thread, transparent)`**
+**`WasmApi.export_png(width, height, iterations_per_thread, transparent, premultiplied?)`**
 (`src/wasm_api.rs`) renders the loaded config through
 `export_headless_wasm` (`src/app/export.rs`): a WebGPU device of its own
 with the adapter's binding and storage-buffer limits, `render`, then
 `device.destroy()` so the export's memory is freed at once rather than
 whenever the JavaScript garbage collector runs. The PNG carries the same
-metadata. It renders the config's `max_iterations`;
-`set_target_iterations` does not change that. Straight alpha only: there
-is no premultiplied argument. See [WASM.md](../WASM.md).
+metadata. It renders to the API's iteration target: the config's
+`max_iterations` on load, or `set_target_iterations`. The optional
+`premultiplied` argument is the CLI's `--premultiplied` (default
+straight alpha). See [WASM.md](../WASM.md).
 
 **In the web app**, the viewport-size export reads the live picture
 back asynchronously and downloads it. The custom-size export runs its
