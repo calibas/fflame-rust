@@ -71,6 +71,11 @@ pub struct FractalBrowserPanel {
     online_deleting: bool,
     /// Shared slot for receiving async delete result (flame_name on success)
     online_delete_result: Arc<Mutex<Option<Result<String, String>>>>,
+    /// A delete the user asked for and has not yet confirmed: (id, name).
+    /// The X sits beside the row's load button and the delete cannot be
+    /// undone, so it goes through a confirmation as the palette
+    /// library's does.
+    online_pending_delete: Option<(String, String)>,
     /// Search filter: name text
     online_search_name: String,
     /// Search filter: render mode (0=All, 1=2D, 2=3D)
@@ -116,6 +121,7 @@ impl FractalBrowserPanel {
             online_flame_result: Arc::new(Mutex::new(None)),
             online_deleting: false,
             online_delete_result: Arc::new(Mutex::new(None)),
+            online_pending_delete: None,
             online_search_name: String::new(),
             online_search_render_mode: 0,
 
@@ -667,9 +673,39 @@ impl FractalBrowserPanel {
                 });
             }
 
-            // Trigger delete outside the borrow
-            if let Some((id, name)) = delete_flame {
+            // Ask first; the delete runs from the confirmation below.
+            if delete_flame.is_some() {
+                self.online_pending_delete = delete_flame;
+            }
+        }
+
+        // Delete confirmation dialog
+        if let Some((id, name)) = self.online_pending_delete.clone() {
+            let mut confirmed = false;
+            let mut cancelled = false;
+            egui::Window::new(t!("browser.online_delete_title"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label(t!("browser.online_delete_message", name = name));
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        if ui.button(t!("browser.online_delete_confirm")).clicked() {
+                            confirmed = true;
+                        }
+                        if ui.button(t!("browser.online_delete_cancel")).clicked() {
+                            cancelled = true;
+                        }
+                    });
+                });
+            if confirmed {
+                self.online_pending_delete = None;
                 self.trigger_delete_flame(&id, &name);
+            } else if cancelled {
+                self.online_pending_delete = None;
             }
         }
 
@@ -933,7 +969,28 @@ async fn delete_online_flame(base_url: &str, token: &str, flame_id: &str) -> Res
         .map_err(|e| e.to_string())
 }
 
-/// Check if an error string indicates an authentication/authorization failure (401/403)
+/// Check if an error string means the session is gone (401), which
+/// signs the user out.
+///
+/// Only the 401: a 403 ("Access denied") is the server refusing THIS
+/// request — someone else's private flame, a delete of a flame the user
+/// does not own — while the session is fine. Treating it as an expired
+/// session signed the user out for asking.
 fn is_auth_error(error: &str) -> bool {
-    error.contains("Authentication required") || error.contains("Access denied")
+    error.contains(&crate::resources::FetchError::Unauthorized.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_auth_error;
+    use crate::resources::FetchError;
+
+    #[test]
+    fn only_a_401_signs_the_user_out() {
+        assert!(is_auth_error(&FetchError::Unauthorized.to_string()));
+        // As the async helpers carry it, wrapped in context.
+        assert!(is_auth_error(&format!("Failed to load flame: {}", FetchError::Unauthorized)));
+        assert!(!is_auth_error(&FetchError::Forbidden.to_string()), "a 403 is not an expired session");
+        assert!(!is_auth_error(&FetchError::NotFound("x".into()).to_string()));
+    }
 }

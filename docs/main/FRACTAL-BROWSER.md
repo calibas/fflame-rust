@@ -67,9 +67,10 @@ The tab lists flames saved through Save Online
   `N` is the transform count and the variations are the first two
   names plus a count; an escape-time row reads `name — Escape`. Clicking
   loads the full config together with its online metadata (id,
-  visibility, owner, linked animations). The red **X** deletes the
-  online flame and refreshes the list.
-- An authentication error (401/403) starts the sign-out flow.
+  visibility, owner, linked animations). The red **X** asks for
+  confirmation, then deletes the online flame and refreshes the list.
+- An authentication error (401) starts the sign-out flow; a 403 is
+  shown as an error and does not sign you out.
 
 The online tab does not use the gallery widget: no thumbnails, no grid,
 no list toggle.
