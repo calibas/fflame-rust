@@ -2248,9 +2248,10 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
         crate::scene::ifs_estimate::RankKey::Auto,
     ) == crate::scene::ifs_estimate::RankKey::Weighted;
     out[2] = [0.0; 4];
-    // fdata[3].w: zero-padded in both layouts (the solid's forward
-    // vector is a vec3 there), so it is free in both. fdata[2] was the
-    // first choice and is the solid's camera eye -- a flag read from
+    // fdata[3].w on the plane. The solid keeps its own elsewhere
+    // ([`SOLID_RANK_KEY`]): its row 3 is the camera's forward vector
+    // with the material's gloss in the pad. fdata[2] was the first
+    // choice and is the solid's camera eye -- a flag read from
     // `eye.x > 0.5` ranked every solid whose camera sat right of
     // x = 0.5 by the wrong key, caught by the solid agreement gate.
     out[3] = [0.0, 0.0, 0.0, if weighted { 1.0 } else { 0.0 }];
@@ -4879,6 +4880,10 @@ pub fn solid_distance(escape: &crate::config::escape::EscapeConfig, ifs: &Ifs3) 
     ((x - e).exp2(), e as i64)
 }
 
+/// Where a solid's beam ranking key sits in `fdata` (row, component):
+/// the handover row's pad. The template's `ifs_weighted_key` reads it.
+pub(crate) const SOLID_RANK_KEY: (usize, usize) = (7, 3);
+
 /// Pack the whole-IFS constants and the camera for a solid render.
 ///
 /// Layout, one `vec4` each:
@@ -4888,6 +4893,11 @@ pub fn solid_distance(escape: &crate::config::escape::EscapeConfig, ifs: &Ifs3) 
 /// 3. `forward xyz, 0`
 /// 4. `right xyz, 0`
 /// 5. `up xyz, 0`
+///
+/// The renderer then writes the material into the w of rows 3-5
+/// (`ifs_gloss`, `ifs_rough`, `ifs_glow`), and `pack_rig3` fills row 7's
+/// z and rows 8 on; the beam's ranking key is row 7's w
+/// ([`SOLID_RANK_KEY`]).
 pub fn pack_globals3(
     ifs: &Ifs3,
     cam: &SolidCamera,
@@ -4940,13 +4950,15 @@ pub fn pack_globals3(
         cam.eye_rel[2] as f32,
         cam.fov,
     ];
-    // w: the beam's ranking key, as the planar packer sets it -- the
-    // forward vector's pad, which nothing else reads.
+    // The forward vector's pad is the material's (`ifs_gloss`): the
+    // ranking key once sat here, as on the plane, and the renderer's
+    // gloss write then ranked every solid glossier than 0.5 by the
+    // sigma-weighted key the CPU seeding it never chose.
     let weighted = crate::scene::ifs_estimate::resolved_key(
         ifs,
         crate::scene::ifs_estimate::RankKey::Auto,
     ) == crate::scene::ifs_estimate::RankKey::Weighted;
-    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, if weighted { 1.0 } else { 0.0 }];
+    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
     out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
     // The target's offset from the ball's centre, which is what turns
@@ -4961,12 +4973,14 @@ pub fn pack_globals3(
     // The handover cap, which is the whole of the level choice: a link
     // holds a sample while its matrix carries the sample's delta no
     // further than this.
+    // z: the light count (`pack_rig3`); w: the beam's ranking key.
     out[7] = [
         beam.max(1) as f32,
         (ifs.ball.radius * crate::scene::ifs_estimate::HANDOVER_FRACTION) as f32,
         0.0,
         0.0,
     ];
+    out[SOLID_RANK_KEY.0][SOLID_RANK_KEY.1] = if weighted { 1.0 } else { 0.0 };
     pack_rig3(cam, shading, fog, out);
 }
 
