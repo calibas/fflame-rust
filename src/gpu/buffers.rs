@@ -2383,23 +2383,17 @@ impl FlameBuffers {
         palette_log_strength: f32,
         palette_reverse: bool,
     ) {
-        use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+        use crate::scene::palette::{render_palette_lookup, PaletteTransform};
 
         let size = self.palette_size as usize;
-        // For geometric mode, `squeeze_factor` carries the octave ratio
-        // (`palette_squeeze_falloff`). For linear mode it carries the
-        // existing repeat count (`palette_squeeze`).
-        let squeeze_factor = match palette_squeeze_mode {
-            SqueezeMode::Linear => palette_squeeze,
-            SqueezeMode::Geometric => palette_squeeze_falloff,
-        };
-        let transform = PaletteTransform {
-            squeeze_mode: palette_squeeze_mode,
-            squeeze_factor,
-            log_strength: palette_log_strength,
-            rotation: palette_rotation,
-            reverse: palette_reverse,
-        };
+        let transform = PaletteTransform::from_settings(
+            palette_squeeze_mode,
+            palette_squeeze,
+            palette_squeeze_falloff,
+            palette_log_strength,
+            palette_rotation,
+            palette_reverse,
+        );
         let rotated_data = render_palette_lookup(palette, &transform, size);
         write_palette_table(queue, &self.palette_texture, self.palette_size, &rotated_data);
         let stepped = crate::scene::palette::render_stepped_palette_lookup(palette, &transform, size);

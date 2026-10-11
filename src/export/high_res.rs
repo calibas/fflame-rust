@@ -665,20 +665,7 @@ impl HighResExporter {
         // squeeze/rotation, showing the full palette instead of the squeezed
         // colors.
         let palette = &config.palette;
-        let palette_transform = {
-            use crate::scene::palette::{PaletteTransform, SqueezeMode};
-            let squeeze_factor = match config.palette_squeeze_mode {
-                SqueezeMode::Linear => config.palette_squeeze,
-                SqueezeMode::Geometric => config.palette_squeeze_falloff,
-            };
-            PaletteTransform {
-                squeeze_mode: config.palette_squeeze_mode,
-                squeeze_factor,
-                log_strength: config.palette_log_strength,
-                rotation: config.palette_rotation,
-                reverse: config.palette_reverse,
-            }
-        };
+        let palette_transform = crate::scene::palette::PaletteTransform::from_config(config);
         // Use the config's palette size (clamped to the valid range, matching
         // FlameBuffers), not a hardcoded 256 — an oversampled palette
         // (size > 256, smoother gradients) otherwise rendered coarser in the

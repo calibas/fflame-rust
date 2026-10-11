@@ -656,19 +656,9 @@ pub fn render_colors_content(
                 // panel size, and decouples preview cost from the
                 // user's chosen palette resolution.
                 {
-                    use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+                    use crate::scene::palette::{render_palette_lookup, PaletteTransform};
                     let config = config_manager.active_config();
-                    let squeeze_factor = match config.palette_squeeze_mode {
-                        SqueezeMode::Linear => config.palette_squeeze,
-                        SqueezeMode::Geometric => config.palette_squeeze_falloff,
-                    };
-                    let transform = PaletteTransform {
-                        squeeze_mode: config.palette_squeeze_mode,
-                        squeeze_factor,
-                        log_strength: config.palette_log_strength,
-                        rotation: config.palette_rotation,
-                        reverse: config.palette_reverse,
-                    };
+                    let transform = PaletteTransform::from_config(config);
                     const PREVIEW_LUT_LEN: usize = 512;
                     const PREVIEW_HEIGHT: f32 = 24.0;
                     let lut = render_palette_lookup(&config.palette, &transform, PREVIEW_LUT_LEN);
