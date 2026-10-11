@@ -742,8 +742,6 @@ mod slider_tests {
 /// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
 #[derive(Clone, Debug)]
 pub struct PathClickInfo {
-    /// View space pixel coordinates (where user clicked)
-    pub click_pixel: (u32, u32),
     /// Actual pixel with valid path data (may differ if click was empty)
     pub found_pixel: (u32, u32),
     /// Fractal space coordinates of the found pixel
@@ -1176,6 +1174,7 @@ impl EguiLayer {
     }
 
     /// Get reference to current path click info
+    #[cfg(target_arch = "wasm32")]
     pub fn path_click_info(&self) -> Option<&PathClickInfo> {
         self.path_click_info.as_ref()
     }
@@ -1315,7 +1314,6 @@ impl EguiLayer {
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
-        preset_library: &crate::scene::presets::PresetLibrary,
         animation_controller: &mut crate::animation::AnimationController,
         paused: &mut bool,
         view_subflame_in_isolation: &mut bool,
@@ -1522,7 +1520,7 @@ impl EguiLayer {
         // Panel open requests
         let mut open_palette_editor = false;
         let mut open_palette_library = false;
-        let mut open_config_dialog = false;
+        let open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
         let mut open_random_generator = false;
@@ -1757,7 +1755,6 @@ impl EguiLayer {
                         flame,
 
                         // Libraries
-                        preset_library,
                         palette_library,
 
                         // Renderer
@@ -1825,7 +1822,6 @@ impl EguiLayer {
                         config_load_file: &mut config_load_file,
                         flame_xml_import_file: &mut flame_xml_import_file,
                         flame_xml_export_file: &mut flame_xml_export_file,
-                        open_config_dialog: &mut open_config_dialog,
 
                         // Selected preset config (from FractalBrowser or other sources)
                         selected_preset_config: &mut self.selected_preset_config,
@@ -1920,10 +1916,8 @@ impl EguiLayer {
 
                         // API animation state
                         api_flame_id: &api_state.flame_id,
-                        api_animation_id: &api_state.animation_id,
                         flame_animations: &api_state.flame_animations,
                         is_signed_in,
-                        api_animation_save_action: &mut api_animation_save_action,
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
@@ -2685,6 +2679,7 @@ impl EguiLayer {
     }
 
     /// Load JSON configs into the unified Fractal Browser panel
+    #[cfg(target_arch = "wasm32")]
     pub fn load_json_into_fractal_browser(&mut self, json: &str, source_name: &str) {
         // Initialize panel if not already created
         if self.fractal_browser_panel.is_none() {
@@ -2731,6 +2726,7 @@ impl EguiLayer {
     }
 
     /// Get a reference to the density histogram
+    #[cfg(target_arch = "wasm32")]
     pub fn density_histogram(&self) -> &crate::renderer::DensityHistogram {
         &self.density_histogram
     }

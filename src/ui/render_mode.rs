@@ -83,6 +83,7 @@ pub fn switch_render_mode(
 }
 
 /// The two engines that are not the chaos game.
+#[cfg(test)]
 pub fn is_non_flame(mode: RenderMode) -> bool {
     mode.is_non_flame()
 }

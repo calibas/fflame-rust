@@ -120,27 +120,6 @@ mod native {
         }
     }
 
-    /// Fetch text content from a URL asynchronously
-    ///
-    /// Spawns a background thread to perform the fetch.
-    /// Use the returned handle to check status and get results.
-    pub fn fetch_text_async(url: String, handle: std::sync::Arc<std::sync::Mutex<FetchHandle<String>>>) {
-        // Mark as loading
-        if let Ok(mut h) = handle.lock() {
-            h.set_loading();
-        }
-
-        // Spawn background thread
-        std::thread::spawn(move || {
-            let result = fetch_text_sync(&url);
-            if let Ok(mut h) = handle.lock() {
-                match result {
-                    Ok(text) => h.set_complete(text),
-                    Err(e) => h.set_failed(e),
-                }
-            }
-        });
-    }
 }
 
 // `native::fetch_text_sync` is referenced through its module path in

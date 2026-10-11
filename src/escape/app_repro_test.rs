@@ -2960,15 +2960,6 @@ mod tests {
 
     type C64 = (f64, f64);
 
-    fn c64_mul(a: C64, b: C64) -> C64 {
-        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
-    }
-
-    fn c64_div(a: C64, b: C64) -> C64 {
-        let d = b.0 * b.0 + b.1 * b.1;
-        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
-    }
-
     /// The exact outcome of a root-finder orbit at one point, read off
     /// a BIG-FLOAT orbit.
     ///

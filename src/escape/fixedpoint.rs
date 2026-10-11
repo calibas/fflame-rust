@@ -1843,6 +1843,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn limbs_for_zoom_scales() {
         assert!(limbs_for_zoom(0.0) >= 2);
         assert!(limbs_for_zoom(100.0) >= 3);

@@ -344,15 +344,6 @@ impl Default for ApiContentState {
 }
 
 impl ApiContentState {
-    /// Clear all API content state (new flame, load from disk, etc.)
-    pub fn clear(&mut self) {
-        *self = Self::default();
-    }
-
-    /// Clear only animation state (new animation, etc.)
-    pub fn clear_animation(&mut self) {
-        self.animation_id = None;
-    }
 
     /// Check if the current user owns the flame.
     /// Compares flame's user_id against the provided current user ID.
@@ -371,7 +362,7 @@ use crate::ui::{ExportStatus, ExportKind, UiReporter};
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{global_palette_library, PaletteLibrary};
-use crate::scene::presets::{global_preset_library, PresetLibrary};
+use crate::scene::presets::global_preset_library;
 use crate::util::PerformanceMetrics;
 use crate::config::ConfigManager;
 use crate::animation::AnimationController;
@@ -550,7 +541,6 @@ pub struct App {
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
-    pub(super) preset_library: &'static PresetLibrary,
 
     // Animation system
     pub(super) animation_controller: AnimationController,
@@ -701,7 +691,7 @@ pub struct App {
     >,
     pub(super) effect_catalog_started: bool,
     pub(super) script_cloud: script_cloud::ScriptCloudState,
-    pub(super) script_cloud_results: script_cloud::ScriptCloudSlot,
+    pub(in crate::app) script_cloud_results: script_cloud::ScriptCloudSlot,
     /// Parallel to config history: for each FullConfig snapshot, stores
     /// (before_api_state, after_api_state). Keyed by the history index of
     /// the snapshot. Delta-level undo/redo doesn't touch api_state.
@@ -923,7 +913,6 @@ impl App {
             modifiers: winit::keyboard::ModifiersState::default(),
             quit_requested: false,
             palette_library,
-            preset_library,
             animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
@@ -1826,7 +1815,6 @@ impl App {
             self.flame_renderer.as_mut(),
             &mut self.flame,
             &mut self.palette_library,
-            &self.preset_library,
             &mut self.animation_controller,
             &mut self.paused,
             &mut self.view_subflame_in_isolation,
@@ -4173,7 +4161,6 @@ impl App {
                     };
 
                     let click_info = crate::ui::PathClickInfo {
-                        click_pixel: (click_x, click_y),
                         found_pixel: (pixel_x, pixel_y),
                         fractal_coords,
                         search_distance: 0.0, // No search, exact pixel

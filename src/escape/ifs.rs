@@ -9785,7 +9785,6 @@ mod gpu_tests {
                     reference_beam(&ifs, target, basis, px, budget, BEAM);
 
                 let (mut worst_delta, mut worst_shipped) = (0.0f64, 0.0f64);
-                let mut n = 0usize;
                 let mut errs: Vec<f64> = Vec::new();
                 let mut reb: Vec<u32> = Vec::new();
                 let mut worst_at = (0u32, 0u32, 0.0f64, 0.0f64, 0.0f64);
@@ -9829,7 +9828,6 @@ mod gpu_tests {
                         if let Some((l, _)) = log.first() {
                             reb.push(*l);
                         }
-                        n += 1;
                     }
                 }
                 errs.sort_by(f64::total_cmp);

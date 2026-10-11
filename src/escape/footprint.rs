@@ -1236,6 +1236,7 @@ impl EscapeTerrain {
         v
     }
 
+    #[cfg(test)]
     pub(crate) fn cached_for_test(&self) -> Vec<SectionKey> {
         let mut k: Vec<SectionKey> = self.cache.keys().copied().collect();
         k.sort();

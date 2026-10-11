@@ -2245,19 +2245,6 @@ async fn update_flame_online(
         .map_err(|e| e.to_string())
 }
 
-/// Delete a flame from the API (async helper).
-async fn delete_flame_online(
-    base_url: &str,
-    token: &str,
-    flame_id: &str,
-) -> Result<(), String> {
-    let mut api = crate::api::ApiState::new(base_url);
-    api.set_token(token);
-    api.delete_flame(flame_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// Save an animation to the API as new (async helper).
 async fn save_animation_online(
     base_url: &str,

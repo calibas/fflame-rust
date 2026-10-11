@@ -16,6 +16,7 @@ use crate::config::ConfigManager;
 /// depth-ownership tracker (8 B); lighting adds the shade-output
 /// ping-pong and the normal ping-pong (4× Rgba32Float = 64 B). These
 /// dominate on WASM, where the FlameRenderer holds the whole image.
+#[cfg(any(test, target_arch = "wasm32"))]
 fn export_bytes_per_pixel(spatial_filter: bool, solid: bool, lighting: bool, dof: bool) -> u64 {
     let mut b = 52;
     if spatial_filter {

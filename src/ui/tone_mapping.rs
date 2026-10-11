@@ -522,7 +522,7 @@ pub fn render_colors_content(
         .default_open(false)
         .show(ui, |ui| {
             // Render histogram visualization with levels markers from config
-            let _response = render_histogram_with_config(ui, histogram, config_manager);
+            render_histogram_with_config(ui, histogram, config_manager);
 
             ui.add_space(12.0); // Space for triangle markers
 

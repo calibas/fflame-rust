@@ -755,8 +755,6 @@ pub(crate) fn elliptic_h<T: Real>(d: &T, k: &T, y2: &T) -> T {
 /// `xmax − 1 = (A + B)/2`, `xmax − x = (A + Bs)/2`, `xmax + x = (As +
 /// B)/2`.
 pub(crate) struct EllipticParts<T> {
-    pub d1: T,
-    pub d2: T,
     pub a: T,
     pub b: T,
     pub a_s: T,
@@ -774,7 +772,7 @@ pub(crate) fn elliptic_parts<T: Real>(z: &[T; 2]) -> EllipticParts<T> {
     let b = elliptic_h(&d2, &km, &y2);
     let a_s = elliptic_h(&d1, &kp.neg(), &y2);
     let b_s = elliptic_h(&d2, &km.neg(), &y2);
-    EllipticParts { d1, d2, a, b, a_s, b_s }
+    EllipticParts { a, b, a_s, b_s }
 }
 
 /// The forward kernel, over any [`Transcendental`].
@@ -1960,6 +1958,7 @@ pub enum Kernel3 {
 }
 
 /// The Hamilton product of `(x, y, z, w)` quaternions, scalar `w`.
+#[cfg(test)]
 fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     let (av, aw) = ([a[0], a[1], a[2]], a[3]);
     let (bv, bw) = ([b[0], b[1], b[2]], b[3]);
@@ -1970,34 +1969,6 @@ fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
         aw * bv[2] + bw * av[2] + cross[2],
         aw * bw - (av[0] * bv[0] + av[1] * bv[1] + av[2] * bv[2]),
     ]
-}
-
-/// A quaternion `(x, y, z, w)`, scalar part `w`, to an INTEGER power
-/// by Hamilton products -- exact, where the polar form's `acos(w/|q|)`
-/// loses half its digits near the real axis, which is exactly where
-/// the walk's first inverse step lands every slice point (`(xyz, 0)²`
-/// is real). A negative power is the conjugate's, over `|q|^{2|n|}`.
-fn qpow(q: [f64; 4], n: f64) -> [f64; 4] {
-    let k = n.round() as i32;
-    let mut base = if k < 0 {
-        let m2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-        if m2 < 1e-300 {
-            return [0.0; 4];
-        }
-        [-q[0] / m2, -q[1] / m2, -q[2] / m2, q[3] / m2]
-    } else {
-        q
-    };
-    let mut e = k.unsigned_abs();
-    let mut out = [0.0, 0.0, 0.0, 1.0];
-    while e > 0 {
-        if e & 1 == 1 {
-            out = qmul(out, base);
-        }
-        base = qmul(base, base);
-        e >>= 1;
-    }
-    out
 }
 
 /// One of the `|n|` quaternion roots of `q`, branch `k`, with radius

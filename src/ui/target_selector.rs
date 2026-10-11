@@ -20,15 +20,6 @@ pub struct TargetSelectorState {
     pub expanded: std::collections::HashSet<String>,
 }
 
-impl TargetSelectorState {
-    pub fn new() -> Self {
-        Self {
-            search_filter: String::new(),
-            expanded: std::collections::HashSet::new(),
-        }
-    }
-}
-
 /// Category of animatable parameters
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TargetCategory {
@@ -1245,12 +1236,6 @@ fn capitalize_first(s: &str) -> String {
         None => String::new(),
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
-}
-
-/// Get display name for a ConfigPath
-pub fn config_path_display_name(path: &ConfigPath) -> String {
-    // Use the Display implementation which provides good names
-    format!("{}", path)
 }
 
 #[cfg(test)]

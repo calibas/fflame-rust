@@ -4459,7 +4459,7 @@ mod tests {
                 let px = span / 64.0;
                 let basis = [[span, 0.0], [0.0, -span]];
                 let reference = reference_beam(&ifs, target, basis, px, 40, 8);
-                let (mut worst, mut n) = (0.0f64, 0usize);
+                let mut worst = 0.0f64;
                 let mut first: Vec<u32> = Vec::new();
                 let mut no_form = 0usize;
                 let mut truncated = 0usize;
@@ -4483,7 +4483,6 @@ mod tests {
                         no_form += log.iter().filter(|(_, r)| *r == Rebase::NoForm).count();
                         truncated +=
                             log.iter().filter(|(_, r)| *r == Rebase::Truncated).count();
-                        n += 1;
                     }
                 }
                 first.sort_unstable();
