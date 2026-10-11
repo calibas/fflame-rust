@@ -853,6 +853,16 @@ impl App {
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
+        // Open in the language the user last chose (recorded after each
+        // frame's UI, below). A locale whose script needs a font this
+        // platform cannot load stays in English, as the globe menu does.
+        let language = config_manager.system_settings().language.clone();
+        if language != crate::i18n::current_locale()
+            && crate::i18n::supported_locales().iter().any(|l| l.code == language)
+            && crate::ui::ensure_font_for_locale(&egui_layer.ctx, &language)
+        {
+            crate::i18n::set_locale(&language);
+        }
         // Read before the move below: a boot must not look like a
         // load, or it would override the layout the user left.
         let initial_load_generation = config_manager.load_generation();
@@ -1886,6 +1896,18 @@ impl App {
                 }
             },
         );
+
+        // The globe menus (desktop and compact) set the locale and nothing
+        // else; record it, so the next start opens in it.
+        let locale = crate::i18n::current_locale();
+        if locale != self.config_manager.system_settings().language {
+            if let Err(e) = self
+                .config_manager
+                .update_system_setting(crate::config::ConfigPath::SystemLanguage, crate::config::ConfigValue::String(locale))
+            {
+                log::warn!("Could not save the language: {e:?}");
+            }
+        }
 
         // Simulation transport, back from the panel. `sim_running` is
         // the panel's resulting state; the other two are one-shot
