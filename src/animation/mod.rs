@@ -767,8 +767,12 @@ mod tests {
 
         let json = serde_json::to_value(&anim).unwrap();
         let base = &json["base_config"];
-        assert_eq!(base["version"], serde_json::json!(3), "version stamped");
-        assert_eq!(base["render_mode"], serde_json::json!("3d"), "v3 top-level render_mode");
+        assert_eq!(
+            base["version"],
+            serde_json::json!(crate::config::CURRENT_CONFIG_VERSION),
+            "version stamped"
+        );
+        assert_eq!(base["render_mode"], serde_json::json!("3d"), "v3+ top-level render_mode");
 
         // Round-trips back.
         let restored: Animation = serde_json::from_value(json).unwrap();
