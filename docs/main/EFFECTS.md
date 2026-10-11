@@ -188,10 +188,14 @@ runs one chain at a time:
 4. The caller takes the result (`get_density_output`,
    `get_color_output`) or reads it back (`read_color_output_pixels`).
 
-**The parameter uniform.** One shared uniform buffer of
-`MAX_EFFECT_SLOTS` (32) slots, 256 bytes apart, so effects in one
-submission keep separate parameters. `reset_slots` is called once per
-frame or render. A slot holds:
+**The parameter uniform.** One shared uniform buffer of slots 256
+bytes apart, one per pass, so effects in one submission keep separate
+parameters. It starts at `MAX_EFFECT_SLOTS` (32) and `reserve_slots`
+grows it to the next power of two when a frame's chains need more --
+each `distance_field` alone takes its flood count plus two (13 at
+1080p). (The 33rd slot used to be clamped to an offset equal to the
+buffer's size, a validation error that rejected the whole frame.)
+`reset_slots` is called once per frame or render. A slot holds:
 
 ```wgsl
 struct EffectParams {
