@@ -1,5 +1,7 @@
 # Linked Transforms (Pre/Post Transforms)
 
+> **Archived 2026-10-10** -- finished. Read [TRANSFORMS.md](../../main/TRANSFORMS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Overview
 
 Linked transforms are a convenience feature that creates deterministic transform chains via xaos routing. A "linked" pair means transform C always routes to transform D, and D is only reachable from C. This creates a guaranteed two-step pipeline: the "pre" transform fires first, then the "post" transform follows.

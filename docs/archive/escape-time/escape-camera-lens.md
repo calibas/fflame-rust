@@ -1,5 +1,7 @@
 # The camera lens: a variation on the escape engine's screen offset
 
+> **Archived 2026-10-10** -- finished (steps 1-4); extending it to every mode is planned in camera-lens-everywhere. Read [ESCAPE.md](../../main/ESCAPE.md), [camera-lens-everywhere.md](../../projects/camera-lens-everywhere.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 A **lens** is a variation applied to the normalised screen offset
 *before* the view scale, in every escape-time kernel. The fractal is
 untouched; only which point each pixel samples changes.

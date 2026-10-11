@@ -1,5 +1,7 @@
 # Multi-Emit Plotting + Stereograms
 
+> **Archived 2026-10-10** -- finished. Read [VARIATIONS.md](../../main/VARIATIONS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Status: **Phases 1–3 implemented** (plumbing, `stereogram`, `multi_kaleidoscope` + `spray_blur`). Branch: `multi-emit`.
 
 ## Motivation

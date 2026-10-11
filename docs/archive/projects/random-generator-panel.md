@@ -1,5 +1,7 @@
 # Random Fractal Generator Panel
 
+> **Archived 2026-10-10** -- finished (phase 4, settings presets, never built). Read [UI.md](../../main/UI.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Planning
 **Created:** 2025-12-29
 **Priority:** Medium

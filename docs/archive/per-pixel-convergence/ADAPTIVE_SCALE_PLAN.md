@@ -1,5 +1,7 @@
 # Adaptive Histogram Scale - Implementation Plan
 
+> **Archived 2026-10-10** -- obsolete: its premise, the u16 histogram, was replaced by u32 and an Rgba32Float accumulator. Read [COLOR.md](../../main/COLOR.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Date:** 2025-10-26
 **Status:** Proposed
 **Branch:** experiment/batched-accumulation

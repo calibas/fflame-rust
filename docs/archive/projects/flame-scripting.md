@@ -1,5 +1,7 @@
 # Flame Scripting: Random Generation Scripts, Python, Web, Decompositions, L-systems
 
+> **Archived 2026-10-10** -- finished. Read [SCRIPTING.md](../../main/SCRIPTING.md), [SCRIPTING-GUIDE.md](../../main/SCRIPTING-GUIDE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Implemented (Phase 1 shipped; see §7b field notes). This is
 the design record — the reasoning, the rejected alternatives, and what
 each decision cost. For **how to write a script**, see

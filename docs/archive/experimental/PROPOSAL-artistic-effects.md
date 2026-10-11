@@ -1,5 +1,7 @@
 # PROPOSAL: Artistic Effects (Depth of Field & Motion Blur)
 
+> **Archived 2026-10-10** -- depth of field shipped (3D); motion blur did not, and is listed as an idea in docs/experimental/README.md. Read [RENDERER.md](../../main/RENDERER.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Proposed (Not yet implemented)
 **Date:** 2025-10-28
 **Priority:** Medium - Optional visual enhancements inspired by Terrarium

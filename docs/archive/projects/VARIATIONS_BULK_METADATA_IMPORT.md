@@ -1,5 +1,7 @@
 # Variations & Effects Bulk Metadata Import — Project Plan
 
+> **Archived 2026-10-10** -- finished for variations; the effects part is noted in VARIATIONS_TODOS. Read [VARIATIONS.md](../../main/VARIATIONS.md), [VARIATIONS_TODOS.md](../../projects/VARIATIONS_TODOS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Project to bring description, author, and per-parameter description
 metadata to the ~494 variations in [src/variations/defs/](../../src/variations/defs/)
 and the built-in effects in [src/effects/mod.rs](../../src/effects/mod.rs),

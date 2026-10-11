@@ -1,5 +1,7 @@
 # Animation system overhaul (subflame-aware, stable identity, complete affine ops)
 
+> **Archived 2026-10-10** -- finished. Read [ANIMATION.md](../../main/ANIMATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Bring the Animation system back into alignment with the rest of the app

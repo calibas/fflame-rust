@@ -1,5 +1,7 @@
 # McCabe multi-scale: colour memory, a per-scale table, variation radius
 
+> **Archived 2026-10-10** -- finished (P4, the compound pattern, never started). Read [SIMULATION.md](../../main/SIMULATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Branch `mccabe-scales`, started 2026-10-04. **Phases 1 (colour memory)
 and 2 (the per-scale table) done 2026-10-04**; results at the end of
 sections 2 and 3. The model is catalogue

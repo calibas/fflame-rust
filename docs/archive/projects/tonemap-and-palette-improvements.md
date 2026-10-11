@@ -1,5 +1,7 @@
 # Tonemap and palette panel improvements
 
+> **Archived 2026-10-10** -- finished. Read [TONE-MAPPING.md](../../main/TONE-MAPPING.md), [COLOR.md](../../main/COLOR.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Two related groups of UX improvements to the Colors / Tonemap panel:

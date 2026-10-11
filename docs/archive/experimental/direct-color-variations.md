@@ -1,5 +1,7 @@
 # Direct Color Variations Support
 
+> **Archived 2026-10-10** -- implemented (direct_color, WritesColor/WritesRgb). Read [VARIATIONS.md](../../main/VARIATIONS.md), [COLOR.md](../../main/COLOR.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Planning
 **Priority:** Medium
 **Estimated Effort:** 10-14 hours

@@ -1,5 +1,7 @@
 # Free 3D Camera Movement
 
+> **Archived 2026-10-10** -- finished (stages 1-4); its record of deliberate JWF divergences stands. Read [CAMERA.md](../../main/CAMERA.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status**:
 - Stage 1 (rotation) shipped on `camera-bank-and-matrix-port` and merged.
 - Stage 2 (position + input handlers) shipped on `free-camera-position`:

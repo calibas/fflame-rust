@@ -1,5 +1,7 @@
 # Subflame variation support
 
+> **Archived 2026-10-10** -- superseded by subflame-variations-v2. Read [subflame-variations-v2.md](../subflame-variations-v2.md), [TRANSFORMS.md](../../main/TRANSFORMS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Implement the JWildfire `subflame_wf` variation. A subflame is **not** a

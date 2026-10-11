@@ -1,5 +1,7 @@
 # Solid Rendering: occlusion, lighting, and shading for 3D flames
 
+> **Archived 2026-10-10** -- finished (the Phase 2/3 density volume was removed 2026-07-16); open items in solid-rendering-todo. Read [RENDERER.md](../../main/RENDERER.md), [solid-rendering-todo.md](../../projects/solid-rendering-todo.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status**: Phase 1 COMPLETE — Phase 2 CORE COMPLETE: density-volume splat + shade-pass consumption (∇ρ normals, volumetric AO, shadow march, volume-authoritative occlusion repair). Remaining: translucent volumetric mode, perf tuning of the per-pixel ray march
 **Motivation**: 3D flames render as additive transparent ghosts. Shapes have no
 occlusion (far structure bleeds through near structure), and geometry becomes

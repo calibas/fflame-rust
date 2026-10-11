@@ -1,5 +1,7 @@
 # Endless Gallery: standalone WASM renderer + script evaluator
 
+> **Archived 2026-10-10** -- finished. Read [ONLINE.md](../../main/ONLINE.md), [WASM.md](../../WASM.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Delivered (all four phases; browser-verified). The
 finished gallery will live in a separate repo; what this repo delivers
 is the two production-grade WASM modules it will be built on, plus a

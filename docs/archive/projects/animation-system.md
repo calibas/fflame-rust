@@ -1,5 +1,7 @@
 # Animation System - Design Document
 
+> **Archived 2026-10-10** -- superseded: the animation system was built differently (`.anim`, not `.ffanim`). Read [ANIMATION.md](../../main/ANIMATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Date:** 2025-11-13 (Updated: 2025-11-25)
 **Status:** Ready for Implementation
 **Priority:** Active Development

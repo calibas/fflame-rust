@@ -1,5 +1,7 @@
 # Local Storage System Design
 
+> **Archived 2026-10-10** -- finished (phases 1-2; the rest were never needed). Read [CONFIG.md](../../main/CONFIG.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Problem Statement
 
 Currently, all settings (visual + system + performance) are stored in `FractalConfig`, which is designed for per-fractal configuration. This causes issues:

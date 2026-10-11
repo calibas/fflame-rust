@@ -1,5 +1,7 @@
 # Path Caching for Flame Iteration - Experimental Proposal
 
+> **Archived 2026-10-10** -- superseded: Focused Rendering's composed words and persistent orbits. Read [FOCUSED-RENDERING.md](../../main/FOCUSED-RENDERING.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Experimental idea - not yet implemented
 **Date:** 2025-10-28
 **Complexity:** High

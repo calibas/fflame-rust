@@ -1,5 +1,7 @@
 # Client Migration: Palette Redesign
 
+> **Archived 2026-10-10** -- finished. Read [ONLINE.md](../../main/ONLINE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Tracks the breaking changes to the palette API. The API server has shipped
 migration `20250101000063_palette_inline_redesign.sql` which:
 

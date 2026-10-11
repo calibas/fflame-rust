@@ -1,5 +1,7 @@
 # Texture Sampling Framework
 
+> **Archived 2026-10-10** -- abandoned: image files were set aside for simulation textures. Read [SIMULATION.md](../../main/SIMULATION.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Project plan for adding texture (user-supplied image) sampling as a variation framework feature. Unblocks the texture/image-sampling family of JWildfire variations and any future hand-written texture-using variations.
 
 This is **blocker #2** from [`variation-port-blockers.md`](../../projects/variation-port-blockers.md): "Texture / image / SVG sampling."

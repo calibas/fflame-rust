@@ -1,5 +1,7 @@
 # Levels scale-invariance (Phase 8c follow-up)
 
+> **Archived 2026-10-10** -- finished. Read [TONE-MAPPING.md](../../main/TONE-MAPPING.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 ## Goal
 
 Make the Levels feature's input range invariant to iteration count, so

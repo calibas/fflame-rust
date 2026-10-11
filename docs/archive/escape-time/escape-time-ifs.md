@@ -1,5 +1,7 @@
 # Escape-time / IFS research
 
+> **Archived 2026-10-10** -- a source conversation, absorbed; mode C (escape-time IFS) is still not built. Read [ESCAPE.md](../../main/ESCAPE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 > ## Status, 2026-09-10 — absorbed. This is a source, not a to-do list.
 >
 > Everything below was research for what became

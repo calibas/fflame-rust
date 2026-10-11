@@ -1,5 +1,7 @@
 # Visual Regression Testing Plan
 
+> **Archived 2026-10-10** -- history: the visual suite was built (and differently). Read [TESTING-GUIDE.md](../TESTING-GUIDE.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Comprehensive strategy for visual quality verification across platforms.
 
 ---

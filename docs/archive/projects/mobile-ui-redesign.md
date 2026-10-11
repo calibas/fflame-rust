@@ -1,5 +1,7 @@
 # Mobile UI/UX Redesign
 
+> **Archived 2026-10-10** -- finished: the compact layout and touch input shipped. Read [UI.md](../../main/UI.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status:** Planning
 **Priority:** High — prerequisite for iOS and Android native apps
 **Depends on:** Nothing

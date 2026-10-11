@@ -1,5 +1,7 @@
 # Resolution and Quality Roadmap
 
+> **Archived 2026-10-10** -- superseded: tiled and CPU exports and 2x antialiasing shipped another way. Read [EXPORT.md](../../main/EXPORT.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Overview:** Integrated plan for unlimited resolution exports with anti-aliasing
 
 ## Current Limitations

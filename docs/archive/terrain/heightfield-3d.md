@@ -1,5 +1,7 @@
 # 3D height-field mode: escape-time and simulations as path-traced terrain
 
+> **Archived 2026-10-10** -- finished (T1-T4 and most of T5; HDRI, sun shafts and presets deferred). Read [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Plan, 2026-10-05. Not started. Asked for by the user as "one of the
 larger goals", to be planned before anything is built.
 

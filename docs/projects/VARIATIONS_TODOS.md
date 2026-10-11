@@ -820,3 +820,11 @@ from the zcone/flatten/zscale signatures. The rotation3d variations
 already had clean `(p, xform_id, variation_id)` signatures — no
 change needed there. Verified bit-identical pixel output via 3D
 smoke tests for zcone, flatten, and zscale.
+
+## Effects metadata (from the archived bulk-metadata import)
+
+The variations got descriptions and authors through
+[VARIATIONS_BULK_METADATA_IMPORT.md](../archive/projects/VARIATIONS_BULK_METADATA_IMPORT.md);
+its Phase 8, the same for effects, was never started.
+`EffectParameter::description` exists but is never populated -- the
+gap is written up in the header of `src/bin/export_effects_json.rs`.
