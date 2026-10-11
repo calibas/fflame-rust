@@ -314,10 +314,15 @@ value)`). See [SCRIPTING.md](SCRIPTING.md).
 Effects", available in every render mode:
 
 - **Color Effects** (open) and **Density Effects** (collapsed), each a
-  list of the config's instances with an enable box, up/down reorder,
-  remove, and a slider per parameter while enabled. Sliders run from
-  the parameter's min to its max (0 to 1 where either is absent), with
-  its description as the tooltip.
+  list of the config's instances by their translated names (the raw
+  key for an effect this build lacks), with an enable box, up/down
+  reorder, remove, and a control per parameter while enabled. The
+  controls are the variation parameters' (`variation_params`, through
+  an `EffectTarget`): a slider for a Float (0 to 1 where its range is
+  absent), an integer slider for an Integer, a checkbox for a Boolean,
+  degrees for an Angle, with the description as the tooltip. A value is
+  written only when it changes, never by being drawn. Undo entries name
+  the effect the same way.
 - An **Add effect** combo per chain, listing that category's
   registered effects by their translated names.
 - **Online library**, when a catalog is cached or fetched: how many the
