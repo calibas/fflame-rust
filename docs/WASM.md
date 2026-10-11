@@ -93,7 +93,7 @@ implementations of one procedure and nothing checks that they agree
 | flag | profile | what it is for |
 |---|---|---|
 | (none) | `dist` | the shipped build: fat LTO, one codegen unit, stripped, `panic = "abort"`. About 16 MiB of `.wasm` (16.0 MiB when measured for the `dist-symbols` comment in `Cargo.toml`) |
-| `--symbols` | `dist-symbols` | `dist`'s codegen exactly, with the symbol table kept (`strip = false`, `debug = false`). Writes to `./pkg-names/` and copies the module to `pkg/fractal_flame_wgpu_bg.names.wasm`, leaving the served `./pkg` untouched. 18.9 MiB against dist's 16.0 |
+| `--symbols` | `dist-symbols` | `dist`'s codegen exactly, with the symbol table kept (`strip = false`, `debug = false`). Writes the module and its JS glue to `./pkg-names/` and nothing to `./pkg`, which stays the shipped build; serve `pkg-names` in place of `pkg` to reproduce with names. 18.9 MiB against dist's 16.0 |
 | `--debug` | `dist-debug` | debug info, debug assertions, overflow checks and unwinding panics, with thin LTO and 16 codegen units. A `debug_assert` or a wrapping subtraction fails at its source instead of corrupting an index somewhere else. Bigger and slower, and because it changes codegen it does not reproduce faults that depend on how the shipped build is optimized |
 
 Why `dist` and not `--release` (size, and the profile name recorded in
