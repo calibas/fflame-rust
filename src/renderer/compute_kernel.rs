@@ -2545,8 +2545,14 @@ impl FlameRenderer {
             config
         };
         // 0. Check if shaders need to be recompiled (variations or constants changed)
-        // Determine if path features are needed (PathMap mode)
-        let path_features_enabled = config.color_mode == ColorMode::PathMap;
+        // Determine if path features are needed (PathMap mode). By the
+        // CONFIG's mode: `current_render_mode` is still the previous
+        // config's here (it is set below), so an escape or simulation
+        // config carrying a flame's PathMap colour mode allocated path
+        // ids on a tail renderer, and undoing back to a flame left a
+        // PathMap flame without them.
+        let path_features_enabled =
+            !config.render_mode.is_non_flame() && config.color_mode == ColorMode::PathMap;
         // The enumeration decides whether the shader is built with
         // the forced prefix in it, so it has to run FIRST. It was
         // below this for one commit and the render came out as the
@@ -2587,9 +2593,7 @@ impl FlameRenderer {
         );
         // PathMap's per-pixel path ids (the right-click): a loaded
         // PathMap config needs them as surely as a switch to PathMap.
-        let path_buffers_changed = path_features_enabled
-            && !self.current_render_mode.is_non_flame()
-            && self.buffers.create_path_buffers(device);
+        let path_buffers_changed = path_features_enabled && self.buffers.create_path_buffers(device);
         if shaders_changed || path_buffers_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
@@ -5866,6 +5870,37 @@ mod edge_tests {
     /// which gathered two pixels' worth; flam3 rejects those points.
     /// At 64x64 and zoom 1 a pixel is 1/16 of a unit and x = 0 is at 32,
     /// so x = -2.03125 is pixel -0.5 and x = -1.96875 is pixel 0.5.
+    /// Path ids follow the loaded config's mode, not the renderer's
+    /// previous one.
+    #[test]
+    fn path_buffers_follow_the_loaded_configs_mode() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let load = |r: &mut super::FlameRenderer, c: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&Default::default());
+            r.load_config(&device, &mut enc, &queue, c, &c.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        let mut escape = FractalConfig::default();
+        escape.render_mode = RenderMode::Escape;
+        escape.color_mode = crate::scene::palette::ColorMode::PathMap;
+        let mut tail = super::FlameRenderer::for_tail(&device, &queue, format, 64, 64, &escape.flame, 256);
+        load(&mut tail, &escape);
+        assert!(!tail.path_features_enabled(), "no path ids for an escape config");
+        tail.destroy();
+
+        let mut flame = escape.clone();
+        flame.render_mode = RenderMode::TwoD;
+        let mut r = super::FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &flame.flame, 256);
+        load(&mut r, &escape);
+        load(&mut r, &flame);
+        assert!(r.path_features_enabled(), "a PathMap flame loaded after an escape config has path ids");
+        r.destroy();
+    }
+
     /// A flame with more transforms than the GPU buffers hold is refused
     /// with a reason; it used to panic packing them.
     #[test]
