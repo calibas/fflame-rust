@@ -111,10 +111,15 @@ run time:
 
 Pack content is fetched over HTTP from `assets/palettes/packs/<file>`
 (the build scripts copy the pack JSONs next to `pkg/`). An enabled pack
-is fetched the first time the Palette Library panel is drawn, a disabled
-one when it is enabled. Until a pack arrives, its palettes are in
-neither the dropdown nor the flat list. While it loads the panel shows a
-spinner; a failure shows the error and a **Retry** button.
+is fetched on the first frame, a disabled one when it is enabled. Until
+a pack arrives, its palettes are in neither the dropdown nor the flat
+list. A fetch completes into the global library; every frame, before
+any panel draws, the app's copy takes each pack whose load state
+changed and rebuilds its flat list from its packs
+(`palette_library::poll_palette_packs`,
+`PaletteLibrary::sync_packs_from`), keeping its own palettes. While a
+pack loads the panel shows a spinner; a failure shows the error and a
+**Retry** button, and is not retried on its own.
 
 ### The flat list
 

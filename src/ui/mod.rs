@@ -1365,6 +1365,12 @@ impl EguiLayer {
             let _ = config_manager.system_settings().save();
         }
 
+        // Web: palette packs are fetched asynchronously into the global
+        // library; start the enabled ones and bring the app's copy up to
+        // date before any panel reads it.
+        #[cfg(target_arch = "wasm32")]
+        crate::ui::palette_library::poll_palette_packs(&self.ctx, palette_library);
+
         // Wider, always-visible scrollbars in compact mode (touch-friendly).
         // Applied every frame since egui_dock may reset styles.
         self.ctx.global_style_mut(|style| {
