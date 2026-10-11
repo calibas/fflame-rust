@@ -152,6 +152,16 @@ fn render_compact_menu_items(
             ui.close();
         }
 
+        // The switch for everything online, as in the desktop File menu.
+        let mut online = menu_state.online_mode;
+        if ui
+            .checkbox(&mut online, t!("menu.online_features").as_ref())
+            .on_hover_text(t!("menu.tooltip_online_features").as_ref())
+            .changed()
+        {
+            menu_actions.file.set_online_mode = Some(online);
+        }
+
         // Shown whenever online mode is on, signed in or not: hiding it
         // when signed out (the old gate) made the feature look absent —
         // the reported "Save Online missing from the mobile File menu".

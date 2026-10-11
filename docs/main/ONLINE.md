@@ -97,18 +97,25 @@ an empty success.
 
 ## Online mode
 
-`SystemSettings::online_mode` (default `true`) gates the online
-**surfaces**. No panel writes it; it changes only by editing the
-settings file.
+`SystemSettings::online_mode` (default `true`) gates everything that
+talks to the online service. File → **Online features** (a checkbox,
+also in the compact menu's File section) switches it; like any device
+preference it is saved at once and is not undoable.
 
 | gated on online mode | not gated |
 | --- | --- |
-| File → **Save Online** | the variation catalog, fetched once per session at startup |
-| Window → **Account** | fetching a variation a loaded flame names but the app lacks |
-| the Fractal Browser's **Online** tab | the effect catalog, fetched once per session (on desktop it needs sign-in: `list_effects` requires a token) |
-| Palette Library → **Cloud Palettes** | fetching a missing effect (needs sign-in) |
-| the menu bar's connection and account indicator | the Scripts panel's online library (needs sign-in) |
-| the periodic health check | loading a web deep link |
+| File → **Save Online** | loading a web deep link |
+| Window → **Account** | |
+| the Fractal Browser's **Online** tab | |
+| Palette Library → **Cloud Palettes** | |
+| the menu bar's connection and account indicator | |
+| the periodic health check | |
+| the variation catalog, fetched once per session | |
+| fetching a variation a loaded flame names but the app lacks: off, the flame renders without it and a notice names it (`api.variations_need_online`), with no fetch and no pause | |
+| updating downloaded variations the catalog says are stale | |
+| the effect catalog, fetched once per session (on desktop it needs sign-in: `list_effects` requires a token) | |
+| fetching a missing effect (needs sign-in); off, the name stays recorded and is fetched when online mode is turned on | |
+| the Scripts panel's online library (needs sign-in); off, a request reports that online features are off | |
 
 ---
 
