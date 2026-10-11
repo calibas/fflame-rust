@@ -71,7 +71,7 @@ by primitives infrastructure).
   needs a separate (storage-backed, atomically-managed) project.
   *Since 2026-10-01 it persists: the registers are part of each
   thread's orbit, kept between dispatches
-  ([persistent-orbits.md](../projects/persistent-orbits.md)).
+  ([persistent-orbits.md](projects/persistent-orbits.md)).
   `cubic_julia`'s Branch Blend register was 68% off at 64 iterations a
   thread restarted, and `curliecue2`'s walker never got past 256 steps.*
 - **Cross-thread shared state.** Each thread has its own

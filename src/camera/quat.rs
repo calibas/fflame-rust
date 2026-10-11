@@ -1,5 +1,5 @@
 //! A unit quaternion for camera orientation: the one place every 3D
-//! camera's turning composes (docs/projects/camera-unification.md, C2).
+//! camera's turning composes (docs/archive/3d-camera/camera-unification.md, C2).
 //!
 //! It stands for the camera's WORLD → CAMERA rotation, the matrix whose
 //! rows are the camera's axes in world coordinates (row 0 screen-right,

@@ -1,7 +1,7 @@
 # pyfflame — Python bindings
 
 Status doc for the Python side. Phase 5 of
-[flame-scripting.md](flame-scripting.md) shipped a working wheel; this
+[flame-scripting.md](../archive/projects/flame-scripting.md) shipped a working wheel; this
 tracks what is left, roughly in the order it is worth doing.
 
 User-facing usage lives in [`python/README.md`](../../python/README.md)

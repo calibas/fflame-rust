@@ -28,7 +28,7 @@
 //! Refs:
 //!   - `output/jwildfire-vars/output/subflame_wf.cpp`
 //!   - https://www.jwfsanctuary.club/variation-information/subflame/
-//!   - `docs/projects/subflames.md`
+//!   - `docs/archive/projects/subflames.md`
 
 use crate::variations::{
     definition::{Feature, VariationDef, VariationParamDef},

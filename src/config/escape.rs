@@ -1,7 +1,7 @@
 //! Escape-time fractal configuration.
 //!
 //! The per-config state for the fragment rendering modes (Mandelbrot
-//! and kin) — everything `docs/projects/escape-time-fractals.md` calls
+//! and kin) — everything `docs/archive/escape-time/escape-time-fractals.md` calls
 //! `EscapeConfig`. Lives inside [`FractalConfig`] behind
 //! skip-if-default, so a flame that has never touched escape mode
 //! serializes exactly as before, byte for byte.
@@ -129,7 +129,7 @@ pub struct EscapeConfig {
     /// This warps the VIEW, not the fractal: the formula is untouched
     /// and only which point each pixel samples changes, which is the
     /// opposite direction from a flame's final transform. See
-    /// `docs/projects/escape-camera-lens.md`.
+    /// `docs/archive/escape-time/escape-camera-lens.md`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub lens: String,
 
@@ -236,7 +236,7 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "EscapeShading::is_default")]
     pub shading: EscapeShading,
 
-    /// The 3D terrain view (docs/projects/heightfield-3d.md): this
+    /// The 3D terrain view (docs/archive/terrain/heightfield-3d.md): this
     /// picture as a height field, seen through the solid camera. Off by
     /// default and skipped when off, so every existing file is
     /// byte-stable.
@@ -264,7 +264,7 @@ pub struct EscapeConfig {
     /// colouring is no layer, which is the default and is skipped.
     #[serde(default, skip_serializing_if = "ColoringLayer::is_default")]
     pub layer: ColoringLayer,
-    /// A simulation texture (`docs/projects/sim-textures.md`): its recipe,
+    /// A simulation texture (`docs/archive/projects/sim-textures.md`): its recipe,
     /// in full, so the file is self-contained. None is no texture, the
     /// default, and is skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -386,7 +386,7 @@ impl EscapeConfig {
 }
 
 /// A simulation texture a config uses: its name, and its recipe -- a
-/// Simulation-mode config -- in full (`docs/projects/sim-textures.md`,
+/// Simulation-mode config -- in full (`docs/archive/projects/sim-textures.md`,
 /// decision 6), so the file that uses it needs nothing else.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscapeTexture {
@@ -1700,7 +1700,7 @@ pub enum ShadingTexture {
     /// laid in a felt rather than as isotropic speckle.
     Paper,
     /// The config's simulation texture (`EscapeConfig::texture`), its
-    /// luminance as the micro-relief (docs/projects/sim-textures.md,
+    /// luminance as the micro-relief (docs/archive/projects/sim-textures.md,
     /// phase 3). Nothing without a texture.
     Simulation,
 }
@@ -1835,7 +1835,7 @@ pub const MAX_TERRAIN_PREFILTER: u32 = 3;
 pub const MAX_TERRAIN_SOFTNESS: f32 = 4.0;
 
 /// How a terrain's escape count or relief value rises to its height
-/// (docs/projects/terrain-height.md, H2): over the range the ground
+/// (docs/archive/terrain/terrain-height.md, H2): over the range the ground
 /// measured, a logarithmic or linear rise, or a mesa that tops out
 /// early, so the busy boundary is a flat top rather than spikes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1930,7 +1930,7 @@ pub struct PathTraceConfig {
     pub environment: f32,
     // The coat and the glow were here; they are the picture's material
     // now, beside the lights (`SolidShadingSettings::gloss`, and
-    // docs/projects/materials.md), lifted there on load.
+    // docs/archive/projects/materials.md), lifted there on load.
     /// The lens: its radius, as a fraction of the distance to the target
     /// (0, a pinhole, is everything sharp), and the focal plane's
     /// distance, as a multiple of the target's (0 is the target).
@@ -2022,7 +2022,7 @@ pub struct TerrainConfig {
     /// 2D render at that antialiasing does.
     #[serde(default = "default_terrain_detail", skip_serializing_if = "is_default_terrain_detail")]
     pub detail: f32,
-    /// Samples a texel, each way (docs/projects/terrain-height.md, H4):
+    /// Samples a texel, each way (docs/archive/terrain/terrain-height.md, H4):
     /// a section's height texel is the mean of `prefilter²` samples over
     /// its footprint rather than one at its centre, so detail finer than
     /// a texel averages instead of aliasing into spikes. 1 is a point
@@ -2087,7 +2087,7 @@ pub struct TerrainConfig {
     /// above the ground; 0 is the camera every terrain had before.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub target_lift: f32,
-    /// The relief fixed at a zoom (docs/projects/terrain-height.md, H3).
+    /// The relief fixed at a zoom (docs/archive/terrain/terrain-height.md, H3).
     /// Locked, the height, the flanks' width, occlusion's reach and a
     /// hole's depth are fractions of `lock_zoom`'s view width rather than
     /// the current one's ([`EscapeConfig::terrain_scale`]), so zooming

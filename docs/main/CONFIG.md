@@ -575,7 +575,7 @@ if response.changed() {
 - Settings persist across app restarts
 
 **See Also:**
-- [docs/projects/local-storage-system.md](../../docs/projects/local-storage-system.md) - Complete design document
+- [docs/archive/projects/local-storage-system.md](../archive/projects/local-storage-system.md) - Complete design document
 
 ### ConfigPath - Type-Safe Parameter Identification
 
@@ -1225,7 +1225,7 @@ pub fn import_config(&mut self, config: FractalConfig) {
 ---
 
 **Last Updated:** 2025-11-24
-**Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md), [local-storage-system.md](../../docs/projects/local-storage-system.md)
+**Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md), [local-storage-system.md](../archive/projects/local-storage-system.md)
 
 **Major Changes:**
 

@@ -58,7 +58,7 @@ Implements Phases 1-3 of visual regression testing plan for catching rendering b
   - Test directory structure: `tests/visual/configs/`, `tests/visual/current/`
   - Sample test configs: linear, sinusoidal, spherical variations
   - All test PNGs include embedded metadata for reproducibility
-  - Documentation: [docs/TESTING-PLAN.md](docs/TESTING-PLAN.md) (464 lines, 7-phase plan)
+  - Documentation: [docs/archive/TESTING-PLAN.md](docs/archive/TESTING-PLAN.md) (464 lines, 7-phase plan)
 
 **Testing Results:**
 - Batch export: 3/3 success, ~0.1s per 800x600 @ 50 frames

@@ -58,22 +58,22 @@ pub enum ConfigPath {
     LevelsEnabled,
     /// Auto exposure: normalise the tone map by the density of the
     /// pixels in frame rather than by total iterations
-    /// (docs/projects/flame-deep-zoom.md §14).
+    /// (docs/projects/deep-zoom/flame-deep-zoom.md §14).
     AutoExposure,
     /// Cylinder targeting: force an enumerated prefix so every sample
-    /// lands in the viewport (docs/projects/flame-deep-zoom.md stage
+    /// lands in the viewport (docs/projects/deep-zoom/flame-deep-zoom.md stage
     /// 2). A REQUEST -- the renderer still declines per view.
     CylinderTargeting,
     /// Keep the plan at every zoom, even where it renders more slowly
     /// ("Always" in the UI's Focused Rendering switch).
     CylinderAlways,
     /// Trim: drop the plan's minor branches near the view
-    /// (docs/projects/word-editing.md §4). 0 = off.
+    /// (docs/projects/deep-zoom/word-editing.md §4). 0 = off.
     CylinderTrim,
     /// How many levels of the word tree, from the view, trim reaches.
     CylinderTrimLevels,
     /// The pieces of the picture removed by their words
-    /// (docs/projects/word-editing.md §5): a list of patterns.
+    /// (docs/projects/deep-zoom/word-editing.md §5): a list of patterns.
     WordRemovals,
     LevelsLow,
     LevelsHigh,
@@ -254,7 +254,7 @@ pub enum ConfigPath {
     SolidSpecular,
     SolidShininess,
     /// The material's coat -- reflectance at normal incidence and
-    /// roughness -- and the albedo's glow (docs/projects/materials.md):
+    /// roughness -- and the albedo's glow (docs/archive/projects/materials.md):
     /// one per picture, read by every tier. `EscapePathGloss` and
     /// `SimPathGloss` (and their roughness and emission) are aliases.
     SolidGloss,
@@ -536,7 +536,7 @@ pub enum ConfigPath {
     EscapeShadingHighlightStrength,
     EscapeShadingHighlightBlend,
     EscapeShadingSoftness,
-    // The 3D terrain view (docs/projects/heightfield-3d.md).
+    // The 3D terrain view (docs/archive/terrain/heightfield-3d.md).
     EscapeTerrainEnabled,
     EscapeTerrainSource,
     EscapeTerrainHeight,
@@ -562,7 +562,7 @@ pub enum ConfigPath {
     EscapePathZenith,
     EscapeTerrainInterior,
     /// How a count or a relief rises to its height, and the land
-    /// inverted (docs/projects/terrain-height.md, H2).
+    /// inverted (docs/archive/terrain/terrain-height.md, H2).
     EscapeTerrainCurve,
     EscapeTerrainInvert,
     /// The relief fixed at a zoom, and the range pinned there (H3).
@@ -661,7 +661,7 @@ pub enum AffineParam {
 /// variant and read from the right pool when displaying / editing
 /// affine, post-affine, variations, and variation_params.
 ///
-/// See `docs/projects/per-transform-linked-and-final.md`.
+/// See `docs/archive/projects/per-transform-linked-and-final.md`.
 /// Which transform pool a path-or-action targets.
 /// Use `TransformRef` when an index is also needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

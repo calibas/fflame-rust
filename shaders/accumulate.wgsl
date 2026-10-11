@@ -44,7 +44,7 @@ const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
 // leaked iters_per_thread and frame count into brightness.
 //
 // Uses ping-pong textures to work around read-write limitations.
-// See docs/projects/accumulator-unification.md.
+// See docs/archive/projects/accumulator-unification.md.
 
 struct AccumulateParams {
     width: u32,

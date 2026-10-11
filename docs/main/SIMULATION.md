@@ -12,10 +12,10 @@ a run at a step count*.
 - [UI.md](UI.md) — the panel, and how the animation timeline drives the grid
 - [EXPORT.md](EXPORT.md) — stills and video
 - [SCRIPTING.md](SCRIPTING.md) — the `sim` script surface
-- [simulation-catalog.md](../projects/simulation-catalog.md) — every model,
+- [simulation-catalog.md](SIMULATION-CATALOG.md) — every model,
   its governing rule, its source, and what bit it. **Read this before
   touching a model.**
-- [simulation-fractals.md](../projects/simulation-fractals.md) — the
+- [simulation-fractals.md](../archive/projects/simulation-fractals.md) — the
   master plan and its decision record
 
 **Code locations:**
@@ -143,7 +143,7 @@ them. In the stage loop:
 Switching a memory on or off is part of `SeedIdentity`, so it
 restarts the run. A `ReadsMemory` colouring sees them as
 `x.m0`/`x.m1`, blended by the resolve like the state. See
-[mccabe-multiscale.md](../projects/mccabe-multiscale.md).
+[mccabe-multiscale.md](../archive/projects/mccabe-multiscale.md).
 
 **Scratch slices.** A layer whose model has a measure pass that is on
 has its scratch after ALL memory (`SliceLayout`). They do not persist:
@@ -210,7 +210,7 @@ pyramid with a spectral stage:
   round disc did. Exact discs only: the panel hides the columns
   otherwise.
 
-See [mccabe-multiscale.md](../projects/mccabe-multiscale.md), sections 6
+See [mccabe-multiscale.md](../archive/projects/mccabe-multiscale.md), sections 6
 to 6c and 9.
 
 ### Shaders
@@ -386,7 +386,7 @@ reseeding on it would make every model unusable.
 2. Append it to `MODELS` in [src/sim/mod.rs](../../src/sim/mod.rs)
    (**append-only** — order is the stable ID order).
 3. Add a section to
-   [simulation-catalog.md](../projects/simulation-catalog.md): the
+   [simulation-catalog.md](SIMULATION-CATALOG.md): the
    governing rule as its source states it, the discretisation, the
    parameters, and what bit you. Cite the source and mark it `[read]`
    or `[verify]` honestly.

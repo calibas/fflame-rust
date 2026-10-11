@@ -2,7 +2,7 @@
 
 The client's first API integration and the v2 wire-format redesign. Both
 are **done and shipped**; the live successor is
-[docs/projects/api-shared-resources.md](../../projects/api-shared-resources.md),
+[docs/archive/projects/api-shared-resources.md](../projects/api-shared-resources.md),
 which is still active and deliberately not archived.
 
 Read these for *why* the API looks the way it does. Do not read them for
@@ -41,7 +41,7 @@ each other and were moved together.
 | the wire format, authoritatively | `docs/main/openapi.json` |
 | variation/effect payloads | `docs/projects/VARIATIONS_WIRE_FORMAT.md` |
 | vocabularies and engine limits | `docs/generated/engine-contract.json` (generated) |
-| shared resources, curation, plugins | `docs/projects/api-shared-resources.md` |
+| shared resources, curation, plugins | `docs/archive/projects/api-shared-resources.md` |
 | version-keyed config migration | `docs/archive/config-versioning.md` for the mechanism; `src/api/sync.rs` for its API-specific use |
 
 Nothing unique was lost in archiving these — that was checked before

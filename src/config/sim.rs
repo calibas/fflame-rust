@@ -2,7 +2,7 @@
 //!
 //! The per-config state for the neighbour-coupled simulations
 //! (reaction–diffusion, cellular automata, growth) — everything
-//! `docs/projects/simulation-fractals.md` calls `SimConfig`. Lives
+//! `docs/archive/projects/simulation-fractals.md` calls `SimConfig`. Lives
 //! inside [`FractalConfig`] behind skip-if-default, so a flame or an
 //! escape config that has never touched simulation mode serializes
 //! exactly as before, byte for byte.
@@ -21,7 +21,7 @@
 //!   because the renderer runs exactly this many steps from the seed;
 //!   models that never settle (spirals, cyclic automata) are animated
 //!   subjects whose still is simply "the state at step N". Measured
-//!   defaults per model are in `docs/projects/simulation-catalog.md`.
+//!   defaults per model are in `docs/main/SIMULATION-CATALOG.md`.
 //!
 //! Per-model and per-colouring parameters are keyed maps rather than
 //! fields, the same choice `Transform::variation_params` and
@@ -943,7 +943,7 @@ pub struct SimConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub color_layers: Vec<SimColorLayer>,
 
-    /// The 3D terrain view (docs/projects/heightfield-3d.md, T4): the
+    /// The 3D terrain view (docs/archive/terrain/heightfield-3d.md, T4): the
     /// grid as a height field. Off by default and skipped when off, so
     /// every existing file is byte-stable.
     #[serde(default, skip_serializing_if = "SimTerrainConfig::is_default")]

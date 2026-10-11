@@ -2000,7 +2000,7 @@ impl ConfigManager {
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
             // The material is the picture's, beside the lights
-            // (docs/projects/materials.md): these are its aliases.
+            // (docs/archive/projects/materials.md): these are its aliases.
             ConfigPath::SimPathGloss => Ok(ConfigValue::Float(config.solid_shading.gloss)),
             ConfigPath::SimPathRoughness => Ok(ConfigValue::Float(config.solid_shading.roughness)),
             ConfigPath::SimPathEmission => Ok(ConfigValue::Float(config.solid_shading.glow)),

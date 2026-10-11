@@ -1,4 +1,4 @@
-//! Cameras, unified (docs/projects/camera-unification.md).
+//! Cameras, unified (docs/archive/3d-camera/camera-unification.md).
 //!
 //! The app has seven cameras -- the flame's 2D view and its 3D camera,
 //! the escape plane, mode D's solid camera, the escape terrain's, the

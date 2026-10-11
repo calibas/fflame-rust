@@ -16,7 +16,7 @@
 
 > **This document is the FLAME pipeline.** Two other engines produce a
 > picture the same shape and reuse everything from the accumulator
-> onward: escape-time ([escape-time-fractals.md](../projects/escape-time-fractals.md))
+> onward: escape-time ([escape-time-fractals.md](../archive/escape-time/escape-time-fractals.md))
 > and simulation ([SIMULATION.md](SIMULATION.md)). Neither runs the
 > compute or accumulate passes below; both hand `render_with` an
 > `Rgba32Float` image in the accumulator's layout and join at the
@@ -156,7 +156,7 @@ pub fn compute_pass(&mut self, encoder: &mut CommandEncoder) {
 ### Persistent orbits
 
 Each thread's orbit outlives its dispatch
-([persistent-orbits.md](../projects/persistent-orbits.md)). The orbit
+([persistent-orbits.md](../archive/projects/persistent-orbits.md)). The orbit
 buffer (binding 8, `PERSISTENT_ORBITS`) holds, for every thread, its
 point, colour, burn-in left, xaos previous transform, importance window,
 analytic-blur residual and variation registers; a dispatch resumes them

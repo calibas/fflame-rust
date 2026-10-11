@@ -213,7 +213,7 @@ engine-escape = []
 # fraction of a module's download; unlike it, there is no deep-zoom
 # machinery, so the whole thing is light.
 engine-sim = []
-# The 3D terrain view (docs/projects/heightfield-3d.md): an escape
+# The 3D terrain view (docs/archive/terrain/heightfield-3d.md): an escape
 # picture, and later a simulation's, as a lit height field on the
 # escape engine's solid camera. ON by default; the gallery modules
 # build without it (the plan's H2) and render a terrain config as its

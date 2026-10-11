@@ -453,7 +453,7 @@ pub struct Transform {
     /// run sequentially after this normal transform's variations.
     /// Linked transforms are part of dynamics: their output feeds the
     /// next iteration. Empty for transforms in the linked/final pools
-    /// themselves. See `docs/projects/per-transform-linked-and-final.md`.
+    /// themselves. See `docs/archive/projects/per-transform-linked-and-final.md`.
     pub linked_attachments: Vec<usize>,
 
     /// Indexes into `flame.final_transforms` — Final transforms that
@@ -646,7 +646,7 @@ impl Transform {
     /// nonlinear — they're the deterministic structure the mean-splat
     /// captures. The plot-path-linearity check (post-affine/finals/projection
     /// linear) is applied separately by the renderer. See
-    /// `docs/projects/analytic-blur-buffer.md`.
+    /// `docs/archive/projects/analytic-blur-buffer.md`.
     pub fn analytic_blur(&self, registry: &VariationRegistry) -> Option<(String, f32)> {
         use crate::variations::{Feature, analytic_blur::is_analytic_blur};
         let mut found: Option<(String, f32)> = None;
@@ -1841,7 +1841,7 @@ pub enum RenderMode {
     ThreeD,
     /// Escape-time fragment rendering (Mandelbrot and kin) — the whole
     /// chaos game is replaced by a per-pixel fragment pass; see
-    /// `docs/projects/escape-time-fractals.md`. Wire form `"escape"`.
+    /// `docs/archive/escape-time/escape-time-fractals.md`. Wire form `"escape"`.
     /// An older build loading a config with this mode fails the parse
     /// (unknown variant), which is honest: it cannot render it.
     #[serde(rename = "escape")]
@@ -1849,7 +1849,7 @@ pub enum RenderMode {
     /// Neighbour-coupled simulation (reaction-diffusion, cellular
     /// automata, growth) — a stateful grid stepped many times per
     /// frame rather than a function of the pixel's own coordinates;
-    /// see `docs/projects/simulation-fractals.md`. Wire form
+    /// see `docs/archive/projects/simulation-fractals.md`. Wire form
     /// `"simulation"`. An older build loading a config with this mode
     /// fails the parse (unknown variant), which is honest: it cannot
     /// render it.
@@ -1991,7 +1991,7 @@ pub struct Flame {
     /// layered rendering (separate `Flame` per layer) naturally gets a
     /// per-layer subflame pool this way.
     ///
-    /// See `docs/projects/subflames.md`.
+    /// See `docs/archive/projects/subflames.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subflames: Vec<Flame>,
 
@@ -2148,7 +2148,7 @@ impl Flame {
     /// produced by older versions of the app, or pulled from external
     /// sources) into the new `final_transforms` pool with an attachment
     /// on every normal transform. No-op if `legacy` is `None`.
-    /// See `docs/projects/per-transform-linked-and-final.md`.
+    /// See `docs/archive/projects/per-transform-linked-and-final.md`.
     pub fn migrate_legacy_final(&mut self, legacy: Option<Transform>) {
         let Some(legacy) = legacy else { return };
         let new_idx = self.final_transforms.len();
@@ -2511,7 +2511,7 @@ impl<'de> Deserialize<'de> for Flame {
                 // (consumed locally above into `final_transform`) into the
                 // new `final_transforms` pool with auto-attachment on every
                 // normal. See
-                // `docs/projects/per-transform-linked-and-final.md`
+                // `docs/archive/projects/per-transform-linked-and-final.md`
                 // §"File format / migration".
                 flame.migrate_legacy_final(final_transform);
                 Ok(flame)

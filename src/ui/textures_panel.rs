@@ -1,4 +1,4 @@
-//! The Texture panel (`docs/projects/sim-textures.md`): the textures an
+//! The Texture panel (`docs/archive/projects/sim-textures.md`): the textures an
 //! escape-time config can use -- the shipped presets, then the user's
 //! own, saved from Simulation mode with "Save as texture" -- each with a
 //! preview, picked into the config with one undo step.

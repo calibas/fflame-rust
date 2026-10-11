@@ -125,7 +125,7 @@ pub struct SystemSettings {
     // enters fly mode (F2, or the View panel's or menu bar's button) —
     // WASD/QE for movement, a drag in the viewport to look about the
     // eye; the sensitivity and Invert Y turn the orbit too. See
-    // `docs/projects/free-camera-movement.md` and `camera::fly`.
+    // `docs/archive/3d-camera/free-camera-movement.md` and `camera::fly`.
     /// Mouse-look sensitivity in radians per pixel of drag.
     /// Default 0.005 = ~0.3° per pixel, comfortable for most mice.
     #[serde(default = "default_fly_mouse_sensitivity")]

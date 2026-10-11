@@ -1,4 +1,4 @@
-//! Mode D's path tracer (docs/projects/heightfield-3d.md, T3c): a
+//! Mode D's path tracer (docs/archive/terrain/heightfield-3d.md, T3c): a
 //! solid's distance field through the core the terrain renders with
 //! (`crate::escape::path_core`), on the same camera and lights as the
 //! walk.

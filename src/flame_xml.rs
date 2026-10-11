@@ -427,7 +427,7 @@ fn parse_flame_element(
     // at plot time. `Flame::migrate_legacy_final` pushes each into the
     // `final_transforms` pool and auto-attaches them to every normal so
     // the rest of the pipeline sees a consistent shape.
-    // See `docs/projects/per-transform-linked-and-final.md`.
+    // See `docs/archive/projects/per-transform-linked-and-final.md`.
     let mut flame = Flame {
         id: crate::scene::transforms::next_id(),
         name,

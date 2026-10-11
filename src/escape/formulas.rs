@@ -3,7 +3,7 @@
 //! One `static FormulaDef` per formula, WGSL inline, mirroring
 //! `src/variations/defs/*`. Registered in `super::FORMULAS`
 //! (append-only). This is the phase-1 set from the plan's catalog
-//! (docs/projects/escape-time-fractals.md §5): Mandelbrot/Multibrot,
+//! (docs/archive/escape-time/escape-time-fractals.md §5): Mandelbrot/Multibrot,
 //! Tricorn/Multicorn, the Burning Ship family, McMullen, Kaliset.
 //!
 //! Complex helpers `esc_cmul(a, b)` and `esc_cpow(z, p)` come from the

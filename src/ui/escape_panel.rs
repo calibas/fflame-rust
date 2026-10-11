@@ -1,6 +1,6 @@
 //! Escape Fractal panel — the whole editing surface for escape-time
 //! mode (the flame-only panels stay hidden rather than learning a
-//! second vocabulary; see docs/projects/escape-time-fractals.md §3).
+//! second vocabulary; see docs/archive/escape-time/escape-time-fractals.md §3).
 //!
 //! Every control writes through `config_manager.update_param` with an
 //! `Escape*` ConfigPath, so undo/redo, coalescing, animation tracks and
@@ -747,7 +747,7 @@ pub fn render_escape_content(
         .show(ui, |ui| palette_map_controls(ui, config_manager, &esc.palette_map));
 
     // ---- 3D terrain ----
-    // The picture as a lit height field (docs/projects/heightfield-3d.md).
+    // The picture as a lit height field (docs/archive/terrain/heightfield-3d.md).
     // Above the relief because, on, it replaces the relief's 2D lighting
     // with its own.
     #[cfg(feature = "terrain")]

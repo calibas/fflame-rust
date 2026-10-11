@@ -42,7 +42,7 @@
 //! -69.078.
 //!
 //! Found by the variation math probe; see
-//! `docs/projects/variation-math-probe.md`.
+//! `docs/archive/projects/variation-math-probe.md`.
 
 use crate::variations::{
     definition::{Feature, VariationDef},

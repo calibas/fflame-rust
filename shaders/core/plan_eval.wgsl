@@ -1,4 +1,4 @@
-// The planner's arithmetic on the GPU -- docs/projects/gpu-cylinder-planning.md.
+// The planner's arithmetic on the GPU -- docs/projects/deep-zoom/gpu-cylinder-planning.md.
 //
 // Appended to a flame's definitions by `ShaderBuilder::build_plan_eval`,
 // built with CYLINDER_REPLAY on, so a word is applied by

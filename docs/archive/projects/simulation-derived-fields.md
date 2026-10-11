@@ -8,7 +8,7 @@ most interesting page here.
 transform inside the flame renderer, which is the third of the three
 requests §1 opens with. It is scoped in §1 and §5 and deliberately
 never scheduled; it is carried forward in the master plan's open list
-([simulation-fractals.md](../../projects/simulation-fractals.md) §5)
+([simulation-fractals.md](simulation-fractals.md) §5)
 so it is not lost by archiving this.
 
 This is the plan for three requests made together: a low-resolution

@@ -24,7 +24,7 @@ use crate::scene::palette::Palette;
 /// per-iteration cost — see its doc comment.
 ///
 /// Soft cap: panics with a clear message if a flame exceeds it.
-/// See `docs/projects/per-transform-linked-and-final.md`.
+/// See `docs/archive/projects/per-transform-linked-and-final.md`.
 pub const MAX_TRANSFORMS: usize = 128;
 
 /// Max number of per-transform analytic-blur mean-splat buffers (v1 cap).
@@ -141,7 +141,7 @@ pub struct GpuTransform {
     // plot section routes a blur-terminated iteration to `blur_buffers[slot]`
     // instead of the main histogram. Repurposed from one `_plane_pad` slot,
     // so the struct size/alignment is unchanged. See
-    // `docs/projects/analytic-blur-buffer.md`.
+    // `docs/archive/projects/analytic-blur-buffer.md`.
     pub analytic_blur_slot: i32,
 
     // Analytic-blur routing knobs (carved from the former 2-u32 pad, so the
@@ -422,7 +422,7 @@ impl GpuTransform {
     /// `flame.final_transforms[0]` at deserialize time and re-synced
     /// on every UI edit, so chain renderers see it without needing a
     /// separate GPU slot. See
-    /// `docs/projects/per-transform-linked-and-final.md`.
+    /// `docs/archive/projects/per-transform-linked-and-final.md`.
     ///
     /// Solo mode (a normal-only feature) sets effective_opacity to 0
     /// for non-solo normals; linkeds and finals always run with their
@@ -838,7 +838,7 @@ pub struct GpuParams {
     pub path_origin: [f32; 3],
     /// Where the path filters' count and minimum length were: the Path
     /// Editor they served was replaced by word editing
-    /// (docs/projects/word-editing.md). Kept as padding so `post_symmetry`
+    /// (docs/projects/deep-zoom/word-editing.md). Kept as padding so `post_symmetry`
     /// stays on its 16-byte boundary. Mirror in header.wgsl.
     pub _pad_path_filters: [u32; 2],
     pub background_r: f32, // Background color R (for depth fog)
@@ -871,7 +871,7 @@ pub struct GpuParams {
     pub shadow_radius: f32,
     pub shadow_count: u32,
     /// The correction window `m` for biased selection
-    /// (docs/projects/flame-deep-zoom.md stage 1). Carved from the
+    /// (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Carved from the
     /// first of the three shadow pads, so the struct's size and every
     /// later field's offset are unchanged -- there is no layout churn
     /// to get wrong, which is the whole reason it sits here rather
@@ -880,7 +880,7 @@ pub struct GpuParams {
     /// Read only under the IMPORTANCE_SAMPLING builder flag.
     pub importance_window: u32,
     /// The orbit generation (`PERSISTENT_ORBITS`,
-    /// docs/projects/persistent-orbits.md): a thread whose stored orbit
+    /// docs/archive/projects/persistent-orbits.md): a thread whose stored orbit
     /// carries it resumes. Carved from the second shadow pad, like
     /// `importance_window` from the first, so no offset moves.
     pub orbit_generation: u32,
@@ -900,7 +900,7 @@ pub struct GpuParams {
     /// region — the one number the enumeration cannot compute for
     /// itself, because `Cylinders::lost` only sees words it tried to
     /// bound, never the measure that was never in the root region at
-    /// all (`docs/projects/inversive-targeting.md` §1b).
+    /// all (`docs/projects/deep-zoom/inversive-targeting.md` §1b).
     ///
     /// Appended after `shadow_dirs`, which is 16-byte aligned, so no
     /// existing field's offset moves.
@@ -1157,7 +1157,7 @@ pub struct FlameBuffers {
     /// `update_attachments`'s packing stride. Backing storage is
     /// always allocated at the worst-case `MAX_ATTACHMENTS_PER_TRANSFORM`
     /// stride; smaller per-flame caps just write fewer bytes per slot.
-    /// See `docs/projects/per-transform-linked-and-final.md`.
+    /// See `docs/archive/projects/per-transform-linked-and-final.md`.
     pub attachments_buffer: Buffer,
 
     /// `array<SubflameMeta, MAX_SUBFLAMES>` uniform with per-subflame
@@ -1226,7 +1226,7 @@ pub struct FlameBuffers {
     pub dummy_xaos_buffer: Buffer,
 
     // Biased selection weights and their likelihood ratios
-    // (docs/projects/flame-deep-zoom.md stage 1). Layout is
+    // (docs/projects/deep-zoom/flame-deep-zoom.md stage 1). Layout is
     // `scene::importance::build_table`'s: N biased weights, then the
     // N×N ratio matrix. None when the feature is off, and the dummy
     // is bound then — the shader does not declare the binding at all
@@ -1235,14 +1235,14 @@ pub struct FlameBuffers {
     pub bias_buffer: Option<Buffer>,
     pub dummy_bias_buffer: Buffer,
 
-    // The enumerated cylinders (docs/projects/flame-deep-zoom.md
+    // The enumerated cylinders (docs/projects/deep-zoom/flame-deep-zoom.md
     // stage 2), packed by `scene::cylinder::pack`. None when the view
     // is not being targeted, which is the common case -- targeting is
     // for depth and a shallow view has nothing to target.
     pub cylinder_buffer: Option<Buffer>,
     pub dummy_cylinder_buffer: Buffer,
     /// Each thread's orbit, kept between dispatches (binding 8,
-    /// `PERSISTENT_ORBITS`; docs/projects/persistent-orbits.md). Made when
+    /// `PERSISTENT_ORBITS`; docs/archive/projects/persistent-orbits.md). Made when
     /// a shader first asks for it, grown when a dispatch needs more.
     pub orbit_buffer: Option<Buffer>,
     pub dummy_orbit_buffer: Buffer,
@@ -1261,7 +1261,7 @@ pub struct FlameBuffers {
     // buffer or downsample pass. Reallocated when the downscale D changes
     // (rare, discrete steps; never on exports). None when inactive (the dummy
     // is bound). See `ensure_lowres_blur_buffers` and
-    // docs/projects/analytic-blur-buffer.md.
+    // docs/archive/projects/analytic-blur-buffer.md.
     //   blur_splat_buffer     — low-res atomic splat target + convolve input
     //   blur_convolved_buffer — convolve output / upscale input
     pub blur_splat_buffer: Option<Buffer>,
@@ -2275,7 +2275,7 @@ impl FlameBuffers {
     /// `cap` MUST match the value the shader was compiled with
     /// (`Flame::attachment_cap()` for the same flame). Mismatch =
     /// stride mismatch = garbage reads.
-    /// See `docs/projects/per-transform-linked-and-final.md`.
+    /// See `docs/archive/projects/per-transform-linked-and-final.md`.
     pub fn update_attachments(&self, queue: &Queue, flame: &Flame, cap: usize) {
         let n = flame.transforms.len();
         let l = flame.linked_transforms.len();

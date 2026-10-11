@@ -11,7 +11,7 @@
 //! `HighResExporter` lifetime and reuse it across iterate→accumulate
 //! cycles.
 //!
-//! See `docs/projects/unified-render-pipeline.md`.
+//! See `docs/archive/projects/unified-render-pipeline.md`.
 
 use egui_wgpu::wgpu::*;
 

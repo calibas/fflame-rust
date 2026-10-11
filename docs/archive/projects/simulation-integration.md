@@ -23,9 +23,9 @@ WASM and TESTING-GUIDE do not, and CLAUDE.md still has no `src/sim/`
 entry beside `src/escape/`.
 
 **Was:** Planning, 2026-09-01. No code. Companion to
-[simulation-fractals.md](../../projects/simulation-fractals.md) (master plan),
+[simulation-fractals.md](simulation-fractals.md) (master plan),
 [simulation-pipeline.md](simulation-pipeline.md) (GPU design) and
-[simulation-catalog.md](../../projects/simulation-catalog.md) (models and sources).
+[simulation-catalog.md](../../main/SIMULATION-CATALOG.md) (models and sources).
 
 This is the file-by-file list of everything a third render mode has to
 touch, derived by mapping every place `RenderMode::Escape` reaches

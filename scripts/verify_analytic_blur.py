@@ -9,7 +9,7 @@ reproduces the stochastic blur — smooth, unbiased, energy-preserving:
   * stochastic@N  — the same transform uses the original `blur` (noisy at N)
   * reference     — stochastic at a high sample count (converged ground truth)
 
-Assertions (see docs/projects/analytic-blur-buffer.md "The golden test"):
+Assertions (see docs/archive/projects/analytic-blur-buffer.md "The golden test"):
   1. Energy preserved: mean brightness of analytic@N within 5% of reference.
   2. No spatial bias: denoised (structure-only) RMSE of analytic@N vs the
      reference is small — a shifted/wrong kernel would blow this up.

@@ -190,7 +190,7 @@ struct VariationParams {
 // these after the chaos game picks a normal transform: linkeds advance
 // the dynamics state (their output feeds the next iteration), finals
 // shape the plotted point only (output discarded for IFS).
-// See docs/projects/per-transform-linked-and-final.md.
+// See docs/archive/projects/per-transform-linked-and-final.md.
 struct AttachmentList {
     linked: array<u32, 1>,
     linked_count: u32,
@@ -202,7 +202,7 @@ struct AttachmentList {
 // Sample-emit output: shader writes one Sample per plotted point to a
 // streaming buffer, host-side accumulate pass scatters into per-tile
 // histograms. Used by multi-tile strategies (above the single-binding
-// histogram size limit). See docs/projects/unified-render-pipeline.md.
+// histogram size limit). See docs/archive/projects/unified-render-pipeline.md.
 //
 // WGSL storage array stride must be a multiple of 16 bytes; 5 floats
 // (20B) padded to 32B (8 floats).
@@ -246,7 +246,7 @@ struct SampleCounter {
 @group(0) @binding(7) var<storage, read_write> path_ids: array<u32>;
 
 // Binding 8 intentionally unused: the path filters, which word editing
-// replaced (docs/projects/word-editing.md).
+// replaced (docs/projects/deep-zoom/word-editing.md).
 // Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
 // Modifies probability of selecting dst transform when coming from src
 @group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;
@@ -259,7 +259,7 @@ struct SampleCounter {
 
 
 // **Each thread's orbit, kept between dispatches**
-// (docs/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
+// (docs/archive/projects/persistent-orbits.md). `ORBIT_WORDS` u32 a thread:
 //
 //   0..4   x, y, z, point_w        4..8   speed rgb, color_index
 //   8      generation              9      burn-in left
@@ -1323,7 +1323,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // plot routes the deterministic mean to this transform's blur buffer.
         // Only declared (and threaded into apply_variations) when the feature
         // is active — a non-blur build is byte-identical to one without it.
-        // See docs/projects/analytic-blur-buffer.md.
+        // See docs/archive/projects/analytic-blur-buffer.md.
 
 
 
@@ -1628,7 +1628,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // pass scatters samples into per-tile histograms. Used when
                 // the full-resolution histogram exceeds the storage-buffer
                 // binding size limit. See
-                // docs/projects/unified-render-pipeline.md.
+                // docs/archive/projects/unified-render-pipeline.md.
                 //
                 // Allocate a slot via atomic counter and write the sample.
                 // Same plot-time coords + final_color the direct path uses

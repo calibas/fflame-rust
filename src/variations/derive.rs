@@ -2075,7 +2075,7 @@ mod branch_tests {
     /// **Does pinning the arm make a julia bound shrink?**
     ///
     /// `grand-julian` is refused today with "`julian` has no forward
-    /// bound", and §2 of `docs/projects/inversive-targeting.md` says
+    /// bound", and §2 of `docs/projects/deep-zoom/inversive-targeting.md` says
     /// why: the body picks one of `|power|` arms with a random draw,
     /// so a bound that covers every draw covers a whole annulus about
     /// the origin — `O(1)` however small the input. A word through it

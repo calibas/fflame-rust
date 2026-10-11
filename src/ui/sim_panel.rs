@@ -49,7 +49,7 @@ pub struct SimUiState<'a> {
     pub grid: (u32, u32),
 }
 
-/// "Save as texture" (`docs/projects/sim-textures.md`): this simulation,
+/// "Save as texture" (`docs/archive/projects/sim-textures.md`): this simulation,
 /// as it stands, into the texture library, where escape-time fractals
 /// can use it. What is saved is what is on screen: the step count is the
 /// live run's, not the cap (which may be 0, uncapped), and a

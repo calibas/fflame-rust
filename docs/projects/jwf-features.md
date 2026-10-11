@@ -2,7 +2,7 @@
 
 Companion to [`jwf-common-variations-port.md`](jwf-common-variations-port.md) (variations) and [`variation-port-blockers.md`](variation-port-blockers.md) (blocked variations). This doc tracks JWildfire features that are **not variations** — XML attributes on `<flame>` / `<xform>`, per-transform settings, plot-time mechanisms, etc. — that affect how a JWF flame renders but aren't yet wired up in our import or pipeline.
 
-Same shape as [`apophysis-remaining-features.md`](apophysis-remaining-features.md) but for JWildfire's extensions to the Apophysis baseline.
+Same shape as [`apophysis-remaining-features.md`](../archive/projects/apophysis-remaining-features.md) but for JWildfire's extensions to the Apophysis baseline.
 
 Each feature listed below has a status, what it does in JWildfire, what it would take to implement, and how its absence currently manifests when importing a JWF flame.
 
@@ -116,7 +116,7 @@ The deferred items are loosely coupled — the zoom math is the heaviest single 
 - Pure JWF/Apo camera math reproduction would land all four slider directions naturally. We needed empirical sign tuning to get it right — JWildfire almost certainly applies their matrix with a different convention internally (M^T·v or different basis vectors). The tuning is documented at `project_3d_to_2d_apophysis` in `shaders/core/utilities.wgsl`.
 - The 2D `rotation` field doubles as the 3D `roll` angle in our model (mirroring JWildfire's `rotate` ↔ `roll` mapping). 2D mode still applies `rotation` as a post-projection screen rotation since there's no camera matrix there.
 
-**Stage 2 — free camera movement**. With rotation done, the natural next project is FPS-style free-fly: WASD + mouse-look + Q/E for up/down. See [`free-camera-movement.md`](free-camera-movement.md) for the full plan.
+**Stage 2 — free camera movement**. With rotation done, the natural next project is FPS-style free-fly: WASD + mouse-look + Q/E for up/down. See [`free-camera-movement.md`](../archive/3d-camera/free-camera-movement.md) for the full plan.
 
 ## Deferred (not urgent)
 
@@ -445,4 +445,4 @@ Defaults are all `0.0` — they're opt-in modulators.
 
 - [`jwf-common-variations-port.md`](jwf-common-variations-port.md) — JWF "script vars" variation subset (188/190 implemented).
 - [`variation-port-blockers.md`](variation-port-blockers.md) — Per-variation porting blockers + framework features needed to unblock them.
-- [`apophysis-remaining-features.md`](apophysis-remaining-features.md) — Apophysis-baseline features (XAOS, 3D camera, etc.); same shape as this doc but for the Apo side.
+- [`apophysis-remaining-features.md`](../archive/projects/apophysis-remaining-features.md) — Apophysis-baseline features (XAOS, 3D camera, etc.); same shape as this doc but for the Apo side.

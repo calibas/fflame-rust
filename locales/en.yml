@@ -1779,7 +1779,7 @@ track_editor:
   close: "Close"
   warning_replace: "⚠ A track with this target already exists and will be replaced"
 
-# Paths Panel (docs/projects/word-editing.md §6)
+# Paths Panel (docs/projects/deep-zoom/word-editing.md §6)
 paths:
   needs_focus: "Turn on Focused Rendering to see and edit the fractal's paths. Choose Always to use this panel at any zoom."
   summary: "%{paths} paths, %{drawn} drawn. Each path is a part of the picture, named by the transforms that lead there, the last one at the top. Open a path to see the paths inside it."
