@@ -1532,6 +1532,7 @@ fractal_gallery:
   zoom: "Zoom: %{value}"
   max_iterations: "Max Iterations: %{value}"
   color_mode: "Color Mode: %{value}"
+  steps: "Steps: %{value}"
   variations_more: "%{first}, +%{count} more"
 
 # Animation Panel

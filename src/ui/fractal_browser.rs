@@ -25,6 +25,56 @@ pub enum BrowserTab {
     Online,
 }
 
+/// The Online tab's render-mode filter: the value sent as
+/// `render_mode`, and the label key.
+///
+/// No Simulation entry: the server's `render_mode` enum does not know
+/// that value yet (see [`ApiRenderMode::Simulation`]), so filtering by
+/// it would fail the whole search rather than return nothing.
+///
+/// [`ApiRenderMode::Simulation`]: crate::api::types::ApiRenderMode::Simulation
+const ONLINE_RENDER_MODE_FILTERS: &[(Option<crate::api::types::ApiRenderMode>, &str)] = &[
+    (None, "browser.search_all"),
+    (Some(crate::api::types::ApiRenderMode::TwoD), "browser.search_2d"),
+    (Some(crate::api::types::ApiRenderMode::ThreeD), "browser.search_3d"),
+    (Some(crate::api::types::ApiRenderMode::Escape), "mode.escape"),
+];
+
+/// One row of the Online tab: the name, the kind of fractal, and for a
+/// flame its transform count and variations.
+///
+/// Escape and simulation configs legitimately have no transforms and no
+/// variations -- the formula or the model IS the fractal -- so for them
+/// those columns would read "0T | " and look like a broken row rather
+/// than a different kind of fractal.
+fn online_row_label(flame: &crate::api::types::FlameListItem) -> String {
+    use crate::api::types::ApiRenderMode as M;
+    let render_mode = t!(match flame.render_mode {
+        M::TwoD => "fractal_gallery.render_mode_2d",
+        M::ThreeD => "fractal_gallery.render_mode_3d",
+        M::Escape => "fractal_gallery.render_mode_escape",
+        M::Simulation => "fractal_gallery.render_mode_simulation",
+    });
+    match flame.render_mode {
+        M::Escape | M::Simulation => format!("{} — {}", flame.name, render_mode),
+        M::TwoD | M::ThreeD => {
+            let variations_summary = if flame.variation_names.len() <= 3 {
+                flame.variation_names.join(", ")
+            } else {
+                format!(
+                    "{}, +{}",
+                    flame.variation_names[..2].join(", "),
+                    flame.variation_names.len() - 2
+                )
+            };
+            format!(
+                "{} — {} | {}T | {}",
+                flame.name, render_mode, flame.transform_count, variations_summary
+            )
+        }
+    }
+}
+
 /// State for the Fractal Browser panel
 pub struct FractalBrowserPanel {
     /// Currently active tab
@@ -78,8 +128,9 @@ pub struct FractalBrowserPanel {
     online_pending_delete: Option<(String, String)>,
     /// Search filter: name text
     online_search_name: String,
-    /// Search filter: render mode (0=All, 1=2D, 2=3D)
-    online_search_render_mode: u8,
+    /// Search filter: render mode (`None` = All). One of
+    /// [`ONLINE_RENDER_MODE_FILTERS`].
+    online_search_render_mode: Option<crate::api::types::ApiRenderMode>,
 
     /// Cached auth credentials for trigger methods (base_url, token) — set each frame from render()
     auth_credentials: Option<(String, String)>,
@@ -123,7 +174,7 @@ impl FractalBrowserPanel {
             online_delete_result: Arc::new(Mutex::new(None)),
             online_pending_delete: None,
             online_search_name: String::new(),
-            online_search_render_mode: 0,
+            online_search_render_mode: None,
 
             auth_credentials: None,
         }
@@ -239,7 +290,7 @@ impl FractalBrowserPanel {
         self.online_loading = false;
         self.online_error = None;
         self.online_search_name.clear();
-        self.online_search_render_mode = 0;
+        self.online_search_render_mode = None;
     }
 
     /// Reset online tab for a fresh session (used after sign-in).
@@ -562,14 +613,10 @@ impl FractalBrowserPanel {
 
             ui.separator();
 
-            if ui.selectable_label(self.online_search_render_mode == 0, t!("browser.search_all").as_ref()).clicked() {
-                self.online_search_render_mode = 0;
-            }
-            if ui.selectable_label(self.online_search_render_mode == 1, t!("browser.search_2d").as_ref()).clicked() {
-                self.online_search_render_mode = 1;
-            }
-            if ui.selectable_label(self.online_search_render_mode == 2, t!("browser.search_3d").as_ref()).clicked() {
-                self.online_search_render_mode = 2;
+            for &(mode, key) in ONLINE_RENDER_MODE_FILTERS {
+                if ui.selectable_label(self.online_search_render_mode == mode, t!(key).as_ref()).clicked() {
+                    self.online_search_render_mode = mode;
+                }
             }
 
             ui.separator();
@@ -579,11 +626,11 @@ impl FractalBrowserPanel {
                 search_triggered = true;
             }
 
-            let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode != 0;
+            let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode.is_some();
             if has_filters {
                 if ui.add_enabled(search_enabled, egui::Button::new(t!("browser.search_clear"))).clicked() {
                     self.online_search_name.clear();
-                    self.online_search_render_mode = 0;
+                    self.online_search_render_mode = None;
                     search_triggered = true;
                 }
             }
@@ -617,35 +664,7 @@ impl FractalBrowserPanel {
             let mut delete_flame: Option<(String, String)> = None;
 
             for flame in &flames {
-                let render_mode = match flame.render_mode {
-                    crate::api::types::ApiRenderMode::TwoD => "2D",
-                    crate::api::types::ApiRenderMode::ThreeD => "3D",
-                    crate::api::types::ApiRenderMode::Escape => "Escape",
-                    crate::api::types::ApiRenderMode::Simulation => "Simulation",
-                };
-
-                let variations_summary = if flame.variation_names.len() <= 3 {
-                    flame.variation_names.join(", ")
-                } else {
-                    format!(
-                        "{}, +{}",
-                        flame.variation_names[..2].join(", "),
-                        flame.variation_names.len() - 2
-                    )
-                };
-
-                // An escape fractal legitimately has no transforms and no
-                // variations -- the formula IS the fractal -- so those
-                // columns would read "0T | " and look like a broken row
-                // rather than a different kind of fractal.
-                let label = if flame.render_mode == crate::api::types::ApiRenderMode::Escape {
-                    format!("{} — {}", flame.name, render_mode)
-                } else {
-                    format!(
-                        "{} — {} | {}T | {}",
-                        flame.name, render_mode, flame.transform_count, variations_summary
-                    )
-                };
+                let label = online_row_label(flame);
 
                 ui.horizontal(|ui| {
                     // Load button (main flame row)
@@ -718,7 +737,7 @@ impl FractalBrowserPanel {
         self.online_loading = true;
         self.online_error = None;
 
-        let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode != 0;
+        let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode.is_some();
 
         // Get credentials (WASM: from localStorage, Desktop: from cached auth)
         #[cfg(target_arch = "wasm32")]
@@ -743,11 +762,7 @@ impl FractalBrowserPanel {
             } else {
                 Some(self.online_search_name.clone())
             };
-            let render_mode = match self.online_search_render_mode {
-                1 => Some(crate::api::types::ApiRenderMode::TwoD),
-                2 => Some(crate::api::types::ApiRenderMode::ThreeD),
-                _ => None,
-            };
+            let render_mode = self.online_search_render_mode;
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
                 let result = search_online_flames(&base_url, &token, name, render_mode).await;
@@ -992,5 +1007,62 @@ mod tests {
         assert!(is_auth_error(&format!("Failed to load flame: {}", FetchError::Unauthorized)));
         assert!(!is_auth_error(&FetchError::Forbidden.to_string()), "a 403 is not an expired session");
         assert!(!is_auth_error(&FetchError::NotFound("x".into()).to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::types::{ApiRenderMode, FlameListItem};
+
+    fn item(render_mode: ApiRenderMode, transform_count: i32, variations: &[&str]) -> FlameListItem {
+        FlameListItem {
+            id: "id".to_string(),
+            name: "Reef".to_string(),
+            render_mode,
+            transform_count,
+            variation_names: variations.iter().map(|s| s.to_string()).collect(),
+            has_3d: false,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// A simulation has no transforms and no variations, legitimately;
+    /// its row used to read "Reef — Simulation | 0T | " like a broken
+    /// flame, because only Escape got the short form.
+    #[test]
+    fn a_simulation_row_has_no_transform_columns() {
+        let label = online_row_label(&item(ApiRenderMode::Simulation, 0, &[]));
+        assert!(label.starts_with("Reef — "), "{label}");
+        assert!(!label.contains("0T"), "{label}");
+        assert!(!label.contains('|'), "{label}");
+
+        let label = online_row_label(&item(ApiRenderMode::Escape, 0, &[]));
+        assert!(!label.contains('|'), "{label}");
+    }
+
+    #[test]
+    fn a_flame_row_keeps_its_transform_count_and_variations() {
+        let label = online_row_label(&item(ApiRenderMode::TwoD, 3, &["linear", "swirl"]));
+        assert!(label.contains("| 3T | linear, swirl"), "{label}");
+        let label = online_row_label(&item(ApiRenderMode::ThreeD, 2, &["a", "b", "c", "d"]));
+        assert!(label.contains("| 2T | a, b, +2"), "{label}");
+    }
+
+    /// Escape is searchable; Simulation is not offered, because the
+    /// server's render_mode enum rejects it.
+    #[test]
+    fn the_online_filter_offers_escape_but_not_simulation() {
+        let modes: Vec<_> = ONLINE_RENDER_MODE_FILTERS.iter().map(|(m, _)| *m).collect();
+        assert_eq!(
+            modes,
+            vec![
+                None,
+                Some(ApiRenderMode::TwoD),
+                Some(ApiRenderMode::ThreeD),
+                Some(ApiRenderMode::Escape),
+            ]
+        );
     }
 }

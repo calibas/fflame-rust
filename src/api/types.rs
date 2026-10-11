@@ -344,6 +344,10 @@ pub struct SearchFlamesParams {
 
 impl SearchFlamesParams {
     /// Build query string from non-None fields.
+    ///
+    /// The free-text values are percent-encoded: a flame name holding
+    /// `&`, `#` or `+` otherwise split the query, cut it off as a
+    /// fragment, or arrived as a space.
     pub fn to_query_string(&self) -> String {
         let mut parts = Vec::new();
         if let Some(ref mode) = self.render_mode {
@@ -357,7 +361,7 @@ impl SearchFlamesParams {
             parts.push(format!("has_3d={}", has_3d));
         }
         if let Some(ref variation) = self.variation {
-            parts.push(format!("variation={}", variation));
+            parts.push(format!("variation={}", super::urlencode(variation)));
         }
         if let Some(min) = self.min_transforms {
             parts.push(format!("min_transforms={}", min));
@@ -366,7 +370,7 @@ impl SearchFlamesParams {
             parts.push(format!("max_transforms={}", max));
         }
         if let Some(ref name) = self.name {
-            parts.push(format!("name={}", name));
+            parts.push(format!("name={}", super::urlencode(name)));
         }
         if let Some(page) = self.page {
             parts.push(format!("page={}", page));
@@ -872,4 +876,30 @@ pub struct VariationListItem {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name went into the URL raw: `&` started a new parameter,
+    /// `#` cut the rest off as a fragment, and `+` arrived as a space.
+    #[test]
+    fn a_searched_name_is_percent_encoded() {
+        let params = SearchFlamesParams {
+            name: Some("a&b #c+".to_string()),
+            render_mode: Some(ApiRenderMode::Escape),
+            per_page: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(
+            params.to_query_string(),
+            "?render_mode=escape&name=a%26b+%23c%2B&per_page=100"
+        );
+    }
+
+    #[test]
+    fn no_filters_is_an_empty_query() {
+        assert_eq!(SearchFlamesParams::default().to_query_string(), "");
+    }
 }
