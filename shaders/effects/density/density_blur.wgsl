@@ -6,6 +6,13 @@
 //   params[0] = radius (0-10): Maximum blur radius in pixels
 //   params[1] = threshold (0-1): Density below which to apply blur
 //   params[2] = falloff (0-1): How quickly blur falls off above threshold
+//
+// Density is in multiples of the frame's mean density (`density_mean`,
+// the unit Levels uses), so the same pixels blur at any iteration count:
+// 0.25 blurs fully below a quarter of the mean, and the blur fades out
+// by threshold + falloff. The threshold used to be compared with the raw
+// hit count in `a`, so a pixel with a single hit never blurred. For an
+// escape or simulation image `density_mean` is 1 and `a` is read as is.
 
 struct EffectParams {
     // Parameters packed into vec4s for uniform buffer alignment
@@ -13,7 +20,10 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    // The frame's mean density: a pixel's `a` divided by it is in
+    // multiples of the mean.
+    density_mean: f32,
+    _padding: f32,
 }
 
 // Helper to get parameter by index
@@ -62,7 +72,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Sample center pixel
     let center = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
-    let density = center.a;
+    let density = center.a / max(effect_params.density_mean, 1e-6);
 
     // Calculate blur amount based on density
     // Low density = more blur, high density = less blur

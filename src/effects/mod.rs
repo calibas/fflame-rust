@@ -841,7 +841,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(1.0),
                 display_name: "Density Threshold".to_string(),
-                description: None,
+                description: Some(
+                    "Density, in multiples of the frame's mean density, below which a pixel blurs at the full radius. 0.25 blurs the parts sparser than a quarter of the average.".to_string(),
+                ),
             },
             EffectParameter {
                 name: "falloff".to_string(),
@@ -850,7 +852,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(1.0),
                 display_name: "Falloff".to_string(),
-                description: None,
+                description: Some(
+                    "How far above the threshold, in multiples of the mean density, the blur fades out to none.".to_string(),
+                ),
             },
         ],
     });

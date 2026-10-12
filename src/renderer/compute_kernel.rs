@@ -1610,6 +1610,39 @@ impl FlameRenderer {
     /// `TonemapParams::sample_density`. See
     /// docs/archive/projects/accumulator-unification.md, Phase 8a.
     fn refresh_sample_density(&self, queue: &Queue) {
+        let sample_density = self.sample_density();
+        let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&sample_density),
+        );
+        // Levels measures against the frame's REAL mean, which is this
+        // same number without the targeting inflation. Written HERE,
+        // beside its twin and from the same expression, because the
+        // whole-struct uploads that also set these fields compute a
+        // simpler `sample_density` of their own -- leaving this one
+        // stale was worth 15 grey levels across the visual suite.
+        let levels_density = self.mean_density();
+        let offset = std::mem::offset_of!(TonemapParams, levels_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&levels_density),
+        );
+    }
+
+    /// The frame's mean density without Focused Rendering's inflation:
+    /// what Levels measures in, and what a density effect divides a
+    /// pixel's hit count by (`density_blur`'s threshold). Written to the
+    /// tone map as `levels_density` by `refresh_sample_density`.
+    pub fn mean_density(&self) -> f32 {
+        (self.sample_density() / self.cylinder_iteration_scale() as f32).max(1e-6)
+    }
+
+    /// The tone map's `sample_density`: the plotted samples per pixel,
+    /// with the corrections below.
+    fn sample_density(&self) -> f32 {
         let total_pixels = (self.width as f32) * (self.height as f32);
         // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
         // the tonemap shader). Was `.max(1.0)`, which clamped
@@ -1647,32 +1680,12 @@ impl FlameRenderer {
         // is the plain `samples / pixels`. That cancellation is not a
         // coincidence -- it is the two halves (the estimator's weight,
         // and the exposure policy) agreeing.
-        let sample_density = ((self.samples_in_buffer as f32)
+        ((self.samples_in_buffer as f32)
             * self.solid_density_fraction
             * self.frame_coverage_fraction
             * self.cylinder_iteration_scale() as f32
             / total_pixels.max(1.0))
-            .max(1e-6);
-        let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
-        queue.write_buffer(
-            &self.buffers.tonemap_params_buffer,
-            offset,
-            bytemuck::bytes_of(&sample_density),
-        );
-        // Levels measures against the frame's REAL mean, which is this
-        // same number without the targeting inflation. Written HERE,
-        // beside its twin and from the same expression, because the
-        // whole-struct uploads that also set these fields compute a
-        // simpler `sample_density` of their own -- leaving this one
-        // stale was worth 15 grey levels across the visual suite.
-        let levels_density =
-            (sample_density / self.cylinder_iteration_scale() as f32).max(1e-6);
-        let offset = std::mem::offset_of!(TonemapParams, levels_density) as u64;
-        queue.write_buffer(
-            &self.buffers.tonemap_params_buffer,
-            offset,
-            bytemuck::bytes_of(&levels_density),
-        );
+            .max(1e-6)
     }
 
     /// Render the accumulation buffer to internal fractal texture with tone mapping

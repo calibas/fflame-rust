@@ -723,6 +723,7 @@ pub async fn render_with(
             &mut tonemap_encoder,
             pre_tonemap_view,
             &job.config.density_effects,
+            renderer.mean_density(),
         );
 
         if density_ran {
@@ -1010,6 +1011,7 @@ async fn render_sim(
             &mut encoder,
             sim_view,
             &job.config.density_effects,
+            1.0, // a simulation's alpha is not a hit count
         );
         match (density_ran, chain.get_density_output()) {
             (true, Some(density_output)) => {
@@ -1376,6 +1378,7 @@ async fn escape_tail(
             &mut encoder,
             escape_view,
             &config.density_effects,
+            1.0, // an escape image's alpha is not a hit count
         );
         match (density_ran, chain.get_density_output()) {
             (true, Some(density_output)) => {

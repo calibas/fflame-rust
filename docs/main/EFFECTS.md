@@ -144,7 +144,7 @@ The label is the curated name from `locales/en.yml`.
 | `film_grain` | Film Grain | colour | 3 | Per-pixel random noise; `seed` varies it between frames |
 | `chromatic_aberration` | Chromatic Aberration | colour | 4 | Offsets the red and blue channels, optionally growing toward the edges |
 | `hue_shift` | Hue Shift | colour | 3 | Rotates every hue by a fixed angle (shader `hue_cycle.wgsl`); keyframe `offset` to animate it |
-| `density_blur` | Density Blur | density | 3 | Blurs low-density areas more than dense ones |
+| `density_blur` | Density Blur | density | 3 | Blurs low-density areas more than dense ones; `threshold` and `falloff` are multiples of the mean density |
 | `sharpen` | Sharpen | density | 2 | Unsharp mask |
 | `bilateral_blur` | Bilateral Blur | density | 3 | Edge-preserving blur, weighted by distance and by luminance similarity |
 | `kaleidoscope` | Kaleidoscope | colour | 7 | N-fold rotational symmetry by folding coordinates in polar space |
@@ -202,13 +202,22 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,   // MAX_EFFECT_PARAMS = 48 floats
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    density_mean: f32,              // density effects: the frame's mean density
+    _padding: f32,
 }
 ```
 
 Parameter `i` of the effect's definition goes to
 `params[i / 4][i % 4]`, so the definition's order is the shader's slot
 order. A value missing from the instance takes the registry default.
+
+`density_mean` is, for a density effect on a flame, the frame's mean
+density (`FlameRenderer::mean_density`, the unit Levels measures in):
+`a / density_mean` is a density that does not grow with the iteration
+count. It is 1 for an escape or simulation image, whose `a` is not a
+hit count, and 0 for colour effects. It occupies what was an 8-byte
+padding, so a shader that declares `_padding: vec2<f32>` there binds
+the same layout and ignores it.
 
 **The 48-parameter cap is physical.** 48 floats plus the dimensions is
 208 bytes, inside the 256-byte slot stride; a compile-time assertion

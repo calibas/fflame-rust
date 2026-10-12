@@ -22,9 +22,11 @@ From this list:
 - **B6** -- the deep-zoom gates read gitignored fixtures.
 
 Found while fixing:
-- `density_blur.wgsl` compares the raw hit count with a 0-1 threshold, so
-  a pixel with a hit or more never blurs. What the threshold was meant
-  to be relative to is not recorded anywhere.
+- `density_blur.wgsl` compared the raw hit count with a 0-1 threshold, so
+  a pixel with a hit or more never blurred, and its intended unit was
+  recorded nowhere. Fixed: threshold and falloff are multiples of the
+  frame's mean density, the unit Levels uses, passed to density effects
+  as `density_mean`.
 - Escape fog decodes the background with `pow(2.2)`, which matches the
   tonemap exactly only at exposure 1 and gamma 1.
 - With online features off, web deep links (`?flame=`) are still

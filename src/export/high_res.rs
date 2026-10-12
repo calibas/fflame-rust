@@ -3554,6 +3554,7 @@ impl HighResExporter {
                     &mut density_encoder,
                     base_accum_view,
                     &config.density_effects,
+                    tonemap_params.levels_density,
                 );
                 self.queue.submit(std::iter::once(density_encoder.finish()));
                 if ran {
