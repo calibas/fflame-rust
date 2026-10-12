@@ -586,7 +586,23 @@ fn eye_in_anchor(escape: &EscapeConfig, a: &Anchor) -> ([f64; 2], f64) {
 /// screen pixel at its nearest point, inside the view (widened by a
 /// margin) and within `far`. Past `capacity`, the texels coarsen until
 /// it fits.
-pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: usize, anchor_zoom: f64, eye: [f64; 2]) -> Wanted {
+///
+/// No ground the view shows is nearer than `near_floor` (`next_near_floor`,
+/// from the probe; 0 unknown), so a section is split for no nearer than
+/// that. A box knows only the relief's slab: with the eye inside it --
+/// a low target lift -- every box under the eye held the eye itself, at
+/// distance 0, and split to the finest level. That column, under and
+/// behind the camera where nothing is seen, took most of the cap, and
+/// the ground in view was coarsened to fit what was left.
+pub fn wanted_sections(
+    escape: &EscapeConfig,
+    out_w: u32,
+    out_h: u32,
+    capacity: usize,
+    anchor_zoom: f64,
+    eye: [f64; 2],
+    near_floor: f64,
+) -> Wanted {
     let t = &escape.terrain;
     let z = (escape.zoom_log2 - anchor_zoom).exp2();
     let cam = terrain_camera(escape);
@@ -682,7 +698,7 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
                 continue;
             }
             let texel = (level as f64).exp2() * z / SECTION_CELLS as f64;
-            let need = near.max(1.0e-9) * per_pixel / rho * coarsen;
+            let need = near.max(near_floor).max(1.0e-9) * per_pixel / rho * coarsen;
             if texel > need && level > finest {
                 if level == root_level {
                     hidden_roots.insert((level, i, j));
@@ -700,6 +716,20 @@ pub fn wanted_sections(escape: &EscapeConfig, out_w: u32, out_h: u32, capacity: 
             return Wanted { root_level, root_first: lo, root_dims, sections: out, hidden_roots };
         }
         coarsen *= 1.5;
+    }
+}
+
+/// The sections' floor on distance (`wanted_sections`) from the nearest
+/// ground the probe saw, `t`: half of it -- the probe traces one ray an
+/// 8x8 block, and the camera may have come nearer since -- rounded down
+/// to a power of two, and raised only once the ground has drawn back
+/// four times as far, so the sections settle rather than flip between two
+/// splits as the measure wavers.
+fn next_near_floor(old: Option<f64>, t: f32) -> f64 {
+    let q = (0.5 * t as f64).max(1.0e-12).log2().floor().exp2();
+    match old {
+        Some(o) if q >= o && q < 4.0 * o => o,
+        _ => q,
     }
 }
 
@@ -760,6 +790,12 @@ pub struct EscapeTerrain {
     /// (`TerrainRenderer::reshape_section`): the config's Smooth surface
     /// when they were made, every one re-bounded when it changes.
     mips_smooth: bool,
+    /// Whether they bound the land inverted (`TerrainConfig::invert`):
+    /// an inverted map takes the other raw extreme highest.
+    mips_inverted: bool,
+    /// The sections' floor on distance (`next_near_floor`), once the
+    /// probe has seen ground.
+    near_floor: Option<f64>,
 }
 
 pub use super::path_core::PATH_SHOW_SAMPLES;
@@ -788,6 +824,8 @@ impl EscapeTerrain {
             max_sections: MAX_SECTIONS,
             sections_fitted: false,
             mips_smooth: false,
+            mips_inverted: false,
+            near_floor: None,
         }
     }
 
@@ -876,6 +914,14 @@ impl EscapeTerrain {
     ) -> bool {
         self.frame += 1;
         self.terrain.poll_range(device, queue);
+        // The nearest ground in view, measured on the ground as it stands,
+        // sets how near any section is split for (`wanted_sections`).
+        self.terrain.poll_nearest(device);
+        if let Some(t) = self.terrain.nearest_hit() {
+            self.near_floor = Some(next_near_floor(self.near_floor, t));
+        }
+
+        self.terrain.probe_nearest(device, queue, &terrain_view(config, [0.0, 0.0]));
         let escape = &config.escape;
         // A new picture: every section goes.
         let picture = (picture_key(escape), palette_key(config));
@@ -895,7 +941,8 @@ impl EscapeTerrain {
         }
         let anchor = self.anchor.clone().expect("set above");
         let (eye, z) = eye_in_anchor(escape, &anchor);
-        let wanted = wanted_sections(escape, out_w, out_h, self.max_sections as usize, anchor.zoom, eye);
+        let wanted =
+            wanted_sections(escape, out_w, out_h, self.max_sections as usize, anchor.zoom, eye, self.near_floor.unwrap_or(0.0));
         // The atlas holds what the view wants and a quarter more, growing
         // in steps of eight to `max_sections` -- each section is about
         // 21 MB, so a small view does not hold a large one's memory.
@@ -942,13 +989,14 @@ impl EscapeTerrain {
         let derivative = self.footprint.derivative_active(&section_config(&fp, &anchor, (0, 0, 0), SECTION_SAMPLES));
         let ingest = terrain_ingest(config, derivative);
         let filter = section_filter(&escape.terrain);
-        // The smooth surface turned on or off: every section bounded again
-        // for it, nothing re-rendered.
-        if escape.terrain.smooth != self.mips_smooth {
+        // The smooth surface or the inversion turned on or off: every
+        // section bounded again for it, nothing re-rendered.
+        if escape.terrain.smooth != self.mips_smooth || escape.terrain.invert != self.mips_inverted {
             self.mips_smooth = escape.terrain.smooth;
+            self.mips_inverted = escape.terrain.invert;
             let layers: Vec<u32> = self.cache.values().map(|c| c.layer).collect();
             for layer in layers {
-                self.terrain.reshape_section(device, queue, layer, &ingest, self.mips_smooth);
+                self.terrain.reshape_section(device, queue, layer, &ingest, self.mips_smooth, self.mips_inverted);
             }
         }
         let mut landed = false;
@@ -1006,7 +1054,7 @@ impl EscapeTerrain {
             let filter = SectionFilter { samples: self.footprint.effective_supersample(), ..filter };
             self.terrain.begin_section(queue, layer, n, n, &ingest, filter);
             self.terrain.ingest_region(device, queue, self.footprint.render_view(), self.footprint.height_view(), 0, 0, n, n);
-            self.terrain.finish_section(device, queue, self.mips_smooth);
+            self.terrain.finish_section(device, queue, self.mips_smooth, self.mips_inverted);
             let b = self.building.take().expect("made above");
             // A coarser copy it replaces gives its layer back.
             if let Some(old) = self.cache.insert(key, Cached { layer, samples: n, wanted: self.frame }) {
@@ -1031,7 +1079,14 @@ impl EscapeTerrain {
             self.footprint.release_pixels(device);
         }
         self.set_ground(device, queue, config, &wanted, eye, z, landed, &ingest);
-        self.missing > 0 || self.building.is_some()
+        // Busy until the probe of the ground as it now stands has landed:
+        // its floor may want other sections, and an export's loop must not
+        // settle on a ground the floor has not seen. Not in a browser, whose
+        // export loop never yields to the event loop a read lands on: there
+        // the floor follows in the viewport's frames, and an export settles
+        // without one, as before it.
+        let probing = cfg!(not(target_arch = "wasm32")) && self.terrain.probe_in_flight();
+        self.missing > 0 || self.building.is_some() || probing
     }
 
     /// Measure auto contrast's fit again (`contrast_probe_config`).
@@ -1250,6 +1305,12 @@ impl EscapeTerrain {
     #[cfg(test)]
     pub(crate) fn terrain_for_test(&self) -> &TerrainRenderer {
         &self.terrain
+    }
+
+    /// The terrain renderer, for a test to switch its step count on.
+    #[cfg(test)]
+    pub(crate) fn terrain_for_test_mut(&mut self) -> &mut TerrainRenderer {
+        &mut self.terrain
     }
 
     /// The measured range once the last read of it has landed.
@@ -1627,7 +1688,7 @@ mod tests {
         esc.terrain.enabled = true;
         let a = Anchor { re: esc.center_re.clone(), im: esc.center_im.clone(), zoom: esc.zoom_log2 };
         let (eye, z) = eye_in_anchor(&esc, &a);
-        let w = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye);
+        let w = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye, 0.0);
         let leaves: Vec<_> = w.sections.iter().filter(|s| !s.2).collect();
         let roots = w.sections.len() - leaves.len();
         println!("default view: {roots} roots, {} leaves", leaves.len());
@@ -1649,8 +1710,145 @@ mod tests {
         // Twice the antialiasing would want more than the atlas holds:
         // coarsened to fit.
         esc.supersample = 4;
-        let w4 = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye);
+        let w4 = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye, 0.0);
         assert!(w4.sections.len() <= MAX_SECTIONS as usize, "{}", w4.sections.len());
+    }
+
+    /// A low camera: the target lifted below the relief's top, as a user
+    /// drew it (origami's paper, locked, at full detail), the eye inside
+    /// the slab.
+    fn low_camera() -> EscapeConfig {
+        let mut esc = EscapeConfig::default();
+        esc.terrain.enabled = true;
+        esc.center_re = "0.1667536456250117143652613".into();
+        esc.center_im = "1.0682267144495711585029086".into();
+        esc.zoom_log2 = 2.7572002;
+        esc.rotation = -1.3358407;
+        esc.cam_pitch = 0.36719954;
+        esc.cam_yaw = 0.40259957;
+        esc.cam_fov = 0.699877;
+        esc.terrain.height = 0.3;
+        esc.terrain.detail = 8.0;
+        esc.terrain.locked = true;
+        esc.terrain.lock_zoom = 1.640069;
+        esc.terrain.target_lift = -0.62;
+        esc
+    }
+
+    /// With the eye inside the relief's slab, every box under it holds the
+    /// eye, at distance 0, and splits to the finest level: a column under
+    /// and behind the camera where no pixel looks. Measured on this view,
+    /// most of the cap -- and the viewport fills sections nearest first,
+    /// so the ground in view waited behind it, coarse, and started over
+    /// with every turn. With the probe's floor (no ground in view is
+    /// nearer) the column stops where the view does, and the ground in
+    /// view is finer for the room.
+    #[test]
+    fn a_low_camera_spends_its_sections_on_the_ground_in_view() {
+        let esc = low_camera();
+        let a = canonical_anchor(&esc);
+        let (eye, _) = eye_in_anchor(&esc, &a);
+        let cam = terrain_camera(&esc);
+        assert!(cam.eye[2] < esc.terrain.height as f64 * esc.terrain_scale(), "the eye inside the slab");
+        // The nearest ground this view shows, as the probe measured it on
+        // the rendered terrain: about 0.093.
+        let floor = next_near_floor(None, 0.093);
+        let before = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye, 0.0);
+        let after = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye, floor);
+        let unseen = |w: &Wanted| w.sections.iter().filter(|s| s.1 < 0.093).count();
+        // The finest level among the leaves 0.15 to 0.35 away: ground the
+        // view's lower half shows.
+        let in_view = |w: &Wanted| {
+            w.sections.iter().filter(|s| !s.2 && (0.15..0.35).contains(&s.1)).map(|s| s.0 .0).min().expect("ground in view")
+        };
+        let finest = |w: &Wanted| w.sections.iter().map(|s| s.0 .0).min().expect("sections");
+        println!(
+            "before: {} sections, {} nearer than any ground in view, finest level {}, level {} in view; after: {}, {}, {}, {}",
+            before.sections.len(),
+            unseen(&before),
+            finest(&before),
+            in_view(&before),
+            after.sections.len(),
+            unseen(&after),
+            finest(&after),
+            in_view(&after)
+        );
+        assert!(unseen(&before) > before.sections.len() / 2, "the column took the cap: {}", unseen(&before));
+        // The column stops at the texels the floor wants, not 2^-14 widths.
+        assert!(finest(&after) >= finest(&before) + 8, "the floor stops the column");
+        assert!(in_view(&after) <= in_view(&before) - 2, "the ground in view at least two levels finer");
+        assert!(after.sections.len() <= MAX_SECTIONS as usize);
+    }
+
+    /// The floor is half the nearest hit, rounded down to a power of two;
+    /// it falls at once (nearer ground must be sharp now) and rises only
+    /// once the ground has drawn back fourfold, so a wavering measure
+    /// cannot flip the sections between two splits.
+    #[test]
+    fn the_near_floor_falls_at_once_and_rises_slowly() {
+        assert_eq!(next_near_floor(None, 0.093), 0.03125);
+        assert_eq!(next_near_floor(Some(0.03125), 0.07), 0.03125, "a little nearer: the same split");
+        assert_eq!(next_near_floor(Some(0.03125), 0.2), 0.03125, "a little further: held");
+        assert_eq!(next_near_floor(Some(0.03125), 0.03), 0.0078125, "nearer: down at once");
+        assert_eq!(next_near_floor(Some(0.03125), 0.3), 0.125, "four times as far: up");
+    }
+
+    /// The probe measures the nearest ground the view shows: never nearer
+    /// than the walk's own nearest hit over every pixel (it traces some of
+    /// them), and not far from it (it traces the frame's bottom row, where
+    /// the nearest ground is, and a ray every 8x8 block).
+    #[test]
+    fn the_probe_finds_the_nearest_ground_in_view() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (320u32, 180u32);
+        for (name, c) in [("default", terrain_config()), ("low", {
+            let mut c = terrain_config();
+            c.escape.terrain.target_lift = -0.02;
+            c.escape.cam_pitch = 0.2;
+            c
+        })] {
+            let mut c = c;
+            c.escape.terrain.tier = RenderTier::Lit;
+            let mut engines = crate::renderer::render::RenderEngines::default();
+            let _ = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(&c, w, h).with_engines(&mut engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render");
+            let t = engines.terrain.as_mut().unwrap();
+            let view = terrain_view(&c, [0.0, 0.0]);
+            // The walk's depths, over every pixel, for this view.
+            t.terrain.render(&device, &queue, &view);
+            let geom: Vec<[u32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
+                &device,
+                &queue,
+                t.terrain.geometry_buffer(),
+                (w * h * 16) as u64,
+            ))
+            .to_vec();
+            let nearest = geom.iter().map(|g| f32::from_bits(g[3])).filter(|d| *d > 0.0).fold(f32::INFINITY, f32::min);
+            // A probe of exactly that view, waited for.
+            t.terrain.probe_nearest(&device, &queue, &view);
+            let mut probed = None;
+            for _ in 0..1000 {
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                t.terrain.poll_nearest(&device);
+                if let Some(p) = t.terrain.nearest_hit() {
+                    probed = Some(p);
+                    break;
+                }
+            }
+            let probed = probed.expect("the probe landed");
+            println!("{name}: walk's nearest {nearest}, probe's {probed}");
+            assert!(nearest.is_finite(), "{name}: ground in view");
+            assert!(probed >= nearest * 0.999, "{name}: the probe saw ground nearer than any pixel");
+            assert!(probed <= nearest * 1.5, "{name}: the probe missed the nearest ground");
+        }
     }
 
     /// The leaves cover every point a primary ray can meet the ground at
@@ -1691,7 +1889,7 @@ mod tests {
         for (name, escape, w, h) in views {
             let a = canonical_anchor(&escape);
             let (eye, z) = eye_in_anchor(&escape, &a);
-            let wanted = wanted_sections(&escape, w, h, MAX_SECTIONS as usize, a.zoom, eye);
+            let wanted = wanted_sections(&escape, w, h, MAX_SECTIONS as usize, a.zoom, eye, 0.0);
             let leaves: std::collections::HashSet<SectionKey> = wanted.sections.iter().filter(|s| !s.2).map(|s| s.0).collect();
             let roots: Vec<SectionKey> = wanted.sections.iter().filter(|s| s.2).map(|s| s.0).collect();
             let finest = wanted.sections.iter().map(|s| s.0 .0).min().unwrap();
@@ -2081,6 +2279,61 @@ mod tests {
             println!("invert {source:?}: {agree} of {land} land pixels stand at H - h, {lake} lake");
             assert!(land > (w * h / 2) as usize, "{land}");
             assert!(agree as f64 > 0.9 * land as f64, "{source:?}: {agree} of {land}");
+        }
+    }
+
+    /// Invert costs the walk what the plain map does. Each mipmap node
+    /// keeps the raw value its map takes highest, inverted or not; bound
+    /// by the relief's top instead, an inverted node could never be
+    /// skipped, and the walk marched cell by cell -- many times the
+    /// steps, slow enough to lose the device and restart, over and over.
+    #[test]
+    fn an_inverted_terrain_walks_as_fast_as_a_plain_one() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (320u32, 180u32);
+        for source in [TerrainSource::EscapeCount, TerrainSource::Distance] {
+            // Steps a pixel, every ray (primary and shadow), plain then
+            // inverted.
+            let mut steps = [0.0f64; 2];
+            for (k, invert) in [false, true].into_iter().enumerate() {
+                let mut c = terrain_config();
+                c.escape.terrain.tier = RenderTier::Lit;
+                c.escape.terrain.source = source;
+                c.escape.terrain.invert = invert;
+                // Fine sections: a march cell by cell costs by the cells,
+                // six times the steps here, where coarse ones hid it.
+                c.escape.terrain.detail = 4.0;
+                let mut engines = crate::renderer::render::RenderEngines::default();
+                let mut frame = |engines: &mut crate::renderer::render::RenderEngines| {
+                    let _ = pollster::block_on(crate::renderer::render(
+                        &device,
+                        &queue,
+                        crate::renderer::RenderJob::new(&c, w, h).with_engines(engines),
+                        &mut crate::renderer::NoProgress,
+                    ))
+                    .expect("render");
+                };
+                frame(&mut engines);
+                // Counted on a walk of the settled ground.
+                engines.terrain.as_mut().unwrap().terrain_for_test_mut().count_steps = true;
+                frame(&mut engines);
+                let t = engines.terrain.as_ref().unwrap().terrain_for_test();
+                let stats: Vec<u32> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
+                    &device,
+                    &queue,
+                    t.stats_buffer(),
+                    16,
+                ))
+                .to_vec();
+                assert!(stats[2] > 0, "{source:?}: no rays counted");
+                assert!(stats[1] < crate::escape::terrain::HF_MAX_STEPS, "{source:?} invert {invert}: a ray hit the step cap");
+                steps[k] = stats[3] as f64 / stats[2] as f64;
+            }
+            println!("{source:?}: {:.1} steps a pixel plain, {:.1} inverted", steps[0], steps[1]);
+            assert!(steps[1] < 2.0 * steps[0] + 20.0, "{source:?}: inverted {:.1} against plain {:.1}", steps[1], steps[0]);
         }
     }
 
