@@ -461,9 +461,23 @@ A smooth surface needs a different level 0 (`BUILD_WGSL`):
   that is not linear. The map is monotone and the spline a non-negative
   weighting of its 4x4 real samples, so their extreme bounds it.
 
-`hf_bound` maps a node's extreme to a height. An inverted map is not
-increasing, so its bound is the relief's top. That stays tight, because
-an inverted terrain stands near its top almost everywhere.
+**Which extreme** a node keeps is the raw value the map takes highest.
+For a tile or a simulation's heights that is the maximum. An escape
+terrain's sections rank their values by height (`rank` in the build):
+- the plateau's sentinel first;
+- then the land, in the map's direction: a distance falls as the raw
+  value rises, a count or a relief rises, and **Invert** turns each the
+  other way;
+- then a hole's sentinel;
+- a lake's last, so the land round a lake still bounds its block.
+
+`hf_bound` is the kept value's height. Turning Invert or the smooth
+surface on or off builds every section's mips again and re-renders
+none. Inverted terrains used to keep the plain map's extreme and bound
+every node by the relief's top instead. Below that top the walk could
+never skip a node, so it marched cell by cell, many times the steps,
+slow enough to lose the device and restart over and over
+(`an_inverted_terrain_walks_as_fast_as_a_plain_one`).
 
 ### The walk
 
@@ -754,6 +768,28 @@ camera, light or path-tracer edit re-renders no section.
 3. **Past the cap**, coarsen: the texel target is multiplied by 1.5 until
    the set fits.
 
+**The nearest ground in view** floors every distance in step 2. A box
+knows only the relief's slab. With the eye inside the slab (a low
+**Target lift**), every box under the eye contains the eye, at distance
+0, and split to the finest level. That column lies under and behind the
+camera where no pixel looks, and on a measured view it was 50 of 59
+sections. The viewport fills sections nearest first, so the ground in
+view waited behind the column, coarse, and started over with every turn.
+- **The probe:** `TerrainRenderer::probe_nearest` traces one primary ray
+  per 8x8 block, each block's last row and column, so the frame's bottom
+  row is included. It reads the nearest hit back without waiting. It
+  runs whenever what the walk reads changes.
+- **The floor** (`next_near_floor`) is half that hit, rounded down to a
+  power of two. It falls at once and rises only once the ground has drawn
+  back fourfold, so a wavering measure cannot flip the sections between
+  two splits.
+- **Settling:** `update` stays busy while a probe is in flight, so an
+  export's loop settles on a ground the floor has seen. On the desktop
+  that loop waits on the GPU between updates, so the sequence is the
+  same every time. A browser's export loop never yields to the event
+  loop a read lands on, so there an export settles without the floor,
+  as before it, and the viewport's frames apply it.
+
 The result is ordered roots first, then nearest first. The planner works
 in 3D, from the eye, and culls by the frustum, so a lifted target or an
 eye looking up needs nothing extra.
@@ -822,9 +858,8 @@ A terrain needs at least 64 texture array layers on the device
   linear by default. A crease's slope runs out to one paper size (the
   line spread) and then levels off (`CREASE_TERRAIN_REACH`). Unbounded,
   the rise out to the horizon would set the measured range and flatten
-  every crease near the camera. Where a later crease crosses onto a
-  layer that an earlier fold turned over, its direction flips, and the
-  height steps there. The step reads as a flap's edge. Offered only for
+  every crease near the camera. The sheet is continuous: every crease
+  keeps its fold's direction along its whole length. Offered only for
   formulas with creases.
 
 **Interior** (`TerrainInterior`): **Plateau** (flat at the top, in the

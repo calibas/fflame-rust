@@ -53,7 +53,7 @@ use wgpu::*;
 /// Steps a ray may take before it is called a miss. A ray over a
 /// 4096-cell tile skipping at the top levels takes a few dozen; this is
 /// a guard, not a budget.
-const HF_MAX_STEPS: u32 = 4096;
+pub(crate) const HF_MAX_STEPS: u32 = 4096;
 
 /// The walk's uniform. Mirrored by `TerrainParams` in [`WALK_COMMON`];
 /// `fdata` uses mode D's slots so the rig's accessors read the same
@@ -96,8 +96,10 @@ struct BuildParamsGpu {
     src_h: u32,
     /// 1 for level 0 (a cell's four corners), 2 above (a 2x2 block).
     step: u32,
-    /// 0 keeps the maximum of the raw values, 1 the minimum: whichever
-    /// the tile's map takes to the highest point.
+    /// 0 keeps the maximum of the raw values, 1 the minimum (a tile set
+    /// from heights, a simulation's). An escape terrain's sections keep
+    /// whichever raw value its map takes highest (`escape_build_order`):
+    /// bit 1, with bit 2 for a distance and bit 3 for an inverted map.
     mode: u32,
     /// Level 0 of a smooth ground: each cell's 4x4 control points' Bezier
     /// bound (1, a simulation's), or their extreme (2, an escape
@@ -137,6 +139,39 @@ fn at(x: i32, y: i32) -> f32 {
     return textureLoad(src, q, 0).r;
 }
 
+// Where an escape terrain's map takes a raw value (bp.mode bit 1;
+// `hf_f`), as an order: a plateau's sentinel at the top, the land in the
+// map's own direction -- a distance falls as the raw value rises, a count
+// or a relief rises, and inverted each the other way -- then a hole's
+// sentinel at the floor, and last a lake's, so the land round a lake
+// still bounds its block. Inverted, the land's direction turns over and
+// the sentinels' places do not: keeping the plain map's extreme bounded
+// nothing, and the walk stood every node at the relief's top instead --
+// a march cell by cell, slow enough to lose the device.
+fn rank(raw: f32) -> f32 {
+    if (abs(raw) >= 2.0e30) {
+        return -2.0e31;
+    }
+    let distance = (bp.mode & 4u) != 0u;
+    if (select(raw >= 1.0e29, raw <= -1.0e29, distance)) {
+        return 1.0e31;
+    }
+    if (select(raw <= -1.0e29, raw >= 1.0e29, distance)) {
+        return -1.0e31;
+    }
+    let rises = distance == ((bp.mode & 8u) != 0u);
+    return select(-raw, raw, rises);
+}
+
+// Of two raw values, the one the map takes higher: the maximum or the
+// minimum for a plain mode, the better ranked for an escape terrain's.
+fn pick(a: f32, b: f32) -> f32 {
+    if (bp.mode >= 2u) {
+        return select(b, a, rank(a) >= rank(b));
+    }
+    return select(max(a, b), min(a, b), bp.mode == 1u);
+}
+
 // A uniform cubic B-spline segment's Bezier control points, from its
 // four B-spline ones: the segment lies within their range, which hugs it
 // far closer than the B-spline points' own.
@@ -145,9 +180,9 @@ fn bz(p0: f32, p1: f32, p2: f32, p3: f32) -> vec4<f32> {
 }
 
 // Level 0: a cell's highest corner, so no bilinear patch rises above
-// it -- or, for a spline, its 16 Bezier points' highest. Above: the highest of the 2x2 block of nodes below. "Highest" is
-// the raw extreme the tile's map takes to the top: the maximum, or for
-// a distance the minimum.
+// it -- or, for a spline, its 16 Bezier points' highest. Above: the
+// highest of the 2x2 block of nodes below. "Highest" is the raw value
+// the tile's map takes to the top (`pick`).
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= bp.dst_w || gid.y >= bp.dst_h) {
@@ -167,7 +202,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var m = at(x - 1, y - 1);
         for (var j = -1; j < 3; j = j + 1) {
             for (var i = -1; i < 3; i = i + 1) {
-                m = select(max(m, at(x + i, y + j)), min(m, at(x + i, y + j)), bp.mode == 1u);
+                m = pick(m, at(x + i, y + j));
             }
         }
         textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(m, 0.0, 0.0, 0.0));
@@ -197,10 +232,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = at(x + 1, y);
     let c = at(x, y + 1);
     let d = at(x + 1, y + 1);
-    let m = select(max(max(a, b), max(c, d)), min(min(a, b), min(c, d)), bp.mode == 1u);
+    let m = pick(pick(a, b), pick(c, d));
     textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(m, 0.0, 0.0, 0.0));
 }
 "#;
+
+/// The mip build's order for an escape terrain's sections (`BuildParamsGpu::mode`):
+/// the raw value each node keeps is the one its map, `mode`
+/// (`TerrainIngest::mode`) and `inverted`, takes highest.
+fn escape_build_order(mode: u32, inverted: bool) -> u32 {
+    2 | if mode == 1 { 4 } else { 0 } | if inverted { 8 } else { 0 }
+}
 
 /// The albedo's mip chain: each level the 2x2 box average of the one
 /// below, the last row or column of an odd level repeated.
@@ -872,9 +914,9 @@ fn hf_rise(raw: f32, mode: u32) -> f32 {
 // from heights), the distance's H exp(-d / w) -- d the raw estimate in
 // the section's pixels times its texel -- or a count's or a relief's
 // rise (`hf_rise`), each with the interior's sentinels, and the land
-// inverted when asked. Increasing in the raw value unless inverted, so
-// a section's mipmap of raw extremes bounds its highest point -- and
-// for an inverted map `hf_bound` does instead.
+// inverted when asked. Monotone in the raw value, either way, so the
+// mipmap keeps each node's raw value this takes highest (`rank` in the
+// build) and `hf_bound` is its height.
 fn hf_f(raw: f32) -> f32 {
     // A lake: flat at the plain's level.
     if (abs(raw) >= 2.0e30) {
@@ -911,15 +953,10 @@ fn hf_f(raw: f32) -> f32 {
     return land;
 }
 
-// The highest a region of raw values stands, from its mipmap extreme:
-// the extreme's height -- or, inverted, the relief's top, since an
-// inverted map is not increasing. An inverted terrain stands at the top
-// almost everywhere (its plain), so the bound stays tight.
+// The highest a region of raw values stands: its mipmap node's height.
+// The node keeps the raw value the map takes highest, inverted or not
+// (the build's `rank`).
 fn hf_bound(raw: f32) -> f32 {
-    let mode = u32(params.fdata[1].w);
-    if (hf_inverted() && mode >= 1u && mode <= 3u) {
-        return params.fdata[6].x;
-    }
     return hf_f(raw);
 }
 
@@ -1555,6 +1592,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         atomicAdd(&hf_stats[3], steps);
     }
 }
+
+// The nearest ground the view shows (`TerrainRenderer::probe_nearest`),
+// for the sections' detail to be chosen by: one primary ray an 8x8 block
+// of the frame -- each block's last row and column, so the frame's bottom
+// row, where the nearest ground usually is, is traced -- its hit distance
+// into word 0 of the buffer bound in the stats' place, by atomicMin (a
+// positive float's bits order as its value).
+@compute @workgroup_size(8, 8, 1)
+fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let px = min(gid.x * 8u + 7u, params.width - 1u);
+    let py = min(gid.y * 8u + 7u, params.height - 1u);
+    if (gid.x * 8u >= params.width || gid.y * 8u >= params.height) {
+        return;
+    }
+    hf_load_range();
+    let o = params.eye.xyz;
+    let d = ifs_ray(px, py);
+    let tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
+    let h = hf_trace(o, d, tmax, 0.0);
+    if (h.hit && h.t > 0.0) {
+        atomicMin(&hf_stats[0], bitcast<u32>(h.t));
+    }
+}
 "#;
 
 /// The albedo's filtered lookup, shared by the relight and the path
@@ -2148,6 +2208,17 @@ struct RangeRead {
     last: Option<[f32; 2]>,
 }
 
+/// A probe of the nearest ground in flight, and the last that landed
+/// (`TerrainRenderer::probe_nearest`): the walk's key it measured.
+#[derive(Default)]
+struct NearRead {
+    stage: Option<Buffer>,
+    /// Set by the map's callback: 1 mapped, 2 failed.
+    landed: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
+    key: Option<String>,
+    last: Option<f32>,
+}
+
 /// The range's ordered encoding undone: `hf_unordered`.
 fn unordered(u: u32) -> f32 {
     f32::from_bits(if u & 0x8000_0000 != 0 { u & 0x7fff_ffff } else { !u })
@@ -2226,7 +2297,9 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
         view.height,
         view.width
     );
-    k.push_str(&format!("|{}", view.far));
+    // The height map: a curve, an inversion or a pinned range moves the
+    // land itself.
+    k.push_str(&format!("|{}|{}|{}|{:?}", view.far, view.curve, view.invert, view.range));
     let any = !view.shading.rig_untouched();
     k.push_str(&format!("|{any}"));
     for l in &view.shading.lights {
@@ -2349,6 +2422,11 @@ pub struct TerrainRenderer {
     range_reduce_pipeline: ComputePipeline,
     /// The ground's range, read back for a lock to pin (H3).
     range_read: RangeRead,
+    /// The nearest ground the view shows (`probe_main`, on the walk's
+    /// layout), and its read.
+    probe_pipeline: ComputePipeline,
+    near: Buffer,
+    near_read: NearRead,
     /// The accumulation's pair, allocated on the first `accumulate`;
     /// `accum_front` is the one holding the mean.
     accum: Option<[(Texture, TextureView); 2]>,
@@ -2541,7 +2619,9 @@ impl TerrainRenderer {
         };
         let pipeline = |label: &str, layout: &BindGroupLayout, src: String| entry(label, layout, &src, "main");
         let build_pipeline = pipeline("Terrain Build", &build_layout, assemble_build());
-        let walk_pipeline = pipeline("Terrain Walk", &walk_layout, assemble_walk());
+        let walk_src = assemble_walk();
+        let walk_pipeline = entry("Terrain Walk", &walk_layout, &walk_src, "main");
+        let probe_pipeline = entry("Terrain Probe", &walk_layout, &walk_src, "probe_main");
         let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
         let filter_pipeline = entry("Terrain Section Raw", &filter_layout, INGEST_WGSL, "filter_main");
         let soften_pipeline = entry("Terrain Section Soften", &filter_layout, INGEST_WGSL, "soften_main");
@@ -2582,6 +2662,12 @@ impl TerrainRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let near = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Nearest"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         TerrainRenderer {
             build_layout,
             walk_layout,
@@ -2611,6 +2697,9 @@ impl TerrainRenderer {
             building: None,
             range,
             range_read: RangeRead::default(),
+            probe_pipeline,
+            near,
+            near_read: NearRead::default(),
             accum: None,
             accum_front: 0,
             accum_count: 0,
@@ -2769,6 +2858,10 @@ impl TerrainRenderer {
         }
         self.range.destroy();
         if let Some(b) = &self.range_read.stage {
+            b.destroy();
+        }
+        self.near.destroy();
+        if let Some(b) = &self.near_read.stage {
             b.destroy();
         }
         if let Some((_, _, pair)) = &self.scratch {
@@ -3013,7 +3106,7 @@ impl TerrainRenderer {
         self.reset_range(queue);
         self.begin_section(queue, 0, n, m, ingest, SectionFilter::default());
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
-        self.finish_section(device, queue, false);
+        self.finish_section(device, queue, false, false);
         let floor = -0.01 * n.max(m) as f64;
         self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor, false, false));
     }
@@ -3183,6 +3276,99 @@ impl TerrainRenderer {
         self.range_read.last
     }
 
+    /// Measure the nearest ground `view` shows (`probe_main`: a primary
+    /// ray an 8x8 block), without waiting: read back and collected by
+    /// [`Self::poll_nearest`]. Only when something the walk reads has
+    /// changed since the last probe, and none is in flight. Submits its
+    /// own work.
+    pub fn probe_nearest(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
+        let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
+        if self.near_read.landed.is_some() {
+            return;
+        }
+        let key = walk_key(view, self.out_w, self.out_h, ground.version);
+        if self.near_read.key.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.write_params(queue, view);
+        queue.write_buffer(&self.near, 0, &u32::MAX.to_le_bytes());
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Probe"),
+            layout: &self.walk_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&atlas.raw_all) },
+                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&atlas.mips_all) },
+                BindGroupEntry { binding: 3, resource: self.geom.as_entire_binding() },
+                BindGroupEntry { binding: 4, resource: self.near.as_entire_binding() },
+                BindGroupEntry { binding: 5, resource: self.range.as_entire_binding() },
+                BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
+                BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
+            ],
+        });
+        let stage = self.near_read.stage.get_or_insert_with(|| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some("Terrain Nearest Readback"),
+                size: 4,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Probe") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Probe"), timestamp_writes: None });
+            pass.set_pipeline(&self.probe_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(self.frame.0.div_ceil(64), self.frame.1.div_ceil(64), 1);
+        }
+        enc.copy_buffer_to_buffer(&self.near, 0, stage, 0, 4);
+        queue.submit(std::iter::once(enc.finish()));
+        let landed = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let flag = landed.clone();
+        stage.slice(..).map_async(MapMode::Read, move |r| {
+            flag.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release);
+        });
+        self.near_read.landed = Some(landed);
+        self.near_read.key = Some(key);
+    }
+
+    /// Collect a probe that has landed (`probe_nearest`), polling without
+    /// waiting.
+    pub fn poll_nearest(&mut self, device: &Device) {
+        let Some(landed) = self.near_read.landed.as_ref() else {
+            return;
+        };
+        let _ = device.poll(PollType::Poll);
+        let state = landed.load(std::sync::atomic::Ordering::Acquire);
+        if state == 0 {
+            return;
+        }
+        if let (1, Some(stage)) = (state, self.near_read.stage.as_ref()) {
+            let bits = {
+                let data = stage.slice(..).get_mapped_range();
+                u32::from_le_bytes(data[0..4].try_into().unwrap())
+            };
+            stage.unmap();
+            let t = f32::from_bits(bits);
+            // Nothing struck (the sky) leaves the last measure standing.
+            if bits != u32::MAX && t.is_finite() && t > 0.0 {
+                self.near_read.last = Some(t);
+            }
+        }
+        self.near_read.landed = None;
+    }
+
+    /// The nearest ground the view showed, in the world's units, at the
+    /// last probe that struck any.
+    pub fn nearest_hit(&self) -> Option<f32> {
+        self.near_read.last
+    }
+
+    /// Whether a probe is in flight.
+    pub fn probe_in_flight(&self) -> bool {
+        self.near_read.landed.is_some()
+    }
+
     /// Start making atlas layer `layer` -- `n x m` samples -- from
     /// footprint regions, each rendered as `filter` says.
     pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest, filter: SectionFilter) {
@@ -3315,17 +3501,27 @@ impl TerrainRenderer {
     /// Finish the section being made: its maximum mipmap and its albedo's
     /// mip chain. It is drawn once a ground names its layer.
     /// `smooth`: bounded for a smooth ground's spline (`reshape_section`).
-    pub fn finish_section(&mut self, device: &Device, queue: &Queue, smooth: bool) {
+    /// `inverted`: bounded for the land turned upside down.
+    pub fn finish_section(&mut self, device: &Device, queue: &Queue, smooth: bool, inverted: bool) {
         let (layer, base) = self.building.take().expect("begin_section first");
         let mode = TerrainIngest { source: base.source, interior: base.interior, background: [0.0; 3], tint: [0.0; 3] }.mode();
-        self.build_layer_shaped(device, queue, layer, u32::from(mode == 1), (if smooth { 2 } else { 0 }, false));
+        self.build_layer_shaped(device, queue, layer, escape_build_order(mode, inverted), (if smooth { 2 } else { 0 }, false));
     }
 
     /// Bound a made section's surface again: for the spline of a smooth
-    /// ground (`smooth`) or a bilinear patch a cell -- its max mipmap made
-    /// anew, its heights and colours as they are. Turning the smooth
-    /// surface on or off re-renders nothing.
-    pub fn reshape_section(&mut self, device: &Device, queue: &Queue, layer: u32, ingest: &TerrainIngest, smooth: bool) {
+    /// ground (`smooth`) or a bilinear patch a cell, for the land the
+    /// right way up or `inverted` -- its max mipmap made anew, its
+    /// heights and colours as they are. Turning the smooth surface or the
+    /// inversion on or off re-renders nothing.
+    pub fn reshape_section(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layer: u32,
+        ingest: &TerrainIngest,
+        smooth: bool,
+        inverted: bool,
+    ) {
         let atlas = self.atlas.as_ref().expect("ensure_atlas first");
         let raw = atlas.raw.create_view(&TextureViewDescriptor {
             dimension: Some(TextureViewDimension::D2),
@@ -3334,7 +3530,8 @@ impl TerrainRenderer {
             ..Default::default()
         });
         let shape = (if smooth { 2 } else { 0 }, false);
-        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, u32::from(ingest.mode() == 1), shape);
+        let order = escape_build_order(ingest.mode(), inverted);
+        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, order, shape);
         self.walked = None;
     }
 
@@ -5070,7 +5267,7 @@ pub(crate) mod gpu_tests {
         let relief = TerrainIngest { source: 0, interior: 0, background: [0.0; 3], tint: [0.0; 3] };
         let albedo = r.atlas.as_ref().unwrap().albedo.clone();
         for s in 0..2 {
-            r.reshape_section(&device, &queue, s, &relief, true);
+            r.reshape_section(&device, &queue, s, &relief, true, false);
             r.build_albedo_mips(&device, &queue, &albedo, s);
         }
         // A relief's linear map over a pinned range: the CPU's heights.
