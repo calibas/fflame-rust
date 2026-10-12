@@ -894,8 +894,21 @@ measures its own finer sections.
 
 The camera's target still rests on the relief's top, so zooming in on a
 locked terrain approaches a point at the peaks' altitude: a valley falls
-away, and past the lock out of reach (Target lift brings the camera
-down).
+away, and past the lock out of reach. The top is `height` lock widths,
+which is 2^(zoom − lock_zoom) times that in current widths. Four zooms
+past a lock at height 0.3, it stands about 5 view widths above the plain.
+Ground that far below the eye is in the haze, which thickens from about
+a third of `far` (8 widths) and ends at `far`. So the picture darkens
+as you zoom and then goes to the background. A relief whose ground lies
+mostly below its top shows this soonest; Origami's paper creases are
+such a relief.
+
+Ways down, by decision (2026-10-12) rather than a camera that follows
+the land:
+- type a negative **Target lift**, about −0.3 × 2^(zoom − lock_zoom)
+  to reach the plain;
+- **Lock here** at the new zoom;
+- or unlock.
 
 ### Atmosphere
 
