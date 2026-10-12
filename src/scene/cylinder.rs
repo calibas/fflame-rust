@@ -3338,7 +3338,7 @@ mod gpu_tests {
                 queue.submit(Some(enc.finish()));
                 let _ = device.poll(wgpu::PollType::wait_indefinitely());
             }
-            r.apply_exact_density_fraction(&device, &queue);
+            pollster::block_on(r.apply_exact_density_fraction(&device, &queue));
             r.frame_coverage_fraction()
         };
         let before = run(&mut r);
@@ -3706,7 +3706,7 @@ mod gpu_tests {
             );
             queue.submit(Some(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-            rr.apply_exact_density_fraction(&device, &queue);
+            pollster::block_on(rr.apply_exact_density_fraction(&device, &queue));
             rr.leak_fraction().expect("the probe was set, so a fraction must come back")
         };
 
