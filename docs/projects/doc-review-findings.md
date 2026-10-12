@@ -25,10 +25,10 @@ Found while fixing:
   tonemap exactly only at exposure 1 and gamma 1.
 - With online features off, web deep links (`?flame=`) are still
   followed.
-- `FlameRenderer::resize` replaces its output texture without destroying
-  the old one: 4 bytes a pixel per resize waits for the garbage collector
-  on WebGPU. egui keeps its own registration of that texture, so it needs
-  a deferral that outlives the frame's paint, not the buffers' retire list.
+- `FlameRenderer::resize` replaced its output texture without destroying
+  the old one: 4 bytes a pixel per resize waited for the garbage collector
+  on WebGPU. Fixed: the app destroys it right after submitting the paint
+  that last sampled it (`destroy_replaced_output`).
 - The web build has warnings the desktop build no longer has:
   deprecated web-sys calls and desktop-only code compiled for wasm32.
 

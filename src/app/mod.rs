@@ -2096,6 +2096,11 @@ impl App {
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+        // The paint just submitted was the last user of an output texture
+        // a resize above replaced.
+        if let Some(renderer) = self.flame_renderer.as_mut() {
+            renderer.destroy_replaced_output();
+        }
 
         // ============================================================================
         // PHASE 2: Process ALL UI Responses and Config Updates
