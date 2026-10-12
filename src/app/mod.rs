@@ -1910,6 +1910,10 @@ impl App {
         if ui_response.sim_reseed {
             self.sim_reseed = true;
         }
+        #[cfg(all(feature = "engine-sim", not(target_arch = "wasm32")))]
+        if let Some(name) = ui_response.sim_saved_texture.as_deref() {
+            self.cache_saved_texture_from_run(name);
+        }
 
         // A panel asked for a different workspace. Applied here rather
         // than in the panel because the workspace is borrowed by the
@@ -2771,6 +2775,9 @@ impl App {
                 if self.escape_texture.update(terrain.footprint_renderer(), device, queue, &final_config.escape) {
                     terrain.invalidate_footprint();
                 }
+                if let Some(name) = self.escape_texture.take_notice() {
+                    self.egui_layer.show_api_notification(&rust_i18n::t!("textures_panel.viewport_waiting", name = name), false);
+                }
                 let mut busy = self.escape_texture.busy();
                 // The sections the view wants (plan section 12): as many
                 // render steps a frame as fit about 8 ms, at the measured
@@ -2922,6 +2929,9 @@ impl App {
                     && self.escape_texture.update(escape, &self.gpu.device, &self.gpu.queue, &final_config.escape)
                 {
                     self.escape_dirty = true;
+                }
+                if let Some(name) = self.escape_texture.take_notice() {
+                    self.egui_layer.show_api_notification(&rust_i18n::t!("textures_panel.viewport_waiting", name = name), false);
                 }
                 if self.escape_texture.busy() {
                     self.window.request_redraw();

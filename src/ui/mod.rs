@@ -1555,6 +1555,7 @@ impl EguiLayer {
         let mut sim_running_local = sim_running;
         let mut sim_step_once_local = false;
         let mut sim_reseed_local = false;
+        let mut sim_saved_texture_local: Option<String> = None;
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
@@ -1925,6 +1926,7 @@ impl EguiLayer {
                         sim_running: &mut sim_running_local,
                         sim_step_once: &mut sim_step_once_local,
                         sim_reseed: &mut sim_reseed_local,
+                        sim_saved_texture: &mut sim_saved_texture_local,
                         sim_step_index,
                         sim_grid,
                         sim_timeline_target,
@@ -2562,6 +2564,7 @@ impl EguiLayer {
             sim_running: Some(sim_running_local),
             sim_step_once: sim_step_once_local,
             sim_reseed: sim_reseed_local,
+            sim_saved_texture: sim_saved_texture_local,
             variation_update_requested,
             script_cloud_request,
         }

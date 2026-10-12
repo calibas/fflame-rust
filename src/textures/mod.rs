@@ -188,6 +188,45 @@ pub fn texture_size(config: &FractalConfig) -> (u32, u32) {
     (w.clamp(1, MAX_TEXTURE_SIDE), h.clamp(1, MAX_TEXTURE_SIDE))
 }
 
+/// The work generating a recipe takes, in cell-steps: its grid's cells,
+/// times its steps, times its layers. The shipped presets are 512² cells
+/// for 10,000 steps, 2.6e9, about half a second.
+pub fn generation_cost(recipe: &FractalConfig) -> f64 {
+    let (w, h) = texture_size(recipe);
+    w as f64 * h as f64 * recipe.sim.steps.max(1) as f64 * recipe.sim.layer_count().max(1) as f64
+}
+
+/// The most work a texture is generated for without asking: about four
+/// shipped presets, a couple of seconds. More waits for the user's
+/// Generate ([`approve`]), so opening the Textures panel, or a file whose
+/// texture is not cached, never freezes the app on minutes of simulation.
+pub const AUTO_GENERATE_COST: f64 = 1.0e10;
+
+/// Cache keys the user has asked to generate this session.
+static APPROVED: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashSet<String>>> =
+    once_cell::sync::Lazy::new(Default::default);
+
+/// Let the texture with cache key `key` generate however long it takes:
+/// the user asked for it.
+pub fn approve(key: &str) {
+    if let Ok(mut set) = APPROVED.lock() {
+        set.insert(key.to_string());
+    }
+}
+
+/// Whether the user asked for the texture with cache key `key`.
+pub fn is_approved(key: &str) -> bool {
+    APPROVED.lock().is_ok_and(|set| set.contains(key))
+}
+
+/// Whether the app may produce `recipe`'s image (cache key `key`) on its
+/// own: it is cached (a PNG read), cheap ([`AUTO_GENERATE_COST`]), or the
+/// user asked for it. An export does not ask: a file must hold the
+/// picture its config names.
+pub fn may_generate(recipe: &FractalConfig, key: &str) -> bool {
+    generation_cost(recipe) <= AUTO_GENERATE_COST || is_approved(key) || cache::exists(key)
+}
+
 /// Generate a recipe's texture: the recipe rendered through the headless
 /// path at its own size -- exactly what Simulation mode draws, at the
 /// step count the recipe names.
@@ -372,6 +411,91 @@ mod tests {
         // Path characters go, and nothing is put in their place.
         assert_eq!(sanitize_name("  Coral/../reef: v2 "), "Coralreef v2");
         assert_eq!(sanitize_name("///"), "Texture");
+    }
+
+    /// The adapter's own limits, as every renderer test asks for, or
+    /// None without an adapter.
+    #[cfg(feature = "engine-sim")]
+    fn device_if_any() -> Option<(egui_wgpu::wgpu::Device, egui_wgpu::wgpu::Queue)> {
+        use egui_wgpu::wgpu;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("texture test"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .ok()
+    }
+
+    /// Saving a simulation as a texture caches the live run's image
+    /// (`App::cache_saved_texture_from_run`). The run, stepped in uneven
+    /// batches at a viewport's size and then continued through `render`
+    /// at the recipe's size, must draw what generating the recipe from
+    /// scratch draws, byte for byte -- or the cache would hold a picture
+    /// its recipe does not reproduce. And a run with a step taken under
+    /// other settings is not the recipe's, until it is reseeded.
+    #[test]
+    #[cfg(feature = "engine-sim")]
+    fn a_live_run_continued_to_its_recipe_draws_what_generating_it_draws() {
+        let Some((device, queue)) = device_if_any() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut recipe = FractalConfig::from_json(TEXTURE_PRESETS[0].1).unwrap();
+        recipe.sim.steps = 300;
+        let (w, h) = texture_size(&recipe);
+
+        let mut sim = crate::sim::SimRenderer::new(&device, &recipe.sim, 800, 600);
+        sim.seed(&device, &queue, &recipe.sim);
+        for batch in [7, 100, 193] {
+            sim.run_steps(&device, &queue, &recipe.sim, batch);
+        }
+        assert_eq!(sim.step_index(), recipe.sim.steps);
+        assert!(sim.ran_steadily_as(&recipe.sim), "every step was the recipe's");
+        let mut engines = crate::renderer::RenderEngines::default();
+        engines.sim = Some(sim);
+        let job = crate::renderer::RenderJob::new(&recipe, w, h).with_engines(&mut engines);
+        let live = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render the live run");
+        let fresh = pollster::block_on(generate(&device, &queue, &recipe)).expect("generate");
+        assert!(live.rgba_data == fresh.as_raw().as_slice(), "the live run's picture is not the recipe's");
+
+        let mut sim = engines.sim.take().expect("the run comes back");
+        let mut edited = recipe.sim.clone();
+        edited.dt *= 1.01;
+        sim.run_steps(&device, &queue, &edited, 1);
+        assert!(!sim.ran_steadily_as(&recipe.sim) && !sim.ran_steadily_as(&edited), "a step under other settings");
+        sim.seed(&device, &queue, &recipe.sim);
+        assert!(sim.ran_steadily_as(&recipe.sim), "a reseed starts a steady run");
+        sim.destroy();
+    }
+
+    /// What the app makes without asking: the shipped presets, yes; a
+    /// saved run of hundreds of thousands of steps, not until asked for
+    /// -- opening the Textures panel used to freeze on one for minutes.
+    #[test]
+    fn only_a_cheap_cached_or_asked_for_texture_generates_on_its_own() {
+        let mut recipe = FractalConfig::from_json(TEXTURE_PRESETS[0].1).unwrap();
+        assert!(generation_cost(&recipe) <= AUTO_GENERATE_COST, "a shipped preset generates on its own");
+        recipe.sim.steps = 300_000;
+        // A seed no real cache holds.
+        recipe.sim.seed = 0x5EED_0F_7E57;
+        let key = cache::key(&recipe);
+        assert!(!may_generate(&recipe, &key), "minutes of simulation waits to be asked for");
+        approve(&key);
+        assert!(may_generate(&recipe, &key), "asked for");
     }
 
     /// The recipe rides inside the config that uses it, in its file form,

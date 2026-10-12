@@ -34,6 +34,9 @@ pub struct UiResponse {
     pub sim_running: Option<bool>,
     pub sim_step_once: bool,
     pub sim_reseed: bool,
+    /// The name a simulation was just saved under as a texture, for the
+    /// app to cache its image from the live run.
+    pub sim_saved_texture: Option<String>,
 
     // File I/O operations
     pub config_export_requested: Option<String>,
@@ -221,6 +224,7 @@ impl Default for UiResponse {
             sim_running: None,
             sim_step_once: false,
             sim_reseed: false,
+            sim_saved_texture: None,
             config_export_requested: None,
             config_import_requested: None,
             config_save_file_requested: false,
