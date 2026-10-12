@@ -1329,6 +1329,43 @@ pub struct FlameBuffers {
 
     // Track current palette size for dynamic palette texture
     palette_size: u32,
+
+    /// What the setters below have replaced, waiting to be destroyed.
+    retired: Retired,
+}
+
+/// A buffer or texture `FlameBuffers` has replaced.
+enum Retiree {
+    Buffer(Buffer),
+    Texture(Texture),
+}
+
+impl Retiree {
+    fn destroy(&self) {
+        match self {
+            Retiree::Buffer(b) => b.destroy(),
+            Retiree::Texture(t) => t.destroy(),
+        }
+    }
+}
+
+/// Resources `FlameBuffers` has replaced mid-update -- toggling solid or
+/// the census, path ids, the palette size, xaos, analytic blur, a
+/// growing orbit, cylinder or bias table -- waiting to be destroyed.
+///
+/// Dropping them is not enough: on WebGPU a dropped buffer frees nothing
+/// until garbage collection, so each toggle of a solid flame held another
+/// histogram. Destroying them at once is not safe either: a command
+/// encoder not yet submitted may still use one, and a submit that uses a
+/// destroyed buffer fails validation. Every caller submits a
+/// `compute_pass`'s encoder before it records the next `compute_pass`, so
+/// what was retired before the previous one is in no unsubmitted encoder:
+/// each `compute_pass` destroys the older generation and ages the newer
+/// (`FlameBuffers::release_retired`); `destroy` takes both.
+#[derive(Default)]
+struct Retired {
+    newer: Vec<Retiree>,
+    older: Vec<Retiree>,
 }
 
 /// Default palette size (256 colors for backward compatibility)
@@ -1390,6 +1427,29 @@ impl FlameBuffers {
         self.palette_texture.destroy();
         self.stepped_palette_texture.destroy();
         self.curve_lut_texture.destroy();
+        for r in self.retired.newer.iter().chain(&self.retired.older) {
+            r.destroy();
+        }
+    }
+
+    /// Hand a replaced buffer to the retire list (see `Retired`).
+    fn retire_buffer(&mut self, buffer: Buffer) {
+        self.retired.newer.push(Retiree::Buffer(buffer));
+    }
+
+    /// Hand a replaced texture to the retire list (see `Retired`).
+    fn retire_texture(&mut self, texture: Texture) {
+        self.retired.newer.push(Retiree::Texture(texture));
+    }
+
+    /// Destroy what was retired before the previous call, and age what
+    /// was retired since. `FlameRenderer::compute_pass` calls it first
+    /// thing; see `Retired` for why two generations are safe.
+    pub fn release_retired(&mut self) {
+        for r in self.retired.older.drain(..) {
+            r.destroy();
+        }
+        self.retired.older = std::mem::take(&mut self.retired.newer);
     }
 
     /// Free only the large per-iteration GPU resources — the histogram buffers,
@@ -1871,6 +1931,7 @@ impl FlameBuffers {
             sampler,
             curve_lut_sampler,
             current_is_a: true,
+            retired: Retired::default(),
             width,
             height,
             palette_size,
@@ -2013,16 +2074,18 @@ impl FlameBuffers {
         } else {
             0
         };
-        self.histogram_buffer = device.create_buffer(&BufferDescriptor {
+        let size = self.histogram_rgbd_bytes() + tail;
+        let old = std::mem::replace(&mut self.histogram_buffer, device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {
                 "Histogram Buffer (+census tail)"
             } else {
                 "Histogram Buffer"
             }),
-            size: self.histogram_rgbd_bytes() + tail,
+            size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
-        });
+        }));
+        self.retire_buffer(old);
         self.census_region = enabled;
         true
     }
@@ -2049,7 +2112,7 @@ impl FlameBuffers {
         //    shade pass, cleared with the depth region.
         let tail: u64 = if enabled { Self::SOLID_TAIL_BYTES } else { 0 };
         let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64 + tail;
-        self.histogram_buffer = device.create_buffer(&BufferDescriptor {
+        let old = std::mem::replace(&mut self.histogram_buffer, device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {
                 "Histogram Buffer (+solid depth region)"
             } else {
@@ -2060,11 +2123,12 @@ impl FlameBuffers {
             // auto-fit when the depth region exists.
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
-        });
+        }));
+        self.retire_buffer(old);
         // The accumulator's depth-ownership tracker lives and dies with
         // the depth region (accumulate.wgsl depth-tightening reset).
         if let Some(b) = self.accum_depth_buffer.take() {
-            b.destroy();
+            self.retire_buffer(b);
         }
         if enabled {
             self.accum_depth_buffer = Some(device.create_buffer(&BufferDescriptor {
@@ -2413,10 +2477,14 @@ impl FlameBuffers {
 
         self.palette_size = new_size;
 
-        self.palette_texture = create_palette_texture(device, new_size, "Palette Texture");
+        let old = std::mem::replace(&mut self.palette_texture, create_palette_texture(device, new_size, "Palette Texture"));
+        self.retire_texture(old);
         self.palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
-        self.stepped_palette_texture =
-            create_palette_texture(device, new_size, "Stepped Palette Texture");
+        let old = std::mem::replace(
+            &mut self.stepped_palette_texture,
+            create_palette_texture(device, new_size, "Stepped Palette Texture"),
+        );
+        self.retire_texture(old);
         self.stepped_palette_view =
             self.stepped_palette_texture.create_view(&TextureViewDescriptor::default());
 
@@ -2497,7 +2565,9 @@ impl FlameBuffers {
             (self.width as f64 * self.height as f64 * 4.0) / (1024.0 * 1024.0)
         );
 
-        self.path_buffer = None;
+        if let Some(b) = self.path_buffer.take() {
+            self.retire_buffer(b);
+        }
 
         true  // Bind groups need rebuilding
     }
@@ -2554,7 +2624,9 @@ impl FlameBuffers {
 
         log::info!("Dropping xaos buffer");
 
-        self.xaos_buffer = None;
+        if let Some(b) = self.xaos_buffer.take() {
+            self.retire_buffer(b);
+        }
 
         true  // Bind groups need rebuilding
     }
@@ -2599,8 +2671,9 @@ impl FlameBuffers {
             if self.blur_splat_buffer.is_none() {
                 return false; // Already dropped.
             }
-            self.blur_splat_buffer = None;
-            self.blur_convolved_buffer = None;
+            for b in [self.blur_splat_buffer.take(), self.blur_convolved_buffer.take()].into_iter().flatten() {
+                self.retire_buffer(b);
+            }
             self.blur_buffer_count = 0;
             self.blur_lowres_w = 0;
             self.blur_lowres_h = 0;
@@ -2627,8 +2700,10 @@ impl FlameBuffers {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        self.blur_splat_buffer = Some(mk("Blur Splat Buffer"));
-        self.blur_convolved_buffer = Some(mk("Blur Convolved Buffer"));
+        let (splat, convolved) = (mk("Blur Splat Buffer"), mk("Blur Convolved Buffer"));
+        for b in [self.blur_splat_buffer.replace(splat), self.blur_convolved_buffer.replace(convolved)].into_iter().flatten() {
+            self.retire_buffer(b);
+        }
         self.blur_buffer_count = want;
         self.blur_lowres_w = lowres_w;
         self.blur_lowres_h = lowres_h;
@@ -2651,7 +2726,7 @@ impl FlameBuffers {
             return false;
         }
         if let Some(b) = self.orbit_buffer.take() {
-            b.destroy();
+            self.retire_buffer(b);
         }
         self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
             label: Some("Orbit Buffer"),
@@ -2678,7 +2753,7 @@ impl FlameBuffers {
     ) -> bool {
         let Some(table) = packed.filter(|t| !t.is_empty()) else {
             if let Some(b) = self.cylinder_buffer.take() {
-                b.destroy();
+                self.retire_buffer(b);
                 return true;
             }
             return false;
@@ -2687,7 +2762,7 @@ impl FlameBuffers {
         let mut rebuilt = false;
         if !self.cylinder_buffer.as_ref().is_some_and(|b| b.size() >= want) {
             if let Some(b) = self.cylinder_buffer.take() {
-                b.destroy();
+                self.retire_buffer(b);
             }
             self.cylinder_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Cylinder Buffer"),
@@ -2732,10 +2807,8 @@ impl FlameBuffers {
         settings: &crate::config::fractal_config::ImportanceSettings,
     ) -> bool {
         if !settings.enabled {
-            if self.bias_buffer.is_some() {
-                if let Some(b) = self.bias_buffer.take() {
-                    b.destroy();
-                }
+            if let Some(b) = self.bias_buffer.take() {
+                self.retire_buffer(b);
                 return true;
             }
             return false;
@@ -2746,7 +2819,7 @@ impl FlameBuffers {
         let fits = self.bias_buffer.as_ref().is_some_and(|b| b.size() >= want);
         if !fits {
             if let Some(b) = self.bias_buffer.take() {
-                b.destroy();
+                self.retire_buffer(b);
             }
             self.bias_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Importance Bias Buffer"),
