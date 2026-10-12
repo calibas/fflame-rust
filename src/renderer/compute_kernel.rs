@@ -6223,7 +6223,10 @@ mod fog_tests {
 mod subflame_tests {
     use super::FlameRenderer;
     use crate::config::FractalConfig;
+    use crate::scene::palette::Palette;
     use crate::scene::transforms::{Flame, RenderMode, Transform};
+
+    const N: u32 = 64;
 
     fn linear(a: f32, e: f32) -> Transform {
         let mut t = Transform::new();
@@ -6235,6 +6238,62 @@ mod subflame_tests {
         t
     }
 
+    /// A parent transform running subflame 0 through `variation` at
+    /// `weight`: identity affine, the variation's parameters at their
+    /// defaults but for `params`.
+    fn parent(variation: &str, weight: f32, params: &[(&str, f32)]) -> Transform {
+        let mut t = Transform::new();
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation(variation, weight);
+        let defaults = [("subflame_id", 0.0), ("scale", 1.0), ("angle", 0.0), ("offset_x", 0.0), ("offset_y", 0.0), ("color_mode", -1.0)];
+        for (k, v) in defaults.iter().chain(params) {
+            t.variation_params.insert(format!("{variation}.{k}"), *v);
+        }
+        t.weight = 1.0;
+        t
+    }
+
+    /// A 2D config of `parent` over `sub`, viewed N x N at `zoom`
+    /// (16 pixels a unit at zoom 1) around (`pan_x`, 0).
+    fn config(parent: Transform, sub: Flame, zoom: f32, pan_x: f64) -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.render_mode = RenderMode::TwoD;
+        cfg.flame = Flame { transforms: vec![parent], subflames: vec![sub], ..Flame::default() };
+        (cfg.zoom, cfg.pan_x, cfg.pan_y) = (zoom, pan_x, 0.0);
+        cfg.levels_enabled = false;
+        cfg
+    }
+
+    /// The accumulator after two frames of `cfg`.
+    fn accumulate(device: &wgpu::Device, queue: &wgpu::Queue, cfg: &FractalConfig) -> Vec<[f64; 4]> {
+        let mut r = FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        for _ in 0..2 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, queue, device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, queue, device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let acc = r.read_accumulator_blocking(device, queue);
+        r.destroy();
+        acc
+    }
+
+    /// The density in view (per sample) and its mean column.
+    fn spread(acc: &[[f64; 4]]) -> (f64, f64) {
+        let total: f64 = acc.iter().map(|p| p[3]).sum();
+        let column = acc.iter().enumerate().map(|(i, p)| (i % N as usize) as f64 * p[3]).sum::<f64>() / total;
+        (total, column)
+    }
+
     /// A subflame's finals shape its OUTPUT, not its walk. JWF's
     /// SubFlameWFFunc steps p -> p with the normal transforms and maps p
     /// through the finals to the q it returns; ours ran the finals inside
@@ -6243,50 +6302,123 @@ mod subflame_tests {
     /// the walk settles at x = 2 and JWF plots 12; with the finals in the
     /// walk, p -> 0.5(p + 10) + 1 settles at 22.
     ///
-    /// 64x64 at zoom 1 is 16 pixels a unit, so a view panned to (12, 0)
-    /// spans x in [10, 14], 12 at column 32, and 22 is far outside it.
+    /// A view panned to (12, 0) spans x in [10, 14], 12 at column 32,
+    /// and 22 is far outside it.
     #[test]
     fn a_subflame_final_maps_the_output_not_the_walk() {
         let Some((device, queue)) = super::memory_tests::device() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
-        const N: u32 = 64;
-        let mut parent = Transform::new();
-        parent.variations.clear();
-        parent.variation_order.clear();
-        parent.set_variation("subflame_wf", 1.0);
-        for (k, v) in [("subflame_id", 0.0), ("scale", 1.0), ("angle", 0.0), ("offset_x", 0.0), ("offset_y", 0.0), ("color_mode", -1.0)] {
-            parent.variation_params.insert(format!("subflame_wf.{k}"), v);
-        }
-        parent.weight = 1.0;
         let sub = Flame { transforms: vec![linear(0.5, 1.0)], final_transforms: vec![linear(1.0, 10.0)], ..Flame::default() };
-        let mut cfg = FractalConfig::default();
-        cfg.render_mode = RenderMode::TwoD;
-        cfg.flame = Flame { transforms: vec![parent], subflames: vec![sub], ..Flame::default() };
-        (cfg.zoom, cfg.pan_x, cfg.pan_y) = (1.0, 12.0, 0.0);
-        cfg.levels_enabled = false;
-
-        let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
-        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 64, 20);
-        queue.submit(Some(enc.finish()));
-        for _ in 0..2 {
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-            let k = r.compute_pass(
-                &mut enc, &queue, &device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
-                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
-                cfg.speed_factor, true, false,
-            );
-            r.accumulate_pass(&mut enc, &queue, &device, k);
-            queue.submit(Some(enc.finish()));
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        }
-        let density = r.read_density_blocking(&device, &queue);
-        r.destroy();
-        let total: f64 = density.iter().sum();
+        let cfg = config(parent("subflame_wf", 1.0, &[]), sub, 1.0, 12.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
         assert!(total > 0.9, "only {total:.3} of the subflame's points landed in a view around x = 12 (JWF's); the finals fed the walk");
-        let column = density.iter().enumerate().map(|(i, d)| (i % N as usize) as f64 * d).sum::<f64>() / total;
         assert!((column - 32.0).abs() < 2.0, "the subflame's points centre on column {column:.1}, not 32 (x = 12)");
+    }
+
+    /// JWF's subflame_wf adds its q to the running result whatever its
+    /// weight (`pVarTP += q`); ours multiplied it by the weight, as the
+    /// dispatcher does every normal variation's output. At weight 0.5
+    /// the walk of p -> 0.5p + (1, 0) still plots at x = 2, not 1.
+    #[test]
+    fn subflame_output_ignores_the_variation_weight() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let sub = Flame { transforms: vec![linear(0.5, 1.0)], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 0.5, &[]), sub, 1.0, 2.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the subflame's points landed in a view around x = 2");
+        assert!((column - 32.0).abs() < 2.0, "the subflame's points centre on column {column:.1}, not 32 (x = 2): the weight scaled them");
+    }
+
+    /// Inside a subflame a hidden transform moves the walk but makes no
+    /// output: JWF's subflameIter steps on until a visible transform.
+    /// p -> 0.5p + (1, 0) and a hidden p -> 0.5p - (1, 0) walk the whole
+    /// of [-2, 2]; only the first's steps are output, which land in
+    /// [0, 2]. Ours ignored opacity there and output both halves.
+    ///
+    /// At zoom 0.5 the view spans x in [-4, 4], 0 at column 32.
+    #[test]
+    fn a_hidden_subflame_transform_moves_the_walk_but_is_not_output() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut hidden = linear(0.5, -1.0);
+        hidden.opacity = 0.0;
+        let sub = Flame { transforms: vec![linear(0.5, 1.0), hidden], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 1.0, &[]), sub, 0.5, 0.0);
+        let acc = accumulate(&device, &queue, &cfg);
+        let (total, column) = spread(&acc);
+        let left: f64 = acc.iter().enumerate().filter(|(i, _)| i % (N as usize) < 31).map(|(_, p)| p[3]).sum();
+        assert!(total > 0.9, "only {total:.3} of the subflame's points landed in view");
+        assert!(left < 0.01 * total, "{:.1}% of the points are left of x = 0, where only the hidden transform's steps land", 100.0 * left / total);
+        assert!((column - 40.0).abs() < 1.5, "the points centre on column {column:.1}, not 40 (x = 1, the middle of [0, 2])");
+    }
+
+    /// With no transform that can be visible, JWF's subflameIter never
+    /// sets q and returns its initial (0, 0, 0) unplaced -- the offset
+    /// is applied only to a q it makes. (We also skip the 1000 steps it
+    /// walks looking.) Ours output the walk at x = 2 + 3.
+    #[test]
+    fn a_subflame_with_nothing_visible_outputs_its_first_q() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut hidden = linear(0.5, 1.0);
+        hidden.opacity = 0.0;
+        let sub = Flame { transforms: vec![hidden], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 1.0, &[("offset_x", 3.0)]), sub, 1.0, 0.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the points landed in a view around the origin");
+        assert!((column - 32.0).abs() < 1.0, "the points centre on column {column:.1}, not 32 (x = 0)");
+    }
+
+    /// pre_subflame_wf takes JWF's q, which subflameIter has already
+    /// scaled, rotated and offset; ours ignored those parameters. The
+    /// walk at x = 2 with offset_x 10 is at x = 12.
+    #[test]
+    fn pre_subflame_output_is_placed_by_its_parameters() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut p = parent("pre_subflame_wf", 1.0, &[("offset_x", 10.0)]);
+        p.set_variation("linear", 1.0);
+        let sub = Flame { transforms: vec![linear(0.5, 1.0)], ..Flame::default() };
+        let cfg = config(p, sub, 1.0, 12.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the points landed in a view around x = 12; the offset was ignored");
+        assert!((column - 32.0).abs() < 2.0, "the points centre on column {column:.1}, not 32 (x = 12)");
+    }
+
+    /// JWF makes a subflame's finals DIFFUSION, so they blend the colour
+    /// of the q they return; ours left it at the walk's. The walk's
+    /// transform holds its colour at 0 (colour 0, speed -1) and the final
+    /// sets 1 the same way, so with color_mode Direct and the parent's
+    /// direct colour 1 the plotted colour is the grayscale palette's
+    /// white end, not its black.
+    #[test]
+    fn a_subflame_final_blends_the_colour_it_outputs() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut walk = linear(0.5, 1.0);
+        (walk.color, walk.color_speed) = (0.0, -1.0);
+        let mut last = linear(1.0, 0.0);
+        (last.color, last.color_speed) = (1.0, -1.0);
+        let sub = Flame { transforms: vec![walk], final_transforms: vec![last], ..Flame::default() };
+        let mut cfg = config(parent("subflame_wf", 1.0, &[("color_mode", 0.0)]), sub, 1.0, 2.0);
+        cfg.palette = Palette::grayscale();
+        let acc = accumulate(&device, &queue, &cfg);
+        let (total, _) = spread(&acc);
+        assert!(total > 0.9, "only {total:.3} of the points landed in a view around x = 2");
+        let mean = acc.iter().map(|p| p[0] * p[3]).sum::<f64>() / total;
+        assert!(mean > 0.9, "the subflame's points are {mean:.3} red, not the white the final's colour blend gives");
     }
 }

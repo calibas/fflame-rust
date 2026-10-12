@@ -10,22 +10,27 @@
 //! Crucially `subflame_wf` is classified as a **blur** variation in
 //! JWildfire (same family as `circleblur`, `starblur`):
 //!   - It ignores its input `p` (the chaos-game state of the parent).
-//!   - The variation `amount` is ignored too.
+//!   - The variation `amount` is ignored too: JWF adds `q` to the
+//!     running result unscaled, so the body divides out the weight the
+//!     dispatcher multiplies it by.
 //!   - Users scale/rotate the subflame via the *parent xform's
 //!     post-affine*, which is applied to FP after `subflame_wf`
 //!     contributes its `q` to the running result.
 //!
-//! State (5 slots, persistent per (thread, xform, variation_id)):
+//! State (9 slots, persistent per (thread, xform, variation_id)):
 //!   0..2: subflame's current chaos-game point (x, y, z)
 //!   3:    subflame's current xform index (encoded as f32 ↔ u32)
 //!   4:    subflame's current color scalar (0..1, for `color_mode`)
+//!   5..8: the last output q (x, y, z, colour), returned again by a call
+//!         that finds no visible transform
 //!
-//! P3 — variation REGISTRATION only. Body is a stub returning
-//! vec3(0). P4 implements the nested chaos-game iteration in
-//! `subflame_iterate(subflame_id, state_offset)` and wires it into
-//! the variation body.
+//! The nested step is `subflame_iterate` in `shaders/core/subflame.wgsl`,
+//! a port of JWF's `SubFlameWFFunc.subflameIter`: it also applies
+//! `scale`, `angle`, the offsets and `colorscale_z`, for both variations.
 //!
 //! Refs:
+//!   - `output/variation-jwf-source/SubFlameWFFunc.java`,
+//!     `PreSubFlameWFFunc.java`
 //!   - `output/jwildfire-vars/output/subflame_wf.cpp`
 //!   - https://www.jwfsanctuary.club/variation-information/subflame/
 //!   - `docs/archive/projects/subflames.md`
@@ -45,9 +50,12 @@ use crate::param;
 /// and the variation `amount` — users scale/rotate the subflame via the
 /// parent xform's post-affine instead, though `scale`/`angle`/`offset_*`
 /// are also kept here for round-trip fidelity with existing JWildfire /
-/// Apophysis flame files. Per-thread state (5 slots) carries the subflame's
-/// chaos-game point, current xform index, and color scalar across
-/// iterations. The nested chaos-game step is implemented in
+/// Apophysis flame files. Per-thread state (9 slots) carries the subflame's
+/// chaos-game point, current xform index, color scalar and last output
+/// across iterations. Inside the subflame, transform opacity works as in
+/// JWildfire: a step on a hidden transform, or one whose opacity roll
+/// fails, moves the walk but is not output; the walk steps on until a
+/// visible one. The nested chaos-game step is implemented in
 /// [`shaders/core/subflame.wgsl`](../../shaders/core/subflame.wgsl),
 /// injected by the shader builder when `subflame_wf` is active.
 ///
@@ -91,42 +99,31 @@ pub static SUBFLAME_WF: VariationDef = VariationDef {
     ],
     init_param_count: 0,
     wgsl_init: None,
-    // 5 slots per instance — see module doc. Zero-init is the "fresh"
+    // 9 slots per instance — see module doc. Zero-init is the "fresh"
     // sentinel: subflame_iterate's first call on a thread starts from a
     // random point and walks JWildfire's 42-step prefuse, as
     // SubFlameWFFunc.prefuseIter does at setup time (and again after a
-    // walk goes non-finite).
-    state_count: 5,
+    // walk goes non-finite). It is also JWF's initial q, (0, 0, 0).
+    state_count: 9,
     wgsl_state_init: None,
-    // P4b: real subflame_wf body. Calls subflame_iterate() to advance
-    // the nested chaos game one step, then applies scale/rotate/offset
-    // and the color_mode rule. Forward-references subflame_iterate
-    // (defined in `shaders/core/subflame.wgsl`, injected after this
-    // variation by the shader builder when subflame_wf is active).
+    // Calls subflame_iterate() to advance the nested chaos game, which
+    // returns q already scaled, rotated and offset, then applies the
+    // color_mode rule. Forward-references subflame_iterate (defined in
+    // `shaders/core/subflame.wgsl`, injected after this variation by the
+    // shader builder when subflame_wf is active).
     //
     // "Blur" semantics: input `p` is ignored. The variation amount is
-    // also ignored (the apply_variations dispatcher multiplies our
-    // output by amount, but JWildfire's spec is explicit that amount
-    // shouldn't affect output — users scale via the parent xform's
-    // post-affine instead). For perfect parity we'd return early at
-    // amount=0; since the dispatcher gates on amount != 0 before
-    // calling us, that's effectively the case.
+    // also ignored: JWF's transform does `pVarTP += q`, but the
+    // apply_variations dispatcher multiplies every normal variation's
+    // output by its weight, so the body divides the weight out (the
+    // idisc pattern). The dispatcher gates on a non-zero weight, so the
+    // division is safe. Users scale via the parent xform's post-affine.
     wgsl_2d: r#"
 fn variation_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
     let subflame_id = u32(get_param(xform_id, variation_id, 0u));
-    let scale = get_param(xform_id, variation_id, 1u);
-    let angle_deg = get_param(xform_id, variation_id, 2u);
-    let offset_x = get_param(xform_id, variation_id, 3u);
-    let offset_y = get_param(xform_id, variation_id, 4u);
     let color_mode = i32(get_param(xform_id, variation_id, 7u));
 
     let q = subflame_iterate(subflame_id, xform_id, variation_id, rng);
-
-    let angle_rad = angle_deg * 0.017453292519943295;
-    let cos_a = cos(angle_rad);
-    let sin_a = sin(angle_rad);
-    let sx = scale * q.x;
-    let sy = scale * q.y;
 
     // JWildfire's setColor rule: any color_mode != CM_OFF (-1)
     // overrides the parent's color register with the subflame's
@@ -139,55 +136,41 @@ fn variation_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
         *vc = q.w;
     }
 
-    return vec2<f32>(
-        sx * cos_a - sy * sin_a + offset_x,
-        sx * sin_a + sy * cos_a + offset_y,
-    );
+    // Unscaled by the weight -- see above.
+    let w = transforms[xform_id].variations[variation_id];
+    return vec2<f32>(q.x, q.y) / w;
 }
 "#,
     wgsl_3d: r#"
 fn variation_subflame_wf(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {
     let subflame_id = u32(get_param(xform_id, variation_id, 0u));
-    let scale = get_param(xform_id, variation_id, 1u);
-    let angle_deg = get_param(xform_id, variation_id, 2u);
-    let offset_x = get_param(xform_id, variation_id, 3u);
-    let offset_y = get_param(xform_id, variation_id, 4u);
-    let offset_z = get_param(xform_id, variation_id, 5u);
-    let colorscale_z = get_param(xform_id, variation_id, 6u);
     let color_mode = i32(get_param(xform_id, variation_id, 7u));
 
     let q = subflame_iterate(subflame_id, xform_id, variation_id, rng);
-
-    let angle_rad = angle_deg * 0.017453292519943295;
-    let cos_a = cos(angle_rad);
-    let sin_a = sin(angle_rad);
-    let sx = scale * q.x;
-    let sy = scale * q.y;
 
     // See 2D body for the color_mode != -1 rationale.
     if (color_mode != -1) {
         *vc = q.w;
     }
 
-    return vec3<f32>(
-        sx * cos_a - sy * sin_a + offset_x,
-        sx * sin_a + sy * cos_a + offset_y,
-        scale * q.z + offset_z + colorscale_z * q.w,
-    );
+    // Unscaled by the weight -- see the 2D body.
+    let w = transforms[xform_id].variations[variation_id];
+    return q.xyz / w;
 }
 "#,
 };
 
 /// Pre-phase variant of subflame_wf. Steps the nested chaos game (same
-/// `subflame_iterate` helper) and writes the raw `q` to the affine
-/// point — overriding the chaos-game state going into the rest of the
-/// pre/normal/post variation chain. Inherits subflame_wf's full param
-/// list for round-trip fidelity with JWildfire `.flame` XML, but the
-/// transform body ignores scale/angle/offset/colorscale_z (JWildfire's
-/// `PreSubFlameWFFunc.transform` extends `SubFlameWFFunc` and overrides
-/// to do `pAffineTP.{x,y,z} = q.{x,y,z}` with no further math).
-/// `color_mode` still applies — non-Off pulls the subflame's color
-/// scalar into the parent's color register.
+/// `subflame_iterate` helper) and writes its `q` to the affine point —
+/// overriding the chaos-game state going into the rest of the
+/// pre/normal/post variation chain. JWildfire's
+/// `PreSubFlameWFFunc.transform` extends `SubFlameWFFunc` and does
+/// `pAffineTP.{x,y,z} = q.{x,y,z}`; `q` comes from the shared
+/// `subflameIter`, which has already applied scale, angle, the offsets
+/// and colorscale_z, so those parameters work here too. A pre variation's
+/// weight is never applied, as JWF ignores it. `color_mode` still applies
+/// — non-Off pulls the subflame's color scalar into the parent's color
+/// register.
 ///
 /// Source: `output/variation-jwf-source/PreSubFlameWFFunc.java`.
 ///
@@ -201,13 +184,12 @@ pub static PRE_SUBFLAME_WF: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     features: &[Feature::NeedsRng, Feature::WritesColor],
     // Same params as SUBFLAME_WF — JWildfire's PreSubFlameWFFunc extends
-    // SubFlameWFFunc, so file XML carries identical names. Body uses
-    // only `subflame_id` and `color_mode`; the rest are accepted for
-    // round-trip fidelity.
+    // SubFlameWFFunc, so file XML carries identical names, and the
+    // shared subflame_iterate reads the same slots.
     parameters: SUBFLAME_WF.parameters,
     init_param_count: 0,
     wgsl_init: None,
-    state_count: 5,
+    state_count: 9,
     wgsl_state_init: None,
     wgsl_2d: r#"
 fn variation_pre_subflame_wf(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {
