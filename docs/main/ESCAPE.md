@@ -131,6 +131,7 @@ and a colouring share one module.
 | `MutatesC` | `c` becomes a `var` passed by pointer (Spider) |
 | `Convergent` | the loop also stops on `|z − z_prev|² < 1e-12` and records `converged` (Newton, Nova, Magnet, Novaretti) |
 | `DynamicalOnly` | the map ignores `c` and seeds at the pixel, so both planes are one picture and the Julia toggle is hidden (Origami, Newton, Collatz, Lattès) |
+| `Creases` | the map folds paper, and its WGSL also defines `fn formula_creases(p0) -> vec3<f32>`: the folded paper's height at a starting point and its gradient, from the settings in `params.crease`. Offers the Creases relief field and terrain source (Origami) |
 
 **`EscapeMetric`**: `NormSq` (`|z|² > bailout`, the default), `Re`
 (`Re z > bailout`, raw — the exponential family and tetration) and
@@ -242,7 +243,7 @@ A toggle, not a list of formulas: `julia` on makes the pixel `z₀` with
 | `novaretti` | Novaretti | `−6z(z³ + c)/(2z³ − c)²`; nothing escapes, so classification is convergence. `NonEscaping`, `Convergent` |
 | `littlewood` | Littlewood | the root cloud: the greedy sign-choice map `w ← λw + d` stays bounded, over three digit sets |
 | `lambda_sine` | Lambda Sine (λ·sin z) | `λ·sin z`, the Cantor-bouquet family, seeded at π/2. Escape on `|Im z|`; derivative |
-| `origami` | Origami (Butterfly) | McCabe's Butterfly Origami: one fold per iteration along a seeded line sequence. `NonEscaping`, `NeedsIndex`, `DynamicalOnly`; uses `derived_data` |
+| `origami` | Origami (Butterfly) | McCabe's Butterfly Origami: one fold per iteration along a seeded line sequence. `NonEscaping`, `NeedsIndex`, `DynamicalOnly`, `Creases`; uses `derived_data` |
 | `lattes` | Lattès | rational maps whose Julia set is the whole sphere, three variants. `NonEscaping`, `DynamicalOnly` |
 
 Each def's doc comment cites its source and the convention it pins.
@@ -738,10 +739,35 @@ without the key means 315). The slope can come from (`ShadingField`):
 - `Layer` — the texture layer's value;
 - `Analytic` — the distance estimate's slope from the derivative;
 - `Offset` — the value at orbits a small step beside the pixel;
-- `Embossed` — Ultra Fractal's bevelled contours from two such orbits.
+- `Embossed` — Ultra Fractal's bevelled contours from two such orbits;
+- `Creases` — a folding formula's paper (below).
 
-The last three re-iterate, and `Offset` and `Embossed` run on the direct
-path only. Lighting is `Tilt` (the signed lean toward the light) or
+`Analytic`, `Offset`, `Embossed` and `Creases` re-iterate, and the last
+three run on the direct path only.
+
+**Creases** (`FormulaFeature::Creases`; Origami's) draws the folds as
+paper. Each fold is a crease, and the paper rises or falls in a straight
+line with the distance from it, the same slope on both sides. Fold `i`'s
+crease weighs `decay^i` (`CreaseSettings`: **Decay**, 0.6 by default),
+so the first is the main crease and each later one is finer; the
+iteration count is the crease count, one per fold, at most 64. The
+**Pattern** sets each fold's direction: Valley (every flap toward the
+viewer), Alternate, or Random from the line seed. **Flip** swaps
+mountain and valley. A crease is a valley on one face of the paper and a
+mountain on the other, so a layer that an odd number of earlier folds
+turned face down shows it reversed. The slope is exact, not
+differenced: every fold reflects, so the folded point is `M p0 + t` for
+an orthogonal `M`, and the gradient of a distance from a line is
+`Mᵀ n`. `formula_creases` returns the height and gradient. The
+iterate pass stores the height in the relief channel, and stores a
+tenth of `−∇h`, turned into the screen frame, as the slope (at the
+default relief Height of 10, the first crease tilts 45°). Every pixel
+gets one, the interior's too. The recolour shortcut cannot recompute
+them, so a crease render always iterates
+(`EscapeConfig::wants_creases`); Origami's 64 folds are cheap. The
+settings reach the shader through the uniform's `crease` row. The
+model was prototyped in `scripts/escape_prototypes/origami_creases.py`
+([plan](../projects/origami-creases.md)). Lighting is `Tilt` (the signed lean toward the light) or
 `Lambert` (with an elevation); shadow and highlight each have a colour,
 strength and blend (`ShadingBlend`, blended in a perceptual space so the
 two strengths read alike); `softness` is a Gaussian on the height, in

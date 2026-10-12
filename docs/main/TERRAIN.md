@@ -817,6 +817,15 @@ A terrain needs at least 64 texture array layers on the device
   toward the set.
 - **Relief field:** the 2D relief's own height source, the field chosen
   in the Escape panel's relief settings; linear by default.
+- **Paper creases:** a folding formula's paper (Origami's; see
+  [ESCAPE.md](ESCAPE.md), relief shading), whatever the 2D relief draws,
+  linear by default. A crease's slope runs out to one paper size (the
+  line spread) and then levels off (`CREASE_TERRAIN_REACH`). Unbounded,
+  the rise out to the horizon would set the measured range and flatten
+  every crease near the camera. Where a later crease crosses onto a
+  layer that an earlier fold turned over, its direction flips, and the
+  height steps there. The step reads as a flap's edge. Offered only for
+  formulas with creases.
 
 **Interior** (`TerrainInterior`): **Plateau** (flat at the top, in the
 interior's colour), **Hole** (transparent, sunk to the floor) or **Lake**

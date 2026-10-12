@@ -63,7 +63,7 @@ use super::terrain_tiers::{TerrainTiers, TierInputs};
 #[cfg(test)]
 use crate::config::escape::RenderTier;
 use super::EscapeRenderer;
-use crate::config::escape::{EscapeConfig, TerrainInterior, TerrainSource};
+use crate::config::escape::{EscapeConfig, ShadingField, TerrainInterior, TerrainSource};
 use crate::config::FractalConfig;
 use std::collections::HashMap;
 use wgpu::*;
@@ -425,6 +425,7 @@ pub fn terrain_ingest(config: &FractalConfig, derivative: bool) -> TerrainIngest
         TerrainSource::Distance if derivative => 8,
         TerrainSource::Distance | TerrainSource::EscapeCount => 9,
         TerrainSource::Relief => config.escape.shading.field.to_gpu(),
+        TerrainSource::Creases => ShadingField::Creases.to_gpu(),
     };
     let interior = match t.interior {
         TerrainInterior::Plateau => 0,

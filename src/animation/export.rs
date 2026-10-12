@@ -1010,6 +1010,10 @@ fn apply_config_value(
             let (lo, hi) = crate::config::escape::RELIEF_OFFSET_RANGE;
             config.escape.shading.offset = v.clamp(lo, hi);
         }
+        (ConfigPath::EscapeShadingCreaseDecay, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::CREASE_DECAY_RANGE;
+            config.escape.shading.creases.decay = v.clamp(lo, hi);
+        }
         (ConfigPath::EscapeTextureOverlayMerge, ConfigValue::Float(v)) => {
             config.escape.texture_overlay.merge = v.clamp(0.0, 1.0);
         }

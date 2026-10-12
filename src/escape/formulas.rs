@@ -756,7 +756,12 @@ pub static ORIGAMI: FormulaDef = FormulaDef {
     name: "origami",
     display_name: "Origami (Butterfly)",
     presets: super::presets::ORIGAMI,
-    features: &[FormulaFeature::NonEscaping, FormulaFeature::NeedsIndex, FormulaFeature::DynamicalOnly],
+    features: &[
+        FormulaFeature::NonEscaping,
+        FormulaFeature::NeedsIndex,
+        FormulaFeature::DynamicalOnly,
+        FormulaFeature::Creases,
+    ],
     parameters: &[
         EscapeParamDef {
             name: "seed",
@@ -809,6 +814,85 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
     let l = fdata4(i);
     return origami_fold(z, l.xy, l.zw);
 }
+
+// The paper's creases (FormulaFeature::Creases; see
+// docs/projects/origami-creases.md): the folded paper's height at a
+// starting point and the height's gradient there, from the folds the
+// orbit makes. Fold i is a crease weighing decay^i: the paper rises (a
+// valley, toward the viewer) or falls in a straight line with the
+// point's distance from it, the same slope on both sides. A layer an
+// odd number of earlier folds turned face down sees the crease
+// reversed: a valley on one face of a sheet is a mountain on the other.
+// Each fold reflects, so the folded point is m p0 + t for an orthogonal
+// m, and the gradient of a distance from a line is m^T times its
+// normal -- exact at any zoom, never differenced.
+fn origami_crease_hash(x: u32) -> u32 {
+    var h = x;
+    h = h ^ (h >> 16u);
+    h = h * 0x7feb352du;
+    h = h ^ (h >> 15u);
+    h = h * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    return h;
+}
+
+fn formula_creases(p0: vec2<f32>) -> vec3<f32> {
+    // Decay, pattern (0 valley, 1 alternate, 2 random), flip sign, and
+    // the reach in paper sizes (the line spread), 0 for none: how far
+    // from its crease a slope runs before the paper levels off.
+    let settings = params.crease;
+    let pattern = u32(settings.y + 0.5);
+    let reach = settings.w * fparam(1u);
+    // Random draws past the hash indices the line endpoints took
+    // (origami_derived_lines: four per line, 256 in all).
+    let seed = u32(clamp(fparam(0u), 0.0, 4096.0)) * 2654435761u;
+    let folds = min(params.max_iter, 64u);
+    var p = p0;
+    var m = mat2x2<f32>(1.0, 0.0, 0.0, 1.0);
+    var face = settings.z;
+    var weight = 1.0;
+    var h = 0.0;
+    var grad = vec2<f32>(0.0);
+    for (var i = 0u; i < folds; i = i + 1u) {
+        let l = fdata4(i);
+        let a = l.xy;
+        let ab = l.zw - l.xy;
+        let d2 = dot(ab, ab);
+        // origami_fold's own test: the paper moves where it is <= 0.
+        let side = ab.x * (p.y - a.y) - ab.y * (p.x - a.x);
+        if (d2 >= 1e-12) {
+            var dir = 1.0;
+            if (pattern == 1u && (i & 1u) == 1u) {
+                dir = -1.0;
+            }
+            if (pattern == 2u && (origami_crease_hash(seed + 256u + i) >> 31u) == 1u) {
+                dir = -1.0;
+            }
+            let len = sqrt(d2);
+            let nrm = vec2<f32>(-ab.y, ab.x) / len;
+            let dist = side / len;
+            let w = weight * dir * face;
+            if (reach > 0.0 && abs(dist) >= reach) {
+                h = h + w * reach;
+            } else {
+                h = h + w * abs(dist);
+                grad = grad + (w * sign(dist)) * (nrm * m);
+            }
+            if (side <= 0.0) {
+                p = origami_fold(p, l.xy, l.zw);
+                let u = ab / len;
+                let r = mat2x2<f32>(
+                    2.0 * u.x * u.x - 1.0, 2.0 * u.x * u.y,
+                    2.0 * u.x * u.y, 2.0 * u.y * u.y - 1.0,
+                );
+                m = r * m;
+                face = -face;
+            }
+        }
+        weight = weight * settings.x;
+    }
+    return vec3<f32>(h, grad);
+}
 "#,
     wgsl_param_seed: "pixel",
     wgsl_prev_init: "",
@@ -831,18 +915,21 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
 /// whole image — is now MORE deterministic than the in-shader
 /// construction it replaces (GPU FMA contraction varied by driver).
 /// The integer hash matches the WGSL one bit-for-bit.
+/// The hash behind origami's lines, and its Random crease pattern
+/// (`origami_crease_hash` in the WGSL).
+fn origami_hash(x: u32) -> u32 {
+    let mut h = x;
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^= h >> 16;
+    h
+}
+
 fn origami_derived_lines(params: &[f32]) -> Vec<f32> {
-    fn hash(x: u32) -> u32 {
-        let mut h = x;
-        h ^= h >> 16;
-        h = h.wrapping_mul(0x7feb_352d);
-        h ^= h >> 15;
-        h = h.wrapping_mul(0x846c_a68b);
-        h ^= h >> 16;
-        h
-    }
     fn unit(x: u32) -> f32 {
-        (hash(x) >> 8) as f32 * (1.0 / 16_777_216.0)
+        (origami_hash(x) >> 8) as f32 * (1.0 / 16_777_216.0)
     }
     fn fold(p: [f32; 2], l: &[f32; 4]) -> [f32; 2] {
         let (ab_x, ab_y) = (l[2] - l[0], l[3] - l[1]);
@@ -877,6 +964,86 @@ fn origami_derived_lines(params: &[f32]) -> Vec<f32> {
 
 /// 64 lines x vec4 fills the whole `fdata` array.
 pub(crate) const ORIGAMI_MAX_FOLDS: usize = 64;
+
+/// `formula_creases` on the CPU, in f32: the reference the GPU's crease
+/// field is tested against. `params` are origami's resolved params,
+/// `crease` the uniform row (`CreaseSettings::to_gpu`); returns the
+/// height and its gradient at `p0`.
+#[cfg(test)]
+pub(crate) fn origami_creases_at(params: &[f32], crease: [f32; 4], max_iter: u32, p0: [f32; 2]) -> [f32; 3] {
+    let lines = origami_derived_lines(params);
+    let pattern = (crease[1] + 0.5) as u32;
+    let seed = (params.first().copied().unwrap_or(7.0).clamp(0.0, 4096.0) as u32).wrapping_mul(2_654_435_761);
+    let folds = max_iter.min(ORIGAMI_MAX_FOLDS as u32);
+    let mut p = p0;
+    // Row-major: m[r][col].
+    let mut m = [[1.0f32, 0.0], [0.0, 1.0]];
+    let mut face = crease[2];
+    let reach = crease[3] * params.get(1).copied().unwrap_or(2.0);
+    let mut weight = 1.0f32;
+    let mut h = 0.0f32;
+    let mut grad = [0.0f32; 2];
+    for i in 0..folds {
+        let l = &lines[i as usize * 4..i as usize * 4 + 4];
+        let (ax, ay) = (l[0], l[1]);
+        let (abx, aby) = (l[2] - l[0], l[3] - l[1]);
+        let d2 = abx * abx + aby * aby;
+        let side = abx * (p[1] - ay) - aby * (p[0] - ax);
+        if d2 >= 1e-12 {
+            let mut dir = 1.0f32;
+            if pattern == 1 && i & 1 == 1 {
+                dir = -1.0;
+            }
+            if pattern == 2 && origami_hash(seed.wrapping_add(256 + i)) >> 31 == 1 {
+                dir = -1.0;
+            }
+            let len = d2.sqrt();
+            let (nx, ny) = (-aby / len, abx / len);
+            let dist = side / len;
+            let w = weight * dir * face;
+            if reach > 0.0 && dist.abs() >= reach {
+                h += w * reach;
+                if side <= 0.0 {
+                    let t = ((p[0] - ax) * abx + (p[1] - ay) * aby) / d2;
+                    p = [(ax + abx * t) * 2.0 - p[0], (ay + aby * t) * 2.0 - p[1]];
+                    let (ux, uy) = (abx / len, aby / len);
+                    let r = [[2.0 * ux * ux - 1.0, 2.0 * ux * uy], [2.0 * ux * uy, 2.0 * uy * uy - 1.0]];
+                    m = [
+                        [r[0][0] * m[0][0] + r[0][1] * m[1][0], r[0][0] * m[0][1] + r[0][1] * m[1][1]],
+                        [r[1][0] * m[0][0] + r[1][1] * m[1][0], r[1][0] * m[0][1] + r[1][1] * m[1][1]],
+                    ];
+                    face = -face;
+                }
+                weight *= crease[0];
+                continue;
+            }
+            h += w * dist.abs();
+            let s = if dist > 0.0 {
+                1.0
+            } else if dist < 0.0 {
+                -1.0
+            } else {
+                0.0
+            };
+            // m^T n.
+            grad[0] += w * s * (m[0][0] * nx + m[1][0] * ny);
+            grad[1] += w * s * (m[0][1] * nx + m[1][1] * ny);
+            if side <= 0.0 {
+                let t = ((p[0] - ax) * abx + (p[1] - ay) * aby) / d2;
+                p = [(ax + abx * t) * 2.0 - p[0], (ay + aby * t) * 2.0 - p[1]];
+                let (ux, uy) = (abx / len, aby / len);
+                let r = [[2.0 * ux * ux - 1.0, 2.0 * ux * uy], [2.0 * ux * uy, 2.0 * uy * uy - 1.0]];
+                m = [
+                    [r[0][0] * m[0][0] + r[0][1] * m[1][0], r[0][0] * m[0][1] + r[0][1] * m[1][1]],
+                    [r[1][0] * m[0][0] + r[1][1] * m[1][0], r[1][0] * m[0][1] + r[1][1] * m[1][1]],
+                ];
+                face = -face;
+            }
+        }
+        weight *= crease[0];
+    }
+    [h, grad[0], grad[1]]
+}
 
 /// Lattès maps — rational maps whose Julia set is the WHOLE sphere.
 ///
@@ -2054,5 +2221,51 @@ mod tests {
             finals[0], finals[1],
             "seeded at the critical point, different lambdas must give different orbits"
         );
+    }
+
+    /// The crease field's carried gradient is the gradient of its height.
+    /// The paper is piecewise linear, so where a second difference is
+    /// zero no crease lies between the samples, and the central
+    /// difference there must BE the carried gradient. Most samples must
+    /// qualify, or the check says nothing. And the field has creases --
+    /// many facets, not one tilted plane -- and Flip mirrors it exactly.
+    #[test]
+    fn the_crease_gradient_is_the_heights() {
+        let params = [8.0f32, 2.0];
+        for pattern in [0.0f32, 1.0, 2.0] {
+            let row = [0.6f32, pattern, 1.0, 0.0];
+            let (mut flat, mut total) = (0usize, 0usize);
+            let mut facets = std::collections::HashSet::new();
+            let e = 1e-3f32;
+            for j in 0..40 {
+                for i in 0..40 {
+                    let p = [-1.9 + 3.8 * (i as f32 + 0.5) / 40.0, -1.9 + 3.8 * (j as f32 + 0.5) / 40.0];
+                    let at = |q: [f32; 2]| super::origami_creases_at(&params, row, 32, q);
+                    let g = at(p);
+                    let (xp, xm) = (at([p[0] + e, p[1]])[0], at([p[0] - e, p[1]])[0]);
+                    let (yp, ym) = (at([p[0], p[1] + e])[0], at([p[0], p[1] - e])[0]);
+                    total += 1;
+                    if (xp - 2.0 * g[0] + xm).abs() < 1e-5 && (yp - 2.0 * g[0] + ym).abs() < 1e-5 {
+                        flat += 1;
+                        let (fx, fy) = ((xp - xm) / (2.0 * e), (yp - ym) / (2.0 * e));
+                        assert!(
+                            (fx - g[1]).abs() < 1e-2 && (fy - g[2]).abs() < 1e-2,
+                            "pattern {pattern} at {p:?}: carried {:?}, differenced {:?}",
+                            [g[1], g[2]],
+                            [fx, fy]
+                        );
+                    }
+                    facets.insert(((g[1] * 100.0).round() as i32, (g[2] * 100.0).round() as i32));
+                    let flipped = super::origami_creases_at(&params, [0.6, pattern, -1.0, 0.0], 32, p);
+                    assert_eq!(flipped, [-g[0], -g[1], -g[2]], "flip must mirror the paper");
+                }
+            }
+            assert!(flat * 100 >= total * 80, "pattern {pattern}: only {flat}/{total} samples clear of a crease");
+            assert!(facets.len() > 50, "pattern {pattern}: only {} facets", facets.len());
+        }
+        // The first fold is the main crease: at one fold the paper is a
+        // V, its slope 1 on both sides.
+        let g = super::origami_creases_at(&params, [0.6, 0.0, 1.0, 0.0], 1, [0.3, -0.7]);
+        assert!(((g[1] * g[1] + g[2] * g[2]).sqrt() - 1.0).abs() < 1e-5, "{g:?}");
     }
 }

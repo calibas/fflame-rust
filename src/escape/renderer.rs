@@ -544,7 +544,7 @@ const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
-/// boundary, total 1312 bytes).
+/// boundary, total 1328 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EscapeParamsGpu {
@@ -579,7 +579,9 @@ struct EscapeParamsGpu {
     /// The value-to-palette map's two curves (`PaletteMap::gpu_flags`).
     /// Occupies a padding word.
     pmap_flags: u32,
-    /// x: the transfer's pivot (`PaletteMap::gpu_pivot`); yzw spare.
+    /// The transfer's pivot (`PaletteMap::gpu_pivot`), the texture
+    /// layer's weight, the relief orbits' step, the relief light's
+    /// azimuth.
     pmap: [f32; 4],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
@@ -588,6 +590,8 @@ struct EscapeParamsGpu {
     /// CPU-derived formula data (`FormulaDef::derived_data`),
     /// vec4-packed; zero for formulas without the hook.
     fdata: [[f32; 4]; FDATA_VEC4S],
+    /// A folding formula's crease settings (`CreaseSettings::to_gpu`).
+    crease: [f32; 4],
 }
 
 /// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
@@ -7983,6 +7987,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             cparams,
             lparams,
             fdata,
+            // A terrain made of creases bounds their reach.
+            crease: escape.shading.creases.to_gpu(
+                escape.terrain_active() && escape.terrain.source == crate::config::escape::TerrainSource::Creases,
+            ),
         }
     }
 
@@ -8060,11 +8068,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let solid = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid);
         let geom_active = if solid { self.ensure_ifs_geom(device, results_active) } else { false };
         if let Some(ik) = iterate_key.as_deref() {
-            // Offset relief runs orbits beside each pixel's own, which a
+            // Offset relief runs orbits beside each pixel's own, and the
+            // crease field folds the pixel's starting point, which a
             // recolour of the stored records cannot: it iterates.
             if results_active
                 && self.results_key.as_deref() == Some(ik)
                 && !escape.shading.wants_offset_orbits()
+                && !escape.wants_creases()
             {
                 let t0 = web_time::Instant::now();
                 let ckey = Self::contrast_key(escape, ik);
@@ -9146,9 +9156,9 @@ mod tests {
         // 4 vec2 (32) + 4 u32 (16) + bailout, tile row, damping (16) +
         // shading flags, stride, degree, palette-map flags (16) + the
         // palette map's vec4 (16) + 3 param arrays (192) + the
-        // derived-data table (1024) = 1312, and every vec4 must start
-        // 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1312);
+        // derived-data table (1024) + the crease row (16) = 1328, and
+        // every vec4 must start 16-byte aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1328);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);
@@ -9156,6 +9166,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 160);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 224);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 288);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, crease), 1312);
     }
 }
 

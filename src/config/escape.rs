@@ -558,6 +558,12 @@ pub enum ShadingField {
     /// shadow or a highlight by which came out higher. Bevelled contour
     /// lines, a fixed fraction of the view wide. Direct path only.
     Embossed,
+    /// A folding formula's paper (`FormulaFeature::Creases`): the height
+    /// rises or falls with the distance from each crease, and the slope
+    /// is exact, carried through the folds (`CreaseSettings`;
+    /// docs/projects/origami-creases.md). Flat on a formula without
+    /// creases.
+    Creases,
 }
 
 impl ShadingField {
@@ -569,7 +575,112 @@ impl ShadingField {
             ShadingField::Analytic => 3,
             ShadingField::Offset => 4,
             ShadingField::Embossed => 5,
+            // 3 or more: a stored slope, which the texture overlay must
+            // leave its channels to (`overlay_owns_blue`).
+            ShadingField::Creases => 6,
         }
+    }
+}
+
+/// The direction each fold of a folding formula takes before a
+/// face-down layer of the wad reverses it (`CreaseSettings`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreasePattern {
+    /// Every fold a valley: each flap folds toward the viewer.
+    #[default]
+    Valley,
+    /// Valley, mountain, valley, and so on.
+    Alternate,
+    /// Each fold's direction from the formula's line seed.
+    Random,
+}
+
+impl CreasePattern {
+    pub const ALL: [CreasePattern; 3] = [CreasePattern::Valley, CreasePattern::Alternate, CreasePattern::Random];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CreasePattern::Valley => "valley",
+            CreasePattern::Alternate => "alternate",
+            CreasePattern::Random => "random",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "alternate" => CreasePattern::Alternate,
+            "random" => CreasePattern::Random,
+            _ => CreasePattern::Valley,
+        }
+    }
+    pub fn to_gpu(self) -> f32 {
+        match self {
+            CreasePattern::Valley => 0.0,
+            CreasePattern::Alternate => 1.0,
+            CreasePattern::Random => 2.0,
+        }
+    }
+    fn is_default(v: &CreasePattern) -> bool {
+        *v == CreasePattern::Valley
+    }
+}
+
+/// A folding formula's paper, for the Creases relief field and terrain
+/// source (docs/projects/origami-creases.md). Each fold is a crease; the
+/// paper rises or falls in a straight line with the distance from it,
+/// the same slope on both sides. Fold i's crease weighs `decay^i`, so the
+/// first is the main crease and each later one finer. A crease is a
+/// valley on one face of the paper and a mountain on the other, so a
+/// layer an odd number of earlier folds turned face down reverses it.
+///
+/// There is no depth: the relief's Height scales the slope, and a
+/// terrain fits its heights to its own range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreaseSettings {
+    #[serde(default, skip_serializing_if = "CreasePattern::is_default")]
+    pub pattern: CreasePattern,
+    /// How much finer each later crease is (`CREASE_DECAY_RANGE`).
+    #[serde(default = "default_crease_decay", skip_serializing_if = "is_default_crease_decay")]
+    pub decay: f32,
+    /// Swaps mountain and valley.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip: bool,
+}
+
+fn default_crease_decay() -> f32 {
+    0.6
+}
+fn is_default_crease_decay(v: &f32) -> bool {
+    *v == default_crease_decay()
+}
+pub const CREASE_DECAY_RANGE: (f32, f32) = (0.05, 1.0);
+/// How far from its crease a terrain's paper slopes before it levels
+/// off, in paper sizes (Origami's line spread). The 2D relief lights
+/// slopes, so its creases run on unbounded; a terrain fits its heights
+/// to the whole range it sees, out to the horizon, where an unbounded
+/// rise would dwarf every crease near the camera
+/// (docs/projects/origami-creases.md).
+pub const CREASE_TERRAIN_REACH: f32 = 1.0;
+
+impl Default for CreaseSettings {
+    fn default() -> Self {
+        Self { pattern: CreasePattern::Valley, decay: default_crease_decay(), flip: false }
+    }
+}
+
+impl CreaseSettings {
+    fn is_default(v: &CreaseSettings) -> bool {
+        *v == CreaseSettings::default()
+    }
+    /// The escape uniform's `crease` row: the decay, the pattern, the
+    /// flip as a sign, and the reach (`CREASE_TERRAIN_REACH` for a
+    /// terrain, else 0).
+    pub fn to_gpu(&self, terrain: bool) -> [f32; 4] {
+        [
+            self.decay.clamp(CREASE_DECAY_RANGE.0, CREASE_DECAY_RANGE.1),
+            self.pattern.to_gpu(),
+            if self.flip { -1.0 } else { 1.0 },
+            if terrain { CREASE_TERRAIN_REACH } else { 0.0 },
+        ]
     }
 }
 
@@ -646,6 +757,7 @@ pub fn shading_field_to_str(m: ShadingField) -> &'static str {
         ShadingField::Analytic => "analytic",
         ShadingField::Offset => "offset",
         ShadingField::Embossed => "embossed",
+        ShadingField::Creases => "creases",
     }
 }
 
@@ -656,6 +768,7 @@ pub fn shading_field_from_str(s: &str) -> ShadingField {
         "analytic" => ShadingField::Analytic,
         "offset" => ShadingField::Offset,
         "embossed" => ShadingField::Embossed,
+        "creases" => ShadingField::Creases,
         _ => ShadingField::Smooth,
     }
 }
@@ -1331,6 +1444,10 @@ pub struct EscapeShading {
     /// Which field the slope is taken from.
     #[serde(default, skip_serializing_if = "ShadingField::is_default")]
     pub field: ShadingField,
+    /// The paper a folding formula's Creases field and terrain source
+    /// draw.
+    #[serde(default, skip_serializing_if = "CreaseSettings::is_default")]
+    pub creases: CreaseSettings,
 
     /// Colour applied where the surface faces away from the light.
     #[serde(default = "default_shadow_color")]
@@ -1499,6 +1616,7 @@ impl Default for EscapeShading {
             light_angle: default_light_angle(),
             height: default_relief_height(),
             field: ShadingField::default(),
+            creases: CreaseSettings::default(),
             shadow_color: default_shadow_color(),
             shadow_strength: default_shadow_strength(),
             shadow_blend: ShadingBlend::Multiply,
@@ -1531,6 +1649,10 @@ impl EscapeShading {
     pub fn wants_derivative(&self) -> bool {
         self.enabled && self.field == ShadingField::Analytic
     }
+    /// Whether the relief draws a folding formula's creases.
+    pub fn wants_creases(&self) -> bool {
+        self.enabled && self.field == ShadingField::Creases
+    }
     /// Whether the relief runs orbits beside each pixel's own.
     pub fn wants_offset_orbits(&self) -> bool {
         self.enabled && matches!(self.field, ShadingField::Offset | ShadingField::Embossed)
@@ -1540,7 +1662,7 @@ impl EscapeShading {
     /// orbits), 2 Embossed's stored response.
     pub fn stored_relief(&self) -> u32 {
         match self.field {
-            ShadingField::Analytic | ShadingField::Offset => 1,
+            ShadingField::Analytic | ShadingField::Offset | ShadingField::Creases => 1,
             ShadingField::Embossed => 2,
             _ => 0,
         }
@@ -1764,32 +1886,39 @@ pub enum TerrainSource {
     /// The 2D relief's own height source (the Escape panel's relief
     /// field: the colouring's value, banded, a layer's).
     Relief,
+    /// A folding formula's paper: the Creases field's height
+    /// (`CreaseSettings`), whatever the 2D relief draws.
+    Creases,
 }
 
 impl TerrainSource {
-    pub const ALL: [TerrainSource; 3] = [TerrainSource::Distance, TerrainSource::EscapeCount, TerrainSource::Relief];
+    pub const ALL: [TerrainSource; 4] =
+        [TerrainSource::Distance, TerrainSource::EscapeCount, TerrainSource::Relief, TerrainSource::Creases];
     pub fn as_str(self) -> &'static str {
         match self {
             TerrainSource::Distance => "distance",
             TerrainSource::EscapeCount => "escape_count",
             TerrainSource::Relief => "relief",
+            TerrainSource::Creases => "creases",
         }
     }
-    /// The iterate pass's height mode for it: the shaders' relief
-    /// source codes, past the relief's own (0-5), for the two the
-    /// terrain adds.
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "escape_count" => TerrainSource::EscapeCount,
             "relief" => TerrainSource::Relief,
+            "creases" => TerrainSource::Creases,
             _ => TerrainSource::Distance,
         }
     }
+    /// The iterate pass's height mode for it: the shaders' relief
+    /// source codes -- the relief's own (0-6), and 8 and 9 for the two
+    /// the terrain adds. Creases is the relief's code.
     pub fn shade_flags(self, relief: ShadingField) -> u32 {
         match self {
             TerrainSource::Distance => 8,
             TerrainSource::EscapeCount => 9,
             TerrainSource::Relief => relief.to_gpu(),
+            TerrainSource::Creases => ShadingField::Creases.to_gpu(),
         }
     }
 }
@@ -2257,6 +2386,14 @@ impl EscapeConfig {
         self.shading.wants_derivative() || (self.terrain_active() && self.terrain.source == TerrainSource::Distance)
     }
 
+    /// Whether the iterate pass draws a folding formula's creases: the
+    /// relief's Creases field, or a terrain made of them. The pass then
+    /// always runs whole -- the recolour shortcut, which has no formula
+    /// code, cannot recompute them.
+    pub fn wants_creases(&self) -> bool {
+        self.shading.wants_creases() || (self.terrain_active() && self.terrain.source == TerrainSource::Creases)
+    }
+
     /// Whether the 3D terrain is in force: switched on, for a formula
     /// that draws a plane (a solid IFS is already 3D, mode D's own),
     /// in a build that carries it. The gallery modules are built
@@ -2464,6 +2601,7 @@ mod shading_tests {
             offset: 0.002,
             emboss: EmbossType::SmallestMagnitude,
             emboss_sections: 5,
+            creases: CreaseSettings { pattern: CreasePattern::Random, decay: 0.8, flip: true },
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
@@ -2505,11 +2643,18 @@ mod shading_tests {
             ShadingField::Analytic,
             ShadingField::Offset,
             ShadingField::Embossed,
+            ShadingField::Creases,
         ] {
             assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
         }
         for t in EmbossType::ALL {
             assert_eq!(EmbossType::from_name(t.as_str()), t);
+        }
+        for p in CreasePattern::ALL {
+            assert_eq!(CreasePattern::from_name(p.as_str()), p);
+        }
+        for s in TerrainSource::ALL {
+            assert_eq!(TerrainSource::from_str_or_default(s.as_str()), s);
         }
         // The GPU discriminants must be distinct, or two blend modes
         // would render identically.
@@ -2560,6 +2705,35 @@ mod tests {
         assert_eq!(old.light_angle, 315.0);
         let json = serde_json::to_string(&EscapeShading { enabled: true, ..EscapeShading::default() }).unwrap();
         assert!(json.contains("\"light_angle\":135.0"), "the light must be written: {json}");
+    }
+
+    /// The crease settings are skipped while default -- a shading block
+    /// that never drew creases does not mention them -- and each one set
+    /// is written on its own.
+    #[test]
+    fn crease_settings_are_written_only_when_set() {
+        let on = EscapeShading { enabled: true, field: ShadingField::Creases, ..EscapeShading::default() };
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(json.contains("\"field\":\"creases\""), "{json}");
+        assert!(!json.contains("\"creases\":{"), "default creases must not be written: {json}");
+        let mut set = on.clone();
+        set.creases.decay = 0.85;
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains("\"creases\":{\"decay\":0.85}"), "{json}");
+        let back: EscapeShading = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.creases, set.creases);
+        // The uniform row: decay, pattern, flip as a sign, the reach.
+        let s = CreaseSettings { pattern: CreasePattern::Alternate, decay: 0.7, flip: true };
+        assert_eq!(s.to_gpu(false), [0.7, 1.0, -1.0, 0.0]);
+        assert_eq!(s.to_gpu(true), [0.7, 1.0, -1.0, CREASE_TERRAIN_REACH]);
+        // The relief and the terrain source share the code, and a terrain
+        // made of creases asks for them whatever the relief draws.
+        assert_eq!(TerrainSource::Creases.shade_flags(ShadingField::Smooth), ShadingField::Creases.to_gpu());
+        let mut esc = EscapeConfig::default();
+        assert!(!esc.wants_creases());
+        esc.terrain.enabled = true;
+        esc.terrain.source = TerrainSource::Creases;
+        assert_eq!(esc.wants_creases(), esc.terrain_active());
     }
 
     /// The palette map is skipped while it is the identity, and a set

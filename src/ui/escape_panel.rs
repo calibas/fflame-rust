@@ -889,6 +889,8 @@ pub fn render_escape_content(
                     });
                 }
 
+                let folds = crate::escape::get_formula(&esc.formula)
+                    .has_feature(crate::escape::FormulaFeature::Creases);
                 ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_field"));
                     let cur = sh.field;
@@ -900,6 +902,7 @@ pub fn render_escape_content(
                             ShadingField::Analytic => t!("escape_panel.shading_field_analytic"),
                             ShadingField::Offset => t!("escape_panel.shading_field_offset"),
                             ShadingField::Embossed => t!("escape_panel.shading_field_embossed"),
+                            ShadingField::Creases => t!("escape_panel.shading_field_creases"),
                         })
                         .show_ui(ui, |ui| {
                             for f in [
@@ -909,7 +912,12 @@ pub fn render_escape_content(
                                 ShadingField::Analytic,
                                 ShadingField::Offset,
                                 ShadingField::Embossed,
+                                ShadingField::Creases,
                             ] {
+                                // Paper only a folding formula has.
+                                if f == ShadingField::Creases && !folds && cur != f {
+                                    continue;
+                                }
                                 let label = match f {
                                     ShadingField::Smooth => {
                                         t!("escape_panel.shading_field_smooth")
@@ -928,6 +936,9 @@ pub fn render_escape_content(
                                     }
                                     ShadingField::Embossed => {
                                         t!("escape_panel.shading_field_embossed")
+                                    }
+                                    ShadingField::Creases => {
+                                        t!("escape_panel.shading_field_creases")
                                     }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
@@ -1038,6 +1049,13 @@ pub fn render_escape_content(
                             }
                         };
                         ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
+                    }
+                }
+                if sh.field == ShadingField::Creases {
+                    if folds {
+                        crease_controls(ui, config_manager, &sh.creases, "relief", false);
+                    } else {
+                        no_creases_note(ui, &esc.formula);
                     }
                 }
 
@@ -1532,17 +1550,24 @@ fn show_terrain_section(
             ui.label(egui::RichText::new(t!("escape_panel.terrain_gestures")).small().weak());
 
             // How the height is made.
+            let folds =
+                crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Creases);
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.terrain_source"));
                 let label = |s: TerrainSource| match s {
                     TerrainSource::Distance => t!("escape_panel.terrain_source_distance"),
                     TerrainSource::EscapeCount => t!("escape_panel.terrain_source_count"),
                     TerrainSource::Relief => t!("escape_panel.terrain_source_relief"),
+                    TerrainSource::Creases => t!("escape_panel.terrain_source_creases"),
                 };
                 egui::ComboBox::from_id_salt("terrain_source")
                     .selected_text(label(t.source))
                     .show_ui(ui, |ui| {
                         for s in TerrainSource::ALL {
+                            // Paper only a folding formula has.
+                            if s == TerrainSource::Creases && !folds && t.source != s {
+                                continue;
+                            }
                             if ui.selectable_label(t.source == s, label(s)).clicked() && s != t.source {
                                 let _ = config_manager.update_param(
                                     ConfigPath::EscapeTerrainSource,
@@ -1556,6 +1581,15 @@ fn show_terrain_section(
                 && crate::escape::get_formula(&esc.formula).wgsl_derivative.is_empty()
             {
                 ui.label(egui::RichText::new(t!("escape_panel.terrain_no_derivative")).small().weak());
+            }
+            // The paper the relief draws, held to the release here: every
+            // change renders the terrain's sections again.
+            if t.source == TerrainSource::Creases {
+                if folds {
+                    crease_controls(ui, config_manager, &esc.shading.creases, "terrain", true);
+                } else {
+                    no_creases_note(ui, &esc.formula);
+                }
             }
             let mut percent = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, tip: String| {
                 ui.horizontal(|ui| {
@@ -3086,6 +3120,75 @@ mod tests {
             }
         }
     }
+}
+
+/// A folding formula's paper (`CreaseSettings`), for the Creases relief
+/// field and terrain source alike: they draw the same paper. `hold`
+/// commits the decay on release, for a terrain, whose every change
+/// renders its sections again.
+fn crease_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    creases: &crate::config::escape::CreaseSettings,
+    salt: &str,
+    hold: bool,
+) {
+    use crate::config::escape::{CreasePattern, CREASE_DECAY_RANGE};
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.crease_pattern"));
+        let name = |p: CreasePattern| match p {
+            CreasePattern::Valley => t!("escape_panel.crease_valley"),
+            CreasePattern::Alternate => t!("escape_panel.crease_alternate"),
+            CreasePattern::Random => t!("escape_panel.crease_random"),
+        };
+        egui::ComboBox::from_id_salt(("crease_pattern", salt))
+            .selected_text(name(creases.pattern))
+            .show_ui(ui, |ui| {
+                for p in CreasePattern::ALL {
+                    if ui.selectable_label(p == creases.pattern, name(p)).clicked() && p != creases.pattern {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingCreasePattern,
+                            ConfigValue::String(p.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_crease_pattern"));
+        let mut flip = creases.flip;
+        if ui
+            .checkbox(&mut flip, t!("escape_panel.crease_flip"))
+            .on_hover_text(t!("escape_panel.tooltip_crease_flip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingCreaseFlip, flip.into());
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.crease_decay"));
+        let mut v = creases.decay;
+        let (lo, hi) = CREASE_DECAY_RANGE;
+        let slider = |ui: &mut egui::Ui, v: &mut f32| {
+            ui.add(egui::Slider::new(v, lo..=hi)).on_hover_text(t!("escape_panel.tooltip_crease_decay"))
+        };
+        let changed = if hold {
+            super::slow_controls::on_release(ui, ui.id().with(("crease_decay", salt)), &mut v, slider).1
+        } else {
+            slider(ui, &mut v).changed()
+        };
+        if changed {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingCreaseDecay, v.into());
+        }
+    });
+}
+
+/// Creases picked on a formula that folds no paper: they are flat, and
+/// said so rather than left silent.
+fn no_creases_note(ui: &mut egui::Ui, formula: &str) {
+    ui.colored_label(
+        egui::Color32::from_rgb(220, 170, 90),
+        t!("escape_panel.creases_no_formula", formula = crate::escape::get_formula(formula).display_name),
+    );
 }
 
 /// One side of the relief layer — shadows or highlights. They carry

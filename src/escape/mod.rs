@@ -98,6 +98,15 @@ pub enum FormulaFeature {
     /// toggle something inert. `formula_julia_is_meaningful` is the
     /// gate, and a test keeps the flag honest against the WGSL.
     DynamicalOnly,
+    /// The map FOLDS paper, and its WGSL also defines
+    /// `fn formula_creases(p0: vec2<f32>) -> vec3<f32>`: the folded
+    /// paper's height at a starting point and the height's gradient
+    /// there, in the plane's units, from the settings in
+    /// `params.crease` (`CreaseSettings`). The Creases relief field and
+    /// terrain source draw it (docs/projects/origami-creases.md);
+    /// without the flag neither is offered, and the assembler never
+    /// calls the function.
+    Creases,
 }
 
 /// Which quantity the escape test compares against `bailout`

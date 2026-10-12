@@ -1639,6 +1639,100 @@ mod tests {
         );
     }
 
+    /// The crease field (`ShadingField::Creases`) the iterate pass stores
+    /// is `origami_creases_at`'s: the height in the relief channel and
+    /// the slope -- a tenth of -grad h, rotation 0, no supersampling --
+    /// in blue and alpha, at every pixel, the interior's too. Two
+    /// settings, so the pattern and the flip reach the shader, and a
+    /// terrain made of creases, so its reach does. One renderer draws
+    /// all three, so each is an EDIT of the last: a recolour of the
+    /// stored records, which has no formula code, would keep the old
+    /// creases or none (`EscapeConfig::wants_creases`).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_crease_field_matches_its_reference() {
+        use crate::config::escape::{CreasePattern, CreaseSettings, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let zoom = -1.0f64;
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        for (creases, terrain) in [
+            (CreaseSettings { pattern: CreasePattern::Alternate, decay: 0.6, flip: false }, false),
+            (CreaseSettings { pattern: CreasePattern::Random, decay: 0.8, flip: true }, false),
+            (CreaseSettings { pattern: CreasePattern::Valley, decay: 0.6, flip: false }, true),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "origami".to_string();
+            esc.coloring = "position_map".to_string();
+            esc.center_re = "0.0".to_string();
+            esc.center_im = "0.0".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 32;
+            esc.formula_params.insert("seed".to_string(), 8.0);
+            esc.formula_params.insert("spread".to_string(), 2.0);
+            esc.shading.enabled = true;
+            esc.shading.field = ShadingField::Creases;
+            esc.shading.creases = creases.clone();
+            if terrain {
+                esc.terrain.enabled = true;
+                esc.terrain.source = crate::config::escape::TerrainSource::Creases;
+            }
+
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("creases") });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let read = |ch| pollster::block_on(escape.read_height_channel(&device, &queue, false, ch)).expect("height");
+            let (relief, sx, sy) = (read(1), read(2), read(3));
+
+            let params = [8.0f32, 2.0];
+            let row = creases.to_gpu(terrain);
+            let span_y = 4.0 / zoom.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let (mut close, mut total) = (0usize, 0usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let p = [
+                        (((px as f64 + 0.5) / w as f64 - 0.5) * span_x) as f32,
+                        (-(((py as f64 + 0.5) / h as f64 - 0.5) * span_y)) as f32,
+                    ];
+                    let r = crate::escape::formulas::origami_creases_at(&params, row, 32, p);
+                    let i = (py * w + px) as usize;
+                    total += 1;
+                    // A pixel whose point lies within rounding of a crease
+                    // can land on the other side of it in f32 on the GPU.
+                    if (relief[i] - r[0]).abs() < 1e-3
+                        && (sx[i] + 0.1 * r[1]).abs() < 1e-4
+                        && (sy[i] + 0.1 * r[2]).abs() < 1e-4
+                    {
+                        close += 1;
+                    }
+                }
+            }
+            println!("creases {:?} (terrain {terrain}): {close}/{total} pixels match the reference", creases.pattern);
+            assert!(
+                close * 100 >= total * 99,
+                "{:?}: only {close}/{total} pixels match the reference",
+                creases.pattern
+            );
+        }
+        escape.destroy();
+    }
+
     /// `position_average` must average POSITIONS, not magnitudes.
     ///
     /// The distinction is the whole point of the coloring and it is
