@@ -10,12 +10,14 @@ it becomes a relief field and a terrain source.
 Per pixel, per fold i (the formula's own loop):
   d_i   = signed distance of the point (in the wad, before fold i) from
           fold i's line, positive on the side that stays put
-  par   = how many earlier folds reflected the point, mod 2: whether
-          this layer of the wad lies face up or face down
-  sigma = the fold's base direction (+1 valley, -1 mountain), flipped
-          on a face-down layer -- a crease is a valley on one face of
-          the paper and a mountain on the other
+  sigma = the fold's direction (+1 valley, -1 mountain), the same on
+          every layer: the continuous sheet the shader draws
   h    += decay**i * sigma * profile(|d_i|)
+
+`layered=True` reverses a crease on a face-down layer (par, the earlier
+folds that reflected the point, mod 2) -- the flat-folded assignment the
+first version used. It tears the height wherever a crease crosses an
+earlier one (docs/projects/origami-creases.md).
 
 The first fold is the biggest crease; each later one is finer, laid on
 top. Run from the repo root; writes output/origami/*.png.
@@ -68,7 +70,7 @@ def lines(seed, spread):
 
 
 def crease_height(w, h, *, seed=8, spread=2.0, folds=32, zoom_log2=-1.0, centre=(0.0, 0.0),
-                  decay=0.6, pattern="valley", flip=False, depth=1.0, layered=True, reach=0.0):
+                  decay=0.6, pattern="valley", flip=False, depth=1.0, layered=False, reach=0.0):
     """The crease height and its exact gradient, per pixel.
 
     The fold count is the formula's iteration count: one crease a fold.

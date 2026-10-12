@@ -753,9 +753,11 @@ so the first is the main crease and each later one is finer; the
 iteration count is the crease count, one per fold, at most 64. The
 **Pattern** sets each fold's direction: Valley (every flap toward the
 viewer), Alternate, or Random from the line seed. **Flip** swaps
-mountain and valley. A crease is a valley on one face of the paper and a
-mountain on the other, so a layer that an odd number of earlier folds
-turned face down shows it reversed. The slope is exact, not
+mountain and valley. Each crease keeps its fold's direction along its
+whole length, on every layer, which keeps the sheet in one piece. This is
+how gently folded paper bends. Reversing a crease on a face-down layer
+(the flat-folded valley/mountain pattern) tears the height wherever it
+crosses an earlier crease. The slope is exact, not
 differenced: every fold reflects, so the folded point is `M p0 + t` for
 an orthogonal `M`, and the gradient of a distance from a line is
 `Mᵀ n`. `formula_creases` returns the height and gradient. The

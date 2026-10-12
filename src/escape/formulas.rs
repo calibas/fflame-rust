@@ -820,12 +820,13 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
 // starting point and the height's gradient there, from the folds the
 // orbit makes. Fold i is a crease weighing decay^i: the paper rises (a
 // valley, toward the viewer) or falls in a straight line with the
-// point's distance from it, the same slope on both sides. A layer an
-// odd number of earlier folds turned face down sees the crease
-// reversed: a valley on one face of a sheet is a mountain on the other.
-// Each fold reflects, so the folded point is m p0 + t for an orthogonal
-// m, and the gradient of a distance from a line is m^T times its
-// normal -- exact at any zoom, never differenced.
+// point's distance from it, measured in the wad, the same slope on both
+// sides. Every image of a crease keeps its fold's way, which is what
+// keeps the sheet in one piece: reversing it on a face-down layer tore
+// the paper wherever the crease crossed an earlier one. Each fold
+// reflects, so the folded point is m p0 + t for an orthogonal m, and the
+// gradient of a distance from a line is m^T times its normal -- exact at
+// any zoom, never differenced.
 fn origami_crease_hash(x: u32) -> u32 {
     var h = x;
     h = h ^ (h >> 16u);
@@ -849,7 +850,6 @@ fn formula_creases(p0: vec2<f32>) -> vec3<f32> {
     let folds = min(params.max_iter, 64u);
     var p = p0;
     var m = mat2x2<f32>(1.0, 0.0, 0.0, 1.0);
-    var face = settings.z;
     var weight = 1.0;
     var h = 0.0;
     var grad = vec2<f32>(0.0);
@@ -871,7 +871,7 @@ fn formula_creases(p0: vec2<f32>) -> vec3<f32> {
             let len = sqrt(d2);
             let nrm = vec2<f32>(-ab.y, ab.x) / len;
             let dist = side / len;
-            let w = weight * dir * face;
+            let w = weight * dir * settings.z;
             if (reach > 0.0 && abs(dist) >= reach) {
                 h = h + w * reach;
             } else {
@@ -886,7 +886,6 @@ fn formula_creases(p0: vec2<f32>) -> vec3<f32> {
                     2.0 * u.x * u.y, 2.0 * u.y * u.y - 1.0,
                 );
                 m = r * m;
-                face = -face;
             }
         }
         weight = weight * settings.x;
@@ -978,7 +977,6 @@ pub(crate) fn origami_creases_at(params: &[f32], crease: [f32; 4], max_iter: u32
     let mut p = p0;
     // Row-major: m[r][col].
     let mut m = [[1.0f32, 0.0], [0.0, 1.0]];
-    let mut face = crease[2];
     let reach = crease[3] * params.get(1).copied().unwrap_or(2.0);
     let mut weight = 1.0f32;
     let mut h = 0.0f32;
@@ -1000,34 +998,22 @@ pub(crate) fn origami_creases_at(params: &[f32], crease: [f32; 4], max_iter: u32
             let len = d2.sqrt();
             let (nx, ny) = (-aby / len, abx / len);
             let dist = side / len;
-            let w = weight * dir * face;
+            let w = weight * dir * crease[2];
             if reach > 0.0 && dist.abs() >= reach {
                 h += w * reach;
-                if side <= 0.0 {
-                    let t = ((p[0] - ax) * abx + (p[1] - ay) * aby) / d2;
-                    p = [(ax + abx * t) * 2.0 - p[0], (ay + aby * t) * 2.0 - p[1]];
-                    let (ux, uy) = (abx / len, aby / len);
-                    let r = [[2.0 * ux * ux - 1.0, 2.0 * ux * uy], [2.0 * ux * uy, 2.0 * uy * uy - 1.0]];
-                    m = [
-                        [r[0][0] * m[0][0] + r[0][1] * m[1][0], r[0][0] * m[0][1] + r[0][1] * m[1][1]],
-                        [r[1][0] * m[0][0] + r[1][1] * m[1][0], r[1][0] * m[0][1] + r[1][1] * m[1][1]],
-                    ];
-                    face = -face;
-                }
-                weight *= crease[0];
-                continue;
-            }
-            h += w * dist.abs();
-            let s = if dist > 0.0 {
-                1.0
-            } else if dist < 0.0 {
-                -1.0
             } else {
-                0.0
-            };
-            // m^T n.
-            grad[0] += w * s * (m[0][0] * nx + m[1][0] * ny);
-            grad[1] += w * s * (m[0][1] * nx + m[1][1] * ny);
+                h += w * dist.abs();
+                let s = if dist > 0.0 {
+                    1.0
+                } else if dist < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                };
+                // m^T n.
+                grad[0] += w * s * (m[0][0] * nx + m[1][0] * ny);
+                grad[1] += w * s * (m[0][1] * nx + m[1][1] * ny);
+            }
             if side <= 0.0 {
                 let t = ((p[0] - ax) * abx + (p[1] - ay) * aby) / d2;
                 p = [(ax + abx * t) * 2.0 - p[0], (ay + aby * t) * 2.0 - p[1]];
@@ -1037,7 +1023,6 @@ pub(crate) fn origami_creases_at(params: &[f32], crease: [f32; 4], max_iter: u32
                     [r[0][0] * m[0][0] + r[0][1] * m[1][0], r[0][0] * m[0][1] + r[0][1] * m[1][1]],
                     [r[1][0] * m[0][0] + r[1][1] * m[1][0], r[1][0] * m[0][1] + r[1][1] * m[1][1]],
                 ];
-                face = -face;
             }
         }
         weight *= crease[0];
@@ -2229,6 +2214,10 @@ mod tests {
     /// difference there must BE the carried gradient. Most samples must
     /// qualify, or the check says nothing. And the field has creases --
     /// many facets, not one tilted plane -- and Flip mirrors it exactly.
+    /// And the sheet is in one piece: no step between neighbouring
+    /// samples exceeds what the steepest slope the creases can add up to
+    /// (the sum of decay^i) allows. Reversing a crease on a face-down
+    /// layer tore it, by hundreds of times that.
     #[test]
     fn the_crease_gradient_is_the_heights() {
         let params = [8.0f32, 2.0];
@@ -2244,6 +2233,10 @@ mod tests {
                     let g = at(p);
                     let (xp, xm) = (at([p[0] + e, p[1]])[0], at([p[0] - e, p[1]])[0]);
                     let (yp, ym) = (at([p[0], p[1] + e])[0], at([p[0], p[1] - e])[0]);
+                    let steepest = 1.0 / (1.0 - 0.6);
+                    for step in [xp - g[0], xm - g[0], yp - g[0], ym - g[0]] {
+                        assert!(step.abs() <= steepest * e * 1.01 + 1e-5, "pattern {pattern}: a {step} step at {p:?}");
+                    }
                     total += 1;
                     if (xp - 2.0 * g[0] + xm).abs() < 1e-5 && (yp - 2.0 * g[0] + ym).abs() < 1e-5 {
                         flat += 1;
