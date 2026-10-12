@@ -108,7 +108,13 @@ Tests that touch the GPU follow a few conventions.
   a static `Mutex<()>` first:
   - `gpu()` in `src/escape/footprint.rs` hands out a device together
     with a turn — each terrain test holds an atlas of hundreds of MB,
-    and two at once ran a 6 GB card out of memory;
+    and two at once ran a 6 GB card out of memory. The turn orders
+    only the terrain tests, so nothing in the suite may hold most of
+    the card: `fit_export_sections` does not probe the card's memory
+    under `cfg(test)` (its probe took a 6 GB card to 5.8 GB, and the
+    tests beside it ran out of memory or crashed the driver with
+    `STATUS_ACCESS_VIOLATION`); its real probe is the ignored
+    `an_exports_section_cap_fits_the_card`, run alone;
   - `DIAG_LOCK` in `src/escape/app_repro_test.rs` guards the global
     escape diagnostics snapshot between a render and its assertion;
   - `BREAKER_LOCK` in `src/escape/renderer.rs`.
