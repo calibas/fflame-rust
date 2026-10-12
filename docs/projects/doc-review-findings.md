@@ -13,9 +13,6 @@ From this list:
   collected, and a parent's ungated move also applies inside the subflame
   dispatcher. A moved pre/post variation in 3D does not get the normal
   phase's z gating.
-- **R13** -- inside a subflame, transform opacity is ignored (JWildfire
-  re-picks a hidden or opacity-failed xform), and the `subflame_wf`
-  weight scales the output (JWildfire adds it unscaled).
 - **A13** -- the effect compile cache is keyed by name; harmless until
   something can update an installed effect.
 - **E4** -- the web app's custom-size PNG export is still its own render
@@ -66,7 +63,7 @@ check before it is fixed.
 | R10 | **More than 128 transforms panics.** `update_transforms` panics past 128 normals + linked + finals. Nothing earlier on import or load validates the count. | `src/gpu/buffers.rs` | fixed |
 | R11 | **u32 overflow in buffer sizes**: the histogram and path-buffer sizes are `width * height * 16` in u32, which wraps at 16384². | `FlameBuffers::with_palette_size`, `create_path_buffers` | fixed |
 | R12 | **Phase overrides.** These look like problems:<br>- The pre-phase call hard-codes `variation_{name}` instead of `info.wgsl_function`, so `julia` moved to pre emits a call to a function that does not exist.<br>- `vrc` is missing in the post phase (2D, 3D) and the 3D pre phase.<br>- `fx_priority` on a Linked or Final transform never reaches the shader: `collect_phase_overrides` reads only the normal transforms. | `src/shader_builder_v2.rs` | fixed (subflame transforms' fx_priority: open) |
-| R13 | **Subflame prefuse is 20 iterations**, though the header says JWildfire's 42 and "we do the same". Inside a subflame the post-Final point is what the state keeps, so subflame Finals feed the next step, unlike the parent's. Check against JWF's `SubFlameWFFunc`. | `shaders/core/subflame.wgsl` | fixed: finals, prefuse, NaN re-prefuse (opacity and weight: open) |
+| R13 | **Subflame prefuse is 20 iterations**, though the header says JWildfire's 42 and "we do the same". Inside a subflame the post-Final point is what the state keeps, so subflame Finals feed the next step, unlike the parent's. Check against JWF's `SubFlameWFFunc`. | `shaders/core/subflame.wgsl` | fixed: finals, prefuse, NaN re-prefuse; then opacity, the weight, the finals' colour and `pre_subflame_wf`'s placement |
 | R14 | **`render_with` counts dispatched iterations** (burn-in included) where the app counts plotted ones (`total_iterations()`). | `src/renderer/render.rs` | fixed |
 | R15 | **`load_config` checks the render mode before updating it.** It tests `current_render_mode.is_non_flame()` for the path buffers before setting the mode from the config. | `src/renderer/compute_kernel.rs` | fixed |
 

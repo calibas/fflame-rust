@@ -1,13 +1,15 @@
-// Subflame iteration helper — runs ONE step of a nested chaos game
-// using the subflame's transform pool. Called from the
-// `subflame_wf` variation body.
+// Subflame iteration helper — advances a nested chaos game using the
+// subflame's transform pool and returns its output point. Called from
+// the `subflame_wf` and `pre_subflame_wf` variation bodies. A port of
+// JWildfire's SubFlameWFFunc.subflameIter (and prefuseIter).
 //
-// State storage: the (point, current_xform_idx, color) tuple lives
-// in the parent variation's 5 state slots, keyed by the *parent*
-// (xform_id, variation_id) pair. The state mechanism gives each
-// `subflame_wf` instance its own independent chaos-game state, so
-// the same subflame used by two parent transforms gets two
-// independent observers.
+// State storage: nine slots of the parent variation's state, keyed by
+// the *parent* (xform_id, variation_id) pair, so the same subflame used
+// by two parent transforms gets two independent walks:
+//   0..2  the walk's point p
+//   3     the last transform picked (written, never read)
+//   4     the walk's colour
+//   5..8  the last output q (x, y, z, colour) -- JWF's `q` field
 //
 // Lazy per-thread prefuse: the state starts at (0,0) per thread
 // (var<private> thread_state zero-init). For low-weight parent
@@ -26,11 +28,21 @@
 // (subflameIter's isInfinite / isNaN test), a walk that has blown up
 // is prefused again, rather than carrying Inf/NaN forever.
 //
-// The walk and the output are two things, as in JWF's subflameIter:
-// the normal transforms step the state p -> p; the subflame's finals
-// then map p to the output q, which the parent sees. q is never
-// stored, so the finals shape what is plotted without feeding the
-// walk -- the parent pipeline's own rule for finals.
+// One call, as JWF's subflameIter:
+//   - The walk steps p -> p until a step lands on a VISIBLE transform:
+//     one whose opacity roll passes (opacity 1 does not roll, opacity 0
+//     never passes -- JWF's NORMAL / OPAQUE / HIDDEN draw modes). A
+//     hidden transform still moves the walk; it only makes no output.
+//     At most SUBFLAME_MAX_PICKS steps; when none is visible the call
+//     returns the previous output q unchanged (zero before the first),
+//     and when no transform can ever be visible it skips the steps.
+//   - The subflame's finals map p to q without feeding the walk -- the
+//     parent pipeline's own rule for finals. Unlike the parent's, they
+//     blend the colour (JWF makes a subflame's finals DIFFUSION), so
+//     q's colour is the finals', the walk's colour is p's.
+//   - The variation's scale, angle and offsets then place q, and
+//     colorscale_z lifts it by its colour. Both subflame variations
+//     receive the placed q.
 //
 // Subflame xforms occupy real slots in the variation_params,
 // thread_state, and transforms buffers immediately after parent
@@ -47,6 +59,10 @@
 // JWF's prefuse length (SubFlameWFFunc.prefuseIter). It was 20 here
 // while this header claimed JWF's 42.
 const SUBFLAME_PREFUSE_ITERS: u32 = 42u;
+
+// JWF's cap on the steps one call takes looking for a visible
+// transform (subflameIter's MAX_ITER).
+const SUBFLAME_MAX_PICKS: u32 = 1000u;
 
 {{#if RENDER_3D}}
 fn subflame_iterate(
@@ -86,20 +102,28 @@ fn subflame_iterate(
         current = vec3<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5, 0.0);
         color = rng_nextf(rng);
     }
-    let total_steps = select(1u, SUBFLAME_PREFUSE_ITERS + 1u, needs_prefuse);
 
     // Total weight is constant across iterations (transforms don't
-    // change during this dispatch). Hoist it out.
+    // change during this dispatch). Hoist it out, and with it whether
+    // any transform can ever be visible.
     var total_weight: f32 = 0.0;
+    var any_visible = false;
     for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
         // Read from the unified `transforms[]` buffer at this
         // subflame xform's xform_id. Pre-Phase-5 this read went to a
         // separate `subflame_transforms[]` buffer; that path is gone.
-        total_weight = total_weight + transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i].weight;
+        let t = transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i];
+        total_weight = total_weight + t.weight;
+        any_visible = any_visible || (t.weight > 0.0 && t.opacity > 0.0);
     }
     let total_weight_safe = max(total_weight, 1e-6);
 
+    // The prefuse's steps are plain; the rest look for a visible one.
+    let prefuse_steps = select(0u, SUBFLAME_PREFUSE_ITERS, needs_prefuse);
+    let total_steps = prefuse_steps + select(0u, SUBFLAME_MAX_PICKS, any_visible);
+
     var picked: u32 = 0u;
+    var visible = false;
     var vc: f32 = color;
 {{#if HAS_RGB}}
     // Sentinel vrc for subflames. WritesRgb variations in the
@@ -157,28 +181,13 @@ fn subflame_iterate(
         // color_speed recurrence) collapsed colorscale_z * q.w to a
         // single Z plane — flat-looking subflames with no DC.
         color = c_base + xform.direct_color * (vc - c_base);
-    }
 
-    // The subflame's finals map the walk's point to the OUTPUT, q (see
-    // the header). They used to run inside the loop on `current`, which
-    // is stored as the state, so they fed the walk: p -> 0.5p + (1,0)
-    // with a final +(10,0) settled at 22 instead of JWF's 12. As the
-    // parent's finals do, they leave the colour alone: a DC write goes
-    // to a register that is then discarded.
-    var q = current;
-    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
-        let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
-        let f_xform = transforms[f_xform_id];
-        let f_affine_p = apply_affine(f_xform, q);
-        var final_vc: f32 = color;  // discarded after the call
-{{#if HAS_RGB}}
-        var final_vrc: vec3<f32> = vec3<f32>(0.0);  // discarded after the call
-        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc, &final_vrc);
-{{else}}
-        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc);
-{{/if}}
-        if (f_xform.post_enabled > 0.5) {
-            q = apply_post_affine(f_xform, q);
+        // Past the prefuse, stop at a visible transform (see the header).
+        // Opacity 1 takes no roll, so a subflame without hidden or
+        // translucent transforms draws the random numbers it always did.
+        if (k >= prefuse_steps && (xform.opacity >= 1.0 || rng_nextf(rng) < xform.opacity)) {
+            visible = true;
+            break;
         }
     }
 
@@ -189,7 +198,59 @@ fn subflame_iterate(
     set_state(parent_xform_id, parent_variation_id, 3u, f32(picked));
     set_state(parent_xform_id, parent_variation_id, 4u, color);
 
-    return vec4<f32>(q.x, q.y, q.z, color);
+    // No visible step: JWF's subflameIter returns with q as it was.
+    if (!visible) {
+        return vec4<f32>(
+            get_state(parent_xform_id, parent_variation_id, 5u),
+            get_state(parent_xform_id, parent_variation_id, 6u),
+            get_state(parent_xform_id, parent_variation_id, 7u),
+            get_state(parent_xform_id, parent_variation_id, 8u),
+        );
+    }
+
+    // The subflame's finals map the walk's point to the OUTPUT, q (see
+    // the header). They used to run inside the loop on `current`, which
+    // is stored as the state, so they fed the walk: p -> 0.5p + (1,0)
+    // with a final +(10,0) settled at 22 instead of JWF's 12. Their
+    // colour blend is a normal transform's, applied to q's colour.
+    var q = current;
+    var q_color = color;
+    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
+        let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
+        let f_xform = transforms[f_xform_id];
+        let f_symmetry = f_xform.color_speed;
+        let f_base = q_color * (1.0 + f_symmetry) * 0.5 + f_xform.color * (1.0 - f_symmetry) * 0.5;
+        var final_vc: f32 = f_base;
+        let f_affine_p = apply_affine(f_xform, q);
+{{#if HAS_RGB}}
+        var final_vrc: vec3<f32> = vec3<f32>(0.0);  // discarded after the call
+        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc, &final_vrc);
+{{else}}
+        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc);
+{{/if}}
+        if (f_xform.post_enabled > 0.5) {
+            q = apply_post_affine(f_xform, q);
+        }
+        q_color = f_base + f_xform.direct_color * (final_vc - f_base);
+    }
+
+    // Place q: the end of JWF's subflameIter.
+    let scale = get_param(parent_xform_id, parent_variation_id, 1u);
+    let angle = get_param(parent_xform_id, parent_variation_id, 2u) * 0.017453292519943295;
+    let x = scale * q.x;
+    let y = scale * q.y;
+    let out = vec4<f32>(
+        x * cos(angle) - y * sin(angle) + get_param(parent_xform_id, parent_variation_id, 3u),
+        x * sin(angle) + y * cos(angle) + get_param(parent_xform_id, parent_variation_id, 4u),
+        scale * q.z + get_param(parent_xform_id, parent_variation_id, 5u)
+            + get_param(parent_xform_id, parent_variation_id, 6u) * q_color,
+        q_color,
+    );
+    set_state(parent_xform_id, parent_variation_id, 5u, out.x);
+    set_state(parent_xform_id, parent_variation_id, 6u, out.y);
+    set_state(parent_xform_id, parent_variation_id, 7u, out.z);
+    set_state(parent_xform_id, parent_variation_id, 8u, out.w);
+    return out;
 }
 {{else}}
 fn subflame_iterate(
@@ -203,8 +264,8 @@ fn subflame_iterate(
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    // 2D: state slot 2 (Z) is still stored but unused; keep the same
-    // layout as 3D for code symmetry.
+    // 2D: state slots 2 and 7 (the Zs) are still stored but unused;
+    // keep the same layout as 3D for code symmetry.
     var current = vec2<f32>(
         get_state(parent_xform_id, parent_variation_id, 0u),
         get_state(parent_xform_id, parent_variation_id, 1u),
@@ -220,18 +281,25 @@ fn subflame_iterate(
         current = vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
         color = rng_nextf(rng);
     }
-    let total_steps = select(1u, SUBFLAME_PREFUSE_ITERS + 1u, needs_prefuse);
 
     var total_weight: f32 = 0.0;
+    var any_visible = false;
     for (var i: u32 = 0u; i < sf_meta.normals_count; i = i + 1u) {
         // Read from the unified `transforms[]` buffer at this
         // subflame xform's xform_id. Pre-Phase-5 this read went to a
         // separate `subflame_transforms[]` buffer; that path is gone.
-        total_weight = total_weight + transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i].weight;
+        let t = transforms[sf_meta.xform_id_base + sf_meta.normals_offset + i];
+        total_weight = total_weight + t.weight;
+        any_visible = any_visible || (t.weight > 0.0 && t.opacity > 0.0);
     }
     let total_weight_safe = max(total_weight, 1e-6);
 
+    // See the 3D branch for the step counts.
+    let prefuse_steps = select(0u, SUBFLAME_PREFUSE_ITERS, needs_prefuse);
+    let total_steps = prefuse_steps + select(0u, SUBFLAME_MAX_PICKS, any_visible);
+
     var picked: u32 = 0u;
+    var visible = false;
     var vc: f32 = color;
 {{#if HAS_RGB}}
     // Sentinel vrc for subflames. WritesRgb variations in the
@@ -276,23 +344,11 @@ fn subflame_iterate(
         }
 
         color = c_base + xform.direct_color * (vc - c_base);
-    }
 
-    // The finals map the walk's point to the output -- see the 3D branch.
-    var q = current;
-    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
-        let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
-        let f_xform = transforms[f_xform_id];
-        let f_affine_p = apply_affine(f_xform, q);
-        var final_vc: f32 = color;  // discarded after the call
-{{#if HAS_RGB}}
-        var final_vrc: vec3<f32> = vec3<f32>(0.0);  // discarded after the call
-        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc, &final_vrc);
-{{else}}
-        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc);
-{{/if}}
-        if (f_xform.post_enabled > 0.5) {
-            q = apply_post_affine(f_xform, q);
+        // Stop at a visible transform -- see the 3D branch.
+        if (k >= prefuse_steps && (xform.opacity >= 1.0 || rng_nextf(rng) < xform.opacity)) {
+            visible = true;
+            break;
         }
     }
 
@@ -302,8 +358,55 @@ fn subflame_iterate(
     set_state(parent_xform_id, parent_variation_id, 3u, f32(picked));
     set_state(parent_xform_id, parent_variation_id, 4u, color);
 
-    // Return (x, y, 0, color) for 2D — the variation body keeps the
-    // shape consistent across 2D/3D.
-    return vec4<f32>(q.x, q.y, 0.0, color);
+    // No visible step: the previous output -- see the 3D branch.
+    if (!visible) {
+        return vec4<f32>(
+            get_state(parent_xform_id, parent_variation_id, 5u),
+            get_state(parent_xform_id, parent_variation_id, 6u),
+            0.0,
+            get_state(parent_xform_id, parent_variation_id, 8u),
+        );
+    }
+
+    // The finals map the walk's point to the output, blending its
+    // colour -- see the 3D branch.
+    var q = current;
+    var q_color = color;
+    for (var i: u32 = 0u; i < sf_meta.finals_count; i = i + 1u) {
+        let f_xform_id = sf_meta.xform_id_base + sf_meta.finals_offset + i;
+        let f_xform = transforms[f_xform_id];
+        let f_symmetry = f_xform.color_speed;
+        let f_base = q_color * (1.0 + f_symmetry) * 0.5 + f_xform.color * (1.0 - f_symmetry) * 0.5;
+        var final_vc: f32 = f_base;
+        let f_affine_p = apply_affine(f_xform, q);
+{{#if HAS_RGB}}
+        var final_vrc: vec3<f32> = vec3<f32>(0.0);  // discarded after the call
+        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc, &final_vrc);
+{{else}}
+        q = apply_subflame_variations(f_xform, f_xform_id, f_affine_p, rng, &final_vc);
+{{/if}}
+        if (f_xform.post_enabled > 0.5) {
+            q = apply_post_affine(f_xform, q);
+        }
+        q_color = f_base + f_xform.direct_color * (final_vc - f_base);
+    }
+
+    // Place q -- see the 3D branch. Return (x, y, 0, colour) for 2D;
+    // the variation bodies keep the shape consistent across 2D/3D.
+    let scale = get_param(parent_xform_id, parent_variation_id, 1u);
+    let angle = get_param(parent_xform_id, parent_variation_id, 2u) * 0.017453292519943295;
+    let x = scale * q.x;
+    let y = scale * q.y;
+    let out = vec4<f32>(
+        x * cos(angle) - y * sin(angle) + get_param(parent_xform_id, parent_variation_id, 3u),
+        x * sin(angle) + y * cos(angle) + get_param(parent_xform_id, parent_variation_id, 4u),
+        0.0,
+        q_color,
+    );
+    set_state(parent_xform_id, parent_variation_id, 5u, out.x);
+    set_state(parent_xform_id, parent_variation_id, 6u, out.y);
+    set_state(parent_xform_id, parent_variation_id, 7u, 0.0);
+    set_state(parent_xform_id, parent_variation_id, 8u, out.w);
+    return out;
 }
 {{/if}}

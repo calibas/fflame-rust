@@ -145,7 +145,7 @@
     "$comment": "Two different KINDS of number. Variation slots are packed dynamically, so the per-variation cap is a policy choice below a real engine ceiling. Effect params live in a fixed-size uniform, so that cap is physical capacity and the API must match it exactly.",
     "effect_params": 48,
     "effect_slots": 32,
-    "largest_shipped_state_count": 7,
+    "largest_shipped_state_count": 9,
     "largest_shipped_variation_slots": 259,
     "script_source_bytes": 262144,
     "transforms_per_flame": 128,
