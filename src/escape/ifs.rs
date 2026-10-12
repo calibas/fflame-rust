@@ -1636,6 +1636,15 @@ fn ifs_color(res: IfsResult) -> IfsShade {
     if (cparam(0u) >= 0.5) {
         v = res.color;
     }
+    // Both are positions in [0, 1): the address is a base-N fraction,
+    // and a transform colour of 1 is the palette's last entry, as on a
+    // flame. But an address on the last branch at every level --
+    // 0.(N-1)(N-1)... -- rounds UP to exactly 1.0 in f32 once the walk
+    // is a dozen levels deep, and the palette wrap took 1.0 to 0: a black
+    // spot at the very tip of the corner the last map holds (the Menger
+    // Sponge preset's nearest white corner). The largest f32 below 1
+    // keeps it at the palette's end.
+    v = min(v, 0.99999994);
     return IfsShade(v * cparam(1u), ifs_halo(res, cparam(2u)));
 }
 "#,
@@ -7786,6 +7795,12 @@ mod gpu_tests {
     }
 
     pub(super) fn device() -> (wgpu::Device, wgpu::Queue) {
+        device_if_any().expect("adapter and device")
+    }
+
+    /// `device`, or None without an adapter -- for a test that runs in
+    /// the suite and skips on a machine with no GPU.
+    fn device_if_any() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -7795,7 +7810,7 @@ mod gpu_tests {
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
-        .expect("adapter");
+        .ok()?;
         // The flame renderer is built on every render_with job
         // whatever the mode, and its compute layout wants nine
         // storage buffers where the default limit is eight.
@@ -7811,7 +7826,7 @@ mod gpu_tests {
             required_limits: limits,
             ..Default::default()
         }))
-        .expect("device")
+        .ok()
     }
 
     fn half(tx: f32, ty: f32) -> Transform {
@@ -7951,6 +7966,40 @@ mod gpu_tests {
     fn brightness(rgba: &[u8], x: u32, y: u32) -> f64 {
         let i = ((y * W + x) * 4) as usize;
         (rgba[i] as f64 + rgba[i + 1] as f64 + rgba[i + 2] as f64) / 765.0
+    }
+
+    /// The corner the last map holds is the palette's END. Its address,
+    /// the last branch at every level, is 0.(N-1)(N-1)... in base N, a
+    /// fraction below 1 -- but in f32 it rounds up to exactly 1.0 once
+    /// the walk is a dozen levels deep, and the palette wrap took that
+    /// to 0, the start: a black spot at the very tip of the Menger
+    /// Sponge preset's nearest white corner.
+    ///
+    /// Four half-maps tile the unit square, the last fixing (1, 1). A
+    /// view 2^-14 across centred on that corner has the square in one
+    /// quarter, every pixel of it at least fourteen 3s deep in base 4:
+    /// white under a black-to-white palette, where it was black.
+    #[test]
+    fn the_last_branchs_corner_is_the_palettes_end_not_its_start() {
+        let Some((device, queue)) = device_if_any() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let square = vec![half(0.0, 0.0), half(0.5, 0.0), half(0.0, 0.5), half(0.5, 0.5)];
+        let mut c = ifs_preset_config("Square", "ifs_address", square);
+        c.escape.center_re = "1".to_string();
+        c.escape.center_im = format!("{}", plane_im(1.0));
+        c.escape.zoom_log2 = 16.0;
+        c.palette = crate::scene::palette::Palette::grayscale();
+        let job = crate::renderer::RenderJob::new(&c, W, H);
+        let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render");
+        let white = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .filter(|&(x, y)| brightness(&out.rgba_data, x, y) > 0.8)
+            .count();
+        let share = white as f64 / (W * H) as f64;
+        assert!(share > 0.15, "only {:.1}% of the view is white; the square's quarter of it is the palette's end", 100.0 * share);
     }
 
     /// A Flame Attractor stands as its flame does (`view_basis`): the
