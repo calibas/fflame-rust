@@ -272,14 +272,15 @@ pub fn render_escape_content(
     // Formula parameters, straight from the def (slider bounds and
     // tooltips included). Values read def defaults when unset — the
     // same value the shader's packer uses.
-    let formula_params = match (ifs_def, field) {
-        (Some(d), _) => d.parameters,
-        (None, Some(f)) => f.parameters,
-        (None, None) => formula.parameters,
+    let (formula_params, owner) = match (ifs_def, field) {
+        (Some(d), _) => (d.parameters, d.name),
+        (None, Some(f)) => (f.parameters, f.name),
+        (None, None) => (formula.parameters, formula.name),
     };
     for p in formula_params {
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
-        if param_control(ui, &mut v, p, "formula") {
+        let slow = crate::escape::is_slow_param(owner, p.name);
+        if param_control(ui, &mut v, p, "formula", slow) {
             let _ = config_manager.update_param(
                 ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
                 v.into(),
@@ -646,11 +647,14 @@ pub fn render_escape_content(
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.max_iter"));
         let mut iter = esc.max_iter;
-        if ui
-            .add(egui::DragValue::new(&mut iter).speed(4).range(1..=100_000_000))
-            .on_hover_text(t!("escape_panel.tooltip_max_iter"))
-            .changed()
-        {
+        // Committed when the drag ends: every frame of a drag that raised
+        // it would be slower than the last (`slow_controls`).
+        let id = ui.id().with("escape_max_iter");
+        let (_, changed) = super::slow_controls::on_release(ui, id, &mut iter, |ui, v| {
+            ui.add(egui::DragValue::new(v).speed(4).range(1..=100_000_000))
+                .on_hover_text(t!("escape_panel.tooltip_max_iter"))
+        });
+        if changed {
             let _ = config_manager.update_param(ConfigPath::EscapeMaxIter, ConfigValue::UInt(iter));
         }
     });
@@ -1192,12 +1196,25 @@ fn param_slider<'a>(
 /// `salt` separates the formula and coloring sections: both can define
 /// a parameter called `variant`, and two combo boxes sharing an egui
 /// id would share their popup state.
+///
+/// A `slow` parameter (`escape::SLOW_PARAMS`) makes the next frame slow,
+/// so a live drag would overshoot: a small whole-number range is a
+/// dropdown, anything else commits when the drag ends
+/// (`slow_controls`).
 fn param_control(
     ui: &mut egui::Ui,
     v: &mut f32,
     p: &'static crate::escape::EscapeParamDef,
     salt: &str,
+    slow: bool,
 ) -> bool {
+    if p.choices.is_empty() && slow {
+        if super::slow_controls::fits_a_dropdown(p.min, p.max) {
+            return super::slow_controls::whole_numbers(ui, (salt, p.name), p.display_name, Some(p.tooltip), v, p.min as i32, p.max as i32);
+        }
+        let id = ui.id().with((salt, p.name, "on_release"));
+        return super::slow_controls::on_release(ui, id, v, |ui, v| ui.add(param_slider(v, p)).on_hover_text(p.tooltip)).1;
+    }
     if p.choices.is_empty() {
         return ui.add(param_slider(v, p)).on_hover_text(p.tooltip).changed();
     }
@@ -1432,14 +1449,12 @@ pub(crate) fn show_path_tracing(
         }
     });
     ui.horizontal(|ui| {
-        ui.label(t!("escape_panel.terrain_bounces"));
-        let mut v = pt.bounces;
-        if ui
-            .add(egui::Slider::new(&mut v, 0..=8))
-            .on_hover_text(t!("escape_panel.terrain_bounces_tip"))
-            .changed()
-        {
-            let _ = config_manager.update_param(paths.bounces.clone(), ConfigValue::UInt(v));
+        // Every bounce is another trace a pixel: a dropdown, not a
+        // slider a drag would overshoot (`slow_controls`).
+        let mut v = pt.bounces as f32;
+        let tip = t!("escape_panel.terrain_bounces_tip");
+        if super::slow_controls::whole_numbers(ui, "terrain_bounces", &t!("escape_panel.terrain_bounces"), Some(&tip), &mut v, 0, 8) {
+            let _ = config_manager.update_param(paths.bounces.clone(), ConfigValue::UInt(v as u32));
         }
     });
     let mut denoise = pt.denoise;
@@ -2237,7 +2252,7 @@ fn show_coloring_section(
         });
         for p in coloring.parameters {
             let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-            if param_control(ui, &mut v, p, "coloring") {
+            if param_control(ui, &mut v, p, "coloring", crate::escape::is_slow_param(coloring.name, p.name)) {
                 let _ = config_manager.update_param(
                     ConfigPath::EscapeColoringParam { param: p.name.to_string() },
                     v.into(),
@@ -2297,7 +2312,7 @@ fn show_coloring_section(
         }
         for p in coloring.parameters {
             let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-            if param_control(ui, &mut v, p, "coloring") {
+            if param_control(ui, &mut v, p, "coloring", crate::escape::is_slow_param(coloring.name, p.name)) {
                 let _ = config_manager.update_param(
                     ConfigPath::EscapeColoringParam { param: p.name.to_string() },
                     v.into(),
@@ -2412,7 +2427,7 @@ fn show_coloring_section(
     }
     for p in coloring.parameters {
         let mut v = esc.coloring_params.get(p.name).copied().unwrap_or(p.default);
-        if param_control(ui, &mut v, p, "coloring") {
+        if param_control(ui, &mut v, p, "coloring", crate::escape::is_slow_param(coloring.name, p.name)) {
             let _ = config_manager.update_param(
                 ConfigPath::EscapeColoringParam { param: p.name.to_string() },
                 v.into(),
@@ -2536,7 +2551,7 @@ fn texture_layer_controls(
     });
     for p in l.parameters {
         let mut v = layer.params.get(p.name).copied().unwrap_or(p.default);
-        if param_control(ui, &mut v, p, "layer") {
+        if param_control(ui, &mut v, p, "layer", crate::escape::is_slow_param(l.name, p.name)) {
             let _ = config_manager.update_param(
                 ConfigPath::EscapeLayerParam { param: p.name.to_string() },
                 v.into(),

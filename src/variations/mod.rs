@@ -863,6 +863,39 @@ fn registry_lock() -> &'static RwLock<VariationRegistry> {
 
 /// Get a read guard to the global variation registry singleton.
 /// Initialized once, shared across all code paths.
+/// Parameters that bound a loop the variation runs every iteration, so
+/// raising one makes the next frame slow: dragged live they overshoot, and
+/// the panel commits them when the drag ends, or offers a small
+/// whole-number range as a dropdown (`ui::slow_controls`). Measured, not
+/// read off the WGSL (`renderer::param_cost`): each adds 15 ms or more to
+/// an app frame at its maximum, with the variation alone in the flame.
+/// The fract_* family shares one escape loop, so all of its `max_iter`
+/// are here whatever the one view measured. An exponent such as `power`
+/// that costs as much is left live: it is what a user scrubs.
+pub const SLOW_PARAMS: &[(&str, &str)] = &[
+    ("fract_dragon_wf", "max_iter"),
+    ("fract_julia_wf", "max_iter"),
+    ("fract_mandelbrot_wf", "max_iter"),
+    ("fract_meteors_wf", "max_iter"),
+    ("fract_pearls_wf", "max_iter"),
+    ("fract_salamander_wf", "max_iter"),
+    ("mandelbrot", "iter"),
+    ("polychoron", "steps"),
+    ("glsl_circlesblue", "bubles"),
+    ("glsl_acrilic", "steps"),
+    ("hofstadter", "depth"),
+    ("hofstadter3d", "depth"),
+    ("quaternion_julia_set", "escape_iters"),
+    ("mondrianomies", "depth"),
+    ("spray_blur", "count"),
+    ("jacobian_counterexample", "steps"),
+];
+
+/// Whether `param` of the variation `variation` is slow ([`SLOW_PARAMS`]).
+pub fn is_slow_param(variation: &str, param: &str) -> bool {
+    SLOW_PARAMS.iter().any(|&(v, p)| v == variation && p == param)
+}
+
 pub fn global_registry() -> RwLockReadGuard<'static, VariationRegistry> {
     registry_lock().read().expect("variation registry RwLock poisoned")
 }
@@ -1515,5 +1548,18 @@ pub(crate) mod shader_lint {
     fn comments_do_not_trip_self_ops() {
         // popcorn's fix EXPLAINS the banned idiom in a WGSL comment.
         assert!(self_operations("// NOT `dx != dx`: folded on Metal\nlet a = 1.0;").is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "engine-flame"))]
+mod slow_param_tests {
+    /// Every parameter marked slow names a real one.
+    #[test]
+    fn every_slow_param_names_a_real_parameter() {
+        let registry = super::global_registry();
+        for &(variation, param) in super::SLOW_PARAMS {
+            let v = registry.get(variation).unwrap_or_else(|| panic!("{variation} is not registered"));
+            assert!(v.parameters.iter().any(|p| p.name == param), "{variation}.{param} is marked slow but is not a parameter");
+        }
     }
 }

@@ -684,6 +684,28 @@ pub static COLORINGS: &[&ColoringDef] = &[
 /// formula with a warning rather than failing the load — the same
 /// forward-compatibility posture `EscapeConfig::formula` documents
 /// (a file from a newer build should degrade, not error).
+/// Parameters whose next frame is slow, as (formula or colouring, param):
+/// dragged live they overshoot, so the panel commits them when the drag
+/// ends, or offers a small whole-number range as a dropdown
+/// (`ui::slow_controls`). An IFS walk's cost is its depth times its beam
+/// times its maps, and a solid's march multiplies that by its steps.
+pub const SLOW_PARAMS: &[(&str, &str)] = &[
+    ("ifs_flame", "levels"),
+    ("ifs_flame", "beam"),
+    ("ifs_flame_3d", "levels"),
+    ("ifs_flame_3d", "beam"),
+    ("ifs_flame_3d", "steps"),
+    ("quaternion_julia_solid", "levels"),
+    ("quaternion_julia_solid", "beam"),
+    ("quaternion_julia_solid", "steps"),
+];
+
+/// Whether `param` of the formula or colouring `def` is slow
+/// ([`SLOW_PARAMS`]).
+pub fn is_slow_param(def: &str, param: &str) -> bool {
+    SLOW_PARAMS.iter().any(|&(d, p)| d == def && p == param)
+}
+
 pub fn get_formula(name: &str) -> &'static FormulaDef {
     FORMULAS
         .iter()
@@ -930,5 +952,27 @@ mod tests {
         // coloring colors interior pixels, such a formula could only
         // ever render black.
         assert!(COLORINGS.iter().any(|c| c.has_feature(ColoringFeature::ColorsInterior)));
+    }
+}
+
+#[cfg(test)]
+mod slow_param_tests {
+    /// Every parameter marked slow names a real one: a renamed parameter
+    /// would otherwise go quietly back to a live slider.
+    #[test]
+    fn every_slow_param_names_a_real_parameter() {
+        for &(def, param) in super::SLOW_PARAMS {
+            let names: Vec<&str> = match super::ifs::get_ifs(def) {
+                Some(ifs) => ifs.parameters.iter().map(|p| p.name).collect(),
+                None => super::FORMULAS
+                    .iter()
+                    .filter(|f| f.name == def)
+                    .flat_map(|f| f.parameters.iter())
+                    .chain(super::COLORINGS.iter().filter(|c| c.name == def).flat_map(|c| c.parameters.iter()))
+                    .map(|p| p.name)
+                    .collect(),
+            };
+            assert!(names.contains(&param), "{def}.{param} is marked slow but is not a parameter");
+        }
     }
 }

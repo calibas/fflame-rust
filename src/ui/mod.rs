@@ -51,6 +51,7 @@ mod view;
 mod view_controls;
 mod escape_panel;
 mod sim_panel;
+pub mod slow_controls;
 mod textures_panel;
 pub mod workspace;
 mod palette_generate;

@@ -98,8 +98,22 @@ fn save_as_texture_row(ui: &mut egui::Ui, config: &crate::config::FractalConfig,
 
 /// A registry parameter control: dropdown when it has `choices`,
 /// slider otherwise. Same shape as the escape panel's, over this
-/// engine's param type.
-fn param_control(ui: &mut egui::Ui, v: &mut f32, p: &'static SimParamDef, salt: &str) -> bool {
+/// engine's param type. A `slow` parameter (`sim::SLOW_PARAMS`) is a
+/// dropdown over a small whole-number range, and otherwise commits when
+/// the drag ends (`slow_controls`).
+fn param_control(ui: &mut egui::Ui, v: &mut f32, p: &'static SimParamDef, salt: &str, slow: bool) -> bool {
+    if p.choices.is_empty() && slow {
+        if super::slow_controls::fits_a_dropdown(p.min, p.max) {
+            return super::slow_controls::whole_numbers(ui, (salt, p.name), p.display_name, Some(p.tooltip), v, p.min as i32, p.max as i32);
+        }
+        let speed = ((p.max - p.min) as f64 / 500.0).max(1e-6);
+        let id = ui.id().with((salt, p.name, "on_release"));
+        return super::slow_controls::on_release(ui, id, v, |ui, v| {
+            ui.add(egui::Slider::new(v, p.min..=p.max).text(p.display_name).drag_value_speed(speed))
+                .on_hover_text(p.tooltip)
+        })
+        .1;
+    }
     if p.choices.is_empty() {
         let range = p.min..=p.max;
         // Logarithmic where the interesting band is orders of magnitude
@@ -293,13 +307,17 @@ pub fn render_sim_content(
                     *state.reseed = true;
                 }
                 match sim.grid {
+                    // The grid's size is committed when a drag ends: every
+                    // value it passes through would rebuild the field, and the
+                    // run with it (`slow_controls`).
                     SimGrid::Viewport { scale } => {
                         let mut v = scale;
-                        if ui
-                            .add(egui::Slider::new(&mut v, 0.125..=4.0).text(t!("sim_panel.grid_scale").as_ref()))
-                            .on_hover_text(t!("sim_panel.grid_scale_tip"))
-                            .changed()
-                        {
+                        let id = ui.id().with("sim_grid_scale");
+                        let (_, changed) = super::slow_controls::on_release(ui, id, &mut v, |ui, v| {
+                            ui.add(egui::Slider::new(v, 0.125..=4.0).text(t!("sim_panel.grid_scale").as_ref()))
+                                .on_hover_text(t!("sim_panel.grid_scale_tip"))
+                        });
+                        if changed {
                             let _ = config_manager.update_param(ConfigPath::SimGridScale, v.into());
                         }
                     }
@@ -308,12 +326,14 @@ pub fn render_sim_content(
                             let mut w = width;
                             let mut h = height;
                             ui.label(t!("sim_panel.grid_size").as_ref());
-                            if ui.add(egui::DragValue::new(&mut w).range(16..=8192)).changed() {
+                            let id = ui.id().with("sim_grid_width");
+                            if super::slow_controls::on_release(ui, id, &mut w, |ui, v| ui.add(egui::DragValue::new(v).range(16..=8192))).1 {
                                 let _ = config_manager.update_param(ConfigPath::SimGridWidth, w.into());
                                 *state.reseed = true;
                             }
                             ui.label("x");
-                            if ui.add(egui::DragValue::new(&mut h).range(16..=8192)).changed() {
+                            let id = ui.id().with("sim_grid_height");
+                            if super::slow_controls::on_release(ui, id, &mut h, |ui, v| ui.add(egui::DragValue::new(v).range(16..=8192))).1 {
                                 let _ = config_manager.update_param(ConfigPath::SimGridHeight, h.into());
                                 *state.reseed = true;
                             }
@@ -447,16 +467,20 @@ pub fn render_sim_content(
                     ui.label(egui::RichText::new(t!("sim_panel.steps_uncapped")).small().weak())
                         .on_hover_text(t!("sim_panel.steps_uncapped_tip"));
                 }
+                // Committed when the drag ends: a frame runs this many steps,
+                // so each value a drag passed would slow the next frame more
+                // (`slow_controls`).
                 let mut spf = sim.steps_per_frame;
-                if ui
-                    .add(
-                        egui::Slider::new(&mut spf, 1..=2048)
+                let id = ui.id().with("sim_steps_per_frame");
+                let (_, spf_changed) = super::slow_controls::on_release(ui, id, &mut spf, |ui, v| {
+                    ui.add(
+                        egui::Slider::new(v, 1..=2048)
                             .text(t!("sim_panel.steps_per_frame").as_ref())
                             .logarithmic(true),
                     )
                     .on_hover_text(t!("sim_panel.steps_per_frame_tip"))
-                    .changed()
-                {
+                });
+                if spf_changed {
                     let _ = config_manager.update_param(ConfigPath::SimStepsPerFrame, spf.into());
                 }
                 // An automaton advances by a generation, not by dt: showing the
@@ -1059,7 +1083,7 @@ fn render_coloring_section(
             let params = entry.map(|l| &l.coloring_params).unwrap_or(&sim.coloring_params);
             for p in coloring.parameters {
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
-                if param_control(ui, &mut v, p, &slot.salt()) {
+                if param_control(ui, &mut v, p, &slot.salt(), false) {
                     let _ = config_manager.update_param(slot.param_path(p.name), v.into());
                 }
             }
@@ -1577,7 +1601,7 @@ fn render_model_section(
                     continue;
                 }
                 let mut v = params.get(p.name).copied().unwrap_or(p.default);
-                if param_control(ui, &mut v, p, &slot.salt()) {
+                if param_control(ui, &mut v, p, &slot.salt(), crate::sim::is_slow_param(model.name, p.name)) {
                     match table {
                         // Into the table: write the ladder into it in the
                         // same undo step, so the switch changes nothing.
