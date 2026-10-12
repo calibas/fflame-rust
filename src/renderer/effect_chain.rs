@@ -163,8 +163,11 @@ const DENSITY_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 /// the struct declared in every `shaders/effects/**/*.wgsl`; a mismatch
 /// is a binding-size validation error at pipeline creation.
 ///
-/// Total size: 208 bytes (params=192 + width=4 + height=4 + padding=8
-/// for 16-byte alignment), inside the 256-byte slot stride.
+/// Total size: 208 bytes (params=192 + width=4 + height=4 +
+/// density_mean=4 + padding=4 for 16-byte alignment), inside the
+/// 256-byte slot stride. `density_mean` sits where an 8-byte padding
+/// was, so a shader that still declares `_padding: vec2<f32>` binds the
+/// same layout and ignores it.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EffectParams {
@@ -174,8 +177,14 @@ struct EffectParams {
     /// Texture dimensions
     width: u32,
     height: u32,
+    /// For a density effect, the frame's mean density, the unit Levels
+    /// measures in (`FlameRenderer::mean_density`): divide a pixel's `a`
+    /// by it to get a density that does not grow with the iteration
+    /// count. 1 for escape and simulation images, whose `a` is not a
+    /// hit count; 0 for colour effects.
+    density_mean: f32,
     /// Padding to align struct to 16 bytes (WGSL uniform buffer requirement)
-    _padding: [f32; 2],
+    _padding: f32,
 }
 
 // The uniform packs parameters in vec4 groups, so the count must divide
@@ -635,7 +644,8 @@ impl EffectChainRunner {
             params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
             width,
             height,
-            _padding: [0.0; 2],
+            density_mean: 0.0,
+            _padding: 0.0,
         };
         let registry = global_effect_registry();
         if let Some(info) = registry.get("distance_field") {
@@ -893,6 +903,7 @@ impl EffectChainRunner {
         encoder: &mut CommandEncoder,
         input_view: &TextureView,
         effects: &[EffectInstance],
+        density_mean: f32,
     ) -> bool {
         let enabled_effects: Vec<_> = effects.iter().filter(|e| e.enabled).collect();
         if enabled_effects.is_empty() {
@@ -949,6 +960,7 @@ impl EffectChainRunner {
                     &self.sampler,
                     width,
                     height,
+                    density_mean,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -1101,6 +1113,7 @@ impl EffectChainRunner {
                     &self.sampler,
                     width,
                     height,
+                    0.0, // colour effects have no density
                 );
 
                 // Swap ping-pong textures for next effect
@@ -1136,6 +1149,7 @@ impl EffectChainRunner {
         sampler: &Sampler,
         width: u32,
         height: u32,
+        density_mean: f32,
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
@@ -1151,7 +1165,8 @@ impl EffectChainRunner {
             params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
             width,
             height,
-            _padding: [0.0; 2],
+            density_mean,
+            _padding: 0.0,
         };
 
         // Fill in effect parameters (packed into vec4s)
@@ -1454,6 +1469,13 @@ mod gpu_tests {
 
     /// A `w` x `h` texture of `format`, every texel `texel` (as bytes).
     fn filled(device: &Device, queue: &Queue, w: u32, h: u32, format: TextureFormat, texel: &[u8]) -> (Texture, TextureView) {
+        let data: Vec<u8> = (0..w * h).flat_map(|_| texel.iter().copied()).collect();
+        texture_of(device, queue, w, h, format, &data)
+    }
+
+    /// A `w` x `h` texture of `format` holding `data`, row-major.
+    fn texture_of(device: &Device, queue: &Queue, w: u32, h: u32, format: TextureFormat, data: &[u8]) -> (Texture, TextureView) {
+        let texel_bytes = data.len() as u32 / (w * h);
         let tex = device.create_texture(&TextureDescriptor {
             label: Some("effect chain test input"),
             size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -1464,11 +1486,10 @@ mod gpu_tests {
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let data: Vec<u8> = (0..w * h).flat_map(|_| texel.iter().copied()).collect();
         queue.write_texture(
             TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
-            &data,
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel.len() as u32), rows_per_image: Some(h) },
+            data,
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes), rows_per_image: Some(h) },
             Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
         let view = tex.create_view(&TextureViewDescriptor::default());
@@ -1495,7 +1516,7 @@ mod gpu_tests {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
         chain.reset_slots();
-        let ran = chain.run_density_effects(&device, &queue, &mut encoder, &view, &[sharpen]);
+        let ran = chain.run_density_effects(&device, &queue, &mut encoder, &view, &[sharpen], 1.0);
         queue.submit(Some(encoder.finish()));
         let error = pollster::block_on(scope.pop());
         assert!(error.is_none(), "the density chain failed validation: {error:?}");
@@ -1507,6 +1528,46 @@ mod gpu_tests {
             assert!((px[0] - 0.5).abs() < 1e-6 && (px[2] - 0.75).abs() < 1e-6, "texel {i}: the colour changed: {px:?}");
         }
         chain.destroy();
+    }
+
+    /// density_blur's threshold and falloff are multiples of the frame's
+    /// mean density, the unit Levels uses: the same pixels blur whether
+    /// the render has run a million iterations or a billion. They were
+    /// compared with the raw hit count, so a pixel with a single hit was
+    /// never blurred, at any setting in the 0-1 range.
+    ///
+    /// Columns alternate red 0 and 1 at 1,000 hits each. Against a mean
+    /// of 10,000 that is a tenth of the mean, below the default 0.25, and
+    /// a middle texel blurs toward 0.5; against a mean of 100 it is ten
+    /// times the mean, past 0.25 + 0.5, and stays as it was.
+    #[test]
+    fn density_blur_measures_density_in_multiples_of_the_mean() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        const W: u32 = 32;
+        const H: u32 = 8;
+        let data: Vec<u8> = (0..W * H)
+            .flat_map(|i| [(i % W % 2) as f32, 0.0, 0.0, 1000.0])
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba32Float, &data);
+        let red_at_centre = |mean: f32| {
+            let mut chain = EffectChainRunner::new(&device, W, H);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
+            chain.reset_slots();
+            let ran = chain.run_density_effects(&device, &queue, &mut encoder, &view, &[EffectInstance::new("density_blur")], mean);
+            queue.submit(Some(encoder.finish()));
+            assert!(ran, "the chain ran");
+            let out = chain.read_density_output_blocking(&device, &queue);
+            chain.destroy();
+            out[(H / 2 * W + W / 2) as usize][0]
+        };
+        let sparse = red_at_centre(10_000.0);
+        assert!((sparse - 0.5).abs() < 0.2, "a tenth of the mean is sparse, but the stripes stayed sharp: red {sparse}");
+        let dense = red_at_centre(100.0);
+        assert!(dense == 0.0 || dense == 1.0, "ten times the mean is dense, but the stripes blurred: red {dense}");
     }
 
     /// A frame's chains may need more parameter slots than the buffer

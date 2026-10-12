@@ -3932,13 +3932,17 @@ impl App {
                 renderer.get_accumulation_view()
             };
 
-            // Run density effects (before tonemap, on HDR accumulation data)
+            // Run density effects (before tonemap, on HDR accumulation data).
+            // A flame's alpha is a hit count, measured against its mean; an
+            // escape or simulation image's is not, and is read as it is.
+            let density_mean = if is_non_flame { 1.0 } else { renderer.mean_density() };
             let density_effects_ran = self.effect_chain.run_density_effects(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
                 pre_tonemap_view,
                 &final_config.density_effects,
+                density_mean,
             );
 
             // Render to internal fractal texture with tone mapping.
