@@ -554,6 +554,11 @@ All four are described in [SHADERS.md](SHADERS.md) and
 6. **Unit conversions.** If the foreign app stores a parameter in other
    units, add the pair to `variation_param_from_xml` /
    `variation_param_to_xml` in [flame_xml.rs](../../src/flame_xml.rs).
+   If a parameter bounds a loop the variation runs every iteration, time
+   it (`PARAM_COST_ONLY=<name> cargo test --release --lib -- --ignored
+   --nocapture measure_variation_param_costs`). If its maximum adds 15 ms
+   or more to an app frame, list it in `variations::SLOW_PARAMS`, so its
+   control commits on release (UI.md, *Slow settings*).
 7. **Regenerate the contract**
    (`UPDATE_CONTRACT=1 cargo test --lib contract_is_current`) and read
    the diff; run the shader lints; render a flame that uses it in 2D

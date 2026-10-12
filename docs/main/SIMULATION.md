@@ -620,6 +620,10 @@ reseeding on it would make every model unusable.
    `#[ignore]`d, so **run it deliberately** — it is the only check that
    can see whether a preset draws anything at all, and it has caught a
    model rendering black that no name check could.
+5. A parameter that multiplies a step's work -- a kernel radius read
+   cell by cell, an agent count -- goes in `SLOW_PARAMS` in
+   [src/sim/mod.rs](../../src/sim/mod.rs), so the panel commits it when
+   a drag ends instead of overshooting (UI.md, *Slow settings*).
 
 ---
 

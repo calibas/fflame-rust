@@ -79,6 +79,9 @@ pub fn render_variation_params(
         let mut param_value = stored_value;
 
         let (param_changed, drag_stopped) = match &param.param_type {
+            _ if crate::variations::is_slow_param(var_name, &param.name) => {
+                render_slow_param(ui, var_name, param, &mut param_value)
+            }
             ParamType::Float => render_float_param(ui, param, &mut param_value),
             ParamType::UnlimitedFloat => render_unlimited_float_param(ui, param, &mut param_value),
             ParamType::Integer => render_integer_param(ui, param, &mut param_value),
@@ -153,6 +156,52 @@ fn with_hover(response: egui::Response, param: &VariationParameter) -> egui::Res
     } else {
         response
     }
+}
+
+/// A slow parameter (`variations::SLOW_PARAMS`): it bounds a loop the
+/// variation runs every iteration, so each frame of a live drag that
+/// raised it would come later than the last, and the drag would overshoot.
+/// A small whole-number range is a dropdown; anything else commits when
+/// the drag ends (`slow_controls`). No preview either way: the value
+/// reaches the config once, as one undo step.
+/// Returns (changed, drag_stopped).
+fn render_slow_param(ui: &mut egui::Ui, var_name: &str, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
+    let min = param.min_value.unwrap_or(1.0);
+    let max = param.max_value.unwrap_or(100.0);
+    let integer = matches!(param.param_type, ParamType::Integer | ParamType::UnlimitedInteger);
+    // An unlimited type takes a typed value past its slider's range.
+    let clamping = if matches!(param.param_type, ParamType::UnlimitedInteger | ParamType::UnlimitedFloat) {
+        egui::SliderClamping::Never
+    } else {
+        egui::SliderClamping::Edits
+    };
+    if integer && super::slow_controls::fits_a_dropdown(min, max) {
+        let changed = super::slow_controls::whole_numbers(
+            ui,
+            ("slow_param", var_name, param.name.as_str()),
+            &param.display_name,
+            param.description.as_deref(),
+            value,
+            min as i32,
+            max as i32,
+        );
+        return (changed, changed);
+    }
+    let id = ui.id().with(("slow_param", var_name, param.name.as_str()));
+    let (_, changed) = super::slow_controls::on_release(ui, id, value, |ui, v| {
+        if integer {
+            let mut i = *v as i32;
+            let response = with_hover(
+                ui.add(super::VkbSlider::new(&mut i, min as i32..=max as i32).text(&param.display_name).clamping(clamping)),
+                param,
+            );
+            *v = i as f32;
+            response
+        } else {
+            with_hover(ui.add(super::VkbSlider::new(v, min..=max).text(&param.display_name).clamping(clamping)), param)
+        }
+    });
+    (changed, changed)
 }
 
 /// Render a float parameter slider
