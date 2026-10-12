@@ -269,16 +269,29 @@ pub fn export_headroom(config: &FractalConfig, w: u32, h: u32) -> u64 {
 /// buffer until it is used, so the probe would measure nothing; and a
 /// software renderer is the reference, whose pictures should not depend
 /// on the machine.
+///
+/// Under `cfg(test)` it does not probe unless a test asks
+/// ([`PROBE_EXPORT_MEMORY`]): the probe holds most of the card for a
+/// moment, and the suite runs its GPU tests side by side -- measured on
+/// the same 6 GB card, a terrain test's probe took the card to 5.8 GB,
+/// and the tests beside it ran out of memory or crashed the driver.
+/// The rule itself is [`fitted_sections`], tested without a card.
 pub async fn fit_export_sections(device: &Device, config: &FractalConfig, w: u32, h: u32) -> u32 {
     if cfg!(target_arch = "wasm32") || device.adapter_info().device_type != DeviceType::DiscreteGpu {
+        return MAX_SECTIONS;
+    }
+    #[cfg(test)]
+    if !PROBE_EXPORT_MEMORY.load(std::sync::atomic::Ordering::Relaxed) {
         return MAX_SECTIONS;
     }
     let lim = device.limits();
     let layer = TerrainRenderer::atlas_layer_bytes(SECTION_SAMPLES, SECTION_SAMPLES);
     let headroom = export_headroom(config, w, h) + (256 << 20);
     let piece = lim.max_buffer_size.min(256 << 20).max(1 << 20);
-    let mut cap = EXPORT_MAX_SECTIONS.min(lim.max_texture_array_layers).max(MAX_SECTIONS);
-    while cap > MAX_SECTIONS {
+    for cap in section_caps(lim.max_texture_array_layers) {
+        if cap == MAX_SECTIONS {
+            break;
+        }
         let want = cap as u64 * layer + headroom;
         let mut held: Vec<Buffer> = Vec::new();
         let mut got = 0u64;
@@ -308,9 +321,29 @@ pub async fn fit_export_sections(device: &Device, config: &FractalConfig, w: u32
             log::info!("terrain export: {cap} sections fit ({} MB with the rest of the export)", want >> 20);
             return cap;
         }
-        cap /= 2;
     }
     MAX_SECTIONS
+}
+
+/// Lets a test run [`fit_export_sections`]' real probe (it is off under
+/// `cfg(test)`; see there). Only the ignored, run-alone probe test sets it.
+#[cfg(test)]
+pub(crate) static PROBE_EXPORT_MEMORY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The caps an export tries, largest first: [`EXPORT_MAX_SECTIONS`] (never
+/// past the device's array layers) down by halves to [`MAX_SECTIONS`].
+fn section_caps(max_layers: u32) -> impl Iterator<Item = u32> {
+    let start = EXPORT_MAX_SECTIONS.min(max_layers).max(MAX_SECTIONS);
+    std::iter::successors(Some(start), |&c| (c > MAX_SECTIONS).then(|| (c / 2).max(MAX_SECTIONS)))
+}
+
+/// [`fit_export_sections`]' rule on a known budget: the first cap whose
+/// atlas, `layer` bytes a section, fits beside `headroom` in `budget`.
+#[cfg(test)]
+fn fitted_sections(max_layers: u32, layer: u64, headroom: u64, budget: u64) -> u32 {
+    section_caps(max_layers)
+        .find(|&cap| cap == MAX_SECTIONS || cap as u64 * layer + headroom <= budget)
+        .unwrap_or(MAX_SECTIONS)
 }
 
 /// How far below the plain a hole's floor is, in view widths: a sixth of
@@ -1236,6 +1269,7 @@ impl EscapeTerrain {
         v
     }
 
+    #[cfg(test)]
     pub(crate) fn cached_for_test(&self) -> Vec<SectionKey> {
         let mut k: Vec<SectionKey> = self.cache.keys().copied().collect();
         k.sort();
@@ -1468,16 +1502,36 @@ mod tests {
         assert!((20 << 20..23 << 20).contains(&layer), "{layer}");
     }
 
-    /// An export's section cap is fitted to the card: one of the halvings
-    /// from [`EXPORT_MAX_SECTIONS`] to [`MAX_SECTIONS`], never past the
-    /// device's layers -- and a larger export never fits more. Off a
-    /// discrete card, the viewport's.
+    /// The fitting rule: one of the halvings from [`EXPORT_MAX_SECTIONS`] to
+    /// [`MAX_SECTIONS`], the largest that fits, never past the device's
+    /// layers -- and a larger export never fits more.
     #[test]
+    fn an_exports_section_cap_is_the_largest_that_fits() {
+        let layer = TerrainRenderer::atlas_layer_bytes(SECTION_SAMPLES, SECTION_SAMPLES);
+        let head = 1 << 30;
+        let gb = |n: u64| n << 30;
+        assert_eq!(fitted_sections(2048, layer, head, gb(64)), EXPORT_MAX_SECTIONS);
+        assert_eq!(fitted_sections(2048, layer, head, 128 * layer + head), 128);
+        assert_eq!(fitted_sections(2048, layer, head, 128 * layer + head - 1), MAX_SECTIONS);
+        assert_eq!(fitted_sections(2048, layer, head, 0), MAX_SECTIONS, "never below the viewport's");
+        assert_eq!(fitted_sections(100, layer, head, gb(64)), 100.min(EXPORT_MAX_SECTIONS).max(MAX_SECTIONS), "the device's layers bound it");
+        let budget = gb(5);
+        assert!(fitted_sections(2048, layer, gb(3), budget) <= fitted_sections(2048, layer, head, budget), "more headroom, no more sections");
+        assert_eq!(section_caps(2048).collect::<Vec<_>>(), vec![256, 128, 64]);
+    }
+
+    /// The real probe, on this card. Holds most of its memory for a moment,
+    /// which starves any GPU test running beside it, so it runs alone:
+    /// `cargo test --release --lib an_exports_section_cap_fits_the_card -- --ignored`.
+    /// Off a discrete card, the viewport's cap.
+    #[test]
+    #[ignore = "probes most of the card's memory; run alone"]
     fn an_exports_section_cap_fits_the_card() {
         let Some((_one_at_a_time, device, _queue)) = gpu() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
+        PROBE_EXPORT_MEMORY.store(true, std::sync::atomic::Ordering::Relaxed);
         let c = terrain_config();
         let cap = pollster::block_on(fit_export_sections(&device, &c, 1920, 1080));
         println!("1080p export: {cap} sections");
@@ -1488,6 +1542,7 @@ mod tests {
         let mut huge = c.clone();
         huge.escape.terrain.prefilter = 3;
         let fewer = pollster::block_on(fit_export_sections(&device, &huge, 16384, 16384));
+        PROBE_EXPORT_MEMORY.store(false, std::sync::atomic::Ordering::Relaxed);
         println!("16K export at a 3x3 prefilter: {fewer} sections");
         assert!(fewer <= cap && fewer >= MAX_SECTIONS, "{fewer} vs {cap}");
     }
@@ -1504,7 +1559,7 @@ mod tests {
         let mut c = terrain_config();
         c.escape.terrain.tier = RenderTier::Lit;
         let mut engines = crate::renderer::render::RenderEngines::default();
-        let mut draw = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+        let draw = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
             pollster::block_on(crate::renderer::render(
                 &device,
                 &queue,
@@ -2391,7 +2446,7 @@ mod tests {
         };
         let mut engines = crate::renderer::render::RenderEngines::default();
         let mut c = terrain_config();
-        let mut frame = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+        let frame = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
             pollster::block_on(crate::renderer::render(
                 &device,
                 &queue,
@@ -2689,7 +2744,7 @@ mod tests {
         c.escape.terrain.occlusion = 0.0;
         let (w, h) = (320u32, 180u32);
         let mut engines = crate::renderer::render::RenderEngines::default();
-        let mut picture = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
+        let picture = |c: &FractalConfig, engines: &mut crate::renderer::render::RenderEngines| {
             pollster::block_on(crate::renderer::render(
                 &device,
                 &queue,

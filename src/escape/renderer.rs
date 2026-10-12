@@ -315,8 +315,10 @@ const CHUNK_ITERS_MAX_BASE: u32 = 1_048_576;
 /// preference -- it should not travel with a synced profile.
 #[cfg(not(target_arch = "wasm32"))]
 mod tuning {
+    #[cfg(not(test))]
     use std::sync::atomic::Ordering;
 
+    #[cfg(not(test))]
     fn path() -> Option<std::path::PathBuf> {
         Some(crate::storage::backend::get_app_data_dir().ok()?.join("gpu_tuning.json"))
     }
@@ -5729,7 +5731,6 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             .unwrap_or([0.0, 0.0]);
         super::reference::set_live_reference_period(orbit.periodic);
         let len = orbit.len();
-        let needed_bytes = (len as u64) * 8;
         let recreate = match &self.orbit_buffer {
             Some(_) => len > self.orbit_capacity,
             None => true,

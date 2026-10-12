@@ -683,7 +683,6 @@ mod tests {
 
 #[cfg(test)]
 mod gpu_tests {
-    use super::*;
     use crate::config::FractalConfig;
     use crate::scene::transforms::RenderMode;
 
@@ -861,6 +860,13 @@ mod gpu_tests {
     /// exactly a 2x zoom -- mix(n, 0, 0.5) = n/2. Decisive between
     /// "the map is identity" and "the transforms buffer is empty".
     #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn a_linear_lens_at_half_amount_changes_nothing() {
+        let (device, queue) = device();
+        let plain = render(&device, &queue, &config("", 1.0));
+        let linear = render(&device, &queue, &config("linear", 0.5));
+        assert_eq!(differing(&plain, &linear), 0, "a linear lens moved the picture: its map is not the identity");
+    }
 
     /// The lens reaches every path that renders headlessly.
     ///

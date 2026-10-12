@@ -52,7 +52,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let seed = get_param(1u);
     let blend_mode = i32(get_param(2u));
 
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     // Get pixel coordinates for per-pixel noise
     let pixel = input.uv * vec2<f32>(f32(effect_params.width), f32(effect_params.height));

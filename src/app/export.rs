@@ -24,7 +24,21 @@ pub enum ExportEngine {
     HighRes,
 }
 
+/// What a WASM headless export produced.
+#[cfg(target_arch = "wasm32")]
+pub struct WasmExport {
+    /// The encoded PNG, with metadata.
+    pub png: Vec<u8>,
+    /// Iterations the render actually ran.
+    pub total_iterations: u64,
+}
+
 /// Headless PNG export - WASM version
+///
+/// `target_iterations` overrides the config's `max_iterations` when
+/// `Some` (the `WasmApi`'s `set_target_iterations`); `premultiplied`
+/// picks premultiplied alpha for a transparent export, as the CLI's
+/// `--premultiplied` does.
 #[cfg(target_arch = "wasm32")]
 pub async fn export_headless_wasm(
     config: &FractalConfig,
@@ -32,7 +46,9 @@ pub async fn export_headless_wasm(
     height: u32,
     iterations_per_thread: u32,
     transparent: bool,
-) -> Result<Vec<u8>, String> {
+    premultiplied: bool,
+    target_iterations: Option<u64>,
+) -> Result<WasmExport, String> {
     // Create headless GPU instance
     let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::BROWSER_WEBGPU,
@@ -103,9 +119,13 @@ pub async fn export_headless_wasm(
         .map_err(|e| format!("Failed to create device: {:?}", e))?;
 
     // Use unified render API
-    let job = RenderJob::new(config, width, height)
+    let mut job = RenderJob::new(config, width, height)
         .with_iterations_per_thread(iterations_per_thread)
-        .with_transparent(transparent);
+        .with_transparent(transparent)
+        .with_premultiplied(premultiplied);
+    if let Some(n) = target_iterations {
+        job = job.with_iterations(n);
+    }
 
     let render_result = render(&device, &queue, job, &mut NoProgress).await;
 
@@ -132,14 +152,17 @@ pub async fn export_headless_wasm(
         config,
     );
 
+    let total_iterations = result.total_iterations;
+
     // Encode PNG
-    crate::renderer::compute_kernel::encode_png_from_rgba(
+    let png = crate::renderer::compute_kernel::encode_png_from_rgba(
         result.width,
         result.height,
         result.rgba_data,
         Some(metadata),
     )
-    .map_err(|e| format!("Failed to encode PNG: {}", e))
+    .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+    Ok(WasmExport { png, total_iterations })
 }
 
 /// Headless PNG export for CLI mode.
@@ -182,8 +205,7 @@ pub async fn export_headless(
     };
     let max_binding = probe_max_binding_size().await
         .unwrap_or(128 * 1024 * 1024);
-    let solid_active = config.solid_strength > 0.0
-        && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+    let solid_active = config.solid_depth_active();
     let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
 
     // Route on the MODE first. The high-res path is the tiled
@@ -205,21 +227,10 @@ pub async fn export_headless(
             ExportEngine::HighRes => true,
             ExportEngine::FlameRenderer => false,
         };
-    // The escape and simulation engines hand their picture to the flame
-    // renderer's tail, which allocates its histogram at the export size
-    // whatever the mode: past one binding that is a validation error, and
-    // wgpu panics on it. Refused here, as the app refuses it.
-    if non_flame_mode && hist_size > max_binding {
-        return Err(format!(
-            "{} export at {}x{} exceeds this GPU's buffer limit ({} MB > {} MB) -- try a smaller size",
-            if config.render_mode == crate::scene::transforms::RenderMode::Escape { "escape-time" } else { "simulation" },
-            render_width,
-            render_height,
-            hist_size / (1024 * 1024),
-            max_binding / (1024 * 1024),
-        )
-        .into());
-    }
+    // The escape and simulation engines render through `render()`, which
+    // gives them the flame renderer's tail alone (no histogram) and refuses
+    // what this device cannot hold before allocating -- so the flame's
+    // histogram size does not limit them.
     if !non_flame_mode && engine == ExportEngine::FlameRenderer && hist_size > max_binding {
         log::warn!(
             "--engine flamerenderer forced at {}x{}, but histogram {} MB > binding {} MB — allocation will likely fail.",

@@ -84,10 +84,17 @@ struct SimParams {
 // A cell the resolve reads: wrapped round the torus when the picture
 // tiles, clamped to the grid otherwise -- which is what every resolve
 // filter did before the view.
+//
+// The wrap is `sim_wrap_sized`'s form, through the truncated quotient,
+// not the biased remainder `((p % n) + n) % n`: on the device that idiom
+// behaves like a bare `p % n` (see `sim_wrap_sized`), so a bilinear or
+// bicubic tap at cell -1 read out of bounds as zero -- a one-pixel line
+// of the wrong colour down the seam of a magnified tiled view.
 fn sim_view_cell(p: vec2<i32>, lim: vec2<i32>) -> vec2<i32> {
     if (params.camera_b.x >= 0.5) {
         let n = lim + vec2<i32>(1, 1);
-        return ((p % n) + n) % n;
+        let q = p - n * (p / n);
+        return select(q, q + n, q < vec2<i32>(0));
     }
     return clamp(p, vec2<i32>(0, 0), lim);
 }
@@ -1186,7 +1193,11 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
         sim_sample_lerp(sim_sample(p01), sim_sample(p11), t.x),
         t.y,
     );
-    let col = sim_shade_from(x, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+    // The cell the pixel is in, wrapped like the taps: a tiled view's
+    // wrap can land gf a hair below 0 or on g, and a clamp then handed
+    // the colouring the cell at the far side of the grid -- a line of
+    // it down the seam, one pixel wide, on a magnified tiled view.
+    let col = sim_shade_from(x, sim_view_cell(vec2<i32>(floor(gf)), lim));
 "#
             .to_string(),
             SimUpscale::Bicubic => r#"
@@ -1208,7 +1219,11 @@ fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String 
             x = sim_sample_mad(x, sim_sample(q), wx[i] * wy[j]);
         }
     }
-    let col = sim_shade_from(x, clamp(vec2<i32>(floor(gf)), vec2<i32>(0, 0), lim));
+    // The cell the pixel is in, wrapped like the taps: a tiled view's
+    // wrap can land gf a hair below 0 or on g, and a clamp then handed
+    // the colouring the cell at the far side of the grid -- a line of
+    // it down the seam, one pixel wide, on a magnified tiled view.
+    let col = sim_shade_from(x, sim_view_cell(vec2<i32>(floor(gf)), lim));
 "#
             .to_string(),
         }
@@ -2806,6 +2821,53 @@ mod tests {
             code.contains("p - g * (p / g)"),
             "the periodic wrap should subtract the truncated quotient"
         );
+    }
+
+    /// No shader anywhere wraps with the biased remainder
+    /// `((p % n) + n) % n`, in any spelling of `n`. The test above guards
+    /// the step shader's wrap; the colour pass's tiled-view wrap
+    /// (`sim_view_cell`) kept the idiom, and a bilinear tap at cell -1
+    /// read out of bounds -- a line down the seam of a magnified tiled
+    /// view. It cannot be pinned by rendering: an out-of-bounds read may
+    /// return any texel, and the miscompile does not show on every grid.
+    #[test]
+    fn no_shader_wraps_with_the_biased_remainder() {
+        // `) + n) % n` with the same `n` both times.
+        fn biased(line: &str) -> bool {
+            let mut rest = line;
+            while let Some(i) = rest.find(") + ") {
+                let after = &rest[i + 4..];
+                let n: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.').collect();
+                if !n.is_empty() && after[n.len()..].starts_with(&format!(") % {n}")) {
+                    return true;
+                }
+                rest = after;
+            }
+            false
+        }
+        // Spelt with format! so this line is not itself a hit.
+        assert!(biased(&format!("    return ((p % n) + n) {} n;", '%')), "the detector sees the idiom");
+        assert!(!biased("    let q = p - n * (p / n);"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        for dir in ["src/sim", "src/escape", "shaders", "shaders/core", "shaders/effects/color", "shaders/effects/density"] {
+            for e in std::fs::read_dir(root.join(dir)).unwrap().flatten() {
+                let p = e.path();
+                if matches!(p.extension().and_then(|x| x.to_str()), Some("rs") | Some("wgsl")) {
+                    files.push(p);
+                }
+            }
+        }
+        assert!(files.len() > 20, "found the sources");
+        let mut hits = Vec::new();
+        for f in &files {
+            for (k, line) in std::fs::read_to_string(f).unwrap().lines().enumerate() {
+                if !line.trim_start().starts_with("//") && biased(line) {
+                    hits.push(format!("{}:{}: {}", f.display(), k + 1, line.trim()));
+                }
+            }
+        }
+        assert!(hits.is_empty(), "the biased-remainder wrap, which the device miscompiles (see sim_wrap_sized):\n{}", hits.join("\n"));
     }
 
     /// A colouring that does not declare NeedsGradient must not pay

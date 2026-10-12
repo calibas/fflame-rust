@@ -182,10 +182,12 @@ pub async fn probe_impl() -> Result<(), String> {
 /// while keeping a hostile file to seconds rather than forever.
 const MAX_RENDER_ITERATIONS: u64 = 8_000_000_000;
 
-/// Iterations-per-thread bounds. ipt is trajectory depth — one dispatch
-/// runs the whole trajectory, so an unbounded value turns a single
-/// dispatch into a browser-watchdog-length stall the same way an
-/// unbounded iteration budget would. Mirrors the CLI's documented range.
+/// Iterations-per-thread bounds. ipt is how many iterations each GPU
+/// thread runs in ONE dispatch. Orbits persist between dispatches, so it
+/// slices the budget rather than capping how deep an orbit gets — but
+/// an unbounded value still turns a single dispatch into a
+/// browser-watchdog-length stall the same way an unbounded iteration
+/// budget would. Mirrors the CLI's documented range.
 const MIN_ITERATIONS_PER_THREAD: u32 = 64;
 const MAX_ITERATIONS_PER_THREAD: u32 = 4096;
 
@@ -375,12 +377,12 @@ mod wasm {
 
     /// Render a config. `iterations` caps the chaos-game budget
     /// (defaults to the config's own `max_iterations`).
-    /// `iterations_per_thread` is trajectory depth per dispatch
-    /// (default 256, clamped to 64–4096). Depth-vs-breadth trade-off,
-    /// not a quality dial: deep orbits reach late-emerging structure
-    /// with less restart overhead, but orbits stuck in a sink or
-    /// off-frame waste more budget before a restart resamples. It
-    /// changes rendered pixels either way.
+    /// `iterations_per_thread` is how many iterations each GPU thread
+    /// runs per dispatch (default 256, clamped to 64–4096). Orbits
+    /// persist across dispatches and burn-in is paid once, so it slices
+    /// the budget rather than setting orbit depth: the picture does not
+    /// depend on it, though the exact pixels do (each dispatch seeds its
+    /// own random streams). Larger means fewer, longer dispatches.
     #[wasm_bindgen]
     pub async fn render(
         config_json: &str,

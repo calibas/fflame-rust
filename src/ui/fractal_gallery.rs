@@ -36,8 +36,6 @@ pub enum GalleryViewMode {
 pub struct GalleryResponse {
     /// Config was selected (clicked)
     pub selected: Option<FractalConfig>,
-    /// Request to close the panel
-    pub close_requested: bool,
     /// API flame ID (when loading from Online tab)
     pub api_flame_id: Option<String>,
     /// Whether the loaded flame is public (None = unknown)
@@ -115,6 +113,7 @@ impl FractalConfigGallery {
     }
 
     /// Add configs to the gallery (e.g., when loading a new library file)
+    #[cfg(target_arch = "wasm32")]
     pub fn add_configs(&mut self, configs: Vec<FractalConfig>) {
         for config in configs {
             self.items.push(GalleryItem::new(config));
@@ -122,6 +121,7 @@ impl FractalConfigGallery {
     }
 
     /// Get all configs
+    #[cfg(target_arch = "wasm32")]
     pub fn configs(&self) -> Vec<&FractalConfig> {
         self.items.iter().map(|item| &item.config).collect()
     }
@@ -132,6 +132,7 @@ impl FractalConfigGallery {
     }
 
     /// Check if gallery is empty
+    #[cfg(target_arch = "wasm32")]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -506,13 +507,9 @@ impl FractalConfigGallery {
                 Vec2::new(side, 20.0),
             );
 
-            // Truncate name if too long
+            // Truncate name if too long (by characters: names are any script)
             let max_chars = (side / 8.0) as usize;
-            let display_name = if name.len() > max_chars {
-                format!("{}...", &name[..max_chars.saturating_sub(3)])
-            } else {
-                name.to_string()
-            };
+            let display_name = super::ellipsize(name, max_chars);
 
             ui.painter().text(
                 name_rect.center_top() + Vec2::new(0.0, 2.0),
@@ -564,26 +561,13 @@ impl FractalConfigGallery {
                 });
 
                 // Summary line
-                let render_mode = match config.render_mode {
-                    crate::scene::transforms::RenderMode::TwoD => t!("fractal_gallery.render_mode_2d"),
-                    crate::scene::transforms::RenderMode::ThreeD => t!("fractal_gallery.render_mode_3d"),
-                    crate::scene::transforms::RenderMode::Escape => t!("fractal_gallery.render_mode_escape"),
-                    crate::scene::transforms::RenderMode::Simulation => {
-                        t!("fractal_gallery.render_mode_simulation")
-                    }
-                };
-                ui.label(format!(
-                    "{}, {}, {}",
-                    t!("fractal_gallery.transforms_count", count = config.flame.transforms.len()),
-                    render_mode,
-                    Self::format_variations(config),
-                ));
+                ui.label(list_summary(config));
             })
             .body(|ui| {
                 // Expanded details
-                ui.label(t!("fractal_gallery.zoom", value = format!("{:.2}", config.zoom)));
-                ui.label(t!("fractal_gallery.max_iterations", value = config.max_iterations));
-                ui.label(t!("fractal_gallery.color_mode", value = format!("{:?}", config.color_mode)));
+                for line in list_details(config) {
+                    ui.label(line);
+                }
 
                 // Small thumbnail if available
                 if let Some(texture) = self.texture_cache.get(hash) {
@@ -636,5 +620,110 @@ impl FractalConfigGallery {
 impl Default for FractalConfigGallery {
     fn default() -> Self {
         Self::new(Vec::new())
+    }
+}
+
+/// The list view's one-line summary of a config.
+///
+/// What describes a config depends on the engine: a flame by its
+/// transforms and variations, an escape-time fractal by its formula and
+/// coloring, a simulation by its model and colouring. The flame columns
+/// on the other two read "1 transforms, ..., linear" -- the default
+/// flame they carry and never render.
+fn list_summary(config: &FractalConfig) -> String {
+    use crate::scene::transforms::RenderMode;
+    let render_mode = t!(match config.render_mode {
+        RenderMode::TwoD => "fractal_gallery.render_mode_2d",
+        RenderMode::ThreeD => "fractal_gallery.render_mode_3d",
+        RenderMode::Escape => "fractal_gallery.render_mode_escape",
+        RenderMode::Simulation => "fractal_gallery.render_mode_simulation",
+    });
+    match config.render_mode {
+        RenderMode::TwoD | RenderMode::ThreeD => format!(
+            "{}, {}, {}",
+            t!("fractal_gallery.transforms_count", count = config.flame.transforms.len()),
+            render_mode,
+            FractalConfigGallery::format_variations(config),
+        ),
+        RenderMode::Escape => format!(
+            "{}, {}, {}",
+            render_mode,
+            super::escape_panel::formula_display_name(&config.escape.formula),
+            super::escape_panel::coloring_display_name(&config.escape),
+        ),
+        RenderMode::Simulation => format!(
+            "{}, {}, {}",
+            render_mode,
+            crate::sim::model_or_default(&config.sim.model).display_name,
+            crate::sim::coloring_or_default(&config.sim.coloring).display_name,
+        ),
+    }
+}
+
+/// The list view's expanded details, by engine as [`list_summary`] is.
+fn list_details(config: &FractalConfig) -> Vec<String> {
+    use crate::scene::transforms::RenderMode;
+    match config.render_mode {
+        RenderMode::TwoD | RenderMode::ThreeD => vec![
+            t!("fractal_gallery.zoom", value = format!("{:.2}", config.zoom)).to_string(),
+            t!("fractal_gallery.max_iterations", value = config.max_iterations).to_string(),
+            t!("fractal_gallery.color_mode", value = format!("{:?}", config.color_mode)).to_string(),
+        ],
+        // The escape zoom is a log2 exponent that deep zooms take past
+        // anything a plain number can show, so it is shown as one.
+        RenderMode::Escape => vec![
+            t!("fractal_gallery.zoom", value = format!("2^{:.2}", config.escape.zoom_log2)).to_string(),
+            t!("fractal_gallery.max_iterations", value = config.escape.max_iter).to_string(),
+        ],
+        RenderMode::Simulation => vec![
+            t!("fractal_gallery.steps", value = config.sim.steps).to_string(),
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::RenderMode;
+
+    #[test]
+    fn an_escape_row_describes_its_formula_not_the_flame_it_carries() {
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.zoom_log2 = 10.5;
+        config.escape.max_iter = 777;
+        let summary = list_summary(&config);
+        assert!(!summary.contains("transforms"), "{summary}");
+        assert!(
+            summary.contains(super::super::escape_panel::formula_display_name(&config.escape.formula)),
+            "{summary}"
+        );
+        let details = list_details(&config).join("\n");
+        assert!(details.contains("2^10.50"), "{details}");
+        assert!(details.contains("777"), "{details}");
+        assert!(!details.contains("Color Mode"), "{details}");
+    }
+
+    #[test]
+    fn a_simulation_row_describes_its_model_and_steps() {
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::Simulation;
+        config.sim.steps = 1234;
+        let summary = list_summary(&config);
+        assert!(!summary.contains("transforms"), "{summary}");
+        assert!(
+            summary.contains(crate::sim::model_or_default(&config.sim.model).display_name),
+            "{summary}"
+        );
+        let details = list_details(&config).join("\n");
+        assert!(details.contains("1234"), "{details}");
+        assert!(!details.contains("Max Iterations"), "{details}");
+    }
+
+    #[test]
+    fn a_flame_row_is_unchanged() {
+        let config = FractalConfig::default();
+        assert!(list_summary(&config).contains("transforms"));
+        assert_eq!(list_details(&config).len(), 3);
     }
 }

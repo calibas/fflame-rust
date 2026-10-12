@@ -344,15 +344,6 @@ impl Default for ApiContentState {
 }
 
 impl ApiContentState {
-    /// Clear all API content state (new flame, load from disk, etc.)
-    pub fn clear(&mut self) {
-        *self = Self::default();
-    }
-
-    /// Clear only animation state (new animation, etc.)
-    pub fn clear_animation(&mut self) {
-        self.animation_id = None;
-    }
 
     /// Check if the current user owns the flame.
     /// Compares flame's user_id against the provided current user ID.
@@ -371,7 +362,7 @@ use crate::ui::{ExportStatus, ExportKind, UiReporter};
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{global_palette_library, PaletteLibrary};
-use crate::scene::presets::{global_preset_library, PresetLibrary};
+use crate::scene::presets::global_preset_library;
 use crate::util::PerformanceMetrics;
 use crate::config::ConfigManager;
 use crate::animation::AnimationController;
@@ -550,7 +541,6 @@ pub struct App {
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
-    pub(super) preset_library: &'static PresetLibrary,
 
     // Animation system
     pub(super) animation_controller: AnimationController,
@@ -701,7 +691,7 @@ pub struct App {
     >,
     pub(super) effect_catalog_started: bool,
     pub(super) script_cloud: script_cloud::ScriptCloudState,
-    pub(super) script_cloud_results: script_cloud::ScriptCloudSlot,
+    pub(in crate::app) script_cloud_results: script_cloud::ScriptCloudSlot,
     /// Parallel to config history: for each FullConfig snapshot, stores
     /// (before_api_state, after_api_state). Keyed by the history index of
     /// the snapshot. Delta-level undo/redo doesn't touch api_state.
@@ -853,6 +843,16 @@ impl App {
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
+        // Open in the language the user last chose (recorded after each
+        // frame's UI, below). A locale whose script needs a font this
+        // platform cannot load stays in English, as the globe menu does.
+        let language = config_manager.system_settings().language.clone();
+        if language != crate::i18n::current_locale()
+            && crate::i18n::supported_locales().iter().any(|l| l.code == language)
+            && crate::ui::ensure_font_for_locale(&egui_layer.ctx, &language)
+        {
+            crate::i18n::set_locale(&language);
+        }
         // Read before the move below: a boot must not look like a
         // load, or it would override the layout the user left.
         let initial_load_generation = config_manager.load_generation();
@@ -913,7 +913,6 @@ impl App {
             modifiers: winit::keyboard::ModifiersState::default(),
             quit_requested: false,
             palette_library,
-            preset_library,
             animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
@@ -1517,7 +1516,7 @@ impl App {
             // One page is 64 KiB.
             let pages = core::arch::wasm32::memory_size(0);
             let mib = (pages as f64) * 65536.0 / (1024.0 * 1024.0);
-            // The shadow stack grows DOWN from its top (16 MiB, set by
+            // The shadow stack grows DOWN from its top (64 MiB, set by
             // -zstack-size), so the address of a local IS the remaining
             // headroom. Read at the same point in the frame loop every
             // time, so it is comparable: if it falls load over load the
@@ -1587,7 +1586,8 @@ impl App {
             if let Some(t) = self.sim_terrain.take() {
                 t.destroy();
             }
-            if self.sim_renderer.take().is_some() {
+            if let Some(sim) = self.sim_renderer.take() {
+                sim.destroy();
                 log::info!("Left simulation mode: freed the simulation grid");
                 // The grid was the state; coming back starts from the
                 // seed rather than from an uninitialised field.
@@ -1815,7 +1815,6 @@ impl App {
             self.flame_renderer.as_mut(),
             &mut self.flame,
             &mut self.palette_library,
-            &self.preset_library,
             &mut self.animation_controller,
             &mut self.paused,
             &mut self.view_subflame_in_isolation,
@@ -1887,6 +1886,18 @@ impl App {
             },
         );
 
+        // The globe menus (desktop and compact) set the locale and nothing
+        // else; record it, so the next start opens in it.
+        let locale = crate::i18n::current_locale();
+        if locale != self.config_manager.system_settings().language {
+            if let Err(e) = self
+                .config_manager
+                .update_system_setting(crate::config::ConfigPath::SystemLanguage, crate::config::ConfigValue::String(locale))
+            {
+                log::warn!("Could not save the language: {e:?}");
+            }
+        }
+
         // Simulation transport, back from the panel. `sim_running` is
         // the panel's resulting state; the other two are one-shot
         // requests the frame loop consumes.
@@ -1898,6 +1909,10 @@ impl App {
         }
         if ui_response.sim_reseed {
             self.sim_reseed = true;
+        }
+        #[cfg(all(feature = "engine-sim", not(target_arch = "wasm32")))]
+        if let Some(name) = ui_response.sim_saved_texture.as_deref() {
+            self.cache_saved_texture_from_run(name);
         }
 
         // A panel asked for a different workspace. Applied here rather
@@ -2085,6 +2100,11 @@ impl App {
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+        // The paint just submitted was the last user of an output texture
+        // a resize above replaced.
+        if let Some(renderer) = self.flame_renderer.as_mut() {
+            renderer.destroy_replaced_output();
+        }
 
         // ============================================================================
         // PHASE 2: Process ALL UI Responses and Config Updates
@@ -2330,456 +2350,56 @@ impl App {
             {
                 // WASM: Use async task for pixel reading and file save
                 use wasm_bindgen_futures::spawn_local;
-                use crate::renderer::compute_kernel::FlameRenderer;
 
                 let export_config = self.export_config();
                 let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-                let background_color = export_config.background_color;
 
                 if self.use_custom_export_size {
-                    // Custom size export: create temporary renderer and render
-                    let export_width = self.export_width;
-                    let export_height = self.export_height;
-                    let max_iterations = export_config.max_iterations;
-
-                    log::info!("WASM: Exporting at custom size {}×{}", export_width, export_height);
-
-                    // Create temporary renderer at export dimensions
-                    let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
-                    let mut temp_renderer = FlameRenderer::new(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        surface_format,
-                        export_width,
-                        export_height,
-                        &export_config.flame,
-                    );
-
-                    // Load config into temp renderer
-                    let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                        label: Some("WASM Custom Export Encoder"),
-                    });
-
-                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &export_config.palette, iterations_per_thread, 20); // burn_in - use default for WASM export
-                    self.gpu.queue.submit(std::iter::once(encoder.finish()));
-
-                    // Render frames until we reach max_iterations
-                    let render_start = web_time::Instant::now();
-                    let mut total_rendered = 0u64;
-
-                    const NUM_WORKGROUPS: u32 = 128;
-                    const THREADS_PER_WORKGROUP: u64 = 64;
-                    const BATCH_SIZE: u32 = 4;
-
-                    let mut batch_frame_count = 0;
-                    let mut batch_samples = 0u64;
-
-                    let is_escape_export = export_config.render_mode
-                        == crate::scene::transforms::RenderMode::Escape;
-                    // The chaos game is the FLAME generator, and this
-                    // loop is gated on the mode for the same reason the
-                    // video loop is: a non-flame frame that runs it
-                    // spends the config's `max_iterations` -- a billion
-                    // by default -- filling a histogram nothing reads.
-                    // Testing for escape alone is what made a
-                    // custom-size SIMULATION export come out as the
-                    // config's flame.
-                    let is_non_flame_export = export_config.render_mode.is_non_flame();
-                    while !is_non_flame_export && total_rendered < max_iterations {
-                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                            label: Some("WASM Export Render Frame"),
-                        });
-
-                        let clear_histogram = batch_frame_count == 0;
-                        // Clear paths only on very first batch of the entire export
-                        let clear_paths = total_rendered == 0 && clear_histogram;
-
-                        let plotted = temp_renderer.compute_pass(
-                            &mut encoder,
-                            &self.gpu.queue,
-                            &self.gpu.device,
-                            NUM_WORKGROUPS,
-                            iterations_per_thread,
-                            20, // burn_in - use default for WASM export
-                            export_config.zoom,
-                            export_config.pan_x as f32,
-                            export_config.pan_y as f32,
-                            export_config.rotation,
-                            export_config.camera_rotation_x,
-                            export_config.camera_rotation_y,
-                            export_config.camera_bank,
-
-                            export_config.camera_x,
-
-                            export_config.camera_y,
-
-                            export_config.camera_z,
-                            export_config.speed_factor,
-                            clear_histogram,
-                            clear_paths,
-                        );
-
-                        let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
-                        total_rendered += samples_this_frame;
-                        // What plotted, as `render.rs` counts: the tone
-                        // map normalises by it.
-                        batch_samples += plotted;
-                        batch_frame_count += 1;
-
-                        if batch_frame_count >= BATCH_SIZE {
-                            temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, batch_samples);
-                            batch_frame_count = 0;
-                            batch_samples = 0;
-                        }
-
-                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
-
-                        if total_rendered >= max_iterations {
-                            if batch_frame_count > 0 {
-                                let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                                    label: Some("WASM Export Final Accumulation"),
-                                });
-                                temp_renderer.accumulate_pass(&mut final_encoder, &self.gpu.queue, &self.gpu.device, batch_samples);
-                                self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
-                            }
-                            break;
-                        }
-                    }
-
-                    let render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-
-                    // Set transparent mode if requested
-                    if transparent {
-                        temp_renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
-                    }
-
-                    // Escape generator. This used to be ONE render() call
-                    // sharing the tonemap encoder -- i.e. a single chunk --
-                    // so a high-iteration export encoded whatever the first
-                    // dispatch had reached, and on wasm (where the reference
-                    // orbit is sliced per call rather than built on a worker)
-                    // a deep zoom got one slice of its reference too. It also
-                    // never applied `escape.supersample`, which every other
-                    // path honours so a saved file reproduces exactly.
-                    //
-                    // Settle properly instead: chunk until render() reports
-                    // final, each chunk its own submission. Browsers have no
-                    // blocking device poll, so the loop submits without
-                    // waiting -- which is exactly the case where the adaptive
-                    // chunk sizer's wall-clock proxy lies (it would measure
-                    // CPU encode time, read every chunk as free, and grow
-                    // into a watchdog-length dispatch). set_fixed_chunk pins
-                    // the size to the TDR-calibrated seed; the render is
-                    // chunk-invariant, so the image is unchanged.
-                    // The terrain's export: its footprint settled as the
-                    // 2D export settles (fixed chunks, no waiting), the
-                    // tile made, and the antialiasing grid accumulated
-                    // -- what `render_with` does on the desktop.
-                    #[cfg(feature = "terrain")]
-                    let terrain_export = if is_escape_export && export_config.escape.terrain_active() {
-                        // Sized to the still's tiles: it sizes itself.
-                        let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
-                        let mut t = crate::escape::footprint::EscapeTerrain::new(&self.gpu.device, tile_w, tile_h);
-                        t.footprint_renderer().set_fixed_chunk(true);
-                        // A 2D IFS formula draws the flame: its analysis
-                        // and coarse pass, as the viewport's terrain and
-                        // the desktop's `prepare_escape` give them.
-                        if let Some(def) = crate::escape::ifs::get_ifs(&export_config.escape.formula) {
-                            let registry = crate::variations::global_registry();
-                            let fp = t.footprint_renderer();
-                            fp.set_ifs(crate::escape::ifs::pack_for(def, &export_config, &registry));
-                            fp.ensure_coarse(&self.gpu.device, &self.gpu.queue, &export_config.escape, &export_config.flame);
-                        }
-                        let mut guard = 0u32;
-                        while t.update(
-                            &self.gpu.device,
-                            &self.gpu.queue,
-                            &export_config,
-                            export_width,
-                            export_height,
-                            temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
-                            temp_renderer.palette_generation(),
-                            1,
-                        ) {
-                            guard += 1;
-                            if guard > 4_000_000 {
-                                log::error!("WASM terrain sections failed to settle; using what we have");
-                                break;
-                            }
-                        }
-                        // No blocking wait in a browser: the queue keeps
-                        // the batches in order regardless.
-                        t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| true);
-                        Some(t)
-                    } else {
-                        None
-                    };
-                    #[cfg(feature = "terrain")]
-                    let is_escape_export = is_escape_export && terrain_export.is_none();
-                    let escape_export = if is_escape_export {
-                        let mut esc = crate::escape::EscapeRenderer::new(
-                            &self.gpu.device,
-                            export_width,
-                            export_height,
-                        );
-                        esc.set_fixed_chunk(true);
-                        // A solid path traced renders display pixels; its
-                        // jitter is the antialiasing.
-                        let solid_path = crate::escape::ifs::formula_is_solid(&export_config.escape.formula)
-                            && export_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
-                        esc.resize(
-                            &self.gpu.device,
-                            export_width,
-                            export_height,
-                            if solid_path { 1 } else { export_config.escape.supersample },
-                        );
-                        // Mode D reads the flame as an IFS, lit by the
-                        // app's own lights: what `prepare_escape` hands the
-                        // desktop's export.
-                        if let Some(def) = crate::escape::ifs::get_ifs(&export_config.escape.formula) {
-                            let registry = crate::variations::global_registry();
-                            esc.set_ifs(crate::escape::ifs::pack_for(def, &export_config, &registry));
-                            esc.ensure_coarse(&self.gpu.device, &self.gpu.queue, &export_config.escape, &export_config.flame);
-                            esc.set_solid_lighting(
-                                &export_config.solid_shading,
-                                (export_config.fog_strength, export_config.fog_start, export_config.background_color),
-                            );
-                            esc.set_solid_sky(crate::escape::path_core::sky_seen(&export_config.escape.path, &export_config));
-                            esc.set_solid_material(crate::escape::path_core::lit_material(&export_config));
-                        }
-                        let mut guard = 0u32;
-                        loop {
-                            if solid_path {
-                                // No blocking wait in a browser: the queue
-                                // keeps the bands in order regardless.
-                                esc.render_solid_still(
-                                    &self.gpu.device,
-                                    &self.gpu.queue,
-                                    &export_config,
-                                    temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
-                                    export_config.escape.path.samples,
-                                    || true,
-                                );
-                                break;
-                            }
-                            let mut esc_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                                label: Some("WASM Export Escape Chunk"),
-                            });
-                            let settled = esc.render(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                &mut esc_encoder,
-                                &export_config.escape,
-                                temp_renderer.escape_palette_view(export_config.escape.palette_map.stepped),
-                                temp_renderer.palette_generation(),
-                            );
-                            self.gpu.queue.submit(std::iter::once(esc_encoder.finish()));
-                            if settled {
-                                break;
-                            }
-                            guard += 1;
-                            if guard > 4_000_000 {
-                                log::error!("WASM escape export failed to settle; encoding what we have");
-                                break;
-                            }
-                        }
-                        Some(esc)
-                    } else {
-                        None
-                    };
-
-                    // The simulation generator. `render_still` is the
-                    // export contract: seed, run exactly `sim.steps`,
-                    // colour -- so an exported PNG is the state at the
-                    // step count the config names, and reproducible
-                    // from it. A fresh renderer, deliberately: the
-                    // viewport's own holds the user's RUN, and reusing
-                    // it would advance or restart what is on screen as
-                    // a side effect of exporting.
-                    #[cfg(feature = "engine-sim")]
-                    #[allow(unused_mut)]
-                    let mut sim_export = if export_config.render_mode
-                        == crate::scene::transforms::RenderMode::Simulation
-                    {
-                        let mut sim = crate::sim::SimRenderer::new(
-                            &self.gpu.device,
-                            &export_config.sim,
-                            export_width,
-                            export_height,
-                        );
-                        if export_config.sim.use_transforms {
-                            sim.set_layer_transforms(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                &export_config.flame,
-                            );
-                        }
-                        sim.render_still(
-                            &self.gpu.device,
-                            &self.gpu.queue,
-                            &export_config.sim,
-                            temp_renderer.palette_view(),
-                        );
-                        Some(sim)
-                    } else {
-                        None
-                    };
-                    // The simulation's terrain, made from the field it ran
-                    // to, and its still -- what `render_sim` does on the
-                    // desktop. No blocking wait in a browser.
-                    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
-                    let sim_terrain_export = match sim_export.as_mut() {
-                        Some(sim) if export_config.sim.terrain_active() => {
-                            let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(export_width, export_height);
-                            let mut t = crate::sim::terrain::SimTerrain::new(&self.gpu.device, tile_w, tile_h);
-                            t.update(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                sim,
-                                &export_config,
-                                temp_renderer.palette_view(),
-                            );
-                            t.render_still(&self.gpu.device, &self.gpu.queue, &export_config, (export_width, export_height), |_| true);
-                            Some(t)
-                        }
-                        _ => None,
-                    };
-                    #[cfg(not(feature = "engine-sim"))]
-                    let sim_export: Option<()> = None;
-
-                    // Final tonemap pass; the temp renderer supplies the
-                    // palette + tonemap tail for all three modes.
-                    let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                        label: Some("WASM Export Final Tonemap"),
-                    });
-                    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
-                    let sim_view = sim_terrain_export
-                        .as_ref()
-                        .map(|t| t.output_view())
-                        .or(sim_export.as_ref().map(|s| s.output_view()));
-                    #[cfg(all(feature = "engine-sim", not(feature = "terrain")))]
-                    let sim_view = sim_export.as_ref().map(|s| s.output_view());
-                    #[cfg(not(feature = "engine-sim"))]
-                    let sim_view: Option<&egui_wgpu::wgpu::TextureView> = None;
-                    #[cfg(feature = "terrain")]
-                    let terrain_view = terrain_export.as_ref().map(|t| t.output_view());
-                    #[cfg(not(feature = "terrain"))]
-                    let terrain_view: Option<&egui_wgpu::wgpu::TextureView> = None;
-                    if let Some(view) = escape_export.as_ref().map(|e| e.output_view()).or(terrain_view).or(sim_view) {
-                        temp_renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut final_encoder, view);
-                    } else {
-                        temp_renderer.tonemap_pass(&self.gpu.queue, &mut final_encoder);
-                    }
-                    self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
-                    // WebGPU: explicit destroy after submit (drop frees
-                    // nothing on wasm); queued work keeps its references.
-                    if let Some(esc) = escape_export {
-                        esc.destroy();
-                    }
-                    #[cfg(feature = "terrain")]
-                    if let Some(t) = terrain_export {
-                        t.destroy();
-                    }
-
-                    // Color effects (if any) allocate a full-res ping-pong
-                    // (~512 MB at 8K). On WASM that won't fit alongside the
-                    // renderer's iteration buffers, so we wait for the tonemap's
-                    // GPU work to finish, free those buffers, THEN allocate + run
-                    // the effects — all inside the async task because the GPU
-                    // wait is async. Without this, 8K color exports OOM the
-                    // browser GPU and come back all-black.
-                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
-
-                    // Move renderer to heap + clone Arc handles for the async task.
-                    let temp_renderer = Box::new(temp_renderer);
-                    let speed_factor = export_config.speed_factor;
+                    // Custom size: `render()` on the app's device, as the
+                    // desktop's custom-size export runs it. That is the
+                    // pipeline every other export shares -- the shade pass,
+                    // DoF, density effects, the exact density fraction,
+                    // every engine, the burn-in setting -- where this was a
+                    // copy of it without them. On the app's device, not a
+                    // second one: beside the live device a large export
+                    // runs out of memory. `render()` frees its renderer's
+                    // iteration buffers before the colour effects allocate,
+                    // as this did for 8K headroom, and pins escape chunks.
+                    let (export_width, export_height) = (self.export_width, self.export_height);
+                    let burn_in = self.config_manager.system_settings().burn_in;
+                    let premultiplied = self.png_export_premultiplied;
                     let device = self.gpu.device.clone();
                     let queue = self.gpu.queue.clone();
-
-                    if has_color_effects {
-                        spawn_local(async move {
-                            // Wait for the tonemap (and all prior render work) to
-                            // finish, then reclaim the renderer's iteration
-                            // buffers (~3-4 GB at 8K) before the color ping-pong
-                            // allocates — destroy() only frees once the GPU is
-                            // done with the resource, so the wait is required.
-                            {
-                                let (tx, rx) = futures::channel::oneshot::channel();
-                                queue.on_submitted_work_done(move || { let _ = tx.send(()); });
-                                let _ = rx.await;
-                            }
-                            temp_renderer.free_iteration_buffers();
-
-                            let mut chain = crate::renderer::effect_chain::EffectChainRunner::new(
-                                &device, export_width, export_height);
-                            let mut effect_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                                label: Some("WASM Export Color Effects"),
-                            });
-                            chain.reset_slots();
-                            chain.run_color_effects(
-                                &device,
-                                &queue,
-                                &mut effect_encoder,
-                                temp_renderer.get_fractal_texture_view(),
-                                &export_config.color_effects,
-                            );
-                            queue.submit(std::iter::once(effect_encoder.finish()));
-
-                            match chain.read_color_output_pixels(&device, &queue).await {
-                                Ok((width, height, rgba_data)) => {
-                                    let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                        width, height, total_rendered, render_time_ms,
-                                        iterations_per_thread, speed_factor, &export_config,
-                                    );
-                                    match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-                                        Ok(png_data) => match trigger_browser_download(&png_data, "fractal.png", "image/png") {
-                                            Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
-                                            Err(e) => log::error!("Failed to trigger download: {}", e),
-                                        },
-                                        Err(e) => log::error!("Failed to encode PNG: {}", e),
-                                    }
+                    log::info!("WASM: Exporting at custom size {}×{}", export_width, export_height);
+                    spawn_local(async move {
+                        use crate::renderer::render::{render, NoProgress, RenderJob};
+                        let job = RenderJob::new(&export_config, export_width, export_height)
+                            .with_iterations_per_thread(iterations_per_thread)
+                            .with_burn_in(burn_in)
+                            .with_transparent(transparent)
+                            .with_premultiplied(premultiplied);
+                        match render(&device, &queue, job, &mut NoProgress).await {
+                            Ok(out) => {
+                                let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                    out.width,
+                                    out.height,
+                                    out.total_iterations,
+                                    out.render_time_ms,
+                                    iterations_per_thread,
+                                    export_config.speed_factor,
+                                    &export_config,
+                                );
+                                match crate::renderer::compute_kernel::encode_png_from_rgba(out.width, out.height, out.rgba_data, Some(metadata)) {
+                                    Ok(png_data) => match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                        Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", out.width, out.height, out.render_time_ms / 1000.0),
+                                        Err(e) => log::error!("Failed to trigger download: {}", e),
+                                    },
+                                    Err(e) => log::error!("Failed to encode PNG: {}", e),
                                 }
-                                Err(e) => log::error!("Failed to capture effect pixels: {}", e),
                             }
-                            chain.destroy();
-                            temp_renderer.destroy();
-                        });
-                    } else {
-                        spawn_local(async move {
-                            // read_fractal_pixels takes &mut self now (it
-                            // caches its staging buffer in the renderer).
-                            let mut temp_renderer = temp_renderer;
-                            match temp_renderer.read_fractal_pixels(&device, &queue, transparent, background_color).await {
-                                Ok((width, height, rgba_data)) => {
-                                    let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                        width,
-                                        height,
-                                        total_rendered,
-                                        render_time_ms,
-                                        iterations_per_thread,
-                                        speed_factor,
-                                        &export_config,
-                                    );
-
-                                    match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-                                        Ok(png_data) => {
-                                            match trigger_browser_download(&png_data, "fractal.png", "image/png") {
-                                                Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
-                                                Err(e) => log::error!("Failed to trigger download: {}", e),
-                                            }
-                                        }
-                                        Err(e) => log::error!("Failed to encode PNG: {}", e),
-                                    }
-                                }
-                                Err(e) => log::error!("Failed to capture pixels: {}", e),
-                            }
-                            // Read done → free the export renderer's GPU memory
-                            // synchronously. On WebGPU a plain drop defers this
-                            // to JS GC, so repeated large exports pile gigabytes
-                            // onto the device and OOM (all-black output).
-                            temp_renderer.destroy();
-                        });
-                    }
+                            Err(e) => log::error!("Custom-size export failed: {}", e),
+                        }
+                    });
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport size export: use current renderer
                     //
@@ -2943,6 +2563,11 @@ impl App {
             let already_exporting = self.export_status.lock()
                 .map(|s| s.active)
                 .unwrap_or(false);
+            if !already_exporting {
+                // The generator signals the export copies below must be
+                // rendered over the duration it renders.
+                self.sync_generator_signals();
+            }
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
@@ -2976,7 +2601,23 @@ impl App {
                             bitrate_kbps: export_settings.audio_bitrate,
                         }
                     }),
-                    signals: self.signal_manager.clone_signals(),
+                    signals: {
+                        let mut signals = self.signal_manager.clone_signals();
+                        // The offset moves the muxed audio; the
+                        // audio-analysis signals move with it, or the
+                        // tracks react to sound the viewer hears
+                        // `offset` seconds away. Generators and
+                        // `.signal` files are not audio and stay put.
+                        let offset = export_settings.audio_offset;
+                        if export_settings.audio_file.is_some() && offset != 0.0 {
+                            for name in self.audio_manager.available_signals() {
+                                if let Some(signal) = signals.get_mut(name) {
+                                    *signal = signal.shifted(offset);
+                                }
+                            }
+                        }
+                        signals
+                    },
                 };
 
                 println!("Starting animation export (background thread)...");
@@ -3134,6 +2775,9 @@ impl App {
                 if self.escape_texture.update(terrain.footprint_renderer(), device, queue, &final_config.escape) {
                     terrain.invalidate_footprint();
                 }
+                if let Some(name) = self.escape_texture.take_notice() {
+                    self.egui_layer.show_api_notification(&rust_i18n::t!("textures_panel.viewport_waiting", name = name), false);
+                }
                 let mut busy = self.escape_texture.busy();
                 // The sections the view wants (plan section 12): as many
                 // render steps a frame as fit about 8 ms, at the measured
@@ -3285,6 +2929,9 @@ impl App {
                     && self.escape_texture.update(escape, &self.gpu.device, &self.gpu.queue, &final_config.escape)
                 {
                     self.escape_dirty = true;
+                }
+                if let Some(name) = self.escape_texture.take_notice() {
+                    self.egui_layer.show_api_notification(&rust_i18n::t!("textures_panel.viewport_waiting", name = name), false);
                 }
                 if self.escape_texture.busy() {
                     self.window.request_redraw();
@@ -3900,13 +3547,17 @@ impl App {
                 renderer.get_accumulation_view()
             };
 
-            // Run density effects (before tonemap, on HDR accumulation data)
+            // Run density effects (before tonemap, on HDR accumulation data).
+            // A flame's alpha is a hit count, measured against its mean; an
+            // escape or simulation image's is not, and is read as it is.
+            let density_mean = if is_non_flame { 1.0 } else { renderer.mean_density() };
             let density_effects_ran = self.effect_chain.run_density_effects(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &mut render_encoder,
                 pre_tonemap_view,
                 &final_config.density_effects,
+                density_mean,
             );
 
             // Render to internal fractal texture with tone mapping.
@@ -4129,7 +3780,6 @@ impl App {
                     };
 
                     let click_info = crate::ui::PathClickInfo {
-                        click_pixel: (click_x, click_y),
                         found_pixel: (pixel_x, pixel_y),
                         fractal_coords,
                         search_distance: 0.0, // No search, exact pixel

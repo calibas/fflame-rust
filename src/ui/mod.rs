@@ -51,6 +51,7 @@ mod view;
 mod view_controls;
 mod escape_panel;
 mod sim_panel;
+pub mod slow_controls;
 mod textures_panel;
 pub mod workspace;
 mod palette_generate;
@@ -106,6 +107,51 @@ pub fn vkb_sync_full(
                 d.remove_temp::<f64>(egui_dock::egui::Id::new("vkb_max"));
             }
         });
+    }
+}
+
+/// Shorten `s` to at most `max_chars` characters, ending in "..." when cut.
+///
+/// Counts `char`s, never bytes: a name is user text in any script, and
+/// slicing a `&str` at a byte budget panics mid-character (a CJK name of
+/// six characters is eighteen bytes and took the app down). Characters,
+/// not grapheme clusters -- a combining mark can be split from its base,
+/// which looks slightly wrong but cannot panic.
+pub fn ellipsize(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
+#[cfg(test)]
+mod ellipsize_tests {
+    use super::ellipsize;
+
+    #[test]
+    fn short_text_is_unchanged() {
+        assert_eq!(ellipsize("Spiral", 10), "Spiral");
+        assert_eq!(ellipsize("", 10), "");
+        assert_eq!(ellipsize("exactly10!", 10), "exactly10!");
+    }
+
+    #[test]
+    fn long_text_is_cut_to_the_budget() {
+        assert_eq!(ellipsize("abcdefghijkl", 10), "abcdefg...");
+        assert_eq!(ellipsize("abcdefghijkl", 10).chars().count(), 10);
+    }
+
+    #[test]
+    fn cjk_text_is_cut_on_character_boundaries() {
+        // Each of these is three bytes in UTF-8: a byte-budget slice at 7
+        // lands inside the third character and panics.
+        let name = "螺旋状の炎の銀河です";
+        assert_eq!(ellipsize(name, 10), name);
+        assert_eq!(ellipsize(name, 9), "螺旋状の炎の...");
+        assert_eq!(ellipsize("火焰分形图案", 5), "火焰...");
+        // A budget below the ellipsis still yields valid text.
+        assert_eq!(ellipsize("火焰分形图案", 2), "...");
     }
 }
 
@@ -555,8 +601,8 @@ mod u64_field_tests {
             // the "text already present" path where a careless re-seed or
             // an unconditional write-back would show up.
             for _ in 0..3 {
-                let _ = ctx.run(Default::default(), |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
                         ui.add(super::VkbU64::new(&mut seed, "test_seed"));
                     });
                 });
@@ -589,8 +635,8 @@ mod u64_field_tests {
         let mut seed: u64 = 1;
 
         // Frame 1: draw, and take focus.
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 let r = ui.add(super::VkbU64::new(&mut seed, "typed_seed"));
                 r.request_focus();
             });
@@ -613,8 +659,8 @@ mod u64_field_tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 ui.add(super::VkbU64::new(&mut seed, "typed_seed"));
             });
         });
@@ -639,8 +685,8 @@ mod u64_field_tests {
                 // What Reroll does: exact u64 arithmetic, outside the widget.
                 seed = u64::MAX - 3;
             }
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
                     ui.add(super::VkbU64::new(&mut seed, "reroll_seed"));
                 });
             });
@@ -697,8 +743,6 @@ mod slider_tests {
 /// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
 #[derive(Clone, Debug)]
 pub struct PathClickInfo {
-    /// View space pixel coordinates (where user clicked)
-    pub click_pixel: (u32, u32),
     /// Actual pixel with valid path data (may differ if click was empty)
     pub found_pixel: (u32, u32),
     /// Fractal space coordinates of the found pixel
@@ -1131,6 +1175,7 @@ impl EguiLayer {
     }
 
     /// Get reference to current path click info
+    #[cfg(target_arch = "wasm32")]
     pub fn path_click_info(&self) -> Option<&PathClickInfo> {
         self.path_click_info.as_ref()
     }
@@ -1270,7 +1315,6 @@ impl EguiLayer {
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
-        preset_library: &crate::scene::presets::PresetLibrary,
         animation_controller: &mut crate::animation::AnimationController,
         paused: &mut bool,
         view_subflame_in_isolation: &mut bool,
@@ -1319,6 +1363,12 @@ impl EguiLayer {
             config_manager.system_settings_mut().compact_mode = Some(is_compact);
             let _ = config_manager.system_settings().save();
         }
+
+        // Web: palette packs are fetched asynchronously into the global
+        // library; start the enabled ones and bring the app's copy up to
+        // date before any panel reads it.
+        #[cfg(target_arch = "wasm32")]
+        crate::ui::palette_library::poll_palette_packs(&self.ctx, palette_library);
 
         // Wider, always-visible scrollbars in compact mode (touch-friendly).
         // Applied every frame since egui_dock may reset styles.
@@ -1471,7 +1521,7 @@ impl EguiLayer {
         // Panel open requests
         let mut open_palette_editor = false;
         let mut open_palette_library = false;
-        let mut open_config_dialog = false;
+        let open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
         let mut open_random_generator = false;
@@ -1506,6 +1556,7 @@ impl EguiLayer {
         let mut sim_running_local = sim_running;
         let mut sim_step_once_local = false;
         let mut sim_reseed_local = false;
+        let mut sim_saved_texture_local: Option<String> = None;
         let mut variation_update_requested: Vec<String> = Vec::new();
         let mut script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest> = None;
 
@@ -1706,7 +1757,6 @@ impl EguiLayer {
                         flame,
 
                         // Libraries
-                        preset_library,
                         palette_library,
 
                         // Renderer
@@ -1774,7 +1824,6 @@ impl EguiLayer {
                         config_load_file: &mut config_load_file,
                         flame_xml_import_file: &mut flame_xml_import_file,
                         flame_xml_export_file: &mut flame_xml_export_file,
-                        open_config_dialog: &mut open_config_dialog,
 
                         // Selected preset config (from FractalBrowser or other sources)
                         selected_preset_config: &mut self.selected_preset_config,
@@ -1869,10 +1918,8 @@ impl EguiLayer {
 
                         // API animation state
                         api_flame_id: &api_state.flame_id,
-                        api_animation_id: &api_state.animation_id,
                         flame_animations: &api_state.flame_animations,
                         is_signed_in,
-                        api_animation_save_action: &mut api_animation_save_action,
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
                         clear_variation_cache_requested: &mut clear_variation_cache_requested,
@@ -1880,6 +1927,7 @@ impl EguiLayer {
                         sim_running: &mut sim_running_local,
                         sim_step_once: &mut sim_step_once_local,
                         sim_reseed: &mut sim_reseed_local,
+                        sim_saved_texture: &mut sim_saved_texture_local,
                         sim_step_index,
                         sim_grid,
                         sim_timeline_target,
@@ -2320,6 +2368,15 @@ impl EguiLayer {
             api_animation_save_action = action;
         }
 
+        // The Online features switch. A device preference: written to
+        // SystemSettings and saved at once, outside the undo history,
+        // as signing out does.
+        if let Some(on) = menu_actions.file.set_online_mode {
+            let settings = config_manager.system_settings_mut();
+            settings.online_mode = on;
+            let _ = settings.save();
+        }
+
         // Handle sign out action (from menu bar or account panel)
         if menu_actions.file.sign_out || sign_out_requested {
             // Clear auth from SystemSettings
@@ -2508,6 +2565,7 @@ impl EguiLayer {
             sim_running: Some(sim_running_local),
             sim_step_once: sim_step_once_local,
             sim_reseed: sim_reseed_local,
+            sim_saved_texture: sim_saved_texture_local,
             variation_update_requested,
             script_cloud_request,
         }
@@ -2604,7 +2662,28 @@ impl EguiLayer {
         }
     }
 
+    /// Load already-parsed configs from a file into the Fractal
+    /// Browser's Files tab -- what a multi-flame `.flame` wants. Not
+    /// [`Self::load_batch_into_fractal_browser`]: that one is the Random
+    /// tab, and replacing it threw away the last random batch.
+    pub fn load_configs_into_fractal_browser(
+        &mut self,
+        configs: Vec<crate::config::FractalConfig>,
+        path: std::path::PathBuf,
+    ) {
+        // Initialize panel if not already created
+        if self.fractal_browser_panel.is_none() {
+            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            let source = path.display().to_string();
+            panel.load_configs(configs, &source, Some(path));
+        }
+    }
+
     /// Load JSON configs into the unified Fractal Browser panel
+    #[cfg(target_arch = "wasm32")]
     pub fn load_json_into_fractal_browser(&mut self, json: &str, source_name: &str) {
         // Initialize panel if not already created
         if self.fractal_browser_panel.is_none() {
@@ -2651,6 +2730,7 @@ impl EguiLayer {
     }
 
     /// Get a reference to the density histogram
+    #[cfg(target_arch = "wasm32")]
     pub fn density_histogram(&self) -> &crate::renderer::DensityHistogram {
         &self.density_histogram
     }
@@ -2697,42 +2777,184 @@ fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager
     );
 }
 
+/// Every Colors-panel setting the panel's Reset to Defaults restores.
+///
+/// All of the panel's paths but three: the palette and the background
+/// colour are the picture's identity rather than its tone, and Focused
+/// Rendering is a renderer choice the panel only offers a shortcut to
+/// (PathMap's "turn it on" button). A source-scanning test holds this
+/// list to the panel, so a new control cannot be left out of the reset
+/// again -- twelve were, until this was a list.
+fn colors_reset_paths() -> Vec<crate::config::ConfigPath> {
+    use crate::config::ConfigPath as P;
+    vec![
+        // Colour mode
+        P::ColorMode,
+        P::SpeedFactor,
+        P::PathMapStyle,
+        P::PathMapLevel,
+        // Tone mapping
+        P::TonemapMode,
+        P::Exposure,
+        P::Gamma,
+        P::GammaThreshold,
+        P::Brightness,
+        P::Vibrancy,
+        P::WhiteLevel,
+        P::Saturation,
+        P::HueShift,
+        P::HighlightMode,
+        P::AlphaBlendLow,
+        P::AlphaBlendHigh,
+        P::DensityScale,
+        P::FilterRadius,
+        P::FilterBlurEdges,
+        // Tone curve
+        P::UseCurve,
+        P::TonemapCurve,
+        // Levels
+        P::LevelsEnabled,
+        P::LevelsLow,
+        P::LevelsHigh,
+        P::LevelsGamma,
+        // Palette settings (not the palette itself)
+        P::PaletteRotation,
+        P::PaletteSqueeze,
+        P::PaletteSqueezeMode,
+        P::PaletteSqueezeFalloff,
+        P::PaletteLogStrength,
+        P::PaletteReverse,
+        P::PaletteSize,
+    ]
+}
+
 /// Reset all color/tone mapping settings to their defaults (except palette and background)
 /// Returns the UpdateType so the caller can propagate GPU updates
+///
+/// The values are read from `FractalConfig::default()` through the
+/// manager's own getter, so each arrives in exactly the type its
+/// setter takes. A hand-written list passed Palette Size as a
+/// `ConfigValue::UInt` the setter rejects: the batch failed on it, so
+/// Palette Size never reset, the call returned `None` (no GPU update
+/// for the rest), and since the failing delta never matched, every
+/// click pushed another undo entry.
 fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -> crate::config::UpdateType {
-    use crate::config::{ConfigPath, defaults, UpdateType};
-    use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-    use crate::scene::palette::ColorMode;
+    use crate::config::{ConfigManager, EditingTarget, FractalConfig, UpdateType};
 
-    config_manager.update_batch(
-        vec![
-            // Color mode
-            (ConfigPath::ColorMode, ColorMode::Palette.into()),
-            // Tone mapping mode
-            (ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()),
-            // Tone mapping settings
-            (ConfigPath::Exposure, defaults::DEFAULT_EXPOSURE.into()),
-            (ConfigPath::Gamma, defaults::DEFAULT_GAMMA.into()),
-            (ConfigPath::GammaThreshold, defaults::DEFAULT_GAMMA_THRESHOLD.into()),
-            (ConfigPath::Brightness, defaults::DEFAULT_BRIGHTNESS.into()),
-            (ConfigPath::Vibrancy, 1.0f32.into()),
-            (ConfigPath::Saturation, defaults::DEFAULT_SATURATION.into()),
-            (ConfigPath::HueShift, defaults::DEFAULT_HUE_SHIFT.into()),
-            (ConfigPath::AlphaBlendLow, defaults::DEFAULT_ALPHA_BLEND_LOW.into()),
-            (ConfigPath::AlphaBlendHigh, defaults::DEFAULT_ALPHA_BLEND_HIGH.into()),
-            (ConfigPath::DensityScale, defaults::DEFAULT_DENSITY_SCALE.into()),
-            // Tone curve
-            (ConfigPath::UseCurve, true.into()),
-            (ConfigPath::TonemapCurve, ToneCurve::default().into()),
-            // Levels
-            (ConfigPath::LevelsLow, 0.0f32.into()),
-            (ConfigPath::LevelsHigh, defaults::DEFAULT_LEVELS_HIGH.into()),
-            (ConfigPath::LevelsGamma, defaults::DEFAULT_LEVELS_GAMMA.into()),
-            // Palette settings (not the palette itself or background)
-            (ConfigPath::PaletteRotation, defaults::DEFAULT_PALETTE_ROTATION.into()),
-            (ConfigPath::PaletteSqueeze, defaults::DEFAULT_PALETTE_SQUEEZE.into()),
-            (ConfigPath::PaletteSize, defaults::DEFAULT_PALETTE_SIZE.into()),
-        ],
-        "history.action.reset_colors".to_string()
-    ).unwrap_or(UpdateType::None)
+    let defaults = FractalConfig::default();
+    let changes: Vec<_> = colors_reset_paths()
+        .into_iter()
+        .filter_map(|path| {
+            match ConfigManager::get_value_from_config(&defaults, &path, EditingTarget::Main) {
+                Ok(value) => Some((path, value)),
+                Err(e) => {
+                    log::error!("Reset Colors: no default for {path}: {e}");
+                    None
+                }
+            }
+        })
+        .collect();
+
+    config_manager
+        .update_batch(changes, "history.action.reset_colors".to_string())
+        .unwrap_or_else(|e| {
+            log::error!("Reset Colors failed: {e}");
+            UpdateType::None
+        })
+}
+
+#[cfg(test)]
+mod reset_colors_tests {
+    use super::{colors_reset_paths, reset_colors_to_defaults};
+    use crate::config::{ConfigManager, ConfigPath, EditingTarget, FractalConfig, UpdateType};
+
+    /// Every field the reset covers is back at its default afterwards,
+    /// the reset says what to update, and a second reset is a no-op
+    /// with no undo entry.
+    #[test]
+    fn reset_restores_every_colors_field() {
+        use crate::scene::palette::{ColorMode, PathMapStyle, SqueezeMode};
+        use crate::scene::tonemap::{HighlightMode, ToneCurve, ToneMapMode};
+
+        let mut config = FractalConfig::default();
+        config.color_mode = ColorMode::Speed;
+        config.speed_factor = 0.9;
+        config.path_map_style = PathMapStyle::Depth;
+        config.path_map_level = 5;
+        config.tonemap_mode = ToneMapMode::Linear;
+        config.exposure = 3.0;
+        config.gamma = 1.5;
+        config.gamma_threshold = 40.0;
+        config.brightness = 20.0;
+        config.vibrancy = 0.3;
+        config.white_level = 900.0;
+        config.saturation = 2.0;
+        config.hue_shift = 90.0;
+        config.highlight_mode = HighlightMode::Reinhard;
+        config.alpha_blend_low = 0.1;
+        config.alpha_blend_high = 0.95;
+        config.density_scale = 3.0;
+        config.filter_radius = 2.0;
+        config.filter_blur_edges = 0.7;
+        config.use_curve = !config.use_curve;
+        config.tonemap_curve = ToneCurve::s_curve();
+        config.levels_enabled = !config.levels_enabled;
+        config.levels_low = 1.0;
+        config.levels_high = 50.0;
+        config.levels_gamma = 2.0;
+        config.palette_rotation = 0.4;
+        config.palette_squeeze = 3.0;
+        config.palette_squeeze_mode = SqueezeMode::Geometric;
+        config.palette_squeeze_falloff = 0.3;
+        config.palette_log_strength = 2.0;
+        config.palette_reverse = true;
+        config.palette_size = 1024;
+        let mut manager = ConfigManager::new(config);
+
+        let defaults = FractalConfig::default();
+        let read = |m: &ConfigManager, p: &ConfigPath| m.get_value(p).unwrap();
+        let want = |p: &ConfigPath| {
+            ConfigManager::get_value_from_config(&defaults, p, EditingTarget::Main).unwrap()
+        };
+        for p in colors_reset_paths() {
+            assert!(!read(&manager, &p).approx_eq(&want(&p)), "{p} was not set off its default by the test");
+        }
+
+        let update = reset_colors_to_defaults(&mut manager);
+        assert_ne!(update, UpdateType::None);
+        for p in colors_reset_paths() {
+            assert!(read(&manager, &p).approx_eq(&want(&p)), "{p} did not reset");
+        }
+
+        assert!(manager.can_undo());
+        manager.undo().unwrap();
+        manager.redo().unwrap();
+        assert_eq!(reset_colors_to_defaults(&mut manager), UpdateType::None);
+        manager.undo().unwrap();
+        assert!(
+            !read(&manager, &ConfigPath::Exposure).approx_eq(&want(&ConfigPath::Exposure)),
+            "a no-op reset pushed an undo entry"
+        );
+    }
+
+    /// The reset list is the panel: every `ConfigPath` the Colors panel
+    /// (tone_mapping.rs, and the levels controls in histogram.rs)
+    /// writes is either reset or deliberately left alone.
+    #[test]
+    fn the_reset_covers_every_colors_panel_control() {
+        const KEPT: &[&str] = &["Palette", "BackgroundColor", "CylinderTargeting"];
+        let reset: Vec<String> = colors_reset_paths().iter().map(|p| format!("{p:?}")).collect();
+        for src in [include_str!("tone_mapping.rs"), include_str!("histogram.rs")] {
+            for (i, _) in src.match_indices("ConfigPath::") {
+                let name: String = src[i + "ConfigPath::".len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                assert!(
+                    KEPT.contains(&name.as_str()) || reset.contains(&name),
+                    "the Colors panel writes ConfigPath::{name}, which Reset to Defaults does not restore"
+                );
+            }
+        }
+    }
 }

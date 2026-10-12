@@ -56,6 +56,14 @@ impl AnimationController {
         self.signal_smoothed.clear();
     }
 
+    /// Set the time step signal smoothing assumes, for a caller that
+    /// evaluates at fixed times instead of through `update` -- the video
+    /// exporter, whose frames are 1/fps apart. Without it the step stays
+    /// at its initial 1/60 s whatever the frame rate.
+    pub fn set_step(&mut self, dt: f64) {
+        self.last_delta_time = dt;
+    }
+
     /// Start playback
     pub fn play(&mut self) {
         if self.animation.is_some() {
@@ -168,6 +176,11 @@ impl AnimationController {
             if matches!(track.source, TrackSource::Signal { .. }) {
                 continue; // Skip signal tracks when no manager available
             }
+            // Its target was deleted; the index it holds names another
+            // item now (`TrackBinding::broken`).
+            if track.bound.broken {
+                continue;
+            }
             if let Some(value) = Self::evaluate_track_pure(track, time) {
                 values.push((track.flame_target, track.target.clone(), value));
             }
@@ -189,10 +202,13 @@ impl AnimationController {
         };
 
         // Clone track info to avoid borrow conflicts with signal smoothing
+        // Broken tracks are skipped (`TrackBinding::broken`); the index
+        // stays the track's position, which smoothing state is keyed by.
         let track_info: Vec<_> = animation
             .tracks
             .iter()
             .enumerate()
+            .filter(|(_, track)| !track.bound.broken)
             .map(|(idx, track)| (idx, track.flame_target, track.target.clone(), track.source.clone(), track.interpolation))
             .collect();
 
@@ -645,6 +661,39 @@ mod tests {
         let values = controller.evaluate_at_time_with_signals(0.1, Some(&signal_manager));
         let val = values.iter().find(|(_, k, _)| k == "Test").unwrap().2.as_f64().unwrap();
         assert!((val - 5.0).abs() < 0.01);
+    }
+
+    /// Smoothing evaluated frame by frame, as the video exporter does,
+    /// lands in the same place at 30 and 60 fps once the step is the
+    /// frame interval. With the controller's initial 1/60 s step a
+    /// 30 fps run smoothed half as much per second: about 0.97 rather
+    /// than 0.999 here.
+    #[test]
+    fn smoothing_is_frame_rate_independent_with_the_frame_step() {
+        use crate::signal::{Signal, SignalManager, SignalType};
+
+        // 0 until t = 0.5 s, then 1; 100 Hz over 1 s.
+        let data: Vec<f32> = (0..=100).map(|i| if i < 50 { 0.0 } else { 1.0 }).collect();
+        let mut signals = SignalManager::new();
+        signals.insert(Signal::new("step".into(), 100.0, SignalType::Continuous, data));
+
+        let run = |fps: u32| -> f64 {
+            let mut controller = AnimationController::new();
+            let mut animation = Animation::new("Smooth".into(), 1.0);
+            animation.add_track(Track::signal_with_smoothing("Exposure".into(), "step".into(), 0.0, 1.0, 0.8));
+            controller.load(animation);
+            controller.set_step(1.0 / fps as f64);
+            let mut last = f64::NAN;
+            for k in 0..=fps {
+                let values = controller.evaluate_at_time_with_signals(k as f64 / fps as f64, Some(&signals));
+                last = values.iter().find(|(_, key, _)| key == "Exposure").unwrap().2.as_f64().unwrap();
+            }
+            last
+        };
+
+        let (at30, at60) = (run(30), run(60));
+        assert!(at60 > 0.99, "the step has settled at 60 fps: {at60}");
+        assert!((at30 - at60).abs() < 1e-3, "30 fps {at30} vs 60 fps {at60}");
     }
 
 }

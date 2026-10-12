@@ -15,7 +15,7 @@ use crate::effects::EffectInstance;
 fn lift_path_material(value: &mut serde_json::Value) {
     let Some(obj) = value.as_object_mut() else { return };
     let sim_first = obj.get("render_mode").and_then(|m| m.as_str()) == Some("simulation");
-    let mut take = |obj: &mut serde_json::Map<String, serde_json::Value>, sim: bool| -> serde_json::Map<String, serde_json::Value> {
+    let take = |obj: &mut serde_json::Map<String, serde_json::Value>, sim: bool| -> serde_json::Map<String, serde_json::Value> {
         let path = if sim {
             obj.get_mut("sim").and_then(|s| s.get_mut("terrain")).and_then(|t| t.get_mut("path"))
         } else {
@@ -58,7 +58,15 @@ fn lift_path_material(value: &mut serde_json::Value) {
 /// `far_density_fade_start`) off `Flame` and onto `FractalConfig` — they were
 /// always whole-render settings (subflame copies were dead). The v2→v3
 /// migration lifts them from `config.flame.*` to the top level.
-pub const CURRENT_CONFIG_VERSION: u32 = 3;
+///
+/// v4 fixes `levels_gamma`'s save rule. Since the default became 0.5
+/// (2026-05-31) the field was still skipped at 1.0, the OLD default, so
+/// a v3 file without it held 1.0 and reloaded at 0.5. The v3→v4 arm
+/// restores 1.0 for a file saved as v3; every v3 file postdates the
+/// default change, so an absent field there always meant 1.0. Older
+/// files keep loading at 0.5: before the change an absent field was the
+/// old default, which that change deliberately moved to the new one.
+pub const CURRENT_CONFIG_VERSION: u32 = 4;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -993,7 +1001,7 @@ fn is_default_levels_high(v: &f32) -> bool {
 }
 
 fn is_default_levels_gamma(v: &f32) -> bool {
-    (*v - 1.0).abs() < FLOAT_EPSILON  // Default is 1.0
+    (*v - super::defaults::DEFAULT_LEVELS_GAMMA).abs() < FLOAT_EPSILON
 }
 
 fn default_blend_factor() -> f32 {
@@ -1127,6 +1135,19 @@ impl FractalConfig {
         } else {
             10_000.0
         }
+    }
+
+    /// Whether this config renders a 3D flame through the solid depth
+    /// region: occluding (`solid_strength`) OR lit (`solid_shading`) --
+    /// lighting works without occlusion, and needs the depth either way.
+    /// The one test for SOLID compilation, the histogram's depth tail,
+    /// export routing and the export size budget; the interactive
+    /// renderer always used it, but the one-shot paths tested
+    /// `solid_strength` alone, so an export of a lit-only flame came out
+    /// unlit.
+    pub fn solid_depth_active(&self) -> bool {
+        (self.solid_strength > 0.0 || self.solid_shading.active())
+            && matches!(self.render_mode, crate::scene::transforms::RenderMode::ThreeD)
     }
 
     pub fn effective_levels_enabled(&self) -> bool {
@@ -1362,6 +1383,15 @@ impl FractalConfig {
                     }
                     obj.insert("preserve_z".to_string(), preserve_z);
                 }
+                // v3 -> v4: a v3 save skipped `levels_gamma` at 1.0, not at
+                // its 0.5 default, so absent meant 1.0 (CURRENT_CONFIG_VERSION
+                // docs). Only for a file SAVED as v3: an older one passing
+                // through keeps the default it has always loaded with.
+                3 => {
+                    if from_version == 3 {
+                        obj.entry("levels_gamma").or_insert(serde_json::json!(1.0));
+                    }
+                }
                 other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -1449,14 +1479,17 @@ impl FractalConfig {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or_else(|| {
-                // A top-level escape or simulation mode dates the file:
-                // both modes came after v3 (2026-08 and 2026-09; v3 is
-                // 2026-06), so a file using one is at least v3 whatever
-                // wrote it without a version. Assuming less would run the
-                // v2 -> v3 migration, which takes the render mode from the
-                // flame -- 2D -- over the one the file names.
+                // A top-level render mode with none on the flame dates the
+                // file: the field moved there in v3 (2026-06-29, the same
+                // commit), so whatever wrote it without a version wrote a
+                // v3 config -- plain serde did, for a PNG's embedded config
+                // before it was stamped. Assuming less runs the v2 -> v3
+                // migration, which takes the render mode from the flame,
+                // finds none, and makes a 3D flame 2D. An escape or
+                // simulation mode dates it too: both came after v3.
                 let mode = value.get("render_mode").and_then(|m| m.as_str());
-                if matches!(mode, Some("escape") | Some("simulation")) {
+                let on_flame = value.pointer("/flame/render_mode").is_some();
+                if (mode.is_some() && !on_flame) || matches!(mode, Some("escape") | Some("simulation")) {
                     default_version.max(3)
                 } else {
                     default_version
@@ -1811,6 +1844,28 @@ mod tests {
         let json = r#"{"version": 1, "flame": {"name": "test", "transforms": []}}"#;
         let result = FractalConfig::from_json(json);
         assert!(result.is_ok());
+    }
+
+    /// Levels gamma survives a save at every value: the save once
+    /// skipped it at 1.0 (the pre-2026-05-31 default) while the default
+    /// is 0.5, so 1.0 reloaded as 0.5. A v3 file without it held 1.0;
+    /// an older one keeps the default it always loaded with.
+    #[test]
+    fn levels_gamma_survives_a_save() {
+        use super::super::defaults::DEFAULT_LEVELS_GAMMA;
+        for gamma in [1.0f32, DEFAULT_LEVELS_GAMMA, 0.7] {
+            let mut c = FractalConfig::default();
+            c.levels_gamma = gamma;
+            let back = FractalConfig::from_json(&c.to_json().unwrap()).unwrap();
+            assert_eq!(back.levels_gamma, gamma, "levels_gamma {gamma} round trip");
+        }
+        let v3 = r#"{"version": 3, "flame": {"name": "test", "transforms": []}}"#;
+        assert_eq!(FractalConfig::from_json(v3).unwrap().levels_gamma, 1.0, "a v3 save without it held 1.0");
+        let v3_default = r#"{"version": 3, "levels_gamma": 0.5, "flame": {"name": "test", "transforms": []}}"#;
+        assert_eq!(FractalConfig::from_json(v3_default).unwrap().levels_gamma, 0.5);
+        for older in [r#"{"version": 2, "flame": {"name": "t", "transforms": []}}"#, r#"{"flame": {"name": "t", "transforms": []}}"#] {
+            assert_eq!(FractalConfig::from_json(older).unwrap().levels_gamma, DEFAULT_LEVELS_GAMMA, "{older}");
+        }
     }
 
     // Multi-config tests

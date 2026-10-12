@@ -307,6 +307,20 @@ impl Palette {
 
         let t = t.clamp(0.0, 1.0);
 
+        // Before the first stop is the first stop's colour, as the
+        // stepped sampler has it and as every gradient convention does.
+        // Without this the search below settles on stops 0 and 1 and
+        // interpolates with a NEGATIVE local t -- extrapolating past the
+        // first colour, out of [0, 1] for most palettes (a grey first
+        // stop at 0.5 before a white one gave 0.0 a darker-than-grey,
+        // and a black one gave it negative channels). Strictly before:
+        // at the first position itself the search below already returns
+        // the right colour, including the last of several stops stacked
+        // there.
+        if t < self.stops[0].position {
+            return self.stops[0].color;
+        }
+
         // Find the two stops to interpolate between
         let mut idx = 0;
         for (i, stop) in self.stops.iter().enumerate() {
@@ -516,6 +530,51 @@ impl Default for PaletteTransform {
 }
 
 impl PaletteTransform {
+    /// The transform a config's palette settings describe. One reading
+    /// of them for the GPU upload, the export, the Colors panel's
+    /// preview and the Transforms panel's swatches, so none can drift.
+    pub fn from_config(config: &crate::config::FractalConfig) -> Self {
+        Self::from_settings(
+            config.palette_squeeze_mode,
+            config.palette_squeeze,
+            config.palette_squeeze_falloff,
+            config.palette_log_strength,
+            config.palette_rotation,
+            config.palette_reverse,
+        )
+    }
+
+    /// [`Self::from_config`] from the loose settings, for a caller that
+    /// holds them rather than a config. The squeeze factor is the one
+    /// the mode reads: the repeat count for Linear, the octave ratio
+    /// (`palette_squeeze_falloff`) for Geometric.
+    pub fn from_settings(
+        squeeze_mode: SqueezeMode,
+        squeeze: f32,
+        squeeze_falloff: f32,
+        log_strength: f32,
+        rotation: f32,
+        reverse: bool,
+    ) -> Self {
+        let squeeze_factor = match squeeze_mode {
+            SqueezeMode::Linear => squeeze,
+            SqueezeMode::Geometric => squeeze_falloff,
+        };
+        Self { squeeze_mode, squeeze_factor, log_strength, rotation, reverse }
+    }
+
+    /// The colour the renderer gives palette coordinate `t`, after this
+    /// transform -- what a swatch should show. Read from a small lookup
+    /// table built the way the GPU's is ([`render_palette_lookup`]), so
+    /// it cannot disagree with the picture; `palette.sample_color(t)`
+    /// alone ignores rotation, squeeze, log and reverse.
+    pub fn sample_color(&self, palette: &Palette, t: f32) -> [f32; 3] {
+        const LEN: usize = 256;
+        let lut = render_palette_lookup(palette, self, LEN);
+        let i = (t.clamp(0.0, 1.0) * (LEN - 1) as f32).round() as usize;
+        [lut[i * 4], lut[i * 4 + 1], lut[i * 4 + 2]]
+    }
+
     /// True if this transform is the identity — every stage is a no-op.
     /// `update_palette` and the UI preview can skip the helper entirely
     /// in this case, and consumers can short-circuit reupload work.
@@ -1418,29 +1477,53 @@ impl PaletteLibrary {
         }
     }
 
-    /// Sync pack states from global singleton (WASM only)
+    /// Take the packs another library has loaded, and rebuild the flat
+    /// palette list from them. Returns whether anything changed.
     ///
-    /// On WASM, async fetches update the global singleton, but the UI may hold
-    /// a separate instance. This method syncs pack load states and content.
-    #[cfg(target_arch = "wasm32")]
-    pub fn sync_from_global(&mut self) {
-        if let Ok(global) = global_palette_library().read() {
-            // Sync each pack's state
-            for (idx, global_info) in global.packs.iter().enumerate() {
-                if let Some(local_info) = self.packs.get_mut(idx) {
-                    // Only sync if states differ
-                    if local_info.load_state != global_info.load_state {
-                        local_info.load_state = global_info.load_state.clone();
-                        local_info.pack = global_info.pack.clone();
-                        local_info.enabled = global_info.enabled;
-                    }
+    /// On the web a pack is fetched asynchronously into the global
+    /// library, while the app holds its own copy (cloned at startup), so
+    /// the copy has to catch up. A pack is taken -- load state, content,
+    /// enabled flag -- when its load state differs.
+    ///
+    /// The flat list (random palettes, the Palette Editor's list,
+    /// scripts) is then REBUILT, not copied. It used to be copied when a
+    /// `generation` counter differed, which went wrong both ways: a
+    /// fetched pack never bumps the counter, so its palettes never
+    /// reached the list; and a custom save bumps only the copy's, so the
+    /// next sync overwrote the copy's list with the global's, dropping
+    /// the palette just saved. Rebuilding keeps the copy's own palettes,
+    /// as enabling a pack always has.
+    ///
+    /// The Custom pack is skipped: saves write it on this instance and
+    /// never reach the source, so the source's copy is the stale one.
+    pub fn sync_packs_from(&mut self, source: &PaletteLibrary) -> bool {
+        let mut changed = false;
+        for (idx, src) in source.packs.iter().enumerate() {
+            if Some(idx) == self.custom_pack_index {
+                continue;
+            }
+            if let Some(local) = self.packs.get_mut(idx) {
+                if local.load_state != src.load_state {
+                    local.load_state = src.load_state.clone();
+                    local.pack = src.pack.clone();
+                    local.enabled = src.enabled;
+                    changed = true;
                 }
             }
-            // Sync palette list if generation changed
-            if self.generation != global.generation {
-                self.palettes = global.palettes.clone();
-                self.generation = global.generation;
-            }
+        }
+        if changed {
+            self.rebuild_palette_list();
+        }
+        changed
+    }
+
+    /// [`Self::sync_packs_from`] the global singleton, which the web's
+    /// async pack fetches complete into.
+    #[cfg(target_arch = "wasm32")]
+    pub fn sync_from_global(&mut self) -> bool {
+        match global_palette_library().read() {
+            Ok(global) => self.sync_packs_from(&global),
+            Err(_) => false,
         }
     }
 
@@ -1509,6 +1592,85 @@ mod tests {
         assert_eq!(embedded.palettes.len(), on_disk.palettes.len());
     }
 
+    /// The web's shape: the app holds a copy of the global library, and
+    /// a pack's fetch completes into the global. The copy's flat list --
+    /// what random palettes, the Palette Editor and scripts read --
+    /// never received the fetched palettes, because only a `generation`
+    /// bump copied it and a pack load does not bump; and when it did
+    /// copy, it dropped what the copy had of its own.
+    #[test]
+    fn a_pack_loaded_on_one_library_reaches_the_others_palette_list() {
+        use crate::resources::{PackMetadata, PalettePackInfo};
+
+        let mut global = PaletteLibrary::new();
+        global.packs.push(PalettePackInfo::from_metadata(PackMetadata {
+            id: "sync_probe".to_string(),
+            name: "Sync Probe".to_string(),
+            description: String::new(),
+            file: "sync_probe.json".to_string(),
+            item_count: 1,
+            enabled_by_default: true,
+        }));
+        let idx = global.pack_count() - 1;
+        let mut app = global.clone();
+
+        // Something the app has that the global never sees.
+        let mut own = Palette::cool();
+        own.name = "Sync Probe Local".to_string();
+        app.add_or_update(own);
+
+        let mut fetched = Palette::fire();
+        fetched.name = "Sync Probe Fetched".to_string();
+        global.set_pack_loaded(
+            idx,
+            PalettePack {
+                pack_name: "Sync Probe".to_string(),
+                description: String::new(),
+                enabled_by_default: true,
+                palettes: vec![fetched],
+            },
+        );
+        let has = |lib: &PaletteLibrary, name: &str| lib.palettes().iter().any(|p| p.name == name);
+        assert!(!has(&app, "Sync Probe Fetched"));
+
+        assert!(app.sync_packs_from(&global));
+        assert!(has(&app, "Sync Probe Fetched"), "the fetched pack's palettes never reached the list");
+        assert!(has(&app, "Sync Probe Local"), "syncing dropped the app's own palette");
+        assert!(app.get_pack(idx).is_some(), "the pack itself was not taken");
+
+        // Nothing new: nothing to do.
+        assert!(!app.sync_packs_from(&global));
+    }
+
+    /// A swatch sampled through the transform shows what the renderer
+    /// shows: reversed, the start of the palette is its end colour. The
+    /// Transforms panel's swatch sampled the raw palette and ignored
+    /// rotation, squeeze, log and reverse.
+    #[test]
+    fn a_transformed_sample_follows_reverse() {
+        let palette = Palette::fire();
+        let mut config = crate::config::FractalConfig::default();
+        config.palette_reverse = true;
+        let reversed = PaletteTransform::from_config(&config);
+        assert_eq!(reversed.sample_color(&palette, 0.0), palette.sample_color(1.0));
+        assert_eq!(reversed.sample_color(&palette, 1.0), palette.sample_color(0.0));
+
+        let identity = PaletteTransform::from_config(&crate::config::FractalConfig::default());
+        assert!(identity.is_identity());
+        for t in [0.0, 0.2, 1.0] {
+            assert_eq!(identity.sample_color(&palette, t), palette.sample_color(t));
+        }
+    }
+
+    /// The squeeze factor is the one the mode reads.
+    #[test]
+    fn from_settings_picks_the_squeeze_the_mode_reads() {
+        let lin = PaletteTransform::from_settings(SqueezeMode::Linear, 3.0, 0.5, 0.0, 0.0, false);
+        assert_eq!(lin.squeeze_factor, 3.0);
+        let geo = PaletteTransform::from_settings(SqueezeMode::Geometric, 3.0, 0.5, 0.0, 0.0, false);
+        assert_eq!(geo.squeeze_factor, 0.5);
+    }
+
     #[test]
     fn test_palette_sampling() {
         let palette = Palette::grayscale();
@@ -1534,6 +1696,30 @@ mod tests {
         assert!(data[1] < 0.1); // G
         assert!(data[2] < 0.1); // B
         assert_eq!(data[3], 1.0); // A
+    }
+
+    /// Before the first stop is the first stop's colour. The linear
+    /// sampler used to interpolate stops 0 -> 1 with a negative local t
+    /// there, extrapolating darker than the first colour (negative
+    /// channels for a black-to-white pair) into the bottom of the
+    /// gradient texture.
+    #[test]
+    fn before_the_first_stop_holds_the_first_colour() {
+        let stop = |position: f32, color: [f32; 3]| ColorStop { position, color };
+        let grey = [0.5, 0.5, 0.5];
+        let p = Palette::new("late start", vec![stop(0.5, grey), stop(1.0, [1.0, 1.0, 1.0])]);
+        assert_eq!(p.sample_color(0.0), grey);
+        assert_eq!(p.sample_color(0.25), grey);
+        assert_eq!(p.sample_color(0.5), grey);
+        let data = p.generate_texture_data(256);
+        assert_eq!(&data[0..3], &grey, "the texture's first texel");
+        // The stepped sampler already had it right; the two agree.
+        assert_eq!(p.sample_color_stepped(0.25), grey);
+
+        // And past the last stop is the last colour (unchanged).
+        let p = Palette::new("early end", vec![stop(0.0, [0.0; 3]), stop(0.5, [1.0; 3])]);
+        assert_eq!(p.sample_color(0.75), [1.0; 3]);
+        assert_eq!(p.sample_color(0.25), [0.5; 3]);
     }
 
     #[test]

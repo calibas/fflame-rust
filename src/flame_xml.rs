@@ -272,7 +272,7 @@ fn parse_flame_element(
     // all of them rather than overwriting; if `migrate_legacy_final`
     // pushes them in order, the chain ends up in the same order as the
     // source XML.
-    let mut final_transforms_with_index: Vec<(Transform, Option<usize>)> = Vec::new();
+    let mut final_transforms: Vec<Transform> = Vec::new();
     let mut palette = None;
     let mut buf = Vec::new();
 
@@ -303,8 +303,7 @@ fn parse_flame_element(
                         xform_results.push(result);
                     }
                     b"finalxform" if !skip_layer => {
-                        let (transform, color_index) = parse_finalxform_element(&e)?;
-                        final_transforms_with_index.push((transform, color_index));
+                        final_transforms.push(parse_finalxform_element(&e)?);
                     }
                     b"palette" if !skip_layer => {
                         palette = Some(parse_palette_element(reader, &e)?);
@@ -344,15 +343,6 @@ fn parse_flame_element(
 
     for result in xform_results {
         let mut transform = result.transform;
-        if let Some(idx) = result.color_index {
-            if palette.is_some() {
-                // Palette mode: Store color coordinate (0-1) as averaged RGB
-                // This will be used as palette position in shader
-                let color_coord = idx as f32 / 255.0;
-                transform.color = color_coord;
-            }
-            // Note: color_speed comes from XML parsing, don't override here
-        }
         if let Some(child) = result.imported_subflame {
             let assigned_id = imported_subflames.len() as f32;
             imported_subflames.push(child);
@@ -383,21 +373,9 @@ fn parse_flame_element(
         None
     };
 
-    // Process final transforms — JWF chains multiple finals at plot
-    // time so we need to keep them all. Each gets its color coordinate
-    // promoted to the palette position the same way normal xforms do.
-    let final_transforms_processed: Vec<Transform> = final_transforms_with_index
-        .into_iter()
-        .map(|(mut final_xform, color_index)| {
-            if let Some(idx) = color_index {
-                if palette.is_some() {
-                    let color_coord = idx as f32 / 255.0;
-                    final_xform.color = color_coord;
-                }
-            }
-            final_xform
-        })
-        .collect();
+    // Final transforms — JWF chains multiple finals at plot time so we
+    // need to keep them all.
+    let final_transforms_processed: Vec<Transform> = final_transforms;
 
     // Apophysis 7X and JWildfire write 3D flames exclusively (every
     // variation in their corpus is treated as 3D-capable; the camera
@@ -580,13 +558,10 @@ fn parse_flame_element(
     })
 }
 
-/// Parse a single <xform> element (transform)
-/// Returns (Transform, color_index) where color_index is the palette position
-/// Result of parsing an xform element
-/// Contains the transform, optional color index, and optional chaos weights
+/// Result of parsing an xform element: the transform and its optional
+/// chaos weights and embedded subflame.
 struct XformParseResult {
     transform: Transform,
-    color_index: Option<usize>,
     chaos_weights: Option<Vec<f32>>,
     /// JWildfire's `subflame_wf_flame` attribute — hex-encoded XML
     /// bytes of the embedded child flame. When present (and the xform
@@ -618,7 +593,6 @@ fn parse_xform_element(
 ) -> Result<XformParseResult> {
     let mut transform = Transform::new();
     let registry = global_registry();
-    let mut color_index = None;
     let mut chaos_weights = None;
     // JWF subflame_wf payload — hex-encoded child flame XML. Captured
     // during attribute iteration, decoded + parsed after the loop so
@@ -640,9 +614,8 @@ fn parse_xform_element(
         match key {
             "weight" => transform.weight = value.parse().unwrap_or(1.0),
             "color" => {
-                // In Apophysis, color is a palette index (0.0-1.0 mapped to 0-255)
-                if let Ok(color_value) = value.parse::<f32>() {
-                    color_index = Some((color_value * 255.0) as usize);
+                if let Some(c) = parse_xform_color(value) {
+                    transform.color = c;
                 }
             }
             "color_speed" | "symmetry" => {
@@ -799,7 +772,6 @@ fn parse_xform_element(
 
     Ok(XformParseResult {
         transform,
-        color_index,
         chaos_weights,
         imported_subflame,
     })
@@ -808,10 +780,9 @@ fn parse_xform_element(
 /// Parse a <finalxform> element (same as xform but without weight/opacity)
 fn parse_finalxform_element(
     element: &quick_xml::events::BytesStart,
-) -> Result<(Transform, Option<usize>)> {
+) -> Result<Transform> {
     let mut transform = Transform::new();
     let registry = global_registry();
-    let mut color_index = None;
 
     // Storage for variation parameters (applied after all attributes parsed)
     let mut pending_params: Vec<(String, String, f32)> = Vec::new();
@@ -827,9 +798,8 @@ fn parse_finalxform_element(
             // NO "weight" attribute - final transform is not part of random selection
             // NO "opacity" attribute - final transform is always applied
             "color" => {
-                // In Apophysis, color is a palette index (0.0-1.0 mapped to 0-255)
-                if let Ok(color_value) = value.parse::<f32>() {
-                    color_index = Some((color_value * 255.0) as usize);
+                if let Some(c) = parse_xform_color(value) {
+                    transform.color = c;
                 }
             }
             "color_speed" | "symmetry" => {
@@ -913,7 +883,16 @@ fn parse_finalxform_element(
     // Apply fx_priority overrides (sparse; needs the full variation set).
     apply_fx_priorities(&mut transform, pending_priorities, &registry);
 
-    Ok((transform, color_index))
+    Ok(transform)
+}
+
+/// A transform's `color`: its palette coordinate, 0-1, kept as written.
+/// JWildfire reads it as a double (`AbstractFlameReader`); flam3 also
+/// accepts a two-number form ("0.2 0") and keeps the first. It was once
+/// rounded down to a 1/255 step, and dropped to the default when the
+/// file had no `<palette>` element.
+fn parse_xform_color(value: &str) -> Option<f32> {
+    value.split_whitespace().next()?.parse::<f32>().ok()
 }
 
 /// Parse a JWildfire `<var>_fx_priority` attribute. Returns
@@ -1943,6 +1922,32 @@ mod tests {
         assert!(!names.contains("julian"), "second layer must be ignored");
         // Flame attributes came off the <jwf-flame> root.
         assert_eq!(config.image_size, (800, 600));
+    }
+
+    #[test]
+    fn a_transforms_color_is_read_as_written() {
+        // JWildfire reads `color` as a double. It was rounded down to a
+        // 1/255 step (0.7 became 0.698) when the file had a <palette>,
+        // and dropped to the default when it had none.
+        let flame = |palette: &str| {
+            format!(
+                r#"<flames><flame name="c" size="64 64" center="0 0" scale="20">
+                   <xform weight="1" color="0.7" linear="1" coefs="1 0 0 1 0 0" />
+                   <xform weight="1" color="0.123456 0" linear="1" coefs="1 0 0 1 0 0" />
+                   <finalxform color="0.3" linear="1" coefs="1 0 0 1 0 0" />
+                   {palette}
+                   </flame></flames>"#
+            )
+        };
+        let palette = format!(r#"<palette count="256" format="RGB">{}</palette>"#, "808080".repeat(256));
+        for xml in [flame(""), flame(&palette)] {
+            let config = &parse_flame_xml(&xml).expect("parse")[0];
+            assert_eq!(config.flame.transforms[0].color, 0.7);
+            assert_eq!(config.flame.transforms[1].color, 0.123456, "flam3's two-number form keeps the first");
+            assert_eq!(config.flame.final_transforms[0].color, 0.3);
+            let back = &parse_flame_xml(&write_flame_xml(config)).expect("reparse")[0];
+            assert_eq!(back.flame.transforms[0].color, 0.7, "round trip");
+        }
     }
 
     #[test]

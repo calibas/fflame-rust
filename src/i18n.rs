@@ -163,6 +163,122 @@ mod tests {
         assert!(missing.is_empty(), "{} keys have no English text:\n  {}", missing.len(), missing.iter().map(|k| k.as_str()).collect::<Vec<_>>().join("\n  "));
     }
 
+    /// A locale file as `dotted.key -> value`. The files are nested maps
+    /// at two spaces an indent level, of double-quoted strings (one of
+    /// which runs onto following lines); there is no YAML crate here,
+    /// and this is all the shape the locales use.
+    fn flatten_locale(text: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut stack: Vec<String> = Vec::new();
+        let mut lines = text.lines();
+        while let Some(line) = lines.next() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            let Some((key, rest)) = trimmed.split_once(':') else {
+                panic!("not a `key:` line: {line}");
+            };
+            assert_eq!(indent % 2, 0, "odd indent: {line}");
+            stack.truncate(indent / 2);
+            let rest = rest.trim();
+            if rest.is_empty() {
+                stack.push(key.to_string());
+                continue;
+            }
+            let mut value = rest.to_string();
+            // A double-quoted value continues until a line ends the quote.
+            let closed = |v: &str| v.len() >= 2 && v.ends_with('"') && !v.ends_with("\\\"");
+            if value.starts_with('"') {
+                while !closed(&value) {
+                    let next = lines.next().unwrap_or_else(|| panic!("unterminated string at {key}"));
+                    value.push(' ');
+                    value.push_str(next.trim());
+                }
+                value = value[1..value.len() - 1].to_string();
+            }
+            let mut path = stack.join(".");
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(key);
+            out.push((path, value));
+        }
+        out
+    }
+
+    /// The names inside `%{...}`: what rust-i18n substitutes.
+    fn placeholders(value: &str) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut rest = value;
+        while let Some(at) = rest.find("%{") {
+            rest = &rest[at + 2..];
+            if let Some(end) = rest.find('}') {
+                out.insert(rest[..end].to_string());
+                rest = &rest[end..];
+            }
+        }
+        out
+    }
+
+    /// The translations stay in step with English:
+    ///
+    /// - no locale has a key English lacks. Keys get renamed in en.yml
+    ///   and the old ones lingered in es / ja / zh-CN, translated and
+    ///   never shown, while the renamed key fell back to English;
+    /// - a translation takes the same `%{...}` arguments as English.
+    ///   Three of them had dropped theirs, so the performance panel read
+    ///   "FPS" with no number;
+    /// - English writes every placeholder as `%{x}`. rust-i18n leaves a
+    ///   bare `{x}` alone, so "Rendering… {percent}%" was shown with the
+    ///   braces in it.
+    #[test]
+    fn translations_match_english_keys_and_placeholders() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+        let en: std::collections::HashMap<String, String> =
+            flatten_locale(&read("en.yml")).into_iter().collect();
+        assert!(en.len() > 1000, "the flattener read {} en keys", en.len());
+
+        let mut problems = Vec::new();
+        for (key, value) in &en {
+            let mut rest = value.as_str();
+            while let Some(at) = rest.find('{') {
+                if !rest[..at].ends_with('%') && rest[at + 1..].find('}').is_some_and(|e| {
+                    let name = &rest[at + 1..at + 1 + e];
+                    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                }) {
+                    problems.push(format!("en {key}: a placeholder without % -- {value}"));
+                    break;
+                }
+                rest = &rest[at + 1..];
+            }
+        }
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            if !name.ends_with(".yml") || name == "en.yml" {
+                continue;
+            }
+            for (key, value) in flatten_locale(&read(&name)) {
+                if key == "_version" {
+                    continue;
+                }
+                match en.get(&key) {
+                    None => problems.push(format!("{name} {key}: not in en.yml")),
+                    Some(english) if placeholders(english) != placeholders(&value) => problems.push(format!(
+                        "{name} {key}: takes {:?}, English {:?}",
+                        placeholders(&value),
+                        placeholders(english)
+                    )),
+                    Some(_) => {}
+                }
+            }
+        }
+        problems.sort();
+        assert!(problems.is_empty(), "{} problem(s):\n  {}", problems.len(), problems.join("\n  "));
+    }
+
     /// egui's fonts have no glyphs for the invisible emoji plumbing
     /// characters, and egui does not treat them as zero-width — each
     /// one renders as a tofu box next to the emoji it was meant to

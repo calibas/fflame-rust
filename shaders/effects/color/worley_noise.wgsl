@@ -116,7 +116,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let direction = get_param(6u) * PI / 180.0;
 
     let uv = input.uv;
-    let original = textureSample(input_texture, input_sampler, uv);
+    let original = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
 
     // Compute directional time offset
     let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;

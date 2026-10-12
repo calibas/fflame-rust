@@ -67,8 +67,6 @@ pub struct RenderModeFSM {
     /// Config snapshot taken when entering Animating mode
     /// Used to create undo entry when exiting
     pre_animation_snapshot: Option<FractalConfig>,
-    /// Config snapshot taken when entering Overwrite mode (if needed)
-    pre_overwrite_snapshot: Option<FractalConfig>,
     /// Whether we were in a low-density mode before transitioning to Normal
     was_in_low_density_mode: bool,
     /// Whether the PREVIOUS frame was in low-density mode
@@ -97,12 +95,8 @@ impl RenderModeFSM {
         Self::default()
     }
 
-    /// Get the current state
-    pub fn state(&self) -> RenderModeState {
-        self.state
-    }
-
     /// Check if currently in Normal mode
+    #[cfg(test)]
     pub fn is_normal(&self) -> bool {
         self.state == RenderModeState::Normal
     }
@@ -113,6 +107,7 @@ impl RenderModeFSM {
     }
 
     /// Check if currently in overwrite mode
+    #[cfg(test)]
     pub fn is_overwrite(&self) -> bool {
         self.state == RenderModeState::Overwrite
     }
@@ -201,6 +196,7 @@ impl RenderModeFSM {
     ///
     /// Returns true when animating - animation changes shouldn't create
     /// individual undo entries.
+    #[cfg(test)]
     pub fn should_apply_silent(&self) -> bool {
         self.state == RenderModeState::Animating
     }
@@ -256,11 +252,6 @@ impl RenderModeFSM {
         self.prev_frame_low_density || self.was_in_low_density_mode
     }
 
-    /// Get debug info for brightness state
-    /// Returns (prev_frame_low_density, was_in_low_density_mode, frames_since_exit, needs_boost)
-    pub fn brightness_debug(&self) -> (bool, bool, bool) {
-        (self.prev_frame_low_density, self.was_in_low_density_mode, self.needs_brightness_boost())
-    }
 }
 
 #[cfg(test)]

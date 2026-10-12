@@ -12,6 +12,8 @@ Outputs:
 - Console report with color-coded results
 - Unified CSV history (benchmark_results/unified_benchmarks.csv)
 - Baseline cache for regression detection (benchmark_results/last_run.json)
+- The desktop renders, as <category>-<stem>.png (benchmark_results/renders/,
+  gitignored); the WASM ones stay where test_wasm.py writes them
 
 Usage:
     python scripts/run_benchmarks.py [--quick]
@@ -131,8 +133,15 @@ class UnifiedBenchmarkRunner:
 
         self.visual_dir = self.root / "tests" / "visual"
         self.configs_dir = self.visual_dir / "configs"
-        self.current_dir = self.visual_dir / "current"
-        self.baseline_dir = self.visual_dir / "baseline"
+        # The desktop renders go to a folder of their own (gitignored).
+        # They used to land in tests/visual/current/, the visual suite's
+        # working folder, overwriting its 800x600 ipt-256 renders with
+        # ipt-1024 ones under the same names.
+        self.render_dir = self.results_dir / "renders"
+        # test_wasm.py writes here, and its baselines live beside the
+        # visual suite's.
+        self.wasm_current_dir = self.visual_dir / "current" / "wasm"
+        self.wasm_baseline_dir = self.visual_dir / "baseline" / "wasm"
 
         self.csv_path = self.results_dir / "unified_benchmarks.csv"
         self.baseline_path = self.results_dir / "last_run.json"
@@ -327,10 +336,10 @@ class UnifiedBenchmarkRunner:
                 return False
 
             # Ensure output directory exists
-            self.current_dir.mkdir(parents=True, exist_ok=True)
+            self.render_dir.mkdir(parents=True, exist_ok=True)
 
             # Find all config files
-            config_files = list(self.configs_dir.rglob("*.fflame"))
+            config_files = sorted(self.configs_dir.rglob("*.fflame"))
 
             if not config_files:
                 print(f"{Colors.WARNING}No .fflame configs found in {self.configs_dir}{Colors.ENDC}")
@@ -344,7 +353,12 @@ class UnifiedBenchmarkRunner:
             repeats = 3 if self.quick_mode else 5
 
             for config_path in config_files:
-                name = config_path.stem
+                # `<category>-<stem>`, as tests/visual/run_tests.py names
+                # them: 3d/ and variations/ both hold an affine3d-smoke,
+                # and by stem alone their files and CSV rows collided.
+                category = (config_path.parent.name
+                            if config_path.parent != self.configs_dir else "general")
+                name = f"{category}-{config_path.stem}"
                 print(f"  {name}:")
 
                 render_times = []
@@ -352,7 +366,7 @@ class UnifiedBenchmarkRunner:
 
                 # Run multiple times
                 for i in range(repeats):
-                    output_path = self.current_dir / f"{name}_run{i}.png"
+                    output_path = self.render_dir / f"{name}_run{i}.png"
 
                     cmd = [
                         "cargo", "run", "--release", "--",
@@ -403,8 +417,8 @@ class UnifiedBenchmarkRunner:
 
                 # Rename last file to canonical name
                 if repeats > 0:
-                    last_file = self.current_dir / f"{name}_run{repeats-1}.png"
-                    final_file = self.current_dir / f"{name}.png"
+                    last_file = self.render_dir / f"{name}_run{repeats-1}.png"
+                    final_file = self.render_dir / f"{name}.png"
                     if last_file.exists():
                         if final_file.exists():
                             final_file.unlink()
@@ -467,7 +481,7 @@ class UnifiedBenchmarkRunner:
     def run_wasm_rendering(self) -> bool:
         """Run WASM browser rendering tests with multiple runs."""
         try:
-            wasm_dir = self.current_dir / "wasm"
+            wasm_dir = self.wasm_current_dir
             wasm_dir.mkdir(parents=True, exist_ok=True)
 
             repeats = 3 if self.quick_mode else 5
@@ -490,12 +504,21 @@ class UnifiedBenchmarkRunner:
                     cwd=self.root
                 )
 
+                # test_wasm.py exits 1 on a hash mismatch or a config with
+                # no WASM baseline -- most have none -- which says nothing
+                # about the timings. What matters here is whether it
+                # rendered: it deletes each config's PNG before rendering
+                # it, so the PNGs present now are this run's.
+                rendered = list(wasm_dir.glob("*.png")) if wasm_dir.exists() else []
                 if result.returncode != 0:
-                    print(f"{Colors.FAIL}    WASM test run failed{Colors.ENDC}")
-                    if run_idx == 0:  # If first run fails, abort
-                        print(f"{Colors.WARNING}WASM tests failed or not available{Colors.ENDC}")
-                        return False
-                    continue
+                    if not rendered:
+                        print(f"{Colors.FAIL}    WASM test run rendered nothing{Colors.ENDC}")
+                        if run_idx == 0:  # If first run fails, abort
+                            print(f"{Colors.WARNING}WASM tests failed or not available{Colors.ENDC}")
+                            return False
+                        continue
+                    print(f"{Colors.WARNING}    test_wasm.py reported failures or missing "
+                          f"baselines; reading the timings anyway{Colors.ENDC}")
 
                 # Extract metadata from WASM PNGs for this run
                 if wasm_dir.exists():
@@ -821,17 +844,16 @@ class UnifiedBenchmarkRunner:
 
             print()
 
-        # Hash Comparisons
-        # 1. Desktop: baseline vs current
-        self.compare_directories(self.baseline_dir, self.current_dir, "Baseline", "Current")
-
-        # 2. WASM: baseline vs current
-        baseline_wasm = self.baseline_dir / "wasm"
-        current_wasm = self.current_dir / "wasm"
-        self.compare_directories(baseline_wasm, current_wasm, "Baseline WASM", "Current WASM")
-
-        # 3. Current: desktop vs WASM (just to see what happens)
-        self.compare_directories(self.current_dir, current_wasm, "Desktop", "WASM")
+        # Hash comparison: WASM renders against the WASM baselines, the
+        # one pair rendered alike (800x600, ipt 256). There is no desktop
+        # comparison any more, deliberately. The desktop renders here are
+        # 800x600 at ipt 1024; the visual suite's baselines are 160x120
+        # thumbnails of ipt-256 renders, and the WASM renders are ipt 256
+        # -- an exact hash could match neither, so those tables only ever
+        # printed mismatches. tests/visual/run_tests.py is the regression
+        # check for pixels.
+        self.compare_directories(self.wasm_baseline_dir, self.wasm_current_dir,
+                                 "Baseline WASM", "Current WASM")
 
         # Summary
         total = len(self.cpu_benchmarks) + len(self.render_benchmarks)

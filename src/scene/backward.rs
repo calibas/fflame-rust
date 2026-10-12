@@ -1929,6 +1929,7 @@ impl Backward {
     /// all of them. A sample carried as an offset from another piece's
     /// reference has an offset as large as the gap between them, and f32
     /// of that is nothing at depth. `None` past `cap` pieces.
+    #[cfg(test)]
     fn pieces(&self, word: &[u32], end: [f64; 2], m: usize, cap: usize) -> Option<Vec<[f64; 2]>> {
         let ais: Vec<usize> = word.iter().map(|&s| self.alphabet.iter().position(|a| a.sym == s)).collect::<Option<_>>()?;
         let junk_r = JUNK_EXTENTS * self.extent;
@@ -2646,6 +2647,7 @@ impl Backward {
     /// How many of `k` independent replays of `word` land in the view:
     /// sample points in turn, each with its own blur draw. For a word
     /// whose landings the walk's few hundred replays cannot resolve.
+    #[cfg(test)]
     fn landings(&self, word: &[u32], view: View, k: usize) -> usize {
         self.landings_in(word, view, 0..k)
     }
@@ -4497,7 +4499,7 @@ impl Backward {
         let draw_floor = 1.0 / (self.verify_first.len() + self.verify_rest.len()).max(1) as f64;
         let depth = merged.iter().map(|(c, _)| c.word.len()).max().unwrap_or(0);
         tr.t_after += t_after.elapsed();
-        let mut plan = Cylinders {
+        let plan = Cylinders {
             // Each word keeps the efficiency its replays measured. A
             // blur's word is drawn at the square root of it
             // (`Cylinder::draw`), floored at the replays' resolution.

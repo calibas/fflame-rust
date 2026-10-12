@@ -1,7 +1,7 @@
 //! Effect Chain Runner
 //!
 //! Executes shader effects in sequence using ping-pong textures.
-//! - Density effects: Run on Rgba16Float before tonemap
+//! - Density effects: Run on Rgba32Float before tonemap (`DENSITY_FORMAT`)
 //! - Color effects: Run on Rgba8Unorm after tonemap
 
 use std::collections::HashMap;
@@ -109,8 +109,8 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 /// **Why 48 and not more.** Each effect gets one slot in a shared
 /// uniform buffer, and the slot stride is set by
 /// `UNIFORM_BUFFER_OFFSET_ALIGNMENT` (256 B), not by the struct — so
-/// everything up to 240 B of parameters is free, and the buffer stays
-/// 32 × 256 B = 8 KiB. 48 floats (192 B, + 16 B of width/height/pad =
+/// everything up to 240 B of parameters is free, and the buffer starts
+/// at 32 × 256 B = 8 KiB (`MAX_EFFECT_SLOTS`). 48 floats (192 B, + 16 B of width/height/pad =
 /// 208 B) sits inside that with room spare.
 ///
 /// Going much beyond ~60 stops being free and stops being possible:
@@ -120,12 +120,40 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 /// parameters to a storage buffer — a real change, not a constant bump.
 pub const MAX_EFFECT_PARAMS: usize = 48;
 
-/// Maximum number of effect slots in the shared params buffer
-/// Supports up to 32 effects running in a single frame
+/// The shared params buffer's INITIAL slot count (one slot per effect
+/// pass in a frame).
+///
+/// Not a ceiling: `reserve_slots` grows the buffer to the next power of
+/// two when a frame's chains need more. They can: `distance_field` alone
+/// takes its jump-flood pass count + 2 slots (13 at 1080p), so three of
+/// them and one more effect is 40. The runner used to clamp the 33rd
+/// allocation to slot 32 -- an offset equal to the buffer's size -- and
+/// the write and bind group there were validation errors that rejected
+/// the whole frame (a frozen viewport; a panic on an export device).
+/// Published in the engine contract as `effect_slots`; per-effect
+/// parameters (`MAX_EFFECT_PARAMS`) are the real fixed limit.
 pub const MAX_EFFECT_SLOTS: usize = 32;
 
 /// Alignment for uniform buffer dynamic offsets (256 bytes is typical minimum)
 const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
+
+/// The density chain's ping-pong format: the accumulator's own.
+///
+/// The chain carries the accumulator's layout, whose alpha is a RAW
+/// cumulative hit count (`shaders/accumulate.wgsl`), and the density
+/// effects pass it through or average it. It was `Rgba16Float`, whose
+/// largest finite value is 65504: a pixel past 65504 hits -- which a
+/// filament flame reaches well inside the default budget -- became Inf
+/// (black under the Log tone map) or saturated. f32 holds any count
+/// the accumulator does.
+///
+/// `Rgba32Float` is renderable but not blendable (that needs
+/// `FLOAT32_BLENDABLE`), so the density pipelines write with
+/// `blend: None`; `BlendState::REPLACE` would fail pipeline creation.
+/// Sampling it with the chain's filtering sampler needs
+/// `FLOAT32_FILTERABLE`, which `run_density_effects` already requires to
+/// read the accumulation itself.
+const DENSITY_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 
 /// GPU uniform buffer for effect parameters
 ///
@@ -135,8 +163,11 @@ const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
 /// the struct declared in every `shaders/effects/**/*.wgsl`; a mismatch
 /// is a binding-size validation error at pipeline creation.
 ///
-/// Total size: 208 bytes (params=192 + width=4 + height=4 + padding=8
-/// for 16-byte alignment), inside the 256-byte slot stride.
+/// Total size: 208 bytes (params=192 + width=4 + height=4 +
+/// density_mean=4 + padding=4 for 16-byte alignment), inside the
+/// 256-byte slot stride. `density_mean` sits where an 8-byte padding
+/// was, so a shader that still declares `_padding: vec2<f32>` binds the
+/// same layout and ignores it.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EffectParams {
@@ -146,8 +177,14 @@ struct EffectParams {
     /// Texture dimensions
     width: u32,
     height: u32,
+    /// For a density effect, the frame's mean density, the unit Levels
+    /// measures in (`FlameRenderer::mean_density`): divide a pixel's `a`
+    /// by it to get a density that does not grow with the iteration
+    /// count. 1 for escape and simulation images, whose `a` is not a
+    /// hit count; 0 for colour effects.
+    density_mean: f32,
     /// Padding to align struct to 16 bytes (WGSL uniform buffer requirement)
-    _padding: [f32; 2],
+    _padding: f32,
 }
 
 // The uniform packs parameters in vec4 groups, so the count must divide
@@ -263,7 +300,7 @@ impl PingPongTextures {
 pub struct EffectChainRunner {
     /// Compiled effect pipelines by name
     compiled_effects: HashMap<String, CompiledEffect>,
-    /// Ping-pong textures for density effects (Rgba16Float)
+    /// Ping-pong textures for density effects (`DENSITY_FORMAT`)
     density_textures: Option<PingPongTextures>,
     /// Ping-pong textures for color effects (Rgba8Unorm)
     color_textures: Option<PingPongTextures>,
@@ -271,6 +308,9 @@ pub struct EffectChainRunner {
     /// Each effect writes to slot_index * UNIFORM_BUFFER_OFFSET_ALIGNMENT
     /// This allows multiple effects to have different params in a single submit
     params_buffer: Buffer,
+    /// Slots `params_buffer` holds: `MAX_EFFECT_SLOTS` until a frame
+    /// needs more (`reserve_slots`).
+    slot_capacity: usize,
     /// Current slot index for params buffer (reset each frame)
     current_slot: usize,
     /// Linear sampler for texture sampling
@@ -314,13 +354,7 @@ impl EffectChainRunner {
         // Single shared params buffer with slots for all effects
         // Each slot is aligned to UNIFORM_BUFFER_OFFSET_ALIGNMENT (256 bytes)
         // This allows multiple effects to have independent params in a single submit
-        let buffer_size = MAX_EFFECT_SLOTS as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT;
-        let params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Effect Params Buffer (Indexed)"),
-            size: buffer_size,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let params_buffer = Self::create_params_buffer(device, MAX_EFFECT_SLOTS);
 
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Effect Sampler"),
@@ -334,6 +368,7 @@ impl EffectChainRunner {
             density_textures: None,
             color_textures: None,
             params_buffer,
+            slot_capacity: MAX_EFFECT_SLOTS,
             current_slot: 0,
             sampler,
             width,
@@ -360,14 +395,47 @@ impl EffectChainRunner {
         self.params_buffer.destroy();
     }
 
-    /// Allocate a slot and return its buffer offset
-    fn allocate_slot(&mut self) -> u64 {
-        let slot = self.current_slot;
-        self.current_slot += 1;
-        if self.current_slot > MAX_EFFECT_SLOTS {
-            log::warn!("Effect slot overflow! Max {} effects per frame", MAX_EFFECT_SLOTS);
-            self.current_slot = MAX_EFFECT_SLOTS; // Clamp to avoid panic
+    fn create_params_buffer(device: &Device, slots: usize) -> Buffer {
+        device.create_buffer(&BufferDescriptor {
+            label: Some("Effect Params Buffer (Indexed)"),
+            size: slots as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Make room for `needed` more slots this frame, before any of them
+    /// is allocated.
+    ///
+    /// Grows the params buffer to the next power of two past what the
+    /// frame needs. The old buffer is dropped, not destroyed: bind groups
+    /// made earlier in this frame (the density chain's, say) and the
+    /// writes queued for them still reference it, and wgpu keeps it alive
+    /// until they are done. The new buffer's first `current_slot` slots go
+    /// unused this frame; `reset_slots` starts the next one at 0, and the
+    /// capacity stays, so a chain that needed it once grows it once.
+    fn reserve_slots(&mut self, device: &Device, needed: usize) {
+        let want = self.current_slot + needed;
+        if want <= self.slot_capacity {
+            return;
         }
+        let capacity = want.next_power_of_two().max(MAX_EFFECT_SLOTS);
+        log::debug!("Effect params buffer: {} -> {} slots", self.slot_capacity, capacity);
+        self.params_buffer = Self::create_params_buffer(device, capacity);
+        self.slot_capacity = capacity;
+    }
+
+    /// Allocate a slot and return its buffer offset. `reserve_slots`
+    /// must have made room first.
+    fn allocate_slot(&mut self) -> u64 {
+        // A slot past the buffer is an offset at or beyond its end: the
+        // write and the bind group there are validation errors that reject
+        // the whole frame. Reserving is the fix; this only keeps a missed
+        // reservation from becoming that (it reuses the last slot, so one
+        // effect may read another's parameters).
+        debug_assert!(self.current_slot < self.slot_capacity, "effect slot allocated without reserve_slots");
+        let slot = self.current_slot.min(self.slot_capacity - 1);
+        self.current_slot += 1;
         slot as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT
     }
 
@@ -394,7 +462,7 @@ impl EffectChainRunner {
                         device,
                         self.width,
                         self.height,
-                        TextureFormat::Rgba16Float,
+                        DENSITY_FORMAT,
                         "Density Effect",
                     ));
                 }
@@ -576,7 +644,8 @@ impl EffectChainRunner {
             params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
             width,
             height,
-            _padding: [0.0; 2],
+            density_mean: 0.0,
+            _padding: 0.0,
         };
         let registry = global_effect_registry();
         if let Some(info) = registry.get("distance_field") {
@@ -713,8 +782,15 @@ impl EffectChainRunner {
 
         // Determine texture format based on category
         let texture_format = match category {
-            EffectCategory::Density => TextureFormat::Rgba16Float,
+            EffectCategory::Density => DENSITY_FORMAT,
             EffectCategory::Color => TextureFormat::Rgba8Unorm,
+        };
+        // Every pass overwrites its target, so no blending is wanted in
+        // either chain; the density format cannot blend at all (see
+        // `DENSITY_FORMAT`).
+        let blend = match category {
+            EffectCategory::Density => None,
+            EffectCategory::Color => Some(BlendState::REPLACE),
         };
 
         // Create bind group layout for effect
@@ -775,7 +851,7 @@ impl EffectChainRunner {
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format: texture_format,
-                    blend: Some(BlendState::REPLACE),
+                    blend,
                     write_mask: ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -827,6 +903,7 @@ impl EffectChainRunner {
         encoder: &mut CommandEncoder,
         input_view: &TextureView,
         effects: &[EffectInstance],
+        density_mean: f32,
     ) -> bool {
         let enabled_effects: Vec<_> = effects.iter().filter(|e| e.enabled).collect();
         if enabled_effects.is_empty() {
@@ -849,6 +926,7 @@ impl EffectChainRunner {
         self.ensure_textures(device, EffectCategory::Density);
 
         // Pre-allocate slots for all effects (before borrowing textures)
+        self.reserve_slots(device, enabled_effects.len());
         let slot_offsets: Vec<u64> = enabled_effects.iter().map(|_| self.allocate_slot()).collect();
 
         // Extract data needed for effect execution
@@ -882,6 +960,7 @@ impl EffectChainRunner {
                     &self.sampler,
                     width,
                     height,
+                    density_mean,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -895,6 +974,42 @@ impl EffectChainRunner {
     /// Get the output texture view from density effects (if any were run)
     pub fn get_density_output(&self) -> Option<&TextureView> {
         self.density_textures.as_ref().map(|t| t.read_view())
+    }
+
+    /// The density chain's output texels, row-major (test readback).
+    #[cfg(test)]
+    fn read_density_output_blocking(&self, device: &Device, queue: &Queue) -> Vec<[f32; 4]> {
+        let textures = self.density_textures.as_ref().expect("density effects ran");
+        let row = self.width * 16;
+        let padded = row.div_ceil(COPY_BYTES_PER_ROW_ALIGNMENT) * COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Density Output Readback"),
+            size: (padded * self.height) as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Density Output Readback") });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo { texture: textures.read_texture(), mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(self.height) },
+            },
+            Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(encoder.finish()));
+        buffer.slice(..).map_async(MapMode::Read, |_| {});
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let data = buffer.slice(..).get_mapped_range();
+        let mut out = Vec::with_capacity((self.width * self.height) as usize);
+        for y in 0..self.height {
+            let at = (y * padded) as usize;
+            for px in data[at..at + row as usize].chunks_exact(16) {
+                let f = |k: usize| f32::from_le_bytes([px[k], px[k + 1], px[k + 2], px[k + 3]]);
+                out.push([f(0), f(4), f(8), f(12)]);
+            }
+        }
+        out
     }
 
     /// Run color effects chain
@@ -936,12 +1051,11 @@ impl EffectChainRunner {
         // The distance-field effect runs one pass per slot: seed +
         // jump floods + composite.
         let jfa_slots = Self::jfa_pass_count(self.width, self.height) as usize + 2;
+        let slots_of = |e: &EffectInstance| if e.effect_type == "distance_field" { jfa_slots } else { 1 };
+        self.reserve_slots(device, enabled_effects.iter().map(|e| slots_of(e)).sum());
         let slot_offsets: Vec<Vec<u64>> = enabled_effects
             .iter()
-            .map(|e| {
-                let count = if e.effect_type == "distance_field" { jfa_slots } else { 1 };
-                (0..count).map(|_| self.allocate_slot()).collect()
-            })
+            .map(|e| (0..slots_of(e)).map(|_| self.allocate_slot()).collect())
             .collect();
         // The JFA resources leave `self` for the loop below (the
         // color ping-pong holds the &mut borrow).
@@ -999,6 +1113,7 @@ impl EffectChainRunner {
                     &self.sampler,
                     width,
                     height,
+                    0.0, // colour effects have no density
                 );
 
                 // Swap ping-pong textures for next effect
@@ -1034,6 +1149,7 @@ impl EffectChainRunner {
         sampler: &Sampler,
         width: u32,
         height: u32,
+        density_mean: f32,
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
@@ -1049,7 +1165,8 @@ impl EffectChainRunner {
             params: [[0.0; 4]; MAX_EFFECT_PARAMS / 4],
             width,
             height,
-            _padding: [0.0; 2],
+            density_mean,
+            _padding: 0.0,
         };
 
         // Fill in effect parameters (packed into vec4s)
@@ -1316,5 +1433,178 @@ mod include_tests {
     fn a_shader_without_the_marker_is_untouched() {
         let src = "fn a() {}".to_string();
         assert_eq!(process_shader_includes(src.clone()), src);
+    }
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+
+    /// A device with `features` (None, and the test skips, without an
+    /// adapter offering them). The density chain needs
+    /// `FLOAT32_FILTERABLE`; the colour chain nothing.
+    fn device_with(features: wgpu::Features) -> Option<(Device, Queue)> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+            if !adapter.features().contains(features) {
+                return None;
+            }
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("effect chain test"),
+                    required_features: features,
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: Default::default(),
+                })
+                .await
+                .ok()
+        })
+    }
+
+    /// A `w` x `h` texture of `format`, every texel `texel` (as bytes).
+    fn filled(device: &Device, queue: &Queue, w: u32, h: u32, format: TextureFormat, texel: &[u8]) -> (Texture, TextureView) {
+        let data: Vec<u8> = (0..w * h).flat_map(|_| texel.iter().copied()).collect();
+        texture_of(device, queue, w, h, format, &data)
+    }
+
+    /// A `w` x `h` texture of `format` holding `data`, row-major.
+    fn texture_of(device: &Device, queue: &Queue, w: u32, h: u32, format: TextureFormat, data: &[u8]) -> (Texture, TextureView) {
+        let texel_bytes = data.len() as u32 / (w * h);
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some("effect chain test input"),
+            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            data,
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel_bytes), rows_per_image: Some(h) },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// A raw hit count past f16's 65504 survives the density chain. The
+    /// ping-pong was Rgba16Float, so sharpen at amount 0 -- which returns
+    /// its input untouched -- turned a pixel of a million hits into Inf,
+    /// black under the Log tone map.
+    #[test]
+    fn a_hit_count_past_half_float_survives_the_density_chain() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        const W: u32 = 64;
+        const H: u32 = 4;
+        let texel: Vec<u8> = [0.5f32, 0.25, 0.75, 1.0e6].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba32Float, &texel);
+        let mut sharpen = EffectInstance::new("sharpen");
+        sharpen.set_param("amount", 0.0);
+        let mut chain = EffectChainRunner::new(&device, W, H);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
+        chain.reset_slots();
+        let ran = chain.run_density_effects(&device, &queue, &mut encoder, &view, &[sharpen], 1.0);
+        queue.submit(Some(encoder.finish()));
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "the density chain failed validation: {error:?}");
+        assert!(ran, "the chain ran");
+        let out = chain.read_density_output_blocking(&device, &queue);
+        for (i, px) in out.iter().enumerate() {
+            assert!(px[3].is_finite(), "texel {i}: alpha {} is not finite", px[3]);
+            assert!((px[3] / 1.0e6 - 1.0).abs() < 1e-6, "texel {i}: alpha {} is not the million hits it was given", px[3]);
+            assert!((px[0] - 0.5).abs() < 1e-6 && (px[2] - 0.75).abs() < 1e-6, "texel {i}: the colour changed: {px:?}");
+        }
+        chain.destroy();
+    }
+
+    /// density_blur's threshold and falloff are multiples of the frame's
+    /// mean density, the unit Levels uses: the same pixels blur whether
+    /// the render has run a million iterations or a billion. They were
+    /// compared with the raw hit count, so a pixel with a single hit was
+    /// never blurred, at any setting in the 0-1 range.
+    ///
+    /// Columns alternate red 0 and 1 at 1,000 hits each. Against a mean
+    /// of 10,000 that is a tenth of the mean, below the default 0.25, and
+    /// a middle texel blurs toward 0.5; against a mean of 100 it is ten
+    /// times the mean, past 0.25 + 0.5, and stays as it was.
+    #[test]
+    fn density_blur_measures_density_in_multiples_of_the_mean() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        const W: u32 = 32;
+        const H: u32 = 8;
+        let data: Vec<u8> = (0..W * H)
+            .flat_map(|i| [(i % W % 2) as f32, 0.0, 0.0, 1000.0])
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba32Float, &data);
+        let red_at_centre = |mean: f32| {
+            let mut chain = EffectChainRunner::new(&device, W, H);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
+            chain.reset_slots();
+            let ran = chain.run_density_effects(&device, &queue, &mut encoder, &view, &[EffectInstance::new("density_blur")], mean);
+            queue.submit(Some(encoder.finish()));
+            assert!(ran, "the chain ran");
+            let out = chain.read_density_output_blocking(&device, &queue);
+            chain.destroy();
+            out[(H / 2 * W + W / 2) as usize][0]
+        };
+        let sparse = red_at_centre(10_000.0);
+        assert!((sparse - 0.5).abs() < 0.2, "a tenth of the mean is sparse, but the stripes stayed sharp: red {sparse}");
+        let dense = red_at_centre(100.0);
+        assert!(dense == 0.0 || dense == 1.0, "ten times the mean is dense, but the stripes blurred: red {dense}");
+    }
+
+    /// A frame's chains may need more parameter slots than the buffer
+    /// starts with. Three distance fields at 1080p take 13 slots each (11
+    /// jump floods + seed + composite), and a vignette one more: 40
+    /// against 32. The 33rd allocation used to be clamped to slot 32 --
+    /// an offset equal to the buffer's size -- so its write and bind group
+    /// were validation errors and the whole frame was rejected.
+    #[test]
+    fn a_chain_needing_more_than_the_initial_slots_validates() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 1920;
+        const H: u32 = 1080;
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[200, 120, 40, 255]);
+        let effects: Vec<EffectInstance> = ["distance_field", "distance_field", "distance_field", "vignette"]
+            .into_iter()
+            .map(EffectInstance::new)
+            .collect();
+        let mut chain = EffectChainRunner::new(&device, W, H);
+        let needed = 3 * (EffectChainRunner::jfa_pass_count(W, H) as usize + 2) + 1;
+        assert!(needed > MAX_EFFECT_SLOTS, "the fixture needs {needed} slots, not more than the initial {MAX_EFFECT_SLOTS}");
+        // Two frames: the first grows the buffer, the second reuses it.
+        for frame in 0..2 {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("color") });
+            chain.reset_slots();
+            let ran = chain.run_color_effects(&device, &queue, &mut encoder, &view, &effects);
+            queue.submit(Some(encoder.finish()));
+            let error = pollster::block_on(scope.pop());
+            assert!(error.is_none(), "frame {frame}: the colour chain failed validation: {error:?}");
+            assert!(ran, "frame {frame}: the chain ran");
+            assert!(chain.slot_capacity >= needed, "frame {frame}: {} slots for a chain of {needed}", chain.slot_capacity);
+        }
+        let _ = device.poll(PollType::wait_indefinitely());
+        chain.destroy();
     }
 }

@@ -25,6 +25,56 @@ pub enum BrowserTab {
     Online,
 }
 
+/// The Online tab's render-mode filter: the value sent as
+/// `render_mode`, and the label key.
+///
+/// No Simulation entry: the server's `render_mode` enum does not know
+/// that value yet (see [`ApiRenderMode::Simulation`]), so filtering by
+/// it would fail the whole search rather than return nothing.
+///
+/// [`ApiRenderMode::Simulation`]: crate::api::types::ApiRenderMode::Simulation
+const ONLINE_RENDER_MODE_FILTERS: &[(Option<crate::api::types::ApiRenderMode>, &str)] = &[
+    (None, "browser.search_all"),
+    (Some(crate::api::types::ApiRenderMode::TwoD), "browser.search_2d"),
+    (Some(crate::api::types::ApiRenderMode::ThreeD), "browser.search_3d"),
+    (Some(crate::api::types::ApiRenderMode::Escape), "mode.escape"),
+];
+
+/// One row of the Online tab: the name, the kind of fractal, and for a
+/// flame its transform count and variations.
+///
+/// Escape and simulation configs legitimately have no transforms and no
+/// variations -- the formula or the model IS the fractal -- so for them
+/// those columns would read "0T | " and look like a broken row rather
+/// than a different kind of fractal.
+fn online_row_label(flame: &crate::api::types::FlameListItem) -> String {
+    use crate::api::types::ApiRenderMode as M;
+    let render_mode = t!(match flame.render_mode {
+        M::TwoD => "fractal_gallery.render_mode_2d",
+        M::ThreeD => "fractal_gallery.render_mode_3d",
+        M::Escape => "fractal_gallery.render_mode_escape",
+        M::Simulation => "fractal_gallery.render_mode_simulation",
+    });
+    match flame.render_mode {
+        M::Escape | M::Simulation => format!("{} — {}", flame.name, render_mode),
+        M::TwoD | M::ThreeD => {
+            let variations_summary = if flame.variation_names.len() <= 3 {
+                flame.variation_names.join(", ")
+            } else {
+                format!(
+                    "{}, +{}",
+                    flame.variation_names[..2].join(", "),
+                    flame.variation_names.len() - 2
+                )
+            };
+            format!(
+                "{} — {} | {}T | {}",
+                flame.name, render_mode, flame.transform_count, variations_summary
+            )
+        }
+    }
+}
+
 /// State for the Fractal Browser panel
 pub struct FractalBrowserPanel {
     /// Currently active tab
@@ -34,6 +84,7 @@ pub struct FractalBrowserPanel {
     /// Gallery for presets
     presets_gallery: FractalConfigGallery,
     /// Whether preset thumbnails need generation
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     presets_needs_generation: bool,
 
     // --- Batch tab ---
@@ -71,10 +122,16 @@ pub struct FractalBrowserPanel {
     online_deleting: bool,
     /// Shared slot for receiving async delete result (flame_name on success)
     online_delete_result: Arc<Mutex<Option<Result<String, String>>>>,
+    /// A delete the user asked for and has not yet confirmed: (id, name).
+    /// The X sits beside the row's load button and the delete cannot be
+    /// undone, so it goes through a confirmation as the palette
+    /// library's does.
+    online_pending_delete: Option<(String, String)>,
     /// Search filter: name text
     online_search_name: String,
-    /// Search filter: render mode (0=All, 1=2D, 2=3D)
-    online_search_render_mode: u8,
+    /// Search filter: render mode (`None` = All). One of
+    /// [`ONLINE_RENDER_MODE_FILTERS`].
+    online_search_render_mode: Option<crate::api::types::ApiRenderMode>,
 
     /// Cached auth credentials for trigger methods (base_url, token) — set each frame from render()
     auth_credentials: Option<(String, String)>,
@@ -116,14 +173,16 @@ impl FractalBrowserPanel {
             online_flame_result: Arc::new(Mutex::new(None)),
             online_deleting: false,
             online_delete_result: Arc::new(Mutex::new(None)),
+            online_pending_delete: None,
             online_search_name: String::new(),
-            online_search_render_mode: 0,
+            online_search_render_mode: None,
 
             auth_credentials: None,
         }
     }
 
     /// Get the current tab
+    #[cfg(test)]
     pub fn current_tab(&self) -> BrowserTab {
         self.current_tab
     }
@@ -145,11 +204,6 @@ impl FractalBrowserPanel {
         self.batch_needs_generation = true;
         // Auto-switch to batch tab
         self.current_tab = BrowserTab::Batch;
-    }
-
-    /// Check if batch has any results
-    pub fn has_batch_results(&self) -> bool {
-        self.batch_gallery.len() > 0
     }
 
     // ========== Files tab methods ==========
@@ -179,6 +233,7 @@ impl FractalBrowserPanel {
     }
 
     /// Load configs from JSON string
+    #[cfg(target_arch = "wasm32")]
     pub fn load_json(&mut self, json: &str, source_name: &str) {
         self.files_error_message = None;
 
@@ -203,10 +258,17 @@ impl FractalBrowserPanel {
         }
     }
 
-    /// Load configs directly (e.g., from Apophysis import)
-    pub fn load_configs(&mut self, configs: Vec<FractalConfig>, source_name: &str) {
+    /// Load configs that are already parsed into the Files tab -- a
+    /// multi-flame `.flame` from File > Open or Import Apophysis.
+    /// `path` is the file they came from, for the tab's header.
+    pub fn load_configs(
+        &mut self,
+        configs: Vec<FractalConfig>,
+        source_name: &str,
+        path: Option<std::path::PathBuf>,
+    ) {
         self.files_error_message = None;
-        self.files_current_path = None;
+        self.files_current_path = path;
 
         if configs.is_empty() {
             self.files_error_message =
@@ -233,13 +295,7 @@ impl FractalBrowserPanel {
         self.online_loading = false;
         self.online_error = None;
         self.online_search_name.clear();
-        self.online_search_render_mode = 0;
-    }
-
-    /// Reset online tab for a fresh session (used after sign-in).
-    /// Sets `online_fetched = false` so the next visit auto-fetches.
-    pub fn reset_online_for_new_session(&mut self) {
-        self.online_fetched = false;
+        self.online_search_render_mode = None;
     }
 
     // ========== Thumbnail generation (desktop) ==========
@@ -331,16 +387,6 @@ impl FractalBrowserPanel {
         // Files gallery starts generation when files are loaded
         self.files_gallery
             .start_async_thumbnail_generation(device, queue);
-    }
-
-    /// Get generation progress for the current tab
-    pub fn generation_progress(&self) -> (usize, usize) {
-        match self.current_tab {
-            BrowserTab::Presets => self.presets_gallery.generation_progress(),
-            BrowserTab::Batch => self.batch_gallery.generation_progress(),
-            BrowserTab::Files => self.files_gallery.generation_progress(),
-            BrowserTab::Online => (0, 0),
-        }
     }
 
     // ========== Rendering ==========
@@ -556,14 +602,10 @@ impl FractalBrowserPanel {
 
             ui.separator();
 
-            if ui.selectable_label(self.online_search_render_mode == 0, t!("browser.search_all").as_ref()).clicked() {
-                self.online_search_render_mode = 0;
-            }
-            if ui.selectable_label(self.online_search_render_mode == 1, t!("browser.search_2d").as_ref()).clicked() {
-                self.online_search_render_mode = 1;
-            }
-            if ui.selectable_label(self.online_search_render_mode == 2, t!("browser.search_3d").as_ref()).clicked() {
-                self.online_search_render_mode = 2;
+            for &(mode, key) in ONLINE_RENDER_MODE_FILTERS {
+                if ui.selectable_label(self.online_search_render_mode == mode, t!(key).as_ref()).clicked() {
+                    self.online_search_render_mode = mode;
+                }
             }
 
             ui.separator();
@@ -573,11 +615,11 @@ impl FractalBrowserPanel {
                 search_triggered = true;
             }
 
-            let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode != 0;
+            let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode.is_some();
             if has_filters {
                 if ui.add_enabled(search_enabled, egui::Button::new(t!("browser.search_clear"))).clicked() {
                     self.online_search_name.clear();
-                    self.online_search_render_mode = 0;
+                    self.online_search_render_mode = None;
                     search_triggered = true;
                 }
             }
@@ -611,35 +653,7 @@ impl FractalBrowserPanel {
             let mut delete_flame: Option<(String, String)> = None;
 
             for flame in &flames {
-                let render_mode = match flame.render_mode {
-                    crate::api::types::ApiRenderMode::TwoD => "2D",
-                    crate::api::types::ApiRenderMode::ThreeD => "3D",
-                    crate::api::types::ApiRenderMode::Escape => "Escape",
-                    crate::api::types::ApiRenderMode::Simulation => "Simulation",
-                };
-
-                let variations_summary = if flame.variation_names.len() <= 3 {
-                    flame.variation_names.join(", ")
-                } else {
-                    format!(
-                        "{}, +{}",
-                        flame.variation_names[..2].join(", "),
-                        flame.variation_names.len() - 2
-                    )
-                };
-
-                // An escape fractal legitimately has no transforms and no
-                // variations -- the formula IS the fractal -- so those
-                // columns would read "0T | " and look like a broken row
-                // rather than a different kind of fractal.
-                let label = if flame.render_mode == crate::api::types::ApiRenderMode::Escape {
-                    format!("{} — {}", flame.name, render_mode)
-                } else {
-                    format!(
-                        "{} — {} | {}T | {}",
-                        flame.name, render_mode, flame.transform_count, variations_summary
-                    )
-                };
+                let label = online_row_label(flame);
 
                 ui.horizontal(|ui| {
                     // Load button (main flame row)
@@ -667,9 +681,39 @@ impl FractalBrowserPanel {
                 });
             }
 
-            // Trigger delete outside the borrow
-            if let Some((id, name)) = delete_flame {
+            // Ask first; the delete runs from the confirmation below.
+            if delete_flame.is_some() {
+                self.online_pending_delete = delete_flame;
+            }
+        }
+
+        // Delete confirmation dialog
+        if let Some((id, name)) = self.online_pending_delete.clone() {
+            let mut confirmed = false;
+            let mut cancelled = false;
+            egui::Window::new(t!("browser.online_delete_title"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label(t!("browser.online_delete_message", name = name));
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        if ui.button(t!("browser.online_delete_confirm")).clicked() {
+                            confirmed = true;
+                        }
+                        if ui.button(t!("browser.online_delete_cancel")).clicked() {
+                            cancelled = true;
+                        }
+                    });
+                });
+            if confirmed {
+                self.online_pending_delete = None;
                 self.trigger_delete_flame(&id, &name);
+            } else if cancelled {
+                self.online_pending_delete = None;
             }
         }
 
@@ -682,7 +726,7 @@ impl FractalBrowserPanel {
         self.online_loading = true;
         self.online_error = None;
 
-        let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode != 0;
+        let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode.is_some();
 
         // Get credentials (WASM: from localStorage, Desktop: from cached auth)
         #[cfg(target_arch = "wasm32")]
@@ -707,11 +751,7 @@ impl FractalBrowserPanel {
             } else {
                 Some(self.online_search_name.clone())
             };
-            let render_mode = match self.online_search_render_mode {
-                1 => Some(crate::api::types::ApiRenderMode::TwoD),
-                2 => Some(crate::api::types::ApiRenderMode::ThreeD),
-                _ => None,
-            };
+            let render_mode = self.online_search_render_mode;
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
                 let result = search_online_flames(&base_url, &token, name, render_mode).await;
@@ -933,7 +973,107 @@ async fn delete_online_flame(base_url: &str, token: &str, flame_id: &str) -> Res
         .map_err(|e| e.to_string())
 }
 
-/// Check if an error string indicates an authentication/authorization failure (401/403)
+/// Check if an error string means the session is gone (401), which
+/// signs the user out.
+///
+/// Only the 401: a 403 ("Access denied") is the server refusing THIS
+/// request — someone else's private flame, a delete of a flame the user
+/// does not own — while the session is fine. Treating it as an expired
+/// session signed the user out for asking.
 fn is_auth_error(error: &str) -> bool {
-    error.contains("Authentication required") || error.contains("Access denied")
+    error.contains(&crate::resources::FetchError::Unauthorized.to_string())
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::is_auth_error;
+    use crate::resources::FetchError;
+
+    #[test]
+    fn only_a_401_signs_the_user_out() {
+        assert!(is_auth_error(&FetchError::Unauthorized.to_string()));
+        // As the async helpers carry it, wrapped in context.
+        assert!(is_auth_error(&format!("Failed to load flame: {}", FetchError::Unauthorized)));
+        assert!(!is_auth_error(&FetchError::Forbidden.to_string()), "a 403 is not an expired session");
+        assert!(!is_auth_error(&FetchError::NotFound("x".into()).to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::types::{ApiRenderMode, FlameListItem};
+
+    fn item(render_mode: ApiRenderMode, transform_count: i32, variations: &[&str]) -> FlameListItem {
+        FlameListItem {
+            id: "id".to_string(),
+            name: "Reef".to_string(),
+            render_mode,
+            transform_count,
+            variation_names: variations.iter().map(|s| s.to_string()).collect(),
+            has_3d: false,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// A simulation has no transforms and no variations, legitimately;
+    /// its row used to read "Reef — Simulation | 0T | " like a broken
+    /// flame, because only Escape got the short form.
+    #[test]
+    fn a_simulation_row_has_no_transform_columns() {
+        let label = online_row_label(&item(ApiRenderMode::Simulation, 0, &[]));
+        assert!(label.starts_with("Reef — "), "{label}");
+        assert!(!label.contains("0T"), "{label}");
+        assert!(!label.contains('|'), "{label}");
+
+        let label = online_row_label(&item(ApiRenderMode::Escape, 0, &[]));
+        assert!(!label.contains('|'), "{label}");
+    }
+
+    #[test]
+    fn a_flame_row_keeps_its_transform_count_and_variations() {
+        let label = online_row_label(&item(ApiRenderMode::TwoD, 3, &["linear", "swirl"]));
+        assert!(label.contains("| 3T | linear, swirl"), "{label}");
+        let label = online_row_label(&item(ApiRenderMode::ThreeD, 2, &["a", "b", "c", "d"]));
+        assert!(label.contains("| 2T | a, b, +2"), "{label}");
+    }
+
+    /// A multi-flame `.flame` lands in Files and leaves the Random tab's
+    /// batch alone. It used to go through `load_batch`, replacing the
+    /// last random batch and opening the Random tab, while
+    /// `load_configs` -- the Files loader -- had no caller.
+    #[test]
+    fn parsed_configs_from_a_file_go_to_files_and_keep_the_batch() {
+        let mut panel = FractalBrowserPanel::new();
+        panel.load_batch(vec![FractalConfig::default(), FractalConfig::default()]);
+        assert_eq!(panel.current_tab(), BrowserTab::Batch);
+
+        let path = std::path::PathBuf::from("several.flame");
+        panel.load_configs(
+            vec![FractalConfig::default(), FractalConfig::default(), FractalConfig::default()],
+            "several.flame",
+            Some(path.clone()),
+        );
+        assert_eq!(panel.current_tab(), BrowserTab::Files);
+        assert_eq!(panel.files_gallery.len(), 3);
+        assert_eq!(panel.files_current_path, Some(path));
+        assert_eq!(panel.batch_gallery.len(), 2, "the random batch was replaced");
+    }
+
+    /// Escape is searchable; Simulation is not offered, because the
+    /// server's render_mode enum rejects it.
+    #[test]
+    fn the_online_filter_offers_escape_but_not_simulation() {
+        let modes: Vec<_> = ONLINE_RENDER_MODE_FILTERS.iter().map(|(m, _)| *m).collect();
+        assert_eq!(
+            modes,
+            vec![
+                None,
+                Some(ApiRenderMode::TwoD),
+                Some(ApiRenderMode::ThreeD),
+                Some(ApiRenderMode::Escape),
+            ]
+        );
+    }
 }

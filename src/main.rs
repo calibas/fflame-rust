@@ -134,9 +134,11 @@ enum Commands {
 
     /// Export animation to video (pipes directly to ffmpeg, requires ffmpeg in PATH)
     ExportAnimation {
-        /// Input .fflame config file (base flame state)
+        /// Input .fflame config file (base flame state). Optional when the
+        /// .anim embeds a base config (an animation saved from the app
+        /// does); given anyway, it wins over the embedded one.
         #[arg(short, long)]
-        config: String,
+        config: Option<String>,
 
         /// Input .anim animation file
         #[arg(short, long)]
@@ -368,29 +370,31 @@ fn main() {
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, engine, supersample);
             }
             Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality, audio, audio_offset, audio_fade_in, audio_fade_out, audio_bitrate }) => {
-                // Parse video codec
-                let codec = match video_codec.to_lowercase().as_str() {
-                    "h264" => fractal_flame_wgpu::animation::export::VideoCodec::H264,
-                    "h265" | "hevc" => fractal_flame_wgpu::animation::export::VideoCodec::H265,
-                    "vp9" => fractal_flame_wgpu::animation::export::VideoCodec::VP9,
-                    _ => {
-                        eprintln!("Unknown video codec '{}'. Using h264.", video_codec);
-                        fractal_flame_wgpu::animation::export::VideoCodec::H264
-                    }
-                };
+                use fractal_flame_wgpu::animation::export::{HardwareAccel, VideoCodec};
 
-                // Parse hardware acceleration
-                let hardware_accel = match hw_accel.to_lowercase().as_str() {
-                    "none" | "software" | "cpu" => fractal_flame_wgpu::animation::export::HardwareAccel::None,
-                    "nvenc" | "nvidia" => fractal_flame_wgpu::animation::export::HardwareAccel::Nvenc,
-                    "qsv" | "quicksync" | "intel" => fractal_flame_wgpu::animation::export::HardwareAccel::Qsv,
-                    "amf" | "amd" => fractal_flame_wgpu::animation::export::HardwareAccel::Amf,
-                    "videotoolbox" | "vt" | "apple" => fractal_flame_wgpu::animation::export::HardwareAccel::VideoToolbox,
-                    _ => {
-                        eprintln!("Unknown hardware acceleration '{}'. Using software encoding.", hw_accel);
-                        fractal_flame_wgpu::animation::export::HardwareAccel::None
-                    }
-                };
+                // An unknown name falls back to the DEFAULT, and says
+                // which one that is. (It used to print "Using h264" and
+                // encode H.264, while the default is H.265.)
+                let codec = VideoCodec::from_cli_name(&video_codec).unwrap_or_else(|| {
+                    let fallback = VideoCodec::default();
+                    eprintln!(
+                        "Unknown video codec '{}' (expected h264, h265 or vp9). Using the default, {}.",
+                        video_codec,
+                        fallback.display_name()
+                    );
+                    fallback
+                });
+
+                let hardware_accel = HardwareAccel::from_cli_name(&hw_accel).unwrap_or_else(|| {
+                    let fallback = HardwareAccel::default();
+                    eprintln!(
+                        "Unknown hardware acceleration '{}' (expected none, nvenc, qsv, amf or videotoolbox). \
+                         Using the default, {}.",
+                        hw_accel,
+                        fallback.display_name()
+                    );
+                    fallback
+                });
 
                 // Validate hardware accel supports codec
                 if !hardware_accel.supports_codec(codec) {
@@ -423,7 +427,7 @@ fn main() {
                 });
 
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config);
+                fractal_flame_wgpu::export_animation_mode(config.as_deref(), &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config);
             }
             None => {
                 // Run normal GUI mode

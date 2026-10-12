@@ -614,7 +614,7 @@ impl Cylinders {
         let mut heap: std::collections::BinaryHeap<(u64, usize)> =
             std::collections::BinaryHeap::new();
         let bits = |p: f64| -> u64 { p.to_bits() };
-        let unbits = |b: u64| -> f64 { f64::from_bits(b) };
+        let _unbits = |b: u64| -> f64 { f64::from_bits(b) };
 
         let root = Word { map: crate::scene::mobius::Moebius::IDENTITY };
         let root_key = root.map.key().ok_or(NoCylinders::NoInvariantBall)?;
@@ -3338,7 +3338,7 @@ mod gpu_tests {
                 queue.submit(Some(enc.finish()));
                 let _ = device.poll(wgpu::PollType::wait_indefinitely());
             }
-            r.apply_exact_density_fraction(&device, &queue);
+            pollster::block_on(r.apply_exact_density_fraction(&device, &queue));
             r.frame_coverage_fraction()
         };
         let before = run(&mut r);
@@ -3625,7 +3625,7 @@ mod gpu_tests {
         r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 1, 0);
         queue.submit(Some(enc.finish()));
 
-        r.sync_cylinders(&device, &queue, &cfg);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
         assert_eq!(
             *r.targeting_state(),
             TS::NotPlanar,
@@ -3634,13 +3634,13 @@ mod gpu_tests {
 
         // ...and switching the box off is the one case that may.
         cfg.cylinder_targeting = false;
-        r.sync_cylinders(&device, &queue, &cfg);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
         assert_eq!(*r.targeting_state(), TS::Off);
 
         // The same flame in 2D is not refused for the render mode.
         cfg.cylinder_targeting = true;
         cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
-        r.sync_cylinders(&device, &queue, &cfg);
+        let _ = r.sync_cylinders(&device, &queue, &cfg);
         assert_ne!(*r.targeting_state(), TS::NotPlanar);
         assert_ne!(*r.targeting_state(), TS::Off);
     }
@@ -3706,7 +3706,7 @@ mod gpu_tests {
             );
             queue.submit(Some(enc.finish()));
             let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-            rr.apply_exact_density_fraction(&device, &queue);
+            pollster::block_on(rr.apply_exact_density_fraction(&device, &queue));
             rr.leak_fraction().expect("the probe was set, so a fraction must come back")
         };
 
@@ -3918,7 +3918,7 @@ mod gpu_tests {
             }
             assert!(cfg.flame.transforms[0].variations.get(kind).is_some_and(|w| *w != 0.0), "seed {seed} is not a {kind} flame");
             let name = format!("free-{kind}-{seed}");
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             println!("== {name} (seed {seed}), a sample point outside the blob");
             // The blob's disc, on the generator's identity post: a
             // view inside it is the blob's smooth glow, where a renewal
@@ -3954,7 +3954,7 @@ mod gpu_tests {
             let cfg = host.run(text, &FractalConfig::default(), seed, Default::default()).expect("the script runs").config;
             assert!(!cfg.flame.final_transforms.is_empty(), "seed {seed} has no final");
             let name = format!("final-{seed}");
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.75, 0.3] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(&name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -3995,7 +3995,7 @@ mod gpu_tests {
             fin.set_variation(variation, weight);
             (fin.a, fin.b, fin.c, fin.d, fin.e, fin.f) = (0.6, 0.2, -0.2, 0.6, 0.3, 0.1);
             cfg.flame.final_transforms = vec![fin];
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.3, 0.7] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -4053,7 +4053,7 @@ mod gpu_tests {
         (last.a, last.b, last.c, last.d, last.e, last.f) = (0.6, 0.2, -0.2, 0.6, 0.3, 0.1);
         fin.flame.final_transforms = vec![last];
         for (name, cfg) in [("elliptic-splits-julian", &armed), ("elliptic-splits-final", &fin)] {
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.3, 0.7] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -4122,7 +4122,7 @@ mod gpu_tests {
         println!("  the cylinder's branches: {branches}");
         assert!(branches >= 4, "a cylinder reaching two turns has {branches} branches");
         for (name, cfg) in [("cylinder-blur-bipolar", &c6), ("cylinder-turns-julian", &turns)] {
-            std::fs::write(format!("output/flame-zoom/{name}.fflame"), serde_json::to_string_pretty(cfg).expect("json")).expect("written");
+            std::fs::write(format!("output/flame-zoom/{name}.fflame"), cfg.to_json().expect("json")).expect("written");
             for frac in [0.3, 0.7] {
                 println!("== {name}, the plotted point at {frac}");
                 targeted_against_untargeted_at(name, &[1e1, 1e2, 1e3], |b| b.plotted(b.sample_point(frac)));
@@ -4179,7 +4179,7 @@ mod gpu_tests {
         if let Ok(text) = std::fs::read_to_string("output/JWF-rando32-simplified4.flame") {
             let mut cfg = crate::flame_xml::parse_flame_xml(&text).expect("parses").remove(0);
             cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
-            std::fs::write("output/flame-zoom/juliascope-rays.fflame", serde_json::to_string_pretty(&cfg).expect("json")).expect("written");
+            std::fs::write("output/flame-zoom/juliascope-rays.fflame", cfg.to_json().expect("json")).expect("written");
             names.push("juliascope-rays");
         }
         for name in names {
@@ -9116,7 +9116,7 @@ mod tests {
                 let mut st = 99u64;
                 let mut lcg = move || {
                     st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                    ((st >> 33) as usize)
+                    (st >> 33) as usize
                 };
                 let mut cur = mf.empty_word();
                 let mut syms: Vec<u32> = Vec::new();

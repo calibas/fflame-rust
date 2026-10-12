@@ -4,24 +4,34 @@
 WASM Visual Regression Testing
 
 Tests the WASM build by:
-1. Building wasm-pack
-2. Serving the web page locally
-3. Using Selenium to load and render fractals
-4. Capturing canvas to PNG
-5. Comparing pixel hashes with desktop baselines
+1. Building the web app (build-wasm.bat on Windows, build-wasm.sh elsewhere)
+2. Serving the repository root locally
+3. Using Selenium to load test.html and render each config through
+   WasmApi.export_png
+4. Saving the PNG to tests/visual/current/wasm/<category>-<stem>.png
+5. Comparing exact pixel hashes with tests/visual/baseline/wasm/
+
+Tests are named `<category>-<stem>`, as run_tests.py names them: two
+configs share the stem `affine3d-smoke` (3d/ and variations/), and a bare
+stem made them overwrite each other's output and baseline.
+
+A config with no baseline is reported as "no baseline", not as a pass:
+nothing was compared. --update-baseline writes baselines for the configs
+that rendered in this run.
 
 IMPORTANT: All test configs must have deterministic_rng: true
 """
 
 import subprocess
+import sys
 import time
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 from PIL import Image
 import io
-import base64
 
 # Selenium imports
 from selenium import webdriver
@@ -41,6 +51,15 @@ CONFIG = {
     'timeout': 600,  # 10 minutes per test (500M iterations in WASM is slow)
 }
 
+# Every category the web app can render and this suite can judge. The web
+# build has all three engines (build-wasm links the default features), so
+# `sim` is here; it was missing only because it postdates the list.
+# `solid` is NOT here, deliberately: this suite compares EXACT pixel hashes,
+# and solid rendering is not bit-reproducible (an in-batch depth race --
+# run_tests.py compares those with a tolerance for the same reason), so
+# every solid test would fail on noise.
+CATEGORIES = ['2d', '3d', 'tonemap', 'variations', 'escape', 'sim']
+
 
 class WasmTestRunner:
     def __init__(self):
@@ -49,31 +68,39 @@ class WasmTestRunner:
         self.driver = None
 
     def build_wasm(self):
-        """Build WASM package using build-wasm.bat"""
+        """Build the web app with the platform's build script."""
         print('Building WASM...')
 
-        # Run build-wasm.bat from project root
-        build_script = CONFIG['build_dir'] / 'build-wasm.bat'
+        # The two scripts are one procedure in two languages (RELEASE.md
+        # §7). cmd runs the .bat; anything else has bash for the .sh.
+        if sys.platform == 'win32':
+            script = 'build-wasm.bat'
+            cmd = ['cmd', '/c', script]
+        else:
+            script = 'build-wasm.sh'
+            cmd = ['bash', script]
         result = subprocess.run(
-            [str(build_script)],
+            cmd,
             cwd=CONFIG['build_dir'],
             capture_output=True,
             text=True,
-            shell=True,
         )
 
         if result.returncode == 0:
             print('WASM build complete [OK]\n')
         else:
-            raise Exception(f'build-wasm.bat failed:\n{result.stderr}')
+            tail = '\n'.join((result.stdout + result.stderr).strip().splitlines()[-20:])
+            raise Exception(f'{script} failed:\n{tail}')
 
     def start_server(self):
         """Start HTTP server using python -m http.server"""
         print(f'Starting HTTP server on port {CONFIG["port"]}...')
 
-        # Start server in background
+        # Start server in background, with this interpreter: a bare
+        # `python` is not on PATH everywhere (macOS and many Linuxes
+        # have only python3).
         self.server_process = subprocess.Popen(
-            ['python', '-m', 'http.server', str(CONFIG['port'])],
+            [sys.executable, '-m', 'http.server', str(CONFIG['port'])],
             cwd=CONFIG['build_dir'],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -95,8 +122,10 @@ class WasmTestRunner:
         options.add_argument('--enable-unsafe-webgpu')
         options.add_argument('--enable-features=Vulkan,UseSkiaRenderer')
 
-        # Use D3D11 backend on Windows (more reliable than Vulkan for WebGPU)
-        options.add_argument('--use-angle=d3d11')
+        # Use D3D11 backend on Windows (more reliable than Vulkan for WebGPU).
+        # ANGLE's D3D11 backend exists only there.
+        if sys.platform == 'win32':
+            options.add_argument('--use-angle=d3d11')
         options.add_argument('--use-cmd-decoder=passthrough')
 
         # Disable GPU blocklist to allow WebGPU even if GPU is "unsupported"
@@ -113,10 +142,10 @@ class WasmTestRunner:
             raise Exception(f'Failed to launch Chrome: {e}\n'
                           'Make sure Chrome and chromedriver are installed.')
 
-    def discover_configs(self) -> List[Dict]:
+    def discover_configs(self, category_filter: Optional[str] = None) -> List[Dict]:
         """Discover test configs"""
         configs = []
-        categories = ['2d', '3d', 'tonemap', 'variations', 'escape']
+        categories = CATEGORIES if category_filter is None else [category_filter]
 
         for category in categories:
             category_dir = CONFIG['configs_dir'] / category
@@ -124,7 +153,7 @@ class WasmTestRunner:
             if not category_dir.exists():
                 continue
 
-            for config_file in category_dir.glob('*.fflame'):
+            for config_file in sorted(category_dir.glob('*.fflame')):
                 # Skip warmup config
                 if config_file.name == 'warmup.fflame':
                     continue
@@ -139,7 +168,8 @@ class WasmTestRunner:
                     continue
 
                 configs.append({
-                    'name': config_file.stem,
+                    # `<category>-<stem>`, as run_tests.py names them.
+                    'name': f'{category}-{config_file.stem}',
                     'path': config_file,
                     'category': category,
                     'config': config_data,
@@ -148,7 +178,13 @@ class WasmTestRunner:
         return configs
 
     def run_test(self, test_config: Dict) -> Dict:
-        """Run a single WASM test"""
+        """Run a single WASM test.
+
+        The result's `status` is 'pass', 'fail' or 'no-baseline'."""
+        # A failed render must not leave an earlier run's PNG behind for
+        # --update-baseline to promote as this run's output.
+        output_path = CONFIG['current_dir'] / f'{test_config["name"]}.png'
+        output_path.unlink(missing_ok=True)
         try:
             # Navigate to test page
             print(f'  Testing: {test_config["name"]}')
@@ -206,7 +242,6 @@ class WasmTestRunner:
 
             # Save PNG
             CONFIG['current_dir'].mkdir(parents=True, exist_ok=True)
-            output_path = CONFIG['current_dir'] / f'{test_config["name"]}.png'
             with open(output_path, 'wb') as f:
                 f.write(screenshot)
 
@@ -216,10 +251,11 @@ class WasmTestRunner:
             # Extract performance metadata from PNG
             perf_stats = self.extract_performance_metadata(screenshot)
 
-            # Compare with desktop baseline
+            # Compare with the WASM baseline (WASM hashes differ from
+            # desktop's, so it has its own)
             baseline_path = CONFIG['baseline_dir'] / f'{test_config["name"]}.png'
             baseline_hash = None
-            passed = True
+            status = 'pass'
             error = None
 
             if baseline_path.exists():
@@ -227,14 +263,18 @@ class WasmTestRunner:
                     baseline_hash = self.hash_image_data(f.read())
 
                 if img_hash != baseline_hash:
-                    passed = False
+                    status = 'fail'
                     error = f'Hash mismatch: baseline {baseline_hash[:8]}..., got {img_hash[:8]}...'
             else:
-                print(f'Note: No baseline for {test_config["name"]} - creating first baseline')
+                # Nothing was compared, so this is not a pass. Nothing is
+                # written either, unless --update-baseline asks for it.
+                status = 'no-baseline'
+                error = f'No baseline at {baseline_path} (--update-baseline writes one)'
 
             return {
                 'name': test_config['name'],
-                'passed': passed,
+                'status': status,
+                'passed': status == 'pass',
                 'hash': img_hash,
                 'baseline_hash': baseline_hash,
                 'error': error,
@@ -244,6 +284,7 @@ class WasmTestRunner:
         except Exception as e:
             return {
                 'name': test_config['name'],
+                'status': 'fail',
                 'passed': False,
                 'hash': '',
                 'baseline_hash': None,
@@ -316,9 +357,9 @@ class WasmTestRunner:
         except Exception as e:
             print(f'    Warning: Could not get browser logs: {e}')
 
-    def run_all_tests(self) -> bool:
+    def run_all_tests(self, category_filter: Optional[str] = None) -> bool:
         """Run all tests"""
-        configs = self.discover_configs()
+        configs = self.discover_configs(category_filter)
 
         if not configs:
             print('No test configs found!')
@@ -336,7 +377,8 @@ class WasmTestRunner:
 
     def print_result(self, result: Dict):
         """Print single test result"""
-        status = '[PASS]' if result['passed'] else '[FAIL]'
+        status = {'pass': '[PASS]', 'fail': '[FAIL]',
+                  'no-baseline': '[NONE]'}[result['status']]
 
         # Format performance stats if available
         perf_str = ''
@@ -355,11 +397,13 @@ class WasmTestRunner:
 
     def print_summary(self) -> bool:
         """Print summary"""
-        passed = sum(1 for r in self.results if r['passed'])
-        failed = len(self.results) - passed
+        passed = sum(1 for r in self.results if r['status'] == 'pass')
+        failed = sum(1 for r in self.results if r['status'] == 'fail')
+        missing = sum(1 for r in self.results if r['status'] == 'no-baseline')
 
         print('\n' + '=' * 60)
-        print(f'WASM Tests: {passed} passed, {failed} failed, {len(self.results)} total')
+        print(f'WASM Tests: {passed} passed, {failed} failed, {missing} no baseline, '
+              f'{len(self.results)} total')
 
         # Performance summary
         total_render_time = 0
@@ -386,8 +430,13 @@ class WasmTestRunner:
         if failed > 0:
             print('\nFailed tests:')
             for r in self.results:
-                if not r['passed']:
+                if r['status'] == 'fail':
                     print(f'  - {r["name"]}: {r["error"]}')
+        if missing > 0:
+            print('\nNo baseline (rendered, not compared):')
+            for r in self.results:
+                if r['status'] == 'no-baseline':
+                    print(f'  - {r["name"]}')
 
         return failed == 0
 
@@ -405,7 +454,9 @@ def main():
 
     parser = argparse.ArgumentParser(description='WASM Visual Regression Tests')
     parser.add_argument('--update-baseline', action='store_true',
-                        help='Update baseline images with current outputs')
+                        help='Write baselines for the configs that rendered in this run')
+    parser.add_argument('--category', choices=CATEGORIES,
+                        help='Run only the tests in this category')
     args = parser.parse_args()
 
     runner = WasmTestRunner()
@@ -421,31 +472,34 @@ def main():
         runner.launch_browser()
 
         # Run tests
-        success = runner.run_all_tests()
+        success = runner.run_all_tests(args.category)
 
-        # Update baselines if requested
+        # Update baselines if requested: only this run's renders (each
+        # test deletes its old output first, so a PNG here is this run's).
         if args.update_baseline:
             print('\nUpdating WASM baselines...')
             CONFIG['baseline_dir'].mkdir(parents=True, exist_ok=True)
             for result in runner.results:
                 current = CONFIG['current_dir'] / f'{result["name"]}.png'
                 baseline = CONFIG['baseline_dir'] / f'{result["name"]}.png'
-                if current.exists():
-                    import shutil
+                if result['hash'] and current.exists():
                     shutil.copy(current, baseline)
                     print(f'  Updated baseline: {result["name"]}.png')
             print('Baselines updated!')
+        elif any(r['status'] == 'no-baseline' for r in runner.results):
+            # A run that compared nothing for some configs is not a pass.
+            success = False
 
         # Cleanup
         runner.cleanup()
 
         # Exit with appropriate code
-        exit(0 if success else 1)
+        sys.exit(0 if success else 1)
 
     except Exception as e:
         print(f'Fatal error: {e}')
         runner.cleanup()
-        exit(1)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

@@ -90,14 +90,14 @@ async fn a_hostile_iteration_count_is_clamped() {
     );
 }
 
-/// `iterations_per_thread` is caller-adjustable (trajectory depth — a
-/// quality knob), and hostile values are clamped rather than turning a
-/// single dispatch into a watchdog-length stall.
+/// `iterations_per_thread` is caller-adjustable (iterations a thread
+/// runs per dispatch), and hostile values are clamped rather than
+/// turning a single dispatch into a watchdog-length stall.
 #[pollster::test]
 async fn iterations_per_thread_is_adjustable_and_clamped() {
     let config = include_str!("../../script/tests/fixtures/basic_random_seed7.fflame");
 
-    // A deeper-trajectory render succeeds and produces pixels.
+    // A longer-dispatch render succeeds and produces pixels.
     let deep = match fflame_render::render_impl(config, 48, 48, Some(500_000), Some(1024)).await {
         Ok(t) => t,
         Err(e) if e.contains("no GPU adapter") => {
@@ -192,7 +192,7 @@ async fn many_renders_in_a_row_reuse_the_device() {
     assert_eq!(after.pixels.len(), 48 * 48 * 4);
 }
 
-/// This module carries BOTH engines, so an escape config renders here
+/// This module carries EVERY engine, so an escape config renders here
 /// rather than reporting a missing engine — the difference from
 /// ../flame, and the reason ../render is the one a general viewer
 /// should embed.
@@ -211,5 +211,28 @@ async fn an_escape_config_also_renders() {
     assert!(
         tile.pixels.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0),
         "all pixels black — the escape render produced nothing"
+    );
+}
+
+/// And a simulation config. This module was once built without
+/// `engine-sim` while its README promised every mode, so a simulation
+/// came back as `EngineMissing("simulation")` from the one renderer a
+/// gallery is told to embed when it does not know what the config is.
+#[pollster::test]
+async fn a_simulation_config_also_renders() {
+    let config = include_str!("../../../tests/visual/configs/sim/brusselator-turing.fflame");
+
+    let tile = match fflame_render::render_impl(config, 64, 64, None, None).await {
+        Ok(t) => t,
+        Err(e) if e.contains("no GPU adapter") => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        Err(e) => panic!("simulation render failed: {e}"),
+    };
+    assert_eq!(tile.pixels.len(), 64 * 64 * 4);
+    assert!(
+        tile.pixels.chunks(4).any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0),
+        "all pixels black — the simulation render produced nothing"
     );
 }

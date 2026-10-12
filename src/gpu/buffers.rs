@@ -207,6 +207,12 @@ pub struct SubflameMeta {
 unsafe impl bytemuck::Pod for SubflameMeta {}
 unsafe impl bytemuck::Zeroable for SubflameMeta {}
 
+/// A per-pixel buffer's size, in u64: in u32, `width * height * 16`
+/// wraps to 0 at 16384x16384.
+pub(crate) fn pixel_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
+    width as u64 * height as u64 * bytes_per_pixel
+}
+
 /// Pack a flame's transforms into the unified GPU layout:
 /// parent xforms (normals, linkeds, finals) → zero-pad to `MAX_TRANSFORMS` →
 /// subflame xforms (per subflame: normals then finals) → zero-pad to
@@ -1123,12 +1129,15 @@ pub struct BlurConvolveParams {
 pub struct AccumulateParams {
     pub width: u32,
     pub height: u32,
+    /// The fixed-EMA rate, read only in mode 1. Any value is a rate,
+    /// 1.0 included: overwrite is mode 2, never inferred from this.
     pub blend_factor: f32,
-    /// Mode flag — 0 = cumulative-mean (algorithmic ideal,
+    /// Mode — 0 = cumulative-mean (algorithmic ideal,
     /// precision-limited around 10^9 iters/pixel on f32), 1 = fixed
     /// EMA at `blend_factor` (precision-stable, dim early frames as
-    /// the EMA bootstraps from 0). Mirrors `accumulate.wgsl`'s
-    /// `use_fixed_ema` field.
+    /// the EMA bootstraps from 0), 2 = overwrite (discard the
+    /// accumulation, store this batch alone: the parameter-change
+    /// reset). Mirrors `accumulate.wgsl`'s `use_fixed_ema` field.
     pub use_fixed_ema: u32,
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
@@ -1320,6 +1329,43 @@ pub struct FlameBuffers {
 
     // Track current palette size for dynamic palette texture
     palette_size: u32,
+
+    /// What the setters below have replaced, waiting to be destroyed.
+    retired: Retired,
+}
+
+/// A buffer or texture `FlameBuffers` has replaced.
+enum Retiree {
+    Buffer(Buffer),
+    Texture(Texture),
+}
+
+impl Retiree {
+    fn destroy(&self) {
+        match self {
+            Retiree::Buffer(b) => b.destroy(),
+            Retiree::Texture(t) => t.destroy(),
+        }
+    }
+}
+
+/// Resources `FlameBuffers` has replaced mid-update -- toggling solid or
+/// the census, path ids, the palette size, xaos, analytic blur, a
+/// growing orbit, cylinder or bias table -- waiting to be destroyed.
+///
+/// Dropping them is not enough: on WebGPU a dropped buffer frees nothing
+/// until garbage collection, so each toggle of a solid flame held another
+/// histogram. Destroying them at once is not safe either: a command
+/// encoder not yet submitted may still use one, and a submit that uses a
+/// destroyed buffer fails validation. Every caller submits a
+/// `compute_pass`'s encoder before it records the next `compute_pass`, so
+/// what was retired before the previous one is in no unsubmitted encoder:
+/// each `compute_pass` destroys the older generation and ages the newer
+/// (`FlameBuffers::release_retired`); `destroy` takes both.
+#[derive(Default)]
+struct Retired {
+    newer: Vec<Retiree>,
+    older: Vec<Retiree>,
 }
 
 /// Default palette size (256 colors for backward compatibility)
@@ -1358,6 +1404,8 @@ impl FlameBuffers {
         if let Some(b) = &self.accum_depth_buffer { b.destroy(); }
         if let Some(b) = &self.blur_splat_buffer { b.destroy(); }
         if let Some(b) = &self.blur_convolved_buffer { b.destroy(); }
+        if let Some(b) = &self.orbit_buffer { b.destroy(); }
+        self.dummy_orbit_buffer.destroy();
         // Small uniform/param/dummy buffers + 1D LUT textures (KB each, but
         // tidy them too so nothing is left dangling on the device).
         self.transform_buffer.destroy();
@@ -1379,6 +1427,29 @@ impl FlameBuffers {
         self.palette_texture.destroy();
         self.stepped_palette_texture.destroy();
         self.curve_lut_texture.destroy();
+        for r in self.retired.newer.iter().chain(&self.retired.older) {
+            r.destroy();
+        }
+    }
+
+    /// Hand a replaced buffer to the retire list (see `Retired`).
+    fn retire_buffer(&mut self, buffer: Buffer) {
+        self.retired.newer.push(Retiree::Buffer(buffer));
+    }
+
+    /// Hand a replaced texture to the retire list (see `Retired`).
+    fn retire_texture(&mut self, texture: Texture) {
+        self.retired.newer.push(Retiree::Texture(texture));
+    }
+
+    /// Destroy what was retired before the previous call, and age what
+    /// was retired since. `FlameRenderer::compute_pass` calls it first
+    /// thing; see `Retired` for why two generations are safe.
+    pub fn release_retired(&mut self) {
+        for r in self.retired.older.drain(..) {
+            r.destroy();
+        }
+        self.retired.older = std::mem::take(&mut self.retired.newer);
     }
 
     /// Free only the large per-iteration GPU resources — the histogram buffers,
@@ -1609,7 +1680,7 @@ impl FlameBuffers {
         //   u32[3]: Density (full u32)
         // Size: width × height × 4 × sizeof(u32)
         // Memory: ~7.7MB @ 800×600 (was ~5.8MB with packed format)
-        let histogram_buffer_size = (width * height * 4 * std::mem::size_of::<u32>() as u32) as u64;
+        let histogram_buffer_size = pixel_bytes(width, height, 4 * std::mem::size_of::<u32>() as u64);
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
@@ -1860,6 +1931,7 @@ impl FlameBuffers {
             sampler,
             curve_lut_sampler,
             current_is_a: true,
+            retired: Retired::default(),
             width,
             height,
             palette_size,
@@ -1970,6 +2042,9 @@ impl FlameBuffers {
     /// Light-space shadow map resolution per axis (4 maps ride the
     /// solid histogram's tail — 16 MB total at 1024).
     pub const SHADOW_MAP_RES: u32 = 1024;
+    /// The histogram's tail past the solid depth region: the 8-word
+    /// bounds atomics and four SHADOW_MAP_RES² shadow maps (16 MiB).
+    pub const SOLID_TAIL_BYTES: u64 = 32 + 4 * (Self::SHADOW_MAP_RES as u64 * Self::SHADOW_MAP_RES as u64) * 4;
 
     /// Word offset of the shadow-map region inside the solid histogram
     /// (after RGBD + depth region + 8-word bounds tail).
@@ -1999,16 +2074,18 @@ impl FlameBuffers {
         } else {
             0
         };
-        self.histogram_buffer = device.create_buffer(&BufferDescriptor {
+        let size = self.histogram_rgbd_bytes() + tail;
+        let old = std::mem::replace(&mut self.histogram_buffer, device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {
                 "Histogram Buffer (+census tail)"
             } else {
                 "Histogram Buffer"
             }),
-            size: self.histogram_rgbd_bytes() + tail,
+            size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
-        });
+        }));
+        self.retire_buffer(old);
         self.census_region = enabled;
         true
     }
@@ -2033,13 +2110,9 @@ impl FlameBuffers {
         //    ordered-float atomicMax depth toward each light) — shadows
         //    at SPLAT resolution, written by the main pass, read by the
         //    shade pass, cleared with the depth region.
-        let tail: u64 = if enabled {
-            32 + 4 * (Self::SHADOW_MAP_RES as u64).pow(2) * 4
-        } else {
-            0
-        };
+        let tail: u64 = if enabled { Self::SOLID_TAIL_BYTES } else { 0 };
         let size = (self.width as u64) * (self.height as u64) * words * std::mem::size_of::<u32>() as u64 + tail;
-        self.histogram_buffer = device.create_buffer(&BufferDescriptor {
+        let old = std::mem::replace(&mut self.histogram_buffer, device.create_buffer(&BufferDescriptor {
             label: Some(if enabled {
                 "Histogram Buffer (+solid depth region)"
             } else {
@@ -2050,11 +2123,12 @@ impl FlameBuffers {
             // auto-fit when the depth region exists.
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
-        });
+        }));
+        self.retire_buffer(old);
         // The accumulator's depth-ownership tracker lives and dies with
         // the depth region (accumulate.wgsl depth-tightening reset).
         if let Some(b) = self.accum_depth_buffer.take() {
-            b.destroy();
+            self.retire_buffer(b);
         }
         if enabled {
             self.accum_depth_buffer = Some(device.create_buffer(&BufferDescriptor {
@@ -2374,23 +2448,17 @@ impl FlameBuffers {
         palette_log_strength: f32,
         palette_reverse: bool,
     ) {
-        use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+        use crate::scene::palette::{render_palette_lookup, PaletteTransform};
 
         let size = self.palette_size as usize;
-        // For geometric mode, `squeeze_factor` carries the octave ratio
-        // (`palette_squeeze_falloff`). For linear mode it carries the
-        // existing repeat count (`palette_squeeze`).
-        let squeeze_factor = match palette_squeeze_mode {
-            SqueezeMode::Linear => palette_squeeze,
-            SqueezeMode::Geometric => palette_squeeze_falloff,
-        };
-        let transform = PaletteTransform {
-            squeeze_mode: palette_squeeze_mode,
-            squeeze_factor,
-            log_strength: palette_log_strength,
-            rotation: palette_rotation,
-            reverse: palette_reverse,
-        };
+        let transform = PaletteTransform::from_settings(
+            palette_squeeze_mode,
+            palette_squeeze,
+            palette_squeeze_falloff,
+            palette_log_strength,
+            palette_rotation,
+            palette_reverse,
+        );
         let rotated_data = render_palette_lookup(palette, &transform, size);
         write_palette_table(queue, &self.palette_texture, self.palette_size, &rotated_data);
         let stepped = crate::scene::palette::render_stepped_palette_lookup(palette, &transform, size);
@@ -2409,10 +2477,14 @@ impl FlameBuffers {
 
         self.palette_size = new_size;
 
-        self.palette_texture = create_palette_texture(device, new_size, "Palette Texture");
+        let old = std::mem::replace(&mut self.palette_texture, create_palette_texture(device, new_size, "Palette Texture"));
+        self.retire_texture(old);
         self.palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
-        self.stepped_palette_texture =
-            create_palette_texture(device, new_size, "Stepped Palette Texture");
+        let old = std::mem::replace(
+            &mut self.stepped_palette_texture,
+            create_palette_texture(device, new_size, "Stepped Palette Texture"),
+        );
+        self.retire_texture(old);
         self.stepped_palette_view =
             self.stepped_palette_texture.create_view(&TextureViewDescriptor::default());
 
@@ -2469,7 +2541,7 @@ impl FlameBuffers {
         );
 
         // Create the path id buffer (one u32 per pixel: the path it was last drawn through)
-        let path_buffer_size = (self.width * self.height * std::mem::size_of::<u32>() as u32) as u64;
+        let path_buffer_size = pixel_bytes(self.width, self.height, std::mem::size_of::<u32>() as u64);
         self.path_buffer = Some(device.create_buffer(&BufferDescriptor {
             label: Some("Path Buffer"),
             size: path_buffer_size,
@@ -2493,7 +2565,9 @@ impl FlameBuffers {
             (self.width as f64 * self.height as f64 * 4.0) / (1024.0 * 1024.0)
         );
 
-        self.path_buffer = None;
+        if let Some(b) = self.path_buffer.take() {
+            self.retire_buffer(b);
+        }
 
         true  // Bind groups need rebuilding
     }
@@ -2550,7 +2624,9 @@ impl FlameBuffers {
 
         log::info!("Dropping xaos buffer");
 
-        self.xaos_buffer = None;
+        if let Some(b) = self.xaos_buffer.take() {
+            self.retire_buffer(b);
+        }
 
         true  // Bind groups need rebuilding
     }
@@ -2595,8 +2671,9 @@ impl FlameBuffers {
             if self.blur_splat_buffer.is_none() {
                 return false; // Already dropped.
             }
-            self.blur_splat_buffer = None;
-            self.blur_convolved_buffer = None;
+            for b in [self.blur_splat_buffer.take(), self.blur_convolved_buffer.take()].into_iter().flatten() {
+                self.retire_buffer(b);
+            }
             self.blur_buffer_count = 0;
             self.blur_lowres_w = 0;
             self.blur_lowres_h = 0;
@@ -2623,8 +2700,10 @@ impl FlameBuffers {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        self.blur_splat_buffer = Some(mk("Blur Splat Buffer"));
-        self.blur_convolved_buffer = Some(mk("Blur Convolved Buffer"));
+        let (splat, convolved) = (mk("Blur Splat Buffer"), mk("Blur Convolved Buffer"));
+        for b in [self.blur_splat_buffer.replace(splat), self.blur_convolved_buffer.replace(convolved)].into_iter().flatten() {
+            self.retire_buffer(b);
+        }
         self.blur_buffer_count = want;
         self.blur_lowres_w = lowres_w;
         self.blur_lowres_h = lowres_h;
@@ -2647,7 +2726,7 @@ impl FlameBuffers {
             return false;
         }
         if let Some(b) = self.orbit_buffer.take() {
-            b.destroy();
+            self.retire_buffer(b);
         }
         self.orbit_buffer = Some(device.create_buffer(&BufferDescriptor {
             label: Some("Orbit Buffer"),
@@ -2674,7 +2753,7 @@ impl FlameBuffers {
     ) -> bool {
         let Some(table) = packed.filter(|t| !t.is_empty()) else {
             if let Some(b) = self.cylinder_buffer.take() {
-                b.destroy();
+                self.retire_buffer(b);
                 return true;
             }
             return false;
@@ -2683,7 +2762,7 @@ impl FlameBuffers {
         let mut rebuilt = false;
         if !self.cylinder_buffer.as_ref().is_some_and(|b| b.size() >= want) {
             if let Some(b) = self.cylinder_buffer.take() {
-                b.destroy();
+                self.retire_buffer(b);
             }
             self.cylinder_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Cylinder Buffer"),
@@ -2728,10 +2807,8 @@ impl FlameBuffers {
         settings: &crate::config::fractal_config::ImportanceSettings,
     ) -> bool {
         if !settings.enabled {
-            if self.bias_buffer.is_some() {
-                if let Some(b) = self.bias_buffer.take() {
-                    b.destroy();
-                }
+            if let Some(b) = self.bias_buffer.take() {
+                self.retire_buffer(b);
                 return true;
             }
             return false;
@@ -2742,7 +2819,7 @@ impl FlameBuffers {
         let fits = self.bias_buffer.as_ref().is_some_and(|b| b.size() >= want);
         if !fits {
             if let Some(b) = self.bias_buffer.take() {
-                b.destroy();
+                self.retire_buffer(b);
             }
             self.bias_buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Importance Bias Buffer"),
@@ -2771,6 +2848,34 @@ impl FlameBuffers {
 mod tests {
     use super::*;
     use crate::scene::transforms::Transform;
+
+    #[test]
+    fn a_per_pixel_size_does_not_wrap() {
+        assert_eq!(pixel_bytes(16384, 16384, 16), 1u64 << 32);
+    }
+
+    /// `scene` mirrors these caps rather than depending on `gpu`; the
+    /// capacity check every way in relies on the mirrors being right.
+    #[test]
+    fn the_scene_mirrors_the_transform_caps() {
+        use crate::scene::transforms as t;
+        assert_eq!(t::SUBFLAME_XFORM_ID_BASE as usize, MAX_TRANSFORMS);
+        assert_eq!(t::MAX_GPU_TRANSFORM_SLOTS, MAX_TRANSFORMS);
+        assert_eq!(t::MAX_GPU_SUBFLAMES, MAX_SUBFLAMES);
+        assert_eq!(t::MAX_GPU_SUBFLAME_TRANSFORMS, MAX_SUBFLAME_TRANSFORMS_TOTAL);
+    }
+
+    /// A flame at the cap packs; one past it is refused by the check
+    /// before packing could panic.
+    #[test]
+    fn a_flame_past_the_transform_cap_is_refused_not_packed() {
+        let mut flame = crate::scene::transforms::Flame::default();
+        flame.transforms = (0..MAX_TRANSFORMS).map(|_| Transform::default()).collect();
+        assert_eq!(flame.gpu_capacity_error(), None);
+        assert_eq!(pack_gpu_transforms(&flame, crate::scene::transforms::RenderMode::TwoD).len(), MAX_TRANSFORMS_UNIFIED);
+        flame.final_transforms.push(Transform::default());
+        assert!(flame.gpu_capacity_error().is_some(), "normals + finals count together");
+    }
 
     #[test]
     fn gpu_transform_std430_size_invariant() {

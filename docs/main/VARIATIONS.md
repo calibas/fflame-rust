@@ -156,7 +156,9 @@ integer, sparsely: an entry exists only where it differs from the
 variation's natural priority (`Pre` −1, `Normal`/`Any` 0, `Post` 1).
 The dispatcher buckets by sign: negative is pre, positive post. Only
 `Any` variations honour an override; `Pre`, `Normal` and `Post` stay
-where their definition puts them.
+where their definition puts them. Every transform's override counts --
+normal, Linked and Final alike, as JWildfire partitions the phases per
+XForm.
 
 An `Any` variation moved to pre or post is still a normal-style body,
 so the dispatcher applies its weight: `temp = temp + w·f(temp)`, or
@@ -399,7 +401,10 @@ The rules and their reasons are in [SHADERS.md](SHADERS.md).
 | `su_mobius.wgsl` | any active variation has `NeedsMobiusLib` |
 
 All but `su_mobius.wgsl` are gated on **names**, in
-`ShaderBuilder::build_definitions`. A downloaded variation can therefore
+`ShaderBuilder::build_definitions`; the name-gated libraries from
+`fractwf.wgsl` on are one table, `NAME_GATED_LIBRARIES`
+(`src/shader_builder_v2.rs`), which the engine contract publishes as
+`helper_libraries.name_gated`. A downloaded variation can therefore
 reach only `complex.wgsl` and the Möbius library; anything else it
 needs must be in its own body.
 
@@ -549,6 +554,11 @@ All four are described in [SHADERS.md](SHADERS.md) and
 6. **Unit conversions.** If the foreign app stores a parameter in other
    units, add the pair to `variation_param_from_xml` /
    `variation_param_to_xml` in [flame_xml.rs](../../src/flame_xml.rs).
+   If a parameter bounds a loop the variation runs every iteration, time
+   it (`PARAM_COST_ONLY=<name> cargo test --release --lib -- --ignored
+   --nocapture measure_variation_param_costs`). If its maximum adds 15 ms
+   or more to an app frame, list it in `variations::SLOW_PARAMS`, so its
+   control commits on release (UI.md, *Slow settings*).
 7. **Regenerate the contract**
    (`UPDATE_CONTRACT=1 cargo test --lib contract_is_current`) and read
    the diff; run the shader lints; render a flame that uses it in 2D

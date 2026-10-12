@@ -19,6 +19,15 @@ pub struct PaletteEditor {
     pub pending_save_palette: Option<Palette>,
     /// Palette name pending delete (for confirmation dialog)
     pub pending_delete_name: Option<String>,
+    /// One id per colour stop, parallel to the palette's stops: the
+    /// egui id of that stop's row. A position change re-sorts the stops,
+    /// and the row being dragged must keep its widget id through the
+    /// sort, or egui carries the drag on in the row the stop LEFT and
+    /// the slider there takes over the neighbour it was dragged past.
+    /// Rebuilt whenever the count stops matching (another palette, an
+    /// undo); only a drag in progress depends on it.
+    stop_ids: Vec<u64>,
+    next_stop_id: u64,
 }
 
 impl PaletteEditor {
@@ -34,8 +43,38 @@ impl PaletteEditor {
             show_delete_confirmation: false,
             pending_save_palette: None,
             pending_delete_name: None,
+            stop_ids: Vec::new(),
+            next_stop_id: 0,
         }
     }
+
+    fn fresh_stop_id(&mut self) -> u64 {
+        self.next_stop_id += 1;
+        self.next_stop_id
+    }
+
+    /// Make `stop_ids` one id per stop again if the palette's stop count
+    /// changed under it.
+    fn sync_stop_ids(&mut self, stops: usize) {
+        if self.stop_ids.len() != stops {
+            self.stop_ids = (0..stops).map(|_| self.fresh_stop_id()).collect();
+        }
+    }
+}
+
+/// Sort the stops by position, carrying each stop's row id along.
+///
+/// Both samplers (`Palette::sample_color`, `sample_color_stepped`)
+/// assume the stops are in position order. Only Add used to sort, so
+/// dragging a stop's Position past its neighbour left an unsorted list
+/// they read as a different gradient. Stable, so stops at one position
+/// keep their order (a hard edge stays the edge it was).
+fn sort_stops_keeping_ids(stops: &mut Vec<ColorStop>, ids: &mut Vec<u64>) {
+    debug_assert_eq!(stops.len(), ids.len());
+    let mut order: Vec<usize> = (0..stops.len()).collect();
+    order.sort_by(|&a, &b| stops[a].position.total_cmp(&stops[b].position));
+    *stops = order.iter().map(|&i| stops[i]).collect();
+    *ids = order.iter().map(|&i| ids[i]).collect();
 }
 
 /// Core implementation of palette editor (shared by window and panel)
@@ -155,12 +194,15 @@ fn render_palette_editor_core_impl(
             let mut palette_updated = false;
             let mut force_commit = false;
 
+            palette_editor.sync_stop_ids(palette.stops.len());
+            let row_ids = palette_editor.stop_ids.clone();
             egui::ScrollArea::vertical()
                 .max_height(250.0)
                 .show(ui, |ui| {
                     let stops_len = palette.stops.len();
                     for i in 0..stops_len {
-                        ui.horizontal(|ui| {
+                        // Keyed by the stop, not the row: see `stop_ids`.
+                        ui.push_id(("palette_stop", row_ids[i]), |ui| ui.horizontal(|ui| {
                             let stop = &mut palette.stops[i];
 
                             ui.label(t!("palette_editor.stop_label", index = i + 1));
@@ -201,13 +243,15 @@ fn render_palette_editor_core_impl(
                             {
                                 stop_to_remove = Some(i);
                             }
-                        });
+                        }));
                     }
                 });
 
             // Handle ConfigManager updates after all mutable borrows are done
             if palette_updated {
-                // Update library (live updates during drag)
+                // A position drag can carry a stop past its neighbour;
+                // keep the list in order, the dragged row with its stop.
+                sort_stops_keeping_ids(&mut palette.stops, &mut palette_editor.stop_ids);
 
                 // Enter preview mode for live rendering
                 let _ = config_manager.update_param(
@@ -219,6 +263,7 @@ fn render_palette_editor_core_impl(
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
                 palette.stops.remove(idx);
+                palette_editor.stop_ids.remove(idx);
 
                 // Update library and create undo point
                 let _ = config_manager.update_param(
@@ -244,8 +289,10 @@ fn render_palette_editor_core_impl(
                     position: new_position,
                     color: [1.0, 1.0, 1.0],
                 });
+                let id = palette_editor.fresh_stop_id();
+                palette_editor.stop_ids.push(id);
                 // Sort by position
-                palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
+                sort_stops_keeping_ids(&mut palette.stops, &mut palette_editor.stop_ids);
 
                 // Update library and create undo point
                 let _ = config_manager.update_param(
@@ -492,4 +539,45 @@ pub fn render_palette_editor_content(
     super::palette_generate::render(ui, &mut palette_editor.generator, config_manager, palettes);
 
     // Note: The dialogs are rendered separately via render_palette_dialogs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dragging a stop's Position past its neighbour re-sorts the list,
+    /// and the dragged stop's row id goes with it -- the id is what keeps
+    /// egui's drag on the stop rather than on the row it left.
+    #[test]
+    fn a_position_change_resorts_and_the_row_id_follows_its_stop() {
+        let stop = |position: f32, c: f32| ColorStop { position, color: [c; 3] };
+        // Stop 0 (id 10) dragged from 0.0 to 0.8, past stop 1 at 0.5.
+        let mut stops = vec![stop(0.8, 0.0), stop(0.5, 0.5), stop(1.0, 1.0)];
+        let mut ids = vec![10, 11, 12];
+        sort_stops_keeping_ids(&mut stops, &mut ids);
+        assert_eq!(stops.iter().map(|s| s.position).collect::<Vec<_>>(), [0.5, 0.8, 1.0]);
+        assert_eq!(ids, [11, 10, 12], "the dragged stop's id moved with it");
+        assert_eq!(stops[1].color, [0.0; 3], "and so did its colour");
+
+        // Stable: stacked stops (a hard edge) keep their order.
+        let mut stops = vec![stop(0.5, 0.1), stop(0.5, 0.9), stop(0.0, 0.0)];
+        let mut ids = vec![1, 2, 3];
+        sort_stops_keeping_ids(&mut stops, &mut ids);
+        assert_eq!(ids, [3, 1, 2]);
+    }
+
+    #[test]
+    fn stop_ids_resync_when_the_count_changes() {
+        let mut ed = PaletteEditor::new();
+        ed.sync_stop_ids(3);
+        let first = ed.stop_ids.clone();
+        ed.sync_stop_ids(3);
+        assert_eq!(ed.stop_ids, first, "same count: the ids hold");
+        ed.sync_stop_ids(4);
+        assert_eq!(ed.stop_ids.len(), 4);
+        let mut unique = ed.stop_ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 4, "ids are distinct");
+    }
 }

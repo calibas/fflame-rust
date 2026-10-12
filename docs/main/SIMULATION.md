@@ -537,7 +537,16 @@ advanced, and a viewport-bound grid is fixed at its current size.
 `textures::as_recipe` then fixes the grid (at most `MAX_TEXTURE_SIDE` =
 2048 on its longer side), forces `Letterbox` so the grid fills the image
 edge to edge, and drops any texture of the config's own — textures do
-not nest. Names are sanitised and numbered if taken.
+not nest. Names are sanitised and numbered if taken. On desktop, saving
+also caches the image from the live run, so the texture never needs a
+first generation (`App::cache_saved_texture_from_run`): it is rendered
+through `render` continuing the viewport's simulation as a caller-owned
+engine, which colours a field already at the recipe's step count without
+stepping it. That is done only when the field is the recipe's: the same
+grid, exactly its step count, and every step taken under its settings
+(`SimRenderer::ran_steadily_as`; a parameter edited mid-run makes a field
+no recipe reproduces). A run that uses the flame's transforms, or shows
+a terrain, is left to generate.
 
 **The Textures panel** ([src/ui/textures_panel.rs](../../src/ui/textures_panel.rs))
 shows presets, then the user's own, each with a preview. Picking one
@@ -547,14 +556,32 @@ deleted, and a fractal already using one keeps its own copy. The panel
 is available in Escape and Simulation modes (in Simulation, to manage
 what was saved).
 
+**Generating without asking** is only for what is quick:
+`textures::may_generate` allows a texture that is cached, cheap
+(`generation_cost`, grid cells × steps × layers, at most
+`AUTO_GENERATE_COST` = 1e10, about four of the shipped presets), or asked
+for this session (`approve`). Anything else waits: the panel shows a
+Generate button with its size and step count, and Generate all; the
+viewport draws an escape picture without it and says so once
+(`texture_sync`), until the panel's Generate. An asked-for generation
+still blocks the frame while it runs, but its "generating" label is drawn
+first. Exports do not ask: a file must hold the picture its config
+names.
+
 **The image** is derived data. `textures::obtain` reads it from the
 cache, or generates it by rendering the recipe through
 `renderer::render` at the recipe's grid size and caches it. The cache
-key is a SHA-256 of the recipe's file form, its size,
-`TEXTURE_CACHE_VERSION` and the crate version
+key is a SHA-256 of the recipe's file form without its `version` stamp,
+its size and `TEXTURE_CACHE_VERSION`
 ([src/textures/cache.rs](../../src/textures/cache.rs)); desktop keeps
 PNGs under `texture_cache/` in the data directory, the web keeps them in
-memory for the session.
+memory for the session. The key used to carry the crate version, so a
+release or a config format change regenerated every texture.
+`TEXTURE_CACHE_VERSION` is what moves when the engine's output may:
+`the_texture_engine_is_the_one_the_cache_was_versioned_for` pins a
+fingerprint of the shaders a texture is made with (every model's seed and
+step, every colouring, the tone map), and fails when they change. Old
+entries stay on disk, unused; nothing evicts the cache.
 
 ---
 
@@ -593,6 +620,10 @@ reseeding on it would make every model unusable.
    `#[ignore]`d, so **run it deliberately** — it is the only check that
    can see whether a preset draws anything at all, and it has caught a
    model rendering black that no name check could.
+5. A parameter that multiplies a step's work -- a kernel radius read
+   cell by cell, an agent count -- goes in `SLOW_PARAMS` in
+   [src/sim/mod.rs](../../src/sim/mod.rs), so the panel commits it when
+   a drag ends instead of overshooting (UI.md, *Slow settings*).
 
 ---
 

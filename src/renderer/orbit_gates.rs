@@ -763,7 +763,7 @@ fn dbg_what_persistent_orbits_cost() {
                     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
                     r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, ipt, 20);
                     queue.submit(Some(enc.finish()));
-                    let mut go = |r: &mut crate::renderer::FlameRenderer, n: usize| -> u64 {
+                    let go = |r: &mut crate::renderer::FlameRenderer, n: usize| -> u64 {
                         let mut samples = 0u64;
                         for _ in 0..n {
                             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });

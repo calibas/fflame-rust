@@ -100,7 +100,11 @@ It is chosen in the Colors panel under *Tone Mapping → Advanced → Tone
 Map Mode*.
 
 Every mode inverts `gamma`: the exponent is `1/gamma`, except that a
-gamma of exactly 0 gives an exponent of 0.
+gamma of exactly 0 gives an exponent of 0. The slider stops at 0.1, so
+neither that flat silhouette nor the inverted picture a negative gamma
+gives is offered; a file or script can still set them, and the slider
+shows such a value without rewriting it (`ConfigSlider` draws with
+`SliderClamping::Edits`).
 
 | mode | value | colour | alpha |
 | --- | --- | --- | --- |
@@ -257,7 +261,9 @@ it changes nothing.
 
 In the Colors panel's *Tone Curve* section: an enable box; presets Linear,
 S-Curve, Brighten Shadows and Darken Highlights; and an editor where
-dragging moves a point and a double-click adds one.
+dragging moves a point, a double-click adds one, and Ctrl+click
+(Cmd+click on a Mac) or a right-click -- a long press on touch --
+removes an interior one. The endpoints move vertically only.
 
 ---
 
@@ -469,9 +475,12 @@ and colour mode alone. Every preset is Logarithmic.
 
 The panel's *Reset to Defaults* button
 (`reset_colors_to_defaults` in [src/ui/mod.rs](../../src/ui/mod.rs))
-restores the colour mode, the tone-map mode and most tone-map and
-palette-transform settings to their `defaults.rs` values. It leaves the
-palette and the background alone.
+restores every setting the Colors panel edits to its
+`FractalConfig::default()` value, as one undo step -- the colour mode
+and its Speed and PathMap settings, the tone map, the spatial filter,
+the curve, Levels and the palette transforms (`colors_reset_paths`; a
+test holds the list to the panel's controls). It leaves the palette,
+the background and Focused Rendering alone.
 
 ---
 
@@ -483,7 +492,7 @@ means the control is read only by the logarithmic branch.
 | control | field | UI range | default | read by |
 | --- | --- | --- | --- | --- |
 | Exposure | `exposure` | 0.001–10 | 1.0 | all modes |
-| Gamma | `gamma` | −1–10 | 4.0 | all modes |
+| Gamma | `gamma` | 0.1–10 | 4.0 | all modes |
 | Gamma Threshold | `gamma_threshold` | 0–1000 | 5.0 | Log |
 | Brightness | `brightness` | 0.001–100 | 4.0 | Log |
 | Vibrancy | `vibrancy` | 0–30 | 1.0 | Log |

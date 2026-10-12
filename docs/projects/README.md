@@ -14,6 +14,8 @@ which rewrites the references in code comments too).
 |---|---|
 | [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
 | [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
+| [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |
+| [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Planned 2026-10-12: hold any slider's drag once its frames turn slow, beyond the listed slow settings. |
 
 ## Paused
 
@@ -27,10 +29,9 @@ which rewrites the references in code comments too).
 
 | Doc | What it tracks |
 |---|---|
-| [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code: likely bugs, UI and comment mismatches, dead code. None fixed yet. |
+| [doc-review-findings.md](doc-review-findings.md) | What the October 2026 doc refresh found wrong in the code, and what the fix pass that followed left open (its *Still open* section). |
 | [escape-sim-followups.md](escape-sim-followups.md) | Escape-time and simulation decisions to make, the path tracer's speed, known gaps, and what the escape engine has not built. |
 | [solid-rendering-todo.md](solid-rendering-todo.md) | Solid rendering for 3D flames: what is left. |
-| [config-v2-migration.md](config-v2-migration.md) | Config value translations planned for the v1 -> v2 bump. The bump shipped without the `levels_high` and `dof_blur_strength` translations: open. |
 | [VARIATIONS_TODOS.md](VARIATIONS_TODOS.md) | The variation backlog. |
 | [variation-port-blockers.md](variation-port-blockers.md) | Why particular variations are not ported yet. |
 | [jwf-common-variations-port.md](jwf-common-variations-port.md) | Porting JWildfire's common variations (and the cut family). |

@@ -209,8 +209,9 @@ viewport size, since the viewport's own image cannot be supersampled.
 
 ## Routing flames by size
 
-A flame histogram is 16 bytes a pixel, 20 with solid rendering
-(`histogram_size_bytes`). The direct path needs it in one storage
+A flame histogram is 16 bytes a pixel; with solid rendering (occluding
+or only lit, `FractalConfig::solid_depth_active`) 20, plus a 16 MiB
+tail of shadow maps (`histogram_size_bytes`). The direct path needs it in one storage
 binding, so routing compares it with the adapter's own
 `max_storage_buffer_binding_size` — probed from the adapter by the CLI
 (`probe_max_binding_size`), read from the app's device in the app — not
@@ -218,9 +219,9 @@ WebGPU's 128 MB floor. Desktop adapters commonly report far more, so 8K
 can take the direct path.
 
 **CLI** (`export_headless`):
-- Escape and Simulation always go to `render`. Above one binding they
-  are refused: the shared tail allocates its histogram at the export
-  size whatever the mode.
+- Escape and Simulation always go to `render`, at any size: the tail
+  they use holds no histogram (`FlameRenderer::for_tail`), and `render`
+  refuses what the device cannot hold (`TooLarge`) before allocating.
 - A flame goes to `HighResExporter` when the histogram exceeds the
   binding, otherwise to `render`. `--engine flamerenderer` or
   `--engine highres` forces one (for parity testing; forcing the direct
@@ -228,8 +229,9 @@ can take the direct path.
   allocate).
 
 **App** (`export_custom_size`, rule in `route_custom_size_export`):
-- Escape and Simulation: `Direct` (`render`), or `TooLarge` above one
-  binding, reported with a toast.
+- Escape and Simulation: `Direct` (`render`), at any size; a size the
+  device refuses comes back from `render` as `TooLarge`, reported with a
+  toast.
 - A flame: `HighRes` — in the background — when the histogram exceeds
   the binding **or** `max_iterations` exceeds 250,000,000
   (`BACKGROUND_EXPORT_ITER_THRESHOLD`), so a long render shows progress
@@ -287,8 +289,8 @@ What `HighResExporter::new` does with each:
 Then the tone map, on the same `tonemap.wgsl`. Above a 1 GB
 accumulation (about 8000²) it runs in strips of at most 256 MB, so the
 `Rgba32Float` accumulation is never whole on the GPU. Density effects
-need a full-resolution set of about 36 bytes a pixel after the histogram
-is freed; above a 4 GiB budget (about 119 MP, ~10,900²) they are skipped
+need a full-resolution set of 52 bytes a pixel after the histogram
+is freed; above a 4 GiB budget (about 83 MP, ~9,100²) they are skipped
 with a warning. Colour effects always run.
 
 (The module's own header comment still describes the CPU-histogram path
@@ -440,14 +442,14 @@ FractalArtEditor export-animation -c config.fflame -a animation.anim -o out.mp4 
 
 | flag | default |
 | --- | --- |
-| `-c`, `--config` | required: the base config |
+| `-c`, `--config` | the base config; without it, the `.anim`'s embedded `base_config` (an error if it has none). Given with one, `-c` wins |
 | `-a`, `--animation` | required: the `.anim` file |
 | `-o`, `--output` | required |
 | `-w`, `--width` / `-H`, `--height` | 1920 / 1080 |
 | `--fps` | 30 |
 | `--iterations-per-thread` | 1024 |
-| `--video-codec` | `h265`; also `h264`, `vp9` (WebM). An unknown name falls back to H.264 |
-| `--hw-accel` | `none`; `nvenc`, `qsv`, `amf`, `videotoolbox`; falls back to software when the encoder cannot do the codec |
+| `--video-codec` | `h265` (also `hevc`); also `h264`, `vp9` (WebM). An unknown name falls back to the default, H.265, with a message saying so |
+| `--hw-accel` | `none`; `nvenc`, `qsv`, `amf`, `videotoolbox`. An unknown name falls back to the default, software, with a message; so does an encoder that cannot do the codec |
 | `--video-quality` | 18 (CRF, 0–51, lower is better) |
 | `--audio` | none: an MP3, WAV, FLAC or OGG file to mux in |
 | `--audio-offset`, `--audio-fade-in`, `--audio-fade-out` | 0 seconds |
@@ -490,16 +492,14 @@ the image data.
 | `RenderMode` | `2D`, `3D`, `Escape` or `Simulation` |
 | `Projection` | `Orthographic` or `Perspective{strength:…}` in 3D; `N/A` otherwise |
 | `ShaderVariations` | how many variations the flame uses |
+| `TestName`, `TestCategory` | the CLI's test labels (`export --category`); written only when set |
 
-The test category (`--category`) is a field of `PngMetadata` but is not
-written to a chunk.
-
-The `Config` chunk is `serde_json::to_string(config)` — the plain
-derive, not `FractalConfig::to_json` — so it has **no `version` key**.
-Reloading it through `FractalConfig::from_json` treats it as version 0
-and runs the v2 → v3 migration, which turns a 3D flame into 2D (see
-[CONFIG.md](CONFIG.md), *Versioning*). Escape and simulation configs are
-not affected.
+The `Config` chunk is the canonical saved form,
+`FractalConfig::to_json_value` (compact, with its `version`), so it
+reloads through `FractalConfig::from_json` exactly as a `.fflame` does.
+PNGs exported before that carry the plain serde derive with no
+`version`; `from_json` dates those by their top-level `render_mode` (see
+[CONFIG.md](CONFIG.md), *Versioning*).
 
 **Stripping.** The privacy switch is one process-global flag checked by
 the encoder itself, so no export path can forget it:
@@ -616,22 +616,33 @@ forward pictures exactly only when the model parameters are constant.
 
 ## The web build
 
-**`WasmApi.export_png(width, height, iterations_per_thread, transparent)`**
+**`WasmApi.export_png(width, height, iterations_per_thread, transparent, premultiplied?)`**
 (`src/wasm_api.rs`) renders the loaded config through
 `export_headless_wasm` (`src/app/export.rs`): a WebGPU device of its own
 with the adapter's binding and storage-buffer limits, `render`, then
 `device.destroy()` so the export's memory is freed at once rather than
 whenever the JavaScript garbage collector runs. The PNG carries the same
-metadata. It renders the config's `max_iterations`;
-`set_target_iterations` does not change that. Straight alpha only: there
-is no premultiplied argument. See [WASM.md](../WASM.md).
+metadata. It renders to the API's iteration target: the config's
+`max_iterations` on load, or `set_target_iterations`. The optional
+`premultiplied` argument is the CLI's `--premultiplied` (default
+straight alpha). See [WASM.md](../WASM.md).
 
 **In the web app**, the viewport-size export reads the live picture
-back asynchronously and downloads it. The custom-size export runs its
-own render loops in `src/app/mod.rs` — the flame chaos game, the escape
-chunk loop and `SimRenderer::render_still` — rather than calling
-`render_with`, so a stage added to `render_with` does not reach it
-automatically. 2× antialiasing is not offered on the web.
+back asynchronously and downloads it. The custom-size export calls
+`render` on the app's own device in a `spawn_local` task, as the
+desktop's runs it under `pollster`, so it has every stage the other
+exports have. (It was a copy of the render loops in `src/app/mod.rs`
+until 2026-10, without the shade pass, DoF, density effects or the exact
+density fraction.) Not on a device of its own: beside the live one a
+large export runs out of memory. Three things in `render_with` exist
+for the browser: the exact reads it makes (the shadow fit, the density
+fraction) are awaited, never waited on synchronously, which never
+returns in a page; escape chunks are fixed in size there, since nothing
+can wait between them to time them (`set_fixed_chunk`); and `render`'s
+own renderer frees its iteration buffers once the tone map has run,
+before the colour effects allocate (`RenderJob::throwaway_renderer`),
+which an 8K export with colour effects needs. 2× antialiasing is not
+offered on the web.
 
 ---
 

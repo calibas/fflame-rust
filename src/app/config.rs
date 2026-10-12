@@ -17,6 +17,15 @@ impl App {
         description: String,
         api_metadata: Option<ApiContentState>,
     ) -> Result<(), String> {
+        // A flame the renderer's transform buffers cannot hold would
+        // panic on its first frame; refuse it, and say why on screen
+        // (the callers only log a load error).
+        if let Some(why) = config.flame.gpu_capacity_error() {
+            let msg = format!("Can't load \"{}\": {why}", config.flame.name);
+            self.egui_layer.show_api_notification(&msg, true);
+            return Err(msg);
+        }
+
         // Snapshot the current api_state as the "after" of the previous snapshot
         // (captures any changes since the last load, e.g. saving online)
         self.update_current_api_state_snapshot();
@@ -359,8 +368,7 @@ impl App {
         // binding, or row-tiles when it doesn't — either way bounded memory +
         // progress. Synchronous ⇒ the app's own device, blocking briefly.
         let max_binding = self.gpu.device.limits().max_storage_buffer_binding_size as u64;
-        let solid_active = config.solid_strength > 0.0
-            && matches!(config.render_mode, crate::scene::transforms::RenderMode::ThreeD);
+        let solid_active = config.solid_depth_active();
         let hist_size = crate::export::histogram_size_bytes(render_width, render_height, solid_active);
         let long_render = config.max_iterations > Self::BACKGROUND_EXPORT_ITER_THRESHOLD;
         // Escape mode: one compute dispatch, always fast -- the flame
@@ -381,23 +389,6 @@ impl App {
             max_binding,
             long_render,
         ) {
-            crate::export::CustomSizeRoute::TooLarge => {
-                // Both non-flame engines hit this for the same reason:
-                // the shared `FlameRenderer` whose tail they use
-                // allocates its histogram at the export size whatever
-                // the mode. Say which mode, since the remedy differs --
-                // escape tiling is unimplemented, while a simulation's
-                // grid is independent of the output and can simply be
-                // exported smaller.
-                let what = if escape_mode { "Escape-time" } else { "Simulation" };
-                let msg = format!(
-                    "{what} export at {}x{} exceeds this GPU's buffer limit -- try a smaller size",
-                    render_width, render_height
-                );
-                log::error!("{msg}");
-                self.egui_layer.show_api_notification(&msg, true);
-                return;
-            }
             crate::export::CustomSizeRoute::HighRes => {
                 println!(
                     "  Routing through HighResExporter for {}x{} ({} MB histogram, {} iterations{})",

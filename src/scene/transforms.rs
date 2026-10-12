@@ -193,6 +193,16 @@ pub const MAX_STATE_SLOTS_PER_FLAME: u32 = 1024;
 /// `xform_id_base` initializer in `update_subflames`).
 pub const SUBFLAME_XFORM_ID_BASE: u32 = 128;
 
+/// The parent transform slots the GPU holds: normals, linked and finals
+/// together. Mirrors `gpu::buffers::MAX_TRANSFORMS`, as
+/// `SUBFLAME_XFORM_ID_BASE` does (a test checks all three mirrors).
+pub const MAX_GPU_TRANSFORM_SLOTS: usize = SUBFLAME_XFORM_ID_BASE as usize;
+/// Mirrors `gpu::buffers::MAX_SUBFLAMES`.
+pub const MAX_GPU_SUBFLAMES: usize = 8;
+/// Every subflame's normals and finals together. Mirrors
+/// `gpu::buffers::MAX_SUBFLAME_TRANSFORMS_TOTAL`.
+pub const MAX_GPU_SUBFLAME_TRANSFORMS: usize = 256;
+
 /// Walk a flame's active variations and assign each `(xform_idx,
 /// variation_local_id)` pair with `state_count > 0` a contiguous offset
 /// in the per-thread state array.
@@ -2142,6 +2152,33 @@ impl Flame {
         self.transforms.len()
             + self.linked_transforms.len()
             + self.final_transforms.len()
+    }
+
+    /// Why the renderer cannot hold this flame, if it cannot: more
+    /// transforms or subflames than its fixed GPU buffers have slots for.
+    /// Packing such a flame panics (`update_transforms`), so every way in
+    /// -- loading a config, `render()`, adding a transform -- asks this
+    /// first. A `.flame` with more xforms than that is the likely case.
+    pub fn gpu_capacity_error(&self) -> Option<String> {
+        let slots = self.total_gpu_transform_slots();
+        if slots > MAX_GPU_TRANSFORM_SLOTS {
+            return Some(format!(
+                "it has {slots} transforms (normal, linked and final together); the renderer holds {MAX_GPU_TRANSFORM_SLOTS}"
+            ));
+        }
+        if self.subflames.len() > MAX_GPU_SUBFLAMES {
+            return Some(format!(
+                "it has {} subflames; the renderer holds {MAX_GPU_SUBFLAMES}",
+                self.subflames.len()
+            ));
+        }
+        let sub: usize = self.subflames.iter().map(|s| s.transforms.len() + s.final_transforms.len()).sum();
+        if sub > MAX_GPU_SUBFLAME_TRANSFORMS {
+            return Some(format!(
+                "its subflames have {sub} transforms together; the renderer holds {MAX_GPU_SUBFLAME_TRANSFORMS}"
+            ));
+        }
+        None
     }
 
     /// Migrate a legacy singular `final_transform` (loaded from JSON

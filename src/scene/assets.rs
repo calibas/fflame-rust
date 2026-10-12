@@ -123,10 +123,17 @@ mod tests {
     }
 
     #[test]
-    fn test_load_presets() {
-        // This test will only pass if assets/presets exists
-        let presets = load_configs_from_dir(&crate::resources::resource_path("assets/presets"));
-        // Should have at least the default presets
-        assert!(presets.is_empty() || !presets.is_empty()); // Always passes, just exercising the code
+    fn every_fflame_in_a_folder_loads() {
+        // The CLI's `export -i <dir>` reads a folder of configs this way.
+        // (This test once read a folder that does not exist and asserted
+        // `is_empty() || !is_empty()`.)
+        let dir = crate::resources::resource_path("tests/visual/configs/2d");
+        let on_disk = std::fs::read_dir(&dir)
+            .expect("tests/visual/configs/2d exists")
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("fflame"))
+            .count();
+        assert!(on_disk > 0);
+        assert_eq!(load_configs_from_dir(&dir).len(), on_disk);
     }
 }

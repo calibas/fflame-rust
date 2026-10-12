@@ -34,9 +34,12 @@ const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
 //                       exchange for unbounded sample-count headroom.
 //                       Set this to ~0.001 for high-quality renders
 //                       past ~10^9 iters.
-// `blend_factor ≥ 0.99` → overwrite mode (clear prev before add).
-//                         Used by the host as the parameter-change
-//                         reset signal.
+// Overwrite mode (clear prev before add) is its own mode value
+// (`use_fixed_ema == 2`), the host's parameter-change reset signal.
+// It used to be signalled by `blend_factor ≥ 0.99`, which a Fixed
+// Blend Rate slider at 0.99-1.0 also sent: the shader then cleared
+// every batch while the host kept counting the samples the buffer
+// no longer held, and the picture faded as `sample_density` grew.
 //
 // Pre-Phase-8b this was a true EMA `prev * (1-α) + new * α` with
 // nonlinearly-scaled density `prev.a + density × 0.01 × blend_factor`.
@@ -49,11 +52,11 @@ const HISTOGRAM_COLOR_SCALE: f32 = 100.0;
 struct AccumulateParams {
     width: u32,
     height: u32,
-    // EMA blend strength when use_fixed_ema != 0. Also overloaded as
-    // the "overwrite" signal: blend_factor ≥ 0.99 means clear prev
-    // before add (used for parameter-change reset).
+    // EMA blend strength when use_fixed_ema == 1; read in no other mode.
+    // Any value is a blend rate, 1.0 included -- overwrite is mode 2,
+    // never a blend_factor.
     blend_factor: f32,
-    // Mode flag (was _pad0):
+    // Mode (was _pad0):
     //   0 = cumulative-mean — α per pixel = new_density / total_density.
     //       Matches the reference Fractal Flame algorithm. Brightness
     //       correct from the first frame. Hits an f32 precision wall
@@ -65,6 +68,9 @@ struct AccumulateParams {
     //       indefinitely because each batch's contribution stays at
     //       a constant proportion of the stored value, well above
     //       f32 precision for any reasonable blend rate.
+    //   2 = overwrite — discard prev, store this batch alone (the
+    //       host's parameter-change reset; it counts only this
+    //       batch's samples in `samples_in_buffer` to match).
     use_fixed_ema: u32,
     background_r: f32, // Unused - kept for struct layout compatibility
     background_g: f32,
@@ -107,8 +113,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Overwrite mode (slider-drag etc): discard prev so this dispatch
     // starts fresh. Lets the host signal "reset accumulation" without
-    // a separate clear pass.
-    let is_overwrite_mode = params.blend_factor >= 0.99;
+    // a separate clear pass. Its own mode value, never inferred from
+    // blend_factor (see the header).
+    let is_overwrite_mode = params.use_fixed_ema == 2u;
     let prev_raw = textureLoad(previous_accumulation, pixel, 0);
     var prev = select(prev_raw, vec4<f32>(0.0), is_overwrite_mode);
 
@@ -179,11 +186,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Pick α based on mode (see AccumulateParams::use_fixed_ema doc):
     //   0 → cumulative-mean rate (α = new_density / total_density)
     //   1 → fixed EMA at blend_factor
-    // Lerp formulation `prev * (1-α) + new * α` is used in both modes;
+    //   2 → overwrite: prev was cleared, so the cumulative rate is 1
+    // Lerp formulation `prev * (1-α) + new * α` is used in every mode;
     // it keeps both terms in [0,1] range and is algebraically identical
     // to the density-weighted mean for cumulative mode.
     let cumulative_alpha = new_density / total_density;
-    let alpha = select(cumulative_alpha, params.blend_factor, params.use_fixed_ema != 0u);
+    let alpha = select(cumulative_alpha, params.blend_factor, params.use_fixed_ema == 1u);
     let blended_rgb = prev.rgb * (1.0 - alpha) + new_color * alpha;
 
     textureStore(output_texture, pixel, vec4<f32>(blended_rgb, total_density));

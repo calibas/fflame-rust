@@ -2960,15 +2960,6 @@ mod tests {
 
     type C64 = (f64, f64);
 
-    fn c64_mul(a: C64, b: C64) -> C64 {
-        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
-    }
-
-    fn c64_div(a: C64, b: C64) -> C64 {
-        let d = b.0 * b.0 + b.1 * b.1;
-        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
-    }
-
     /// The exact outcome of a root-finder orbit at one point, read off
     /// a BIG-FLOAT orbit.
     ///
@@ -4169,7 +4160,7 @@ mod tests {
         esc.max_iter = 66_400;
         esc.bailout = 4.0;
 
-        let mut run = |hold: bool| -> (f64, u32) {
+        let run = |hold: bool| -> (f64, u32) {
             let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
             escape.force_budgeted = true;
             escape.force_dispatch_while_building = !hold;
@@ -4258,7 +4249,7 @@ mod tests {
         esc.max_iter = 66_400;
         esc.bailout = 4.0;
 
-        let mut run = |budgeted: bool| -> Vec<crate::escape::renderer::IterRecord> {
+        let run = |budgeted: bool| -> Vec<crate::escape::renderer::IterRecord> {
             let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
             escape.force_budgeted = budgeted;
             let mut frames = 0u32;
@@ -6496,7 +6487,7 @@ fn main() {
         esc.center_im = im.to_string();
         esc.max_iter = 2000;
 
-        let mut settle = |esc: &crate::config::escape::EscapeConfig,
+        let settle = |esc: &crate::config::escape::EscapeConfig,
                           escape: &mut crate::escape::EscapeRenderer,
                           label: &str| {
             let t0 = web_time::Instant::now();
@@ -6762,7 +6753,7 @@ fn main() {
 
         // Fresh-renderer render: the ground truth a cache hit must
         // reproduce exactly.
-        let mut fresh = |esc: &crate::config::escape::EscapeConfig,
+        let fresh = |esc: &crate::config::escape::EscapeConfig,
                          renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
          -> Vec<u8> {
             let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
@@ -8416,14 +8407,13 @@ fn main() {
         config.escape.max_iter = 200;
         config.escape.bailout = 1.0e4;
         config.escape.supersample = 1;
-        let span_y = 4.0 / (config.escape.zoom_log2).exp2();
         let render = |c: &crate::config::FractalConfig| {
             let job = crate::renderer::RenderJob::new(c, w, h);
             pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
                 .expect("render")
                 .rgba_data
         };
-        let encode = |lin: f64| (lin.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0);
+        let encode = |lin: f64| lin.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0;
         let hsv = |c: [f64; 3]| -> [f64; 3] {
             let k = [1.0, 2.0 / 3.0, 1.0 / 3.0];
             let mut out = [0.0; 3];
@@ -11149,7 +11139,7 @@ fn main() {
         // Render a config to settle and measure whether it is a
         // picture: how much is lit, and how many DISTINCT colours
         // (quantised, so f32 noise does not read as detail).
-        let mut shoot = |esc: &crate::config::escape::EscapeConfig,
+        let shoot = |esc: &crate::config::escape::EscapeConfig,
                          renderer: &mut crate::renderer::compute_kernel::FlameRenderer|
          -> (f64, usize) {
             let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
@@ -12471,7 +12461,7 @@ fn main() {
         esc_cfg.max_iter = 4_000;
 
         let (w, h) = (192u32, 128u32);
-        let mut render = |cap: Option<&str>| -> (Vec<u8>, u32) {
+        let render = |cap: Option<&str>| -> (Vec<u8>, u32) {
             match cap {
                 Some(v) => std::env::set_var("ESCAPE_CHUNK_BATCH", v),
                 None => std::env::remove_var("ESCAPE_CHUNK_BATCH"),

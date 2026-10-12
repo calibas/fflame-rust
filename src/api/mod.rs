@@ -25,6 +25,45 @@ pub struct FlameLoadResult {
     pub animations: Vec<types::AnimationSummary>,
 }
 
+/// The visibility a flame **Update** sends, from the Save Online
+/// dialog's "Make public" box and what the flame was when the dialog
+/// opened (`was_public`: `Some(true)` public, `Some(false)` private or
+/// unlisted, `None` unknown).
+///
+/// `update_flame` reads `None` as "keep what the server has", which is
+/// right for an unchecked box on a flame that was not public (an
+/// unlisted flame stays unlisted) but wrong for one that was: the
+/// dialog opens with the box checked for a public flame, so unchecking
+/// it is the user asking to make it private. Sending `None` there left
+/// the flame public while the app recorded it as private.
+pub fn flame_update_visibility(make_public: bool, was_public: Option<bool>) -> Option<ApiVisibility> {
+    if make_public {
+        Some(ApiVisibility::Public)
+    } else if was_public == Some(true) {
+        Some(ApiVisibility::Private)
+    } else {
+        None
+    }
+}
+
+/// Make the server's copy of an animation's flame its `base_config`.
+///
+/// The flame embedded in the animation response is authoritative: an
+/// animation is tied to its flame online by `flame_id`, and the flame
+/// may have been updated since the animation stored a `base_config`
+/// (one is stored only if the animation already carried one). The
+/// stored copy was preferred whenever it existed, so such an animation
+/// loaded onto the flame as it was, not as it is. Without an embedded
+/// flame the animation's own `base_config` stands.
+pub fn adopt_server_flame(
+    animation: &mut crate::animation::Animation,
+    server_flame: Option<&FractalConfig>,
+) {
+    if let Some(config) = server_flame {
+        animation.base_config = Some(config.clone());
+    }
+}
+
 /// Hard-coded API base URL. Change this for release builds.
 pub const API_BASE_URL: &str = "https://fractalsforall.com";
 // pub const API_BASE_URL: &str = "http://localhost:3000";
@@ -59,13 +98,10 @@ pub enum HealthCheckOutcome {
 
 /// Percent-encode a query-string value.
 ///
-/// Written rather than pulled in: the only need is one parameter, and
-/// the unreserved set from RFC 3986 is short enough to state.
-///
-/// NOTE: `SearchFlamesParams::to_query_string` interpolates its values
-/// raw, so a flame name containing `&` or `#` still corrupts that URL.
-/// Left alone here because it is a live path with its own behaviour to
-/// re-check, not because it is correct.
+/// Written rather than pulled in: the need is a few free-text query
+/// values (this endpoint's, and `SearchFlamesParams::to_query_string`'s
+/// name and variation), and the unreserved set from RFC 3986 is short
+/// enough to state.
 pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {
@@ -152,6 +188,30 @@ impl ApiState {
         self.auth.set_token(token.to_string());
     }
 
+    /// Refuse configs the server cannot store yet, BEFORE anything is
+    /// sent — and before the token check, so the refusal is the same
+    /// signed in or out.
+    ///
+    /// The server casts `render_mode` into a Postgres enum with no
+    /// "simulation" value (the committed `openapi.json` lists `2d`,
+    /// `3d`, `escape`); uploading one is an HTTP 400
+    /// `render_mode_invalid` on their side instead of a sentence on
+    /// ours. Nothing forces this coordination (the engine contract
+    /// carries no render-mode vocabulary), so this guard is the only
+    /// seatbelt. Escape went through the same sequence: refused here
+    /// until the API added the value on 2026-08-29. Remove the
+    /// Simulation arm when the API adds "simulation".
+    fn refuse_unsupported_online(config: &FractalConfig) -> FetchResult<()> {
+        if config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+            return Err(FetchError::Unsupported(
+                "Simulations can't be saved online yet -- the server doesn't \
+                 know this render mode. Save locally for now."
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Clear auth state (sign out).
     pub fn clear_auth(&mut self) {
         self.auth.clear();
@@ -216,6 +276,7 @@ impl ApiState {
         visibility: Option<ApiVisibility>,
         thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<String> {
+        Self::refuse_unsupported_online(config)?;
         let token = self.require_token()?;
 
         let mut flame_req = sync::config_to_create_request(config, name)?;
@@ -272,6 +333,7 @@ impl ApiState {
         visibility: Option<ApiVisibility>,
         thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<FlameResponse> {
+        Self::refuse_unsupported_online(config)?;
         let token = self.require_token()?;
 
         let effective_visibility = match visibility {
@@ -458,13 +520,7 @@ impl ApiState {
             .transpose()?;
 
         let mut animation = sync::animation_response_to_animation(&resp);
-
-        // Use the embedded flame as the animation's base_config (authoritative source)
-        if animation.base_config.is_none() {
-            if let Some(ref config) = flame_config {
-                animation.base_config = Some(config.clone());
-            }
-        }
+        adopt_server_flame(&mut animation, flame_config.as_ref());
 
         Ok((animation, flame_config, flame_id))
     }
@@ -635,5 +691,83 @@ impl ApiState {
     pub async fn list_variations(&self) -> FetchResult<Vec<types::VariationListItem>> {
         let url = build_url(API_BASE_URL, "/api/variations");
         client::api_get::<Vec<types::VariationListItem>>(&url, "").await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::RenderMode;
+
+    /// The Save Online seatbelt: a simulation config is refused before
+    /// anything is sent — and before the token check, so it fires the
+    /// same signed in or out (which is also what makes it testable
+    /// without auth). Without it the server answers HTTP 400
+    /// `render_mode_invalid`.
+    #[test]
+    fn simulation_configs_are_refused_by_save_and_update() {
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::Simulation;
+        let api = ApiState::default();
+
+        let save = pollster::block_on(api.save_flame(&config, Some("x"), None, None));
+        assert!(
+            matches!(save, Err(FetchError::Unsupported(_))),
+            "save must refuse client-side: {save:?}"
+        );
+        let update = pollster::block_on(api.update_flame("id", &config, None, None, None));
+        assert!(
+            matches!(update, Err(FetchError::Unsupported(_))),
+            "update must refuse client-side: {update:?}"
+        );
+    }
+
+    /// What a flame Update sends for "Make public". The case that was
+    /// wrong: a public flame with the box unchecked sent nothing, and
+    /// `update_flame` read that as "keep public".
+    #[test]
+    fn unchecking_make_public_on_a_public_flame_makes_it_private() {
+        use types::ApiVisibility::{Private, Public};
+        assert_eq!(flame_update_visibility(false, Some(true)), Some(Private));
+        // Checked is public whatever it was.
+        for was in [Some(true), Some(false), None] {
+            assert_eq!(flame_update_visibility(true, was), Some(Public), "{was:?}");
+        }
+        // Unchecked on a flame that was not public (private or
+        // unlisted), or whose visibility is unknown: keep the server's.
+        assert_eq!(flame_update_visibility(false, Some(false)), None);
+        assert_eq!(flame_update_visibility(false, None), None);
+    }
+
+    /// The server's flame replaces an animation's stored base config;
+    /// without one, the stored config stands.
+    #[test]
+    fn the_server_flame_is_the_animations_base_config() {
+        let mut stored = FractalConfig::default();
+        stored.flame.name = "stored".into();
+        let mut server = FractalConfig::default();
+        server.flame.name = "server".into();
+
+        let mut anim = crate::animation::Animation::with_config("A".into(), 5.0, stored.clone());
+        adopt_server_flame(&mut anim, Some(&server));
+        assert_eq!(anim.base_config.as_ref().unwrap().flame.name, "server");
+
+        let mut anim = crate::animation::Animation::with_config("A".into(), 5.0, stored);
+        adopt_server_flame(&mut anim, None);
+        assert_eq!(anim.base_config.as_ref().unwrap().flame.name, "stored");
+
+        let mut anim = crate::animation::Animation::new("A".into(), 5.0);
+        adopt_server_flame(&mut anim, Some(&server));
+        assert_eq!(anim.base_config.as_ref().unwrap().flame.name, "server");
+    }
+
+    /// The modes the server knows pass the guard.
+    #[test]
+    fn known_render_modes_pass_the_online_guard() {
+        for mode in [RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Escape] {
+            let mut config = FractalConfig::default();
+            config.render_mode = mode;
+            assert!(ApiState::refuse_unsupported_online(&config).is_ok(), "{mode:?}");
+        }
     }
 }

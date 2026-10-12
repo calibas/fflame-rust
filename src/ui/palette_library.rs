@@ -30,6 +30,40 @@ fn spawn_pack_fetch(ctx: egui::Context, pack_idx: usize, file_path: String) {
     });
 }
 
+/// Keep the app's palette library in step with the web's pack fetches.
+///
+/// Called every frame, before any panel draws (`EguiLayer::render_ui`).
+/// It used to run inside the Palette Library panel, which no default
+/// layout opens, so on the web an enabled pack was never fetched and
+/// its palettes were missing from the Colors panel's dropdown until
+/// that panel happened to be opened.
+///
+/// Starts the fetch of each enabled pack that has not been tried. A
+/// pack whose fetch FAILED waits for the panel's Retry: retrying it
+/// here would refetch every frame for as long as the app is offline.
+#[cfg(target_arch = "wasm32")]
+pub fn poll_palette_packs(ctx: &egui::Context, library: &mut PaletteLibrary) {
+    // Async fetches complete into the global singleton, not this copy.
+    library.sync_from_global();
+
+    for pack_idx in 0..library.pack_count() {
+        let needs_auto_load = library
+            .get_pack_info(pack_idx)
+            .map(|info| {
+                info.enabled
+                    && matches!(info.load_state, LoadState::NotLoaded)
+                    && info.metadata.is_some()
+            })
+            .unwrap_or(false);
+
+        if needs_auto_load {
+            if let Some(file_path) = library.start_pack_load(pack_idx) {
+                spawn_pack_fetch(ctx.clone(), pack_idx, file_path);
+            }
+        }
+    }
+}
+
 /// Render the Palette Library panel
 /// When a palette is selected, it's set directly via ConfigManager
 pub fn render_palette_library(
@@ -38,25 +72,8 @@ pub fn render_palette_library(
     config_manager: &mut ConfigManager,
     open_palette_editor: &mut bool,
 ) {
-    // WASM: Sync from global singleton (async fetches update global, not local)
-    #[cfg(target_arch = "wasm32")]
-    library.sync_from_global();
-
-    // WASM: Auto-load enabled packs that haven't been loaded yet (e.g., on startup)
-    #[cfg(target_arch = "wasm32")]
-    {
-        for pack_idx in 0..library.pack_count() {
-            let needs_auto_load = library.get_pack_info(pack_idx)
-                .map(|info| info.enabled && !info.is_loaded() && !info.is_loading() && info.metadata.is_some())
-                .unwrap_or(false);
-
-            if needs_auto_load {
-                if let Some(file_path) = library.start_pack_load(pack_idx) {
-                    spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
-                }
-            }
-        }
-    }
+    // Pack fetches and the sync from the global library run every frame
+    // from `poll_palette_packs`, not here.
 
     // Quick access to palette editor
     if ui.button(t!("palette_library.open_editor")).clicked() {

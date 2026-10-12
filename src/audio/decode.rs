@@ -299,6 +299,23 @@ impl AudioDecoder {
 mod tests {
     use super::*;
 
+    /// Every format the file pickers offer has a decoder. `.ogg` was
+    /// offered with only symphonia's Ogg container enabled, so the file
+    /// opened and then had no codec for its Vorbis stream.
+    #[test]
+    fn every_offered_format_has_a_decoder() {
+        use symphonia::core::codecs::{CODEC_TYPE_FLAC, CODEC_TYPE_MP3, CODEC_TYPE_PCM_S16LE, CODEC_TYPE_VORBIS};
+        let codecs = symphonia::default::get_codecs();
+        for (name, codec) in [
+            ("mp3", CODEC_TYPE_MP3),
+            ("wav", CODEC_TYPE_PCM_S16LE),
+            ("flac", CODEC_TYPE_FLAC),
+            ("ogg", CODEC_TYPE_VORBIS),
+        ] {
+            assert!(codecs.get_codec(codec).is_some(), "no decoder for {name}");
+        }
+    }
+
     #[test]
     fn test_audio_data_duration() {
         let data = AudioData {

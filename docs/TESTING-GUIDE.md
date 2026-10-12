@@ -14,8 +14,8 @@ requires.
 # Unit tests (~1,900 in the library; GPU tests skip or are #[ignore]d)
 cargo test --release --lib
 
-# Every fast gate: tests, wasm build, generated files, doc links,
-# engine feature matrix, gallery crates
+# Every fast gate: versions, tests, wasm build, generated files, doc
+# links, the five gallery crates (also the engine feature matrix)
 python scripts/release.py check
 python scripts/release.py check --fix      # ...and regenerate stale generated files
 
@@ -108,7 +108,13 @@ Tests that touch the GPU follow a few conventions.
   a static `Mutex<()>` first:
   - `gpu()` in `src/escape/footprint.rs` hands out a device together
     with a turn — each terrain test holds an atlas of hundreds of MB,
-    and two at once ran a 6 GB card out of memory;
+    and two at once ran a 6 GB card out of memory. The turn orders
+    only the terrain tests, so nothing in the suite may hold most of
+    the card: `fit_export_sections` does not probe the card's memory
+    under `cfg(test)` (its probe took a 6 GB card to 5.8 GB, and the
+    tests beside it ran out of memory or crashed the driver with
+    `STATUS_ACCESS_VIOLATION`); its real probe is the ignored
+    `an_exports_section_cap_fits_the_card`, run alone;
   - `DIAG_LOCK` in `src/escape/app_repro_test.rs` guards the global
     escape diagnostics snapshot between a render and its assertion;
   - `BREAKER_LOCK` in `src/escape/renderer.rs`.
@@ -153,16 +159,24 @@ pass or FAIL with its time; any failure exits 1.
 
 | gate | command |
 |---|---|
+| versions agree | `python scripts/release.py versions` (run in-process) |
 | unit tests | `cargo test --release --lib` |
 | wasm builds | `cargo check --release --target wasm32-unknown-unknown --lib` |
 | generated contract | `cargo test --release --lib contract_is_current` |
 | shader dumps | `cargo test --release --lib canonical_shader_dumps` |
 | doc links | `python scripts/check_doc_links.py` |
-| engine feature matrix | `cargo check --lib --no-default-features --features engine-sim` |
-| engine feature matrix (escape) | `... --features engine-escape` |
-| engine feature matrix (flame) | `... --features engine-flame` |
 | gallery script parity | `cargo test --profile gallery-test`, in `wasm/script` |
 | gallery renderer smoke | `cargo test --profile gallery-test`, in `wasm/render` |
+| gallery sim smoke | the same, in `wasm/sim` (the library with only `engine-sim`) |
+| gallery escape smoke | the same, in `wasm/escape` (only `engine-escape`) |
+| gallery flame smoke | the same, in `wasm/flame` (only `engine-flame`) |
+
+The last three are the engine feature matrix: each single-engine crate
+links the library with `default-features` off and one engine on, so
+building its tests catches a `#[cfg]` on the wrong item that every
+all-engines build hides, and the tests assert the other engines are
+really gone. The gallery gates run from the crate directory, where
+cargo finds `wasm/.cargo/config.toml` ([RELEASE.md §5](RELEASE.md)).
 
 `--fix` regenerates the two generated files below when their gate
 fails, then tells you to read the diff. No other gate has a fix.
@@ -230,7 +244,9 @@ python tests/visual/run_tests.py --update-baseline
   out of that check (their `Iterations` metadata is not a sample count).
 - **Updating:** `--update-baseline` runs the suite, then rewrites only
   the baselines whose renders moved beyond the tolerance; the rest stay
-  byte-identical. It considers every PNG in `tests/visual/current/`.
+  byte-identical. It considers only the renders this run produced (each
+  test deletes its old output first), so a `--category` run touches only
+  that category, and it merges them into `baseline_manifest.json`.
 - **Every config must set `"deterministic_rng": true`**, or it is
   skipped.
 
@@ -253,8 +269,11 @@ than a pixel mismatch. Treat a lone throughput failure as a measurement
 to repeat, not a regression to chase.
 
 `tests/visual/run_all_tests.py` runs this suite and the WASM suite (§4)
-one after the other and appends render timings to
-`tests/visual/performance_history.csv`.
+one after the other, compares each render's time with the previous
+run's, and appends every render's timing to
+`tests/visual/performance_history.csv`, which is where the previous run
+is read from. (It used to read timings from the baselines; the desktop
+ones are metadata-stripped thumbnails, so every desktop delta was 0%.)
 
 ---
 
@@ -266,22 +285,31 @@ one after the other and appends render timings to
 
 ```bash
 python tests/visual/wasm/test_wasm.py
+python tests/visual/wasm/test_wasm.py --category 2d
 python tests/visual/wasm/test_wasm.py --update-baseline
 ```
 
 `test_wasm.py`:
 
-1. builds the web app by running `build-wasm.bat` (so, as written, it
-   runs on Windows);
-2. serves the repository root on port 8080 and opens
-   `tests/visual/wasm/test.html` in a Chrome window with WebGPU flags;
-3. for each config in the `2d`, `3d`, `tonemap`, `variations` and
-   `escape` categories, calls `WasmApi.load_config_json` and
+1. builds the web app with `build-wasm.bat` on Windows and
+   `build-wasm.sh` elsewhere;
+2. serves the repository root on port 8080 (with the running Python)
+   and opens `tests/visual/wasm/test.html` in a Chrome window with
+   WebGPU flags (ANGLE's D3D11 backend on Windows only);
+3. for each config in the `2d`, `3d`, `tonemap`, `variations`, `escape`
+   and `sim` categories, calls `WasmApi.load_config_json` and
    `await WasmApi.export_png(800, 600, 256, false)`
-   ([WASM.md](WASM.md) lists the API);
-4. compares an **exact** SHA-256 of the pixels against
+   ([WASM.md](WASM.md) lists the API). `solid` is left out: solid
+   rendering is not bit-reproducible, and this suite compares exact
+   hashes;
+4. names each test `<category>-<stem>`, as `run_tests.py` does, writes
+   `tests/visual/current/wasm/<name>.png` (deleting the old one first)
+   and compares an **exact** SHA-256 of the pixels against
    `tests/visual/baseline/wasm/<name>.png`. Seven baselines are
-   committed; a config with no baseline passes with a note.
+   committed. A config with no baseline is reported as `[NONE]` and
+   counted as "no baseline", not as a pass, and the run exits 1 unless
+   `--update-baseline` wrote it; `--update-baseline` writes baselines
+   only for the configs that rendered in that run.
 
 `test_plan.py` is a separate gate for Focused Rendering's planner in
 the browser: it drives `PlanBench` (`src/wasm_api.rs`) one step per
@@ -315,22 +343,31 @@ Three stages:
    `cargo run --release -- export ... --width 800 --height 600 --iterations-per-thread 1024`,
    5 runs each (3 with `--quick`), the first discarded as warmup. Times
    come from each PNG's `RenderTime` metadata. Output:
-   `tests/visual/current/<name>.png`.
+   `benchmark_results/renders/<category>-<stem>.png` (gitignored), the
+   names `run_tests.py` uses; the benchmark rows carry the same names.
 3. **WASM renders** — runs `tests/visual/wasm/test_wasm.py` repeatedly
-   and reads the times from its PNGs. A failure here is a warning, not
-   a failed run.
+   and reads the times from the PNGs it writes to
+   `tests/visual/current/wasm/`. Its exit status is not used — it exits
+   1 for any config without a WASM baseline — only whether it rendered.
+   A failure here is a warning, not a failed run.
 
 The report compares each benchmark with the previous run
 (`benchmark_results/last_run.json`) and the two previous full runs in
 `benchmark_results/unified_benchmarks.csv`, colouring more than 10%
 slower red, more than 5% slower yellow and more than 2% faster green.
 
-**The hash tables are informational.** The report ends with
-Baseline-vs-Current, WASM-vs-WASM and Desktop-vs-WASM tables of exact
-pixel hashes (tolerance for `solid-*`). They do not affect the exit
-status, and the "baseline" they read is the visual suite's 160x120
-thumbnails, which a full-size render never matches exactly. Use
-`tests/visual/run_tests.py` for regressions.
+**The hash table is informational.** The report ends with one table of
+exact pixel hashes: the WASM renders against `tests/visual/baseline/wasm/`,
+the one pair rendered the same way. It does not affect the exit status.
+There is no desktop table: the benchmark renders at ipt 1024 and full
+size, while the visual suite's baselines are 160x120 thumbnails of
+ipt-256 renders, so an exact match was impossible (the Baseline-vs-Current
+and Desktop-vs-WASM tables it used to print could only ever mismatch).
+Use `tests/visual/run_tests.py` for regressions.
+
+The benchmark names became `<category>-<stem>` on 2026-10-11 (they were
+bare stems, and the two `affine3d-smoke` configs shared one), so the
+previous-run columns show "—" until two runs with the new names exist.
 
 ### Other measurement binaries
 
@@ -386,6 +423,21 @@ cargo run --release --bin variation_probe -- rank OLD NEW [census-report]
 
 Design records: [variation-math-probe.md](archive/projects/variation-math-probe.md),
 [variation-reachability-census.md](archive/projects/variation-reachability-census.md).
+
+### What a variation parameter costs
+
+`renderer::param_cost` times every whole-number parameter, and every
+one named like a count, at its default and at its maximum, with the
+variation alone in a small flame. It reports what the maximum adds to an
+app frame. A parameter that adds 15 ms or more belongs in
+`variations::SLOW_PARAMS` (UI.md, *Slow settings*). The dispatches are
+small, so no maximum comes near a GPU watchdog; the first figures are
+noisy until the GPU has clocked up, so run it twice and compare.
+
+```bash
+cargo test --release --lib -- --ignored --nocapture measure_variation_param_costs
+PARAM_COST_ONLY=glsl_ cargo test --release --lib -- --ignored --nocapture measure_variation_param_costs
+```
 
 ---
 

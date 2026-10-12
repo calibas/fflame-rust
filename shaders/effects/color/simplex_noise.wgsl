@@ -142,7 +142,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let direction = get_param(6u) * PI / 180.0;
 
     let uv = input.uv;
-    let original = textureSample(input_texture, input_sampler, uv);
+    let original = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
 
     // Generate animated noise with directional movement
     let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
@@ -157,7 +157,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let warp = vec2<f32>(noise, noise2) * intensity * 0.1;
         let warped_uv = clamp(uv + warp, vec2<f32>(0.0), vec2<f32>(1.0));
         // For distort, we return directly (blend doesn't apply well)
-        return textureSample(input_texture, input_sampler, warped_uv);
+        return textureSampleLevel(input_texture, input_sampler, warped_uv, 0.0);
     } else if (mode == 2) {
         // Mask mode: Use noise as brightness mask
         let mask = smoothstep(-0.5, 0.5, noise);

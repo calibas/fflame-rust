@@ -447,30 +447,59 @@ and [xaos-implementation.md](../archive/xaos/xaos-implementation.md).
 A **subflame** is a whole `Flame` nested inside a parent and iterated by
 a variation: `subflame_wf` (normal phase) or `pre_subflame_wf` (pre
 phase), whose `subflame_id` parameter picks the subflame. It is not a
-separate render; each call runs the subflame's chaos game one step and
-contributes the resulting point (and optionally its colour) to the
-parent transform.
+separate render; each call runs the subflame's chaos game until it
+makes an output point, and contributes that point (and optionally its
+colour) to the parent transform. It is a port of JWildfire's
+`SubFlameWFFunc.subflameIter`.
 
 - **Limits.** `MAX_SUBFLAMES = 8`, and at most
   `MAX_SUBFLAME_TRANSFORMS_TOTAL = 256` transforms across all of them.
   Only a subflame's normals and Finals are used — its Linked pool,
-  attachment lists, xaos, opacity and solo are not — and a subflame
-  variation inside a subflame contributes nothing.
-- **Its state** lives in the variation's five per-thread state slots,
-  keyed by the parent transform and variation: the point, the last
-  transform picked, and the colour. So two parent transforms using the
-  same subflame walk it independently. The first call on a thread —
-  detected by the state still being exactly the origin — runs 20 extra
-  steps (`SUBFLAME_PREFUSE_ITERS`) to reach the attractor.
+  attachment lists, xaos and solo are not — and a subflame variation
+  inside a subflame contributes nothing.
+- **Its state** lives in the variation's nine per-thread state slots,
+  keyed by the parent transform and variation: the walk's point, the
+  last transform picked, the walk's colour, and the last output point
+  and colour. So two parent transforms using the same subflame walk it
+  independently. The first call on a thread — detected by the state
+  still being exactly the origin — starts from a random point in
+  [-0.5, 0.5]² with a random colour and runs 42 extra steps
+  (`SUBFLAME_PREFUSE_ITERS`, JWildfire's prefuse) to reach the
+  attractor; a state that has gone non-finite is prefused again.
 - **One step:** pick a normal by raw weight; blend the colour with the
   `color_speed` rule; affine, variations, post-affine; then the
-  subflame's Finals in order; then the direct-colour blend. The point
-  after the Finals is what the state keeps, so inside a subflame the
-  Finals **do** feed the next step.
+  direct-colour blend. That point is the state.
+- **Opacity:** the walk steps on until a step lands on a visible
+  transform, at most 1,000 steps (JWildfire's `MAX_ITER`). Opacity 1
+  is always visible, 0 never, and between them it is a roll, as in the
+  parent's plot. A hidden step still moves the walk. If no step is
+  visible the call returns its previous output — the origin before the
+  first — and a subflame with no transform that can ever be visible
+  skips the steps.
+- **Output:** the subflame's Finals map the visible step's point, in
+  order, to the point the parent receives. They do **not** feed the
+  next step, as in `subflameIter` and as the parent's own Finals don't.
+  Unlike the parent's, they blend the colour as a normal transform
+  does, because JWildfire makes a subflame's Finals DIFFUSION; the
+  output's colour is theirs. Then the variation's `scale`, `angle`,
+  `offset_x/y/z` and `colorscale_z` place it. (Until 2026-10 the Finals
+  ran inside the step and fed the walk, and left the colour alone.)
+- **Into the parent:** `subflame_wf` adds the output to the
+  transform's variation sum **unscaled by its weight** (JWildfire's
+  `pVarTP += q`); its body divides out the weight the dispatcher
+  multiplies by. `pre_subflame_wf` replaces the affine point with it.
+  Until 2026-10, opacity was ignored inside a subflame, the weight
+  scaled the output, and `pre_subflame_wf` ignored the placement
+  parameters.
 - **Variations inside** run through `apply_subflame_variations`, a
   second dispatcher without the subflame variations (which is what
   forbids nesting). Hiding is a no-op there, `NeedsW` does not commit
-  the 4th coordinate, and analytic blurs render stochastically.
+  the 4th coordinate, and analytic blurs render stochastically. A
+  subflame transform's `fx_priority` moves a variation in this
+  dispatcher only, gated on its global id, and a parent's moves stay
+  out of it (`collect_phase_overrides`, `resolve_phase_buckets`). Until
+  2026-10 the subflame's priorities were ignored and the parent's
+  applied inside it.
 - **One id space.** Subflame transforms occupy slots
   `[SUBFLAME_XFORM_ID_BASE = 128, …)` in the transforms, parameter and
   state buffers, normals then Finals per subflame. Their variations are

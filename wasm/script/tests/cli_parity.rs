@@ -15,7 +15,7 @@ fn config_of(envelope: &str) -> String {
 
 #[test]
 fn generator_matches_the_cli_byte_for_byte() {
-    // fractal_flame_wgpu generate -s assets/scripts/generators/basic_random.rhai \
+    // FractalArtEditor generate -s assets/scripts/generators/basic_random.rhai \
     //   --seed 7 -o basic_random_seed7.fflame
     let fixture = include_str!("fixtures/basic_random_seed7.fflame");
     let source = include_str!("../../../assets/scripts/generators/basic_random.rhai");
@@ -25,7 +25,7 @@ fn generator_matches_the_cli_byte_for_byte() {
 
 #[test]
 fn modifier_on_a_base_matches_the_cli() {
-    // fractal_flame_wgpu generate -s assets/scripts/modifiers/jitter.rhai \
+    // FractalArtEditor generate -s assets/scripts/modifiers/jitter.rhai \
     //   --seed 7 -b basic_random_seed7.fflame -o basic_random_seed7_jitter.fflame
     let base = include_str!("fixtures/basic_random_seed7.fflame");
     let fixture = include_str!("fixtures/basic_random_seed7_jitter.fflame");
@@ -36,7 +36,7 @@ fn modifier_on_a_base_matches_the_cli() {
 
 #[test]
 fn choice_params_resolve_like_the_cli_set_flag() {
-    // fractal_flame_wgpu generate -s assets/scripts/generators/lsystem.rhai \
+    // FractalArtEditor generate -s assets/scripts/generators/lsystem.rhai \
     //   --seed 3 --set "preset=2D · Koch snowflake" -o lsystem_koch_seed3.fflame
     let fixture = include_str!("fixtures/lsystem_koch_seed3.fflame");
     let source = include_str!("../../../assets/scripts/generators/lsystem.rhai");

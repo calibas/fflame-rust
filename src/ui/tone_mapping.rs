@@ -5,6 +5,40 @@ use crate::renderer::DensityHistogram;
 use super::histogram::{render_histogram_with_config, render_levels_controls_managed};
 use rust_i18n::t;
 
+/// The Gamma slider's range.
+///
+/// Every mode raises to `1/gamma`, so 0 makes the exponent 0 -- a flat
+/// silhouette, every covered pixel white -- and below 0 the picture
+/// inverts; the old -1..10 range offered both. Apophysis 7X's UI keeps
+/// gamma to 1-5. Values under 1 stay: Linear mode's calibration is 1,
+/// and the tone presets go down to 0.3.
+const GAMMA_RANGE: std::ops::RangeInclusive<f32> = 0.1..=10.0;
+
+/// How close, in screen points, the pointer has to be to a control
+/// point to pick it up or remove it.
+const CURVE_POINT_HIT_RADIUS: f32 = 12.0;
+
+/// A curve coordinate (both axes 0..1, y up) in the editor's `rect`.
+fn curve_to_screen(rect: egui::Rect, x: f32, y: f32) -> egui::Pos2 {
+    egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height())
+}
+
+/// The interior control point under `pos`, the nearest if several are
+/// within reach. Endpoints are never offered: the curve always runs
+/// from x = 0 to x = 1, and `ToneCurve::remove_point` refuses them.
+fn removable_point_at(curve: &ToneCurve, rect: egui::Rect, pos: egui::Pos2) -> Option<usize> {
+    let last = curve.points.len().checked_sub(1)?;
+    curve
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 0 && *i != last)
+        .map(|(i, p)| (i, curve_to_screen(rect, p.x, p.y).distance(pos)))
+        .filter(|(_, d)| *d < CURVE_POINT_HIT_RADIUS)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
 /// Render curve editor UI with ConfigManager integration
 fn render_curve_editor(
     ui: &mut egui::Ui,
@@ -23,12 +57,7 @@ fn render_curve_editor(
     );
 
     let rect = response.rect;
-    let to_screen = |x: f32, y: f32| -> egui::Pos2 {
-        egui::pos2(
-            rect.left() + x * rect.width(),
-            rect.bottom() - y * rect.height(),
-        )
-    };
+    let to_screen = |x: f32, y: f32| -> egui::Pos2 { curve_to_screen(rect, x, y) };
 
     let from_screen = |pos: egui::Pos2| -> (f32, f32) {
         (
@@ -88,14 +117,14 @@ fn render_curve_editor(
 
         // Check if mouse is over this point (check both hover and interact positions for fast drags)
         let is_hovered = if let Some(hover_pos) = response.hover_pos() {
-            hover_pos.distance(screen_pos) < point_radius * 2.0
+            hover_pos.distance(screen_pos) < CURVE_POINT_HIT_RADIUS
         } else {
             false
         };
 
         // Also check interact position for fast drags where hover might lag
         let is_clicked = if let Some(interact_pos) = response.interact_pointer_pos() {
-            interact_pos.distance(screen_pos) < point_radius * 2.0
+            interact_pos.distance(screen_pos) < CURVE_POINT_HIT_RADIUS
         } else {
             false
         };
@@ -117,14 +146,34 @@ fn render_curve_editor(
         }
     }
 
+    // Remove an interior point: Ctrl+click (Cmd+click on a Mac), or a
+    // right-click -- which is also what a touch long press is.
+    let remove_requested = (response.clicked() && ui.input(|i| i.modifiers.command))
+        || response.secondary_clicked()
+        || response.long_touched();
+    if remove_requested {
+        let at = response.interact_pointer_pos().or_else(|| response.hover_pos());
+        if let Some(idx) = at.and_then(|pos| removable_point_at(&curve, rect, pos)) {
+            let mut modified_curve = config_manager.active_config().tonemap_curve.clone();
+            modified_curve.remove_point(idx);
+            // A discrete action, like adding one: not lazy.
+            if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into()) {
+                max_update = max_update.max(update);
+            }
+            dragging_point = None;
+        }
+    }
+
     // Update dragged point (use global pointer position)
     if let Some(idx) = dragging_point {
         if let Some(drag_pos) = ui.ctx().pointer_latest_pos() {
             let (new_x, new_y) = from_screen(drag_pos);
 
-            // Create modified curve
+            // Create modified curve. Passing a neighbour re-sorts the
+            // points, so keep following the dragged one at its new index
+            // rather than whichever point now sits at the old one.
             let mut modified_curve = config_manager.active_config().tonemap_curve.clone();
-            modified_curve.move_point(idx, new_x, new_y);
+            dragging_point = Some(modified_curve.move_point(idx, new_x, new_y));
 
             // Update via ConfigManager with lazy mode (throttled)
             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into()) {
@@ -259,7 +308,7 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=10.0, t!("tonemap.gamma").as_ref(), Some(t!("tonemap.tooltip_gamma").as_ref())) {
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, GAMMA_RANGE, t!("tonemap.gamma").as_ref(), Some(t!("tonemap.tooltip_gamma").as_ref())) {
                 max_update = max_update.max(result.update_type);
             }
 
@@ -473,7 +522,7 @@ pub fn render_colors_content(
         .default_open(false)
         .show(ui, |ui| {
             // Render histogram visualization with levels markers from config
-            let _response = render_histogram_with_config(ui, histogram, config_manager);
+            render_histogram_with_config(ui, histogram, config_manager);
 
             ui.add_space(12.0); // Space for triangle markers
 
@@ -532,11 +581,12 @@ pub fn render_colors_content(
             }
 
             let current_color_mode = config_manager.active_config().color_mode;
-            // Neither non-flame generator reads the colour mode, and a
-            // config left on PathMap would otherwise hide the palette
-            // picker they both genuinely use.
-            if !show_color_mode
-                || matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed)
+            // The palette controls, in every colour mode: Palette and
+            // Speed look colours up in the transformed palette, and so
+            // does PathMap -- a path's colour is a palette coordinate --
+            // so hiding them under PathMap hid controls that still
+            // changed the picture. The non-flame engines read the
+            // palette too.
             {
                 let current_palette_name = config_manager.active_config().palette.name.clone();
 
@@ -606,19 +656,9 @@ pub fn render_colors_content(
                 // panel size, and decouples preview cost from the
                 // user's chosen palette resolution.
                 {
-                    use crate::scene::palette::{render_palette_lookup, PaletteTransform, SqueezeMode};
+                    use crate::scene::palette::{render_palette_lookup, PaletteTransform};
                     let config = config_manager.active_config();
-                    let squeeze_factor = match config.palette_squeeze_mode {
-                        SqueezeMode::Linear => config.palette_squeeze,
-                        SqueezeMode::Geometric => config.palette_squeeze_falloff,
-                    };
-                    let transform = PaletteTransform {
-                        squeeze_mode: config.palette_squeeze_mode,
-                        squeeze_factor,
-                        log_strength: config.palette_log_strength,
-                        rotation: config.palette_rotation,
-                        reverse: config.palette_reverse,
-                    };
+                    let transform = PaletteTransform::from_config(config);
                     const PREVIEW_LUT_LEN: usize = 512;
                     const PREVIEW_HEIGHT: f32 = 24.0;
                     let lut = render_palette_lookup(&config.palette, &transform, PREVIEW_LUT_LEN);
@@ -837,4 +877,59 @@ pub fn render_colors_content(
     }
 
     max_update
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::tonemap::CurvePoint;
+
+    fn editor_rect() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0))
+    }
+
+    /// Ctrl+click / right-click removal finds the interior point under
+    /// the pointer, and never an endpoint.
+    #[test]
+    fn removal_hits_interior_points_only() {
+        let mut curve = ToneCurve::linear();
+        curve.add_point(CurvePoint::new(0.5, 0.5));
+        let rect = editor_rect();
+
+        let on_middle = curve_to_screen(rect, 0.5, 0.5);
+        assert_eq!(removable_point_at(&curve, rect, on_middle), Some(1));
+        let near_middle = on_middle + egui::vec2(5.0, -5.0);
+        assert_eq!(removable_point_at(&curve, rect, near_middle), Some(1));
+
+        let on_endpoint = curve_to_screen(rect, 0.0, 0.0);
+        assert_eq!(removable_point_at(&curve, rect, on_endpoint), None);
+        let on_last = curve_to_screen(rect, 1.0, 1.0);
+        assert_eq!(removable_point_at(&curve, rect, on_last), None);
+
+        let empty_space = curve_to_screen(rect, 0.25, 0.9);
+        assert_eq!(removable_point_at(&curve, rect, empty_space), None);
+    }
+
+    /// Gamma 0 is an exponent of 0 (a white silhouette) and below it the
+    /// picture inverts: neither belongs on the slider.
+    #[test]
+    fn the_gamma_slider_starts_above_zero() {
+        assert!(*GAMMA_RANGE.start() > 0.0);
+        assert!(GAMMA_RANGE.contains(&1.0), "Linear mode's gamma must be reachable");
+        assert!(GAMMA_RANGE.contains(&crate::config::defaults::DEFAULT_GAMMA));
+        for preset in crate::scene::tonemap_presets::TONEMAP_PRESETS {
+            assert!(GAMMA_RANGE.contains(&preset.gamma), "preset {} is off the slider", preset.name);
+        }
+    }
+
+    /// Two points within reach: the nearer one goes.
+    #[test]
+    fn removal_takes_the_nearest_point() {
+        let mut curve = ToneCurve::linear();
+        curve.add_point(CurvePoint::new(0.40, 0.5));
+        curve.add_point(CurvePoint::new(0.44, 0.5));
+        let rect = editor_rect();
+        let near_second = curve_to_screen(rect, 0.435, 0.5);
+        assert_eq!(removable_point_at(&curve, rect, near_second), Some(2));
+    }
 }

@@ -15,5 +15,5 @@ fn main() {
     let mut config = fractal_flame_wgpu::config::FractalConfig::default();
     config.flame = flame;
     config.deterministic_rng = true;
-    println!("{}", serde_json::to_string_pretty(&config).unwrap());
+    println!("{}", config.to_json().unwrap());
 }

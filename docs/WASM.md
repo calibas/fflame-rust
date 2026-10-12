@@ -7,13 +7,13 @@
 > JSON and return pixels; they are built with `wasm-pack` and
 > documented in [wasm/README.md](../wasm/README.md).
 >
-> All three render engines work in the web app. Among the gallery
-> modules, `wasm/render` is built with the flame and escape-time
-> engines only (its `Cargo.toml` features), so a simulation needs
-> `wasm/sim`. The single-engine modules exist only to cut download
-> size, and are not interchangeable: a module built without an engine
-> reports that the engine is missing (`RenderError::EngineMissing`)
-> rather than rendering something the file never described.
+> All three render engines work in the web app, and in the gallery
+> module `wasm/render` (its `Cargo.toml` features). The single-engine
+> modules (`wasm/flame`, `wasm/escape`, `wasm/sim`) exist only to cut
+> download size, and are not interchangeable: a module built without
+> an engine reports that the engine is missing
+> (`RenderError::EngineMissing`) rather than rendering something the
+> file never described.
 
 The live web app is `https://fractalsforall.com/editor/`; how it gets
 there is [RELEASE.md §5](RELEASE.md).
@@ -93,7 +93,7 @@ implementations of one procedure and nothing checks that they agree
 | flag | profile | what it is for |
 |---|---|---|
 | (none) | `dist` | the shipped build: fat LTO, one codegen unit, stripped, `panic = "abort"`. About 16 MiB of `.wasm` (16.0 MiB when measured for the `dist-symbols` comment in `Cargo.toml`) |
-| `--symbols` | `dist-symbols` | `dist`'s codegen exactly, with the symbol table kept (`strip = false`, `debug = false`). Writes to `./pkg-names/` and copies the module to `pkg/fractal_flame_wgpu_bg.names.wasm`, leaving the served `./pkg` untouched. 18.9 MiB against dist's 16.0 |
+| `--symbols` | `dist-symbols` | `dist`'s codegen exactly, with the symbol table kept (`strip = false`, `debug = false`). Writes the module and its JS glue to `./pkg-names/` and nothing to `./pkg`, which stays the shipped build; serve `pkg-names` in place of `pkg` to reproduce with names. 18.9 MiB against dist's 16.0 |
 | `--debug` | `dist-debug` | debug info, debug assertions, overflow checks and unwinding panics, with thin LTO and 16 codegen units. A `debug_assert` or a wrapping subtraction fails at its source instead of corrupting an index somewhere else. Bigger and slower, and because it changes codegen it does not reproduce faults that depend on how the shipped build is optimized |
 
 Why `dist` and not `--release` (size, and the profile name recorded in
@@ -113,9 +113,10 @@ python -m http.server 8080      # or: npx serve
 ```
 
 `index.html` imports `./pkg/fractal_flame_wgpu.js`. Palette packs are
-fetched relative to the page, at `assets/palettes/packs/<file>`
-(`load_pack` in `src/resources/palettes.rs`), which a server rooted at
-the repository finds in `assets/` itself.
+fetched relative to the page, at `pkg/assets/palettes/packs/<file>`
+(`WEB_PACKS_DIR`, read by `load_pack` in `src/resources/palettes.rs`) —
+where the build copied them, so a local server and a deploy find them
+the same way.
 
 ### Deploy
 
@@ -123,10 +124,14 @@ Upload `pkg/`, `index.html`, `css/` and `js/` (the virtual-keyboard
 bridge). The list and the checks after an upload are in
 [RELEASE.md §5](RELEASE.md).
 
-The build copies the palette packs to `pkg/assets/palettes/packs/`,
-but `load_pack` requests `assets/palettes/packs/<file>` relative to the
-page, not to `pkg/`. After a deploy, open a pack other than the
-embedded starter pack in the Palette Library and check that it loads.
+The palette packs travel inside `pkg/` (`pkg/assets/palettes/packs/`),
+which is where the web build fetches them; a unit test
+(`both_wasm_build_scripts_copy_the_packs_where_the_web_build_fetches_them`)
+holds both build scripts to that path. Builds before this fetched
+`assets/palettes/packs/` beside the page, which the live site served
+only from a hand-uploaded `/editor/assets/` copy; that copy is no longer
+read. After a deploy, open a pack other than the embedded starter pack
+in the Palette Library and check that it loads.
 
 ## JavaScript API — `WasmApi`
 
@@ -143,7 +148,7 @@ await init();
 const api = new WasmApi();
 api.load_config_json(JSON.stringify(config));       // a .fflame's JSON
 const png = await api.export_png(800, 600, 256, false);
-// width, height, iterations per thread, transparent -> Uint8Array (PNG, with metadata)
+// width, height, iterations per thread, transparent [, premultiplied] -> Uint8Array (PNG, with metadata)
 ```
 
 | method | does |
@@ -155,9 +160,9 @@ const png = await api.export_png(800, 600, 256, false);
 | `get_preset_names()` | JSON array of preset names |
 | `get_config_json()` | the loaded config, pretty-printed |
 | `has_config()` | whether one is loaded |
-| `export_png(w, h, ipt, transparent)` | async; render and encode a PNG |
-| `get_target_iterations()` / `set_target_iterations(n)` | the iteration target (set from the config's `max_iterations` on load) |
-| `get_current_iterations()` / `get_progress()` | progress counters; nothing in `export_png` advances them |
+| `export_png(w, h, ipt, transparent, premultiplied?)` | async; render and encode a PNG. `premultiplied` (optional, default false) is premultiplied alpha for a transparent export |
+| `get_target_iterations()` / `set_target_iterations(n)` | the iteration target the next `export_png` renders to (set from the config's `max_iterations` on load) |
+| `get_current_iterations()` / `get_progress()` | the **last export's** iterations, and that over the target; 0 before an export and after a load. An export is one awaited call, so there is nothing in flight to poll |
 | `api_get_auth_status()`, `api_validate_token()` | online account state (cookie session) |
 | `api_save_current_flame(name)`, `api_update_flame(id, name)`, `api_list_flames(page, per_page)`, `api_load_flame(id)`, `api_delete_flame(id)` | online flame storage, async ([ONLINE.md](main/ONLINE.md)) |
 | `api_set_base_url(url)` | no-op, kept for old callers; the API URL is a compile-time constant |
@@ -175,9 +180,9 @@ out (`script`). Each is built with
 include the editor (they depend on this crate with
 `default-features = false`, so `web-app` and `wasm_main` stay out), and
 has its own `[profile.release]` tuned for size plus a `wasm-opt -Oz`
-pass. Engines per module, from each `Cargo.toml`: `render` flame +
-escape-time, `flame` flame, `escape` escape-time, `sim` simulation;
-`script` links all three, to generate configs. API, sizes and an
+pass. Engines per module, from each `Cargo.toml`: `render` all three
+(flame, escape-time, simulation), `flame` flame, `escape` escape-time,
+`sim` simulation; `script` links all three, to generate configs. API, sizes and an
 end-to-end example: [wasm/README.md](../wasm/README.md).
 How they are gated and released: [RELEASE.md §5](RELEASE.md).
 
@@ -243,9 +248,10 @@ that gave confident wrong answers on the way — is recorded in
 ## Testing
 
 - `python scripts/release.py check` compiles the library for
-  `wasm32-unknown-unknown`, and at each single-engine feature
-  combination the gallery modules link; it also runs the gallery
-  crates' script-parity and renderer smoke tests.
+  `wasm32-unknown-unknown` and runs all five gallery crates' tests:
+  script parity, and the smoke tests of `wasm/render` and of the three
+  single-engine modules, which also build the library at each
+  single-engine feature combination.
 - `tests/visual/wasm/test_wasm.py` renders the visual-suite configs in
   Chrome through `WasmApi.export_png`, driven by Selenium, and
   compares exact pixel hashes against `tests/visual/baseline/wasm/`.

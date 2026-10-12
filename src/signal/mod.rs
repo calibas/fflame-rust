@@ -120,6 +120,46 @@ impl Signal {
         }
     }
 
+    /// This signal moved later in time by `offset` seconds (earlier for
+    /// a negative one), to the nearest sample: the value at `t` of the
+    /// result is this signal's value at `t - offset`.
+    ///
+    /// For a video whose muxed audio is offset: the audio-analysis
+    /// signals must move with the audio, or the tracks react to sound
+    /// the viewer hears `offset` seconds away. A positive offset pads
+    /// the front -- with the first sample for a continuous signal, with
+    /// zero for a trigger (no beat before the audio starts) -- and a
+    /// negative one drops the leading samples, keeping at least the
+    /// last so the signal still holds its final value. A scalar has no
+    /// time axis and comes back unchanged.
+    pub fn shifted(&self, offset: f64) -> Signal {
+        let mut out = self.clone();
+        if self.data.is_empty() || self.sample_rate <= 0.0 || !offset.is_finite() {
+            return out;
+        }
+        let samples = (offset * self.sample_rate).round();
+        match self.signal_type {
+            SignalType::Scalar => {}
+            _ if samples > 0.0 => {
+                let pad = match self.signal_type {
+                    SignalType::Trigger => 0.0,
+                    _ => self.data[0],
+                };
+                let n = samples as usize;
+                let mut data = Vec::with_capacity(n + self.data.len());
+                data.resize(n, pad);
+                data.extend_from_slice(&self.data);
+                out.data = data;
+            }
+            _ if samples < 0.0 => {
+                let n = ((-samples) as usize).min(self.data.len() - 1);
+                out.data = self.data[n..].to_vec();
+            }
+            _ => {}
+        }
+        out
+    }
+
     /// Get the duration of this signal in seconds
     pub fn duration(&self) -> f64 {
         if self.sample_rate > 0.0 {
@@ -608,5 +648,33 @@ mod tests {
         let value = manager.get_value_at("energy", 0.01);
         assert!(value.is_some());
         assert!((value.unwrap() - 0.5).abs() < 0.001);
+    }
+
+    /// A shifted signal reads at `t` what the original read at
+    /// `t - offset`, as the muxed audio does.
+    #[test]
+    fn a_shifted_signal_follows_its_offset() {
+        let s = Signal::new("a".into(), 10.0, SignalType::Continuous, vec![0.2, 0.4, 0.6, 0.8]);
+
+        // Later by 0.2 s: two samples of the first value in front.
+        let later = s.shifted(0.2);
+        assert_eq!(later.data, vec![0.2, 0.2, 0.2, 0.4, 0.6, 0.8]);
+        assert_eq!(later.value_at(0.3), s.value_at(0.1));
+
+        // Earlier by 0.1 s: the first sample dropped.
+        let earlier = s.shifted(-0.1);
+        assert_eq!(earlier.data, vec![0.4, 0.6, 0.8]);
+        assert_eq!(earlier.value_at(0.0), s.value_at(0.1));
+
+        // Past the end: the last sample is kept, so it still holds.
+        assert_eq!(s.shifted(-5.0).data, vec![0.8]);
+
+        // A trigger is padded with silence, not with its first beat.
+        let beats = Signal::new("b".into(), 10.0, SignalType::Trigger, vec![1.0, 0.0, 1.0]);
+        assert_eq!(beats.shifted(0.2).data, vec![0.0, 0.0, 1.0, 0.0, 1.0]);
+
+        // A scalar has no time axis.
+        let bpm = Signal::new("bpm".into(), 1.0, SignalType::Scalar, vec![120.0]);
+        assert_eq!(bpm.shifted(3.0).data, vec![120.0]);
     }
 }

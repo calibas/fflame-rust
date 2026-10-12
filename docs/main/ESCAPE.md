@@ -969,6 +969,10 @@ texture filtering — are in the design record's macOS sections (from
    `every_preset_renders_a_picture` on a GPU.
 5. A perturbation tier is separate work: a delta form for both rungs,
    an arm in `perturb_tier`, and a measurement against exact orbits.
+6. A parameter that multiplies the work -- a walk's depth, a beam, a
+   march's steps -- goes in `SLOW_PARAMS` in `mod.rs`, so the panel
+   commits it when a drag ends instead of overshooting (UI.md, *Slow
+   settings*).
 
 ---
 

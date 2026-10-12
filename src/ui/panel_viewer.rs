@@ -276,7 +276,6 @@ pub struct PanelContext<'a> {
     pub variation_catalog: Option<&'a crate::storage::variation_catalog::CachedCatalog>,
 
     // Libraries
-    pub preset_library: &'a crate::scene::presets::PresetLibrary,
     pub palette_library: &'a mut crate::scene::palette::PaletteLibrary,
 
     // Renderer (optional, might not exist during init)
@@ -360,7 +359,6 @@ pub struct PanelContext<'a> {
     pub config_load_file: &'a mut bool,
     pub flame_xml_import_file: &'a mut bool,
     pub flame_xml_export_file: &'a mut bool,
-    pub open_config_dialog: &'a mut bool,
 
     // Selected preset config (from any browser)
     pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
@@ -462,12 +460,10 @@ pub struct PanelContext<'a> {
 
     // API animation state (for Save/Update Online buttons in animation panel)
     pub api_flame_id: &'a Option<String>,
-    pub api_animation_id: &'a Option<String>,
     pub flame_animations: &'a [crate::api::types::AnimationSummary],
     pub is_signed_in: bool,
 
     // API animation save action (from animation panel)
-    pub api_animation_save_action: &'a mut super::response::ApiAnimationSaveAction,
 
     // Open Save Online dialog (from animation panel)
     pub open_save_online_dialog: &'a mut bool,
@@ -483,6 +479,8 @@ pub struct PanelContext<'a> {
     pub sim_running: &'a mut bool,
     pub sim_step_once: &'a mut bool,
     pub sim_reseed: &'a mut bool,
+    /// Set to the name "Save as texture" stored the simulation under.
+    pub sim_saved_texture: &'a mut Option<String>,
     /// Steps completed and the grid in use, for the panel's readout.
     pub sim_step_index: u32,
     pub sim_grid: (u32, u32),
@@ -809,6 +807,7 @@ impl<'a> PanelViewer<'a> {
                         running: self.context.sim_running,
                         step_once: self.context.sim_step_once,
                         reseed: self.context.sim_reseed,
+                        saved_texture: self.context.sim_saved_texture,
                         step_index: self.context.sim_step_index,
                         grid: self.context.sim_grid,
                         timeline_target: self.context.sim_timeline_target,
@@ -1033,7 +1032,6 @@ impl<'a> PanelViewer<'a> {
         ui.separator();
         let api_context = super::animation_panel::AnimationApiContext {
             api_flame_id: self.context.api_flame_id,
-            api_animation_id: self.context.api_animation_id,
             flame_animations: self.context.flame_animations,
             is_signed_in: self.context.is_signed_in,
         };
@@ -1937,7 +1935,7 @@ impl<'a> PanelViewer<'a> {
         let animation_duration = self.context.animation_controller.animation
             .as_ref()
             .map(|a| a.duration)
-            .unwrap_or(10.0);
+            .unwrap_or(super::signal_panel::DEFAULT_GENERATOR_DURATION);
         super::signal_panel::render_signal_panel(
             ui,
             self.context.audio_manager,

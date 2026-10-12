@@ -8,7 +8,7 @@
 #
 # An escape config loaded here reports a missing engine rather than
 # rendering something the file never described. ../render is the one
-# that renders both.
+# that renders every mode.
 
 [package]
 name = "fflame-flame"

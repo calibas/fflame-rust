@@ -1,4 +1,5 @@
-# Build settings for the two standalone gallery crates (render, script).
+# Build settings for the standalone gallery crates (render, script,
+# flame, escape, sim).
 #
 # They stay separate workspaces on purpose — the app must be unaffected
 # by anything here — but "separate workspace" defaulted to "separate
@@ -15,9 +16,9 @@
 # getrandom wasm backend cfg), so nothing there is lost.
 
 [build]
-# Relative to this file's directory -> wasm/target-gallery. Both crates
-# share it, so the parent crate is compiled once for the pair instead of
-# once each.
+# Relative to this file's directory -> wasm/target-gallery. Every
+# gallery crate shares it rather than building into a private tree, so
+# what they have in common is compiled once.
 target-dir = "target-gallery"
 
 [env]

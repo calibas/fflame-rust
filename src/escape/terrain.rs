@@ -2852,15 +2852,6 @@ impl TerrainRenderer {
         }
     }
 
-    /// The accumulated mean's texture, for a test to read back.
-    #[cfg(test)]
-    pub(crate) fn accumulated_texture_for_test(&self) -> Option<&Texture> {
-        match (&self.accum, self.accum_count) {
-            (Some(pair), 1..) => Some(&pair[self.accum_front].0),
-            _ => None,
-        }
-    }
-
     /// Levels of the mipmap for an `n x m` tile: level 0 is its cells,
     /// each level above halves them (rounding up), to one node.
     /// One atlas layer's bytes at `w x h` samples: the raw heights, the
@@ -4100,7 +4091,6 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod gpu_tests {
     use super::*;
-    use wgpu::*;
 
     pub(crate) fn device() -> Option<(Device, Queue)> {
         let instance = Instance::new(InstanceDescriptor {
