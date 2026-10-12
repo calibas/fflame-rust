@@ -566,6 +566,14 @@ impl Default for ShaderConstants {
 /// not, as before; a Linked/Final non-user stays out, because adding it
 /// would gate placements that need no gate.) A variation no transform
 /// moves stays out of the map entirely, as before.
+///
+/// A subflame's transforms count too, at their own global ids
+/// (`SUBFLAME_XFORM_ID_BASE` on: each subflame's normals, then its
+/// finals), and are recorded as a Linked or Final is: when they move a
+/// variation, or use one something else moves. They run through a
+/// dispatcher of their own, which reads only that range
+/// (`resolve_phase_buckets`). Their priorities used to be ignored, and a
+/// parent's move applied inside the subflame as well.
 pub fn collect_phase_overrides(
     flame: &crate::scene::transforms::Flame,
     registry: &crate::variations::VariationRegistry,
@@ -580,7 +588,14 @@ pub fn collect_phase_overrides(
             .chain(flame.linked_transforms.iter().enumerate().map(move |(i, t)| (n + i, t)))
             .chain(flame.final_transforms.iter().enumerate().map(move |(j, t)| (n + l + j, t)))
     };
-    for (gid, xform) in pools() {
+    let base = crate::scene::transforms::SUBFLAME_XFORM_ID_BASE as usize;
+    let subflame_pool = || {
+        flame.subflames.iter()
+            .flat_map(|sf| sf.transforms.iter().chain(sf.final_transforms.iter()))
+            .enumerate()
+            .map(move |(k, t)| (base + k, t))
+    };
+    for (gid, xform) in pools().chain(subflame_pool()) {
         for (name, &prio) in &xform.variation_priorities {
             let Some(info) = registry.get(name) else { continue };
             if info.phase != VariationPhase::Any {
@@ -590,7 +605,7 @@ pub fn collect_phase_overrides(
             out.entry(local).or_default().insert(gid as u32, prio);
         }
     }
-    for (gid, xform) in pools().skip(n) {
+    for (gid, xform) in pools().skip(n).chain(subflame_pool()) {
         for (name, &weight) in &xform.variations {
             if weight == 0.0 {
                 continue; // the dispatch's weight check skips it anyway
@@ -2319,10 +2334,24 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                     // xform_id: every normal, plus each Linked/Final the
                     // overrides map records (`collect_phase_overrides`
                     // records those that move the variation or use it).
+                    //
+                    // Each dispatcher reads only its own transforms: the
+                    // parent's ids below SUBFLAME_XFORM_ID_BASE, the
+                    // subflame dispatcher's from it up. A subflame has no
+                    // "every normal" to classify -- the map records its
+                    // transforms that move or use the variation -- so one
+                    // that records none keeps the variation in its natural
+                    // bucket, ungated, below.
                     let ov = overrides.get(idx);
                     let (mut pre_t, mut nor_t, mut post_t) = (Vec::new(), Vec::new(), Vec::new());
-                    let pools = ov.map(|m| m.range(num_transforms..).map(|(&t, &p)| (t, p)));
-                    let normals = (0..num_transforms)
+                    let base = crate::scene::transforms::SUBFLAME_XFORM_ID_BASE;
+                    let (normals_end, pools_from, pools_to) = if is_subflame {
+                        (0, base, u32::MAX)
+                    } else {
+                        (num_transforms, num_transforms, base)
+                    };
+                    let pools = ov.map(|m| m.range(pools_from..pools_to).map(|(&t, &p)| (t, p)));
+                    let normals = (0..normals_end)
                         .map(|t| (t, ov.and_then(|m| m.get(&t)).copied().unwrap_or(0)));
                     for (t, prio) in normals.chain(pools.into_iter().flatten()) {
                         if prio < 0 {
@@ -2336,7 +2365,10 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                     let used = (!pre_t.is_empty()) as u32
                         + (!nor_t.is_empty()) as u32
                         + (!post_t.is_empty()) as u32;
-                    if used <= 1 {
+                    if used == 0 {
+                        // A subflame that records nothing for it.
+                        normal.push(mk(None, false));
+                    } else if used == 1 {
                         // One bucket across every transform classified ⇒
                         // no xform_id gate (the weight check restricts it
                         // to the transforms that use the variation). A
@@ -3380,6 +3412,71 @@ mod tests {
         assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u || xform_id == 1u)"), "pre only for the normals that moved it");
         assert_eq!(normal.len(), 1);
         assert_eq!(normal[0].gate.as_deref(), Some("(xform_id != 0u && xform_id != 1u)"), "the final keeps it in normal");
+        drop(registry);
+        for render_3d in [false, true] {
+            validated_flame_shader(&flame, render_3d);
+        }
+    }
+
+    /// A subflame's transforms have fx_priority of their own, and run
+    /// through a dispatcher of their own. Their priorities were never
+    /// collected, and the subflame dispatcher took the parent's
+    /// placements: a parent that moved a variation moved it inside the
+    /// subflame too, and a subflame transform's own move did nothing.
+    #[test]
+    fn a_subflames_fx_priority_is_its_own() {
+        use crate::scene::transforms::{Flame, Transform};
+        let builder = test_builder();
+        let registry = crate::variations::global_registry();
+        let ids = |f: &Flame, name: &str| {
+            let id_map = crate::scene::transforms::compute_local_index_map(f.active_variation_names_ordered(&registry));
+            (id_map[name], collect_phase_overrides(f, &registry, &id_map))
+        };
+        let parent_running = |sub: Flame| {
+            let mut flame = flame_moving("linear", 0);
+            flame.transforms[0].variation_priorities.clear();
+            flame.transforms[1].set_variation("subflame_wf", 1.0);
+            flame.transforms[1].variation_params.insert("subflame_wf.subflame_id".to_string(), 0.0);
+            flame.subflames.push(sub);
+            flame
+        };
+        let sub_of = |transforms: Vec<Transform>| Flame { transforms, ..Flame::default() };
+
+        // The parent moves blur to pre; the subflame uses it where it stands.
+        let mut uses = Transform::new();
+        uses.set_variation("blur", 1.0);
+        let mut flame = parent_running(sub_of(vec![uses]));
+        flame.transforms[0].set_variation("blur", 0.5);
+        flame.transforms[0].variation_priorities.insert("blur".to_string(), -1);
+        let (blur, overrides) = ids(&flame, "blur");
+        let active = [("blur".to_string(), blur)];
+        let (pre, normal, _) = builder.resolve_phase_buckets(&active, 2, &overrides, false);
+        assert_eq!(pre.len(), 1, "the parent moves it");
+        assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u)"));
+        assert_eq!(normal.len(), 1);
+        let (pre, normal, post) = builder.resolve_phase_buckets(&active, 2, &overrides, true);
+        assert!(pre.is_empty() && post.is_empty(), "the parent's move reached the subflame");
+        assert!(normal.len() == 1 && normal[0].gate.is_none(), "the subflame keeps it in normal");
+
+        // A subflame transform moves julia to post; its sibling keeps it.
+        let mut moves = Transform::new();
+        moves.set_variation("julia", 1.0);
+        moves.variation_priorities.insert("julia".to_string(), 1);
+        let mut keeps = Transform::new();
+        keeps.set_variation("julia", 1.0);
+        let flame = parent_running(sub_of(vec![moves, keeps]));
+        let (julia, overrides) = ids(&flame, "julia");
+        let base = crate::scene::transforms::SUBFLAME_XFORM_ID_BASE;
+        assert_eq!(overrides[&julia].get(&base), Some(&1), "keyed by the subflame transform's global id");
+        assert_eq!(overrides[&julia].get(&(base + 1)), Some(&0), "a user that keeps it is recorded too");
+        let active = [("julia".to_string(), julia)];
+        let (pre, normal, post) = builder.resolve_phase_buckets(&active, 2, &overrides, false);
+        assert!(pre.is_empty() && post.is_empty() && normal.len() == 1 && normal[0].gate.is_none(), "the parent is untouched");
+        let (pre, normal, post) = builder.resolve_phase_buckets(&active, 2, &overrides, true);
+        assert!(pre.is_empty());
+        assert_eq!(post.len(), 1, "the subflame transform's move was ignored");
+        assert_eq!(post[0].gate.as_deref(), Some(format!("(xform_id == {base}u)").as_str()));
+        assert_eq!(normal[0].gate.as_deref(), Some(format!("(xform_id != {base}u)").as_str()));
         drop(registry);
         for render_3d in [false, true] {
             validated_flame_shader(&flame, render_3d);

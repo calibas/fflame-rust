@@ -494,7 +494,12 @@ colour) to the parent transform. It is a port of JWildfire's
 - **Variations inside** run through `apply_subflame_variations`, a
   second dispatcher without the subflame variations (which is what
   forbids nesting). Hiding is a no-op there, `NeedsW` does not commit
-  the 4th coordinate, and analytic blurs render stochastically.
+  the 4th coordinate, and analytic blurs render stochastically. A
+  subflame transform's `fx_priority` moves a variation in this
+  dispatcher only, gated on its global id, and a parent's moves stay
+  out of it (`collect_phase_overrides`, `resolve_phase_buckets`). Until
+  2026-10 the subflame's priorities were ignored and the parent's
+  applied inside it.
 - **One id space.** Subflame transforms occupy slots
   `[SUBFLAME_XFORM_ID_BASE = 128, …)` in the transforms, parameter and
   state buffers, normals then Finals per subflame. Their variations are
