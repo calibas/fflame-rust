@@ -55,7 +55,7 @@ struct EscapeParams {
     _pad_shade0: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
     cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
     lparams: array<vec4<f32>, 4>,  // the texture layer's params, slot-ordered
@@ -66,6 +66,9 @@ struct EscapeParams {
     // replaced cost enough occupancy to trip the TDR watchdog under
     // supersampling.
     fdata: array<vec4<f32>, 64>,
+    // A folding formula's crease settings (CreaseSettings::to_gpu): the
+    // decay, the pattern, the flip as a sign, the terrain's reach.
+    crease: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -344,6 +347,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = esc_colour(raw, t, summary, accum_state);
         coverage = 1.0;
     }
+    //__CREASES__
 
     if ((params.flags & 8u) != 0u) {
         results[py * params.width + gid.x] = IterResult(
@@ -723,6 +727,34 @@ fn esc_offset_slope(pixel: vec2<f32>, h: f32) -> vec2<f32> {
     return -vec2<f32>(hx - h, hy - h) / (step * esc_supersample());
 }
 "#;
+
+/// A folding formula's crease slope (`FormulaFeature::Creases`), spliced
+/// after its WGSL.
+const CREASE_SLOPE_WGSL: &str = r#"
+// The crease relief's stored slope: -grad h turned from the plane into
+// the screen's y-up frame, as the analytic slope is. A tenth of the
+// plane's slope, so the relief's default Height (10) lights the first
+// crease at its own 45 degrees; and divided by the supersample factor
+// the shade pass multiplies every stored slope by, because a slope in
+// the plane's units does not change with the grid.
+fn esc_crease_slope(g: vec2<f32>) -> vec2<f32> {
+    let u = -g * (0.1 / esc_supersample());
+    let rot = params.rot_cs;
+    return vec2<f32>(u.x * rot.x + u.y * rot.y, -u.x * rot.y + u.y * rot.x);
+}
+"#;
+
+/// The crease field's height and slope, spliced into the direct template
+/// for a formula with creases. Every pixel's, the interior's too: the
+/// paper has no inside.
+const CREASES_APPLY_WGSL: &str = r#"
+    // The folded paper (ShadingField::Creases, and the terrain's
+    // Creases source): its height, and its exact slope.
+    if (params.shade_flags == 6u) {
+        let crease = formula_creases(pixel);
+        relief = crease.x;
+        slope = esc_crease_slope(crease.yz);
+    }"#;
 
 /// Orbits the relief runs beside the pixel's own, spliced only into a
 /// pipeline built for them: each is another copy of the loop once the
@@ -1341,12 +1373,13 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 struct PerturbParams {
@@ -1858,12 +1891,13 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 struct PerturbParams {
@@ -5196,11 +5230,12 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 struct IterResult {
@@ -5518,12 +5553,13 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -5674,13 +5710,14 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     // Mode D keeps the whole-IFS constants here: see
     // `escape::ifs::pack_globals` for the layout.
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -6201,11 +6238,12 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 struct IfsRecord {
@@ -6383,11 +6421,12 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 struct IfsRecord {
@@ -6603,11 +6642,12 @@ struct EscapeParams {
     stride: u32,
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
-    pmap: vec4<f32>,       // x = the transfer's pivot; yzw spare
+    pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
     fparams: array<vec4<f32>, 4>,
     cparams: array<vec4<f32>, 4>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
+    crease: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -7830,6 +7870,7 @@ pub fn assemble_layered(
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
+    let creases = formula.has_feature(FormulaFeature::Creases);
     let needs_period = either(ColoringFeature::NeedsPeriod);
     // Interior detection may only stop an orbit where stopping is
     // INVISIBLE. A coloring that draws the interior reads the final z
@@ -7894,6 +7935,14 @@ pub fn assemble_layered(
                 out.push(formula.wgsl.to_string());
                 if needs_derivative {
                     out.push(formula.wgsl_derivative.to_string());
+                }
+                if creases {
+                    out.push(CREASE_SLOPE_WGSL.trim().to_string());
+                }
+            }
+            "//__CREASES__" => {
+                if creases {
+                    out.push(CREASES_APPLY_WGSL.trim_start_matches(['\r', '\n']).to_string());
                 }
             }
             "//__COLORING__" => {
@@ -8334,6 +8383,13 @@ mod tests {
                         f.name
                     );
                     assert_eq!(src.contains("fn esc_emboss("), orbits == ReliefOrbits::Embossed, "{}", f.name);
+                    // The crease field only where the formula folds paper.
+                    assert_eq!(
+                        src.contains("formula_creases(pixel)"),
+                        f.has_feature(crate::escape::FormulaFeature::Creases),
+                        "{}",
+                        f.name
+                    );
                 }
             }
         }

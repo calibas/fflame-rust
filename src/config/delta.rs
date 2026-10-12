@@ -595,6 +595,10 @@ pub enum ConfigPath {
     EscapeShadingOffset,
     EscapeShadingEmboss,
     EscapeShadingEmbossSections,
+    /// A folding formula's paper (`CreaseSettings`).
+    EscapeShadingCreasePattern,
+    EscapeShadingCreaseDecay,
+    EscapeShadingCreaseFlip,
     /// The texture overlay (`TextureOverlay`, Kalles Fraktaler's).
     EscapeTextureOverlay,
     EscapeTextureOverlayMerge,
@@ -1284,6 +1288,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingOffset => write!(f, "Relief Offset"),
             ConfigPath::EscapeShadingEmboss => write!(f, "Relief Emboss Type"),
             ConfigPath::EscapeShadingEmbossSections => write!(f, "Relief Emboss Sections"),
+            ConfigPath::EscapeShadingCreasePattern => write!(f, "Crease Pattern"),
+            ConfigPath::EscapeShadingCreaseDecay => write!(f, "Crease Decay"),
+            ConfigPath::EscapeShadingCreaseFlip => write!(f, "Crease Flip"),
             ConfigPath::EscapeTextureOverlay => write!(f, "Texture Overlay"),
             ConfigPath::EscapeTextureOverlayMerge => write!(f, "Texture Overlay Merge"),
             ConfigPath::EscapeTextureOverlayPower => write!(f, "Texture Overlay Power"),
@@ -1722,6 +1729,11 @@ impl ConfigPath {
             ConfigPath::EscapeShadingEmbossSections => {
                 I18nKey::simple("history.param.escape_shading_emboss_sections")
             }
+            ConfigPath::EscapeShadingCreasePattern => {
+                I18nKey::simple("history.param.escape_shading_crease_pattern")
+            }
+            ConfigPath::EscapeShadingCreaseDecay => I18nKey::simple("history.param.escape_shading_crease_decay"),
+            ConfigPath::EscapeShadingCreaseFlip => I18nKey::simple("history.param.escape_shading_crease_flip"),
             ConfigPath::EscapeTextureOverlay => I18nKey::simple("history.param.escape_texture_overlay"),
             ConfigPath::EscapeTextureOverlayMerge => I18nKey::simple("history.param.escape_texture_overlay_merge"),
             ConfigPath::EscapeTextureOverlayPower => I18nKey::simple("history.param.escape_texture_overlay_power"),
@@ -3161,6 +3173,9 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingOffset
             | ConfigPath::EscapeShadingEmboss
             | ConfigPath::EscapeShadingEmbossSections
+            | ConfigPath::EscapeShadingCreasePattern
+            | ConfigPath::EscapeShadingCreaseDecay
+            | ConfigPath::EscapeShadingCreaseFlip
             | ConfigPath::EscapeTextureOverlay
             | ConfigPath::EscapeTextureOverlayMerge
             | ConfigPath::EscapeTextureOverlayPower
@@ -3698,6 +3713,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingOffset => "Escape.Shading.Offset".to_string(),
             ConfigPath::EscapeShadingEmboss => "Escape.Shading.Emboss".to_string(),
             ConfigPath::EscapeShadingEmbossSections => "Escape.Shading.EmbossSections".to_string(),
+            ConfigPath::EscapeShadingCreasePattern => "Escape.Shading.CreasePattern".to_string(),
+            ConfigPath::EscapeShadingCreaseDecay => "Escape.Shading.CreaseDecay".to_string(),
+            ConfigPath::EscapeShadingCreaseFlip => "Escape.Shading.CreaseFlip".to_string(),
             ConfigPath::EscapeTextureOverlay => "Escape.TextureOverlay.Enabled".to_string(),
             ConfigPath::EscapeTextureOverlayMerge => "Escape.TextureOverlay.Merge".to_string(),
             ConfigPath::EscapeTextureOverlayPower => "Escape.TextureOverlay.Power".to_string(),
@@ -3984,6 +4002,9 @@ impl ConfigPath {
                 ["Shading", "Offset"] => return Some(ConfigPath::EscapeShadingOffset),
                 ["Shading", "Emboss"] => return Some(ConfigPath::EscapeShadingEmboss),
                 ["Shading", "EmbossSections"] => return Some(ConfigPath::EscapeShadingEmbossSections),
+                ["Shading", "CreasePattern"] => return Some(ConfigPath::EscapeShadingCreasePattern),
+                ["Shading", "CreaseDecay"] => return Some(ConfigPath::EscapeShadingCreaseDecay),
+                ["Shading", "CreaseFlip"] => return Some(ConfigPath::EscapeShadingCreaseFlip),
                 ["TextureOverlay", "Enabled"] => return Some(ConfigPath::EscapeTextureOverlay),
                 ["TextureOverlay", "Merge"] => return Some(ConfigPath::EscapeTextureOverlayMerge),
                 ["TextureOverlay", "Power"] => return Some(ConfigPath::EscapeTextureOverlayPower),
@@ -4885,6 +4906,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeShadingHeightPre
         | ConfigPath::EscapeShadingHeightPost
         | ConfigPath::EscapeShadingOffset
+        | ConfigPath::EscapeShadingCreaseDecay
         // The overlay's mix, warp ratio and tile size are quantities;
         // its power is a whole number whose parity flips the warp's
         // sign rule, so it does not tween.
@@ -4944,6 +4966,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // value part-way between two keyframes.
         | ConfigPath::EscapeShadingEmboss
         | ConfigPath::EscapeShadingEmbossSections
+        // A crease pattern is a choice, and a flip a switch.
+        | ConfigPath::EscapeShadingCreasePattern
+        | ConfigPath::EscapeShadingCreaseFlip
         | ConfigPath::EscapeTextureOverlay
         | ConfigPath::EscapeTextureOverlayPower
         | ConfigPath::EscapeTextureOverlayFit

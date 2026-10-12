@@ -2202,6 +2202,11 @@ impl ConfigManager {
             ConfigPath::EscapeShadingEmbossSections => {
                 Ok(ConfigValue::UInt(config.escape.shading.emboss_sections))
             }
+            ConfigPath::EscapeShadingCreasePattern => Ok(ConfigValue::String(
+                config.escape.shading.creases.pattern.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingCreaseDecay => Ok(config.escape.shading.creases.decay.into()),
+            ConfigPath::EscapeShadingCreaseFlip => Ok(ConfigValue::Bool(config.escape.shading.creases.flip)),
             ConfigPath::EscapeTextureOverlay => Ok(ConfigValue::Bool(config.escape.texture_overlay.enabled)),
             ConfigPath::EscapeTextureOverlayMerge => Ok(config.escape.texture_overlay.merge.into()),
             ConfigPath::EscapeTextureOverlayPower => Ok(config.escape.texture_overlay.power.into()),
@@ -3910,6 +3915,18 @@ impl ConfigManager {
                 let v: u32 = value.try_into()?;
                 let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
                 self.current.escape.shading.emboss_sections = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingCreasePattern => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.creases.pattern = crate::config::escape::CreasePattern::from_name(&v);
+            }
+            ConfigPath::EscapeShadingCreaseDecay => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::CREASE_DECAY_RANGE;
+                self.current.escape.shading.creases.decay = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingCreaseFlip => {
+                self.current.escape.shading.creases.flip = value.try_into()?;
             }
             ConfigPath::EscapeTextureOverlay => {
                 self.current.escape.texture_overlay.enabled = value.try_into()?;

@@ -1950,7 +1950,7 @@ fn register_escape(engine: &mut Engine) {
         },
     );
     engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| -> Result<(), Box<EvalAltResult>> {
-        const FIELDS: [&str; 6] = ["smooth", "banded", "layer", "analytic", "offset", "embossed"];
+        const FIELDS: [&str; 7] = ["smooth", "banded", "layer", "analytic", "offset", "embossed", "creases"];
         let f = field.trim().to_ascii_lowercase();
         if !FIELDS.contains(&f.as_str()) {
             return Err(err(format!("unknown relief field '{field}'; one of {}", FIELDS.join(", "))));
@@ -2044,6 +2044,24 @@ fn register_escape(engine: &mut Engine) {
     engine.register_fn("shading_emboss", |e: &mut EscapeHandle, kind: &str, sections: i64| {
         set_emboss(e, kind, Some(sections))
     });
+
+    engine.register_fn(
+        "shading_creases",
+        |e: &mut EscapeHandle, pattern: &str, decay: Dynamic, flip: bool| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::{CreasePattern, CREASE_DECAY_RANGE};
+            let p = CreasePattern::ALL.into_iter().find(|p| p.as_str() == pattern).ok_or_else(|| {
+                let names: Vec<&str> = CreasePattern::ALL.iter().map(|p| p.as_str()).collect();
+                err(format!("unknown crease pattern '{pattern}'; one of {}", names.join(", ")))
+            })?;
+            let decay = num(&decay, "decay")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.creases.pattern = p;
+            cfg.escape.shading.creases.decay = decay.clamp(CREASE_DECAY_RANGE.0, CREASE_DECAY_RANGE.1);
+            cfg.escape.shading.creases.flip = flip;
+            Ok(())
+        },
+    );
 
     // ---- Palette mapping --------------------------------------------
     // Curve names are checked, unlike the shading selectors: a typo in

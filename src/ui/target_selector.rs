@@ -469,6 +469,7 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapeShadingHeightPre, "Relief: Height before curve"),
             TargetItem::new(ConfigPath::EscapeShadingHeightPost, "Relief: Height after curve"),
             TargetItem::new(ConfigPath::EscapeShadingOffset, "Relief: Offset"),
+            TargetItem::new(ConfigPath::EscapeShadingCreaseDecay, "Relief: Crease decay"),
             TargetItem::new(ConfigPath::EscapeShadingSoftness, "Relief: Softness"),
             TargetItem::new(ConfigPath::EscapeShadingAmbient, "Relief: Ambient"),
             TargetItem::new(ConfigPath::EscapeShadingShadowStrength, "Relief: Shadow strength"),
