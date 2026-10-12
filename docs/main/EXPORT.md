@@ -628,11 +628,21 @@ metadata. It renders to the API's iteration target: the config's
 straight alpha). See [WASM.md](../WASM.md).
 
 **In the web app**, the viewport-size export reads the live picture
-back asynchronously and downloads it. The custom-size export runs its
-own render loops in `src/app/mod.rs` — the flame chaos game, the escape
-chunk loop and `SimRenderer::render_still` — rather than calling
-`render_with`, so a stage added to `render_with` does not reach it
-automatically. 2× antialiasing is not offered on the web.
+back asynchronously and downloads it. The custom-size export calls
+`render` on the app's own device in a `spawn_local` task, as the
+desktop's runs it under `pollster`, so it has every stage the other
+exports have. (It was a copy of the render loops in `src/app/mod.rs`
+until 2026-10, without the shade pass, DoF, density effects or the exact
+density fraction.) Not on a device of its own: beside the live one a
+large export runs out of memory. Three things in `render_with` exist
+for the browser: the exact reads it makes (the shadow fit, the density
+fraction) are awaited, never waited on synchronously, which never
+returns in a page; escape chunks are fixed in size there, since nothing
+can wait between them to time them (`set_fixed_chunk`); and `render`'s
+own renderer frees its iteration buffers once the tone map has run,
+before the colour effects allocate (`RenderJob::throwaway_renderer`),
+which an 8K export with colour effects needs. 2× antialiasing is not
+offered on the web.
 
 ---
 

@@ -321,7 +321,8 @@ or lighting is active (`SolidShadingSettings::active`, i.e.
   view extents around the view centre. The app re-fits at most once a
   run and only in its first 64 batches (`maybe_refit_shadow`, which
   makes the caller reset); `render_with` runs six warm-up dispatches,
-  re-fits blocking (`refresh_shadow_placement_blocking`), and resets.
+  awaits one exact bounds read to re-fit (`refresh_shadow_placement`),
+  and resets.
 - **The shade pass** (`ShadePass`, `shaders/shade.wgsl`): Blinn-Phong
   over normals reconstructed from the depth region — a full-image
   normals pass smoothed by up to three à-trous iterations

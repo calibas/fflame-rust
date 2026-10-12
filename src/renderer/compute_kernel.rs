@@ -2158,17 +2158,17 @@ impl FlameRenderer {
         (self.width as u64) * (self.height as u64) * 5 * 4
     }
 
-    /// Blocking bounds measurement + shadow-fit refresh (export warmup:
-    /// run a few batches, call this, reset, render for real — the maps
-    /// then cover the actual flame). Returns true when the fit changed
-    /// materially.
+    /// Bounds measurement + shadow-fit refresh (export warmup: run a few
+    /// batches, call this, reset, render for real — the maps then cover
+    /// the actual flame). Returns true when the fit changed materially.
+    /// Async for the browser's sake (`BoundsTracker::read`).
     #[allow(clippy::too_many_arguments)]
-    pub fn refresh_shadow_placement_blocking(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
+    pub async fn refresh_shadow_placement(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
         if !(self.shadow_capture_wanted() && self.buffers.solid_depth_region) {
             return false;
         }
         let off = self.bounds_tail_offset();
-        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+        if let Some(words) = self.bounds_stats.read(device, queue, &self.buffers.histogram_buffer, off).await {
             match crate::renderer::density_stats::decode_bounds(&words) {
                 Some(b) => {
                     log::debug!("Attractor bounds measured: min {:?} max {:?}", b.0, b.1);
@@ -2521,16 +2521,17 @@ impl FlameRenderer {
         Some((hits as f32 / attempts as f32).clamp(1e-9, 1.0))
     }
 
-    /// Exact (blocking) density-fraction measurement for one-shot renders
-    /// (CLI export) — sets the fraction the final tonemap will use.
-    pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
+    /// Exact density-fraction measurement for one-shot renders (exports,
+    /// the CLI, the gallery) — sets the fraction the final tonemap will
+    /// use. Async for the browser's sake (`BoundsTracker::read`).
+    pub async fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
         // Frame coverage first, and unconditionally: it is not tied to
         // solid rendering, and a one-shot render has exactly one
         // chance to measure it before the final tonemap. The leak
         // probe reads the same words and has the same one chance.
         if self.auto_exposure || self.leak_probe[2] > 0.0 {
             if let Some(words) =
-                self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+                self.coverage_stats.read(device, queue, &self.buffers.coverage_buffer, 0).await
             {
                 if self.leak_probe[2] > 0.0 && words[1] > 0 {
                     self.leak_fraction = Some(words[2] as f32 / words[1] as f32);
@@ -2556,7 +2557,7 @@ impl FlameRenderer {
             return;
         }
         let off = self.bounds_tail_offset();
-        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+        if let Some(words) = self.bounds_stats.read(device, queue, &self.buffers.histogram_buffer, off).await {
             let (num, den) = (words[6], words[7]);
             if den > 0 {
                 self.solid_density_fraction = (num as f32 / den as f32).clamp(0.005, 1.0);
@@ -4972,7 +4973,7 @@ impl FlameRenderer {
     /// the gate that holds the orbit fuses' count to the GPU's.
     #[cfg(test)]
     pub(crate) fn read_coverage_blocking(&mut self, device: &Device, queue: &Queue) -> Option<[u32; 8]> {
-        self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+        pollster::block_on(self.coverage_stats.read(device, queue, &self.buffers.coverage_buffer, 0))
     }
 
     /// A hash of the whole flame, for the orbit key: its serialisation, so
@@ -5964,6 +5965,42 @@ mod memory_tests {
         queue.write_buffer(&old, 0, &[0u8; 4]);
         assert!(pollster::block_on(scope.pop()).is_some(), "the replaced histogram was never destroyed");
         r.destroy();
+    }
+
+    /// `render()`'s own renderer frees its iteration buffers once the
+    /// tone map has run, before the colour effects allocate their
+    /// full-size ping-pong -- the headroom an 8K export in a browser
+    /// needs, which the web app's own export loop used to buy itself.
+    /// The picture is the one a renderer that keeps them draws.
+    #[test]
+    fn a_throwaway_render_frees_its_iteration_buffers_before_colour_effects() {
+        use crate::renderer::render::{render_with, NoProgress, RenderJob};
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.deterministic_rng = true;
+        cfg.color_effects = vec![crate::effects::EffectInstance::new("vignette")];
+        let draw = |throwaway: bool| {
+            let mut r = FlameRenderer::for_job(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &cfg);
+            r.set_sticky_enabled(false);
+            let mut job = RenderJob::new(&cfg, 64, 64).with_iterations(2_000_000);
+            job.throwaway_renderer = throwaway;
+            let out = pollster::block_on(render_with(&mut r, &device, &queue, job, &mut NoProgress)).expect("the render");
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            queue.write_buffer(&r.buffers.histogram_buffer, 0, &[0u8; 4]);
+            let freed = pollster::block_on(scope.pop()).is_some();
+            r.destroy();
+            (out.rgba_data, freed)
+        };
+        let (kept, kept_freed) = draw(false);
+        let (thrown, freed) = draw(true);
+        assert!(!kept_freed, "a renderer that renders again lost its histogram");
+        assert!(freed, "the throwaway renderer still held its histogram after the colour effects");
+        assert!(kept.iter().any(|&b| b != 0), "nothing was drawn");
+        assert!(thrown == kept, "freeing the iteration buffers changed the picture");
     }
 }
 

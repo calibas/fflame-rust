@@ -71,6 +71,12 @@ pub struct RenderJob<'a> {
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
 
+    /// The renderer is `render`'s own and dies with this job, so its
+    /// iteration buffers can go once the tone map has run. Set by
+    /// `render`, never by a caller of `render_with`, whose renderer
+    /// renders again.
+    pub(crate) throwaway_renderer: bool,
+
     /// Restart every orbit every dispatch, as before orbits persisted
     /// (`docs/archive/projects/persistent-orbits.md`): a gate's baseline.
     #[cfg(test)]
@@ -90,6 +96,7 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
+            throwaway_renderer: false,
             #[cfg(test)]
             restarted_orbits: false,
         }
@@ -313,7 +320,7 @@ const BATCH_SIZE: u32 = 4;
 pub async fn render(
     device: &Device,
     queue: &Queue,
-    job: RenderJob<'_>,
+    mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
     // A flame the transform buffers cannot hold would panic in packing.
@@ -388,6 +395,7 @@ pub async fn render(
     // reproducibility contracts were made with. A throwaway renderer
     // gains nothing from stickiness anyway.
     renderer.set_sticky_enabled(false);
+    job.throwaway_renderer = true;
 
     let out = render_with(&mut renderer, device, queue, job, progress).await;
 
@@ -517,12 +525,12 @@ pub async fn render_with(
             );
             queue.submit(std::iter::once(enc.finish()));
         }
-        let changed = renderer.refresh_shadow_placement_blocking(
+        let changed = renderer.refresh_shadow_placement(
             device, queue,
             job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             [job.config.camera_x, job.config.camera_y, job.config.camera_z],
-        );
+        ).await;
         log::info!("Shadow warmup: fit {}", if changed { "refit to measured bounds" } else { "unchanged" });
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Shadow Warmup Reset"),
@@ -679,7 +687,7 @@ pub async fn render_with(
 
     // Solid brightness renormalization: exact accepted-density measurement
     // before the single final tonemap.
-    renderer.apply_exact_density_fraction(device, queue);
+    renderer.apply_exact_density_fraction(device, queue).await;
 
     // Solid-rendering shade pass — same ordering as the interactive frame:
     // shade, then density effects, then tonemap.
@@ -746,6 +754,22 @@ pub async fn render_with(
     }
 
     queue.submit(std::iter::once(tonemap_encoder.finish()));
+
+    // A throwaway renderer's iteration buffers -- several gigabytes at 8K
+    // -- are dead once the tone map has run. Free them before the colour
+    // chain allocates its full-size ping-pong: beside them, a browser ran
+    // out of GPU memory and the 8K export came back black. A destroyed
+    // buffer is freed only when the GPU is done with it, so wait for the
+    // tone map first.
+    if has_color_effects && job.throwaway_renderer {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        queue.on_submitted_work_done(move || {
+            let _ = tx.send(());
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = rx.await;
+        renderer.free_iteration_buffers();
+    }
 
     // Run color effects (after tonemap)
     let color_effects_ran = if has_color_effects {
@@ -1203,6 +1227,13 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = if solid_path { 1 } else { job.config.escape.supersample.max(1) };
     escape_renderer.resize(device, job.width, job.height, want_ss);
+    // A browser has no blocking wait: the polls below return at once, so
+    // chunks go in back to back and the adaptive sizer, which times the
+    // gap between calls, would read each as free and grow toward a
+    // watchdog-length dispatch. The fixed TDR-calibrated seed cannot
+    // change the image (`EscapeRenderer::set_fixed_chunk`).
+    #[cfg(target_arch = "wasm32")]
+    escape_renderer.set_fixed_chunk(true);
     prepare_escape(escape_renderer, device, queue, job.config).await;
     if solid_path {
         escape_renderer.render_solid_still(
@@ -1528,6 +1559,9 @@ async fn render_escape_terrain(
     let generation = renderer.palette_generation();
     prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
     terrain.footprint_renderer().set_chunk_time_target(200.0);
+    // No blocking wait in a browser -- see `render_escape`.
+    #[cfg(target_arch = "wasm32")]
+    terrain.footprint_renderer().set_fixed_chunk(true);
     // As many sections as the card holds beside the rest of the export:
     // past the viewport's 64, an export's nearest ground was magnified.
     terrain.fit_sections_for_export(device, config, job_w, job_h).await;
