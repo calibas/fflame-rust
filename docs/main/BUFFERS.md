@@ -512,6 +512,19 @@ are the frame's.
 `free_iteration_buffers` releases only the large per-pixel ones once a
 render's tone map has run.
 
+A buffer or texture replaced mid-update is **retired**, not dropped:
+the histogram when solid or the census changes its size, the palette
+textures, path ids, xaos, the analytic-blur pair, and a growing orbit,
+cylinder or bias table. It cannot be destroyed at once, because an
+encoder not yet submitted may still use it, and a submit that uses a
+destroyed buffer fails validation. Every caller submits a
+`compute_pass`'s encoder before recording the next one, so each
+`compute_pass` starts by destroying what was retired before the
+previous one (`release_retired`); `destroy` takes the rest
+(`a_replaced_buffer_is_destroyed_once_no_encoder_can_use_it`).
+`resize` replaces the whole set and destroys the old one at once, which
+is safe only because the app gives it an encoder of its own.
+
 ---
 
 ## Common tasks

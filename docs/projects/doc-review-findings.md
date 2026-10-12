@@ -19,10 +19,6 @@ From this list:
   loop. Routing it through `render()` first needs `BoundsTracker`'s
   blocking readback made async (it would spin forever in a browser) and
   fixed chunk sizing for escape on the web.
-- **E5** -- on WebGPU, the buffers `FlameBuffers` replaces mid-update
-  (toggling solid or census, path ids, the palette, xaos) are dropped,
-  not destroyed: an unsubmitted encoder may still reference them, so
-  this needs a deferred retire list.
 - **B6** -- the deep-zoom gates read gitignored fixtures.
 
 Found while fixing:
@@ -33,6 +29,10 @@ Found while fixing:
   tonemap exactly only at exposure 1 and gamma 1.
 - With online features off, web deep links (`?flame=`) are still
   followed.
+- `FlameRenderer::resize` replaces its output texture without destroying
+  the old one: 4 bytes a pixel per resize waits for the garbage collector
+  on WebGPU. egui keeps its own registration of that texture, so it needs
+  a deferral that outlives the frame's paint, not the buffers' retire list.
 - The web build has warnings the desktop build no longer has:
   deprecated web-sys calls and desktop-only code compiled for wasm32.
 
@@ -124,7 +124,7 @@ check before it is fixed.
 | E2 | **The video loop builds the full `FlameRenderer::with_palette_size` for every engine**, at 64 bytes a pixel of unused flame state for escape, sim and terrain videos. | `src/animation/export.rs:1920` | fixed |
 | E3 | **`histogram_size_bytes` undercounts solids.** It ignores the 16 MiB shadow-map tail, and the routing tests only `solid_strength > 0`. | `src/export/mod.rs` | fixed |
 | E4 | **The web custom-size export is its own copy of the render loop.** It skips the shade pass, DoF, density effects and the exact density fraction. It also leaves sticky shaders on, hard-codes burn-in to 20 and never frees its `SimRenderer`. | `src/app/mod.rs` ~2330-2780 | open |
-| E5 | **GPU memory leaks on WebGPU**, where dropping a buffer frees nothing.<br>- `FlameBuffers::destroy` skips the orbit buffers.<br>- `FlameRenderer::destroy` skips the shade and DoF textures.<br>- `resize`, `set_solid_depth_region`, `set_census_region`, `resize_palette`, `drop_xaos_buffer` and `drop_path_buffers` replace buffers without destroying them.<br>- `SimRenderer` has no `destroy`.<br>- `render_escape`'s cancel paths skip the destroy. | `src/gpu/buffers.rs`, `src/renderer/` | fixed, except the buffers replaced mid-update |
+| E5 | **GPU memory leaks on WebGPU**, where dropping a buffer frees nothing.<br>- `FlameBuffers::destroy` skips the orbit buffers.<br>- `FlameRenderer::destroy` skips the shade and DoF textures.<br>- `resize`, `set_solid_depth_region`, `set_census_region`, `resize_palette`, `drop_xaos_buffer` and `drop_path_buffers` replace buffers without destroying them.<br>- `SimRenderer` has no `destroy`.<br>- `render_escape`'s cancel paths skip the destroy. | `src/gpu/buffers.rs`, `src/renderer/` | fixed; the buffers replaced mid-update go through a retire list, destroyed two dispatches later |
 | E6 | `WasmApi.set_target_iterations` has no effect on `export_png`, which has no premultiplied option. `get_current_iterations()` and `get_progress()` are never advanced. | `src/wasm_api.rs` | fixed |
 | E7 | **Sim grid sizing under 2x AA**: `supersample_plan` sizes a bound sim grid without `SimGrid::cells_for`'s 0.125-4 clamp. `export-animation` says an unknown codec falls back to H.264, though the default is H.265. | `src/export/supersample.rs`; `src/lib.rs` | fixed |
 

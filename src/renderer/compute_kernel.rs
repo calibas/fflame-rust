@@ -1167,6 +1167,10 @@ impl FlameRenderer {
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
 
+        // Buffers replaced before the previous dispatch are in no
+        // unsubmitted encoder now; destroy them (`gpu::buffers::Retired`).
+        self.buffers.release_retired();
+
         let seed = self.get_rng_seed();
 
         // **Persistent orbits** (docs/archive/projects/persistent-orbits.md): the
@@ -5901,6 +5905,52 @@ mod memory_tests {
             assert_eq!(r.buffers.size_for_test(), state, "{mode:?}");
             r.destroy();
         }
+    }
+
+    /// A buffer the renderer replaces mid-update -- here the histogram,
+    /// which the census grows -- is destroyed, not only dropped (dropping
+    /// frees nothing on WebGPU), but not while an encoder may still use
+    /// it: a submit that uses a destroyed buffer fails. An encoder that
+    /// cleared the old histogram before the swap, and then recorded the
+    /// next dispatch, submits cleanly; the dispatch after destroys it.
+    #[test]
+    fn a_replaced_buffer_is_destroyed_once_no_encoder_can_use_it() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        let dispatch = |r: &mut FlameRenderer, enc: &mut wgpu::CommandEncoder| {
+            r.compute_pass(
+                enc, &queue, &device, 4, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+        };
+
+        let old = r.buffers.histogram_buffer.clone();
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("swap") });
+        enc.clear_buffer(&old, 0, None);
+        r.enable_census(&device);
+        assert!(r.buffers.histogram_buffer != old, "the census replaced the histogram");
+        dispatch(&mut r, &mut enc);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        queue.submit(Some(enc.finish()));
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "an encoder that used the old histogram could not submit: {error:?}");
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("next") });
+        dispatch(&mut r, &mut enc);
+        queue.submit(Some(enc.finish()));
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        queue.write_buffer(&old, 0, &[0u8; 4]);
+        assert!(pollster::block_on(scope.pop()).is_some(), "the replaced histogram was never destroyed");
+        r.destroy();
     }
 }
 
