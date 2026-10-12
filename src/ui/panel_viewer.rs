@@ -479,6 +479,8 @@ pub struct PanelContext<'a> {
     pub sim_running: &'a mut bool,
     pub sim_step_once: &'a mut bool,
     pub sim_reseed: &'a mut bool,
+    /// Set to the name "Save as texture" stored the simulation under.
+    pub sim_saved_texture: &'a mut Option<String>,
     /// Steps completed and the grid in use, for the panel's readout.
     pub sim_step_index: u32,
     pub sim_grid: (u32, u32),
@@ -805,6 +807,7 @@ impl<'a> PanelViewer<'a> {
                         running: self.context.sim_running,
                         step_once: self.context.sim_step_once,
                         reseed: self.context.sim_reseed,
+                        saved_texture: self.context.sim_saved_texture,
                         step_index: self.context.sim_step_index,
                         grid: self.context.sim_grid,
                         timeline_target: self.context.sim_timeline_target,

@@ -5,7 +5,11 @@
 //!
 //! A preview is the texture itself, generated (or read from the cache)
 //! and shrunk. Desktop generates one a frame, blocking, as the fractal
-//! browser does its thumbnails; the web spawns them.
+//! browser does its thumbnails; the web spawns them. Only what may
+//! generate on its own (`textures::may_generate`: cached, cheap, or asked
+//! for) does: a saved texture of hundreds of thousands of steps waits for
+//! its Generate button, where opening the panel used to freeze the app
+//! on it for minutes.
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +28,10 @@ pub struct TexturesPanel {
     seen_generation: u64,
     previews: HashMap<String, egui::TextureHandle>,
     failed: HashSet<String>,
+    /// Asked-for textures whose "generating" label has been drawn. A
+    /// long generation blocks the frame, so it starts the frame after,
+    /// once the label is on screen.
+    announced: HashSet<String>,
     /// A user texture being renamed: (its name, the edit buffer).
     rename: Option<(String, String)>,
     #[cfg(target_arch = "wasm32")]
@@ -48,6 +56,7 @@ impl TexturesPanel {
             seen_generation: crate::textures::library_generation(),
             previews: HashMap::new(),
             failed: HashSet::new(),
+            announced: HashSet::new(),
             rename: None,
             #[cfg(target_arch = "wasm32")]
             in_flight: HashSet::new(),
@@ -67,14 +76,28 @@ impl TexturesPanel {
         }
     }
 
-    /// The next texture still without a preview.
+    /// The next texture still without a preview that may be made now:
+    /// cached or cheap, or asked for and announced (see `announced`).
     pub fn next_pending(&self) -> Option<(String, FractalConfig)> {
         self.library
             .entries
             .iter()
             .zip(&self.keys)
-            .find(|(_, k)| !self.previews.contains_key(*k) && !self.failed.contains(*k))
+            .find(|(e, k)| {
+                !self.previews.contains_key(*k)
+                    && !self.failed.contains(*k)
+                    && self.may_make(&e.config, k)
+            })
             .map(|(e, k)| (k.clone(), e.config.clone()))
+    }
+
+    /// Whether a preview may be made now: on its own, or asked for and
+    /// its label already drawn.
+    fn may_make(&self, recipe: &FractalConfig, key: &str) -> bool {
+        if crate::textures::is_approved(key) {
+            return self.announced.contains(key);
+        }
+        crate::textures::may_generate(recipe, key)
     }
 
     /// Take a generated texture: shrink it to a preview.
@@ -116,6 +139,9 @@ impl TexturesPanel {
             if self.previews.contains_key(key) || self.failed.contains(key) || self.in_flight.contains(key) {
                 continue;
             }
+            if !crate::textures::may_generate(&entry.config, key) {
+                continue;
+            }
             self.in_flight.insert(key.clone());
             let (key, recipe, results) = (key.clone(), entry.config.clone(), std::rc::Rc::clone(&self.async_results));
             let (device, queue) = (device.clone(), queue.clone());
@@ -141,6 +167,21 @@ impl TexturesPanel {
             match &current {
                 Some(t) => {
                     ui.strong(&t.name);
+                    // A texture the viewport is drawing without, until
+                    // asked (`texture_sync`).
+                    let key = crate::textures::cache::key(&t.config);
+                    if !crate::textures::may_generate(&t.config, &key) {
+                        ui.weak(t!("textures_panel.not_generated"))
+                            .on_hover_text(t!("textures_panel.current_not_generated_tip", size = cost_label(&t.config)));
+                        if ui
+                            .button(t!("textures_panel.generate"))
+                            .on_hover_text(t!("textures_panel.generate_tip", size = cost_label(&t.config)))
+                            .clicked()
+                        {
+                            crate::textures::approve(&key);
+                            ui.ctx().request_repaint();
+                        }
+                    }
                     if ui.button(t!("textures_panel.clear")).on_hover_text(t!("textures_panel.clear_tip")).clicked() {
                         set_texture(config_manager, None, "history.action.texture_clear");
                     }
@@ -159,6 +200,31 @@ impl TexturesPanel {
             ui.weak(if trapping { t!("textures_panel.trap_in_use") } else { t!("textures_panel.trap_hint") });
         }
         ui.separator();
+
+        // Textures waiting to be asked for: one button for all of them.
+        let waiting: Vec<String> = self
+            .library
+            .entries
+            .iter()
+            .zip(&self.keys)
+            .filter(|(e, k)| {
+                !self.previews.contains_key(*k)
+                    && !self.failed.contains(*k)
+                    && !crate::textures::may_generate(&e.config, k)
+            })
+            .map(|(_, k)| k.clone())
+            .collect();
+        if waiting.len() > 1
+            && ui
+                .button(t!("textures_panel.generate_all", count = waiting.len()))
+                .on_hover_text(t!("textures_panel.generate_all_tip"))
+                .clicked()
+        {
+            for key in &waiting {
+                crate::textures::approve(key);
+            }
+            ui.ctx().request_repaint();
+        }
 
         let mut pick = None;
         let mut delete = None;
@@ -182,13 +248,28 @@ impl TexturesPanel {
                             .add(egui::Button::image(egui::load::SizedTexture::new(tex.id(), size)).selected(picked))
                             .on_hover_text(t!("textures_panel.pick_tip"))
                             .clicked(),
+                        None if self.failed.contains(key) => {
+                            ui.add_sized(size, egui::Label::new(t!("textures_panel.failed")));
+                            false
+                        }
+                        None if crate::textures::may_generate(&entry.config, key) => {
+                            ui.add_sized(size, egui::Label::new(t!("textures_panel.generating")));
+                            // On screen now: an asked-for generation may
+                            // start, and the frames keep coming until it has.
+                            if crate::textures::is_approved(key) && self.announced.insert(key.clone()) {
+                                ui.ctx().request_repaint();
+                            }
+                            false
+                        }
                         None => {
-                            let label = if self.failed.contains(key) {
-                                t!("textures_panel.failed")
-                            } else {
-                                t!("textures_panel.generating")
-                            };
-                            ui.add_sized(size, egui::Label::new(label));
+                            if ui
+                                .add_sized(size, egui::Button::new(t!("textures_panel.generate")))
+                                .on_hover_text(t!("textures_panel.generate_tip", size = cost_label(&entry.config)))
+                                .clicked()
+                            {
+                                crate::textures::approve(key);
+                                ui.ctx().request_repaint();
+                            }
                             false
                         }
                     };
@@ -216,8 +297,7 @@ impl TexturesPanel {
                         } else {
                             let label = if picked { egui::RichText::new(&entry.name).strong() } else { egui::RichText::new(&entry.name) };
                             ui.label(label);
-                            let (w, h) = crate::textures::texture_size(&entry.config);
-                            ui.weak(format!("{w}×{h}, {} steps", entry.config.sim.steps));
+                            ui.weak(cost_label(&entry.config));
                             if entry.origin == TextureOrigin::User {
                                 ui.horizontal(|ui| {
                                     if ui.small_button(t!("textures_panel.rename")).clicked() {
@@ -254,6 +334,12 @@ impl TexturesPanel {
             self.rename = None;
         }
     }
+}
+
+/// A recipe's size and length, which is what its generation costs.
+fn cost_label(recipe: &FractalConfig) -> String {
+    let (w, h) = crate::textures::texture_size(recipe);
+    format!("{w}×{h}, {} steps", recipe.sim.steps)
 }
 
 /// What the texture does in the picture: Kalles Fraktaler's overlay.

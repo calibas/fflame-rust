@@ -26,6 +26,9 @@ pub struct SimUiState<'a> {
     pub running: &'a mut bool,
     pub step_once: &'a mut bool,
     pub reseed: &'a mut bool,
+    /// Set to the name "Save as texture" stored the simulation under, so
+    /// the app can cache its image from the live run.
+    pub saved_texture: &'a mut Option<String>,
     /// Steps completed in the live run, for the readout.
     pub step_index: u32,
     /// The step count the timeline has committed the grid to, when the
@@ -54,7 +57,7 @@ pub struct SimUiState<'a> {
 /// can use it. What is saved is what is on screen: the step count is the
 /// live run's, not the cap (which may be 0, uncapped), and a
 /// viewport-scaled grid is fixed at the size it has now.
-fn save_as_texture_row(ui: &mut egui::Ui, config: &crate::config::FractalConfig, state: &SimUiState<'_>) {
+fn save_as_texture_row(ui: &mut egui::Ui, config: &crate::config::FractalConfig, state: &mut SimUiState<'_>) {
     let name_id = ui.id().with("sim_texture_name");
     let status_id = ui.id().with("sim_texture_status");
     let mut name: String = ui.data_mut(|d| d.get_temp(name_id)).unwrap_or_default();
@@ -77,7 +80,11 @@ fn save_as_texture_row(ui: &mut egui::Ui, config: &crate::config::FractalConfig,
                 recipe.sim.grid = crate::config::sim::SimGrid::Fixed { width: state.grid.0, height: state.grid.1 };
             }
             let status = match crate::textures::save_user(&name, &recipe, state.grid) {
-                Ok(stored) => t!("sim_panel.texture_saved", name = stored).to_string(),
+                Ok(stored) => {
+                    let status = t!("sim_panel.texture_saved", name = stored).to_string();
+                    *state.saved_texture = Some(stored);
+                    status
+                }
                 Err(e) => t!("sim_panel.texture_save_failed", error = e.to_string()).to_string(),
             };
             ui.data_mut(|d| d.insert_temp(status_id, status));
@@ -141,7 +148,7 @@ pub fn render_sim_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
-    state: SimUiState<'_>,
+    mut state: SimUiState<'_>,
 ) {
     let config = config_manager.active_config().clone();
     let sim = config.sim.clone();
@@ -208,7 +215,7 @@ pub fn render_sim_content(
             ui.label("⏱").on_hover_text(t!("sim_panel.timeline_owns_steps").as_ref());
         }
     });
-    save_as_texture_row(ui, &config, &state);
+    save_as_texture_row(ui, &config, &mut state);
 
     // Three readouts, because "step 340" alone cannot tell a run that
     // has arrived from one still walking toward a target from one that
