@@ -1790,7 +1790,6 @@ mod tests {
         assert!((v - (-0.375)).abs() < 1e-12, "{out}");
     }
 
-    #[test]
     /// The vector column core writes through RAW POINTERS, and what
     /// keeps those in range is arithmetic, not a bounds check. This
     /// pins that arithmetic on every platform — including the desktop,
@@ -1844,6 +1843,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn limbs_for_zoom_scales() {
         assert!(limbs_for_zoom(0.0) >= 2);
         assert!(limbs_for_zoom(100.0) >= 3);

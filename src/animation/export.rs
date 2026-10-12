@@ -46,6 +46,18 @@ impl VideoCodec {
             VideoCodec::VP9 => "VP9 (WebM)",
         }
     }
+
+    /// The codec a `--video-codec` value names (case-insensitive), or
+    /// `None` for a name it does not know -- the caller decides what an
+    /// unknown name falls back to, and should say so.
+    pub fn from_cli_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "h264" => Some(VideoCodec::H264),
+            "h265" | "hevc" => Some(VideoCodec::H265),
+            "vp9" => Some(VideoCodec::VP9),
+            _ => None,
+        }
+    }
 }
 
 /// Hardware acceleration options for video encoding
@@ -109,6 +121,19 @@ impl HardwareAccel {
             HardwareAccel::Qsv => "Intel Quick Sync",
             HardwareAccel::Amf => "AMD AMF",
             HardwareAccel::VideoToolbox => "Apple VideoToolbox",
+        }
+    }
+
+    /// The encoder a `--hw-accel` value names (case-insensitive, with
+    /// the vendor aliases), or `None` for a name it does not know.
+    pub fn from_cli_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "none" | "software" | "cpu" => Some(HardwareAccel::None),
+            "nvenc" | "nvidia" => Some(HardwareAccel::Nvenc),
+            "qsv" | "quicksync" | "intel" => Some(HardwareAccel::Qsv),
+            "amf" | "amd" => Some(HardwareAccel::Amf),
+            "videotoolbox" | "vt" | "apple" => Some(HardwareAccel::VideoToolbox),
+            _ => None,
         }
     }
 
@@ -458,7 +483,9 @@ pub struct AnimationExportConfig {
     pub video_settings: VideoEncodingSettings,
     /// Optional audio to include in export
     pub audio: Option<AudioExportConfig>,
-    /// Signal data for signal tracks (cloned from SignalManager)
+    /// Signal data for signal tracks (cloned from SignalManager). The
+    /// animation's generators are added to these at export start
+    /// (`export_signals`), so the CLI may leave it empty.
     pub signals: std::collections::HashMap<String, Signal>,
 }
 
@@ -471,6 +498,69 @@ impl AnimationExportConfig {
     /// Calculate time for a given frame number
     pub fn frame_time(&self, frame: u32) -> f64 {
         frame as f64 / self.fps as f64
+    }
+}
+
+/// The signals a video export reads: the ones handed over, plus each of
+/// the animation's generators that is not among them, rendered over the
+/// animation's duration.
+///
+/// A generator is serialized in the `.anim` as its config, so the
+/// exporter can render it itself -- which the CLI, handing over no
+/// signals, needs: before this every signal track was skipped there,
+/// generator-driven ones included. A signal handed over wins: in the
+/// app that is the Signals panel's version, which is what the preview
+/// played.
+pub fn export_signals(
+    animation: &Animation,
+    given: &std::collections::HashMap<String, Signal>,
+) -> std::collections::HashMap<String, Signal> {
+    let mut signals = given.clone();
+    for gen in &animation.generators {
+        signals.entry(gen.name.clone()).or_insert_with(|| {
+            gen.generate_signal(animation.duration, crate::signal::generator::SAMPLE_RATE)
+        });
+    }
+    signals
+}
+
+/// The signal tracks whose signal is not in `signals`, as
+/// `(target, signal name)`. Such a track applies nothing in the video.
+/// The usual cause is a live signal (`live_*`): live producers are
+/// deliberately not exported -- a video is rendered from stored data,
+/// not from whatever the microphone hears while it renders.
+pub fn tracks_missing_signals(
+    animation: &Animation,
+    signals: &std::collections::HashMap<String, Signal>,
+) -> Vec<(String, String)> {
+    animation
+        .tracks
+        .iter()
+        .filter_map(|track| match &track.source {
+            crate::animation::TrackSource::Signal { signal_name, .. }
+                if !signals.contains_key(signal_name) =>
+            {
+                Some((track.target.clone(), signal_name.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The config a CLI video export starts from: `-c` if given, else the
+/// `.anim`'s embedded `base_config` (an animation saved from the app
+/// carries one), else an error. With both, `-c` wins; the caller says
+/// so.
+pub fn cli_base_config(
+    from_flag: Option<FractalConfig>,
+    embedded: Option<&FractalConfig>,
+) -> Result<FractalConfig, String> {
+    match (from_flag, embedded) {
+        (Some(config), _) => Ok(config),
+        (None, Some(base)) => Ok(base.clone()),
+        (None, None) => Err(
+            "the animation has no embedded base config; pass one with -c / --config".to_string(),
+        ),
     }
 }
 
@@ -1800,14 +1890,35 @@ pub async fn export_animation(
     // resolved IDs.
     let mut controller = AnimationController::new();
     let mut animation = export_config.animation.clone();
+    // A track the app marked broken holds a stale index, and binding
+    // afresh would resolve that index onto whatever item now sits
+    // there -- so it is left out, as it is left out of the preview.
+    for track in animation.remove_broken_tracks() {
+        log::warn!(
+            "Video export: the track on `{}` lost its target (deleted) and is left out",
+            track.target
+        );
+    }
     animation.bind_to_config(&export_config.config);
     controller.load(animation);
+    // The video steps one frame at a time. Signal smoothing is scaled
+    // by the step, and the controller's is 1/60 s until something
+    // calls `update` -- which nothing here does -- so a 30 fps video
+    // smoothed half as much per second as the preview.
+    controller.set_step(1.0 / export_config.fps.max(1) as f64);
 
+    let signals = export_signals(&export_config.animation, &export_config.signals);
+    for (target, signal) in tracks_missing_signals(&export_config.animation, &signals) {
+        log::warn!(
+            "Video export: the track on `{target}` reads signal `{signal}`, which is not \
+             exported (live signals never are), so it will not move in the video"
+        );
+    }
     let mut signal_manager = SignalManager::new();
-    for (_name, signal) in &export_config.signals {
+    for signal in signals.values() {
         signal_manager.insert(signal.clone());
     }
-    let has_signals = !export_config.signals.is_empty();
+    let has_signals = !signals.is_empty();
 
     // A deep-zoom frame carries per-pixel resume state (48-72 bytes),
     // and past a device's buffer limit that allocation is a wgpu
@@ -1917,14 +2028,15 @@ pub async fn export_animation(
     let mut first_config = export_config.config.clone();
     apply_animation_values(&mut first_config, &first_values);
 
-    let mut renderer = FlameRenderer::with_palette_size(
+    // The render mode is not a track target, so the first frame's holds
+    // for the whole video.
+    let mut renderer = FlameRenderer::for_job(
         &device,
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
         export_config.width,
         export_config.height,
-        &first_config.flame,
-        first_config.palette_size,
+        &first_config,
     );
     renderer.set_sticky_enabled(false);
 
@@ -2367,6 +2479,35 @@ mod tests {
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
 
+    /// The CLI's names resolve, case-insensitively, and an unknown one
+    /// is `None` so the caller can fall back to the DEFAULT and say so.
+    /// The CLI used to map an unknown codec to H.264 ("Using h264")
+    /// while the default -- and its own `--video-codec` default -- is
+    /// H.265.
+    #[test]
+    fn cli_names_parse_and_unknown_ones_are_left_to_the_caller() {
+        assert_eq!(VideoCodec::from_cli_name("h264"), Some(VideoCodec::H264));
+        assert_eq!(VideoCodec::from_cli_name("HEVC"), Some(VideoCodec::H265));
+        assert_eq!(VideoCodec::from_cli_name(" vp9 "), Some(VideoCodec::VP9));
+        assert_eq!(VideoCodec::from_cli_name("av1"), None);
+        // `--video-codec`'s clap default names the enum's default.
+        assert_eq!(VideoCodec::from_cli_name("h265"), Some(VideoCodec::default()));
+
+        assert_eq!(HardwareAccel::from_cli_name("NVENC"), Some(HardwareAccel::Nvenc));
+        assert_eq!(HardwareAccel::from_cli_name("apple"), Some(HardwareAccel::VideoToolbox));
+        assert_eq!(HardwareAccel::from_cli_name("cuda"), None);
+        // `--hw-accel`'s clap default names the enum's default.
+        assert_eq!(HardwareAccel::from_cli_name("none"), Some(HardwareAccel::default()));
+        for hw in HardwareAccel::all() {
+            assert!(
+                ["none", "nvenc", "qsv", "amf", "videotoolbox"]
+                    .iter()
+                    .any(|n| HardwareAccel::from_cli_name(n) == Some(*hw)),
+                "{hw:?} has no CLI name"
+            );
+        }
+    }
+
     /// An animated supersample keeps the panel's full range.
     ///
     /// It was clamped to 3 here while the panel offers 8, so a track
@@ -2648,6 +2789,53 @@ mod tests {
             "PoolFinal: param must be readable",
         );
     }
+
+    /// The exporter renders the animation's generators itself, so a
+    /// caller that hands over no signals (the CLI) still drives
+    /// generator tracks -- and one it does hand over wins.
+    #[test]
+    fn an_export_renders_the_animations_generators() {
+        use crate::animation::Track;
+        use crate::signal::generator::GeneratorConfig;
+        use crate::signal::SignalType;
+
+        let mut anim = Animation::new("Gen".into(), 2.5);
+        anim.generators.push(GeneratorConfig::new("lfo".into()));
+        anim.generators.push(GeneratorConfig::new("panel".into()));
+        anim.add_track(Track::signal("Exposure".into(), "lfo".into(), 0.0, 1.0));
+        anim.add_track(Track::signal("Gamma".into(), "live_amplitude".into(), 0.0, 1.0));
+
+        // The CLI: nothing handed over.
+        let cli = export_signals(&anim, &std::collections::HashMap::new());
+        assert_eq!(cli["lfo"].data.len(), 250, "rendered over the duration at 100 Hz");
+        assert_eq!(
+            tracks_missing_signals(&anim, &cli),
+            vec![("Gamma".to_string(), "live_amplitude".to_string())],
+            "a live signal is the one not exported"
+        );
+
+        // The app: its panel's version of a generator wins.
+        let mut given = std::collections::HashMap::new();
+        given.insert("panel".to_string(), Signal::new("panel".into(), 10.0, SignalType::Continuous, vec![0.5]));
+        let app = export_signals(&anim, &given);
+        assert_eq!(app["panel"].data, vec![0.5]);
+        assert!(app.contains_key("lfo"));
+    }
+
+    /// The CLI's base config: `-c` wins, the `.anim`'s embedded one
+    /// serves without it, and neither is an error.
+    #[test]
+    fn the_cli_falls_back_to_the_embedded_base_config() {
+        let mut flag = FractalConfig::default();
+        flag.flame.name = "flag".into();
+        let mut embedded = FractalConfig::default();
+        embedded.flame.name = "embedded".into();
+
+        assert_eq!(cli_base_config(Some(flag.clone()), Some(&embedded)).unwrap().flame.name, "flag");
+        assert_eq!(cli_base_config(None, Some(&embedded)).unwrap().flame.name, "embedded");
+        assert_eq!(cli_base_config(Some(flag), None).unwrap().flame.name, "flag");
+        assert!(cli_base_config(None, None).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -2744,13 +2932,32 @@ mod escape_export_tests {
         sim.render_mode = RenderMode::Simulation;
         sim.sim.terrain.enabled = true;
         configs.push(sim);
+        // One effect of each kind, so their on/off and parameters are
+        // offered too.
+        let mut effected = FractalConfig::default();
+        {
+            use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
+            let registry = global_effect_registry();
+            let density = registry.names_by_category(EffectCategory::Density).first().map(|n| n.to_string());
+            let color = registry.names_by_category(EffectCategory::Color).first().map(|n| n.to_string());
+            drop(registry);
+            effected.density_effects.extend(density.map(|n| EffectInstance::new(&n)));
+            effected.color_effects.extend(color.map(|n| EffectInstance::new(&n)));
+        }
+        configs.push(effected);
         let mut differ = Vec::new();
+        // A target that refuses every probe applies nowhere -- not a
+        // difference between the two paths, so it used to pass here
+        // while every on/off track (stored as 1.0 / 0.0) did nothing.
+        let mut refused = Vec::new();
         for base in &configs {
             for item in crate::ui::target_selector::all_items_for_test(base) {
+                let mut carried = false;
                 for probe in [serde_json::json!(0.375), serde_json::json!(3.0), serde_json::json!(-1.25)] {
                     let Some(value) = crate::config::delta::json_to_config_value(&probe, &item) else {
                         continue;
                     };
+                    carried = true;
                     let mut video = base.clone();
                     apply_config_value(&mut video, EditingTarget::Main, &item, &value);
                     let mut app = base.clone();
@@ -2759,8 +2966,19 @@ mod escape_export_tests {
                         differ.push(format!("{} = {probe} ({:?})", item.to_string_key(), base.render_mode));
                     }
                 }
+                if !carried {
+                    refused.push(format!("{} ({:?})", item.to_string_key(), base.render_mode));
+                }
             }
         }
+        refused.sort();
+        refused.dedup();
+        assert!(
+            refused.is_empty(),
+            "{} offered targets cannot carry a track value:\n  {}",
+            refused.len(),
+            refused.join("\n  ")
+        );
         differ.sort();
         differ.dedup();
         assert!(differ.is_empty(), "{} targets differ between the video and the app:\n  {}", differ.len(), differ.join("\n  "));

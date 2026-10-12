@@ -26,6 +26,6 @@
 # announce itself: the stack pointer walks out of its region and the
 # next access traps as `RuntimeError: index out of bounds`, reported
 # from whatever requestAnimationFrame callback was running, with no
-# Rust panic message and no location. 16 MiB costs address space only.
+# Rust panic message and no location. 64 MiB costs address space only.
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-Ctarget-feature=+simd128', '-Clink-arg=-zstack-size=67108864']

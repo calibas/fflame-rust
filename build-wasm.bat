@@ -54,21 +54,23 @@ REM the .wasm leaves glue that does not link:
 REM   LinkError: import object field '__wbindgen_object_drop_ref' is
 REM   not a Function
 REM Keeping it out of ./pkg entirely means the served bundle is never
-REM touched, in any order, and the locator gets its second module.
+REM touched, in any order.
 set OUTDIR=./pkg
 if "%SYMBOLS%"=="1" set OUTDIR=./pkg-names
 if "%SYMBOLS%"=="1" if not exist "pkg-names" mkdir "pkg-names"
 wasm-bindgen %BINDGEN_FLAGS% --out-dir %OUTDIR% --target web ./target/wasm32-unknown-unknown/%PROFILE%/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 
-REM Hand the names module to scripts/wasm-locate.py under the filename
-REM it looks for, and leave everything else in ./pkg alone.
+REM A names build stops here: nothing of it goes into ./pkg. (It used
+REM to copy its module to pkg\*_bg.names.wasm for scripts/wasm-locate.py,
+REM which has read only the shipped module since it stopped comparing
+REM builds -- and the copy left a second 19 MiB module in the directory
+REM a deploy uploads.)
 if "%SYMBOLS%"=="1" (
-    copy /Y "pkg-names\fractal_flame_wgpu_bg.wasm" "pkg\fractal_flame_wgpu_bg.names.wasm" >nul
     echo.
-    echo   names module -^> pkg\fractal_flame_wgpu_bg.names.wasm
+    echo   names build -^> ./pkg-names ^(module + JS glue, a matched pair^)
     echo   ./pkg is untouched: the served bundle is still the shipped build.
-    echo   Reproduce with it, then: python scripts/wasm-locate.py ^<offset^>
+    echo   Serve ./pkg-names in place of ./pkg to reproduce; a trap names its function.
     goto :eof
 )
 

@@ -185,7 +185,7 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 
 ## Versioning and migration
 
-`CURRENT_CONFIG_VERSION` is **3** (`src/config/fractal_config.rs`).
+`CURRENT_CONFIG_VERSION` is **4** (`src/config/fractal_config.rs`).
 `migrate_value` upgrades one version per arm:
 
 | arm | what it does |
@@ -193,28 +193,25 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 | v0 → v1 | nothing; configs from before versioning |
 | v1 → v2 | nothing. v2 is the cloud "opaque blob" format ([api-v2.md](../archive/api-v1-v2/api-v2.md)): the `.fflame` JSON stored as-is |
 | v2 → v3 | lifts the scene-level render fields from `flame` to the top level: `render_mode` (absent: `"2d"`), `perspective_strength` (or the legacy `projection` enum, converted), `depth_density_compensation`, `far_density_fade`, `far_density_fade_start`, and `preserve_z` (absent: `true`) |
+| v3 → v4 | for a file saved as v3 only: an absent `levels_gamma` becomes 1.0. A v3 save skipped the field at 1.0, the pre-2026-05-31 default, rather than at its 0.5 default; every v3 file postdates that change, so absent meant 1.0. Older files keep loading at 0.5, as that change intended |
 
-A value **without a `version`** is read as v0, with two exceptions: a
-top-level `render_mode` of `"escape"` or `"simulation"` dates the file to
-at least v3 (both modes came after it), and an animation's embedded
-`base_config` is read as v2 (`from_json_value_with_default_version`).
+A value **without a `version`** is read as v0, with two exceptions. A
+top-level `render_mode` with none on `flame`, or one of `"escape"` or
+`"simulation"`, dates the file to at least v3: the field moved to the top
+level in v3, and both modes came after it. That covers the plain-serde
+JSON older PNGs carry in their `Config` chunk, which has no `version`.
+And an animation's embedded `base_config` is read as v2
+(`from_json_value_with_default_version`).
 
-**The v1 → v2 arm is a no-op that should not be.** Two value
-translations were tracked for it and never applied: `levels_high`
-divided by 1000 when above 100 (its units changed from raw density to
-multiples of the mean), and `dof_blur_strength` multiplied by 10 (the
-shader now scales it by 0.1). A v1 file saved before those changes, with
-either value set explicitly, renders differently today. The open
-decision is in [config-v2-migration.md](../projects/config-v2-migration.md).
-
-**A versionless v3 config is mis-migrated.** The v2 → v3 arm replaces
-the top-level `render_mode`, `perspective_strength` and `preserve_z`
-with what it finds on `flame` — which in a v3 config is nothing, so a 3D
-flame becomes 2D with no perspective. The plain-derive JSON in a PNG's
-`Config` chunk has no `version`, so reloading it through `from_json`
-(for example a `.fflame` written by `scripts/png_metadata.py -o`) loses
-a 3D flame's mode. Escape and simulation configs are protected by the
-exception above.
+**The v1 → v2 arm is a no-op, by decision.** Two unit changes landed
+while files were stamped v1: Levels values became multiples of the mean
+(2026-05-12) and the shader started scaling `dof_blur_strength` by 0.1
+(2026-05-29). A v1 file with Levels values set explicitly between
+2026-01-15 and 2026-05-12, or a blur strength set between 2026-01-24 and
+2026-05-29, renders differently today. A version-1 stamp cannot tell
+those files from later v1 saves or from hand-written v1 configs in the
+new units, so nothing translates them; they are fixed by hand. The
+record is [config-v2-migration.md](../archive/projects/config-v2-migration.md).
 
 `SystemSettings` has its own version (`CURRENT_SETTINGS_VERSION` = 4,
 `src/storage/settings.rs`); all four of its migration arms are no-ops.
@@ -592,10 +589,6 @@ written through `system_settings_mut()` by their owners.
 
 Things the code does not do:
 
-- **The language is not persisted.** The language menu (the globe in
-  the menu bar, `src/ui/menu_bar.rs`) calls `i18n::set_locale` only.
-  Nothing writes `SystemLanguage`, and nothing reads `language` at
-  startup, so every launch starts in rust-i18n's default locale.
 - `recent_files`, `last_opened_file` and `default_save_location` are
   declared and serialized but nothing reads or writes them.
 

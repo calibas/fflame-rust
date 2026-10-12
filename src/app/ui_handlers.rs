@@ -42,9 +42,15 @@ impl App {
         self.handle_variation_fetches();
         self.handle_clear_variation_cache(ui_response);
         self.handle_variation_updates(ui_response);
-        self.refresh_variation_catalog();
-        self.handle_effect_fetches();
-        self.refresh_effect_catalog();
+        // Online mode off: no catalog fetches, and an effect a flame
+        // lacks stays in the missing set rather than being fetched, so
+        // turning online mode on fetches it then. (Results already in
+        // flight are folded in when it is back on.)
+        if self.config_manager.system_settings().online_mode {
+            self.refresh_variation_catalog();
+            self.handle_effect_fetches();
+            self.refresh_effect_catalog();
+        }
         self.poll_script_cloud();
         self.handle_script_cloud_request(ui_response.script_cloud_request.clone());
     }
@@ -108,8 +114,33 @@ impl App {
 
     /// Handle add, delete, and clone transform operations
     fn handle_transform_operations(&mut self, ui_response: &UiResponse) {
+        // One more transform must still fit the renderer's buffers, or
+        // the next frame panics packing them. Checked once for every
+        // kind of add: each takes one slot of the active target.
+        let adding = ui_response.add_transform
+            || ui_response.clone_transform.is_some()
+            || ui_response.add_linked_transform
+            || ui_response.add_final_transform;
+        let room = !adding || {
+            use crate::config::manager::EditingTarget;
+            let mut probe = self.config_manager.active_config().flame.clone();
+            match self.config_manager.editing_target() {
+                EditingTarget::Subflame { index } if index < probe.subflames.len() => {
+                    probe.subflames[index].transforms.push(Transform::default())
+                }
+                _ => probe.transforms.push(Transform::default()),
+            }
+            match probe.gpu_capacity_error() {
+                Some(why) => {
+                    self.egui_layer.show_api_notification(&format!("Can't add a transform: {why}"), true);
+                    false
+                }
+                None => true,
+            }
+        };
+
         // Handle add transform
-        if ui_response.add_transform {
+        if ui_response.add_transform && room {
             // Pull length + xaos from the active editing target so an
             // "Add Transform" while editing a subflame inserts at the
             // subflame's end, not the parent's.
@@ -179,7 +210,7 @@ impl App {
         }
 
         // Handle clone transform
-        if let Some(idx) = ui_response.clone_transform {
+        if let Some(idx) = ui_response.clone_transform.filter(|_| room) {
             // Source the cloned transform + xaos from the active
             // editing target, same as add/delete.
             let cloned_transform_with_xaos = {
@@ -211,7 +242,7 @@ impl App {
         }
 
         // ---------- LINKED POOL ----------
-        if ui_response.add_linked_transform {
+        if ui_response.add_linked_transform && room {
             self.apply_pool_full_snapshot("Add Linked Transform", |flame| {
                 let mut t = Transform::default();
                 t.set_variation("linear", 1.0);
@@ -242,7 +273,7 @@ impl App {
         }
 
         // ---------- FINAL POOL ----------
-        if ui_response.add_final_transform {
+        if ui_response.add_final_transform && room {
             self.apply_pool_full_snapshot("Add Final Transform", |flame| {
                 let mut t = Transform::default();
                 t.set_variation("linear", 1.0);
@@ -626,11 +657,17 @@ impl App {
                                     self.egui_layer.update_palette_editor(palette.clone());
 
                                     // Add or update in library (prevents duplicates)
-                                    let palette_idx = self.palette_library.add_or_update(palette.clone());
-                                    // Set to the palette
+                                    let _palette_idx = self.palette_library.add_or_update(palette.clone());
+                                    // Set it as the config's palette, as the JSON
+                                    // import above does. This wrote the deprecated
+                                    // PaletteIndex, which the manager ignores: the
+                                    // viewport showed the palette while the config
+                                    // kept the old one, so save, export and undo
+                                    // used the old one and the next palette edit
+                                    // reverted the picture.
                                     let _ = self.config_manager.update_param(
-                                        crate::config::ConfigPath::PaletteIndex,
-                                        (palette_idx as u32).into()
+                                        crate::config::ConfigPath::Palette,
+                                        crate::config::ConfigValue::Palette(palette.clone())
                                     );
 
                                     // Update renderer
@@ -811,7 +848,7 @@ impl App {
                                 // tab). XML is already parsed; JSON loads by
                                 // path so the browser owns re-parsing.
                                 if is_xml {
-                                    self.egui_layer.load_batch_into_fractal_browser(configs.clone());
+                                    self.egui_layer.load_configs_into_fractal_browser(configs.clone(), path.clone());
                                 } else {
                                     self.egui_layer.load_file_into_fractal_browser(path.clone());
                                 }
@@ -877,7 +914,7 @@ impl App {
                                         println!("Found {} flames in {}, loading first and opening Fractal Browser", configs.len(), filename);
 
                                         // Load all configs into Fractal Browser (Files tab)
-                                        self.egui_layer.load_batch_into_fractal_browser(configs.clone());
+                                        self.egui_layer.load_configs_into_fractal_browser(configs.clone(), path.clone());
 
                                         // Load the first config
                                         let first_config = configs.into_iter().next().unwrap();
@@ -1739,11 +1776,13 @@ impl App {
                     let upload_thumbnail = *upload_thumbnail;
                     let make_public = *make_public;
 
-                    let visibility = if make_public {
-                        Some(crate::api::types::ApiVisibility::Public)
-                    } else {
-                        None
-                    };
+                    // Unchecking the box on a PUBLIC flame makes it
+                    // private; otherwise an unchecked box keeps what
+                    // the server has (see the fn).
+                    let visibility = crate::api::flame_update_visibility(
+                        make_public,
+                        self.api_state.flame_is_public,
+                    );
 
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = false;
@@ -1990,6 +2029,15 @@ impl App {
         }
 
         let base_url = crate::api::API_BASE_URL.to_string();
+        // The signed-in token, so a private flame or animation of the
+        // user's own loads on desktop too (the web authenticates by
+        // cookie and gets an empty one either way). Signed out, empty:
+        // anonymous, which still reaches public content.
+        let token = self
+            .config_manager
+            .system_settings()
+            .get_auth_token()
+            .unwrap_or_default();
         let result_slot = self.url_load_result.clone();
         let window = self.window.clone();
         self.url_load_in_progress = true;
@@ -1997,7 +2045,7 @@ impl App {
 
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
-            let result = load_from_url(&base_url, flame_id, animation_id).await;
+            let result = load_from_url(&base_url, &token, flame_id, animation_id).await;
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
@@ -2007,7 +2055,7 @@ impl App {
 
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::spawn(move || {
-            let result = pollster::block_on(load_from_url(&base_url, flame_id, animation_id));
+            let result = pollster::block_on(load_from_url(&base_url, &token, flame_id, animation_id));
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
@@ -2197,19 +2245,6 @@ async fn update_flame_online(
         .map_err(|e| e.to_string())
 }
 
-/// Delete a flame from the API (async helper).
-async fn delete_flame_online(
-    base_url: &str,
-    token: &str,
-    flame_id: &str,
-) -> Result<(), String> {
-    let mut api = crate::api::ApiState::new(base_url);
-    api.set_token(token);
-    api.delete_flame(flame_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 /// Save an animation to the API as new (async helper).
 async fn save_animation_online(
     base_url: &str,
@@ -2248,12 +2283,15 @@ async fn update_animation_online(
 /// Prioritizes `animation_id` over `flame_id` if both are present.
 async fn load_from_url(
     base_url: &str,
+    token: &str,
     flame_id: Option<String>,
     animation_id: Option<String>,
 ) -> Result<super::UrlLoadedData, String> {
-    // WASM uses cookie auth — empty token is fine (require_token returns Ok(""))
+    // WASM uses cookie auth and ignores the token. On desktop it was
+    // always empty, so the request went out as `Bearer ` -- anonymous
+    // -- and a private animation of the user's own came back 404.
     let mut api = crate::api::ApiState::new(base_url);
-    api.set_token("");
+    api.set_token(token);
 
     if let Some(animation_id) = animation_id {
         // Load animation with embedded flame config (single request)

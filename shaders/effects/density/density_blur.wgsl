@@ -6,6 +6,13 @@
 //   params[0] = radius (0-10): Maximum blur radius in pixels
 //   params[1] = threshold (0-1): Density below which to apply blur
 //   params[2] = falloff (0-1): How quickly blur falls off above threshold
+//
+// Density is in multiples of the frame's mean density (`density_mean`,
+// the unit Levels uses), so the same pixels blur at any iteration count:
+// 0.25 blurs fully below a quarter of the mean, and the blur fades out
+// by threshold + falloff. The threshold used to be compared with the raw
+// hit count in `a`, so a pixel with a single hit never blurred. For an
+// escape or simulation image `density_mean` is 1 and `a` is read as is.
 
 struct EffectParams {
     // Parameters packed into vec4s for uniform buffer alignment
@@ -13,7 +20,10 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    // The frame's mean density: a pixel's `a` divided by it is in
+    // multiples of the mean.
+    density_mean: f32,
+    _padding: f32,
 }
 
 // Helper to get parameter by index
@@ -61,8 +71,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel_size = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
 
     // Sample center pixel
-    let center = textureSample(input_texture, input_sampler, input.uv);
-    let density = center.a;
+    let center = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
+    let density = center.a / max(effect_params.density_mean, 1e-6);
 
     // Calculate blur amount based on density
     // Low density = more blur, high density = less blur
@@ -75,7 +85,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let radius = max_radius * blur_factor;
 
-    // If no blur needed, return original
+    // If no blur needed, return original. The radius depends on this
+    // pixel's density, so past this return the control flow is
+    // NON-UNIFORM: every sample below must name its level
+    // (textureSampleLevel). An implicit-derivative textureSample here is
+    // a WGSL uniformity error that Chrome's Tint rejects -- the whole
+    // effect fails to compile in the browser -- while naga, which does
+    // not check fragment uniformity, accepts it on desktop. The effect
+    // textures have one mip, so level 0 is what textureSample read.
     if (radius < 0.5) {
         return center;
     }
@@ -99,7 +116,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             if (dist <= radius) {
                 let offset = sample_offset * pixel_size;
                 let weight = gaussian(dist, sigma);
-                let sample_color = textureSample(input_texture, input_sampler, input.uv + offset);
+                let sample_color = textureSampleLevel(input_texture, input_sampler, input.uv + offset, 0.0);
                 color_sum += sample_color * weight;
                 weight_sum += weight;
             }

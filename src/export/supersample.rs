@@ -87,9 +87,14 @@ pub fn supersample_plan(config: &FractalConfig, out_w: u32, out_h: u32) -> (Frac
         RenderMode::Escape => (config.clone(), 2),
         RenderMode::Simulation => {
             let mut c = config.clone();
-            if let crate::config::sim::SimGrid::Viewport { scale } = c.sim.grid {
-                let cells = |n: u32| ((n as f32 * scale).round() as u32).max(16);
-                c.sim.grid = crate::config::sim::SimGrid::Fixed { width: cells(out_w), height: cells(out_h) };
+            // The grid a plain export at the OUTPUT size would run, by the
+            // same rule (`cells_for`: the scale clamped to 0.125-4, a NaN
+            // read as 1), so 2x AA renders the same simulation finer
+            // rather than a different one. It once rounded the raw scale
+            // with a floor of 16 cells.
+            if c.sim.grid.is_bound() {
+                let (width, height) = c.sim.grid.cells_for(out_w, out_h);
+                c.sim.grid = crate::config::sim::SimGrid::Fixed { width, height };
             }
             (c, 2)
         }
@@ -168,6 +173,24 @@ fn downsample_row(rgba: &[u8], w2: usize, ow: usize, oy: usize, row: &mut [u8]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2x AA runs the simulation a plain export would, whatever the
+    /// grid scale says -- out of range and NaN included.
+    #[test]
+    fn a_simulation_under_2x_runs_the_plain_exports_grid() {
+        use crate::config::sim::SimGrid;
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        for scale in [0.05f32, 0.5, 4.0, 8.0, f32::NAN] {
+            for (w, h) in [(640u32, 480u32), (10, 10)] {
+                c.sim.grid = SimGrid::Viewport { scale };
+                let (plan, factor) = supersample_plan(&c, w, h);
+                assert_eq!(factor, 2);
+                let (pw, ph) = c.sim.grid.cells_for(w, h);
+                assert_eq!(plan.sim.grid, SimGrid::Fixed { width: pw, height: ph }, "scale {scale}, {w}x{h}");
+            }
+        }
+    }
 
     fn quad_image(quads: &[[[u8; 4]; 4]], w: u32) -> Vec<u8> {
         // Lay out `quads` left to right on a (2w × 2) image.

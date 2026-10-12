@@ -68,7 +68,13 @@ impl PngMetadata {
         config: &crate::config::FractalConfig,
     ) -> Self {
         let version_info = crate::version::get_version_info();
-        let config_json = serde_json::to_string(config).unwrap_or_default();
+        // The canonical saved form, as a `.fflame` holds it: versioned, so
+        // it reloads through the same migration. Plain serde wrote no
+        // version, and an unversioned config is read as pre-versioning.
+        let config_json = config
+            .to_json_value()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
         let config_checksum = Self::calculate_checksum(&config_json);
 
         let (render_mode, projection) = match config.render_mode {
@@ -137,7 +143,7 @@ impl PngMetadata {
 
     /// Convert metadata to PNG tEXt chunk key-value pairs
     pub fn to_text_chunks(&self) -> Vec<(String, String)> {
-        vec![
+        let mut chunks = vec![
             ("Software".to_string(), format!("Fractal Art Editor v{}", self.version)),
             ("GitHash".to_string(), self.git_hash.clone()),
             ("Branch".to_string(), self.git_branch.clone()),
@@ -165,7 +171,15 @@ impl PngMetadata {
             ("Projection".to_string(), self.projection.clone()),
 
             ("ShaderVariations".to_string(), self.shader_variations_count.to_string()),
-        ]
+        ];
+        // The CLI's test labels (`export --category`), written only when set.
+        if let Some(name) = &self.test_name {
+            chunks.push(("TestName".to_string(), name.clone()));
+        }
+        if let Some(category) = &self.test_category {
+            chunks.push(("TestCategory".to_string(), category.clone()));
+        }
+        chunks
     }
 }
 
@@ -196,6 +210,11 @@ static STRIP_METADATA: std::sync::atomic::AtomicBool =
 pub fn set_strip_metadata(strip: bool) {
     STRIP_METADATA.store(strip, std::sync::atomic::Ordering::Relaxed);
 }
+
+/// Tests that set the process-global strip flag hold this, so one cannot
+/// encode while another has it flipped.
+#[cfg(test)]
+pub(crate) static STRIP_FLAG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn strip_metadata() -> bool {
     STRIP_METADATA.load(std::sync::atomic::Ordering::Relaxed)
@@ -305,8 +324,8 @@ pub fn read_png_metadata(png_data: &[u8]) -> Result<PngMetadata, String> {
             .map(|s| s.strip_prefix("sha256:").or_else(|| s.strip_prefix("hash:")).unwrap_or(s).to_string())
             .unwrap_or_default(),
 
-        test_name: None,
-        test_category: None,
+        test_name: text_chunks.get("TestName").cloned(),
+        test_category: text_chunks.get("TestCategory").cloned(),
 
         background_color: [0.0, 0.0, 0.0],  // Would need parsing
         exposure: 1.0,
@@ -339,6 +358,58 @@ mod tests {
         let checksum2 = PngMetadata::calculate_checksum("config2");
         assert_ne!(checksum1, checksum2);
     }
+
+    /// A PNG's embedded config reloads as the config it was rendered
+    /// from. It was written with plain serde and no version, so it read
+    /// as pre-versioning, and the v2 -> v3 migration took the render
+    /// mode from the flame (where a v3 config has none): every 3D flame
+    /// recovered from a PNG came back 2D. Both the stamped form written
+    /// now and the unstamped form older PNGs carry must survive.
+    #[test]
+    fn a_pngs_config_reloads_as_rendered() {
+        use crate::config::FractalConfig;
+        use crate::scene::transforms::RenderMode;
+        let mut c = FractalConfig::default();
+        c.render_mode = RenderMode::ThreeD;
+        c.perspective_strength = 0.2;
+        c.preserve_z = false;
+        c.levels_gamma = 1.0;
+        let check = |json: &str, what: &str| {
+            let back = FractalConfig::from_json(json).expect(what);
+            assert_eq!(back.render_mode, RenderMode::ThreeD, "{what}");
+            assert_eq!(back.perspective_strength, 0.2, "{what}");
+            assert!(!back.preserve_z, "{what}");
+            assert_eq!(back.levels_gamma, 1.0, "{what}");
+        };
+        let meta = PngMetadata::from_app_state(64, 64, 0, 0.0, 256, 1.0, &c);
+        check(&meta.config_json, "stamped");
+        // What a v3 build wrote: plain serde, which skipped levels_gamma
+        // at 1.0 (its save rule then).
+        let mut old = serde_json::to_value(&c).unwrap();
+        old.as_object_mut().unwrap().remove("levels_gamma");
+        check(&old.to_string(), "unstamped, as older PNGs carry");
+    }
+
+    /// `export --category` reaches the file and reads back; it was set on
+    /// the metadata and never written.
+    #[test]
+    fn the_test_labels_round_trip() {
+        let _flag = STRIP_FLAG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let was = strip_metadata();
+        set_strip_metadata(false);
+        let meta = PngMetadata {
+            test_name: Some("spiral".to_string()),
+            test_category: Some("2d".to_string()),
+            ..Default::default()
+        };
+        let png = encode_png_with_metadata(4, 4, vec![0u8; 4 * 4 * 4], &meta).expect("encode");
+        set_strip_metadata(was);
+        let back = read_png_metadata(&png).expect("read");
+        assert_eq!(back.test_name.as_deref(), Some("spiral"));
+        assert_eq!(back.test_category.as_deref(), Some("2d"));
+        let unlabelled = PngMetadata::default().to_text_chunks();
+        assert!(!unlabelled.iter().any(|(k, _)| k.starts_with("Test")), "no labels, no chunks");
+    }
 }
 
 #[cfg(test)]
@@ -365,11 +436,11 @@ mod strip_tests {
     /// valid PNG of the right size — a privacy switch that corrupts the
     /// export is not a privacy switch.
     ///
-    /// Serialised against the global by construction: this test owns
-    /// the flag for its duration and restores it, and no other test
-    /// touches it.
+    /// Serialised against the global: this test owns the flag (under
+    /// `STRIP_FLAG_TEST_LOCK`) for its duration and restores it.
     #[test]
     fn stripping_removes_every_text_chunk_and_nothing_else() {
+        let _flag = STRIP_FLAG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let was = strip_metadata();
         let rgba = vec![128u8; 4 * 4 * 4];
         let meta = PngMetadata {

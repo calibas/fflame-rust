@@ -109,12 +109,17 @@ run time:
    description, palette count, `enabled_by_default`), in filename order.
 3. The Custom pack, inserted first.
 
-Pack content is fetched over HTTP from `assets/palettes/packs/<file>`
-(the build scripts copy the pack JSONs next to `pkg/`). An enabled pack
-is fetched the first time the Palette Library panel is drawn, a disabled
-one when it is enabled. Until a pack arrives, its palettes are in
-neither the dropdown nor the flat list. While it loads the panel shows a
-spinner; a failure shows the error and a **Retry** button.
+Pack content is fetched over HTTP from `pkg/assets/palettes/packs/<file>`,
+relative to the page (`WEB_PACKS_DIR`; the build scripts copy the pack
+JSONs there, inside `pkg/`). An enabled pack is fetched on the first
+frame, a disabled one when it is enabled. Until a pack arrives, its
+palettes are in neither the dropdown nor the flat list. A fetch
+completes into the global library; every frame, before any panel draws,
+the app's copy takes each pack whose load state changed and rebuilds its
+flat list from its packs (`palette_library::poll_palette_packs`,
+`PaletteLibrary::sync_packs_from`), keeping its own palettes. While a
+pack loads the panel shows a spinner; a failure shows the error and a
+**Retry** button, and is not retried on its own.
 
 ### The flat list
 
@@ -257,7 +262,7 @@ malformed pack is skipped with a build warning and fails
   `palettes`, and each palette's `name` plus `stops` or
   `indexed_colors`); a parse failure is logged at startup.
 - **Web: a pack is listed but will not load**: its JSON must be deployed
-  under `assets/palettes/packs/` next to the app; the browser console
-  shows the fetch error.
+  under `pkg/assets/palettes/packs/` (the build puts it there, so upload
+  all of `pkg/`); the browser console shows the fetch error.
 - **Web: a pack is not listed**: the manifest is generated at build
   time, so a pack added after the last build needs a rebuild.

@@ -555,7 +555,7 @@ fn frame_cost_breakdown_at_1080p() {
     }
     let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-    let mut report = |label: &str, n: f64, secs: f64| {
+    let report = |label: &str, n: f64, secs: f64| {
         println!("{label:<38} {:8.3} ms", secs * 1000.0 / n);
     };
 
@@ -995,7 +995,7 @@ fn percolation_labels_match_a_cpu_flood_fill() {
         comp[start] = id;
         while let Some(i) = stack.pop() {
             let (x, y) = (i % N, i / N);
-            let mut push = |nx: usize, ny: usize, st: &mut Vec<usize>, c: &mut Vec<usize>| {
+            let push = |nx: usize, ny: usize, st: &mut Vec<usize>, c: &mut Vec<usize>| {
                 let j = ny * N + nx;
                 if open[j] && c[j] == usize::MAX {
                     c[j] = id;
@@ -7262,7 +7262,7 @@ fn an_octave_doubling_does_not_jump_the_picture() {
     let doubling = (600..2000u32).find(|&n| cfg.warp.octave(n).warp.is_some()).unwrap();
     let mut r = SimRenderer::new(&device, &cfg, N, N);
     r.seed(&device, &queue, &cfg);
-    let mut frame = |r: &mut SimRenderer, upto: u32| -> Vec<[f32; 4]> {
+    let frame = |r: &mut SimRenderer, upto: u32| -> Vec<[f32; 4]> {
         let now = r.step_index();
         assert!(upto >= now);
         r.run_steps(&device, &queue, &cfg, upto - now);

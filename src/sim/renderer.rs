@@ -25,7 +25,7 @@
 //!   phase 0 established that per-submit overhead is 0.8% across a
 //!   256x range, so batching is purely a watchdog and pacing device.
 
-use crate::config::sim::{SimConfig, SimGrid, MAX_COUPLINGS, MAX_LAYERS};
+use crate::config::sim::{SimConfig, MAX_COUPLINGS, MAX_LAYERS};
 
 /// One colour-stack layer as the colour shader reads it; mirrored in
 /// the assembler's `SimColorLayerGpu`.
@@ -387,7 +387,6 @@ fn layer_models(cfg: &SimConfig) -> Vec<&'static ModelDef> {
 /// combination. Rebuilt when any of those change, which is rare —
 /// parameter edits do not touch it.
 struct Pipelines {
-    seed: ComputePipeline,
     /// Per layer, the dispatches of one step in order: `sim_step`,
     /// then `sim_step2`, and so on for as many as that layer's model
     /// declares. Layers sharing a model share the compiled pipelines.
@@ -608,9 +607,53 @@ pub struct SimRenderer {
     /// config that arrives by any route at all cannot inherit the
     /// previous run's field.
     seeded_as: Option<SeedIdentity>,
+    /// The step-affecting settings every step of this run was taken
+    /// under (`run_identity`), or `None` once one was taken under others
+    /// -- a parameter edit mid-run -- until the next seed.
+    run_identity: Option<u64>,
+}
+
+/// What a run's field depends on beyond its seed: the config, less what
+/// only colours, frames or caps the picture -- the colouring and its
+/// layers, the view, matte, resampling, fit, terrain, the step cap and
+/// the speed -- and less the grid, which `resize` reseeds on. Dropped by
+/// name from the file form, so a field this list misses stays in, which
+/// only makes the identity stricter.
+fn run_identity(cfg: &SimConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut v = serde_json::to_value(cfg).unwrap_or_default();
+    if let Some(o) = v.as_object_mut() {
+        for k in [
+            "steps", "steps_per_frame", "coloring", "coloring_params", "color_layers", "view", "matte",
+            "upscale", "downscale", "fit", "terrain", "grid",
+        ] {
+            o.remove(k);
+        }
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.to_string().hash(&mut h);
+    h.finish()
 }
 
 impl SimRenderer {
+    /// Free the field, the output and the buffers now. Dropping frees
+    /// nothing on WebGPU, so leaving simulation mode, or a one-shot
+    /// render's throwaway renderer, kept the whole grid until garbage
+    /// collection.
+    pub fn destroy(&self) {
+        for t in &self.field {
+            t.destroy();
+        }
+        self.output_texture.destroy();
+        self.diffs.0.destroy();
+        self.params_buffer.destroy();
+        self.model_params_buffer.destroy();
+        self.coloring_params_buffer.destroy();
+        self.coupling_buffer.destroy();
+        self.color_layers_buffer.destroy();
+        self.kernel_buffer.destroy();
+    }
+
     pub fn new(device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> Self {
         let (grid_w, grid_h) = Self::allocatable_grid(cfg, out_w, out_h);
         // Every slice: the user's layers, their memory and their scratch.
@@ -751,6 +794,7 @@ impl SimRenderer {
             ms_per_step: 0.0,
             needs_seed: true,
             seeded_as: None,
+            run_identity: None,
         }
     }
 
@@ -1455,6 +1499,15 @@ impl SimRenderer {
         self.needs_seed || self.seeded_as.as_ref() != Some(&SeedIdentity::of(cfg))
     }
 
+    /// Whether every step of the live run was taken under `cfg`'s
+    /// step-affecting settings, from a seed `cfg` describes: the field
+    /// is then what seeding `cfg` and running `step_index` steps makes,
+    /// and a picture of it is that recipe's. False once a parameter was
+    /// edited mid-run, until the next seed.
+    pub fn ran_steadily_as(&self, cfg: &SimConfig) -> bool {
+        !self.will_reseed(cfg) && self.run_identity == Some(run_identity(cfg))
+    }
+
     /// How many steps are left before `cfg.steps`, or `None` when
     /// nothing is holding the run back.
     ///
@@ -1946,7 +1999,6 @@ impl SimRenderer {
         self.pipelines = Some(Pipelines {
             layer_warp,
             flame_layout,
-            seed: seed_pipelines[0].1.clone(),
             layer_seeds: models.iter().map(|m| {
                 seed_pipelines.iter().find(|(n, _)| *n == m.name).map(|(_, p)| p.clone()).expect("built above")
             }).collect(),
@@ -2771,6 +2823,7 @@ impl SimRenderer {
         queue.submit(std::iter::once(enc.finish()));
         self.needs_seed = false;
         self.seeded_as = Some(SeedIdentity::of(cfg));
+        self.run_identity = Some(run_identity(cfg));
 
         // A model that renormalises needs the seed's range before its
         // first step. Step 0 reads slot (0 - 1) mod RING, so the seed's
@@ -2871,6 +2924,9 @@ impl SimRenderer {
     pub fn run_steps(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig, count: u32) {
         if count == 0 {
             return;
+        }
+        if self.run_identity.is_some() && self.run_identity != Some(run_identity(cfg)) {
+            self.run_identity = None;
         }
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
@@ -3385,6 +3441,7 @@ struct TerrainInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::sim::SimGrid;
 
     #[test]
     fn a_bound_grid_follows_the_output_and_a_fixed_one_does_not() {

@@ -1,82 +1,89 @@
 # WASM Visual Regression Tests
 
-Tests the WASM build to ensure it produces identical output to the desktop build.
+Renders the visual-suite configs in Chrome through the web app's
+`WasmApi.export_png` and compares exact pixel hashes against WASM
+baselines of its own (WASM hashes differ from desktop's).
 
 ## Prerequisites
 
-### 1. Install wasm-pack
+### 1. The web app's build tools
 ```bash
-cargo install wasm-pack
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.121   # must match Cargo.lock
 ```
+See [docs/WASM.md](../../../docs/WASM.md) for why that version.
 
-### 2. Install Python dependencies
+### 2. Python dependencies
 ```bash
 pip install selenium pillow numpy
 ```
 
-### 3. Install Chrome and chromedriver
+### 3. Chrome and chromedriver
 - **Chrome**: https://www.google.com/chrome/
-- **chromedriver**: Must match your Chrome version
+- **chromedriver**: must match your Chrome version
   - Download from: https://chromedriver.chromium.org/
-  - On Windows: Add to PATH or place in same directory as script
+  - On Windows: add to PATH or place in the same directory as the script
   - On macOS: `brew install chromedriver`
   - On Linux: `sudo apt install chromium-chromedriver`
 
 ## Running Tests
 
 ```bash
-# Run all WASM tests
-python tests/visual/wasm/test_wasm.py
-
-# The script will:
-# 1. Build WASM with wasm-pack (--release)
-# 2. Start HTTP server on port 8080
-# 3. Launch headless Chrome
-# 4. Load test.html and run each test config
-# 5. Compare with desktop baselines
+python tests/visual/wasm/test_wasm.py                    # every category
+python tests/visual/wasm/test_wasm.py --category 2d      # one category
+python tests/visual/wasm/test_wasm.py --update-baseline  # write baselines from this run
 ```
 
-## How It Works
-
-1. **Build**: Runs `wasm-pack build --target web --release`
-2. **Serve**: Starts Python HTTP server on port 8080
-3. **Test Page**: Loads `test.html` which:
-   - Initializes WASM module
-   - Exposes `window.loadFractalConfig()` and `window.startRender()`
-   - Renders fractal to canvas
-   - Sets `window.renderComplete` when done
-4. **Capture**: Selenium captures canvas as PNG via `toDataURL()`
-5. **Compare**: Hashes pixel data and compares with desktop baselines
+The script:
+1. Builds the web app with `build-wasm.bat` on Windows, `build-wasm.sh`
+   elsewhere (`--profile dist`, a few minutes)
+2. Serves the repository root on port 8080 (`python -m http.server`,
+   with the interpreter running the script)
+3. Launches Chrome with WebGPU enabled (not headless; ANGLE's D3D11
+   backend on Windows)
+4. Loads `test.html` for each config, which calls
+   `WasmApi.export_png(800, 600, 256, false)`
+5. Hashes the PNG's pixels and compares them with the baseline
 
 ## Test Configs
 
-Uses the same configs as desktop tests from `tests/visual/configs/`:
-- 2d/
-- 3d/
-- tonemap/
-- variations/
+The desktop suite's configs in `tests/visual/configs/`, from `2d/`,
+`3d/`, `tonemap/`, `variations/`, `escape/` and `sim/`. `solid/` is
+left out on purpose: solid rendering is not bit-reproducible (an
+in-batch depth race), and this suite compares exact hashes.
 
-All configs must have `deterministic_rng: true` for reproducible results.
+All configs must have `deterministic_rng: true`; one without is skipped
+with a warning.
 
-## Output
+## Output and baselines
 
-- `tests/visual/current/wasm/*.png` - Rendered output from WASM
-- Compared against `tests/visual/baseline/*.png` (desktop baselines)
+- `tests/visual/current/wasm/<category>-<stem>.png` — this run's renders
+  (gitignored). Each test deletes its old output before rendering.
+- `tests/visual/baseline/wasm/<category>-<stem>.png` — the baselines.
+  Names carry the category, as in `run_tests.py`: `3d/` and
+  `variations/` both have an `affine3d-smoke`.
+
+Each test reports `[PASS]`, `[FAIL]` or `[NONE]` — no baseline, so
+nothing was compared. The summary counts the three separately, and a
+run with any `[NONE]` exits 1 unless `--update-baseline` wrote them.
+`--update-baseline` writes baselines only for configs that rendered in
+this run. Only a handful of configs have WASM baselines so far.
 
 ## Troubleshooting
 
-**"wasm-pack not found"**
-- Run: `cargo install wasm-pack`
+**"build-wasm.bat failed" / "build-wasm.sh failed"**
+- The last lines of the build output follow the message; run the
+  script by hand to see all of it.
 
 **"Failed to launch Chrome"**
 - Install Chrome and chromedriver
-- Ensure chromedriver is in PATH and matches Chrome version
+- Ensure chromedriver is in PATH and matches the Chrome version
 
 **"Render timeout"**
-- Increase timeout in script (default 60s)
-- Check browser console for errors (remove --headless to debug)
+- The timeout is 10 minutes per test (`CONFIG['timeout']`); the
+  browser console logs for the render are printed after each test
 
 **"Hash mismatch"**
-- WASM and desktop should produce identical output
-- If mismatch persists, check for platform-specific rendering differences
-- Verify WASM build is using same shader code as desktop
+- Baselines are exact pixel hashes from one machine's GPU and browser;
+  a different GPU, driver or Chrome version can change them. Compare
+  the two PNGs before treating it as a regression.

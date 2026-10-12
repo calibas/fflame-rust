@@ -238,9 +238,14 @@ on the host:
 
 | mode | `blend_factor` | `use_fixed_ema` | colour update |
 | --- | --- | --- | --- |
-| overwrite (live preview) | 1.0 | 0 | previous discarded (the shader treats `blend_factor ≥ 0.99` as "clear") |
+| overwrite (live preview) | 1.0 (unread) | 2 | previous discarded |
 | cumulative mean (default, `use_dynamic_blend`) | 0.0 | 0 | `α = new_density / total_density` |
 | fixed EMA | `FractalConfig::blend_factor` | 1 | `α = blend_factor` |
+
+Overwrite is its own mode. It used to be `blend_factor ≥ 0.99` in mode
+0, which a Fixed Blend Rate of 0.99-1.0 also sent: the shader cleared
+every batch while the host kept counting them into `samples_in_buffer`,
+and the picture faded.
 
 Density is cumulative in every mode. Cumulative mean is the reference
 algorithm and reaches an f32 precision floor around 10⁹ hits a pixel;
@@ -316,7 +321,8 @@ or lighting is active (`SolidShadingSettings::active`, i.e.
   view extents around the view centre. The app re-fits at most once a
   run and only in its first 64 batches (`maybe_refit_shadow`, which
   makes the caller reset); `render_with` runs six warm-up dispatches,
-  re-fits blocking (`refresh_shadow_placement_blocking`), and resets.
+  awaits one exact bounds read to re-fit (`refresh_shadow_placement`),
+  and resets.
 - **The shade pass** (`ShadePass`, `shaders/shade.wgsl`): Blinn-Phong
   over normals reconstructed from the depth region — a full-image
   normals pass smoothed by up to three à-trous iterations
@@ -347,7 +353,7 @@ both terrains. See [TERRAIN.md](TERRAIN.md).
 ### 8–11. Tone map and the tail
 
 - **Density effects** run on the HDR input before the tone map, in the
-  effect chain's `Rgba16Float` ping-pong, and need the device's
+  effect chain's `Rgba32Float` ping-pong, and need the device's
   `FLOAT32_FILTERABLE` feature (they are skipped without it). Colour
   effects run on the tone-mapped `Rgba8Unorm` image after it. See
   [EFFECTS.md](EFFECTS.md).
@@ -699,7 +705,7 @@ Per pixel, for a `with_palette_size` renderer at the frame's size:
 | shade pass (four `Rgba32Float`) | 64 | lazily, once a lit solid runs |
 | DoF pass (four `Rgba32Float`) | 64 | lazily, once solid DoF runs |
 | path ids | 4 | PathMap colour mode |
-| density effect ping-pong (`Rgba16Float` × 2) | 16 | an enabled density effect |
+| density effect ping-pong (`Rgba32Float` × 2) | 32 | an enabled density effect |
 | colour effect ping-pong (`Rgba8Unorm` × 2) | 8 | an enabled colour effect |
 
 Layouts and fixed-size buffers: [BUFFERS.md](BUFFERS.md).

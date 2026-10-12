@@ -5,8 +5,7 @@
 //! words 0-5 are the subsampled world-AABB atomics (`decode_bounds`),
 //! words 6-7 the occlusion-survival counter pair the brightness renorm
 //! divides (see main_template.wgsl). Interactive path ticks an async
-//! readback every N frames; exports use `read_blocking` for an exact
-//! value.
+//! readback every N frames; exports use `read` for an exact value.
 //!
 //! (The former `DensityStats` Σalpha reduction lived here until the
 //! renorm switched to occlusion-only counters — see
@@ -138,8 +137,14 @@ impl BoundsTracker {
         result
     }
 
-    /// Blocking read (export warmup: measure once, re-place, re-render).
-    pub fn read_blocking(
+    /// One exact read (export warmup: measure once, re-place, re-render).
+    ///
+    /// Async because a browser cannot wait on a map: it completes in the
+    /// page's event loop, so a synchronous wait there never returns, and
+    /// `render_with` -- which the web app and the gallery run -- hung on
+    /// any lit solid or auto-exposed flame. On the desktop the poll below
+    /// completes the map and the await returns at once.
+    pub async fn read(
         &mut self,
         device: &Device,
         queue: &Queue,
@@ -151,7 +156,7 @@ impl BoundsTracker {
         });
         encoder.copy_buffer_to_buffer(histogram, tail_offset, &self.readback, 0, 32);
         queue.submit(std::iter::once(encoder.finish()));
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = futures::channel::oneshot::channel();
         self.readback.slice(..).map_async(MapMode::Read, move |res| {
             let _ = tx.send(res.is_ok());
         });
@@ -161,7 +166,7 @@ impl BoundsTracker {
         let poll_ok = device
             .poll(PollType::Wait { submission_index: None, timeout: None })
             .is_ok();
-        if !poll_ok || !rx.recv().unwrap_or(false) {
+        if !poll_ok || !rx.await.unwrap_or(false) {
             return None;
         }
         let words = {

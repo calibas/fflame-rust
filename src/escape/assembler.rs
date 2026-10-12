@@ -3924,7 +3924,7 @@ fn rebase_manowar_fe() -> String {
 /// The shared deep-rung pair rebase. Both deltas are rebuilt in
 /// double-float from the reference's own DF entries, never by an
 /// f32 subtraction of two O(1) iterates.
-fn rebase_two_term_fe(prev_target: &str, prev_rebase: &str) -> String {
+fn rebase_two_term_fe(_prev_target: &str, prev_rebase: &str) -> String {
     format!(
     "        let delta_prev = cfe2_to_f32(w_prev);
              let mp = min(max(m, 1u) - 1u, perturb.orbit_len - 1u);
@@ -6124,11 +6124,13 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     var rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
     // Depth fog AFTER lighting, so distant lit surfaces fade toward
     // the background like atmosphere rather than being lit on top of
-    // it -- the ordering the shade pass settled on.
+    // it -- the ordering the shade pass settled on. The fog colour is
+    // the background as picked (sRGB); `rgb` is linear, so decode it
+    // the way the tonemap does before it composites the background.
     if (ifs_fog_strength() > 0.0) {
         let depth = t * dot(dir, ifs_forward());
         let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
-        rgb = mix(rgb, ifs_fog_color(), f);
+        rgb = mix(rgb, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
     }
     return rgb;
 }
@@ -6800,8 +6802,11 @@ fn ifs_has_nonlinear() -> bool {
 // The beam's ranking key: sigma-weighted position when the CPU that
 // seeds this walk chose it, which it does when every map is an
 // inversion. See `ifs_estimate::RankKey::Auto` for the measurement.
+// Not in fdata[3].w as on the plane: the solid's camera rows carry
+// the material there (`ifs_gloss`), so it sits in the handover row's
+// pad (`escape::ifs::SOLID_RANK_KEY`).
 fn ifs_weighted_key() -> bool {
-    return params.fdata[3].w > 0.5;
+    return params.fdata[7].w > 0.5;
 }
 
 fn ifs_count() -> u32 {
@@ -7649,10 +7654,12 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     let h = pt_ifs_surface(ray.o + ray.d * t, t, t);
     pt_first(h, ray.d);
     var l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
+    // Fog toward the background, decoded from the sRGB it was picked in
+    // to the linear `l` (as the lit tier's rig does).
     if (ifs_fog_strength() > 0.0) {
         let depth = t * dot(ray.d, ifs_forward());
         let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
-        l = mix(l, ifs_fog_color(), f);
+        l = mix(l, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
     }
     return vec4<f32>(l, 1.0);
 }
@@ -7821,7 +7828,6 @@ pub fn assemble_layered(
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
     let non_escaping = formula.has_feature(FormulaFeature::NonEscaping);
     let needs_prev = formula.has_feature(FormulaFeature::NeedsPrevZ);
-    let needs_index = formula.has_feature(FormulaFeature::NeedsIndex);
     let mutates_c = formula.has_feature(FormulaFeature::MutatesC);
     let convergent = formula.has_feature(FormulaFeature::Convergent);
     let needs_period = either(ColoringFeature::NeedsPeriod);
@@ -8062,6 +8068,40 @@ mod tests {
     use super::*;
     use crate::escape::{COLORINGS, FORMULAS};
     use egui_wgpu::wgpu::naga;
+
+    /// The `fdata` slot (row, component) a one-line accessor reads.
+    fn fdata_slot(src: &str, name: &str) -> (usize, usize) {
+        let at = src.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+        let rest = &src[at..];
+        let i = rest.find("params.fdata[").expect("reads fdata") + "params.fdata[".len();
+        let close = rest[i..].find(']').expect("closing bracket");
+        let row: usize = rest[i..i + close].parse().expect("row");
+        let comp = match rest.as_bytes()[i + close + 2] {
+            b'x' => 0,
+            b'y' => 1,
+            b'z' => 2,
+            b'w' => 3,
+            c => panic!("component {}", c as char),
+        };
+        (row, comp)
+    }
+
+    /// The solid's beam ranks by the key `pack_globals3` packs, in a slot
+    /// none of the rig's settings share. It once read the forward row's
+    /// pad, which the renderer fills with the material's gloss, so a
+    /// solid glossier than 0.5 ranked by a key its CPU seeding never
+    /// chose.
+    #[test]
+    fn a_solid_ranks_by_its_own_slot_not_the_materials() {
+        let key = fdata_slot(IFS_3D_TEMPLATE, "ifs_weighted_key");
+        assert_eq!(key, crate::escape::ifs::SOLID_RANK_KEY);
+        for f in ["ifs_gloss", "ifs_rough", "ifs_glow"] {
+            assert_ne!(key, fdata_slot(IFS_RIG, f), "{f} shares the ranking key's slot");
+        }
+        for f in ["ifs_has_nonlinear", "ifs_count", "ifs_link_levels", "ifs_beam_slots", "ifs_cap", "ifs_light_count"] {
+            assert_ne!(key, fdata_slot(IFS_3D_TEMPLATE, f), "{f} shares the ranking key's slot");
+        }
+    }
 
     #[test]
     fn every_field_coloring_combination_validates() {

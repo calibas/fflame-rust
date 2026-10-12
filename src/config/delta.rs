@@ -2174,6 +2174,12 @@ impl ConfigValue {
             (ConfigValue::ColorMode(a), ConfigValue::ColorMode(b)) => a == b,
             (ConfigValue::SqueezeMode(a), ConfigValue::SqueezeMode(b)) => a == b,
             (ConfigValue::RenderMode(a), ConfigValue::RenderMode(b)) => a == b,
+            // Without these two, setting a style or a curve to the value
+            // it already had was a change: the Colors panel's Reset to
+            // Defaults (which sets both) pushed an undo entry on every
+            // click, even with nothing to reset.
+            (ConfigValue::PathMapStyle(a), ConfigValue::PathMapStyle(b)) => a == b,
+            (ConfigValue::ToneCurve(a), ConfigValue::ToneCurve(b)) => a == b,
             // For complex types, do shallow comparison or always return false
             _ => false,
         }
@@ -4433,6 +4439,20 @@ fn json_as_round_u64(json: &serde_json::Value) -> Option<u64> {
         .or_else(|| json.as_f64().map(|f| f.max(0.0).round() as u64))
 }
 
+/// A boolean from a track value, which is a NUMBER more often than a
+/// bool: the track editor reads a bool target's current value as
+/// 1.0 / 0.0 (`get_current_value`), so its keyframes, and anything
+/// interpolated between them, are numbers.
+///
+/// Asking `as_bool` alone dropped all of them, so a post-affine or
+/// effect on/off track applied nothing in the app or the video. A
+/// number is on from 0.5 up -- the midpoint, so a Linear 0 -> 1 track
+/// switches halfway, as a Step track would. NaN compares false, so a
+/// wild signal lands on off.
+fn json_as_bool(json: &serde_json::Value) -> Option<bool> {
+    json.as_bool().or_else(|| json.as_f64().map(|f| f >= 0.5))
+}
+
 pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Option<ConfigValue> {
     use serde_json::Value;
 
@@ -4639,15 +4659,20 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::PaletteReverse
-        | ConfigPath::TransformPostAffineEnabled { .. }
-        | ConfigPath::LinkedTransformPostAffineEnabled { .. }
-        | ConfigPath::FinalTransformPostAffineEnabled { .. }
         | ConfigPath::SystemVsyncEnabled
         | ConfigPath::SystemFrameGovernor
         | ConfigPath::SystemShowHelpOnStartup
         | ConfigPath::PreserveZ
         => {
             json.as_bool().map(ConfigValue::Bool)
+        }
+
+        // Booleans offered as track targets: their keyframes are
+        // numbers (see `json_as_bool`).
+        ConfigPath::TransformPostAffineEnabled { .. }
+        | ConfigPath::LinkedTransformPostAffineEnabled { .. }
+        | ConfigPath::FinalTransformPostAffineEnabled { .. } => {
+            json_as_bool(json).map(ConfigValue::Bool)
         }
 
         // UInt parameters
@@ -4729,10 +4754,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 .map(ConfigValue::RenderMode)
         }
 
-        // Effect enabled flags (bool)
+        // Effect enabled flags (bool). The effect ones are offered as
+        // track targets, so their keyframes are numbers (see
+        // `json_as_bool`); a light's on/off is not offered.
         ConfigPath::DensityEffectEnabled { .. }
-        | ConfigPath::ColorEffectEnabled { .. }
-        | ConfigPath::SolidLightEnabled { .. } => {
+        | ConfigPath::ColorEffectEnabled { .. } => {
+            json_as_bool(json).map(ConfigValue::Bool)
+        }
+        ConfigPath::SolidLightEnabled { .. } => {
             json.as_bool().map(ConfigValue::Bool)
         }
 
@@ -5116,6 +5145,29 @@ mod tests {
             Some(ConfigValue::UInt(1))
         );
     }
+
+    /// A boolean track's keyframes are numbers -- the track editor
+    /// reads the current on/off as 1.0 / 0.0 -- and every one of them
+    /// used to be dropped, so the track applied nothing.
+    #[test]
+    fn a_numeric_track_value_switches_an_offered_boolean() {
+        use serde_json::json;
+        let paths = [
+            ConfigPath::DensityEffectEnabled { index: 0 },
+            ConfigPath::ColorEffectEnabled { index: 0 },
+            ConfigPath::TransformPostAffineEnabled { index: 0 },
+            ConfigPath::LinkedTransformPostAffineEnabled { index: 0 },
+            ConfigPath::FinalTransformPostAffineEnabled { index: 0 },
+        ];
+        for path in paths {
+            for (v, want) in [(json!(1.0), true), (json!(0.0), false), (json!(0.5), true), (json!(0.49), false)] {
+                assert_eq!(json_to_config_value(&v, &path), Some(ConfigValue::Bool(want)), "{path:?} = {v}");
+            }
+            // A real bool still works.
+            assert_eq!(json_to_config_value(&json!(true), &path), Some(ConfigValue::Bool(true)));
+        }
+        assert_eq!(json_as_bool(&json!(f64::NAN)), None, "serde_json holds NaN as null");
+    }
     use super::*;
 
     #[test]
@@ -5144,6 +5196,51 @@ mod tests {
 
         assert!(v1.approx_eq(&v2)); // Within epsilon
         assert!(!v1.approx_eq(&v3)); // Outside epsilon
+    }
+
+    /// `PaletteIndex` is deprecated: the manager ignores a write to it,
+    /// so a caller that "sets the palette" through it changes nothing in
+    /// the config. Desktop Load .palette did exactly that -- the viewport
+    /// showed the new palette while the config (and so save, export and
+    /// undo) kept the old one. Nothing outside src/config/ may write it;
+    /// set `ConfigPath::Palette` instead.
+    #[test]
+    fn nothing_outside_config_writes_the_deprecated_palette_index() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        if !src.is_dir() {
+            eprintln!("no source tree; skipping");
+            return;
+        }
+        let config_dir = src.join("config");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path != config_dir {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                for (n, line) in text.lines().enumerate() {
+                    let code = line.trim_start();
+                    if !code.starts_with("//") && code.contains("ConfigPath::PaletteIndex") {
+                        offenders.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "ConfigPath::PaletteIndex is ignored by the manager; write ConfigPath::Palette:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 
     #[test]

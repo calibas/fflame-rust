@@ -90,8 +90,7 @@ pub struct ConfigHandle {
 /// Separate from `config` for the same reason `flame` is: these are a
 /// coherent object with their own vocabulary, and routing them
 /// through `config.set("escape.center_re", ...)` would hand the
-/// author a JSON path AND fail silently while the group sits at its
-/// default, since skip-if-default omits it from the JSON entirely.
+/// author a JSON path in place of the calls below.
 ///
 /// The CENTRE IS A STRING on purpose. It is the deep-zoom payload:
 /// zoom 60 needs about 20 significant digits and an f64 carries 15,
@@ -2329,15 +2328,21 @@ fn set_config_field(
     let key_existed = json_at(&before, key).is_some();
     let mut patched = before.clone();
 
-    // Walk to the parent, creating nothing: intermediate objects must
-    // already exist (a missing one means a bad path, not a default).
+    // Walk to the parent, creating a missing group as an empty object: a
+    // group at its defaults is omitted from the JSON entirely (`sim`,
+    // `escape`, `solid_shading`, `sim.terrain` all skip-if-default), and
+    // each deserializes from a partial object, as a compact save loads.
+    // A misspelt group lands as an unknown key serde ignores, which the
+    // "changed nothing" warning below then reports.
     let parts: Vec<&str> = key.split('.').collect();
     let (last, parents) = parts.split_last().ok_or("empty setting name")?;
     let mut cur = &mut patched;
     for p in parents {
         cur = cur
-            .get_mut(*p)
-            .ok_or_else(|| format!("unknown setting group `{p}` in `{key}`"))?;
+            .as_object_mut()
+            .ok_or_else(|| format!("`{key}` is not a settable field"))?
+            .entry((*p).to_string())
+            .or_insert_with(|| serde_json::Value::Object(Default::default()));
     }
     let obj = cur
         .as_object_mut()

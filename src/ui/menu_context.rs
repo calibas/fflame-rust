@@ -15,6 +15,8 @@ pub struct FileMenuActions {
     pub export_png: bool,
     pub export_png_transparent: bool,
     pub sign_out: bool,
+    /// The Online features checkbox was toggled to this value.
+    pub set_online_mode: Option<bool>,
     pub quit: bool,
 }
 
@@ -23,19 +25,14 @@ pub struct FileMenuActions {
 pub struct EditMenuActions {
     pub undo: bool,
     pub redo: bool,
-    pub copy_transform: bool,
-    pub paste_transform: bool,
-    pub duplicate_transform: bool,
 }
 
 /// Actions that can be triggered from the View menu
 #[derive(Default)]
 pub struct ViewMenuActions {
     pub reset_view: bool,
-    pub fit_to_window: bool,
     pub zoom_in: bool,
     pub zoom_out: bool,
-    pub show_grid: bool,
 }
 
 /// Actions that can be triggered from the Rendering menu

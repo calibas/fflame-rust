@@ -55,7 +55,7 @@ cached and bound with a layout of exactly the bindings it names.
 | `main_template.wgsl` | the entry point `main` (and `probe_main` under `PROBE`) | always, last |
 | `subflame.wgsl` | `subflame_iterate` | `subflame_wf` or `pre_subflame_wf` active |
 | `fractwf.wgsl` | the shared escape-time loop of the `fract_*_wf` family | any `fract_*_wf` active |
-| `noise.wgsl` | simplex and Perlin noise tables (from JWildfire's `NoiseTools.java`) | `dc_perlin`, `crackle`, `dc_crackle_wf`, or whenever `voronoi.wgsl` is |
+| `noise.wgsl` | simplex and Perlin noise tables (from JWildfire's `NoiseTools.java`) | `dc_perlin`, `crackle`, `dc_crackle_wf`, `crackle_fast` (every `voronoi.wgsl` user too) |
 | `voronoi.wgsl` | Voronoi cells for the crackle family | `crackle`, `dc_crackle_wf`, `crackle_fast` |
 | `polyhedra.wgsl` | polyhedron radial-support tables | `polyhedron`, `polyhedron_volume` |
 | `polychora.wgsl` | regular 4-polytope vertex tables, the Menger tesseract set | `polychoron`, `menger` |
@@ -156,7 +156,9 @@ with a real 2D body is kept.
 8. When a subflame variation is active, `apply_subflame_variations`
    and the processed `subflame.wgsl`.
 9. The helper libraries: `fractwf`, `noise`, `voronoi`, `polyhedra`,
-   `polychora`, `su_mobius`, each only when the table above says so.
+   `polychora` (one loop over `NAME_GATED_LIBRARIES`, the table the
+   engine contract also reads), then `su_mobius`, each only when the
+   table above says so.
 10. The per-flame `get_param`.
 11. The per-thread state: `thread_state`, `get_state`, `set_state`;
     `const ORBIT_SLOTS` when orbits persist. `HAS_THREAD_STATE` is set
@@ -229,29 +231,36 @@ the Apophysis order (XForm.pas):
 
 | phase | emitted as | order |
 | --- | --- | --- |
-| Pre | `temp = variation_<name>(temp, …)`: the body applies its own weight | local index |
+| Pre | `temp = f(temp, …)`: the body applies its own weight | local index |
 | Normal | `result += w * f(temp, …)`, or `result = w * f(…)` for `Feature::Replace` | local index, `Replace` variations last |
 | Post | `result = f(result, …)`: the body applies its own weight | local index |
 
 Every emission is gated on the variation's weight being non-zero. A
 `VariationPhase::Any` variation lands in normal unless a transform's
-`fx_priority` override moves it (negative: pre; positive: post). When
-it spans several phases across transforms each placement carries an
-`xform_id` gate, and normal is the catch-all so finals and linked
-transforms still run it. A moved variation applies its weight in the
-emission. The overrides come from `collect_phase_overrides` and are
-part of `ShaderConstants`, so editing one rebuilds the shader; see
+`fx_priority` override moves it (negative: pre; positive: post) -- on
+any transform, Linked and Final included, as JWildfire partitions the
+phases per XForm. The overrides are keyed by global `xform_id`
+(normals, then Linked, then Final). When a variation spans several
+phases across transforms each placement carries an `xform_id` gate,
+and normal is the catch-all so finals and linked transforms that do
+not move it still run it there; a Linked or Final transform that uses
+a variation others move is classified too, so an ungated placement
+cannot carry the move into it. A moved variation applies its weight in
+the emission. The overrides come from `collect_phase_overrides` and
+are part of `ShaderConstants`, so editing one rebuilds the shader; see
 [jwf-features.md](../projects/jwf-features.md).
 
-Arguments after the point follow the variation's declaration:
+Arguments after the point follow the variation's declaration, built
+for all six phase sites by one function (`variation_call`), which also
+names the function from the registry (`julia`'s is `julia`):
 
 | condition | argument |
 | --- | --- |
-| `Feature::NeedsAccum` (normal and post phases) | `result`, the running sum |
+| `Feature::NeedsAccum` | the accumulator JWF's `pVarTP` is there: `result` in normal and post, `temp` for a variation moved to pre, zero for a native pre |
 | has parameters, or `Feature::NeedsTransform` | `xform_id, <local index>u` |
 | `Feature::NeedsRng` | `rng` |
 | `Feature::WritesColor` | `vc` |
-| `Feature::WritesRgb` | `vrc` (normal phase, and the 2D pre phase) |
+| `Feature::WritesRgb` | `vrc` |
 | `Feature::CanHide` | `hide` |
 
 Further rules in the generated code:

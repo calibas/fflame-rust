@@ -116,10 +116,25 @@ pub fn install(kind: PluginKind, json: &str) -> Result<String, String> {
         PluginKind::Variation => {
             let dl: crate::api::types::VariationDownload = serde_json::from_str(json)
                 .map_err(|e| format!("not a variation plugin: {e}"))?;
-            // A fresh registry carries every built-in, so this probe
-            // applies exactly the rules the real one will — including
-            // the built-in name collision, caught while the user is
-            // looking at the file rather than silently at next startup.
+            // The name collision first, against everything `load_all`
+            // will check it against (built-ins and downloads), and
+            // caught while the user is looking at the file rather than
+            // silently at next startup. The probe below cannot see it:
+            // a fresh registry carries every built-in, so `has` was
+            // true for a built-in's name whether or not the plugin
+            // registered. A Local one by that name is this plugin
+            // being reinstalled.
+            if let Some(existing) = crate::variations::global_registry().get(&dl.name) {
+                if existing.provenance != crate::provenance::Provenance::Local {
+                    return Err(format!(
+                        "`{}` is already taken by a {} variation",
+                        dl.name,
+                        existing.provenance.label()
+                    ));
+                }
+            }
+            // A fresh registry applies the remaining rules exactly as
+            // the real one will.
             let mut probe = crate::variations::VariationRegistry::new();
             probe.register_from_api(&dl, crate::provenance::Provenance::Local);
             if !probe.has(&dl.name) {
@@ -301,6 +316,36 @@ mod rule_tests {
             reg.get("linear").unwrap().provenance.is_builtin(),
             "the built-in must survive a same-named plugin"
         );
+    }
+
+    /// ...and install refuses it up front. The install probe used to
+    /// pass a built-in's name: a fresh registry carries every built-in,
+    /// so `has(name)` was true whether or not the plugin registered,
+    /// and the file was written only to be refused at the next start.
+    /// (Refused before anything is written, so this touches no disk.)
+    #[test]
+    fn installing_a_builtin_name_is_refused() {
+        let e = install(PluginKind::Variation, &variation_json("linear"))
+            .expect_err("`linear` is a built-in");
+        assert!(e.contains("already taken"), "{e}");
+        assert!(e.contains("linear"), "{e}");
+    }
+
+    /// Removing a variation takes it out of the ordered name list too,
+    /// so `names()` / `all()` stop listing it.
+    #[test]
+    fn removing_a_variation_prunes_its_name() {
+        let mut reg = crate::variations::VariationRegistry::new();
+        let before = reg.names().len();
+        reg.register_from_api(
+            &serde_json::from_str(&variation_json("mine")).unwrap(),
+            Provenance::Local,
+        );
+        assert!(reg.names().iter().any(|n| n == "mine"));
+        assert!(reg.remove_by_name("mine"));
+        assert!(!reg.names().iter().any(|n| n == "mine"), "the name must go with the variation");
+        assert_eq!(reg.names().len(), before);
+        assert_eq!(reg.all().len(), reg.names().len());
     }
 
     /// ...and the reverse: a download may not displace a plugin. This is

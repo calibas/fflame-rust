@@ -152,6 +152,16 @@ fn render_compact_menu_items(
             ui.close();
         }
 
+        // The switch for everything online, as in the desktop File menu.
+        let mut online = menu_state.online_mode;
+        if ui
+            .checkbox(&mut online, t!("menu.online_features").as_ref())
+            .on_hover_text(t!("menu.tooltip_online_features").as_ref())
+            .changed()
+        {
+            menu_actions.file.set_online_mode = Some(online);
+        }
+
         // Shown whenever online mode is on, signed in or not: hiding it
         // when signed out (the old gate) made the feature look absent —
         // the reported "Save Online missing from the mobile File menu".
@@ -163,7 +173,7 @@ fn render_compact_menu_items(
             if ui
                 .add_enabled(
                     !signed_in || api_available,
-                    egui::SelectableLabel::new(false, t!("menu.save_online").as_ref()),
+                    egui::Button::selectable(false, t!("menu.save_online").as_ref()),
                 )
                 .clicked()
             {
@@ -295,7 +305,8 @@ fn render_compact_menu_items(
     // --- Layout switch ---
     ui.separator();
     if ui.button(t!("menu.desktop_view")).clicked() {
-        workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
+        // The mode's own desktop workspace, not always Standard.
+        workspace.apply_layout(super::render_mode::workspace_for(menu_state.render_mode));
         ui.close();
     }
 }

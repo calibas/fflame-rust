@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 
 use crate::script::{ScriptFlags, ScriptKind};
 use crate::variations::definition::Feature;
-use crate::variations::{VariationCategory, VariationPhase};
+use crate::variations::{ParamType, VariationCategory, VariationPhase};
 
 /// Where the generated contract lives, for the API repo to consume.
 ///
@@ -159,27 +159,19 @@ pub fn generate() -> serde_json::Value {
         }
     }
 
-    let categories: Vec<_> = [
-        VariationCategory::Basic2D,
-        VariationCategory::Advanced2D,
-        VariationCategory::Depth3D,
-        VariationCategory::Rotation3D,
-        VariationCategory::Full3D,
-        VariationCategory::Only3D,
-        VariationCategory::Plugin,
-    ]
-    .iter()
-    .map(|c| {
-        serde_json::json!({
-            "wire": c.to_api_str(),
-            "shipped_variations": category_counts.get(c.to_api_str()).copied().unwrap_or(0),
-            // The one category with behaviour attached: dropped from 2D
-            // shaders because it names variations with no meaningful 2D
-            // reading. Every other category is UI grouping.
-            "affects_compilation": matches!(c, VariationCategory::Only3D),
+    let categories: Vec<_> = VariationCategory::ALL
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "wire": c.to_api_str(),
+                "shipped_variations": category_counts.get(c.to_api_str()).copied().unwrap_or(0),
+                // The one category with behaviour attached: dropped from 2D
+                // shaders because it names variations with no meaningful 2D
+                // reading. Every other category is UI grouping.
+                "affects_compilation": matches!(c, VariationCategory::Only3D),
+            })
         })
-    })
-    .collect();
+        .collect();
 
     let phases: Vec<_> = VariationPhase::ALL
         .iter()
@@ -210,6 +202,19 @@ pub fn generate() -> serde_json::Value {
         .collect();
 
     without_3d.sort();
+
+    // The libraries the builder splices in by variation name, read from
+    // the table the builder itself decides from, so the two cannot drift.
+    // Subflame support is the one entry not decided by a name: it rides on
+    // the flame using a subflame, whatever its variations.
+    let mut name_gated = serde_json::Map::new();
+    for lib in crate::shader_builder_v2::NAME_GATED_LIBRARIES {
+        name_gated.insert(lib.file.to_string(), serde_json::json!(lib.users));
+    }
+    name_gated.insert(
+        "subflame.wgsl".to_string(),
+        serde_json::json!(["(any flame using a subflame)"]),
+    );
 
     // The reserved stems. Read from the embedded starters rather than
     // listed here, so adding a shipped script cannot leave the API
@@ -249,10 +254,7 @@ pub fn generate() -> serde_json::Value {
         "categories": categories,
         "phases": phases,
         "features": features,
-        "param_types": [
-            "float", "unlimited_float", "integer", "unlimited_integer",
-            "boolean", "angle", "enum"
-        ],
+        "param_types": ParamType::ALL.iter().map(|t| t.to_api_str()).collect::<Vec<_>>(),
         "render_modes": {
             "$comment": "The `render_mode` vocabulary, published so the API \
                          gets an AUTOMATIC signal when it grows. Adding a \
@@ -294,12 +296,7 @@ pub fn generate() -> serde_json::Value {
                          server-hosted variation cannot reach them — its WGSL \
                          must be self-contained. No SQL check can verify this; \
                          it is a curation constraint.",
-            "name_gated": {
-                "noise.wgsl": ["dc_perlin", "crackle", "dc_crackle_wf"],
-                "voronoi.wgsl": ["crackle", "dc_crackle_wf", "crackle_fast"],
-                "fractwf.wgsl": ["fract_*_wf"],
-                "subflame.wgsl": ["(any flame using a subflame)"],
-            },
+            "name_gated": name_gated,
             "always_present": ["complex.wgsl"],
             "feature_gated": { "needs_mobius_lib": "SL(2,C) Mobius library" },
         },
@@ -504,6 +501,119 @@ mod tests {
                 !e["kind"].is_null(),
                 "shipped script `{}` declares no kind",
                 e["name"]
+            );
+        }
+    }
+
+    /// `VariationCategory::ALL` must list every variant: the contract
+    /// publishes it as the category vocabulary. Same arrangement as
+    /// `every_render_mode_is_published_in_the_contract` — a new variant
+    /// fails to compile in the exhaustive match, and the count makes
+    /// whoever adds it list it rather than delete an arm.
+    #[test]
+    fn every_variation_category_is_published_in_the_contract() {
+        for c in VariationCategory::ALL {
+            match c {
+                VariationCategory::Basic2D
+                | VariationCategory::Advanced2D
+                | VariationCategory::Depth3D
+                | VariationCategory::Rotation3D
+                | VariationCategory::Full3D
+                | VariationCategory::Only3D
+                | VariationCategory::Plugin => {}
+            }
+            assert_eq!(VariationCategory::from_api_str(c.to_api_str()), *c);
+        }
+        assert_eq!(
+            VariationCategory::ALL.len(),
+            7,
+            "a category was added: put it in VariationCategory::ALL, and tell the \
+             API directly (a new vocabulary value does not move the shape; RELEASE.md §3)"
+        );
+        let published = generate()["categories"].as_array().expect("categories").len();
+        assert_eq!(published, VariationCategory::ALL.len());
+    }
+
+    /// `ParamType::ALL` likewise, and its wire spelling must be
+    /// `ApiParamType`'s, since the API stores what the client parses.
+    #[test]
+    fn every_param_type_is_published_in_the_contract() {
+        use crate::api::types::ApiParamType;
+        for t in ParamType::ALL {
+            // Paired with the API's spelling of the same variant: the
+            // match is exhaustive, so a new ParamType fails to compile
+            // here until it has both.
+            let api = match t {
+                ParamType::Float => ApiParamType::Float,
+                ParamType::UnlimitedFloat => ApiParamType::UnlimitedFloat,
+                ParamType::Integer => ApiParamType::Integer,
+                ParamType::UnlimitedInteger => ApiParamType::UnlimitedInteger,
+                ParamType::Boolean => ApiParamType::Boolean,
+                ParamType::Angle => ApiParamType::Angle,
+                ParamType::Enum { .. } => ApiParamType::Enum { choices: Vec::new() },
+            };
+            // Unit variants serialise as their name, `Enum` as a
+            // one-key object (externally tagged): either way the wire
+            // name is the string or the key.
+            let wire = match serde_json::to_value(&api).expect("serialises") {
+                serde_json::Value::String(s) => s,
+                serde_json::Value::Object(m) => m.keys().next().expect("tagged").clone(),
+                other => panic!("unexpected ApiParamType encoding: {other}"),
+            };
+            assert_eq!(t.to_api_str(), wire);
+        }
+        assert_eq!(
+            ParamType::ALL.len(),
+            7,
+            "a parameter type was added: put it in ParamType::ALL, and tell the \
+             API directly (a new vocabulary value does not move the shape; RELEASE.md §3)"
+        );
+        let published = generate()["param_types"].as_array().expect("param_types").len();
+        assert_eq!(published, ParamType::ALL.len());
+    }
+
+    /// The contract's name-gated helper libraries are the builder's own
+    /// table, and that table covers exactly the libraries the builder
+    /// splices by name: every `shaders/core/*.wgsl` the builder source
+    /// includes is either in the table or one of the files it emits on
+    /// other grounds.
+    #[test]
+    fn the_contract_lists_every_name_gated_helper_library() {
+        let doc = generate();
+        let gated = doc["helper_libraries"]["name_gated"]
+            .as_object()
+            .expect("name_gated is an object");
+        for lib in crate::shader_builder_v2::NAME_GATED_LIBRARIES {
+            let users: Vec<&str> = gated[lib.file]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} missing from the contract", lib.file))
+                .iter()
+                .map(|u| u.as_str().expect("a user is a string"))
+                .collect();
+            assert_eq!(users, lib.users, "{}", lib.file);
+        }
+
+        // The builder must not include a core helper outside the table
+        // without the contract hearing of it. These are the files it
+        // emits for reasons other than a variation's name: the kernel
+        // itself, always-present complex.wgsl, subflame support, the
+        // feature-gated Mobius library, and Focused Rendering's arms.
+        let not_name_gated = [
+            "header.wgsl", "utilities.wgsl", "rng.wgsl", "affine.wgsl", "affine_3d.wgsl",
+            "complex.wgsl", "main_template.wgsl", "subflame.wgsl", "su_mobius.wgsl",
+            "plan_eval.wgsl", "replay.wgsl", "replay_delta.wgsl",
+        ];
+        let builder = include_str!("shader_builder_v2.rs");
+        for piece in builder.split("include_str!(\"../shaders/core/").skip(1) {
+            let file = piece.split('"').next().expect("a path");
+            let in_table = crate::shader_builder_v2::NAME_GATED_LIBRARIES
+                .iter()
+                .any(|lib| lib.file == file);
+            assert!(
+                in_table || not_name_gated.contains(&file),
+                "the shader builder includes shaders/core/{file}, which is neither in \
+                 NAME_GATED_LIBRARIES nor known to be emitted on other grounds — \
+                 if a variation's name pulls it in, add it to the table"
             );
         }
     }

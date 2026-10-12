@@ -44,8 +44,11 @@ impl Vis {
 
 /// Edits the flame, which this mode does not render.
 const FLAME_ONLY: &str = "visibility.flame_only";
-/// The 3D flame engine alone.
-const THREE_D_ONLY: &str = "visibility.three_d_only";
+/// Lights a surface, and nothing loaded renders one. Not "3D flame
+/// only": `Solid::of` also answers yes for escape solids and terrains
+/// and for simulation terrains, and the old wording sent the user to
+/// the wrong mode.
+const NEEDS_SURFACE: &str = "visibility.needs_surface";
 /// The other non-flame engine's editing surface.
 const OTHER_ENGINE: &str = "visibility.other_engine";
 /// The Texture panel: only an escape-time fractal uses a texture so far.
@@ -170,7 +173,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
             if solid.is_yes() {
                 Vis::Show
             } else {
-                Vis::Grey(THREE_D_ONLY)
+                Vis::Grey(NEEDS_SURFACE)
             }
         }
 

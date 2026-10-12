@@ -11,9 +11,9 @@
 //!   3. Document the change in VERSION_HISTORY
 //! See docs/archive/config-versioning.md for details.
 //!
-//! See also `docs/projects/config-v2-migration.md` for the running list
-//! of changes pending a v1 → v2 bump (tonemap defaults shift, levels_high
-//! units conversion, etc.).
+//! `docs/archive/projects/config-v2-migration.md` records the v1 → v2
+//! changes (the tonemap defaults shift, the Levels and blur unit changes)
+//! and why the two unit changes are not migrated.
 
 // Histogram & Color
 pub const DEFAULT_EXPOSURE: f32 = 1.0; // Was 1.0 — calibrated against scale-invariant Levels

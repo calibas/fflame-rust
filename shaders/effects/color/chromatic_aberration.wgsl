@@ -46,7 +46,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(2u);
     let blend_mode = i32(get_param(3u));
 
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     // Calculate offset in UV space
     let pixel_size = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
@@ -64,9 +64,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Sample each channel with offset
-    let r = textureSample(input_texture, input_sampler, input.uv + offset).r;
-    let g = textureSample(input_texture, input_sampler, input.uv).g;
-    let b = textureSample(input_texture, input_sampler, input.uv - offset).b;
+    let r = textureSampleLevel(input_texture, input_sampler, input.uv + offset, 0.0).r;
+    let g = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0).g;
+    let b = textureSampleLevel(input_texture, input_sampler, input.uv - offset, 0.0).b;
 
     let aberrated = vec3<f32>(r, g, b);
 

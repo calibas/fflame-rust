@@ -83,6 +83,7 @@ pub fn switch_render_mode(
 }
 
 /// The two engines that are not the chaos game.
+#[cfg(test)]
 pub fn is_non_flame(mode: RenderMode) -> bool {
     mode.is_non_flame()
 }
@@ -104,6 +105,18 @@ pub fn layout_for(
         RenderMode::Simulation => Some((WorkspaceLayout::Simulation, PanelType::Simulation)),
         RenderMode::TwoD | RenderMode::ThreeD => None,
     }
+}
+
+/// The workspace a "build it fresh" request means in `mode`: Reset
+/// Workspace, and the compact layout's way back to the desktop.
+///
+/// Both applied Standard whatever the mode, so in Escape or Simulation
+/// they threw away the workspace that holds the mode's own editor and
+/// left a flame workspace around a picture no flame panel edits.
+pub fn workspace_for(mode: RenderMode) -> super::workspace::WorkspaceLayout {
+    layout_for(mode)
+        .map(|(layout, _)| layout)
+        .unwrap_or(super::workspace::WorkspaceLayout::Standard)
 }
 
 /// Does this mode need the escape engine's GPU state resident?
@@ -365,6 +378,16 @@ mod tests {
                 assert_ne!(text.as_ref(), key, "{m:?}: missing locale key {key}");
             }
         }
+    }
+
+    /// Reset Workspace rebuilds the mode's own workspace.
+    #[test]
+    fn a_reset_workspace_is_the_modes_own() {
+        use super::super::workspace::WorkspaceLayout;
+        assert_eq!(workspace_for(RenderMode::TwoD), WorkspaceLayout::Standard);
+        assert_eq!(workspace_for(RenderMode::ThreeD), WorkspaceLayout::Standard);
+        assert_eq!(workspace_for(RenderMode::Escape), WorkspaceLayout::EscapeTime);
+        assert_eq!(workspace_for(RenderMode::Simulation), WorkspaceLayout::Simulation);
     }
 
     /// Each non-flame mode brings its own workspace and its own

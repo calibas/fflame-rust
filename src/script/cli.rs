@@ -1,4 +1,4 @@
-//! Headless script running: `fractal_flame_wgpu generate`.
+//! Headless script running: `FractalArtEditor generate`.
 //!
 //! Phase 1's proving ground — the whole engine is exercised without any
 //! UI, so script semantics can be tested and iterated on before a panel

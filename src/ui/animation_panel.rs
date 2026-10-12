@@ -320,8 +320,6 @@ fn render_playback_controls(
 pub struct AnimationApiContext<'a> {
     /// Current flame's API ID (None if flame not saved online)
     pub api_flame_id: &'a Option<String>,
-    /// Current animation's API ID (None if animation not saved online)
-    pub api_animation_id: &'a Option<String>,
     /// List of animations linked to the current flame (from FlameResponse)
     pub flame_animations: &'a [crate::api::types::AnimationSummary],
     /// Whether the user is signed in

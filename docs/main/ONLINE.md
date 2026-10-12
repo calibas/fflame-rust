@@ -97,18 +97,25 @@ an empty success.
 
 ## Online mode
 
-`SystemSettings::online_mode` (default `true`) gates the online
-**surfaces**. No panel writes it; it changes only by editing the
-settings file.
+`SystemSettings::online_mode` (default `true`) gates everything that
+talks to the online service. File → **Online features** (a checkbox,
+also in the compact menu's File section) switches it; like any device
+preference it is saved at once and is not undoable.
 
 | gated on online mode | not gated |
 | --- | --- |
-| File → **Save Online** | the variation catalog, fetched once per session at startup |
-| Window → **Account** | fetching a variation a loaded flame names but the app lacks |
-| the Fractal Browser's **Online** tab | the effect catalog, fetched once per session (on desktop it needs sign-in: `list_effects` requires a token) |
-| Palette Library → **Cloud Palettes** | fetching a missing effect (needs sign-in) |
-| the menu bar's connection and account indicator | the Scripts panel's online library (needs sign-in) |
-| the periodic health check | loading a web deep link |
+| File → **Save Online** | loading a web deep link |
+| Window → **Account** | |
+| the Fractal Browser's **Online** tab | |
+| Palette Library → **Cloud Palettes** | |
+| the menu bar's connection and account indicator | |
+| the periodic health check | |
+| the variation catalog, fetched once per session | |
+| fetching a variation a loaded flame names but the app lacks: off, the flame renders without it and a notice names it (`api.variations_need_online`), with no fetch and no pause | |
+| updating downloaded variations the catalog says are stale | |
+| the effect catalog, fetched once per session (on desktop it needs sign-in: `list_effects` requires a token) | |
+| fetching a missing effect (needs sign-in); off, the name stays recorded and is fetched when online mode is turned on | |
+| the Scripts panel's online library (needs sign-in); off, a request reports that online features are off | |
 
 ---
 
@@ -201,13 +208,15 @@ flames**, on the same endpoints, told apart by `render_mode` alone. An
 escape config's exact-decimal centre strings survive the round trip
 (`an_escape_config_round_trips_with_its_centre_intact`).
 
-A simulation is mapped to `"simulation"` and sent. `ApiRenderMode`'s
-documentation says `sync` refuses to upload one client-side until the
-server's `render_mode` enum knows the value, but no such refusal exists:
-`config_to_create_request` refuses nothing, `FetchError::Unsupported`
-(made for exactly this) is never constructed, and Save Online is
-offered in Simulation mode. The committed `openapi.json` lists
-`RenderMode` as `2d`, `3d`, `escape` only.
+A simulation maps to `"simulation"`, but the server's `render_mode`
+enum does not know that value yet (the committed `openapi.json` lists
+`RenderMode` as `2d`, `3d`, `escape` only; an upload is an HTTP 400
+`render_mode_invalid`). So `save_flame` and `update_flame` refuse a
+simulation client-side, before the token check and before anything is
+sent (`refuse_unsupported_online`, returning `FetchError::Unsupported`
+with a sentence the dialog shows) — the same seatbelt escape had until
+the server added `escape`. Remove it when the server adds `simulation`.
+(`simulation_configs_are_refused_by_save_and_update`)
 
 ### Names, never definitions
 
@@ -238,11 +247,11 @@ What **Make public** sends:
 | action | checked | unchecked |
 | --- | --- | --- |
 | flame Save / Save as Copy | `public` | no visibility (the server's default) |
-| flame Update | `public` | no visibility — `update_flame` then reads the flame's current visibility and sends it back, so the flame **keeps** what it had |
+| flame Update | `public` | `private` if the flame was public; otherwise no visibility — `update_flame` then reads the flame's current visibility and sends it back, so a private or unlisted flame **keeps** what it had |
 | animation Save / Update | `public` | `private` |
 
-So unchecking the box on a flame update does not make a public flame
-private.
+The dialog opens with the box checked for a public flame, so unchecking
+it on an update makes the flame private (`flame_update_visibility`).
 
 ---
 
@@ -257,9 +266,12 @@ carries one (the local `.anim` save embeds the config, the online save
 does not add it).
 
 **Loading** (`load_animation_full`, `GET /api/animations/{id}`) returns
-the animation with the server's copy of its flame embedded. The
-animation's own `base_config` is used if it has one; otherwise the
-embedded flame becomes its `base_config`. The app loads that config
+the animation with the server's copy of its flame embedded. That flame
+is authoritative: it becomes the animation's `base_config`, replacing
+any stored one (`adopt_server_flame`), since the flame may have been
+updated since; without an embedded flame the stored one stands. The
+desktop request carries the signed-in token, so a private animation of
+your own loads. The app loads that config
 (undoable), loads and binds the animation, regenerates its signal
 generators, and switches to the Animation layout.
 
@@ -276,9 +288,11 @@ The Fractal Browser's **Online** tab lists your flames
 (`GET /api/flames`, first 100) or a search (`GET /api/search/flames`),
 loads one (`GET /api/flames/{id}`) and deletes one
 (`DELETE /api/flames/{id}`); see
-[FRACTAL-BROWSER.md](FRACTAL-BROWSER.md). Its error check treats both
-"Authentication required" (401) and "Access denied" (403) as an expired
-session and signs the user out.
+[FRACTAL-BROWSER.md](FRACTAL-BROWSER.md). Its error check treats
+"Authentication required" (401) as an expired session and signs the
+user out; "Access denied" (403) is shown as an error and leaves the
+session alone (`only_a_401_signs_the_user_out`). A delete asks for
+confirmation first.
 
 **Cloud Palettes** in the Palette Library lists your palette library
 (`GET /api/users/me/palettes`, first 100); a click sets the config's
@@ -527,7 +541,7 @@ engines by feature:
 | crate | package | engine features |
 | --- | --- | --- |
 | `wasm/script` | `fflame-script` | `engine-flame`, `engine-escape`, `engine-sim` — script + seed + params → config JSON |
-| `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape` |
+| `wasm/render` | `fflame-render` | `engine-flame`, `engine-escape`, `engine-sim` |
 | `wasm/flame` | `fflame-flame` | `engine-flame` |
 | `wasm/escape` | `fflame-escape` | `engine-escape` |
 | `wasm/sim` | `fflame-sim` | `engine-sim` |
@@ -537,7 +551,8 @@ different features. An escape or simulation config sent to a module
 without that engine is refused with `RenderError::EngineMissing`
 ("this build has no simulation engine"); a flame config sent to a
 module without `engine-flame` renders against a catalog holding only
-`linear`. So `fflame-render` refuses simulations. The JavaScript API and its guarantees are in
+`linear`. `fflame-render` has all three engines and renders every
+mode. The JavaScript API and its guarantees are in
 [wasm/README.md](../../wasm/README.md); building and releasing them are
 in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 
@@ -545,13 +560,12 @@ in [WASM.md](../WASM.md) and [RELEASE.md](../RELEASE.md) §5.
 
 ## Gotchas
 
-- **Simulations are not refused client-side** — see *Render modes*.
-- **An Online-tab 403 signs you out**, since the tab treats "Access
-  denied" as an expired session.
+- **Simulations cannot be saved online yet** — refused client-side
+  until the server knows the mode; see *Render modes*.
 - **Loading an animation from the Animation panel's list goes through
-  the web deep-link loader**, which builds its `ApiState` with an empty
-  token. On the web the cookie authenticates it; on desktop the request
-  carries an empty bearer token.
+  the web deep-link loader** (`trigger_url_load`). It passes the
+  signed-in token (empty when signed out, and ignored on the web, where
+  the cookie authenticates).
 - **The search URL is not encoded.** `SearchFlamesParams::to_query_string`
   interpolates the name raw, so `&` or `#` in a search corrupts the
   query (noted at `api::urlencode`, which the script search does use).

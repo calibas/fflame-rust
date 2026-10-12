@@ -48,12 +48,15 @@ impl ExportReporter for ConsoleReporter {
 }
 
 /// Histogram buffer size in bytes for a full-resolution image: 4 channels
-/// (R, G, B, density) × 4 bytes per u32 = 16 bytes per pixel, plus one
-/// u32 per pixel for the solid-rendering nearest-depth region when solid
-/// rendering is active (see docs/archive/projects/solid-rendering.md).
+/// (R, G, B, density) × 4 bytes per u32 = 16 bytes per pixel, plus, when
+/// solid rendering is active (`FractalConfig::solid_depth_active`), one
+/// u32 per pixel for the nearest-depth region and the fixed tail after it
+/// (bounds and four shadow maps, `FlameBuffers::SOLID_TAIL_BYTES`) -- the
+/// histogram is bound whole, so the routing must count all of it.
 pub fn histogram_size_bytes(width: u32, height: u32, solid: bool) -> u64 {
     let bytes_per_pixel: u64 = if solid { 20 } else { 16 };
-    (width as u64) * (height as u64) * bytes_per_pixel
+    let tail = if solid { crate::gpu::buffers::FlameBuffers::SOLID_TAIL_BYTES } else { 0 };
+    (width as u64) * (height as u64) * bytes_per_pixel + tail
 }
 
 /// Which engine a custom-size PNG export should use.
@@ -86,11 +89,6 @@ pub enum CustomSizeRoute {
     /// Hand off to the background `HighResExporter`: tiled, its own
     /// device, live progress. Flames only.
     HighRes,
-    /// Refuse. Both non-flame engines share the shared
-    /// `FlameRenderer`'s tail, and it allocates its histogram at the
-    /// export size whatever the mode — so past one storage binding
-    /// there is no path that renders the right thing.
-    TooLarge,
 }
 
 /// Pick the route. `hist_bytes` is the flame histogram this size would
@@ -103,11 +101,14 @@ pub fn route_custom_size_export(
     long_render: bool,
 ) -> CustomSizeRoute {
     if mode.is_non_flame() {
-        // `long_render` is deliberately ignored: it measures flame
+        // Always direct, whatever the size: `render()` gives these
+        // engines `FlameRenderer::for_tail`, which allocates no histogram,
+        // so the flame's binding limit says nothing about them, and
+        // `render()` itself refuses what this device cannot hold (a
+        // texture side, a grid's budget) before allocating. They were
+        // once refused here past one binding, for a histogram they no
+        // longer have. `long_render` is ignored too: it measures flame
         // iterations, which mean nothing here.
-        if hist_bytes > max_binding {
-            return CustomSizeRoute::TooLarge;
-        }
         return CustomSizeRoute::Direct;
     }
     if hist_bytes > max_binding || long_render {
@@ -417,13 +418,40 @@ mod custom_size_route_tests {
                     "{mode:?} with long_render={long} must render directly"
                 );
             }
-            // ...and past one binding it is refused, not mis-rendered.
+            // ...and past one binding too: the tail holds no histogram,
+            // and render() refuses what the device cannot hold.
             assert_eq!(
                 route_custom_size_export(mode, BINDING + 1, BINDING, false),
-                CustomSizeRoute::TooLarge,
-                "{mode:?} past the binding limit must be refused"
+                CustomSizeRoute::Direct,
+                "{mode:?} past the flame's binding limit still renders directly"
             );
         }
+    }
+
+    /// A lit flame with no occlusion is still a solid: it compiles the
+    /// depth writes its lighting reads, and its histogram -- depth region
+    /// and shadow-map tail included -- is what routing sizes. The one-shot
+    /// paths once tested `solid_strength` alone: such a flame exported
+    /// unlit, and was sized as a plain histogram.
+    #[test]
+    fn a_lit_flame_without_occlusion_is_a_solid() {
+        let mut c = crate::config::FractalConfig::default();
+        c.render_mode = RenderMode::ThreeD;
+        c.solid_strength = 0.0;
+        c.solid_shading.shading_strength = 1.0;
+        assert!(c.solid_depth_active());
+        assert!(crate::shader_cache::ShaderCache::constants_from_config(&c).solid_enabled);
+        let tail = crate::gpu::buffers::FlameBuffers::SOLID_TAIL_BYTES;
+        assert_eq!(super::histogram_size_bytes(100, 100, true), 100 * 100 * 20 + tail);
+        // 4K UHD: 132.7 MB as a plain histogram fits nothing smaller than
+        // it; 165.9 MB + 16 MiB as the solid it is.
+        let (w, h) = (3840, 2160);
+        assert_eq!(
+            route_custom_size_export(RenderMode::ThreeD, super::histogram_size_bytes(w, h, c.solid_depth_active()), 160 * 1024 * 1024, false),
+            CustomSizeRoute::HighRes,
+        );
+        c.render_mode = RenderMode::TwoD;
+        assert!(!c.solid_depth_active(), "2D is never a solid");
     }
 
     /// Flames are unchanged, which is the other half of the fix: the

@@ -193,11 +193,15 @@ ColorEffect | DensityEffect`).
   `Animation::rebind_targets` rewrites each track's index and
   `flame_target` to wherever its bound item now sits.
 - A track whose bound item is gone keeps its key and its binding, so an
-  undo that restores the item restores the track. The track list marks
-  it with a warning sign and the header counts them ("N broken").
+  undo that restores the item restores the track, and is marked
+  **broken** (`TrackBinding::broken`). The track list marks it with a
+  warning sign and the header counts them ("N broken").
 
-The apply path never reads the binding: it parses `target` and indexes
-directly. The binding's only job is keeping `target` current.
+The apply path parses `target` and indexes directly; the binding keeps
+`target` current. A broken track's `target` still holds the old index,
+which now names a different item, so evaluation skips broken tracks and
+the video exporter removes them (`remove_broken_tracks`) before binding
+afresh against its config.
 
 ---
 
@@ -443,10 +447,9 @@ keyframes from the parameter's current value
 | `PaletteRotation` | start + 1 |
 | everything else | start (adjust by hand) |
 
-The picker sets the new track's interpolation to `Exponential` when the
-target is `Zoom`, but `initialize_preview_keyframes` then resets it to
-`Linear`, so a new Zoom keyframe track currently starts `Linear` and has
-to be switched by hand.
+A new keyframe track starts `Exponential` when the target is `Zoom`
+and `Linear` otherwise (`initialize_preview_keyframes`); the dropdown
+offers every mode.
 
 ---
 
@@ -510,10 +513,15 @@ reproducible and ignores the frequency.
 
 Generators live in the Signals panel's state and are copied into
 `Animation::generators` when the animation is saved, and back (then
-regenerated) when one is loaded. A generator's signal is regenerated
-when its row is edited; it is **not** regenerated when the animation's
-duration changes, so past its original length it holds its last sample
-until the row is touched.
+regenerated, the previous generators' signals removed) when one is
+loaded. A generator's signal is regenerated when its row is edited, and
+all of them when the animation's duration changes
+(`SignalPanelState::sync_generators`, run every frame and before a video
+export copies the signals). Renaming one removes the old name's signal
+unless another generator uses it. A generator never replaces or removes
+a signal from another source: if its name is taken (say `amplitude`
+from audio analysis), its own signal is not published and the name
+field says so.
 
 ### The `.signal` file
 
@@ -542,8 +550,7 @@ available in every mode:
 
 - **Audio File** — load a file (decoded, analysed and imported as
   signals immediately), and a playback section with play/pause, stop
-  and position. The **Analyze** button has no effect; analysis already
-  ran on load.
+  and position.
 - **Live Capture** — device list, start/stop, a level meter. Switching
   device while capturing restarts on the new one.
 - **Signal Generators** — add, edit, delete.
@@ -613,16 +620,20 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
   tracks applied through the exporter's apply path (above).
 - **Signals in export.** The app passes a copy of the **stored**
   signals (`SignalManager::clone_signals`): audio analysis, generators,
-  `.signal` files. Live producers are not copied, so a track on a
-  `live_*` signal applies nothing in a video. The CLI passes **no**
-  signals, so every signal track — generator-driven ones included — is
-  skipped there.
-- **Smoothing in export.** The exporter never advances the
-  controller's clock, so signal smoothing uses its initial 1/60 s step
-  for every frame whatever the frame rate.
+  `.signal` files. The exporter then renders each of the animation's
+  generators that is not among them (`export_signals`), so the CLI,
+  which passes none, still drives generator tracks; the app's panel
+  version of a generator wins. Live producers are not copied, so a
+  track on a `live_*` signal applies nothing in a video — deliberate:
+  the export logs a warning naming each signal track whose signal it
+  does not have (`tracks_missing_signals`; the CLI prints it).
+- **Smoothing in export.** The exporter sets the controller's step to
+  one frame (`set_step(1 / fps)`), so signal smoothing comes out the
+  same at any frame rate.
 - **The base config.** The app exports from the active config, with
   the export window's Max Iterations written over it. The CLI takes the
-  config from `-c`; an `.anim`'s embedded `base_config` is not used.
+  config from `-c`, or without it the `.anim`'s embedded `base_config`
+  (`cli_base_config`); with both, `-c` wins and the CLI says so.
 - **Encoding.** H.264, H.265 (default) or VP9; software or a hardware
   encoder:
 
@@ -641,8 +652,10 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 - **Audio.** An audio file chosen in the export window (or `--audio` on
   the CLI) is muxed as AAC with an offset (negative skips into the file,
   positive delays it), fade-in, fade-out and bitrate. It is independent
-  of the Signals panel's file, and the offset shifts only the muxed
-  audio, not the signals the tracks read.
+  of the Signals panel's file. In the app the offset also shifts the
+  audio-analysis signals the tracks read (`Signal::shifted`), so the
+  picture stays with the sound; generators and `.signal` files are not
+  shifted.
 - **Where.** Desktop only: the export window says it is unavailable on
   the web. In the app it opens from **Export Animation**; it fills
   iterations per thread and Max Iterations from the current settings,
@@ -670,11 +683,11 @@ simulation itself*).
 
 ## Gotchas
 
-- **A boolean target gets numeric keyframes from the editor.**
-  Auto-fill and **Add at current** store the current value as `1.0` or
-  `0.0`, while `json_to_config_value` accepts only a JSON `true`/`false`
-  for boolean paths (effect Enabled, PostAffineEnabled). Such a track
-  converts to nothing and applies nothing, in the app or the video.
+- **A boolean target takes numbers.** Auto-fill and **Add at current**
+  store the current value as `1.0` or `0.0`, so the offered booleans
+  (effect Enabled, PostAffineEnabled) read a number as on from 0.5 up
+  (`json_as_bool`): a Linear 0 -> 1 track switches halfway. Booleans
+  the picker does not offer still accept only `true`/`false`.
 - **A signal track outside its window, or on a missing signal, applies
   nothing** rather than a default: the parameter keeps whatever the
   config or another track set.

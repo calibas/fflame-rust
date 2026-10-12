@@ -1217,6 +1217,24 @@ pub static COLORINGS: &[&SimColoringDef] =
 /// posture the variation and formula registries take: a config naming
 /// a model this build does not have still opens, with a warning,
 /// instead of refusing the file.
+/// Parameters whose next step is slow, as (model, param): dragged live
+/// they overshoot, so the panel commits them when the drag ends, or
+/// offers a small whole-number range as a dropdown (`ui::slow_controls`).
+/// Lenia's and SmoothLife's kernels and the cyclic automaton's
+/// neighbourhood are read cell by cell, a cost that grows with the
+/// radius squared; physarum's population is its agent count.
+pub const SLOW_PARAMS: &[(&str, &str)] = &[
+    ("lenia", "radius"),
+    ("smoothlife", "inner_radius"),
+    ("cyclic_ca", "range"),
+    ("physarum", "population"),
+];
+
+/// Whether `param` of the model `model` is slow ([`SLOW_PARAMS`]).
+pub fn is_slow_param(model: &str, param: &str) -> bool {
+    SLOW_PARAMS.iter().any(|&(m, p)| m == model && p == param)
+}
+
 pub fn model_or_default(name: &str) -> &'static ModelDef {
     MODELS.iter().copied().find(|m| m.name == name).unwrap_or_else(|| {
         log::warn!("unknown simulation model {name:?}; using {:?}", MODELS[0].name);
@@ -2023,5 +2041,17 @@ mod timeline_driver_tests {
         // ...then WALKS FORWARD without restarting again. A second
         // reseed would show here as a drop back to 100.
         assert_eq!(&seen[6..], &[200, 250], "walks up, no second restart");
+    }
+}
+
+#[cfg(test)]
+mod slow_param_tests {
+    /// Every parameter marked slow names a real one.
+    #[test]
+    fn every_slow_param_names_a_real_parameter() {
+        for &(model, param) in super::SLOW_PARAMS {
+            let m = super::MODELS.iter().find(|m| m.name == model).unwrap_or_else(|| panic!("{model} is not a model"));
+            assert!(m.parameters.iter().any(|p| p.name == param), "{model}.{param} is marked slow but is not a parameter");
+        }
     }
 }

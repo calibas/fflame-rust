@@ -265,10 +265,13 @@ reads. How the plan, the colour fold and the right-click work is
 | `built_in` | set at runtime on library palettes, never serialized; picking one in the Colors panel makes an editable copy with it cleared |
 
 `sample_color(t)` clamps `t` to [0, 1] and interpolates linearly between
-the two stops around it; past the last stop it returns that stop's
-colour. `sample_color_stepped(t)` returns the colour of the last stop at
-or before `t` (the first stop's before it), drawing each stop as a flat
-band.
+the two stops around it; before the first stop and past the last it
+returns that stop's colour. `sample_color_stepped(t)` returns the colour
+of the last stop at or before `t` (the first stop's before it), drawing
+each stop as a flat band. Both assume the stops are in position order;
+the Palette Editor re-sorts them after every Position change (a dragged
+stop keeps its row's widget id through the sort, so the drag stays on
+it) as well as on Add.
 
 **Serialized form**, which is also the `.palette` file format: a palette
 of exactly 256 stops at positions `i/255` is written compactly as
@@ -391,7 +394,11 @@ multiplies into it:
 | `1 − solid_strength` behind the surface, 0 in a priming batch | solid rendering |
 | `exp(−zdist² · far_density_fade)` | 3D far-density fade |
 
-Depth fog is not a weight: it blends the colour toward the background.
+Depth fog is not a weight: it blends the colour toward the background,
+decoded to linear (`srgb_to_linear`, the 2.2 power) as the tonemap
+decodes it before compositing -- the sample colour is linear, the
+background is stored as the sRGB the user picked. The shade pass (lit
+solids) and escape mode D's solid fog decode it the same way.
 
 **Why the scale cancels.** Colour is recovered by dividing the colour
 sums by the density sum, Σ(s · w · c) / Σ(s · w). The constant 100 and
@@ -528,7 +535,7 @@ The *Color & Appearance* section of the Colors panel
 | control | shown |
 | --- | --- |
 | Color Mode | flame modes |
-| Palette picker, Edit Palette, Palette Library, preview strip, the palette transforms, Palette Size | Palette and Speed modes, and every non-flame mode |
+| Palette picker, Edit Palette, Palette Library, preview strip, the palette transforms, Palette Size | always: Palette, Speed and PathMap all look colours up in the transformed palette, and so do the non-flame engines |
 | Speed Blend Factor | Speed mode |
 | Path Style, Path level, the Focused Rendering notice | PathMap mode |
 | Background Color | always (used by the tone map) |

@@ -52,7 +52,7 @@ Research survey of candidate effects:
 
 ```
 generator ──▶ [density effects] ──▶ tonemap ──▶ [colour effects] ──▶ display / readback
-  flame: accumulator          Rgba16Float      fractal       Rgba8Unorm
+  flame: accumulator          Rgba32Float      fractal       Rgba8Unorm
          (or solid shade/DoF)   ping-pong        texture        ping-pong
   escape: its image
   sim:    its resolved field
@@ -78,9 +78,9 @@ adapter offers it; where it does not, `run_density_effects` logs a
 warning and skips the whole chain.
 
 **The tiled exporter's density budget.** Density effects there run at
-full resolution after the histogram is freed, at about 36 bytes a pixel
+full resolution after the histogram is freed, at 52 bytes a pixel
 (the accumulation, the density ping-pong pair, the tonemap output).
-Above 4 GiB of that -- about 119 MP, roughly 10,900 × 10,900 -- they are
+Above 4 GiB of that -- about 83 MP, roughly 9,100 × 9,100 -- they are
 skipped with a warning and the export continues
 (`DENSITY_EFFECT_PHASE_B_BUDGET_BYTES`). The Effects panel says so.
 Colour effects are not gated.
@@ -144,7 +144,7 @@ The label is the curated name from `locales/en.yml`.
 | `film_grain` | Film Grain | colour | 3 | Per-pixel random noise; `seed` varies it between frames |
 | `chromatic_aberration` | Chromatic Aberration | colour | 4 | Offsets the red and blue channels, optionally growing toward the edges |
 | `hue_shift` | Hue Shift | colour | 3 | Rotates every hue by a fixed angle (shader `hue_cycle.wgsl`); keyframe `offset` to animate it |
-| `density_blur` | Density Blur | density | 3 | Blurs low-density areas more than dense ones |
+| `density_blur` | Density Blur | density | 3 | Blurs low-density areas more than dense ones; `threshold` and `falloff` are multiples of the mean density |
 | `sharpen` | Sharpen | density | 2 | Unsharp mask |
 | `bilateral_blur` | Bilateral Blur | density | 3 | Edge-preserving blur, weighted by distance and by luminance similarity |
 | `kaleidoscope` | Kaleidoscope | colour | 7 | N-fold rotational symmetry by folding coordinates in polar space |
@@ -178,30 +178,46 @@ runs one chain at a time:
    includes spliced (below). An effect the registry does not know is
    recorded with `note_missing_effect` and skipped.
 2. Allocates a ping-pong texture pair for the chain on first use:
-   `Rgba16Float` for density, `Rgba8Unorm` for colour.
+   `Rgba32Float` for density, `Rgba8Unorm` for colour.
 3. Runs the enabled effects in list order. The first reads the chain's
    input; each later one reads the previous one's output. Every pass is
-   a fullscreen triangle with `BlendState::REPLACE`.
+   a fullscreen triangle that overwrites its target: `BlendState::REPLACE`
+   for colour, no blend state for density (`Rgba32Float` is not
+   blendable without `FLOAT32_BLENDABLE`, and asking for REPLACE would
+   fail pipeline creation).
 4. The caller takes the result (`get_density_output`,
    `get_color_output`) or reads it back (`read_color_output_pixels`).
 
-**The parameter uniform.** One shared uniform buffer of
-`MAX_EFFECT_SLOTS` (32) slots, 256 bytes apart, so effects in one
-submission keep separate parameters. `reset_slots` is called once per
-frame or render. A slot holds:
+**The parameter uniform.** One shared uniform buffer of slots 256
+bytes apart, one per pass, so effects in one submission keep separate
+parameters. It starts at `MAX_EFFECT_SLOTS` (32) and `reserve_slots`
+grows it to the next power of two when a frame's chains need more --
+each `distance_field` alone takes its flood count plus two (13 at
+1080p). (The 33rd slot used to be clamped to an offset equal to the
+buffer's size, a validation error that rejected the whole frame.)
+`reset_slots` is called once per frame or render. A slot holds:
 
 ```wgsl
 struct EffectParams {
     params: array<vec4<f32>, 12>,   // MAX_EFFECT_PARAMS = 48 floats
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    density_mean: f32,              // density effects: the frame's mean density
+    _padding: f32,
 }
 ```
 
 Parameter `i` of the effect's definition goes to
 `params[i / 4][i % 4]`, so the definition's order is the shader's slot
 order. A value missing from the instance takes the registry default.
+
+`density_mean` is, for a density effect on a flame, the frame's mean
+density (`FlameRenderer::mean_density`, the unit Levels measures in):
+`a / density_mean` is a density that does not grow with the iteration
+count. It is 1 for an escape or simulation image, whose `a` is not a
+hit count, and 0 for colour effects. It occupies what was an 8-byte
+padding, so a shader that declares `_padding: vec2<f32>` there binds
+the same layout and ignores it.
 
 **The 48-parameter cap is physical.** 48 floats plus the dimensions is
 208 bytes, inside the 256-byte slot stride; a compile-time assertion
@@ -307,10 +323,15 @@ value)`). See [SCRIPTING.md](SCRIPTING.md).
 Effects", available in every render mode:
 
 - **Color Effects** (open) and **Density Effects** (collapsed), each a
-  list of the config's instances with an enable box, up/down reorder,
-  remove, and a slider per parameter while enabled. Sliders run from
-  the parameter's min to its max (0 to 1 where either is absent), with
-  its description as the tooltip.
+  list of the config's instances by their translated names (the raw
+  key for an effect this build lacks), with an enable box, up/down
+  reorder, remove, and a control per parameter while enabled. The
+  controls are the variation parameters' (`variation_params`, through
+  an `EffectTarget`): a slider for a Float (0 to 1 where its range is
+  absent), an integer slider for an Integer, a checkbox for a Boolean,
+  degrees for an Angle, with the description as the tooltip. A value is
+  written only when it changes, never by being drawn. Undo entries name
+  the effect the same way.
 - An **Add effect** combo per chain, listing that category's
   registered effects by their translated names.
 - **Online library**, when a catalog is cached or fetched: how many the
@@ -414,22 +435,24 @@ send the result to the API repository ([RELEASE.md](../RELEASE.md) §3).
 
 The shader lints in `src/variations/mod.rs` walk all of `shaders/`, so
 an effect shader is held to the same rules as a variation: no
-self-compares, no self-divisions, no subnormal literals. Inside
-non-uniform control flow, read the input with `textureLoad`, not
-`textureSample` (see [SHADERS.md](SHADERS.md) on browser WebGPU).
+self-compares, no self-divisions, no subnormal literals. Sample the
+input with `textureSampleLevel(.., 0.0)` (or read it with
+`textureLoad`), never `textureSample`: the implicit-derivative forms
+are valid only in uniform control flow, which a browser's WebGPU
+enforces and naga does not check, so a per-pixel branch before one
+compiles on desktop and fails in Chrome (see [SHADERS.md](SHADERS.md)).
+The effect textures have one mip, so level 0 is what `textureSample`
+read. `effects_never_sample_with_implicit_derivatives`
+(`src/effects/mod.rs`) rejects the implicit forms anywhere under
+`shaders/effects/`.
 
 ---
 
 ## Gotchas
 
-**The density chain's output is `Rgba16Float`.** It reads the
-`Rgba32Float` accumulation and writes half floats, whose largest finite
-value is 65504. A flame's alpha is a raw hit count, which a long render
-can push past that in its densest pixels.
-
-**A label in the list is the registry key.** The panel's rows show
-`effect_type` (`sobel_edges`); only the Add combo shows the curated
-label (Edge Glow).
-
-**Every parameter is a float slider.** The panel draws Boolean,
-Integer and Angle parameters the same way, over their min and max.
+**The density chain is `Rgba32Float`, like the accumulation.** A
+flame's alpha is a raw hit count, which a filament flame pushes past
+65504 well inside the default budget. The ping-pong was `Rgba16Float`
+until 2026-10: its largest finite half float is 65504, so those
+pixels became Inf (black under Log) or saturated. Full floats cost
+the tiled exporter's budget its ceiling (above).

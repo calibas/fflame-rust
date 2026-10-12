@@ -1253,7 +1253,6 @@ impl<'a> Eval<'a> {
                         IVal::Int(k) => IVal::Int(!k & 0xFFFF_FFFF),
                         _ => IVal::Scalar(INT32_RANGE),
                     },
-                    _ => return Err(Refusal::Intrinsic("a logical unary".into())),
                 }
             }
             E::Binary { op, left, right } => {

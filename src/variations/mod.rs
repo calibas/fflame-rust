@@ -52,6 +52,35 @@ pub enum ParamType {
     },
 }
 
+impl ParamType {
+    /// Every variant, in declaration order, for contract generation.
+    /// `Enum` stands for every choice list: its choices are data, not
+    /// vocabulary. `every_param_type_is_published_in_the_contract`
+    /// holds this list to the enum.
+    pub const ALL: &'static [ParamType] = &[
+        ParamType::Float,
+        ParamType::UnlimitedFloat,
+        ParamType::Integer,
+        ParamType::UnlimitedInteger,
+        ParamType::Boolean,
+        ParamType::Angle,
+        ParamType::Enum { choices: &[] },
+    ];
+
+    /// The wire spelling — `ApiParamType`'s serde name for the variant.
+    pub fn to_api_str(&self) -> &'static str {
+        match self {
+            ParamType::Float => "float",
+            ParamType::UnlimitedFloat => "unlimited_float",
+            ParamType::Integer => "integer",
+            ParamType::UnlimitedInteger => "unlimited_integer",
+            ParamType::Boolean => "boolean",
+            ParamType::Angle => "angle",
+            ParamType::Enum { .. } => "enum",
+        }
+    }
+}
+
 /// Definition of a single variation parameter
 #[derive(Clone, Debug, Serialize)]
 pub struct VariationParameter {
@@ -427,6 +456,19 @@ fn api_phase_to_runtime(api: &crate::api::types::ApiVariationPhase) -> Variation
 }
 
 impl VariationCategory {
+    /// Every variant, in declaration order, for contract generation.
+    /// `every_variation_category_is_published_in_the_contract` holds
+    /// this list to the enum.
+    pub const ALL: &'static [VariationCategory] = &[
+        VariationCategory::Basic2D,
+        VariationCategory::Advanced2D,
+        VariationCategory::Depth3D,
+        VariationCategory::Rotation3D,
+        VariationCategory::Full3D,
+        VariationCategory::Only3D,
+        VariationCategory::Plugin,
+    ];
+
     /// Parse from API string (matches API's snake_case).
     /// Unknown values map to Plugin as a safe default.
     ///
@@ -663,6 +705,11 @@ impl VariationRegistry {
         let removed = self.variations.remove(name).is_some();
         if removed {
             self.aliases.retain(|_, target| target != name);
+            // `names()` is the registry's ID order and what the UI and
+            // the corpus export list; a removed name left here would
+            // still be listed (and would hold its slot) with no
+            // variation behind it. `clear_api` prunes the same way.
+            self.ordered_names.retain(|n| n != name);
             self.version = self.version.wrapping_add(1);
         }
         removed
@@ -816,6 +863,39 @@ fn registry_lock() -> &'static RwLock<VariationRegistry> {
 
 /// Get a read guard to the global variation registry singleton.
 /// Initialized once, shared across all code paths.
+/// Parameters that bound a loop the variation runs every iteration, so
+/// raising one makes the next frame slow: dragged live they overshoot, and
+/// the panel commits them when the drag ends, or offers a small
+/// whole-number range as a dropdown (`ui::slow_controls`). Measured, not
+/// read off the WGSL (`renderer::param_cost`): each adds 15 ms or more to
+/// an app frame at its maximum, with the variation alone in the flame.
+/// The fract_* family shares one escape loop, so all of its `max_iter`
+/// are here whatever the one view measured. An exponent such as `power`
+/// that costs as much is left live: it is what a user scrubs.
+pub const SLOW_PARAMS: &[(&str, &str)] = &[
+    ("fract_dragon_wf", "max_iter"),
+    ("fract_julia_wf", "max_iter"),
+    ("fract_mandelbrot_wf", "max_iter"),
+    ("fract_meteors_wf", "max_iter"),
+    ("fract_pearls_wf", "max_iter"),
+    ("fract_salamander_wf", "max_iter"),
+    ("mandelbrot", "iter"),
+    ("polychoron", "steps"),
+    ("glsl_circlesblue", "bubles"),
+    ("glsl_acrilic", "steps"),
+    ("hofstadter", "depth"),
+    ("hofstadter3d", "depth"),
+    ("quaternion_julia_set", "escape_iters"),
+    ("mondrianomies", "depth"),
+    ("spray_blur", "count"),
+    ("jacobian_counterexample", "steps"),
+];
+
+/// Whether `param` of the variation `variation` is slow ([`SLOW_PARAMS`]).
+pub fn is_slow_param(variation: &str, param: &str) -> bool {
+    SLOW_PARAMS.iter().any(|&(v, p)| v == variation && p == param)
+}
+
 pub fn global_registry() -> RwLockReadGuard<'static, VariationRegistry> {
     registry_lock().read().expect("variation registry RwLock poisoned")
 }
@@ -1468,5 +1548,18 @@ pub(crate) mod shader_lint {
     fn comments_do_not_trip_self_ops() {
         // popcorn's fix EXPLAINS the banned idiom in a WGSL comment.
         assert!(self_operations("// NOT `dx != dx`: folded on Metal\nlet a = 1.0;").is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "engine-flame"))]
+mod slow_param_tests {
+    /// Every parameter marked slow names a real one.
+    #[test]
+    fn every_slow_param_names_a_real_parameter() {
+        let registry = super::global_registry();
+        for &(variation, param) in super::SLOW_PARAMS {
+            let v = registry.get(variation).unwrap_or_else(|| panic!("{variation} is not registered"));
+            assert!(v.parameters.iter().any(|p| p.name == param), "{variation}.{param} is marked slow but is not a parameter");
+        }
     }
 }

@@ -2,12 +2,19 @@
 """
 Unified visual regression and performance testing.
 
-Runs both desktop CLI and WASM browser tests, then compares performance
-metrics from PNG metadata between baseline and current runs.
+Runs both desktop CLI and WASM browser tests, then compares each render's
+time (from its PNG metadata) with the PREVIOUS run's, as recorded in
+performance_history.csv.
+
+Not with the baselines: the desktop baselines are metadata-stripped 160x120
+thumbnails, so they carry no RenderTime, and reading timings from them made
+every desktop delta 0%.
 
 Generates:
 - Console report with pass/fail and performance comparison
-- CSV file with historical performance data
+- CSV file with historical performance data (one row per render, every run;
+  the Baseline_* columns hold the previous run's figures, empty for a test
+  with no previous row)
 """
 
 import subprocess
@@ -16,7 +23,7 @@ import json
 import csv
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import argparse
 
@@ -42,7 +49,8 @@ class PngMetadata:
 
 @dataclass
 class PerformanceComparison:
-    """Comparison between baseline and current render."""
+    """Comparison between the previous run's render and this one's.
+    `baseline` is the previous run, read back from the CSV."""
     name: str
     test_type: str
     baseline: Optional[PngMetadata]
@@ -55,10 +63,9 @@ class PerformanceComparison:
 class UnifiedTestRunner:
     def __init__(self):
         self.root = Path("tests/visual")
-        self.baseline_dir = self.root / "baseline"
         self.current_dir = self.root / "current"
-        self.wasm_baseline = self.root / "baseline/wasm"
         self.wasm_current = self.root / "current/wasm"
+        self.csv_path = self.root / "performance_history.csv"
 
         self.results: List[PerformanceComparison] = []
 
@@ -82,7 +89,7 @@ class UnifiedTestRunner:
         print()
 
         # Compare performance
-        print("Comparing Performance (Baseline vs Current)...")
+        print("Comparing Performance (Previous run vs Current)...")
         print("-" * 70)
         self.compare_performance()
         print()
@@ -167,18 +174,40 @@ class UnifiedTestRunner:
             print(f"  Warning: Failed to read metadata from {png_path.name}: {e}")
             return None
 
+    def previous_run(self) -> Dict[Tuple[str, str], PngMetadata]:
+        """(test name, test type) -> that test's figures from the most
+        recent run recorded in the CSV (the file is append-only, so the
+        last row for a key is the latest)."""
+        previous: Dict[Tuple[str, str], PngMetadata] = {}
+        if not self.csv_path.exists():
+            return previous
+        with open(self.csv_path, newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                try:
+                    time_ms = float(row['Current_Time_ms'])
+                    throughput = float(row['Current_Throughput_Miter_s']) * 1e6
+                except (KeyError, TypeError, ValueError):
+                    continue
+                previous[(row['TestName'], row['TestType'])] = PngMetadata(
+                    name=row['TestName'], width=0, height=0, total_iterations=0,
+                    render_time_ms=time_ms, iterations_per_second=throughput,
+                    test_type=row['TestType'])
+        return previous
+
     def compare_performance(self):
-        """Compare baseline vs current performance for all tests."""
+        """Compare this run's render times with the previous run's."""
+        previous = self.previous_run()
+
         # Desktop tests
         desktop_comparisons = self.compare_directory(
-            self.baseline_dir,
+            previous,
             self.current_dir,
             "desktop"
         )
 
         # WASM tests
         wasm_comparisons = self.compare_directory(
-            self.wasm_baseline,
+            previous,
             self.wasm_current,
             "wasm"
         )
@@ -193,41 +222,24 @@ class UnifiedTestRunner:
 
     def compare_directory(
         self,
-        baseline_dir: Path,
+        previous: Dict[Tuple[str, str], PngMetadata],
         current_dir: Path,
         test_type: str
     ) -> List[PerformanceComparison]:
-        """Compare all PNGs in baseline vs current directory."""
+        """Compare every PNG in `current_dir` with the previous run."""
         comparisons = []
-
-        if not baseline_dir.exists():
-            print(f"  No baseline directory: {baseline_dir}")
-            return comparisons
 
         if not current_dir.exists():
             print(f"  No current directory: {current_dir}")
             return comparisons
 
-        # Get all baseline PNGs
-        baseline_pngs = {p.stem: p for p in baseline_dir.glob("*.png")}
         current_pngs = {p.stem: p for p in current_dir.glob("*.png")}
 
-        # Compare each test
-        all_tests = set(baseline_pngs.keys()) | set(current_pngs.keys())
-
-        for name in sorted(all_tests):
-            baseline_meta = None
-            current_meta = None
-
-            if name in baseline_pngs:
-                baseline_meta = self.extract_png_metadata(baseline_pngs[name])
-                if baseline_meta:
-                    baseline_meta.test_type = test_type
-
-            if name in current_pngs:
-                current_meta = self.extract_png_metadata(current_pngs[name])
-                if current_meta:
-                    current_meta.test_type = test_type
+        for name in sorted(current_pngs):
+            baseline_meta = previous.get((name, test_type))
+            current_meta = self.extract_png_metadata(current_pngs[name])
+            if current_meta:
+                current_meta.test_type = test_type
 
             # Calculate deltas
             time_delta_ms = 0
@@ -263,7 +275,7 @@ class UnifiedTestRunner:
             return
 
         print()
-        print("Performance Report (Baseline → Current)")
+        print("Performance Report (Previous run → Current)")
         print("=" * 70)
 
         # Group by test type
@@ -277,7 +289,7 @@ class UnifiedTestRunner:
             print()
             print(f"{test_type} Tests:")
             print("-" * 70)
-            print(f"{'Test':<30} {'Baseline':>12} {'Current':>12} {'Delta':>10} {'Change':>8}")
+            print(f"{'Test':<30} {'Previous':>12} {'Current':>12} {'Delta':>10} {'Change':>8}")
             print("-" * 70)
 
             for r in results:
@@ -297,7 +309,7 @@ class UnifiedTestRunner:
                     print(f"{r.name:<30} {baseline_str:>12} {current_str:>12} {delta_str:>10} {change_str:>8}")
 
                 elif r.baseline and not r.current:
-                    print(f"{r.name:<30} {'[baseline]':>12} {'[missing]':>12} {'':>10} {'':>8}")
+                    print(f"{r.name:<30} {'[previous]':>12} {'[missing]':>12} {'':>10} {'':>8}")
                 elif not r.baseline and r.current:
                     print(f"{r.name:<30} {'[new]':>12} {f'{r.current.render_time_ms:.1f}ms':>12} {'':>10} {'':>8}")
 
@@ -316,7 +328,7 @@ class UnifiedTestRunner:
 
     def save_to_csv(self):
         """Save performance data to CSV file."""
-        csv_path = self.root / "performance_history.csv"
+        csv_path = self.csv_path
         csv_exists = csv_path.exists()
 
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -334,23 +346,27 @@ class UnifiedTestRunner:
             if not csv_exists:
                 writer.writerow(headers)
 
+            # Every render this run, with or without a previous one: the
+            # next run's comparison reads these rows back.
             for r in self.results:
-                if r.baseline and r.current:
-                    row = [
-                        timestamp,
-                        r.name,
-                        r.test_type,
-                        f"{r.baseline.render_time_ms:.2f}",
-                        f"{r.current.render_time_ms:.2f}",
-                        f"{r.time_delta_ms:.2f}",
-                        f"{r.time_delta_percent:.2f}",
-                        f"{r.baseline.iterations_per_second / 1e6:.2f}",
-                        f"{r.current.iterations_per_second / 1e6:.2f}",
-                        f"{r.throughput_delta_percent:.2f}",
-                        f"{r.current.width}x{r.current.height}",
-                        r.current.total_iterations,
-                    ]
-                    writer.writerow(row)
+                if not r.current:
+                    continue
+                prev = r.baseline
+                row = [
+                    timestamp,
+                    r.name,
+                    r.test_type,
+                    f"{prev.render_time_ms:.2f}" if prev else "",
+                    f"{r.current.render_time_ms:.2f}",
+                    f"{r.time_delta_ms:.2f}" if prev else "",
+                    f"{r.time_delta_percent:.2f}" if prev else "",
+                    f"{prev.iterations_per_second / 1e6:.2f}" if prev else "",
+                    f"{r.current.iterations_per_second / 1e6:.2f}",
+                    f"{r.throughput_delta_percent:.2f}" if prev else "",
+                    f"{r.current.width}x{r.current.height}",
+                    r.current.total_iterations,
+                ]
+                writer.writerow(row)
 
         print()
         print(f"Performance data saved to: {csv_path}")

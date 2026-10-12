@@ -56,7 +56,7 @@ PNG, call the app's headless exporter:
 ```python
 import subprocess
 c.save("out.fflame")
-subprocess.run(["fractal_flame_wgpu", "export",
+subprocess.run(["FractalArtEditor", "export",
                 "-i", "out.fflame", "-o", "out.png",
                 "-w", "1920", "-H", "1080"], check=True)
 ```

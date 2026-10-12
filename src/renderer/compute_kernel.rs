@@ -411,6 +411,13 @@ pub struct FlameRenderer {
     // Output texture that tonemap_pass renders to (for both display and export)
     fractal_texture: Texture,
     fractal_texture_view: TextureView,
+    /// Output textures `resize` replaced, waiting for
+    /// `destroy_replaced_output`. Not destroyed in `resize`: the app
+    /// resizes after egui has recorded the frame's paint, which samples
+    /// the old one, and before that encoder is submitted -- a submit that
+    /// uses a destroyed texture fails. Dropping instead left 4 bytes a
+    /// pixel per resize to the garbage collector on WebGPU.
+    replaced_output: Vec<Texture>,
 
     /// Persistent staging buffer for `read_fractal_pixels`, grow-only.
     ///
@@ -717,6 +724,24 @@ impl FlameRenderer {
         Self::build(device, queue, surface_format, width, height, flame, palette_size, (1, 1))
     }
 
+    /// The renderer a job at `width x height` needs: a flame's full one,
+    /// or for an escape or simulation config, which use only the tail,
+    /// one without the flame's per-pixel state (`for_tail`). The one
+    /// choice for every one-shot path -- `render()` and the video loop
+    /// both -- so they cannot drift apart again: the video loop built
+    /// the full renderer for every engine, 64 bytes a pixel never read.
+    pub fn for_job(
+        device: &Device,
+        queue: &Queue,
+        surface_format: TextureFormat,
+        width: u32,
+        height: u32,
+        config: &FractalConfig,
+    ) -> Self {
+        let build = if config.render_mode.is_non_flame() { Self::for_tail } else { Self::with_palette_size };
+        build(device, queue, surface_format, width, height, &config.flame, config.palette_size)
+    }
+
     /// The renderer at `width x height`, its flame state at `state`.
     #[allow(clippy::too_many_arguments)]
     fn build(
@@ -792,6 +817,7 @@ impl FlameRenderer {
             init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
             fractal_texture_view,
+            replaced_output: Vec::new(),
             readback_staging: None,
             width,
             height,
@@ -915,7 +941,16 @@ impl FlameRenderer {
 
         // Recreate buffers with new size (preserve palette_size)
         let palette_size = self.buffers.palette_size();
-        self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
+        // Destroy the old set, not just drop it: dropping frees nothing on
+        // WebGPU, where every viewport resize kept its 64 bytes a pixel
+        // until garbage collection. Safe here: only work already
+        // submitted holds them (wgpu frees after it), and every bind
+        // group the renderer keeps is rebuilt below.
+        let old = std::mem::replace(
+            &mut self.buffers,
+            FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size),
+        );
+        old.destroy();
 
         // **The plan on screen goes with them.** The fresh buffers hold
         // the placeholder cylinder table, and the shader -- still compiled
@@ -971,8 +1006,9 @@ impl FlameRenderer {
         self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
-        // Recreate fractal output texture with new size
-        self.fractal_texture = device.create_texture(&TextureDescriptor {
+        // Recreate fractal output texture with new size. The old one waits
+        // for `destroy_replaced_output` (see `replaced_output`).
+        let old_output = std::mem::replace(&mut self.fractal_texture, device.create_texture(&TextureDescriptor {
             label: Some("Fractal Output"),
             size: Extent3d {
                 width,
@@ -985,7 +1021,8 @@ impl FlameRenderer {
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
-        });
+        }));
+        self.replaced_output.push(old_output);
         self.fractal_texture_view = self.fractal_texture.create_view(&TextureViewDescriptor::default());
 
         // Clear accumulation counter
@@ -1139,6 +1176,10 @@ impl FlameRenderer {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
+
+        // Buffers replaced before the previous dispatch are in no
+        // unsubmitted encoder now; destroy them (`gpu::buffers::Retired`).
+        self.buffers.release_retired();
 
         let seed = self.get_rng_seed();
 
@@ -1381,7 +1422,7 @@ impl FlameRenderer {
         }
 
         // Track what's actually in the accumulation buffer right now,
-        // since the shader's overwrite branch (blend_factor ≥ 0.99)
+        // since the shader's overwrite mode (use_fixed_ema == 2)
         // discards `prev` before adding this dispatch's contribution.
         // Without this, sample_density (which the tonemap uses) would
         // reflect cumulative compute work while bucket_count in the
@@ -1398,8 +1439,13 @@ impl FlameRenderer {
         // Pick blend mode + rate for the accumulate shader. See
         // docs/archive/projects/accumulator-unification.md and the comment on
         // `AccumulateParams::use_fixed_ema` in gpu/buffers.rs.
-        //   - overwrite (slider drag): blend_factor=1.0 triggers the
-        //     shader's clear-prev branch; mode is irrelevant.
+        //   - overwrite (slider drag): mode 2, the shader's clear-prev
+        //     branch; blend_factor unused. It was once signalled by
+        //     blend_factor = 1.0 in mode 0, and the shader took ANY
+        //     blend_factor >= 0.99 for it -- so a Fixed Blend Rate of
+        //     0.99-1.0 cleared the buffer every batch while this
+        //     function, not in overwrite mode, kept adding to
+        //     samples_in_buffer, and the picture faded frame by frame.
         //   - use_dynamic_blend=true (default): pure cumulative-mean.
         //     blend_factor unused.
         //   - use_dynamic_blend=false: fixed EMA at user's blend_factor.
@@ -1410,7 +1456,7 @@ impl FlameRenderer {
         //     renders past ~10^9 iters/pixel where cumulative-mean
         //     hits f32's precision floor.
         let (blend_factor, use_fixed_ema) = if self.overwrite_mode {
-            (1.0, 0u32)
+            (1.0, 2u32)
         } else if self.use_dynamic_blend {
             (0.0, 0u32)
         } else {
@@ -1574,6 +1620,39 @@ impl FlameRenderer {
     /// `TonemapParams::sample_density`. See
     /// docs/archive/projects/accumulator-unification.md, Phase 8a.
     fn refresh_sample_density(&self, queue: &Queue) {
+        let sample_density = self.sample_density();
+        let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&sample_density),
+        );
+        // Levels measures against the frame's REAL mean, which is this
+        // same number without the targeting inflation. Written HERE,
+        // beside its twin and from the same expression, because the
+        // whole-struct uploads that also set these fields compute a
+        // simpler `sample_density` of their own -- leaving this one
+        // stale was worth 15 grey levels across the visual suite.
+        let levels_density = self.mean_density();
+        let offset = std::mem::offset_of!(TonemapParams, levels_density) as u64;
+        queue.write_buffer(
+            &self.buffers.tonemap_params_buffer,
+            offset,
+            bytemuck::bytes_of(&levels_density),
+        );
+    }
+
+    /// The frame's mean density without Focused Rendering's inflation:
+    /// what Levels measures in, and what a density effect divides a
+    /// pixel's hit count by (`density_blur`'s threshold). Written to the
+    /// tone map as `levels_density` by `refresh_sample_density`.
+    pub fn mean_density(&self) -> f32 {
+        (self.sample_density() / self.cylinder_iteration_scale() as f32).max(1e-6)
+    }
+
+    /// The tone map's `sample_density`: the plotted samples per pixel,
+    /// with the corrections below.
+    fn sample_density(&self) -> f32 {
         let total_pixels = (self.width as f32) * (self.height as f32);
         // Floor at 1e-6 (defensive non-zero, prevents `k2 = 1/0` in
         // the tonemap shader). Was `.max(1.0)`, which clamped
@@ -1611,32 +1690,12 @@ impl FlameRenderer {
         // is the plain `samples / pixels`. That cancellation is not a
         // coincidence -- it is the two halves (the estimator's weight,
         // and the exposure policy) agreeing.
-        let sample_density = ((self.samples_in_buffer as f32)
+        ((self.samples_in_buffer as f32)
             * self.solid_density_fraction
             * self.frame_coverage_fraction
             * self.cylinder_iteration_scale() as f32
             / total_pixels.max(1.0))
-            .max(1e-6);
-        let offset = std::mem::offset_of!(TonemapParams, sample_density) as u64;
-        queue.write_buffer(
-            &self.buffers.tonemap_params_buffer,
-            offset,
-            bytemuck::bytes_of(&sample_density),
-        );
-        // Levels measures against the frame's REAL mean, which is this
-        // same number without the targeting inflation. Written HERE,
-        // beside its twin and from the same expression, because the
-        // whole-struct uploads that also set these fields compute a
-        // simpler `sample_density` of their own -- leaving this one
-        // stale was worth 15 grey levels across the visual suite.
-        let levels_density =
-            (sample_density / self.cylinder_iteration_scale() as f32).max(1e-6);
-        let offset = std::mem::offset_of!(TonemapParams, levels_density) as u64;
-        queue.write_buffer(
-            &self.buffers.tonemap_params_buffer,
-            offset,
-            bytemuck::bytes_of(&levels_density),
-        );
+            .max(1e-6)
     }
 
     /// Render the accumulation buffer to internal fractal texture with tone mapping
@@ -2109,17 +2168,17 @@ impl FlameRenderer {
         (self.width as u64) * (self.height as u64) * 5 * 4
     }
 
-    /// Blocking bounds measurement + shadow-fit refresh (export warmup:
-    /// run a few batches, call this, reset, render for real — the maps
-    /// then cover the actual flame). Returns true when the fit changed
-    /// materially.
+    /// Bounds measurement + shadow-fit refresh (export warmup: run a few
+    /// batches, call this, reset, render for real — the maps then cover
+    /// the actual flame). Returns true when the fit changed materially.
+    /// Async for the browser's sake (`BoundsTracker::read`).
     #[allow(clippy::too_many_arguments)]
-    pub fn refresh_shadow_placement_blocking(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
+    pub async fn refresh_shadow_placement(&mut self, device: &Device, queue: &Queue, zoom: f32, pan_x: f32, pan_y: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_pos: [f32; 3]) -> bool {
         if !(self.shadow_capture_wanted() && self.buffers.solid_depth_region) {
             return false;
         }
         let off = self.bounds_tail_offset();
-        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+        if let Some(words) = self.bounds_stats.read(device, queue, &self.buffers.histogram_buffer, off).await {
             match crate::renderer::density_stats::decode_bounds(&words) {
                 Some(b) => {
                     log::debug!("Attractor bounds measured: min {:?} max {:?}", b.0, b.1);
@@ -2472,16 +2531,17 @@ impl FlameRenderer {
         Some((hits as f32 / attempts as f32).clamp(1e-9, 1.0))
     }
 
-    /// Exact (blocking) density-fraction measurement for one-shot renders
-    /// (CLI export) — sets the fraction the final tonemap will use.
-    pub fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
+    /// Exact density-fraction measurement for one-shot renders (exports,
+    /// the CLI, the gallery) — sets the fraction the final tonemap will
+    /// use. Async for the browser's sake (`BoundsTracker::read`).
+    pub async fn apply_exact_density_fraction(&mut self, device: &Device, queue: &Queue) {
         // Frame coverage first, and unconditionally: it is not tied to
         // solid rendering, and a one-shot render has exactly one
         // chance to measure it before the final tonemap. The leak
         // probe reads the same words and has the same one chance.
         if self.auto_exposure || self.leak_probe[2] > 0.0 {
             if let Some(words) =
-                self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+                self.coverage_stats.read(device, queue, &self.buffers.coverage_buffer, 0).await
             {
                 if self.leak_probe[2] > 0.0 && words[1] > 0 {
                     self.leak_fraction = Some(words[2] as f32 / words[1] as f32);
@@ -2507,7 +2567,7 @@ impl FlameRenderer {
             return;
         }
         let off = self.bounds_tail_offset();
-        if let Some(words) = self.bounds_stats.read_blocking(device, queue, &self.buffers.histogram_buffer, off) {
+        if let Some(words) = self.bounds_stats.read(device, queue, &self.buffers.histogram_buffer, off).await {
             let (num, den) = (words[6], words[7]);
             if den > 0 {
                 self.solid_density_fraction = (num as f32 / den as f32).clamp(0.005, 1.0);
@@ -2545,8 +2605,14 @@ impl FlameRenderer {
             config
         };
         // 0. Check if shaders need to be recompiled (variations or constants changed)
-        // Determine if path features are needed (PathMap mode)
-        let path_features_enabled = config.color_mode == ColorMode::PathMap;
+        // Determine if path features are needed (PathMap mode). By the
+        // CONFIG's mode: `current_render_mode` is still the previous
+        // config's here (it is set below), so an escape or simulation
+        // config carrying a flame's PathMap colour mode allocated path
+        // ids on a tail renderer, and undoing back to a flame left a
+        // PathMap flame without them.
+        let path_features_enabled =
+            !config.render_mode.is_non_flame() && config.color_mode == ColorMode::PathMap;
         // The enumeration decides whether the shader is built with
         // the forced prefix in it, so it has to run FIRST. It was
         // below this for one commit and the render came out as the
@@ -2587,9 +2653,7 @@ impl FlameRenderer {
         );
         // PathMap's per-pixel path ids (the right-click): a loaded
         // PathMap config needs them as surely as a switch to PathMap.
-        let path_buffers_changed = path_features_enabled
-            && !self.current_render_mode.is_non_flame()
-            && self.buffers.create_path_buffers(device);
+        let path_buffers_changed = path_features_enabled && self.buffers.create_path_buffers(device);
         if shaders_changed || path_buffers_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
@@ -2657,6 +2721,13 @@ impl FlameRenderer {
             crate::scene::tonemap::HighlightMode::Filmic => 3,
         };
         self.background_color = config.background_color;
+        // The depth fog's target, which every per-frame GpuParams write
+        // (compute_pass, update_iterations, ...) and the shade pass read.
+        // Only update_flame used to set it, so a renderer that was only
+        // ever loaded -- render() for exports, the CLI, thumbnails and
+        // the visual suite -- fogged a 3D flame toward black whatever the
+        // background.
+        [self.background_r, self.background_g, self.background_b] = config.background_color;
 
         // 4. Update render mode and perspective
         self.current_render_mode = config.render_mode;
@@ -3104,9 +3175,23 @@ impl FlameRenderer {
     /// completes, before dropping the renderer. See `FlameBuffers::destroy`.
     pub fn destroy(&self) {
         self.buffers.destroy();
+        self.shade_pass.destroy();
+        self.dof_pass.destroy();
         self.fractal_texture.destroy();
+        for t in &self.replaced_output {
+            t.destroy();
+        }
         if let Some(staging) = &self.readback_staging {
             staging.destroy();
+        }
+    }
+
+    /// Destroy the output textures `resize` replaced. Call once every
+    /// encoder recorded before the resize -- the app's UI paint above
+    /// all -- has been submitted.
+    pub fn destroy_replaced_output(&mut self) {
+        for t in self.replaced_output.drain(..) {
+            t.destroy();
         }
     }
 
@@ -3947,6 +4032,11 @@ impl FlameRenderer {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         config.flame.has_xaos().hash(&mut h);
+        // Post-symmetry: the planner declines it (`NoCylinders::PostSymmetry`),
+        // so toggling it must replan. Unhashed, a live plan kept drawing
+        // after symmetry was turned on -- its copies turned about the
+        // view, not the world -- and a decline outlived turning it off.
+        (config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None).hash(&mut h);
         // The finals and linked transforms too: the walk pulls the view
         // back through the finals, and refuses a linked transform.
         let pools = [&config.flame.transforms, &config.flame.final_transforms, &config.flame.linked_transforms];
@@ -4905,7 +4995,7 @@ impl FlameRenderer {
     /// the gate that holds the orbit fuses' count to the GPU's.
     #[cfg(test)]
     pub(crate) fn read_coverage_blocking(&mut self, device: &Device, queue: &Queue) -> Option<[u32; 8]> {
-        self.coverage_stats.read_blocking(device, queue, &self.buffers.coverage_buffer, 0)
+        pollster::block_on(self.coverage_stats.read(device, queue, &self.buffers.coverage_buffer, 0))
     }
 
     /// A hash of the whole flame, for the orbit key: its serialisation, so
@@ -5779,7 +5869,7 @@ mod orbit_fuse_tests {
 mod memory_tests {
     use super::FlameRenderer;
 
-    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    pub(super) fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
@@ -5794,7 +5884,7 @@ mod memory_tests {
             adapter
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("renderer memory test"),
-                    required_features: wgpu::Features::empty(),
+                    required_features: wgpu::Features::CLEAR_TEXTURE,
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                     experimental_features: Default::default(),
@@ -5829,5 +5919,672 @@ mod memory_tests {
         assert_eq!((out.width(), out.height()), (640, 480), "the output is the frame's");
         full.destroy();
         tail.destroy();
+
+        // `destroy` frees everything it holds (dropping frees nothing on
+        // WebGPU): writing to the orbit buffer after it is an error.
+        let r = FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &flame, 256);
+        r.destroy();
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        queue.write_buffer(&r.buffers.dummy_orbit_buffer, 0, &[0u8; 4]);
+        assert!(pollster::block_on(scope.pop()).is_some(), "the orbit buffer outlived destroy()");
+
+        // `for_job`, the choice every one-shot path makes (`render()` and
+        // the video loop): the tail for the non-flame engines.
+        let mut config = crate::config::FractalConfig::default();
+        for (mode, state) in [
+            (crate::scene::transforms::RenderMode::TwoD, (640, 480)),
+            (crate::scene::transforms::RenderMode::Escape, (1, 1)),
+            (crate::scene::transforms::RenderMode::Simulation, (1, 1)),
+        ] {
+            config.render_mode = mode;
+            let r = FlameRenderer::for_job(&device, &queue, format, 640, 480, &config);
+            assert_eq!(r.buffers.size_for_test(), state, "{mode:?}");
+            r.destroy();
+        }
+    }
+
+    /// A buffer the renderer replaces mid-update -- here the histogram,
+    /// which the census grows -- is destroyed, not only dropped (dropping
+    /// frees nothing on WebGPU), but not while an encoder may still use
+    /// it: a submit that uses a destroyed buffer fails. An encoder that
+    /// cleared the old histogram before the swap, and then recorded the
+    /// next dispatch, submits cleanly; the dispatch after destroys it.
+    #[test]
+    fn a_replaced_buffer_is_destroyed_once_no_encoder_can_use_it() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        let dispatch = |r: &mut FlameRenderer, enc: &mut wgpu::CommandEncoder| {
+            r.compute_pass(
+                enc, &queue, &device, 4, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+        };
+
+        let old = r.buffers.histogram_buffer.clone();
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("swap") });
+        enc.clear_buffer(&old, 0, None);
+        r.enable_census(&device);
+        assert!(r.buffers.histogram_buffer != old, "the census replaced the histogram");
+        dispatch(&mut r, &mut enc);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        queue.submit(Some(enc.finish()));
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "an encoder that used the old histogram could not submit: {error:?}");
+
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("next") });
+        dispatch(&mut r, &mut enc);
+        queue.submit(Some(enc.finish()));
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        queue.write_buffer(&old, 0, &[0u8; 4]);
+        assert!(pollster::block_on(scope.pop()).is_some(), "the replaced histogram was never destroyed");
+        r.destroy();
+    }
+
+    /// `render()`'s own renderer frees its iteration buffers once the
+    /// tone map has run, before the colour effects allocate their
+    /// full-size ping-pong -- the headroom an 8K export in a browser
+    /// needs, which the web app's own export loop used to buy itself.
+    /// The picture is the one a renderer that keeps them draws.
+    #[test]
+    fn a_throwaway_render_frees_its_iteration_buffers_before_colour_effects() {
+        use crate::renderer::render::{render_with, NoProgress, RenderJob};
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.deterministic_rng = true;
+        cfg.color_effects = vec![crate::effects::EffectInstance::new("vignette")];
+        let draw = |throwaway: bool| {
+            let mut r = FlameRenderer::for_job(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &cfg);
+            r.set_sticky_enabled(false);
+            let mut job = RenderJob::new(&cfg, 64, 64).with_iterations(2_000_000);
+            job.throwaway_renderer = throwaway;
+            let out = pollster::block_on(render_with(&mut r, &device, &queue, job, &mut NoProgress)).expect("the render");
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            queue.write_buffer(&r.buffers.histogram_buffer, 0, &[0u8; 4]);
+            let freed = pollster::block_on(scope.pop()).is_some();
+            r.destroy();
+            (out.rgba_data, freed)
+        };
+        let (kept, kept_freed) = draw(false);
+        let (thrown, freed) = draw(true);
+        assert!(!kept_freed, "a renderer that renders again lost its histogram");
+        assert!(freed, "the throwaway renderer still held its histogram after the colour effects");
+        assert!(kept.iter().any(|&b| b != 0), "nothing was drawn");
+        assert!(thrown == kept, "freeing the iteration buffers changed the picture");
+    }
+
+    /// `resize` replaces the output texture but keeps the old one alive
+    /// -- the app resizes after egui has recorded the frame's paint, which
+    /// samples it, and before that is submitted -- until
+    /// `destroy_replaced_output`, which the app calls after the submit.
+    /// The old one used to be dropped, which frees nothing on WebGPU.
+    #[test]
+    fn a_resized_renderer_destroys_its_old_output_when_told() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let flame = crate::scene::transforms::Flame::default();
+        let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &flame, 256);
+        let old = r.fractal_texture.clone();
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("resize") });
+        r.resize(&device, &mut enc, &queue, 32, 32, &flame, 64, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+        queue.submit(Some(enc.finish()));
+        let probe = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("probe"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let usable = || {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("probe") });
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &old, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &probe,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            queue.submit(Some(enc.finish()));
+            pollster::block_on(scope.pop()).is_none()
+        };
+        assert!(usable(), "resize destroyed the output a recorded paint may still sample");
+        r.destroy_replaced_output();
+        assert!(!usable(), "the replaced output was never destroyed");
+        probe.destroy();
+        r.destroy();
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use crate::config::FractalConfig;
+    use crate::renderer::render::{render, NoProgress, RenderJob};
+    use crate::scene::transforms::{Flame, RenderMode, Transform};
+
+    /// A 64x64 render of a flame whose every point is `x` (y = 0):
+    /// how many pixels light, and whether column 0 of the middle row does.
+    fn lit_by_a_point_at(device: &wgpu::Device, queue: &wgpu::Queue, x: f32) -> (usize, bool) {
+        let mut t = Transform::new();
+        t.variations.clear();
+        t.set_variation("linear", 1.0);
+        (t.a, t.b, t.c, t.d, t.e, t.f) = (0.0, 0.0, 0.0, 0.0, x, 0.0);
+        let mut config = FractalConfig::default();
+        config.render_mode = RenderMode::TwoD;
+        config.flame = Flame { transforms: vec![t], ..Flame::default() };
+        config.deterministic_rng = true;
+        let job = RenderJob::new(&config, 64, 64).with_iterations(200_000);
+        let px = pollster::block_on(render(device, queue, job, &mut NoProgress)).expect("render").rgba_data;
+        let lit = px.chunks(4).filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0).count();
+        let i = (32 * 64) * 4;
+        (lit, px[i] > 0 || px[i + 1] > 0 || px[i + 2] > 0)
+    }
+
+    /// A point just left of the frame is off it. The pixel conversion
+    /// truncated toward zero, so the strip (-1, 0) folded into column 0,
+    /// which gathered two pixels' worth; flam3 rejects those points.
+    /// At 64x64 and zoom 1 a pixel is 1/16 of a unit and x = 0 is at 32,
+    /// so x = -2.03125 is pixel -0.5 and x = -1.96875 is pixel 0.5.
+    /// Path ids follow the loaded config's mode, not the renderer's
+    /// previous one.
+    #[test]
+    fn path_buffers_follow_the_loaded_configs_mode() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let load = |r: &mut super::FlameRenderer, c: &FractalConfig| {
+            let mut enc = device.create_command_encoder(&Default::default());
+            r.load_config(&device, &mut enc, &queue, c, &c.palette, 1, 0);
+            queue.submit(Some(enc.finish()));
+        };
+        let mut escape = FractalConfig::default();
+        escape.render_mode = RenderMode::Escape;
+        escape.color_mode = crate::scene::palette::ColorMode::PathMap;
+        let mut tail = super::FlameRenderer::for_tail(&device, &queue, format, 64, 64, &escape.flame, 256);
+        load(&mut tail, &escape);
+        assert!(!tail.path_features_enabled(), "no path ids for an escape config");
+        tail.destroy();
+
+        let mut flame = escape.clone();
+        flame.render_mode = RenderMode::TwoD;
+        let mut r = super::FlameRenderer::with_palette_size(&device, &queue, format, 64, 64, &flame.flame, 256);
+        load(&mut r, &escape);
+        load(&mut r, &flame);
+        assert!(r.path_features_enabled(), "a PathMap flame loaded after an escape config has path ids");
+        r.destroy();
+    }
+
+    /// A render stops on samples PLOTTED, as the app does, and reports
+    /// that count; and a job that can never plot ends instead of hanging.
+    #[test]
+    fn a_render_counts_what_it_plotted() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let config = FractalConfig::default();
+        // Persistent orbits, a burn-in spanning two dispatches: the
+        // first two plot nothing, then the count catches up to target.
+        let job = RenderJob::new(&config, 32, 32)
+            .with_iterations(4_000_000)
+            .with_iterations_per_thread(16)
+            .with_burn_in(30);
+        let out = pollster::block_on(render(&device, &queue, job, &mut NoProgress)).expect("render");
+        assert!(out.total_iterations >= 4_000_000, "{}", out.total_iterations);
+        // Restarted orbits with a burn-in no shorter than a dispatch plot
+        // nothing, ever.
+        let job = RenderJob::new(&config, 32, 32)
+            .with_iterations(1_000_000)
+            .with_iterations_per_thread(16)
+            .with_burn_in(16)
+            .with_persistent_orbits(false);
+        let out = pollster::block_on(render(&device, &queue, job, &mut NoProgress)).expect("render");
+        assert_eq!(out.total_iterations, 0, "nothing plotted, and it says so");
+    }
+
+    /// A flame with more transforms than the GPU buffers hold is refused
+    /// with a reason; it used to panic packing them.
+    #[test]
+    fn render_refuses_a_flame_past_the_transform_cap() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut config = FractalConfig::default();
+        config.flame.transforms = (0..129).map(|_| Transform::new()).collect();
+        let job = RenderJob::new(&config, 16, 16).with_iterations(1000);
+        match pollster::block_on(render(&device, &queue, job, &mut NoProgress)) {
+            Err(crate::renderer::render::RenderError::TooLarge(why)) => assert!(why.contains("129"), "{why}"),
+            other => panic!("expected TooLarge, got {:?}", other.map(|o| o.width)),
+        }
+    }
+
+    #[test]
+    fn a_point_left_of_the_frame_is_not_plotted() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (lit, col0) = lit_by_a_point_at(&device, &queue, -1.96875);
+        assert!(col0 && lit == 1, "a point at pixel 0.5 lights column 0 alone: {lit} lit, column 0 {col0}");
+        let (lit, _) = lit_by_a_point_at(&device, &queue, -2.03125);
+        assert_eq!(lit, 0, "a point at pixel -0.5 is off the frame");
+    }
+}
+
+#[cfg(test)]
+mod plan_key_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+    use crate::scene::transforms::PostSymmetryType;
+
+    /// Turning post-symmetry on or off changes the flame key, so a
+    /// Focused Rendering plan is replanned (and declined) rather than
+    /// kept drawing.
+    #[test]
+    fn post_symmetry_is_part_of_the_flame_key() {
+        let config = FractalConfig::default();
+        let mut symmetric = config.clone();
+        symmetric.flame.post_symmetry.ty = PostSymmetryType::Point;
+        assert_ne!(FlameRenderer::flame_key(&config), FlameRenderer::flame_key(&symmetric));
+    }
+}
+
+#[cfg(test)]
+mod accumulate_mode_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+
+    /// A Sierpinski gasket filling the view (the orbit gates' fixture):
+    /// every sample lands, so the whole view's density per iteration is
+    /// one when the sample count matches what the buffer holds.
+    fn gasket() -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (i, (e, f)) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = crate::scene::transforms::Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, e, f);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.levels_enabled = false;
+        cfg
+    }
+
+    /// The whole view's density per iteration after `frames` batches at
+    /// a Fixed Blend Rate of `rate` (dynamic blend off).
+    fn view_density(device: &wgpu::Device, queue: &wgpu::Queue, rate: f32, frames: usize) -> f64 {
+        const N: u32 = 64;
+        let cfg = gasket();
+        let mut r = FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        r.set_use_dynamic_blend(false);
+        r.set_blend_factor(rate);
+        for _ in 0..frames {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, queue, device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, queue, device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let total = r.read_density_blocking(device, queue).iter().sum();
+        r.destroy();
+        total
+    }
+
+    /// A Fixed Blend Rate of 1.0 (or anything from 0.99) is a blend rate,
+    /// not the overwrite signal. The shader used to read
+    /// `blend_factor >= 0.99` as overwrite and discard the buffer every
+    /// batch, while the host -- not in overwrite mode -- kept adding each
+    /// batch to `samples_in_buffer`: the tone map's sample density grew
+    /// over a buffer holding one batch, and the picture faded, 1/N after
+    /// N frames. Overwrite is its own mode now.
+    #[test]
+    fn a_fixed_blend_rate_of_one_keeps_every_batch() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        for rate in [1.0, 0.995] {
+            let one = view_density(&device, &queue, rate, 1);
+            let five = view_density(&device, &queue, rate, 5);
+            assert!(one > 0.9 && one < 1.1, "rate {rate}: one batch put {one:.3} per iteration in view; the gasket fills it");
+            assert!(
+                (five / one - 1.0).abs() < 0.02,
+                "rate {rate}: five batches hold {five:.3} per iteration against one batch's {one:.3} -- the buffer lost batches the count kept"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod fog_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+
+    /// The accumulator's density-weighted mean colour for the orbit
+    /// gates' gasket in 3D, two units in front of the camera, under a
+    /// depth fog thick enough (strength 100 from depth 0) that every
+    /// sample is fogged all the way to the background.
+    fn fogged_mean_rgb(device: &wgpu::Device, queue: &wgpu::Queue, background: [f32; 3]) -> [f64; 3] {
+        const N: u32 = 64;
+        let mut cfg = FractalConfig::default();
+        cfg.flame.transforms.clear();
+        for (i, (e, f)) in [(0.0f32, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = crate::scene::transforms::Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, e, f);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+        cfg.perspective_strength = 0.0;
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.camera_z = 2.0;
+        cfg.fog_strength = 100.0;
+        cfg.fog_start = 0.0;
+        cfg.background_color = background;
+        cfg.levels_enabled = false;
+        let mut r = FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        for _ in 0..2 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, queue, device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, queue, device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let (mut sum, mut weight) = ([0.0f64; 3], 0.0f64);
+        for p in r.read_accumulator_blocking(device, queue) {
+            for k in 0..3 {
+                sum[k] += p[k] * p[3];
+            }
+            weight += p[3];
+        }
+        r.destroy();
+        assert!(weight > 0.5, "the gasket put only {weight:.3} per iteration in view");
+        sum.map(|s| s / weight)
+    }
+
+    /// A renderer that is only ever LOADED -- render() for exports, the
+    /// CLI, thumbnails, the visual suite -- fogs toward the config's
+    /// background. load_config set the renderer's background colour but
+    /// not the copy every per-frame GpuParams write reads, which only
+    /// update_flame (the app) set: the fog headed for black.
+    #[test]
+    fn a_loaded_renderer_fogs_toward_its_background() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let rgb = fogged_mean_rgb(&device, &queue, [1.0, 1.0, 1.0]);
+        for c in rgb {
+            assert!((c - 1.0).abs() < 0.01, "a fully fogged sample over a white background is {rgb:?}, not white");
+        }
+    }
+
+    /// Fog blends a LINEAR sample colour toward the background, so the
+    /// background has to be decoded from the sRGB it is stored in, as the
+    /// tonemap decodes it before compositing. Mixing toward the raw value
+    /// made a 0.5 grey background's fog 0.5 linear -- about sRGB 0.73,
+    /// visibly lighter than the background around it. (The histogram
+    /// truncates each deposit to 1/100, so the decoded 0.2176 reads back
+    /// as 0.21.)
+    #[test]
+    fn fog_heads_for_the_decoded_background() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let rgb = fogged_mean_rgb(&device, &queue, [0.5, 0.5, 0.5]);
+        let decoded = 0.5f64.powf(2.2);
+        for c in rgb {
+            assert!(
+                (c - decoded).abs() < 0.015,
+                "a fully fogged sample over a 0.5 grey background is {rgb:?}; the decoded background is {decoded:.4}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod subflame_tests {
+    use super::FlameRenderer;
+    use crate::config::FractalConfig;
+    use crate::scene::palette::Palette;
+    use crate::scene::transforms::{Flame, RenderMode, Transform};
+
+    const N: u32 = 64;
+
+    fn linear(a: f32, e: f32) -> Transform {
+        let mut t = Transform::new();
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation("linear", 1.0);
+        (t.a, t.b, t.c, t.d, t.e, t.f) = (a, 0.0, 0.0, a, e, 0.0);
+        t.weight = 1.0;
+        t
+    }
+
+    /// A parent transform running subflame 0 through `variation` at
+    /// `weight`: identity affine, the variation's parameters at their
+    /// defaults but for `params`.
+    fn parent(variation: &str, weight: f32, params: &[(&str, f32)]) -> Transform {
+        let mut t = Transform::new();
+        t.variations.clear();
+        t.variation_order.clear();
+        t.set_variation(variation, weight);
+        let defaults = [("subflame_id", 0.0), ("scale", 1.0), ("angle", 0.0), ("offset_x", 0.0), ("offset_y", 0.0), ("color_mode", -1.0)];
+        for (k, v) in defaults.iter().chain(params) {
+            t.variation_params.insert(format!("{variation}.{k}"), *v);
+        }
+        t.weight = 1.0;
+        t
+    }
+
+    /// A 2D config of `parent` over `sub`, viewed N x N at `zoom`
+    /// (16 pixels a unit at zoom 1) around (`pan_x`, 0).
+    fn config(parent: Transform, sub: Flame, zoom: f32, pan_x: f64) -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.render_mode = RenderMode::TwoD;
+        cfg.flame = Flame { transforms: vec![parent], subflames: vec![sub], ..Flame::default() };
+        (cfg.zoom, cfg.pan_x, cfg.pan_y) = (zoom, pan_x, 0.0);
+        cfg.levels_enabled = false;
+        cfg
+    }
+
+    /// The accumulator after two frames of `cfg`.
+    fn accumulate(device: &wgpu::Device, queue: &wgpu::Queue, cfg: &FractalConfig) -> Vec<[f64; 4]> {
+        let mut r = FlameRenderer::with_palette_size(device, queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(device, &mut enc, queue, cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        for _ in 0..2 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let k = r.compute_pass(
+                &mut enc, queue, device, 32, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, cfg.rotation,
+                cfg.camera_rotation_x, cfg.camera_rotation_y, cfg.camera_bank, cfg.camera_x, cfg.camera_y, cfg.camera_z,
+                cfg.speed_factor, true, false,
+            );
+            r.accumulate_pass(&mut enc, queue, device, k);
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let acc = r.read_accumulator_blocking(device, queue);
+        r.destroy();
+        acc
+    }
+
+    /// The density in view (per sample) and its mean column.
+    fn spread(acc: &[[f64; 4]]) -> (f64, f64) {
+        let total: f64 = acc.iter().map(|p| p[3]).sum();
+        let column = acc.iter().enumerate().map(|(i, p)| (i % N as usize) as f64 * p[3]).sum::<f64>() / total;
+        (total, column)
+    }
+
+    /// A subflame's finals shape its OUTPUT, not its walk. JWF's
+    /// SubFlameWFFunc steps p -> p with the normal transforms and maps p
+    /// through the finals to the q it returns; ours ran the finals inside
+    /// the step and stored the result as the walk's state, so they fed
+    /// the walk. A subflame of p -> 0.5p + (1, 0) with a final +(10, 0):
+    /// the walk settles at x = 2 and JWF plots 12; with the finals in the
+    /// walk, p -> 0.5(p + 10) + 1 settles at 22.
+    ///
+    /// A view panned to (12, 0) spans x in [10, 14], 12 at column 32,
+    /// and 22 is far outside it.
+    #[test]
+    fn a_subflame_final_maps_the_output_not_the_walk() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let sub = Flame { transforms: vec![linear(0.5, 1.0)], final_transforms: vec![linear(1.0, 10.0)], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 1.0, &[]), sub, 1.0, 12.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the subflame's points landed in a view around x = 12 (JWF's); the finals fed the walk");
+        assert!((column - 32.0).abs() < 2.0, "the subflame's points centre on column {column:.1}, not 32 (x = 12)");
+    }
+
+    /// JWF's subflame_wf adds its q to the running result whatever its
+    /// weight (`pVarTP += q`); ours multiplied it by the weight, as the
+    /// dispatcher does every normal variation's output. At weight 0.5
+    /// the walk of p -> 0.5p + (1, 0) still plots at x = 2, not 1.
+    #[test]
+    fn subflame_output_ignores_the_variation_weight() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let sub = Flame { transforms: vec![linear(0.5, 1.0)], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 0.5, &[]), sub, 1.0, 2.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the subflame's points landed in a view around x = 2");
+        assert!((column - 32.0).abs() < 2.0, "the subflame's points centre on column {column:.1}, not 32 (x = 2): the weight scaled them");
+    }
+
+    /// Inside a subflame a hidden transform moves the walk but makes no
+    /// output: JWF's subflameIter steps on until a visible transform.
+    /// p -> 0.5p + (1, 0) and a hidden p -> 0.5p - (1, 0) walk the whole
+    /// of [-2, 2]; only the first's steps are output, which land in
+    /// [0, 2]. Ours ignored opacity there and output both halves.
+    ///
+    /// At zoom 0.5 the view spans x in [-4, 4], 0 at column 32.
+    #[test]
+    fn a_hidden_subflame_transform_moves_the_walk_but_is_not_output() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut hidden = linear(0.5, -1.0);
+        hidden.opacity = 0.0;
+        let sub = Flame { transforms: vec![linear(0.5, 1.0), hidden], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 1.0, &[]), sub, 0.5, 0.0);
+        let acc = accumulate(&device, &queue, &cfg);
+        let (total, column) = spread(&acc);
+        let left: f64 = acc.iter().enumerate().filter(|(i, _)| i % (N as usize) < 31).map(|(_, p)| p[3]).sum();
+        assert!(total > 0.9, "only {total:.3} of the subflame's points landed in view");
+        assert!(left < 0.01 * total, "{:.1}% of the points are left of x = 0, where only the hidden transform's steps land", 100.0 * left / total);
+        assert!((column - 40.0).abs() < 1.5, "the points centre on column {column:.1}, not 40 (x = 1, the middle of [0, 2])");
+    }
+
+    /// With no transform that can be visible, JWF's subflameIter never
+    /// sets q and returns its initial (0, 0, 0) unplaced -- the offset
+    /// is applied only to a q it makes. (We also skip the 1000 steps it
+    /// walks looking.) Ours output the walk at x = 2 + 3.
+    #[test]
+    fn a_subflame_with_nothing_visible_outputs_its_first_q() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut hidden = linear(0.5, 1.0);
+        hidden.opacity = 0.0;
+        let sub = Flame { transforms: vec![hidden], ..Flame::default() };
+        let cfg = config(parent("subflame_wf", 1.0, &[("offset_x", 3.0)]), sub, 1.0, 0.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the points landed in a view around the origin");
+        assert!((column - 32.0).abs() < 1.0, "the points centre on column {column:.1}, not 32 (x = 0)");
+    }
+
+    /// pre_subflame_wf takes JWF's q, which subflameIter has already
+    /// scaled, rotated and offset; ours ignored those parameters. The
+    /// walk at x = 2 with offset_x 10 is at x = 12.
+    #[test]
+    fn pre_subflame_output_is_placed_by_its_parameters() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut p = parent("pre_subflame_wf", 1.0, &[("offset_x", 10.0)]);
+        p.set_variation("linear", 1.0);
+        let sub = Flame { transforms: vec![linear(0.5, 1.0)], ..Flame::default() };
+        let cfg = config(p, sub, 1.0, 12.0);
+        let (total, column) = spread(&accumulate(&device, &queue, &cfg));
+        assert!(total > 0.9, "only {total:.3} of the points landed in a view around x = 12; the offset was ignored");
+        assert!((column - 32.0).abs() < 2.0, "the points centre on column {column:.1}, not 32 (x = 12)");
+    }
+
+    /// JWF makes a subflame's finals DIFFUSION, so they blend the colour
+    /// of the q they return; ours left it at the walk's. The walk's
+    /// transform holds its colour at 0 (colour 0, speed -1) and the final
+    /// sets 1 the same way, so with color_mode Direct and the parent's
+    /// direct colour 1 the plotted colour is the grayscale palette's
+    /// white end, not its black.
+    #[test]
+    fn a_subflame_final_blends_the_colour_it_outputs() {
+        let Some((device, queue)) = super::memory_tests::device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut walk = linear(0.5, 1.0);
+        (walk.color, walk.color_speed) = (0.0, -1.0);
+        let mut last = linear(1.0, 0.0);
+        (last.color, last.color_speed) = (1.0, -1.0);
+        let sub = Flame { transforms: vec![walk], final_transforms: vec![last], ..Flame::default() };
+        let mut cfg = config(parent("subflame_wf", 1.0, &[("color_mode", 0.0)]), sub, 1.0, 2.0);
+        cfg.palette = Palette::grayscale();
+        let acc = accumulate(&device, &queue, &cfg);
+        let (total, _) = spread(&acc);
+        assert!(total > 0.9, "only {total:.3} of the points landed in a view around x = 2");
+        let mean = acc.iter().map(|p| p[0] * p[3]).sum::<f64>() / total;
+        assert!(mean > 0.9, "the subflame's points are {mean:.3} red, not the white the final's colour blend gives");
     }
 }

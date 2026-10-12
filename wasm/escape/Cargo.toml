@@ -13,7 +13,7 @@
 # Loading a FLAME config here renders whatever a catalog of one
 # variation can express -- which is not the flame the file describes.
 # This module is for escape-time configs; ../render is the one that
-# renders both.
+# renders every mode.
 
 [package]
 name = "fflame-escape"

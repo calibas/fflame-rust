@@ -19,10 +19,13 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # default-features = false turns off `web-app`: without that, this
 # module would inherit the full application's wasm-bindgen exports.
-# `engine-flame` explicitly: this module renders BOTH engines, so
-# it carries the variation catalog. The escape-only sibling
-# (../escape) is the same source without this feature.
-fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "engine-escape"] }
+# All three engines explicitly: this module renders EVERY mode, so it
+# carries the variation catalog, the escape-time engine and the
+# simulation engine. The single-engine siblings (../flame, ../escape,
+# ../sim) are the same source with one of these each. `terrain` stays
+# off, as in every gallery module: a terrain config renders as its 2D
+# picture.
+fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-flame", "engine-escape", "engine-sim"] }
 # The main crate's render API speaks `egui_wgpu::wgpu` types; using the
 # same re-export guarantees type identity. default-features = false —
 # egui itself is never referenced and the linker drops it (verified by

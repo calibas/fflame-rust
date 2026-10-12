@@ -215,6 +215,80 @@ impl TemplateProcessor {
     }
 }
 
+/// A helper library the shader builder splices in when a variation that
+/// needs it is active — decided by variation NAME.
+///
+/// One table, read by both sides that care: the builder, to decide what
+/// to emit, and the engine contract (`helper_libraries.name_gated` in
+/// `src/contract.rs`), which tells the API that a server-hosted
+/// variation can never reach these and must be self-contained. They
+/// were two hand-written lists, and the contract's fell behind: it never
+/// listed `polyhedra.wgsl` or `polychora.wgsl`, nor `crackle_fast` among
+/// `noise.wgsl`'s users.
+pub(crate) struct NameGatedLibrary {
+    /// The file under `shaders/core/`, as the contract names it.
+    pub file: &'static str,
+    pub source: &'static str,
+    /// The variation names that pull the library in. A `*` stands for
+    /// any run of characters (the `fract_*_wf` family).
+    pub users: &'static [&'static str],
+}
+
+impl NameGatedLibrary {
+    pub fn is_used_by(&self, name: &str) -> bool {
+        self.users.iter().any(|user| match user.split_once('*') {
+            Some((prefix, suffix)) => name.starts_with(prefix) && name.ends_with(suffix),
+            None => name == *user,
+        })
+    }
+}
+
+/// The name-gated libraries, in EMISSION order (see `NameGatedLibrary`).
+pub(crate) const NAME_GATED_LIBRARIES: &[NameGatedLibrary] = &[
+    // The fract_*_wf family's shared escape-time helpers (iterate loop,
+    // output mapping, per-iterator next-step switch). Variation bodies
+    // just call into these.
+    NameGatedLibrary {
+        file: "fractwf.wgsl",
+        source: include_str!("../shaders/core/fractwf.wgsl"),
+        users: &["fract_*_wf"],
+    },
+    // Noise tables: 1024-entry tables auto-generated from JWildfire's
+    // NoiseTools.java by `scripts/extract_noise_tables.py`. Before
+    // voronoi.wgsl, which calls its `simplex_noise_3d`. crackle_fast
+    // needs voronoi.wgsl but not the noise itself -- its cell offsets
+    // are hashed, never simplex -- yet voronoi.wgsl's simplex path still
+    // references simplex_noise_3d, so the noise module rides along
+    // wherever voronoi goes. (The dead simplex path costs compile bytes,
+    // not runtime.)
+    NameGatedLibrary {
+        file: "noise.wgsl",
+        source: include_str!("../shaders/core/noise.wgsl"),
+        users: &["dc_perlin", "crackle", "dc_crackle_wf", "crackle_fast"],
+    },
+    NameGatedLibrary {
+        file: "voronoi.wgsl",
+        source: include_str!("../shaders/core/voronoi.wgsl"),
+        users: &["crackle", "dc_crackle_wf", "crackle_fast"],
+    },
+    // Polyhedron radial-support helpers, shared by the `polyhedron`
+    // surface projection and the `polyhedron_volume` occluder so the
+    // pair can coexist in one flame without duplicate symbols.
+    NameGatedLibrary {
+        file: "polyhedra.wgsl",
+        source: include_str!("../shaders/core/polyhedra.wgsl"),
+        users: &["polyhedron", "polyhedron_volume"],
+    },
+    // Regular 4-polytope vertex tables for the `polychoron` chaos-game
+    // variation, plus the Menger Tesseract 4-gap point set used by
+    // `menger`'s third dimension mode.
+    NameGatedLibrary {
+        file: "polychora.wgsl",
+        source: include_str!("../shaders/core/polychora.wgsl"),
+        users: &["polychoron", "menger"],
+    },
+];
+
 /// Inlined transform data for shader compilation
 ///
 /// Contains all per-transform data that will be compiled as shader constants
@@ -472,11 +546,34 @@ impl Default for ShaderConstants {
 }
 
 /// Collect per-transform `fx_priority` overrides into the
-/// `local_var_idx → (transform_idx → priority)` shape `ShaderConstants`
+/// `local_var_idx → (xform_id → priority)` shape `ShaderConstants`
 /// carries. Only variations whose definition phase is
 /// [`VariationPhase::Any`] are honored — `Pre`/`Normal`/`Post` stay
 /// locked to their phase and their stored priority (if any) is ignored.
 /// `id_map` is the per-flame local index map (variation name → slot).
+///
+/// Keyed by GLOBAL xform id, the shader's own: normals `i`, linkeds
+/// `n + i`, finals `n + l + j` (the `transforms[]` buffer's order). JWF
+/// partitions the phases per XForm, finals included (XForm.java's
+/// pre/normal/post step lists), so a Linked or Final transform's
+/// priority counts like a normal's. Only the normals' used to be read:
+/// a Final's override never reached the shader.
+///
+/// A Linked or Final transform that USES a variation some transform
+/// moves is recorded too, at its own priority -- 0 when it has none --
+/// so `resolve_phase_buckets` sees that it wants the variation where it
+/// is. (Every normal is classified whether it uses the variation or
+/// not, as before; a Linked/Final non-user stays out, because adding it
+/// would gate placements that need no gate.) A variation no transform
+/// moves stays out of the map entirely, as before.
+///
+/// A subflame's transforms count too, at their own global ids
+/// (`SUBFLAME_XFORM_ID_BASE` on: each subflame's normals, then its
+/// finals), and are recorded as a Linked or Final is: when they move a
+/// variation, or use one something else moves. They run through a
+/// dispatcher of their own, which reads only that range
+/// (`resolve_phase_buckets`). Their priorities used to be ignored, and a
+/// parent's move applied inside the subflame as well.
 pub fn collect_phase_overrides(
     flame: &crate::scene::transforms::Flame,
     registry: &crate::variations::VariationRegistry,
@@ -485,17 +582,86 @@ pub fn collect_phase_overrides(
     use crate::variations::VariationPhase;
     let mut out: std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, i32>> =
         std::collections::BTreeMap::new();
-    for (t_idx, xform) in flame.transforms.iter().enumerate() {
+    let (n, l) = (flame.transforms.len(), flame.linked_transforms.len());
+    let pools = || {
+        flame.transforms.iter().enumerate().map(|(i, t)| (i, t))
+            .chain(flame.linked_transforms.iter().enumerate().map(move |(i, t)| (n + i, t)))
+            .chain(flame.final_transforms.iter().enumerate().map(move |(j, t)| (n + l + j, t)))
+    };
+    let base = crate::scene::transforms::SUBFLAME_XFORM_ID_BASE as usize;
+    let subflame_pool = || {
+        flame.subflames.iter()
+            .flat_map(|sf| sf.transforms.iter().chain(sf.final_transforms.iter()))
+            .enumerate()
+            .map(move |(k, t)| (base + k, t))
+    };
+    for (gid, xform) in pools().chain(subflame_pool()) {
         for (name, &prio) in &xform.variation_priorities {
             let Some(info) = registry.get(name) else { continue };
             if info.phase != VariationPhase::Any {
                 continue; // only Any variations honor fx_priority
             }
             let Some(&local) = id_map.get(name) else { continue };
-            out.entry(local).or_default().insert(t_idx as u32, prio);
+            out.entry(local).or_default().insert(gid as u32, prio);
+        }
+    }
+    for (gid, xform) in pools().skip(n).chain(subflame_pool()) {
+        for (name, &weight) in &xform.variations {
+            if weight == 0.0 {
+                continue; // the dispatch's weight check skips it anyway
+            }
+            let Some(&local) = id_map.get(name) else { continue };
+            if let Some(by_xform) = out.get_mut(&local) {
+                by_xform.entry(gid as u32).or_insert(0);
+            }
         }
     }
     out
+}
+
+/// One variation call, `name(point, ...)`, with its arguments in the
+/// order every variation function declares them: the running accumulator
+/// (`NeedsAccum`), `xform_id, variation_id` (parameters or
+/// `NeedsTransform`), the RNG (`NeedsRng`), the `vc` / `vrc` colour
+/// registers (`WritesColor` / `WritesRgb`), the hide flag (`CanHide`).
+///
+/// The one builder for all six phase sites (pre, normal and post, in 2D
+/// and 3D). They were six hand-kept lists and had drifted: `vrc` reached
+/// only the 2D pre phase and the two normal phases, `NeedsAccum` neither
+/// pre phase, and the pre phases called `variation_{name}` instead of
+/// the registry's function name. So an `Any` variation moved by
+/// fx_priority could emit a call to a function that does not exist
+/// (`julia`'s is `julia`) or with an argument missing (every `WritesRgb`
+/// variation -- the glsl_* family, dc_mandelbox2D, all `Any` -- moved to
+/// post, or to pre in 3D), and the flame's shader failed to compile.
+fn variation_call(
+    info: &crate::variations::VariationInfo,
+    idx: u32,
+    point: &str,
+    accum: &str,
+    is_subflame: bool,
+) -> String {
+    let mut args = String::from(point);
+    if info.has_feature(Feature::NeedsAccum) {
+        args.push_str(", ");
+        args.push_str(accum);
+    }
+    if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
+        args.push_str(&format!(", xform_id, {}u", idx));
+    }
+    if info.has_feature(Feature::NeedsRng) {
+        args.push_str(", rng");
+    }
+    if info.has_feature(Feature::WritesColor) {
+        args.push_str(", vc");
+    }
+    if info.has_feature(Feature::WritesRgb) {
+        args.push_str(", vrc");
+    }
+    if info.has_feature(Feature::CanHide) {
+        args.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
+    }
+    format!("{}({})", info.wgsl_function, args)
 }
 
 /// One variation's placement in a single phase bucket of the per-flame
@@ -1522,9 +1688,9 @@ impl ShaderBuilder {
                     crate::variations::defs::synth::specialize_wgsl_2d(flame)
                 }),
                 "mondrianomies" => Some(if render_3d {
-                    crate::variations::defs::mondrianomies::specialize_wgsl_3d(flame)
+                    crate::variations::defs::mondrianomies::specialize_mondrian_wgsl_3d(flame)
                 } else {
-                    crate::variations::defs::mondrianomies::specialize_wgsl_2d(flame)
+                    crate::variations::defs::mondrianomies::specialize_mondrian_wgsl_2d(flame)
                 }),
                 _ => None,
             }
@@ -1843,63 +2009,17 @@ impl ShaderBuilder {
             shader.push('\n');
         }
 
-        // 7b. fract_*_wf family: inject the shared escape-time helpers
-        //     (iterate loop, output mapping, per-iterator next-step
-        //     switch) when any of the family is active. Variation bodies
-        //     just call into these — see `shaders/core/fractwf.wgsl`.
-        let has_fractwf = active.iter().any(|(name, _)| name.starts_with("fract_") && name.ends_with("_wf"));
-        if has_fractwf {
-            shader.push_str(include_str!("../shaders/core/fractwf.wgsl"));
-            shader.push('\n');
-        }
-
-        // 7c. Noise + Voronoi helpers — emitted when any variation in the
-        //     crackle / perlin family is active. `noise.wgsl` first because
-        //     `voronoi.wgsl` calls `simplex_noise_3d`. The noise module is
-        //     1024-entry tables (auto-generated from JWildfire's NoiseTools.java
-        //     by `scripts/extract_noise_tables.py`); a flame with no
-        //     noise/voronoi variation pays nothing.
-        let needs_noise = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "dc_perlin" | "crackle" | "dc_crackle_wf")
-        });
-        // crackle_fast needs voronoi.wgsl but NOT noise.wgsl — its cell
-        // offsets are hashed, never simplex. voronoi.wgsl's simplex
-        // path still references simplex_noise_3d though, so the noise
-        // module rides along whenever voronoi does. (The dead simplex
-        // path costs compile bytes, not runtime.)
-        let needs_voronoi = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "crackle" | "dc_crackle_wf" | "crackle_fast")
-        });
-        if needs_noise || needs_voronoi {
-            shader.push_str(include_str!("../shaders/core/noise.wgsl"));
-            shader.push('\n');
-        }
-        if needs_voronoi {
-            shader.push_str(include_str!("../shaders/core/voronoi.wgsl"));
-            shader.push('\n');
-        }
-
-        // 7d. Polyhedron radial-support helpers — shared by the
-        //     `polyhedron` surface projection and `polyhedron_volume`
-        //     occluder so the pair can coexist in one flame without
-        //     duplicate symbols.
-        let needs_polyhedra = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "polyhedron" | "polyhedron_volume")
-        });
-        if needs_polyhedra {
-            shader.push_str(include_str!("../shaders/core/polyhedra.wgsl"));
-            shader.push('\n');
-        }
-
-        // 7e. Regular 4-polytope vertex tables for the `polychoron`
-        //     chaos-game variation, plus the Menger Tesseract 4-gap
-        //     point set used by `menger`'s third dimension mode.
-        let needs_polychora = active.iter().any(|(name, _)| {
-            matches!(name.as_str(), "polychoron" | "menger")
-        });
-        if needs_polychora {
-            shader.push_str(include_str!("../shaders/core/polychora.wgsl"));
-            shader.push('\n');
+        // 7b-7e. Helper libraries gated on variation NAMES: the fract_*_wf
+        //     helpers, noise + Voronoi (the crackle / perlin family),
+        //     polyhedra, polychora. Each is emitted once when any active
+        //     variation uses it, in table order, and a flame using none
+        //     of them pays nothing. The table is shared with the engine
+        //     contract — see `NAME_GATED_LIBRARIES`.
+        for lib in NAME_GATED_LIBRARIES {
+            if active.iter().any(|(name, _)| lib.is_used_by(name)) {
+                shader.push_str(lib.source);
+                shader.push('\n');
+            }
         }
 
         // 7f. SL(2,C) Mobius-group machinery (Bagula) — the SuMat helpers,
@@ -2210,11 +2330,30 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                 VariationPhase::Post => post.push(mk(None, false)),
                 VariationPhase::Any => {
                     // Classify every transform's bucket for this variation
-                    // (absent override ⇒ priority 0 ⇒ normal).
+                    // (absent override ⇒ priority 0 ⇒ normal), by global
+                    // xform_id: every normal, plus each Linked/Final the
+                    // overrides map records (`collect_phase_overrides`
+                    // records those that move the variation or use it).
+                    //
+                    // Each dispatcher reads only its own transforms: the
+                    // parent's ids below SUBFLAME_XFORM_ID_BASE, the
+                    // subflame dispatcher's from it up. A subflame has no
+                    // "every normal" to classify -- the map records its
+                    // transforms that move or use the variation -- so one
+                    // that records none keeps the variation in its natural
+                    // bucket, ungated, below.
                     let ov = overrides.get(idx);
                     let (mut pre_t, mut nor_t, mut post_t) = (Vec::new(), Vec::new(), Vec::new());
-                    for t in 0..num_transforms {
-                        let prio = ov.and_then(|m| m.get(&t)).copied().unwrap_or(0);
+                    let base = crate::scene::transforms::SUBFLAME_XFORM_ID_BASE;
+                    let (normals_end, pools_from, pools_to) = if is_subflame {
+                        (0, base, u32::MAX)
+                    } else {
+                        (num_transforms, num_transforms, base)
+                    };
+                    let pools = ov.map(|m| m.range(pools_from..pools_to).map(|(&t, &p)| (t, p)));
+                    let normals = (0..normals_end)
+                        .map(|t| (t, ov.and_then(|m| m.get(&t)).copied().unwrap_or(0)));
+                    for (t, prio) in normals.chain(pools.into_iter().flatten()) {
                         if prio < 0 {
                             pre_t.push(t);
                         } else if prio > 0 {
@@ -2226,24 +2365,28 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                     let used = (!pre_t.is_empty()) as u32
                         + (!nor_t.is_empty()) as u32
                         + (!post_t.is_empty()) as u32;
-                    if used <= 1 {
-                        // One bucket across all normals ⇒ no xform_id gate
-                        // (the weight check already restricts to the using
-                        // transforms, and an ungated bucket also runs for any
-                        // Final/Linked transform that uses the variation).
+                    if used == 0 {
+                        // A subflame that records nothing for it.
+                        normal.push(mk(None, false));
+                    } else if used == 1 {
+                        // One bucket across every transform classified ⇒
+                        // no xform_id gate (the weight check restricts it
+                        // to the transforms that use the variation). A
+                        // Linked/Final user that wants it elsewhere is
+                        // classified above, so this cannot carry a moved
+                        // variation into one that keeps it in normal.
                         if !pre_t.is_empty() { pre.push(mk(None, true)); }
                         if !nor_t.is_empty() { normal.push(mk(None, false)); }
                         if !post_t.is_empty() { post.push(mk(None, true)); }
                     } else {
-                        // The variation spans multiple phases across normals,
-                        // so each placement needs an xform_id gate. Pre/Post
-                        // get an explicit allow-list of the normals moved
-                        // there. Normal is the DEFAULT / catch-all bucket:
-                        // every transform NOT explicitly placed in pre or post
-                        // — which includes Final and Linked transforms, whose
-                        // GLOBAL xform_ids never appear in these normals-only
-                        // lists. Without the catch-all, a Final using this
-                        // variation would match no gate and run nothing, and
+                        // The variation spans multiple phases, so each
+                        // placement needs an xform_id gate. Pre/Post get an
+                        // explicit allow-list of the global ids moved there.
+                        // Normal is the DEFAULT / catch-all bucket: every
+                        // transform NOT explicitly placed in pre or post —
+                        // which includes any Linked/Final transform the map
+                        // does not record, and a subflame's transforms. A
+                        // Final that matched no gate would run nothing, and
                         // the render collapses to a single pixel.
                         let allow = |ts: &[u32]| -> Option<String> {
                             let conds: Vec<String> =
@@ -2359,32 +2502,14 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
             code.push_str("    var temp = p;\n\n");
 
             for placed in &pre_variations {
-                let (name, idx, info) = (&placed.name, placed.idx, placed.info);
-                // Pre-variations directly modify temp (NOT weighted sum!)
-                let mut params = String::new();
-
-                // Variations with parameters get (xform_id, variation_id) for
-                // get_param lookups. needs_transform variations also get both
-                // so they can read transforms[xform_id].variations[variation_id]
-                // (e.g., pre_rotate_x reads its own weight from the buffer).
-                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
-                    params.push_str(&format!(", xform_id, {}u", idx));
-                }
-                if info.has_feature(Feature::NeedsRng) {
-                    params.push_str(", rng");
-                }
-                // DC variations get the iteration-local color register pointer.
-                if info.has_feature(Feature::WritesColor) {
-                    params.push_str(", vc");
-                }
-                // Direct-RGB-writing variations get the vrc pointer.
-                if info.has_feature(Feature::WritesRgb) {
-                    params.push_str(", vrc");
-                }
-                // CanHide (cut_*) variations get the doHide pointer.
-                if info.has_feature(Feature::CanHide) {
-                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
-                }
+                let (idx, info) = (placed.idx, placed.info);
+                // Pre-variations directly modify temp (NOT weighted sum!).
+                // A NeedsAccum variation reads JWF's pVarTP: for a variation
+                // MOVED into pre (EnforcedPreVariationTransformationStep)
+                // that is the affine point itself, `temp`; for a native pre
+                // it is the variation output, just cleared to zero.
+                let accum = if placed.moved { "temp" } else { "vec2<f32>(0.0)" };
+                let call = variation_call(info, idx, "temp", accum, is_subflame);
 
                 // Activation: weight non-zero, plus any Any-var xform_id gate.
                 let activate = match &placed.gate {
@@ -2399,12 +2524,12 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                 let body = if placed.moved {
                     let w = format!("xform.variations[{}]", idx);
                     if info.has_feature(Feature::Replace) {
-                        format!("temp = {} * variation_{}(temp{});", w, name, params)
+                        format!("temp = {} * {};", w, call)
                     } else {
-                        format!("temp = temp + {} * variation_{}(temp{});", w, name, params)
+                        format!("temp = temp + {} * {};", w, call)
                     }
                 } else {
-                    format!("temp = variation_{}(temp{});", name, params)
+                    format!("temp = {};", call)
                 };
                 // Census: pre inputs are chained (each sees the previous
                 // pre's output), so they are counted per variation.
@@ -2440,30 +2565,9 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
 
         for placed in &normal_variations {
             let (idx, info) = (placed.idx, placed.info);
-            let mut args = String::from("temp");
             // needs_accum: pass current `result` (= cpp's FPx/FPy) so the
             // variation can read the running accumulator of prior variations.
-            // Inserted right after `p` so the order matches the variation
-            // function's declared signature.
-            if info.has_feature(Feature::NeedsAccum) {
-                args.push_str(", result");
-            }
-            if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
-                args.push_str(&format!(", xform_id, {}u", idx));
-            }
-            if info.has_feature(Feature::NeedsRng) {
-                args.push_str(", rng");
-            }
-            if info.has_feature(Feature::WritesColor) {
-                args.push_str(", vc");
-            }
-            if info.has_feature(Feature::WritesRgb) {
-                args.push_str(", vrc");
-            }
-            if info.has_feature(Feature::CanHide) {
-                args.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
-            }
-            let call = format!("{}({})", info.wgsl_function, args);
+            let call = variation_call(info, idx, "temp", "result", is_subflame);
             // Optional Any-var xform_id gate, ANDed into the weight check.
             let gate = placed.gate.as_ref().map(|g| format!(" && {}", g)).unwrap_or_default();
 
@@ -2563,30 +2667,11 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
 
             for placed in &post_variations {
                 let (idx, info) = (placed.idx, placed.info);
-                // Post-variations directly modify result (NOT weighted sum!)
-                let mut params = String::from("result");
+                // Post-variations directly modify result (NOT weighted sum!).
                 // needs_accum: in post-phase, cpp's FP* is the variation
-                // output up to this point — same as our `result`. Pass it as
-                // the accum arg too.
-                if info.has_feature(Feature::NeedsAccum) {
-                    params.push_str(", result");
-                }
-
-                // has_params || needs_transform → pass (xform_id, variation_id).
-                // Pure no-param no-needs_transform variations (e.g. flatten 2D
-                // stub) get just `result`.
-                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
-                    params.push_str(&format!(", xform_id, {}u", idx));
-                }
-                if info.has_feature(Feature::NeedsRng) {
-                    params.push_str(", rng");
-                }
-                if info.has_feature(Feature::WritesColor) {
-                    params.push_str(", vc");
-                }
-                if info.has_feature(Feature::CanHide) {
-                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
-                }
+                // output up to this point — same as our `result` — for a
+                // native post and a moved one alike.
+                let call = variation_call(info, idx, "result", "result", is_subflame);
 
                 let activate = match &placed.gate {
                     Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
@@ -2598,12 +2683,12 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                 let body = if placed.moved {
                     let w = format!("xform.variations[{}]", idx);
                     if info.has_feature(Feature::Replace) {
-                        format!("result = {} * {}({});", w, info.wgsl_function, params)
+                        format!("result = {} * {};", w, call)
                     } else {
-                        format!("result = result + {} * {}({});", w, info.wgsl_function, params)
+                        format!("result = result + {} * {};", w, call)
                     }
                 } else {
-                    format!("result = {}({});", info.wgsl_function, params)
+                    format!("result = {};", call)
                 };
                 let body = if census {
                     format!("census_pp2({0}u, result); {1} census_out2({0}u, result);", idx, body)
@@ -2703,22 +2788,11 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
             code.push_str("    var temp = p;\n\n");
 
             for placed in &pre_variations {
-                let (name, idx, info) = (&placed.name, placed.idx, placed.info);
-                // Pre-variations directly modify temp (NOT weighted sum!)
-                let mut params = String::new();
-
-                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
-                    params.push_str(&format!(", xform_id, {}u", idx));
-                }
-                if info.has_feature(Feature::NeedsRng) {
-                    params.push_str(", rng");
-                }
-                if info.has_feature(Feature::WritesColor) {
-                    params.push_str(", vc");
-                }
-                if info.has_feature(Feature::CanHide) {
-                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
-                }
+                let (idx, info) = (placed.idx, placed.info);
+                // Pre-variations directly modify temp (NOT weighted sum!);
+                // the accumulator a NeedsAccum one reads: see the 2D builder.
+                let accum = if placed.moved { "temp" } else { "vec3<f32>(0.0)" };
+                let call = variation_call(info, idx, "temp", accum, is_subflame);
 
                 let activate = match &placed.gate {
                     Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
@@ -2729,12 +2803,12 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                 let body = if placed.moved {
                     let w = format!("xform.variations[{}]", idx);
                     if info.has_feature(Feature::Replace) {
-                        format!("temp = {} * variation_{}(temp{});", w, name, params)
+                        format!("temp = {} * {};", w, call)
                     } else {
-                        format!("temp = temp + {} * variation_{}(temp{});", w, name, params)
+                        format!("temp = temp + {} * {};", w, call)
                     }
                 } else {
-                    format!("temp = variation_{}(temp{});", name, params)
+                    format!("temp = {};", call)
                 };
                 // Census: see the 2D builder.
                 let body = if census {
@@ -2774,28 +2848,9 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
             // they were removed because the WGSL function bodies
             // already produce equivalent math under the standard
             // `result += w · variation(p)` dispatch.)
-            let mut args = String::from("temp");
             // needs_accum: pass current 3D `result` so the variation
             // can read the running accumulator (cpp's FPx/FPy/FPz).
-            if info.has_feature(Feature::NeedsAccum) {
-                args.push_str(", result");
-            }
-            if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
-                args.push_str(&format!(", xform_id, {}u", idx));
-            }
-            if info.has_feature(Feature::NeedsRng) {
-                args.push_str(", rng");
-            }
-            if info.has_feature(Feature::WritesColor) {
-                args.push_str(", vc");
-            }
-            if info.has_feature(Feature::WritesRgb) {
-                args.push_str(", vrc");
-            }
-            if info.has_feature(Feature::CanHide) {
-                args.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
-            }
-            let call = format!("{}({})", info.wgsl_function, args);
+            let call = variation_call(info, idx, "temp", "result", is_subflame);
 
             // JWF z semantics, driven by per-variation metadata (see
             // Feature::AlwaysZ / Feature::NeverZ docs):
@@ -2941,24 +2996,8 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                 // it was removed because variation_flatten's body already
                 // produces equivalent math under the standard
                 // `result = variation(result)` dispatch.)
-                let mut params = String::from("result");
                 // needs_accum: in post-phase, cpp's FP* is `result`.
-                if info.has_feature(Feature::NeedsAccum) {
-                    params.push_str(", result");
-                }
-
-                if !info.parameters.is_empty() || info.has_feature(Feature::NeedsTransform) {
-                    params.push_str(&format!(", xform_id, {}u", idx));
-                }
-                if info.has_feature(Feature::NeedsRng) {
-                    params.push_str(", rng");
-                }
-                if info.has_feature(Feature::WritesColor) {
-                    params.push_str(", vc");
-                }
-                if info.has_feature(Feature::CanHide) {
-                    params.push_str(if is_subflame { ", &hide_flag" } else { ", hide" });
-                }
+                let call = variation_call(info, idx, "result", "result", is_subflame);
 
                 let activate = match &placed.gate {
                     Some(g) => format!("xform.variations[{}] != 0.0 && {}", idx, g),
@@ -2969,12 +3008,12 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
                 let body = if placed.moved {
                     let w = format!("xform.variations[{}]", idx);
                     if info.has_feature(Feature::Replace) {
-                        format!("result = {} * {}({});", w, info.wgsl_function, params)
+                        format!("result = {} * {};", w, call)
                     } else {
-                        format!("result = result + {} * {}({});", w, info.wgsl_function, params)
+                        format!("result = result + {} * {};", w, call)
                     }
                 } else {
-                    format!("result = {}({});", info.wgsl_function, params)
+                    format!("result = {};", call)
                 };
                 let body = if census {
                     format!("census_pp3({0}u, result); {1} census_out3({0}u, result);", idx, body)
@@ -3032,7 +3071,6 @@ mod tests {
         assert!(wgsl.contains("const USE_INLINED_TRANSFORMS: bool = false;"));
     }
 
-    use super::*;
     use std::collections::{BTreeMap, HashMap};
 
     fn test_builder() -> ShaderBuilder {
@@ -3048,7 +3086,7 @@ mod tests {
     #[test]
     fn inlined_transforms_cover_all_pools_in_global_order() {
         use crate::scene::transforms::{Flame, Transform};
-        let mut mk = || {
+        let mk = || {
             let mut t = Transform::new();
             t.set_variation("linear", 1.0);
             t
@@ -3237,6 +3275,212 @@ mod tests {
         // still run the variation. Here that's "anything except xform 0".
         assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u)"));
         assert_eq!(normal[0].gate.as_deref(), Some("(xform_id != 0u)"));
+    }
+
+    /// The flame's full shader as the export path builds it (inlined
+    /// constants, phase overrides from `collect_phase_overrides`),
+    /// checked by naga's full Validator. `ShaderCache::validate_wgsl`
+    /// only parses, and a call to an undefined function or with an
+    /// argument missing parses fine.
+    fn validated_flame_shader(flame: &crate::scene::transforms::Flame, render_3d: bool) -> String {
+        use crate::scene::transforms::RenderMode;
+        let registry = crate::variations::global_registry();
+        let builder = ShaderBuilder::new((*registry).clone());
+        let mode = if render_3d { RenderMode::ThreeD } else { RenderMode::TwoD };
+        let constants = ShaderConstants::with_inlined_transforms(flame, &registry, 0, mode, false);
+        drop(registry);
+        let shader = builder.build_from_template(flame, &HashMap::new(), render_3d, false, false, true, &constants);
+        let module = wgpu::naga::front::wgsl::parse_str(&shader)
+            .unwrap_or_else(|e| panic!("parse (3d={render_3d}):\n{}", e.emit_to_string(&shader)));
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("validation (3d={render_3d}):\n{}", e.emit_to_string(&shader)));
+        shader
+    }
+
+    /// Two normals -- `name` at weight 0.5 and fx_priority `prio` on the
+    /// first, plain linear on the second.
+    fn flame_moving(name: &str, prio: i32) -> crate::scene::transforms::Flame {
+        use crate::scene::transforms::{Flame, Transform};
+        let mut flame = Flame::new();
+        let mut t0 = Transform::new();
+        t0.set_variation("linear", 1.0);
+        t0.set_variation(name, 0.5);
+        t0.variation_priorities.insert(name.to_string(), prio);
+        flame.transforms.push(t0);
+        let mut t1 = Transform::new();
+        t1.set_variation("linear", 1.0);
+        flame.transforms.push(t1);
+        flame
+    }
+
+    /// An `Any` variation moved by fx_priority compiles in every phase
+    /// and both modes. The pre phase called `variation_{name}` rather
+    /// than the registry's function name (`julia`'s is `julia`), and the
+    /// `vrc` register a WritesRgb variation takes reached only the 2D
+    /// pre phase and the normal phases -- so julia moved to pre, and any
+    /// glsl_* moved to post (or to pre in 3D), emitted shaders that do
+    /// not compile.
+    #[test]
+    fn fx_priority_moved_any_variations_compile() {
+        for (name, prio) in [("julia", -1), ("julia", 1), ("glsl_acrilic", 1), ("glsl_acrilic", -1), ("dc_mandelbox2D", 1)] {
+            for render_3d in [false, true] {
+                let shader = validated_flame_shader(&flame_moving(name, prio), render_3d);
+                let phase = if prio < 0 { "PRE MOVED" } else { "POST MOVED" };
+                assert!(shader.contains(phase), "{name} at {prio} (3d={render_3d}) was not moved");
+            }
+        }
+    }
+
+    /// A Final transform's fx_priority reaches the shader. JWF partitions
+    /// the phases per XForm, finals included; the overrides used to be
+    /// collected from the normal pool only and classified over the
+    /// normals' ids, so a Final's -1 was ignored. The pre placement is
+    /// gated on the Final's GLOBAL id (normals, then linkeds, then
+    /// finals: 2 normals + 1 linked puts the final at 3).
+    #[test]
+    fn fx_priority_on_a_final_gates_the_pre_placement_on_its_id() {
+        use crate::scene::transforms::Transform;
+        let mut flame = flame_moving("linear", 0);
+        flame.transforms[0].variation_priorities.clear();
+        let mut linked = Transform::new();
+        linked.set_variation("linear", 1.0);
+        flame.linked_transforms.push(linked);
+        let mut fin = Transform::new();
+        fin.set_variation("julia", 1.0);
+        fin.variation_priorities.insert("julia".to_string(), -1);
+        flame.final_transforms.push(fin);
+        flame.transforms[0].final_attachments.push(0);
+
+        let registry = crate::variations::global_registry();
+        let id_map = crate::scene::transforms::compute_local_index_map(flame.active_variation_names_ordered(&registry));
+        let julia = id_map["julia"];
+        let overrides = collect_phase_overrides(&flame, &registry, &id_map);
+        assert_eq!(overrides.get(&julia).and_then(|m| m.get(&3)), Some(&-1), "the final's override is keyed by its global id");
+        drop(registry);
+
+        let builder = test_builder();
+        let (pre, normal, post) = builder.resolve_phase_buckets(&[("julia".to_string(), julia)], 2, &overrides, false);
+        assert_eq!(pre.len(), 1, "julia is placed in pre");
+        assert!(pre[0].moved);
+        assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 3u)"), "and only for the final");
+        assert_eq!(normal.len(), 1, "the normals keep it in normal (catch-all)");
+        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id != 3u)"));
+        assert!(post.is_empty());
+        for render_3d in [false, true] {
+            validated_flame_shader(&flame, render_3d);
+        }
+    }
+
+    /// A variation every normal moves is placed ungated -- but not when a
+    /// Linked or Final transform uses it unmoved: the ungated pre ran for
+    /// that transform too, moving the variation where its own priority
+    /// left it in normal.
+    #[test]
+    fn a_moved_variation_does_not_leak_into_a_final_that_keeps_it() {
+        use crate::scene::transforms::Transform;
+        let mut flame = flame_moving("blur", -1);
+        flame.transforms[1].set_variation("blur", 0.25);
+        flame.transforms[1].variation_priorities.insert("blur".to_string(), -1);
+        // The builder first: it takes the registry's read lock itself, and
+        // a second read on a thread already holding one can deadlock.
+        let builder = test_builder();
+        let registry = crate::variations::global_registry();
+        let ids = |f: &crate::scene::transforms::Flame| {
+            let id_map = crate::scene::transforms::compute_local_index_map(f.active_variation_names_ordered(&registry));
+            let blur = id_map["blur"];
+            (blur, collect_phase_overrides(f, &registry, &id_map))
+        };
+
+        // Both normals move it and no other transform uses it: one
+        // ungated pre placement, as before.
+        let (blur, overrides) = ids(&flame);
+        let (pre, normal, _) = builder.resolve_phase_buckets(&[("blur".to_string(), blur)], 2, &overrides, false);
+        assert!(pre.len() == 1 && pre[0].gate.is_none() && normal.is_empty(), "the unshared case is unchanged");
+
+        // A final that uses it at its natural phase.
+        let mut fin = Transform::new();
+        fin.set_variation("blur", 1.0);
+        flame.final_transforms.push(fin);
+        flame.transforms[0].final_attachments.push(0);
+        let (blur, overrides) = ids(&flame);
+        let (pre, normal, _) = builder.resolve_phase_buckets(&[("blur".to_string(), blur)], 2, &overrides, false);
+        assert_eq!(pre.len(), 1);
+        assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u || xform_id == 1u)"), "pre only for the normals that moved it");
+        assert_eq!(normal.len(), 1);
+        assert_eq!(normal[0].gate.as_deref(), Some("(xform_id != 0u && xform_id != 1u)"), "the final keeps it in normal");
+        drop(registry);
+        for render_3d in [false, true] {
+            validated_flame_shader(&flame, render_3d);
+        }
+    }
+
+    /// A subflame's transforms have fx_priority of their own, and run
+    /// through a dispatcher of their own. Their priorities were never
+    /// collected, and the subflame dispatcher took the parent's
+    /// placements: a parent that moved a variation moved it inside the
+    /// subflame too, and a subflame transform's own move did nothing.
+    #[test]
+    fn a_subflames_fx_priority_is_its_own() {
+        use crate::scene::transforms::{Flame, Transform};
+        let builder = test_builder();
+        let registry = crate::variations::global_registry();
+        let ids = |f: &Flame, name: &str| {
+            let id_map = crate::scene::transforms::compute_local_index_map(f.active_variation_names_ordered(&registry));
+            (id_map[name], collect_phase_overrides(f, &registry, &id_map))
+        };
+        let parent_running = |sub: Flame| {
+            let mut flame = flame_moving("linear", 0);
+            flame.transforms[0].variation_priorities.clear();
+            flame.transforms[1].set_variation("subflame_wf", 1.0);
+            flame.transforms[1].variation_params.insert("subflame_wf.subflame_id".to_string(), 0.0);
+            flame.subflames.push(sub);
+            flame
+        };
+        let sub_of = |transforms: Vec<Transform>| Flame { transforms, ..Flame::default() };
+
+        // The parent moves blur to pre; the subflame uses it where it stands.
+        let mut uses = Transform::new();
+        uses.set_variation("blur", 1.0);
+        let mut flame = parent_running(sub_of(vec![uses]));
+        flame.transforms[0].set_variation("blur", 0.5);
+        flame.transforms[0].variation_priorities.insert("blur".to_string(), -1);
+        let (blur, overrides) = ids(&flame, "blur");
+        let active = [("blur".to_string(), blur)];
+        let (pre, normal, _) = builder.resolve_phase_buckets(&active, 2, &overrides, false);
+        assert_eq!(pre.len(), 1, "the parent moves it");
+        assert_eq!(pre[0].gate.as_deref(), Some("(xform_id == 0u)"));
+        assert_eq!(normal.len(), 1);
+        let (pre, normal, post) = builder.resolve_phase_buckets(&active, 2, &overrides, true);
+        assert!(pre.is_empty() && post.is_empty(), "the parent's move reached the subflame");
+        assert!(normal.len() == 1 && normal[0].gate.is_none(), "the subflame keeps it in normal");
+
+        // A subflame transform moves julia to post; its sibling keeps it.
+        let mut moves = Transform::new();
+        moves.set_variation("julia", 1.0);
+        moves.variation_priorities.insert("julia".to_string(), 1);
+        let mut keeps = Transform::new();
+        keeps.set_variation("julia", 1.0);
+        let flame = parent_running(sub_of(vec![moves, keeps]));
+        let (julia, overrides) = ids(&flame, "julia");
+        let base = crate::scene::transforms::SUBFLAME_XFORM_ID_BASE;
+        assert_eq!(overrides[&julia].get(&base), Some(&1), "keyed by the subflame transform's global id");
+        assert_eq!(overrides[&julia].get(&(base + 1)), Some(&0), "a user that keeps it is recorded too");
+        let active = [("julia".to_string(), julia)];
+        let (pre, normal, post) = builder.resolve_phase_buckets(&active, 2, &overrides, false);
+        assert!(pre.is_empty() && post.is_empty() && normal.len() == 1 && normal[0].gate.is_none(), "the parent is untouched");
+        let (pre, normal, post) = builder.resolve_phase_buckets(&active, 2, &overrides, true);
+        assert!(pre.is_empty());
+        assert_eq!(post.len(), 1, "the subflame transform's move was ignored");
+        assert_eq!(post[0].gate.as_deref(), Some(format!("(xform_id == {base}u)").as_str()));
+        assert_eq!(normal[0].gate.as_deref(), Some(format!("(xform_id != {base}u)").as_str()));
+        drop(registry);
+        for render_3d in [false, true] {
+            validated_flame_shader(&flame, render_3d);
+        }
     }
 
     /// OUTPUT_HISTOGRAM_DIRECT toggles the unified template between two

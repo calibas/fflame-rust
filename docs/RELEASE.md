@@ -31,8 +31,8 @@ Four surfaces, built four different ways, from one repository.
 The three single-engine renderer modules (`flame`, `escape`, `sim`) are
 the SAME SOURCE as `wasm/render` built with different Cargo features;
 each drops the engines it does not need, which is roughly half the
-gzipped download. (`wasm/render` itself is built with the flame and
-escape-time engines, not simulation.) `release.py check` compiles the
+gzipped download. (`wasm/render` itself is built with all three
+engines.) `release.py check` compiles the
 library at each of those feature combinations, because a `#[cfg]`
 attached to the wrong item is invisible in every build that has all
 three engines on — that has happened, and only a build with simulation
@@ -40,30 +40,34 @@ and no escape caught it. See [wasm/README.md](../wasm/README.md).
 
 ### The version problem
 
-Eight files carry a version number, and nothing but this procedure
-relates them. Since 0.5 all but one agree:
+Eight manifests carry a version number, and one more file carries it
+as a cache-buster:
 
 ```
 Cargo.toml                 0.5.0   ← desktop + web app, and what PNG metadata records
-python/pyproject.toml      0.5.0
-python/Cargo.toml          0.1.0
+python/Cargo.toml          0.5.0   ← what pyfflame.__version__ reports (CARGO_PKG_VERSION)
+python/pyproject.toml      0.5.0   ← the wheel's version
 wasm/render/Cargo.toml     0.5.0
 wasm/script/Cargo.toml     0.5.0
 wasm/flame/Cargo.toml      0.5.0
 wasm/escape/Cargo.toml     0.5.0
 wasm/sim/Cargo.toml        0.5.0
+index.html                 ?v=0.5.0 on css/vkb.css and js/vkb.js
 ```
 
 A user reporting "0.5.0 crashes" is describing the app. A user reporting
-"pyfflame 0.1.0 gives a different flame" is describing a build that could
-have come from any app version, because nothing records which.
+"pyfflame 0.1.0 gives a different flame" — which every pyfflame said
+until `python/Cargo.toml` was brought into line — is describing a build
+that could have come from any app version, because nothing records which.
 
 **Decided: lockstep.** One version for everything, bumped together.
-`release.py version` implements it for the four files in its
-`VERSION_FILES` list — `Cargo.toml`, `python/pyproject.toml`,
-`wasm/render/Cargo.toml` and `wasm/script/Cargo.toml` — and says so
-when it runs. It does not touch `wasm/flame`, `wasm/escape`, `wasm/sim`
-or `python/Cargo.toml`; until it does, bump those by hand.
+`release.py version` rewrites every file in its `VERSION_FILES` list
+(the nine above). It reads and checks all of them before writing any,
+so a file that has lost its version line fails the bump with nothing
+rewritten. `release.py versions` lists them, and the `versions agree`
+gate (§2) fails when any differs from `Cargo.toml` — or when a tracked
+`Cargo.toml` or `pyproject.toml` is missing from the list, which is how
+the three single-engine crates and `python/Cargo.toml` fell behind.
 
 The artifacts are not independently useful: a `pyfflame` wheel and the
 app it matches come from one commit, and pretending otherwise creates a
@@ -83,12 +87,14 @@ python scripts/release.py check          # every gate below
 python scripts/release.py check --fix    # ...and regenerate the generated files if stale
 ```
 
-The gates, in order: unit tests (`cargo test --release --lib`), the
-library compiled for `wasm32-unknown-unknown`, the generated contract,
-the shader dumps, doc links, the engine feature matrix (the library
-compiled with only `engine-sim`, only `engine-escape`, only
-`engine-flame`), and the two gallery crates' test suites
-(`wasm/script` parity, `wasm/render` smoke). The commands are in
+The gates, in order: every version agrees (§1), unit tests
+(`cargo test --release --lib`), the library compiled for
+`wasm32-unknown-unknown`, the generated contract, the shader dumps, doc
+links, and the five gallery crates' test suites (`wasm/script` parity,
+`wasm/render` smoke, and the `wasm/sim`, `wasm/escape` and `wasm/flame`
+smoke tests). The last three are also the engine feature matrix: each
+builds the library with only `engine-sim`, only `engine-escape` or only
+`engine-flame`. The commands are in
 [TESTING-GUIDE.md §2](TESTING-GUIDE.md).
 
 **Nothing runs on push, on commit, or on a timer.** That is deliberate:
@@ -184,9 +190,22 @@ the two there is an automatic signal where there was none.
 `RenderMode::ALL` feeds that list, and
 `every_render_mode_is_published_in_the_contract` keeps it honest: Rust
 cannot iterate a plain enum, so a fourth mode fails to compile in that
-test's exhaustive match rather than quietly missing the contract. The
-same trick would work for the other vocabularies whenever they are
-worth the same treatment.
+test's exhaustive match rather than quietly missing the contract.
+`VariationCategory::ALL` and `ParamType::ALL` have the same guard
+(`every_variation_category_is_published_in_the_contract`,
+`every_param_type_is_published_in_the_contract`), as `Feature::ALL` has
+its count test, so no vocabulary in the contract is transcribed by hand
+any more. That keeps a new value from going missing from the contract;
+it still does not move the fingerprint, so the API still has to be told.
+
+**The fingerprint moved again on 2026-10-11** (`81a4d090385275c0` →
+`23a163e0bf37ffe9`): `helper_libraries.name_gated` is now read from the
+shader builder's own table (`NAME_GATED_LIBRARIES` in
+`src/shader_builder_v2.rs`), and that published two libraries the
+hand-written list had left out, `polyhedra.wgsl` and `polychora.wgsl`
+(plus `crackle_fast` among `noise.wgsl`'s users). New keys, so the API
+re-pins. From now on a library the builder gates on a name cannot be
+missing from the contract.
 
 Also update `docs/main/openapi.json` when the client's expectations of
 the API change — it is the wire authority for both repositories, and it
@@ -210,7 +229,7 @@ generated reports (§4.3) and do the tag there.
 
 ```bash
 python scripts/release.py version 0.5.0 --dry-run   # read it first
-python scripts/release.py version 0.5.0             # all four crates, lockstep
+python scripts/release.py version 0.5.0             # every version, lockstep
 python scripts/release.py changelog > NOTES.md      # raw material, then edit it
 ```
 
@@ -273,15 +292,14 @@ cargo run --release --bin variation_probe -- census --corpus
 ### 4.4 — Build
 
 ```bash
-python scripts/release.py build     # desktop, packaging, web, two gallery modules, wheel
+python scripts/release.py build     # desktop, packaging, web, five gallery modules, wheel
 python scripts/release.py build --only desktop   # only surfaces whose name contains this
 ```
 
 Host-specific packaging runs automatically as the second step — the
 `.app` bundle on macOS, the zip on Windows. The web app step runs
-`bash build-wasm.sh`. Of the gallery modules, `release.py build` builds
-only `wasm/render` and `wasm/script`; build `wasm/flame`, `wasm/escape`
-and `wasm/sim` by hand. Individually:
+`bash build-wasm.sh`. The gallery modules are five `wasm-pack` builds,
+one per crate (`--only gallery` builds just those). Individually:
 
 | surface | command | where |
 |---|---|---|
@@ -295,8 +313,8 @@ and `wasm/sim` by hand. Individually:
 `--profile dist`, never `--release`, for **desktop and web alike** — §4c
 says why, and has the measured numbers for each. The gallery modules are
 the exception: their own `[profile.release]` already sets everything
-`dist` would, plus `wasm-opt`. §5 has the detail, including the two
-test suites no gate runs.
+`dist` would, plus `wasm-opt`. §5 has the detail, including their test
+suites.
 
 ### 4.5 — Smoke-test each artifact
 
@@ -586,7 +604,7 @@ no deploy script.
 
 | upload | from | changes |
 |---|---|---|
-| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, ~16 MiB of wasm) | every release |
+| `pkg/` | `build-wasm.sh` / `.bat` (`--profile dist`, ~16 MiB of wasm, and the palette packs under `pkg/assets/`) | every release |
 | `index.html` | repo root | rarely |
 | `css/`, `js/` | repo root | rarely — the virtual-keyboard bridge |
 
@@ -614,7 +632,7 @@ The Endless Gallery's renderers and script engine. Separate crates, so
 they are the one surface that does **not** use `build-wasm.sh`:
 
 ```bash
-cd wasm/render && wasm-pack build --target web --release   # flame + escape-time
+cd wasm/render && wasm-pack build --target web --release   # every engine
 # ...and the single-engine modules, same source, different Cargo features:
 cd wasm/flame  && wasm-pack build --target web --release   # flame only
 cd wasm/escape && wasm-pack build --target web --release   # escape-time only
@@ -640,15 +658,18 @@ own `wasm-opt`, so binaryen need not be on PATH. The
 `Cargo.toml` are load-bearing: the bundled wasm-opt 117 predates
 rustc's bulk-memory default and rejects the module without them.
 
-**Gated since 0.5.** `release.py check` runs both crates' test suites
-(`gallery script parity`, `gallery renderer smoke`) — the CLI-parity
-fixtures §6 names as the guard for `script + seed` reproducibility now
-run in every check. The renderer smoke tests skip cleanly on a machine
-with no GPU adapter. The single-engine crates have smoke tests of
-their own (`wasm/flame/tests/flame_smoke.rs`, `wasm/escape/tests/escape_smoke.rs`,
-`wasm/sim/tests/sim_smoke.rs`, which assert the dropped engines really
-are gone); no gate runs them — `check` only compiles the library at
-their feature combinations. To run one by hand:
+**Gated.** `release.py check` runs all five crates' test suites
+(`gallery script parity`, `gallery renderer smoke`, `gallery sim
+smoke`, `gallery escape smoke`, `gallery flame smoke`) — the CLI-parity
+fixtures §6 names as the guard for `script + seed` reproducibility run
+in every check. The single-engine crates' smoke tests
+(`wasm/flame/tests/flame_smoke.rs`, `wasm/escape/tests/escape_smoke.rs`,
+`wasm/sim/tests/sim_smoke.rs`) assert the dropped engines really are
+gone, and building them is also the engine feature matrix: they replaced
+three `cargo check --lib --no-default-features --features engine-X`
+gates, at the cost of codegen instead of a check (the comment above
+`GATES` in `release.py` has the estimate). The renderer smoke tests skip
+cleanly on a machine with no GPU adapter. To run one by hand:
 
 ```bash
 cd wasm/script && cargo test --profile gallery-test   # byte-identical flames
@@ -760,6 +781,8 @@ Quick reference — the full reasoning is in §3.
 |---|---|
 | a variation | shader dumps if WGSL changed; contract; variation corpus |
 | a variation *feature* | `Feature::ALL` + its count test; contract; **tell the API** (§3) |
+| a variation category or parameter type | `VariationCategory::ALL` / `ParamType::ALL` + their tests in `src/contract.rs`; contract; **tell the API** (§3) |
+| a helper library the builder splices by variation name | an entry in `NAME_GATED_LIBRARIES` (`src/shader_builder_v2.rs`), which the contract reads; contract (shape moves, API re-pins) |
 | an effect | contract; effect corpus; check `locales/en.yml` has its label |
 | a wire struct | contract (shape moves, API re-pins); `VARIATIONS_WIRE_FORMAT.md` §11 |
 | `FractalConfig` structure | bump `CURRENT_CONFIG_VERSION`, add a `migrate_value` arm |

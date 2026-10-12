@@ -1466,8 +1466,33 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
 // What the marcher colours with, at the offset it stopped at. Full
 // depth: the colourings want the level and the address, which are only
 // known once a candidate escapes.
+//
+// The march stops on the surface's OUTSIDE, within its tolerance. Where
+// the attractor touches its bounding sphere -- a Menger sponge's corners
+// -- that point is outside the ball as well, the walk reads it as
+// escaped at level 0, and an escaped candidate takes no address digit:
+// address 0, the palette's start, a black spot at the very tip of the
+// corner. Pulled back just inside the sphere it walks into the corner it
+// touched. The whole outer shell, a relative 1e-5 deep, is pulled in to
+// its inner edge, not only what lies beyond the sphere: the walk measures
+// its radius through the link chain, and a point this test puts a few
+// ulps inside could still read as outside there. A point deeper in the
+// ball, every other surface point, is untouched. The correction is
+// subtracted from the delta as a small displacement, never by forming
+// `target + delta` (see the chain).
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
-    return ifs_walk3(delta, 0.0);
+    let rel = delta + ifs_target_offset();
+    let dw = ifs_slice_w() - ifs_ball_w();
+    let reach2 = ifs_radius() * ifs_radius() - dw * dw;
+    let len = length(rel);
+    var d = delta;
+    if (reach2 > 0.0) {
+        let limit = sqrt(reach2) * (1.0 - 1e-5);
+        if (len > limit) {
+            d = delta - rel * (1.0 - limit / len);
+        }
+    }
+    return ifs_walk3(d, 0.0);
 }
 "#,
 };
@@ -1636,6 +1661,15 @@ fn ifs_color(res: IfsResult) -> IfsShade {
     if (cparam(0u) >= 0.5) {
         v = res.color;
     }
+    // Both are positions in [0, 1): the address is a base-N fraction,
+    // and a transform colour of 1 is the palette's last entry, as on a
+    // flame. But an address on the last branch at every level --
+    // 0.(N-1)(N-1)... -- rounds UP to exactly 1.0 in f32 once the walk
+    // is a dozen levels deep, and the palette wrap took 1.0 to 0: a black
+    // spot at the very tip of the corner the last map holds (the Menger
+    // Sponge preset's nearest white corner). The largest f32 below 1
+    // keeps it at the palette's end.
+    v = min(v, 0.99999994);
     return IfsShade(v * cparam(1u), ifs_halo(res, cparam(2u)));
 }
 "#,
@@ -2248,9 +2282,10 @@ pub fn pack_globals(ifs: &Ifs2, out: &mut [[f32; 4]]) {
         crate::scene::ifs_estimate::RankKey::Auto,
     ) == crate::scene::ifs_estimate::RankKey::Weighted;
     out[2] = [0.0; 4];
-    // fdata[3].w: zero-padded in both layouts (the solid's forward
-    // vector is a vec3 there), so it is free in both. fdata[2] was the
-    // first choice and is the solid's camera eye -- a flag read from
+    // fdata[3].w on the plane. The solid keeps its own elsewhere
+    // ([`SOLID_RANK_KEY`]): its row 3 is the camera's forward vector
+    // with the material's gloss in the pad. fdata[2] was the first
+    // choice and is the solid's camera eye -- a flag read from
     // `eye.x > 0.5` ranked every solid whose camera sat right of
     // x = 0.5 by the wrong key, caught by the solid agreement gate.
     out[3] = [0.0, 0.0, 0.0, if weighted { 1.0 } else { 0.0 }];
@@ -4421,7 +4456,6 @@ impl crate::scene::ifs_estimate::SeedPoint3 for [super::bigfloat::BigFloat; 3] {
         aux: f64,
     ) -> Option<Self> {
         use crate::scene::ifs_analysis::Map3;
-        use crate::scene::ifs_estimate::SeedPoint3;
         let out = match m {
             Map3::Affine(a) => self.apply_affine3(a),
             Map3::NonlinearInverse(r) => {
@@ -4518,7 +4552,6 @@ fn big_kernel_inverse(
 impl crate::scene::ifs_estimate::SeedPoint for [super::bigfloat::BigFloat; 2] {
     fn apply_map(&self, m: &crate::scene::ifs_analysis::Map2) -> Option<Self> {
         use crate::scene::ifs_analysis::Map2;
-        use crate::scene::ifs_estimate::SeedPoint;
         match m {
             Map2::Affine(a) => Some(self.apply_affine(a)),
             Map2::NonlinearInverse(r) => {
@@ -4879,6 +4912,10 @@ pub fn solid_distance(escape: &crate::config::escape::EscapeConfig, ifs: &Ifs3) 
     ((x - e).exp2(), e as i64)
 }
 
+/// Where a solid's beam ranking key sits in `fdata` (row, component):
+/// the handover row's pad. The template's `ifs_weighted_key` reads it.
+pub(crate) const SOLID_RANK_KEY: (usize, usize) = (7, 3);
+
 /// Pack the whole-IFS constants and the camera for a solid render.
 ///
 /// Layout, one `vec4` each:
@@ -4888,6 +4925,11 @@ pub fn solid_distance(escape: &crate::config::escape::EscapeConfig, ifs: &Ifs3) 
 /// 3. `forward xyz, 0`
 /// 4. `right xyz, 0`
 /// 5. `up xyz, 0`
+///
+/// The renderer then writes the material into the w of rows 3-5
+/// (`ifs_gloss`, `ifs_rough`, `ifs_glow`), and `pack_rig3` fills row 7's
+/// z and rows 8 on; the beam's ranking key is row 7's w
+/// ([`SOLID_RANK_KEY`]).
 pub fn pack_globals3(
     ifs: &Ifs3,
     cam: &SolidCamera,
@@ -4940,13 +4982,15 @@ pub fn pack_globals3(
         cam.eye_rel[2] as f32,
         cam.fov,
     ];
-    // w: the beam's ranking key, as the planar packer sets it -- the
-    // forward vector's pad, which nothing else reads.
+    // The forward vector's pad is the material's (`ifs_gloss`): the
+    // ranking key once sat here, as on the plane, and the renderer's
+    // gloss write then ranked every solid glossier than 0.5 by the
+    // sigma-weighted key the CPU seeding it never chose.
     let weighted = crate::scene::ifs_estimate::resolved_key(
         ifs,
         crate::scene::ifs_estimate::RankKey::Auto,
     ) == crate::scene::ifs_estimate::RankKey::Weighted;
-    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, if weighted { 1.0 } else { 0.0 }];
+    out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
     out[5] = [cam.up[0] as f32, cam.up[1] as f32, cam.up[2] as f32, 0.0];
     // The target's offset from the ball's centre, which is what turns
@@ -4961,12 +5005,14 @@ pub fn pack_globals3(
     // The handover cap, which is the whole of the level choice: a link
     // holds a sample while its matrix carries the sample's delta no
     // further than this.
+    // z: the light count (`pack_rig3`); w: the beam's ranking key.
     out[7] = [
         beam.max(1) as f32,
         (ifs.ball.radius * crate::scene::ifs_estimate::HANDOVER_FRACTION) as f32,
         0.0,
         0.0,
     ];
+    out[SOLID_RANK_KEY.0][SOLID_RANK_KEY.1] = if weighted { 1.0 } else { 0.0 };
     pack_rig3(cam, shading, fog, out);
 }
 
@@ -6403,12 +6449,6 @@ mod tests {
             let centre = [on_set[0] + 0.4 * span, on_set[1]];
             let basis = view_basis(span, span, 0.0);
             let px = span / 512.0;
-            use crate::scene::ifs_estimate::SeedPoint as _;
-            let steps: Vec<bool> = ifs
-                .maps
-                .iter()
-                .map(|m| centre.clone().apply_map(&m.inverse).is_some())
-                .collect();
             let seeds = crate::scene::ifs_estimate::seed_beam(
                 &ifs,
                 centre,
@@ -7780,6 +7820,12 @@ mod gpu_tests {
     }
 
     pub(super) fn device() -> (wgpu::Device, wgpu::Queue) {
+        device_if_any().expect("adapter and device")
+    }
+
+    /// `device`, or None without an adapter -- for a test that runs in
+    /// the suite and skips on a machine with no GPU.
+    fn device_if_any() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -7789,7 +7835,7 @@ mod gpu_tests {
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
-        .expect("adapter");
+        .ok()?;
         // The flame renderer is built on every render_with job
         // whatever the mode, and its compute layout wants nine
         // storage buffers where the default limit is eight.
@@ -7805,7 +7851,7 @@ mod gpu_tests {
             required_limits: limits,
             ..Default::default()
         }))
-        .expect("device")
+        .ok()
     }
 
     fn half(tx: f32, ty: f32) -> Transform {
@@ -7945,6 +7991,88 @@ mod gpu_tests {
     fn brightness(rgba: &[u8], x: u32, y: u32) -> f64 {
         let i = ((y * W + x) * 4) as usize;
         (rgba[i] as f64 + rgba[i + 1] as f64 + rgba[i + 2] as f64) / 765.0
+    }
+
+    /// The corner the last map holds is the palette's END. Its address,
+    /// the last branch at every level, is 0.(N-1)(N-1)... in base N, a
+    /// fraction below 1 -- but in f32 it rounds up to exactly 1.0 once
+    /// the walk is a dozen levels deep, and the palette wrap took that
+    /// to 0, the start: a black spot at the very tip of the Menger
+    /// Sponge preset's nearest white corner.
+    ///
+    /// Four half-maps tile the unit square, the last fixing (1, 1). A
+    /// view 2^-14 across centred on that corner has the square in one
+    /// quarter, every pixel of it at least fourteen 3s deep in base 4:
+    /// white under a black-to-white palette, where it was black.
+    #[test]
+    fn the_last_branchs_corner_is_the_palettes_end_not_its_start() {
+        let Some((device, queue)) = device_if_any() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let square = vec![half(0.0, 0.0), half(0.5, 0.0), half(0.0, 0.5), half(0.5, 0.5)];
+        let mut c = ifs_preset_config("Square", "ifs_address", square);
+        c.escape.center_re = "1".to_string();
+        c.escape.center_im = format!("{}", plane_im(1.0));
+        c.escape.zoom_log2 = 16.0;
+        c.palette = crate::scene::palette::Palette::grayscale();
+        let job = crate::renderer::RenderJob::new(&c, W, H);
+        let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+            .expect("render");
+        let white = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .filter(|&(x, y)| brightness(&out.rgba_data, x, y) > 0.8)
+            .count();
+        let share = white as f64 / (W * H) as f64;
+        assert!(share > 0.15, "only {:.1}% of the view is white; the square's quarter of it is the palette's end", 100.0 * share);
+    }
+
+    /// A solid's surface never shows the palette's start for want of an
+    /// address. The march stops just outside the surface, and where the
+    /// attractor touches its bounding sphere -- the Menger sponge's
+    /// corners -- that is outside the ball too: the walk called the point
+    /// escaped at level 0, gave it address 0, and the tip of the corner
+    /// came out the palette's first colour, a few pixels that moved with
+    /// the window's size. These are the Menger Sponge preset's cameras
+    /// that showed it, at sizes that did, with that first colour blue.
+    #[test]
+    fn a_sponges_corner_tip_takes_the_corners_address() {
+        let Some((device, queue)) = device_if_any() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let preset = crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| c.flame.name == "Menger Sponge")
+            .expect("the sponge ships");
+        let views = [
+            (["0.520531140020400689060060", "0.396500536159918481642747", "0.652968641495506081704235"], 1.4850384f64, None, (640u32, 480u32)),
+            (["0.530214777819272501069702", "0.369373328080211437307375", "0.687072901524964720531372"], 0.8250214, Some(0.699877f32), (800, 600)),
+            (["0.530214777819272501069702", "0.369373328080211437307375", "0.687072901524964720531372"], 0.8250214, Some(0.699877), (1000, 700)),
+        ];
+        for (target, zoom_log2, fov, (w, h)) in views {
+            let mut c = preset.clone();
+            c.escape.cam_target_x = target[0].to_string();
+            c.escape.cam_target_y = target[1].to_string();
+            c.escape.cam_target_z = target[2].to_string();
+            c.escape.zoom_log2 = zoom_log2;
+            if let Some(f) = fov {
+                c.escape.cam_fov = f;
+            }
+            c.palette.stops[0].color = [0.0, 0.0, 1.0];
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render");
+            let start: Vec<(usize, usize)> = out
+                .rgba_data
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(_, p)| p[2] > 120 && p[0] < 60 && p[1] < 60)
+                .map(|(i, _)| (i % w as usize, i / w as usize))
+                .collect();
+            assert!(start.is_empty(), "{w}x{h}: the palette's start at {start:?}, the corner's tip had no address");
+        }
     }
 
     /// A Flame Attractor stands as its flame does (`view_basis`): the
@@ -9779,7 +9907,6 @@ mod gpu_tests {
                     reference_beam(&ifs, target, basis, px, budget, BEAM);
 
                 let (mut worst_delta, mut worst_shipped) = (0.0f64, 0.0f64);
-                let mut n = 0usize;
                 let mut errs: Vec<f64> = Vec::new();
                 let mut reb: Vec<u32> = Vec::new();
                 let mut worst_at = (0u32, 0u32, 0.0f64, 0.0f64, 0.0f64);
@@ -9823,7 +9950,6 @@ mod gpu_tests {
                         if let Some((l, _)) = log.first() {
                             reb.push(*l);
                         }
-                        n += 1;
                     }
                 }
                 errs.sort_by(f64::total_cmp);
@@ -9907,7 +10033,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "needs a GPU"]
     fn the_shader_newton_is_the_cpu_newton() {
-        use crate::scene::ifs_analysis::{analyse_2d, Map2};
+        use crate::scene::ifs_analysis::analyse_2d;
         let guard = crate::variations::global_registry();
         let r = &*guard;
 
@@ -10382,7 +10508,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     #[test]
     #[ignore = "needs a GPU"]
     fn the_shader_jacobians_are_the_cpu_ones() {
-        use crate::scene::ifs_analysis::Map2;
         let (device, queue) = device();
 
         // One flame per kernel, so every arm of the switch is reached.
@@ -11951,7 +12076,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let dir = std::path::Path::new("output/ifs");
         std::fs::create_dir_all(dir).expect("output dir");
         let (device, queue) = device();
-        for (name, coloring, flame) in kernel_candidates() {
+        for (name, _coloring, flame) in kernel_candidates() {
             if !matches!(name, "Three Circles and a Seed" | "JuliaN Bubble" | "Julian Disc" | "Cup" | "Disc Spiral" | "Blob Flower") {
                 continue;
             }
@@ -14331,7 +14456,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         zoom: f64,
         n: u32,
     ) -> (u32, f64, usize, usize, usize, usize) {
-        let N = n;
+        let side = n;
         let flame = base.flame.clone();
         let _ = &flame;
         let levels = (zoom as u32 + 24).min(256);
@@ -14361,7 +14486,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         c.solid_shading.ssao_strength = 0.0;
         c.escape.zoom_log2 = zoom;
 
-        let job = crate::renderer::RenderJob::new(&c, N, N);
+        let job = crate::renderer::RenderJob::new(&c, side, side);
         let rgba = pollster::block_on(crate::renderer::render(
             device,
             queue,
@@ -14380,7 +14505,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // stopped shallower would read the difference in DEPTH as
         // a difference in precision.
         let cam = solid_camera(&c.escape, ifs3);
-        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / N as f64;
+        let finest = 2.0 * (cam.fov as f64 * 0.5).tan() * cam.distance / side as f64;
         let chain = crate::scene::ifs_estimate::seed_chain3(
             ifs3,
             super::target_at_precision(&c.escape, ifs3).expect("target parses"),
@@ -14402,13 +14527,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 finest
             );
         }
-        let mut refhit = vec![false; (N * N) as usize];
+        let mut refhit = vec![false; (side * side) as usize];
         let mut agree = 0usize;
         let mut hits = 0usize;
-        for y in 0..N {
-            for x in 0..N {
-                let u = (x as f64 + 0.5) / N as f64 - 0.5;
-                let v = (y as f64 + 0.5) / N as f64 - 0.5;
+        for y in 0..side {
+            for x in 0..side {
+                let u = (x as f64 + 0.5) / side as f64 - 0.5;
+                let v = (y as f64 + 0.5) / side as f64 - 0.5;
                 let mut dir = [0.0f64; 3];
                 for k in 0..3 {
                     dir[k] = cam.forward[k] + cam.right[k] * (u * 2.0 * tan_half)
@@ -14441,7 +14566,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     let root = disc.sqrt();
                     let mut t = (-b - root).max(0.0);
                     let t_max = -b + root;
-                    let px_at = 2.0 * tan_half / N as f64;
+                    let px_at = 2.0 * tan_half / side as f64;
                     for _ in 0..steps {
                         if t > t_max {
                             break;
@@ -14466,18 +14591,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         t += d;
                     }
                 }
-                refhit[(y * N + x) as usize] = hit;
+                refhit[(y * side + x) as usize] = hit;
                 if hit {
                     hits += 1;
                 }
-                let i = ((y * N + x) * 4) as usize;
+                let i = ((y * side + x) * 4) as usize;
                 let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
                 if lit == hit {
                     agree += 1;
                 }
             }
         }
-        let total = (N * N) as usize;
+        let total = (side * side) as usize;
         let pct = 100.0 * agree as f64 / total as f64;
         // Where the disagreement sits. A precision fault shows at
         // the SILHOUETTE, where a pixel is a hair from the
@@ -14485,14 +14610,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // the interior.
         let mut edge_dis = 0usize;
         let mut interior_dis = 0usize;
-        for y in 1..N - 1 {
-            for x in 1..N - 1 {
-                let at = |xx: u32, yy: u32| refhit[(yy * N + xx) as usize];
+        for y in 1..side - 1 {
+            for x in 1..side - 1 {
+                let at = |xx: u32, yy: u32| refhit[(yy * side + xx) as usize];
                 let me = at(x, y);
                 let boundary = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
                     .iter()
                     .any(|(dx, dy)| at((x as i32 + dx) as u32, (y as i32 + dy) as u32) != me);
-                let i = ((y * N + x) * 4) as usize;
+                let i = ((y * side + x) * 4) as usize;
                 let lit = rgba[i] as u32 + rgba[i + 1] as u32 + rgba[i + 2] as u32 > 24;
                 if lit != me {
                     if boundary {
@@ -14952,7 +15077,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         c.solid_shading.shading_strength = 1.0;
         c.solid_shading.lights[0].enabled = true;
         let mut engines = crate::renderer::RenderEngines::default();
-        let mut go = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
+        let go = |c: &crate::config::FractalConfig, engines: &mut crate::renderer::RenderEngines| {
             let job = crate::renderer::RenderJob::new(c, 512, 512).with_engines(engines);
             let t0 = web_time::Instant::now();
             let _ = pollster::block_on(crate::renderer::render(

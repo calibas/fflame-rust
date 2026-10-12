@@ -17,6 +17,8 @@ impl App {
     ///
     /// Returns whether animation is currently playing (for overwrite mode calculation).
     pub(super) fn update_animation(&mut self, delta_time: f64) -> bool {
+        self.sync_generator_signals();
+
         // Detect animation state transitions and update FSM accordingly
         let was_fsm_animating = self.render_mode.is_animating();
         let is_controller_playing = self.animation_controller.state == PlaybackState::Playing;
@@ -73,6 +75,22 @@ impl App {
         }
 
         is_controller_playing
+    }
+
+    /// Keep the Signals panel's generator signals rendered over the
+    /// animation's current duration. Every frame, so a duration change
+    /// reaches them whether or not the panel is open; it does nothing
+    /// unless the duration changed or a signal is missing.
+    pub(super) fn sync_generator_signals(&mut self) {
+        let duration = self
+            .animation_controller
+            .animation
+            .as_ref()
+            .map(|a| a.duration)
+            .unwrap_or(crate::ui::signal_panel::DEFAULT_GENERATOR_DURATION);
+        self.egui_layer
+            .signal_panel_state
+            .sync_generators(&mut self.signal_manager, duration);
     }
 
     /// Handle animation start transition.

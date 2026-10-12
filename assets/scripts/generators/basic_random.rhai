@@ -5,7 +5,7 @@
 // exactly what each one does.
 //
 // Run it from the command line with:
-//   fractal_flame_wgpu generate --script basic_random.rhai --seed 42
+//   FractalArtEditor generate --script basic_random.rhai --seed 42
 
 // Every script starts with its name and kind.
 //   "generator" builds a flame from scratch

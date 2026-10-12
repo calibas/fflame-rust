@@ -71,6 +71,12 @@ pub struct RenderJob<'a> {
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
 
+    /// The renderer is `render`'s own and dies with this job, so its
+    /// iteration buffers can go once the tone map has run. Set by
+    /// `render`, never by a caller of `render_with`, whose renderer
+    /// renders again.
+    pub(crate) throwaway_renderer: bool,
+
     /// Restart every orbit every dispatch, as before orbits persisted
     /// (`docs/archive/projects/persistent-orbits.md`): a gate's baseline.
     #[cfg(test)]
@@ -90,6 +96,7 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
+            throwaway_renderer: false,
             #[cfg(test)]
             restarted_orbits: false,
         }
@@ -290,7 +297,6 @@ impl std::error::Error for RenderError {}
 
 // Constants for render loop
 const NUM_WORKGROUPS: u32 = 128;
-const THREADS_PER_WORKGROUP: u64 = 64;
 const BATCH_SIZE: u32 = 4;
 
 /// Unified rendering function
@@ -314,9 +320,13 @@ const BATCH_SIZE: u32 = 4;
 pub async fn render(
     device: &Device,
     queue: &Queue,
-    job: RenderJob<'_>,
+    mut job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
+    // A flame the transform buffers cannot hold would panic in packing.
+    if let Some(why) = job.config.flame.gpu_capacity_error() {
+        return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
+    }
     // Refuse a size this device cannot hold BEFORE allocating any of
     // it -- including the flame renderer's own textures, which are
     // built below whichever engine ends up rendering. The limits are
@@ -369,24 +379,11 @@ pub async fn render(
     // 64 bytes a pixel never read, 2.1 GB of an 8K export (measured: a
     // terrain export at 8K ran out of memory on a 6 GB card).
     let surface_format = TextureFormat::Rgba8Unorm;
-    let tail_only = matches!(
-        job.config.render_mode,
-        crate::scene::transforms::RenderMode::Escape | crate::scene::transforms::RenderMode::Simulation
-    );
-    let build = if tail_only { FlameRenderer::for_tail } else { FlameRenderer::with_palette_size };
     // Caught here, not by an engine's own scope: wgpu reports a failed
     // allocation as an error that stops nothing, and the renderer is made
     // before any engine's scope is pushed.
     let alloc = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let mut renderer = build(
-        device,
-        queue,
-        surface_format,
-        job.width,
-        job.height,
-        &job.config.flame,
-        job.config.palette_size,
-    );
+    let mut renderer = FlameRenderer::for_job(device, queue, surface_format, job.width, job.height, job.config);
     if let Some(err) = alloc.pop().await {
         renderer.destroy();
         return Err(RenderError::OutOfMemory(err.to_string()));
@@ -398,6 +395,7 @@ pub async fn render(
     // reproducibility contracts were made with. A throwaway renderer
     // gains nothing from stickiness anyway.
     renderer.set_sticky_enabled(false);
+    job.throwaway_renderer = true;
 
     let out = render_with(&mut renderer, device, queue, job, progress).await;
 
@@ -437,6 +435,10 @@ pub async fn render_with(
     job: RenderJob<'_>,
     progress: &mut dyn RenderProgress,
 ) -> Result<RenderOutput, RenderError> {
+    // Callers with their own renderer (video, the gallery) come in here.
+    if let Some(why) = job.config.flame.gpu_capacity_error() {
+        return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
+    }
     let start_time = web_time::Instant::now();
 
     // Escape-time mode is a different generator with the same tail:
@@ -523,12 +525,12 @@ pub async fn render_with(
             );
             queue.submit(std::iter::once(enc.finish()));
         }
-        let changed = renderer.refresh_shadow_placement_blocking(
+        let changed = renderer.refresh_shadow_placement(
             device, queue,
             job.config.zoom, job.config.pan_x as f32, job.config.pan_y as f32,
             job.config.camera_rotation_x, job.config.camera_rotation_y, job.config.camera_bank,
             [job.config.camera_x, job.config.camera_y, job.config.camera_z],
-        );
+        ).await;
         log::info!("Shadow warmup: fit {}", if changed { "refit to measured bounds" } else { "unchanged" });
         let mut enc = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Shadow Warmup Reset"),
@@ -543,8 +545,19 @@ pub async fn render_with(
         queue.submit(std::iter::once(enc.finish()));
     }
 
-    // Render loop
+    // Render loop. `total_rendered` counts PLOTTED samples, as the app
+    // does: it is what stops the loop and what the output reports. It
+    // once counted dispatched iterations, burn-in included, so an export
+    // stopped short of the app's count for the same `max_iterations`
+    // (by a burn-in, or ~2% on flames whose orbits refresh) and its PNG
+    // metadata over-reported.
     let mut total_rendered = 0u64;
+    // Dispatches in a row that plotted nothing. Restarted orbits whose
+    // burn-in is no shorter than a dispatch plot nothing, ever; without
+    // this the loop would never end. Persistent orbits plot once their
+    // burn-in, which may span dispatches, is paid: allow that and a margin.
+    let mut empty_dispatches = 0u32;
+    let stall_limit = job.burn_in / job.iterations_per_thread.max(1) + 4;
     let mut batch_frame_count = 0u32;
     // The samples the batch plotted, which the tone map normalises by:
     // what the renderer says plotted, as the app counts -- a thread's
@@ -586,11 +599,19 @@ pub async fn render_with(
             clear_paths,
         );
 
-        let samples_this_frame =
-            NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * job.iterations_per_thread as u64;
-        total_rendered += samples_this_frame;
+        total_rendered += plotted;
         batch_samples += plotted;
         batch_frame_count += 1;
+        empty_dispatches = if plotted == 0 { empty_dispatches + 1 } else { 0 };
+        let stalled = empty_dispatches >= stall_limit;
+        if stalled {
+            log::warn!(
+                "Render: {stall_limit} dispatches in a row plotted nothing \
+                 ({} iterations a thread, burn-in {}); stopping at {total_rendered}",
+                job.iterations_per_thread,
+                job.burn_in,
+            );
+        }
 
         // Accumulate when batch is complete
         if batch_frame_count >= BATCH_SIZE {
@@ -605,7 +626,7 @@ pub async fn render_with(
         progress.on_progress(total_rendered, target);
 
         // Check if we've reached target
-        if total_rendered >= target {
+        if total_rendered >= target || stalled {
             // Final accumulation for partial batch
             if batch_frame_count > 0 {
                 let mut final_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
@@ -666,7 +687,7 @@ pub async fn render_with(
 
     // Solid brightness renormalization: exact accepted-density measurement
     // before the single final tonemap.
-    renderer.apply_exact_density_fraction(device, queue);
+    renderer.apply_exact_density_fraction(device, queue).await;
 
     // Solid-rendering shade pass — same ordering as the interactive frame:
     // shade, then density effects, then tonemap.
@@ -710,6 +731,7 @@ pub async fn render_with(
             &mut tonemap_encoder,
             pre_tonemap_view,
             &job.config.density_effects,
+            renderer.mean_density(),
         );
 
         if density_ran {
@@ -732,6 +754,22 @@ pub async fn render_with(
     }
 
     queue.submit(std::iter::once(tonemap_encoder.finish()));
+
+    // A throwaway renderer's iteration buffers -- several gigabytes at 8K
+    // -- are dead once the tone map has run. Free them before the colour
+    // chain allocates its full-size ping-pong: beside them, a browser ran
+    // out of GPU memory and the 8K export came back black. A destroyed
+    // buffer is freed only when the GPU is done with it, so wait for the
+    // tone map first.
+    if has_color_effects && job.throwaway_renderer {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        queue.on_submitted_work_done(move || {
+            let _ = tx.send(());
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = rx.await;
+        renderer.free_iteration_buffers();
+    }
 
     // Run color effects (after tonemap)
     let color_effects_ran = if has_color_effects {
@@ -869,6 +907,9 @@ async fn render_sim(
     // seeded, run to `steps`. A video loop passes its own, and frame n
     // continues frame n-1's run instead of re-running from the seed
     // (`simulation-fractals.md` D5).
+    // Whose renderer this is decides whether the teardown may free it
+    // (as in `render_escape`).
+    let caller_owned = job.engines.is_some();
     let mut owned: Option<crate::sim::SimRenderer> = None;
     let make = || crate::sim::SimRenderer::new(device, &job.config.sim, job.width, job.height);
     // A simulation's terrain (heightfield plan T4) lives beside it, so a
@@ -923,6 +964,9 @@ async fn render_sim(
             break;
         }
         if progress.is_cancelled() {
+            if !caller_owned {
+                sim.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
     }
@@ -947,6 +991,12 @@ async fn render_sim(
             !progress.is_cancelled()
         });
         if progress.is_cancelled() {
+            if let Some(t) = terrain_owned.as_ref() {
+                t.destroy();
+            }
+            if !caller_owned {
+                sim.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
         Some(t)
@@ -985,6 +1035,7 @@ async fn render_sim(
             &mut encoder,
             sim_view,
             &job.config.density_effects,
+            1.0, // a simulation's alpha is not a hit count
         );
         match (density_ran, chain.get_density_output()) {
             (true, Some(density_output)) => {
@@ -1019,6 +1070,13 @@ async fn render_sim(
         if let Some(chain) = &effect_chain {
             chain.destroy();
         }
+        #[cfg(feature = "terrain")]
+        if let Some(t) = terrain_owned.as_ref() {
+            t.destroy();
+        }
+        if let Some(s) = owned.as_ref() {
+            s.destroy();
+        }
         return Err(RenderError::OutOfMemory(err.to_string()));
     }
 
@@ -1042,6 +1100,10 @@ async fn render_sim(
     #[cfg(feature = "terrain")]
     if let Some(t) = terrain_owned.as_ref() {
         t.destroy();
+    }
+    // A throwaway run's grid (a caller's, a video's, goes on).
+    if let Some(s) = owned.as_ref() {
+        s.destroy();
     }
     let (width, height, rgba_data) = pixels?;
 
@@ -1165,6 +1227,13 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = if solid_path { 1 } else { job.config.escape.supersample.max(1) };
     escape_renderer.resize(device, job.width, job.height, want_ss);
+    // A browser has no blocking wait: the polls below return at once, so
+    // chunks go in back to back and the adaptive sizer, which times the
+    // gap between calls, would read each as free and grow toward a
+    // watchdog-length dispatch. The fixed TDR-calibrated seed cannot
+    // change the image (`EscapeRenderer::set_fixed_chunk`).
+    #[cfg(target_arch = "wasm32")]
+    escape_renderer.set_fixed_chunk(true);
     prepare_escape(escape_renderer, device, queue, job.config).await;
     if solid_path {
         escape_renderer.render_solid_still(
@@ -1179,6 +1248,9 @@ async fn render_escape(
             },
         );
         if progress.is_cancelled() {
+            if !caller_owned {
+                escape_renderer.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
         log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
@@ -1246,6 +1318,9 @@ async fn render_escape(
             renderer.palette_generation(),
             );
             if progress.is_cancelled() {
+                if !caller_owned {
+                    escape_renderer.destroy();
+                }
                 return Err(RenderError::Cancelled);
             }
             guard += 1;
@@ -1334,6 +1409,7 @@ async fn escape_tail(
             &mut encoder,
             escape_view,
             &config.density_effects,
+            1.0, // an escape image's alpha is not a hit count
         );
         match (density_ran, chain.get_density_output()) {
             (true, Some(density_output)) => {
@@ -1483,6 +1559,9 @@ async fn render_escape_terrain(
     let generation = renderer.palette_generation();
     prepare_escape(terrain.footprint_renderer(), device, queue, config).await;
     terrain.footprint_renderer().set_chunk_time_target(200.0);
+    // No blocking wait in a browser -- see `render_escape`.
+    #[cfg(target_arch = "wasm32")]
+    terrain.footprint_renderer().set_fixed_chunk(true);
     // As many sections as the card holds beside the rest of the export:
     // past the viewport's 64, an export's nearest ground was magnified.
     terrain.fit_sections_for_export(device, config, job_w, job_h).await;
@@ -1494,6 +1573,9 @@ async fn render_escape_terrain(
     while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         if progress.is_cancelled() {
+            if !caller_owned {
+                terrain.destroy();
+            }
             return Err(RenderError::Cancelled);
         }
         let done = (terrain.footprint_renders - before) as f64;
@@ -1514,6 +1596,9 @@ async fn render_escape_terrain(
         !progress.is_cancelled()
     });
     if progress.is_cancelled() {
+        if !caller_owned {
+            terrain.destroy();
+        }
         return Err(RenderError::Cancelled);
     }
     let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;

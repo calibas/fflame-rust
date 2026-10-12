@@ -652,7 +652,6 @@ mod tests {
     fn test_bpm_detection_120bpm() {
         let sample_rate = 44100u32;
         let config = AnalysisConfig::default();
-        let signal_rate = sample_rate as f64 / config.hop_size as f64;
         let analyzer = AudioAnalyzer::new(sample_rate, config);
 
         // Generate 5 seconds of audio with kick drum pulses at 120 BPM

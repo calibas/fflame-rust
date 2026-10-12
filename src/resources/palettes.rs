@@ -144,6 +144,16 @@ pub fn load_embedded_manifest() -> Result<ResourceManifest, FetchError> {
     serde_json::from_str(MANIFEST_JSON).map_err(FetchError::from)
 }
 
+/// Where the web build fetches a pack from, relative to the page.
+///
+/// Inside `pkg/` because that is where `build-wasm.sh` / `.bat` copy
+/// the packs, and `pkg/` is what a deploy uploads (RELEASE.md §5). This
+/// once requested `assets/palettes/packs/` beside the page instead,
+/// which only a server rooted at the repository (or a hand-uploaded
+/// copy of `assets/`) had. The test below holds both build scripts to
+/// this path.
+pub const WEB_PACKS_DIR: &str = "pkg/assets/palettes/packs";
+
 /// Load a palette pack from its file path (desktop - synchronous)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_pack(file_path: &str) -> Result<PalettePack, FetchError> {
@@ -155,14 +165,44 @@ pub fn load_pack(file_path: &str) -> Result<PalettePack, FetchError> {
 /// Load a palette pack from its file path (WASM - async)
 #[cfg(target_arch = "wasm32")]
 pub async fn load_pack(file_path: &str) -> Result<PalettePack, FetchError> {
-    // Construct full path relative to page
-    let full_path = format!("assets/palettes/packs/{}", file_path);
+    let full_path = format!("{WEB_PACKS_DIR}/{file_path}");
     fetch_json(&full_path).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The web build fetches packs from `WEB_PACKS_DIR`; the two build
+    /// scripts are what put them there. Nothing else connects the
+    /// three, and they disagreed once: the fetch asked for a path no
+    /// deploy uploaded.
+    #[test]
+    fn both_wasm_build_scripts_copy_the_packs_where_the_web_build_fetches_them() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        let sh = std::fs::read_to_string(root.join("build-wasm.sh")).expect("build-wasm.sh");
+        let want_sh = format!("cp assets/palettes/packs/*.json {WEB_PACKS_DIR}/");
+        assert!(
+            sh.lines().any(|l| l.trim() == want_sh),
+            "build-wasm.sh no longer has `{want_sh}`: the web build fetches \
+             packs from {WEB_PACKS_DIR}/"
+        );
+
+        let bat = std::fs::read_to_string(root.join("build-wasm.bat")).expect("build-wasm.bat");
+        let win_dir = WEB_PACKS_DIR.replace('/', "\\");
+        let copies_there = |l: &str| {
+            let l = l.trim();
+            l.starts_with("xcopy")
+                && l.contains(r#""assets\palettes\packs\*.json""#)
+                && l.contains(&format!(r#""{win_dir}\""#))
+        };
+        assert!(
+            bat.lines().any(copies_there),
+            "build-wasm.bat no longer xcopies the packs into {win_dir}\\: the web \
+             build fetches them from {WEB_PACKS_DIR}/"
+        );
+    }
 
     /// The generated manifest is what WASM sees; the folder is what
     /// desktop sees. This is the only place the two are compared, and

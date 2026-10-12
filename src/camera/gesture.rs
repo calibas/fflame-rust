@@ -124,6 +124,8 @@ pub fn pan(config: &FractalConfig, drag: [f32; 2], panel: [f32; 2]) -> Option<Ca
         ViewKind::SimTerrain => sim_terrain_pan(config, drag, panel),
         #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => sim_view::pan(config, drag, panel),
+        // Reached when an engine feature is compiled out.
+        #[allow(unreachable_patterns)]
         _ => None,
     }
 }
@@ -148,6 +150,8 @@ pub fn zoom(config: &FractalConfig, factor: f64, cursor: Option<[f32; 2]>, panel
         ViewKind::SimTerrain => sim_terrain_dolly(config, factor),
         #[cfg(feature = "engine-sim")]
         ViewKind::Sim2d => sim_view::zoom(config, factor, cursor, panel),
+        // Reached when an engine feature is compiled out.
+        #[allow(unreachable_patterns)]
         _ => None,
     }
 }
@@ -515,6 +519,8 @@ pub fn reset(config: &FractalConfig) -> Option<CameraEdit> {
             changes.push((ConfigPath::SimTerrainTargetY, home.target_y.into()));
             changes.push((ConfigPath::SimTerrainTargetLift, home.target_lift.into()));
         }
+        // Reached when an engine feature is compiled out.
+        #[allow(unreachable_patterns)]
         _ => return None,
     }
     Some(CameraEdit::batch(changes, RESET))

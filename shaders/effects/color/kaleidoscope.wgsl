@@ -95,7 +95,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Calculate aspect ratio for square mode correction
     let aspect = f32(effect_params.width) / f32(effect_params.height);
 
-    let original = textureSample(input_texture, input_sampler, input.uv);
+    let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 
     let kaleido_uv = kaleidoscope_uv(input.uv, segments, rotation, zoom, aspect, square_mode);
 
@@ -108,7 +108,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let shifted_uv = kaleido_uv + offset_shift;
 
     let clamped_uv = clamp(shifted_uv, vec2<f32>(0.001), vec2<f32>(0.999));
-    let kaleido = textureSample(input_texture, input_sampler, clamped_uv);
+    let kaleido = textureSampleLevel(input_texture, input_sampler, clamped_uv, 0.0);
 
     // Apply blend mode between original and kaleidoscope
     let result = apply_blend(original.rgb, kaleido.rgb, blend_mode, intensity);

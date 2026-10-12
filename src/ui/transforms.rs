@@ -129,9 +129,13 @@ fn render_color_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index });
         }
 
-        // Show color preview at current palette position
-        let palette = &config_manager.active_config().palette;
-        let actual_color = palette.sample_color(transform.color);
+        // Show color preview at current palette position -- through the
+        // palette transforms (rotation, squeeze, log, reverse), as the
+        // renderer looks it up; the raw palette disagreed with the
+        // picture whenever any of them was set.
+        let config = config_manager.active_config();
+        let actual_color = crate::scene::palette::PaletteTransform::from_config(config)
+            .sample_color(&config.palette, transform.color);
         let color_swatch = egui::Color32::from_rgb(
             (actual_color[0] * 255.0) as u8,
             (actual_color[1] * 255.0) as u8,

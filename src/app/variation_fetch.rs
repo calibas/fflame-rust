@@ -104,7 +104,17 @@ impl App {
             );
         }
         if !fetchable.is_empty() {
-            self.trigger_variation_fetches(fetchable);
+            if self.config_manager.system_settings().online_mode {
+                self.trigger_variation_fetches(fetchable);
+            } else {
+                // Online mode off: say what is missing and why, rather
+                // than fetching -- and rather than pausing the render
+                // for a fetch that is not going to happen.
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.variations_need_online", names = fetchable.join(", ")),
+                    true,
+                );
+            }
         }
     }
 
@@ -279,6 +289,11 @@ impl App {
     /// code path to keep in step.
     pub(super) fn handle_variation_updates(&mut self, ui_response: &UiResponse) {
         if ui_response.variation_update_requested.is_empty() {
+            return;
+        }
+        if !self.config_manager.system_settings().online_mode {
+            self.egui_layer
+                .show_api_notification(&rust_i18n::t!("api.online_features_off"), true);
             return;
         }
         // A built-in can never be replaced by a download, so asking to

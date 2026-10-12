@@ -41,7 +41,7 @@ It is available in every render mode.
 |---|---|---|
 | Presets | `Presets` | The built-in presets (see [Presets](#presets)) |
 | Random | `Batch` | The last batch from the Random Generator or a Scripts batch, until the next one replaces it. The label shows the count |
-| Files | `Files` | The configs from one file: **Open File...** on the tab, or a multi-config `.fflame` opened with File ▸ Open. The label shows the count |
+| Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
 | Online | `Online` | The signed-in user's flames from the API. Shown only in online mode |
 
 The code calls the second tab `Batch`; its label (`browser.tab_batch`)
@@ -61,15 +61,19 @@ The tab lists flames saved through Save Online
 
 - It fetches on the first visit when signed in, and again on
   **Refresh**. With no filter it lists the user's own flames (the first
-  100); a name search or a render-mode filter (All / 2D / 3D) uses the
-  search endpoint instead (also 100).
+  100); a name search or a render-mode filter (All / 2D / 3D / Escape
+  Time) uses the search endpoint instead (also 100). The name is
+  percent-encoded into the query. There is no Simulation filter: the
+  server's `render_mode` enum does not know that value yet.
 - Each row is a button reading `name — mode | NT | variations`, where
   `N` is the transform count and the variations are the first two
-  names plus a count; an escape-time row reads `name — Escape`. Clicking
+  names plus a count; an escape-time or simulation row, which has no
+  transforms, reads `name — mode` (`online_row_label`). Clicking
   loads the full config together with its online metadata (id,
-  visibility, owner, linked animations). The red **X** deletes the
-  online flame and refreshes the list.
-- An authentication error (401/403) starts the sign-out flow.
+  visibility, owner, linked animations). The red **X** asks for
+  confirmation, then deletes the online flame and refreshes the list.
+- An authentication error (401) starts the sign-out flow; a 403 is
+  shown as an error and does not sign you out.
 
 The online tab does not use the gallery widget: no thumbnails, no grid,
 no list toggle.
@@ -91,10 +95,16 @@ its thumbnail hash) and draws:
   grey placeholder until it exists) and the name, truncated to fit.
   Clicking a card loads it.
 - **List view**: one collapsible row per config, with a **>** button
-  that loads it, the name, and a summary line
-  `N transforms, mode, variations` (up to three variation names, or the
-  first two and a count). Expanded, a row shows Zoom, Max Iterations,
-  Color Mode and a 64-point thumbnail.
+  that loads it, the name, and a summary line that depends on the
+  engine (`list_summary`, `list_details`):
+
+  | Mode | Summary | Expanded |
+  |---|---|---|
+  | 2D / 3D flame | `N transforms, mode, variations` (up to three variation names, or the first two and a count) | Zoom, Max Iterations, Color Mode |
+  | Escape-time | `mode, formula, coloring` | Zoom as `2^zoom_log2`, Max Iterations |
+  | Simulation | `mode, model, colouring` | Steps |
+
+  Expanded, every row also shows a 64-point thumbnail.
 
 ## Thumbnails
 
@@ -169,27 +179,7 @@ the web build needs a rebuild to embed the new file.
 Recorded from the code as it stands; the escape-time and simulation
 cases were added to a browser built for flames.
 
-- **The online filter offers only All, 2D and 3D**
-  (`online_search_render_mode` is 0, 1 or 2). There is no Escape or
-  Simulation filter, although the API's `ApiRenderMode` has both.
-- **A simulation row in the online list reads `name — Simulation | 0T | `.**
-  Only escape rows drop the transform and variation columns, and a
-  simulation, like an escape fractal, is stored with no transforms and
-  no variation names.
-- **The list view shows flame details for every config.** The summary's
-  transform count and variations come from `config.flame`, and the
-  expanded Zoom, Max Iterations and Color Mode are the flame's fields.
-  For an escape-time or simulation config only the mode label describes
-  the picture (an `ifs_flame` escape preset does render its flame's
-  transforms, so its transform count is meaningful).
-- **A multi-flame `.flame` (XML) file opened with File ▸ Open lands in
-  the Random tab**, not Files: the app loads it with
-  `load_batch_into_fractal_browser`, while the comments beside both call
-  sites say Files.
 - **The disk cache never shrinks.** `enforce_cache_limit` lists `.png`
   files, but the cache now writes `.jpg`, so it finds nothing to
   evict and the folder grows past 200 files. (`ThumbnailCache::clear`,
   unused, also deletes `.png` names.)
-- **Grid-card name truncation slices bytes.** The card cuts a long name
-  with `&name[..n]` on a byte count, which panics if the cut falls
-  inside a multi-byte character (a non-ASCII name longer than the card).

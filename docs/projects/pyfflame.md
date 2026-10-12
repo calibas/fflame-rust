@@ -23,7 +23,7 @@ on the main crate by path.
 - `Animation` — a script-defined animation, with `save`/`load` for
   `.anim`, its `duration`, `targets` and embedded `config`.
 - Ten Python tests; `run_script` output is byte-identical to
-  `fractal_flame_wgpu generate` for the same script and seed.
+  `FractalArtEditor generate` for the same script and seed.
 
 ### The constraints this was built under
 
@@ -65,7 +65,7 @@ Also `palette_rotation` / `palette_reverse` / squeeze settings, which are
 plain `FractalConfig` fields.
 
 **`render()` helper.** A thin subprocess wrapper around
-`fractal_flame_wgpu export`, so the README's boilerplate becomes
+`FractalArtEditor export`, so the README's boilerplate becomes
 `c.render("out.png", width=1920, height=1080)`. Needs a binary-discovery
 rule: explicit argument → `FFLAME_BIN` env var → `PATH` → raise with a
 message naming all three. Deliberately still a subprocess: no GPU in the

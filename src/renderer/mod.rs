@@ -11,6 +11,8 @@ pub mod thumbnail;
 pub(crate) mod density_gates;
 #[cfg(test)]
 mod orbit_gates;
+#[cfg(test)]
+mod param_cost;
 
 pub use compute_kernel::{FlameRenderer, TargetingState};
 pub use histogram::{compute_histogram_async, DensityHistogram, HISTOGRAM_BINS};

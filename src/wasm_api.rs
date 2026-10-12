@@ -4,7 +4,7 @@
 /// - Loading configs from JSON or URL parameters
 /// - Programmatic render control
 /// - PNG export to browser
-/// - Query iteration progress
+/// - Query the last export's iteration count
 ///
 /// This enables:
 /// - URL parameter config loading (e.g., ?config=base64json)
@@ -25,7 +25,11 @@ use crate::config::FractalConfig;
 #[wasm_bindgen]
 pub struct WasmApi {
     config: Option<FractalConfig>,
-    current_iterations: u64,
+    /// Iterations the LAST export ran (0 before one, and after a new
+    /// config loads). A `Cell` because `export_png` takes `&self`.
+    current_iterations: std::cell::Cell<u64>,
+    /// What the next export renders to: the config's `max_iterations`
+    /// on load, or `set_target_iterations`.
     target_iterations: u64,
     api_state: crate::api::ApiState,
 }
@@ -38,7 +42,7 @@ impl WasmApi {
     pub fn new() -> WasmApi {
         WasmApi {
             config: None,
-            current_iterations: 0,
+            current_iterations: std::cell::Cell::new(0),
             target_iterations: 0,
             api_state: crate::api::ApiState::default(),
         }
@@ -57,7 +61,7 @@ impl WasmApi {
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
         self.config = Some(config);
-        self.current_iterations = 0;
+        self.current_iterations.set(0);
         self.target_iterations = self.config.as_ref().unwrap().max_iterations;
 
         Ok(())
@@ -133,7 +137,7 @@ impl WasmApi {
             .clone();
 
         self.config = Some(config);
-        self.current_iterations = 0;
+        self.current_iterations.set(0);
         self.target_iterations = self.config.as_ref().unwrap().max_iterations;
 
         Ok(())
@@ -151,14 +155,17 @@ impl WasmApi {
         let config = self.config.as_ref()
             .ok_or_else(|| JsValue::from_str("No config loaded"))?;
 
-        serde_json::to_string_pretty(config)
+        // The canonical saved form (versioned), as a `.fflame` holds it.
+        config.to_json()
             .map_err(|e| JsValue::from_str(&format!("Failed to serialize config: {}", e)))
     }
 
-    /// Get current iteration count
+    /// Iterations the last `export_png` ran (0 before the first, and
+    /// after a new config loads). An export is one awaited call, so
+    /// there is no in-flight count to poll.
     #[wasm_bindgen]
     pub fn get_current_iterations(&self) -> f64 {
-        self.current_iterations as f64
+        self.current_iterations.get() as f64
     }
 
     /// Get target iteration count
@@ -167,13 +174,14 @@ impl WasmApi {
         self.target_iterations as f64
     }
 
-    /// Get render progress (0.0 to 1.0)
+    /// The last export's iterations over the target (1.0 once an export
+    /// at the current target has finished).
     #[wasm_bindgen]
     pub fn get_progress(&self) -> f64 {
         if self.target_iterations == 0 {
             0.0
         } else {
-            (self.current_iterations as f64) / (self.target_iterations as f64)
+            (self.current_iterations.get() as f64) / (self.target_iterations as f64)
         }
     }
 
@@ -199,7 +207,9 @@ impl WasmApi {
         serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string())
     }
 
-    /// Set target iterations (useful for testing specific iteration counts)
+    /// Set target iterations (useful for testing specific iteration
+    /// counts). The next `export_png` renders to it, overriding the
+    /// config's `max_iterations`.
     #[wasm_bindgen]
     pub fn set_target_iterations(&mut self, iterations: f64) {
         self.target_iterations = iterations as u64;
@@ -214,6 +224,8 @@ impl WasmApi {
     /// const api = new WasmApi();
     /// api.load_preset("Bubble");
     /// const pngBytes = await api.export_png(800, 600, 256, false);
+    /// // Optional 5th argument: premultiplied alpha for a transparent export
+    /// const premul = await api.export_png(800, 600, 256, true, true);
     ///
     /// // Download
     /// const blob = new Blob([pngBytes], { type: 'image/png' });
@@ -230,17 +242,30 @@ impl WasmApi {
         height: u32,
         iterations_per_thread: u32,
         transparent: bool,
+        premultiplied: Option<bool>,
     ) -> Result<Vec<u8>, JsValue> {
         use crate::app::export::export_headless_wasm;
 
         let config = self.config.as_ref()
             .ok_or_else(|| JsValue::from_str("No config loaded"))?;
 
-        let png_data = export_headless_wasm(config, width, height, iterations_per_thread, transparent)
-            .await
-            .map_err(|e| JsValue::from_str(&e))?;
+        // The target was stored and never used: every export rendered
+        // the config's own max_iterations.
+        let target = (self.target_iterations > 0).then_some(self.target_iterations);
+        let export = export_headless_wasm(
+            config,
+            width,
+            height,
+            iterations_per_thread,
+            transparent,
+            premultiplied.unwrap_or(false),
+            target,
+        )
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
 
-        Ok(png_data)
+        self.current_iterations.set(export.total_iterations);
+        Ok(export.png)
     }
 }
 
@@ -363,7 +388,7 @@ impl WasmApi {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         self.target_iterations = config.max_iterations;
-        self.current_iterations = 0;
+        self.current_iterations.set(0);
         self.config = Some(config);
         Ok(())
     }

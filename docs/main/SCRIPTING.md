@@ -124,7 +124,7 @@ error.
 |---|---|
 | `weight` | Selection probability in the chaos game (normals only meaningfully). |
 | `color` | Palette position, 0–1. |
-| `color_speed` | 1 = keep incoming colour, 0 = jump fully to `color`. |
+| `color_speed` | How far each step pulls the colour toward `color`: 1 = keep the incoming colour, 0 = halfway (the Apophysis default), -1 = jump fully to `color`. |
 | `opacity` | Plot opacity. |
 | `direct_color` | Blend toward variation-written colour. |
 | `a`, `b`, `c`, `d`, `e`, `f` | Pre-affine coefficients: `x' = a·x + b·y + e`, `y' = c·x + d·y + f`. |
@@ -213,28 +213,27 @@ refused here — use `flame`.
 
 Camera angles are stored in **radians**.
 
-A dotted path walks the config **as it is saved**, and a group still at
-its defaults is left out of a saved config. So `config.set` reaches a
-field inside a group only when that group already holds something:
-`config.set("sim.use_transforms", true)` fails with "unknown setting
-group `sim`" while every simulation setting is at its default, and
-`sim.terrain.height` fails while the terrain is. A Rhai map is not a
-config value, so a script cannot create a group either.
+A dotted path reaches into any group, including one still at its
+defaults (which a saved config leaves out): `config.set` creates the
+group, so `config.set("sim.terrain.height", 0.2)` works on a fresh
+config. That matters for the settings with no call of their own: a
+simulation's layers, couplings, warp, view and terrain, and an escape
+config's texture (`escape.texture`, `escape.texture_overlay`) and
+terrain. A misspelt group name changes nothing and warns, as a
+misspelt field does.
 
-That matters for the settings with no call of their own: a simulation's
-layers, couplings, warp, view and terrain, and an escape config's
-texture (`escape.texture`, `escape.texture_overlay`) and terrain. A
-script can adjust their fields on a config that already uses them —
-typically a modifier run on a saved one:
+`config.get` still reads the config **as it is saved**, so it throws on
+a field at its default, as above:
 
 ```rhai
 script("Taller terrain", "modifier");
+let h = 0.1;               // the default height
 try {
-    let h = config.get("sim.terrain.height");
-    config.set("sim.terrain.height", h * 1.5);
+    h = config.get("sim.terrain.height");
 } catch {
-    print("this config has no simulation terrain with a set height");
+    // at its default: keep 0.1
 }
+config.set("sim.terrain.height", h * 1.5);
 ```
 
 ## The `escape` object

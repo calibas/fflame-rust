@@ -8,20 +8,15 @@ menu:
   file: "Archivo"
   edit: "Editar"
   view: "Ver"
-  fractal: "Fractal"
+  mode: "Modo"
   rendering: "Renderizado"
   window: "Ventana"
   help: "Ayuda"
 
   # File Menu
-  new_flame: "Nueva Llama"
-  load_preset: "Cargar Ajuste Preestablecido"
-  open_config: "Abrir Configuración..."
-  save_config: "Guardar Configuración Como..."
   import_flame_xml: "Importar XML de llama..."
-  export_png: "Exportar PNG..."
+  export: "Exportar PNG..."
   export_flame_xml: "Exportar XML de llama..."
-  recent_files: "Archivos Recientes"
   quit: "Salir"
 
   # Edit Menu
@@ -31,42 +26,16 @@ menu:
 
   # View Menu
   reset_view: "Restablecer Vista"
-  fit_to_window: "Ajustar a Ventana"
   zoom_in: "Acercar"
   zoom_out: "Alejar"
   mode_2d: "Modo 2D"
   mode_3d: "Modo 3D"
-  show_grid: "Mostrar Cuadrícula"
-
-  # Fractal Menu
-  show_transform_editor: "Mostrar Editor de Transformaciones"
-  show_triangle_editor: "Mostrar Editor de Triángulos"
-  show_palette_editor: "Mostrar Editor de Paletas"
-  add_transform: "Añadir Transformación"
-  copy_transform: "Copiar Transformación"
-  paste_transform: "Pegar Transformación"
-  duplicate_transform: "Duplicar Transformación"
-  delete_transform: "Eliminar Transformación"
-  randomize_transform: "Aleatorizar Transformación"
-  import_palette: "Importar Paleta..."
-  export_palette: "Exportar Paleta..."
 
   # Rendering Menu
-  pause_resume: "Pausar/Reanudar"
   reset_accumulation: "Restablecer Acumulación"
-  speed: "Velocidad"
   iterations_per_thread: "Iteraciones por Hilo"
-  benchmark: "Prueba de Rendimiento..."
-
-  # Window Menu
-  beginner_layout: "Diseño para Principiantes"
-  standard_layout: "Diseño Estándar"
-  advanced_layout: "Diseño Avanzado"
-  reset_layout: "Restablecer Diseño"
-  save_layout: "Guardar Diseño..."
 
   # Help Menu
-  documentation: "Documentación"
   keyboard_shortcuts: "Atajos de Teclado"
   report_bug: "Reportar Error..."
   about: "Acerca de..."
@@ -80,9 +49,8 @@ panels:
   view: "Vista"
   rendering: "Renderizado"
   history: "Historial"
-  settings: "Configuración"
-  tone_mapping: "Mapeo de Tonos"
   performance: "Rendimiento"
+  fractal: "Fractal"
 
 # Transform Controls
 transform:
@@ -91,7 +59,6 @@ transform:
   color: "Posición de Paleta"
   add: "Añadir Transformación"
   delete: "Eliminar"
-  edit: "Editar"
   affine: "Transformación Afín"
   variations: "Variaciones"
   parameters: "Parámetros"
@@ -157,12 +124,9 @@ view:
   camera_yaw: "Giro de Cámara"
   camera_z: "Cámara Z"
   reset: "Restablecer Vista"
-
-  # Projection
-  projection: "Proyección"
-  projection_orthographic: "Ortográfica"
-  projection_perspective: "Perspectiva"
-  projection_strength: "Fuerza de Perspectiva"
+  perspective: "Perspectiva"
+  tooltip_pan: "Mover la vista del fractal izquierda/derecha o arriba/abajo."
+  tooltip_zoom: "Controla el nivel de ampliación.\nMayor = más acercado."
 
 # Rendering Controls
 rendering:
@@ -196,17 +160,16 @@ rendering:
 
 # Tone Mapping
 tonemap:
-  levels_escape_hint: "Density Levels applies to the flame renderer's density statistics — escape-time images have none, so it is off in this mode."
   title: "Mapeo de Tonos"
   mode: "Modo de Mapeo de Tonos"
   mode_log: "Logarítmico"
   mode_linear: "Lineal"
-  mode_reinhard: "Reinhard"
   curve: "Curva de Tono"
-  use_curve: "Usar Curva S"
   exposure: "Exposición"
   gamma: "Gamma"
   density_scale: "Escala de Densidad"
+  color_mode_speed: "Velocidad"
+  highlight_reinhard: "Reinhard"
 
 # History Panel
 history:
@@ -214,6 +177,11 @@ history:
   current: "Actual"
   jump_to: "Saltar a este estado"
   clear: "Limpiar Historial"
+  action:
+    load_preset: "Cargar Ajuste Preestablecido"
+    new_flame: "Nueva Llama"
+  param:
+    perspective_strength: "Fuerza de Perspectiva"
 
 # Settings Panel
 settings:
@@ -225,21 +193,11 @@ settings:
   save: "Guardar Configuración"
   load: "Cargar Configuración"
 
-  # Preferences
-  preferences: "Preferencias"
-  language: "Idioma"
-  theme: "Tema"
-  theme_dark: "Oscuro"
-  theme_light: "Claro"
-  theme_high_contrast: "Alto Contraste"
-
 # Performance Metrics
 performance:
-  fps: "FPS"
-  frame_time: "Tiempo de Fotograma"
-  total_iterations: "Iteraciones Totales"
-  iterations_per_second: "Iteraciones/seg"
-  gpu_time: "Tiempo GPU"
+  fps: "FPS: %{value}"
+  frame_time: "Tiempo de Fotograma: %{value} ms"
+  total_iterations: "Iteraciones Totales: %{count}"
 
 # Common UI Elements
 common:
@@ -263,12 +221,6 @@ common:
 
 # Tooltips
 tooltips:
-  zoom: "Controla el nivel de ampliación.\nMayor = más acercado."
-  pan: "Mover la vista del fractal izquierda/derecha o arriba/abajo."
-  rotation: "Rotar toda la vista.\nTeclado: tecla R + arrastrar"
-  camera_pitch: "Rotación de cámara 3D (arriba/abajo).\nSolo visible en modo 3D."
-  camera_yaw: "Rotación de cámara 3D (izquierda/derecha).\nSolo visible en modo 3D."
-
   transform_weight: "Probabilidad de seleccionar esta transformación.\nMayor = más influencia en la imagen final."
   transform_color: "Posición en la paleta de colores (0.0-1.0)."
 
@@ -295,3 +247,11 @@ errors:
   export_failed: "Error al exportar"
   gpu_error: "Error de GPU"
   shader_compilation_failed: "Error de compilación de shader"
+
+sim_panel:
+  section_settings: "Configuración"
+
+track_editor:
+  category_tone_mapping: "Mapeo de Tonos"
+  edit: "Editar"
+  param_perspective_strength: "Fuerza de Perspectiva"

@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "218a4eed",
+  "git_hash": "b94d602b",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -999,8 +999,8 @@
       "sha256": "91c08a0d60ef16389d170e7cdffb183d3c94ca5d2385eb76e87015fbb0010e6e"
     },
     "solid-solid-lit-transparent.png": {
-      "bytes": 21511,
-      "sha256": "f5f0a526e2670d5beca7db34c737aba632c2cab1d02c98438c6489866739b994"
+      "bytes": 22875,
+      "sha256": "436fce03e8cd4d53e58237d13bd8eb90abbced1c4118cb81796fab277f9b604c"
     },
     "solid-solid-lit.png": {
       "bytes": 23216,

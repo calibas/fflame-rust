@@ -61,8 +61,10 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 - Window ▸ Workspace Layout offers Standard, Animation and Scripting.
   Escape Time and Simulation are not offered there: they arrive with
   their mode (`render_mode::layout_for`).
-- Window ▸ Reset Workspace applies Standard, in every mode. Window ▸
-  Mobile View applies Compact.
+- Window ▸ Reset Workspace rebuilds the mode's own workspace (Standard
+  for the flame modes, Escape Time, Simulation;
+  `render_mode::workspace_for`), as does the compact menu's Desktop
+  View. Window ▸ Mobile View applies Compact.
 - The layouts other than Standard and Compact re-add the Help panel as a
   floating window if it was open.
 - A newly built layout raises each side dock to at least 260 points
@@ -95,7 +97,7 @@ actions by folding them into the frame's `UiResponse`.
 
 | Menu | Holds |
 |---|---|
-| File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
+| File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online features (the `online_mode` switch; [ONLINE.md](ONLINE.md)), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
 | **Mode** | The four render modes as radio rows, built from `RenderMode::ALL`, each with a hover description |
@@ -635,6 +637,24 @@ config_manager.update_batch(changes, "history.action.some_edit".to_string())?;
   History panel.
 - **Device preferences** (`SystemSettings`) go through
   `update_system_setting` and are not undoable.
+- **Slow settings** ([src/ui/slow_controls.rs](../../src/ui/slow_controls.rs)).
+  A slider takes its value from the pointer every frame, so a setting
+  that slows the next frame overshoots when dragged: the frame after each
+  change comes late, the pointer has moved on, and the value jumps. Such
+  settings get one of two controls:
+  - `whole_numbers`, a dropdown, for a range of at most sixteen whole
+    numbers: Beam Width, the path tracer's bounces, the cyclic
+    automaton's range, and a few variations' step counts;
+  - `on_release`, which shows the value while dragged and commits it when
+    the drag ends (a click, an arrow key or a typed number commits at
+    once), for the rest: an IFS walk's depth, March Steps, the iteration
+    cap, Lenia's and SmoothLife's radii, physarum's population, steps per
+    frame, the grid's size, and the variations' iteration counts.
+
+  What is slow is listed beside each registry: `escape::SLOW_PARAMS`,
+  `sim::SLOW_PARAMS` and `variations::SLOW_PARAMS`, each held to real
+  parameter names by a test. The variations' list is measured
+  (`renderer::param_cost`).
 
 ### Variation ordering
 
