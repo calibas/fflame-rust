@@ -1,6 +1,6 @@
 # Code findings from the October 2026 doc review
 
-**Status 2026-10-11:** fixed on branch `bugfixes`, except the items under
+**Status 2026-10-12:** fixed on branch `bugfixes`, except the items under
 *Still open* below. The last column of each table says which. Every
 "confirmed" item, and every other item after a verification pass, was
 checked against the code first; the fixes carry regression tests where
@@ -31,6 +31,14 @@ Found while fixing:
   that last sampled it (`destroy_replaced_output`).
 - The web build has warnings the desktop build no longer has:
   deprecated web-sys calls and desktop-only code compiled for wasm32.
+- A Fractal Browser thumbnail of an escape config whose texture is long
+  and not cached still generates it, blocking: `render()` generates every
+  texture it needs (as an export must), and thumbnails go through it.
+  The Textures panel and the viewport ask first (`textures::may_generate`).
+- Settings nobody listed as slow -- a plugin variation, an effect, a
+  combination -- still overshoot when dragged. Holding any drag once its
+  frames turn slow is planned in
+  [slow-frame-slider-hold.md](slow-frame-slider-hold.md).
 
 The docs/main refresh (branch `docs-housekeeping`) read most of the code
 again to describe it. These are the things that looked wrong along the
