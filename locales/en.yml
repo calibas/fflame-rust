@@ -2540,7 +2540,7 @@ escape_panel:
   crease_valley: "Valley"
   crease_alternate: "Alternate"
   crease_random: "Random"
-  tooltip_crease_pattern: "Which way each fold creases the paper. Valley: every flap folds toward you. Alternate: valley, mountain, valley, and so on. Random: each fold's way from the line seed. A crease is a valley on one face of the paper and a mountain on the other, so a layer an earlier fold turned over shows it reversed."
+  tooltip_crease_pattern: "Which way each fold creases the paper. Valley: every flap folds toward you. Alternate: valley, mountain, valley, and so on. Random: each fold's way from the line seed."
   crease_decay: "Decay"
   tooltip_crease_decay: "How much shallower each fold's crease is than the one before. The first fold is the main crease; lower values keep the later ones fine, 1 makes every crease as deep as the first."
   crease_flip: "Flip"
