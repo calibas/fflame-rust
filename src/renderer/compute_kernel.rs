@@ -411,6 +411,13 @@ pub struct FlameRenderer {
     // Output texture that tonemap_pass renders to (for both display and export)
     fractal_texture: Texture,
     fractal_texture_view: TextureView,
+    /// Output textures `resize` replaced, waiting for
+    /// `destroy_replaced_output`. Not destroyed in `resize`: the app
+    /// resizes after egui has recorded the frame's paint, which samples
+    /// the old one, and before that encoder is submitted -- a submit that
+    /// uses a destroyed texture fails. Dropping instead left 4 bytes a
+    /// pixel per resize to the garbage collector on WebGPU.
+    replaced_output: Vec<Texture>,
 
     /// Persistent staging buffer for `read_fractal_pixels`, grow-only.
     ///
@@ -810,6 +817,7 @@ impl FlameRenderer {
             init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
             fractal_texture_view,
+            replaced_output: Vec::new(),
             readback_staging: None,
             width,
             height,
@@ -998,8 +1006,9 @@ impl FlameRenderer {
         self.histogram_blur_v_bind_group = self.pipelines.create_histogram_blur_v_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
-        // Recreate fractal output texture with new size
-        self.fractal_texture = device.create_texture(&TextureDescriptor {
+        // Recreate fractal output texture with new size. The old one waits
+        // for `destroy_replaced_output` (see `replaced_output`).
+        let old_output = std::mem::replace(&mut self.fractal_texture, device.create_texture(&TextureDescriptor {
             label: Some("Fractal Output"),
             size: Extent3d {
                 width,
@@ -1012,7 +1021,8 @@ impl FlameRenderer {
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
-        });
+        }));
+        self.replaced_output.push(old_output);
         self.fractal_texture_view = self.fractal_texture.create_view(&TextureViewDescriptor::default());
 
         // Clear accumulation counter
@@ -3168,8 +3178,20 @@ impl FlameRenderer {
         self.shade_pass.destroy();
         self.dof_pass.destroy();
         self.fractal_texture.destroy();
+        for t in &self.replaced_output {
+            t.destroy();
+        }
         if let Some(staging) = &self.readback_staging {
             staging.destroy();
+        }
+    }
+
+    /// Destroy the output textures `resize` replaced. Call once every
+    /// encoder recorded before the resize -- the app's UI paint above
+    /// all -- has been submitted.
+    pub fn destroy_replaced_output(&mut self) {
+        for t in self.replaced_output.drain(..) {
+            t.destroy();
         }
     }
 
@@ -6001,6 +6023,50 @@ mod memory_tests {
         assert!(freed, "the throwaway renderer still held its histogram after the colour effects");
         assert!(kept.iter().any(|&b| b != 0), "nothing was drawn");
         assert!(thrown == kept, "freeing the iteration buffers changed the picture");
+    }
+
+    /// `resize` replaces the output texture but keeps the old one alive
+    /// -- the app resizes after egui has recorded the frame's paint, which
+    /// samples it, and before that is submitted -- until
+    /// `destroy_replaced_output`, which the app calls after the submit.
+    /// The old one used to be dropped, which frees nothing on WebGPU.
+    #[test]
+    fn a_resized_renderer_destroys_its_old_output_when_told() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let flame = crate::scene::transforms::Flame::default();
+        let mut r = FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &flame, 256);
+        let old = r.fractal_texture.clone();
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("resize") });
+        r.resize(&device, &mut enc, &queue, 32, 32, &flame, 64, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+        queue.submit(Some(enc.finish()));
+        let probe = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("probe"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let usable = || {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("probe") });
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &old, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &probe,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
+                },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            queue.submit(Some(enc.finish()));
+            pollster::block_on(scope.pop()).is_none()
+        };
+        assert!(usable(), "resize destroyed the output a recorded paint may still sample");
+        r.destroy_replaced_output();
+        assert!(!usable(), "the replaced output was never destroyed");
+        probe.destroy();
+        r.destroy();
     }
 }
 
