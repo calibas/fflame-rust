@@ -1466,8 +1466,33 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
 // What the marcher colours with, at the offset it stopped at. Full
 // depth: the colourings want the level and the address, which are only
 // known once a candidate escapes.
+//
+// The march stops on the surface's OUTSIDE, within its tolerance. Where
+// the attractor touches its bounding sphere -- a Menger sponge's corners
+// -- that point is outside the ball as well, the walk reads it as
+// escaped at level 0, and an escaped candidate takes no address digit:
+// address 0, the palette's start, a black spot at the very tip of the
+// corner. Pulled back just inside the sphere it walks into the corner it
+// touched. The whole outer shell, a relative 1e-5 deep, is pulled in to
+// its inner edge, not only what lies beyond the sphere: the walk measures
+// its radius through the link chain, and a point this test puts a few
+// ulps inside could still read as outside there. A point deeper in the
+// ball, every other surface point, is untouched. The correction is
+// subtracted from the delta as a small displacement, never by forming
+// `target + delta` (see the chain).
 fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
-    return ifs_walk3(delta, 0.0);
+    let rel = delta + ifs_target_offset();
+    let dw = ifs_slice_w() - ifs_ball_w();
+    let reach2 = ifs_radius() * ifs_radius() - dw * dw;
+    let len = length(rel);
+    var d = delta;
+    if (reach2 > 0.0) {
+        let limit = sqrt(reach2) * (1.0 - 1e-5);
+        if (len > limit) {
+            d = delta - rel * (1.0 - limit / len);
+        }
+    }
+    return ifs_walk3(d, 0.0);
 }
 "#,
 };
@@ -8000,6 +8025,54 @@ mod gpu_tests {
             .count();
         let share = white as f64 / (W * H) as f64;
         assert!(share > 0.15, "only {:.1}% of the view is white; the square's quarter of it is the palette's end", 100.0 * share);
+    }
+
+    /// A solid's surface never shows the palette's start for want of an
+    /// address. The march stops just outside the surface, and where the
+    /// attractor touches its bounding sphere -- the Menger sponge's
+    /// corners -- that is outside the ball too: the walk called the point
+    /// escaped at level 0, gave it address 0, and the tip of the corner
+    /// came out the palette's first colour, a few pixels that moved with
+    /// the window's size. These are the Menger Sponge preset's cameras
+    /// that showed it, at sizes that did, with that first colour blue.
+    #[test]
+    fn a_sponges_corner_tip_takes_the_corners_address() {
+        let Some((device, queue)) = device_if_any() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let preset = crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .find(|c| c.flame.name == "Menger Sponge")
+            .expect("the sponge ships");
+        let views = [
+            (["0.520531140020400689060060", "0.396500536159918481642747", "0.652968641495506081704235"], 1.4850384f64, None, (640u32, 480u32)),
+            (["0.530214777819272501069702", "0.369373328080211437307375", "0.687072901524964720531372"], 0.8250214, Some(0.699877f32), (800, 600)),
+            (["0.530214777819272501069702", "0.369373328080211437307375", "0.687072901524964720531372"], 0.8250214, Some(0.699877), (1000, 700)),
+        ];
+        for (target, zoom_log2, fov, (w, h)) in views {
+            let mut c = preset.clone();
+            c.escape.cam_target_x = target[0].to_string();
+            c.escape.cam_target_y = target[1].to_string();
+            c.escape.cam_target_z = target[2].to_string();
+            c.escape.zoom_log2 = zoom_log2;
+            if let Some(f) = fov {
+                c.escape.cam_fov = f;
+            }
+            c.palette.stops[0].color = [0.0, 0.0, 1.0];
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
+                .expect("render");
+            let start: Vec<(usize, usize)> = out
+                .rgba_data
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(_, p)| p[2] > 120 && p[0] < 60 && p[1] < 60)
+                .map(|(i, _)| (i % w as usize, i / w as usize))
+                .collect();
+            assert!(start.is_empty(), "{w}x{h}: the palette's start at {start:?}, the corner's tip had no address");
+        }
     }
 
     /// A Flame Attractor stands as its flame does (`view_basis`): the
