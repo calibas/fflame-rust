@@ -154,6 +154,14 @@ fn picture_key(escape: &EscapeConfig) -> EscapeConfig {
     k.shading.highlight_color = d.shading.highlight_color;
     k.shading.highlight_strength = d.shading.highlight_strength;
     k.shading.highlight_blend = d.shading.highlight_blend;
+    // The surface texture lights the terrain's surface; a section is
+    // rendered with the 2D relief off and never carries it.
+    k.shading.texture_kind = d.shading.texture_kind;
+    k.shading.texture_strength = d.shading.texture_strength;
+    k.shading.texture_scale = d.shading.texture_scale;
+    k.shading.texture_where = d.shading.texture_where;
+    k.shading.texture_angle = d.shading.texture_angle;
+    k.shading.texture_angle_soft = d.shading.texture_angle_soft;
     // The source decides what the iterate pass writes, and the interior
     // and a lake's tint how a section encodes it (the tint is its albedo);
     // the rest is the walk's and the view's.
@@ -393,6 +401,61 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         curve: t.curve.code(),
         invert: t.invert,
         range: t.pinned_range(),
+        surface: surface_texture(&config.escape),
+    }
+}
+
+/// The surface texture's octaves and phases for a config
+/// (docs/projects/surface-textures.md): a function of the config alone.
+///
+/// The target wavelength is `texture_scale` pixels of a 1080-line view at
+/// the target. The octaves are the plane's dyadic ladder near it, octave k
+/// of wavelength 2^k in the plane, so as the view zooms the window slides
+/// over octaves that stay put. Each octave's phase is the world's origin --
+/// the eye's ground point -- in its cells, mod the lattice's period: the
+/// anchor's exact bits (`FixedPoint::bits_mod`), and the eye's offset from
+/// it in f64.
+pub fn surface_texture(escape: &EscapeConfig) -> super::surface::SurfaceTexture {
+    use super::fixedpoint::{limbs_for_view, FixedPoint};
+    use super::surface::{kind_window, octave_span, SurfaceTexture, SURFACE_BUMP, SURFACE_OCTAVES, SURFACE_PERIOD};
+    if !escape.surface_texture_active() {
+        return SurfaceTexture::off();
+    }
+    let sh = &escape.shading;
+    let cam = terrain_camera(escape);
+    // A pixel of a 1080-line view at the target, in current widths.
+    let px = 2.0 * (cam.fov as f64 * 0.5).tan() * FRAME_DISTANCE / 1080.0;
+    let lambda = sh.texture_scale.clamp(0.25, 64.0) as f64 * px;
+    // A current width is 4 * 2^-zoom of the plane.
+    let c = lambda.log2() + 2.0 - escape.zoom_log2;
+    let window = kind_window(sh.texture_kind);
+    let (k_min, n) = octave_span(c, window.0 as f64);
+    let a = canonical_anchor(escape);
+    let (eye, _) = eye_in_anchor(escape, &a);
+    let limbs = limbs_for_view(&a.re, &a.im, escape.zoom_log2.max(a.zoom)) + 1;
+    let exact = [FixedPoint::from_decimal(&a.re, limbs), FixedPoint::from_decimal(&a.im, limbs)];
+    let period_bits = SURFACE_PERIOD.log2() as u32;
+    let mut phases = [[0.0f32; 2]; SURFACE_OCTAVES];
+    for (i, phase) in phases.iter_mut().enumerate().take(n) {
+        let k = k_min + i as i64;
+        // Anchor widths (4 * 2^-anchor zoom of the plane) to octave k's cells.
+        let cells = (2.0 - a.zoom - k as f64).exp2();
+        for axis in 0..2 {
+            let base = exact[axis].as_ref().map_or(0.0, |f| f.bits_mod(k, period_bits));
+            phase[axis] = (base + eye[axis] * cells).rem_euclid(SURFACE_PERIOD) as f32;
+        }
+    }
+    SurfaceTexture {
+        kind: sh.texture_kind.to_gpu(),
+        amplitude: sh.texture_strength.clamp(0.0, 4.0) * lambda as f32 * SURFACE_BUMP,
+        place: sh.texture_where.to_gpu(),
+        angle: sh.texture_angle.to_radians(),
+        soft: sh.texture_angle_soft.to_radians(),
+        c_rel: (c - k_min as f64) as f32,
+        inv_lambda0: (2.0 - escape.zoom_log2 - k_min as f64).exp2() as f32,
+        octaves: n as u32,
+        window,
+        phases,
     }
 }
 
@@ -922,6 +985,7 @@ impl EscapeTerrain {
         }
 
         self.terrain.probe_nearest(device, queue, &terrain_view(config, [0.0, 0.0]));
+        self.sync_surface_image(device, queue, config);
         let escape = &config.escape;
         // A new picture: every section goes.
         let picture = (picture_key(escape), palette_key(config));
@@ -1087,6 +1151,28 @@ impl EscapeTerrain {
         // without one, as before it.
         let probing = cfg!(not(target_arch = "wasm32")) && self.terrain.probe_in_flight();
         self.missing > 0 || self.building.is_some() || probing
+    }
+
+    /// The surface texture's simulation image: the section renderer holds
+    /// the config's (the app and exports fill it, `uses_texture`); the
+    /// terrain renderer takes a copy with its mips when the key changes.
+    fn sync_surface_image(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) {
+        let wanted = config.escape.surface_texture_active()
+            && config.escape.shading.texture_kind == crate::config::escape::ShadingTexture::Simulation;
+        match (wanted, self.footprint.texture_for_copy()) {
+            (true, Some((key, texture))) => {
+                if self.terrain.surface_key() != Some(key) {
+                    let key = key.to_string();
+                    let texture = texture.clone();
+                    self.terrain.set_surface_image(device, queue, &key, &texture);
+                }
+            }
+            _ => {
+                if self.terrain.surface_key().is_some() && !wanted {
+                    self.terrain.clear_surface_image();
+                }
+            }
+        }
     }
 
     /// Measure auto contrast's fit again (`contrast_probe_config`).
@@ -1849,6 +1935,222 @@ mod tests {
             assert!(probed >= nearest * 0.999, "{name}: the probe saw ground nearer than any pixel");
             assert!(probed <= nearest * 1.5, "{name}: the probe missed the nearest ground");
         }
+    }
+
+    /// A terrain config with the surface texture on.
+    fn textured(kind: crate::config::escape::ShadingTexture) -> FractalConfig {
+        let mut c = terrain_config();
+        c.escape.shading.texture_kind = kind;
+        c.escape.shading.texture_strength = 2.0;
+        c.escape.shading.texture_scale = 6.0;
+        c
+    }
+
+    /// The texture coordinate octave `k` gives the plane point `g` under a
+    /// config's view: its phase, plus the point's world position (current
+    /// widths from the eye's ground point) in the octave's cells. In f64,
+    /// at a shallow zoom, where the plane point is exact enough.
+    fn texture_coord(escape: &EscapeConfig, g: [f64; 2], k: i64) -> Option<[f64; 2]> {
+        let st = surface_texture(escape);
+        let a = canonical_anchor(escape);
+        let i = (0..st.octaves as i64).find(|i| st.phases.len() > *i as usize && k == k_min_of(&st, escape) + i)?;
+        let (eye, _) = eye_in_anchor(escape, &a);
+        let width_a = 4.0 * (-a.zoom).exp2();
+        let width = 4.0 * (-escape.zoom_log2).exp2();
+        let re: f64 = a.re.parse().unwrap();
+        let im: f64 = a.im.parse().unwrap();
+        let eye_plane = [re + eye[0] * width_a, im + eye[1] * width_a];
+        let inv = width / (k as f64).exp2();
+        let ph = st.phases[i as usize];
+        Some(std::array::from_fn(|ax| ph[ax] as f64 + (g[ax] - eye_plane[ax]) / width * inv))
+    }
+
+    fn k_min_of(st: &crate::escape::surface::SurfaceTexture, escape: &EscapeConfig) -> i64 {
+        // inv_lambda0 = 2^(2 - zoom - k_min).
+        (2.0 - escape.zoom_log2 - (st.inv_lambda0 as f64).log2()).round() as i64
+    }
+
+    /// The texture stays on the ground (surface-textures.md): a plane
+    /// point keeps its texture coordinate, mod the lattice's period, when
+    /// the view pans, zooms (for the octaves both views hold), and moves
+    /// to another anchor -- the phases are the plane's, not the view's.
+    #[test]
+    fn the_surface_texture_stays_on_the_ground() {
+        use crate::config::escape::ShadingTexture;
+        let period = crate::escape::surface::SURFACE_PERIOD;
+        let base = textured(ShadingTexture::Rock).escape;
+        let g = [-0.7512345, 0.0423456];
+        let mut views = Vec::new();
+        for (re, im, zoom) in [
+            ("-0.75", "0.04", 5.0),
+            // Panned.
+            ("-0.7503", "0.0412", 5.0),
+            // Zoomed in, past an anchor band (8): another anchor.
+            ("-0.7509", "0.0420", 8.3),
+            ("-0.7512", "0.0423", 7.9),
+        ] {
+            let mut e = base.clone();
+            e.center_re = re.into();
+            e.center_im = im.into();
+            e.zoom_log2 = zoom;
+            views.push(e);
+        }
+        let mut compared = 0;
+        for k in -20..0 {
+            let coords: Vec<[f64; 2]> = views.iter().filter_map(|e| texture_coord(e, g, k)).collect();
+            for pair in coords.windows(2) {
+                for ax in 0..2 {
+                    let d = (pair[0][ax] - pair[1][ax]).rem_euclid(period);
+                    let d = d.min(period - d);
+                    assert!(d < 1.0e-3, "octave {k}: the texture moved {d} cells");
+                }
+                compared += 1;
+            }
+        }
+        assert!(compared >= 6, "views shared too few octaves: {compared}");
+        let anchors: std::collections::HashSet<String> = views.iter().map(|e| format!("{:?}", canonical_anchor(e).zoom)).collect();
+        assert!(anchors.len() > 1, "an anchor change was tested");
+    }
+
+    /// A phase is exact however deep: the anchor's bits, not its f64.
+    /// Checked against integer arithmetic at 2^-60, where the f64 of the
+    /// same point is off by whole cells.
+    #[test]
+    fn the_surface_phase_is_exact_past_f64() {
+        use super::super::fixedpoint::FixedPoint;
+        for (dec, n, neg) in [("0.123456789012345", 123_456_789_012_345u128, false), ("-0.987654321098765", 987_654_321_098_765, true)] {
+            let fp = FixedPoint::from_decimal(dec, 4).unwrap();
+            let got = fp.bits_mod(-60, 10);
+            // n * 2^60 / 10^15 mod 1024, exactly.
+            let scale = 10u128.pow(15);
+            let r = (n << 60) % (1024 * scale);
+            let mut want = r as f64 / scale as f64;
+            if neg && want > 0.0 {
+                want = 1024.0 - want;
+            }
+            assert!((got - want).abs() < 1.0e-6, "{dec}: {got} against {want}");
+            let f64_way = (dec.parse::<f64>().unwrap() * 2f64.powi(60)).rem_euclid(1024.0);
+            println!("{dec}: exact {want}, f64 {f64_way}");
+        }
+    }
+
+    /// The octave window slides: every octave enters and leaves the sum at
+    /// weight 0, so a zoom never steps the texture, and the sum never
+    /// vanishes.
+    #[test]
+    fn the_surface_octaves_cross_fade() {
+        use crate::escape::surface::{kind_window, octave_span, octave_weight};
+        use crate::config::escape::ShadingTexture;
+        for kind in [ShadingTexture::Grain, ShadingTexture::Paper, ShadingTexture::Rock] {
+            let w = kind_window(kind);
+            let w = (w.0 as f64, w.1 as f64);
+            assert!(octave_weight(-w.0, w) < 1e-12 && octave_weight(1.0, w) < 1e-12, "{kind:?}: the window's ends");
+            let mut last: Option<f64> = None;
+            for step in 0..400 {
+                let c = -4.0 + step as f64 * 0.02;
+                let (k_min, n) = octave_span(c, w.0);
+                let sum: f64 = (0..n).map(|i| octave_weight((k_min + i as i64) as f64 - c, w)).sum();
+                assert!(sum > 0.1, "{kind:?} at {c}: {sum}");
+                if let Some(prev) = last {
+                    assert!((sum - prev).abs() < 0.1, "{kind:?} at {c}: the sum jumped {prev} -> {sum}");
+                }
+                last = Some(sum);
+            }
+        }
+    }
+
+    /// The slope mask on the GPU: with the texture on the steep faces
+    /// only, a pixel whose ground is flat renders exactly as without it,
+    /// and the steep ones change. The Lit tier, which is deterministic. A
+    /// texture coarser than the pixel: finer, the footprint filters it
+    /// out, rightly.
+    #[test]
+    fn the_steep_texture_bumps_only_the_steep_faces() {
+        use crate::config::escape::{ShadingTexture, TextureWhere};
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (320u32, 180u32);
+        let shot = |c: &FractalConfig| -> (Vec<u8>, Vec<[u32; 4]>) {
+            let mut engines = crate::renderer::render::RenderEngines::default();
+            let img = pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(c, w, h).with_engines(&mut engines),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data;
+            let t = engines.terrain.as_ref().unwrap();
+            let geom: Vec<[u32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(
+                &device,
+                &queue,
+                t.terrain_for_test().geometry_buffer(),
+                (w * h * 16) as u64,
+            ))
+            .to_vec();
+            (img, geom)
+        };
+        let mut plain = textured(ShadingTexture::None);
+        plain.escape.shading.texture_scale = 64.0;
+        plain.escape.terrain.tier = RenderTier::Lit;
+        plain.escape.terrain.source = TerrainSource::EscapeCount;
+        plain.escape.terrain.height = 0.2;
+        let mut steep = plain.clone();
+        steep.escape.shading.texture_kind = ShadingTexture::Rock;
+        steep.escape.shading.texture_where = TextureWhere::Steep;
+        steep.escape.shading.texture_angle = 30.0;
+        steep.escape.shading.texture_angle_soft = 5.0;
+        let (a, geom) = shot(&plain);
+        let (b, _) = shot(&steep);
+        let (mut flat, mut flat_same, mut cliff, mut cliff_changed) = (0usize, 0usize, 0usize, 0usize);
+        for (i, g) in geom.iter().enumerate() {
+            if !(f32::from_bits(g[3]) > 0.0) {
+                continue;
+            }
+            let nz = half::f16::from_bits((g[1] & 0xffff) as u16).to_f32().abs();
+            let slope = nz.clamp(0.0, 1.0).acos().to_degrees();
+            let differs = (0..3).any(|ch| a[i * 4 + ch] != b[i * 4 + ch]);
+            if slope < 24.0 {
+                flat += 1;
+                flat_same += usize::from(!differs);
+            } else if slope > 36.0 {
+                cliff += 1;
+                cliff_changed += usize::from(differs);
+            }
+        }
+        println!("flat {flat_same}/{flat} unchanged, steep {cliff_changed}/{cliff} changed");
+        assert!(flat > 100 && cliff > 50, "both kinds of ground in view: {flat} flat, {cliff} steep");
+        assert_eq!(flat_same, flat, "the flats are untouched");
+        assert!(cliff_changed * 2 > cliff, "the cliffs take the texture: {cliff_changed}/{cliff}");
+    }
+
+    /// A path-traced terrain with the texture is finite, and the same bytes
+    /// twice.
+    #[test]
+    fn a_textured_path_trace_repeats() {
+        use crate::config::escape::ShadingTexture;
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut c = looking_down();
+        c.escape.shading.texture_kind = ShadingTexture::Paper;
+        c.escape.shading.texture_strength = 2.0;
+        c.escape.shading.texture_scale = 64.0;
+        c.escape.cam_fov = 0.7;
+        c.escape.terrain.tier = RenderTier::PathTraced;
+        c.escape.path.samples = 4;
+        let a = render(&device, &queue, &c, 128, 96);
+        let b = render(&device, &queue, &c, 128, 96);
+        assert_eq!(a, b, "the same picture twice");
+        let mut plain = c.clone();
+        plain.escape.shading.texture_kind = ShadingTexture::None;
+        let p = render(&device, &queue, &plain, 128, 96);
+        let changed = a.chunks(4).zip(p.chunks(4)).filter(|(x, y)| x[..3] != y[..3]).count();
+        println!("the texture changed {changed} of {} pixels", a.len() / 4);
+        assert!(changed * 4 > a.len() / 4, "the texture shows: {changed}");
     }
 
     /// The leaves cover every point a primary ray can meet the ground at

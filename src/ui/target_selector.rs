@@ -476,6 +476,8 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapeShadingHighlightStrength, "Relief: Highlight strength"),
             TargetItem::new(ConfigPath::EscapeShadingTextureStrength, "Relief: Texture strength"),
             TargetItem::new(ConfigPath::EscapeShadingTextureScale, "Relief: Texture scale"),
+            TargetItem::new(ConfigPath::EscapeShadingTextureAngle, "Relief: Texture slope angle"),
+            TargetItem::new(ConfigPath::EscapeShadingTextureAngleSoft, "Relief: Texture slope softness"),
         ]);
     }
 

@@ -575,6 +575,45 @@ Their raw values sort so that a mipmap's extreme still bounds the highest
 point. For a distance the plateau is −1e30, not the set's own 0, so an
 inverted map can tell it from land at distance 0 and leave it on top.
 
+### The surface texture
+
+The escape relief's texture (`EscapeShading`: Grain, Paper, Rock or the
+simulation texture, its strength and scale, and Where) is bumped into
+an escape terrain's surface: the shading normal tilts, the geometry
+does not ([surface-textures.md](../projects/surface-textures.md)). A
+simulation's terrain has none.
+- **Mapping:** triplanar. Each of the three axis projections is
+  evaluated where its weight (|n|⁴, normalised) counts, its gradient
+  lifted into the world.
+- **Anchored to the plane:** octave *k* has wavelength 2^*k* of the
+  plane. Its phase is the world's origin (the eye's ground point) in its
+  cells, mod 1024: the anchor's exact bits (`FixedPoint::bits_mod`)
+  plus the eye's offset in f64 (`footprint::surface_texture`). A
+  pan, a turn or an anchor change keeps every point's texture;
+  heights need no phase.
+- **Its size:** `texture_scale` pixels of a 1080-line view at the
+  target. As the view zooms, the kind's octave window slides over the
+  fixed octaves (`kind_window`: Grain 1 octave, Paper 3, Rock 4, with a
+  fractal falloff), so the texture keeps its size on screen and never
+  steps.
+- **Filtered:** an octave fades out between four and two pixel
+  footprints a wavelength (the relight's and the path tracer's `foot`).
+  The simulation texture is copied from the section renderer's on the
+  GPU, with a mip chain, and sampled at the footprint's level.
+- **Masked** by the true normal's slope (Where).
+- **The bump:** the surface gradient, scaled so the tilt does not change
+  with the scale (`SURFACE_BUMP`).
+- **Lit tier:** the relight bumps the normal it unpacks. A light the
+  true surface faces away from stays dark, since the walk's shadow test
+  was the true surface's. The ambient takes the sky the tilted normal
+  faces over the true one's, so a face in shade shows the texture too.
+- **Path tracer:** `pt_surface` bumps the normal before the two-sided
+  flip. `PtHit::ng` keeps the true normal: the next ray leaves along it,
+  and no light or bounce passes under it.
+- **Cost:** a texture edit relights and re-walks nothing (not in
+  `walk_key`); `picture_key` ignores it, so no section re-renders.
+  Nothing at all with the kind None.
+
 ### Relight, albedo and fog
 
 **The albedo** is filtered over a ray's share of a pixel at the hit

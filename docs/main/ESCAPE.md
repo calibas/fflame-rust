@@ -769,14 +769,25 @@ them, so a crease render always iterates
 (`EscapeConfig::wants_creases`); Origami's 64 folds are cheap. The
 settings reach the shader through the uniform's `crease` row. The
 model was prototyped in `scripts/escape_prototypes/origami_creases.py`
-([plan](../projects/origami-creases.md)). Lighting is `Tilt` (the signed lean toward the light) or
+([plan](../projects/origami-creases.md)).
+
+Lighting is `Tilt` (the signed lean toward the light) or
 `Lambert` (with an elevation); shadow and highlight each have a colour,
 strength and blend (`ShadingBlend`, blended in a perceptual space so the
 two strengths read alike); `softness` is a Gaussian on the height, in
 display pixels; a slope stencil, a height curve and a micro-texture
-(`Grain`, `Paper` or the simulation texture) complete it. The
-simulation's relief colouring uses the same lighting (see
-[SIMULATION.md](SIMULATION.md)).
+complete it. The simulation's relief colouring uses the same lighting
+(see [SIMULATION.md](SIMULATION.md)).
+
+**The surface texture** (`ShadingTexture`: Grain, Paper, Rock or the
+simulation texture) is shared with the 3D terrain
+([surface-textures.md](../projects/surface-textures.md); on a terrain it
+is bumped into the surface, [TERRAIN.md](TERRAIN.md)). In 2D it tilts
+the relief's slope, in display pixels: it is fixed to the screen until
+that plan's step 3. **Where** (`TextureWhere`: everywhere, the steep
+faces, the flats) masks it by the relief's tilt against
+`texture_angle` ± `texture_angle_soft`. Rock is ridged gradient noise,
+four octaves.
 
 **Textures** are simulation recipes, not image files: an `EscapeTexture`
 embeds a whole Simulation-mode config, so the file that uses it is
