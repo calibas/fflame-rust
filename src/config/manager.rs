@@ -902,10 +902,7 @@ impl ConfigManager {
         // config before and after, labelled as the edit. A delta of the
         // one field restored the model name and kept the new model's
         // defaults, and the run reseeded with them.
-        if matches!(
-            path,
-            ConfigPath::SimModel | ConfigPath::SimLayerModel { .. } | ConfigPath::SimGridMode | ConfigPath::SimInitKind
-        ) {
+        if Self::changes_more_than_itself(&path) {
             let before = self.current.clone();
             self.set_value(&path, new_value)?;
             let change = ConfigChange::full_config_snapshot(before, self.current.clone(), delta.description());
@@ -989,12 +986,44 @@ impl ConfigManager {
             return Ok(update_type);
         }
 
-        // Normal mode: create deltas and capture
-        let mut deltas = Vec::new();
+        // Normal mode: each change in order, its old value read as the
+        // earlier ones left the config. A later path's value can depend on
+        // an earlier one: a colouring's parameters read that colouring's
+        // defaults, so with every old value read up front a preset's
+        // `mask_channel` 0 against the LAST colouring's default 0 was
+        // dropped as a no-op, and the new colouring's default 1 showed
+        // until the preset was applied again.
+        //
+        // A setter that changes more than its own field makes the batch a
+        // before-and-after snapshot, as it does a single edit: inverted
+        // deltas put back the model's name and kept the new model's
+        // parameters.
+        let before = changes.iter().any(|(p, _)| Self::changes_more_than_itself(p)).then(|| self.current.clone());
+        let mut deltas: Vec<ConfigDelta> = Vec::new();
         for (path, new_value) in changes {
-            let old_value = self.get_value(&path)?;
-            if !old_value.approx_eq(&new_value) {
-                deltas.push(ConfigDelta::new(path, old_value, new_value));
+            let applied = self.get_value(&path).and_then(|old_value| {
+                if old_value.approx_eq(&new_value) {
+                    return Ok(None);
+                }
+                self.set_value(&path, new_value.clone())?;
+                Ok(Some(ConfigDelta::new(path, old_value, new_value)))
+            });
+            match applied {
+                Ok(Some(delta)) => deltas.push(delta),
+                Ok(None) => {}
+                Err(e) => {
+                    // Leave the config as it was: the snapshot, or the
+                    // applied deltas undone in reverse.
+                    match before {
+                        Some(before) => self.current = before,
+                        None => {
+                            for d in deltas.iter().rev() {
+                                let _ = self.set_value(&d.path, d.old_value.clone());
+                            }
+                        }
+                    }
+                    return Err(e);
+                }
             }
         }
 
@@ -1002,19 +1031,32 @@ impl ConfigManager {
             return Ok(UpdateType::None);
         }
 
-        let change = ConfigChange::batch(deltas, description);
-        let update_type = change.update_type();
-
-        self.push_undo(change.clone());  // Batch changes skip coalescing
-
-        for delta in &change.deltas {
-            self.set_value(&delta.path, delta.new_value.clone())?;
+        let mut update_type = UpdateType::None;
+        for delta in &deltas {
+            update_type = update_type.merge(delta.path.update_type());
             // Record each delta's update type separately so all necessary actions are merged
             // (e.g., batch with ColorMode + TonemapCurve needs both update_palette AND update_tone_curve)
             self.record_action(delta.path.update_type());
         }
+        let change = match before {
+            Some(before) => ConfigChange::full_config_snapshot(before, self.current.clone(), description),
+            None => ConfigChange::batch(deltas, description),
+        };
+        self.push_undo(change); // Batch changes skip coalescing
 
         Ok(update_type)
+    }
+
+    /// A setter that changes more than its own field -- a model pick
+    /// resets that model's parameters, time step and steps; the grid mode
+    /// its sizes; the init kind its shape. Recorded as the config before
+    /// and after: a delta of the one field would restore the model's name
+    /// and keep the new model's defaults.
+    fn changes_more_than_itself(path: &ConfigPath) -> bool {
+        matches!(
+            path,
+            ConfigPath::SimModel | ConfigPath::SimLayerModel { .. } | ConfigPath::SimGridMode | ConfigPath::SimInitKind
+        )
     }
 
     /// Update a system setting (device-specific preference)
@@ -5438,6 +5480,79 @@ mod tests {
         assert_eq!(m.config().sim, before);
         m.redo().unwrap();
         assert_eq!(m.config().sim.model, "hodgepodge");
+    }
+
+    /// A batch reads each old value as the changes before it left the
+    /// config: a colouring's parameter against the NEW colouring's
+    /// default, so a preset's `mask_channel` 0 is not dropped as a no-op
+    /// against the old colouring's 0 (field-reported: Percolation's
+    /// presets showed 1 until applied twice).
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_batch_reads_each_old_value_after_the_changes_before_it() {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.sim.coloring = "channel".into();
+        c.sim.coloring_params.clear();
+        let mut m = ConfigManager::new(c);
+        m.update_batch(
+            vec![
+                (ConfigPath::SimColoring, ConfigValue::String("label".into())),
+                (ConfigPath::SimColoringParam { param: "mask_channel".into() }, ConfigValue::Float(0.0)),
+            ],
+            "preset".into(),
+        )
+        .unwrap();
+        assert_eq!(m.config().sim.coloring, "label");
+        let v = m.get_value(&ConfigPath::SimColoringParam { param: "mask_channel".into() }).unwrap();
+        assert!(v.approx_eq(&ConfigValue::Float(0.0)), "{v:?}");
+    }
+
+    /// A batch that picks a model is undone whole, as a single pick is:
+    /// the old model's tuned parameters come back with its name.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn undoing_a_batched_model_pick_restores_its_tuning() {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.sim.model = "gray_scott".into();
+        c.sim.model_params.insert("feed".into(), 0.031);
+        c.sim.dt = 0.7;
+        let before = c.sim.clone();
+        let mut m = ConfigManager::new(c);
+        m.update_batch(
+            vec![
+                (ConfigPath::SimModel, ConfigValue::String("ising".into())),
+                (ConfigPath::SimInitKind, ConfigValue::String("noise".into())),
+                (ConfigPath::SimInitAmplitude, ConfigValue::Float(1.0)),
+            ],
+            "model".into(),
+        )
+        .unwrap();
+        assert_eq!(m.config().sim.init, crate::config::sim::SimInit::Noise { amplitude: 1.0 });
+        m.undo().unwrap();
+        assert_eq!(m.config().sim, before);
+        m.redo().unwrap();
+        assert_eq!(m.config().sim.model, "ising");
+        assert_eq!(m.config().sim.init, crate::config::sim::SimInit::Noise { amplitude: 1.0 });
+    }
+
+    /// A batch whose change fails leaves the config as it was, and no undo
+    /// point.
+    #[test]
+    fn a_failed_batch_changes_nothing() {
+        let mut m = ConfigManager::new(FractalConfig::default());
+        let before = m.config().clone();
+        let r = m.update_batch(
+            vec![
+                (ConfigPath::Exposure, ConfigValue::Float(3.5)),
+                (ConfigPath::SimSteps, ConfigValue::String("not a number".into())),
+            ],
+            "bad".into(),
+        );
+        assert!(r.is_err());
+        assert_eq!(m.config().exposure, before.exposure);
+        assert!(m.undo().is_err(), "no undo point");
     }
 
     #[test]
