@@ -3126,7 +3126,7 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
     display_name: "SmoothLife",
     description: "Conway's Life on a continuous domain: the same birth and survival rules \
                   read as smooth thresholds, giving gliders and rolling labyrinths.",
-    features: &[ModelFeature::NeverStills],
+    features: &[ModelFeature::NeverStills, ModelFeature::ExactDiscs],
     parameters: &[
         SimParamDef {
             name: "inner_radius",
@@ -3356,20 +3356,27 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let w = 2 * r + 1;
     let taps = sim_kernel_taps();
 
-    // ONE gather, two accumulators: the disc and the annulus differ
-    // only in their weights, so reading the field twice would double
-    // the only expensive part.
     var m = 0.0;
     var n = 0.0;
-    for (var dy = -r; dy <= r; dy = dy + 1) {
-        for (var dx = -r; dx <= r; dx = dx + 1) {
-            let i = u32((dy + r) * w + (dx + r));
-            let ki = klut(i);
-            let ko = klut(taps + i);
-            if (ki > 0.0 || ko > 0.0) {
-                let v = sim_read(p + vec2<i32>(dx, dy)).x;
-                m = m + ki * v;
-                n = n + ko * v;
+    if (pyr_exact()) {
+        // By FFT (`smoothlife_discs`): the inner disc's average less the
+        // cell, then the annulus's average -- the gather's own weights.
+        m = pyr_diff_cell(0, p) + s.x;
+        n = pyr_diff_cell(1, p);
+    } else {
+        // ONE gather, two accumulators: the disc and the annulus differ
+        // only in their weights, so reading the field twice would double
+        // the only expensive part.
+        for (var dy = -r; dy <= r; dy = dy + 1) {
+            for (var dx = -r; dx <= r; dx = dx + 1) {
+                let i = u32((dy + r) * w + (dx + r));
+                let ki = klut(i);
+                let ko = klut(taps + i);
+                if (ki > 0.0 || ko > 0.0) {
+                    let v = sim_read(p + vec2<i32>(dx, dy)).x;
+                    m = m + ki * v;
+                    n = n + ko * v;
+                }
             }
         }
     }
@@ -3591,6 +3598,19 @@ pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>
 /// the ladder's power of two times the base, the table's radius floored
 /// at a half cell. The table's discs also lean (section 9); the
 /// ladder's are round.
+/// SmoothLife's discs for the spectral stage (`ModelFeature::ExactDiscs`):
+/// the inner disc against a disc of radius 0 -- the cell itself, so
+/// slice 0 is the disc's average less the cell -- then the annulus out
+/// to the outer radius, averaged. The radii are the kernel's, its
+/// clamps included, so the two paths read the same weights.
+pub fn smoothlife_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
+    use crate::sim::spectral::SpectralScale;
+    let get = |k: &str, d: f32| params.get(k).copied().filter(|v| v.is_finite()).unwrap_or(d);
+    let ri = get("inner_radius", 7.0).clamp(1.0, 10.0);
+    let ra = (ri * get("ratio", 3.0).clamp(1.5, 5.0)).min(MAX_KERNEL_RADIUS as f32 - 1.5);
+    vec![SpectralScale::round(ri, 0.0), SpectralScale::annulus(ra, ri)]
+}
+
 pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
     use crate::sim::spectral::SpectralScale;
     let get = |name: &str| -> f32 {
@@ -3610,6 +3630,7 @@ pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> V
                     // Counter-clockwise on screen, as the app's other
                     // angles are; the grid's y runs down, so negated.
                     angle: -get(&format!("s{i}_angle")).to_radians(),
+                    annulus: false,
                 }
             } else {
                 let ra = get("base_radius") * (1u32 << i) as f32;

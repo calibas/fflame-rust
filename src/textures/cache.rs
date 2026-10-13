@@ -12,7 +12,9 @@ use crate::config::FractalConfig;
 /// by an older engine are not taken for this one's pictures.
 /// `the_texture_engine_is_the_one_the_cache_was_versioned_for` fails when
 /// the shaders a texture is made with change, and says to bump this.
-pub const TEXTURE_CACHE_VERSION: u32 = 1;
+/// 2: SmoothLife's averages by FFT (2026-10-13), the same to rounding a
+/// step but not over a long chaotic run.
+pub const TEXTURE_CACHE_VERSION: u32 = 2;
 
 /// The cache key: SHA-256 of the recipe's file form, its size and the
 /// cache version, in hex.
@@ -139,10 +141,7 @@ mod tests {
     use super::*;
 
     /// The shaders a texture is made with, as of `TEXTURE_CACHE_VERSION`.
-    /// Re-pinned without a bump for SmoothLife's appended parameters
-    /// (2026-10-13): a recipe without them takes their defaults, the
-    /// shader's old arithmetic exactly.
-    const PINNED_ENGINE: &str = "b151725d41e5bed4";
+    const PINNED_ENGINE: &str = "b794f84420b85126";
 
     /// When this fails, the simulation's shaders or the tone map changed,
     /// and a cached texture may no longer be what its recipe makes. If
