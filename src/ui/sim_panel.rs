@@ -1353,6 +1353,9 @@ fn preset_changes(
     if let Some(init) = pre.init {
         changes.extend(init_changes(init));
     }
+    // And the boundary it was measured with: fingering's inlet and outlet
+    // meet on a wrapping grid, and its front never moves.
+    changes.push((ConfigPath::SimBoundary, pre.boundary.name().to_string().into()));
     // Which colouring a model wants is a property of its state layout,
     // not a taste the user should have to acquire.
     if let Some(c) = pre.coloring {
@@ -1554,8 +1557,11 @@ fn render_model_section(
                             // switch leaves it.
                             let mut changes = vec![(slot.model_path(), m.name.to_string().into())];
                             if slot == LayerSlot::Flat {
-                                if let Some(init) = m.presets.first().and_then(|p| p.init) {
-                                    changes.extend(init_changes(init));
+                                if let Some(first) = m.presets.first() {
+                                    if let Some(init) = first.init {
+                                        changes.extend(init_changes(init));
+                                    }
+                                    changes.push((ConfigPath::SimBoundary, first.boundary.name().to_string().into()));
                                 }
                             }
                             let _ = config_manager.update_batch(changes, "history.action.sim_model".to_string());
@@ -1821,9 +1827,16 @@ mod init_tests {
                     config.render_mode = crate::scene::transforms::RenderMode::Simulation;
                     config.sim.model = model.name.to_string();
                     config.sim.init = before;
+                    // A boundary no preset of the model wants, so each
+                    // must set its own.
+                    config.sim.boundary = match pre.boundary {
+                        crate::config::sim::SimBoundary::Periodic => crate::config::sim::SimBoundary::Zero,
+                        _ => crate::config::sim::SimBoundary::Periodic,
+                    };
                     let mut manager = ConfigManager::new(config);
                     let _ = manager.update_batch(preset_changes(model, pre, LayerSlot::Flat), "preset".to_string());
                     assert_eq!(Some(manager.config().sim.init), pre.init, "{}/{} from {before:?}", model.name, pre.name);
+                    assert_eq!(manager.config().sim.boundary, pre.boundary, "{}/{}: its boundary", model.name, pre.name);
                 }
             }
         }
