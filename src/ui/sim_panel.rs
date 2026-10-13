@@ -1345,7 +1345,7 @@ fn preset_changes(
     }
     // Lenia is the sharp case: it runs at 0.1 and dies at 1.
     if !model.has(crate::sim::ModelFeature::NoTimeStep) {
-        changes.push((ConfigPath::SimDt, model.default_dt.into()));
+        changes.push((ConfigPath::SimDt, pre.dt.unwrap_or(model.default_dt).into()));
     }
     // FitzHugh-Nagumo's constants give spirals from a cut wavefront and
     // a flat field from noise, so applying only the numbers would ship

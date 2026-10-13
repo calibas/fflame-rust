@@ -139,7 +139,10 @@ mod tests {
     use super::*;
 
     /// The shaders a texture is made with, as of `TEXTURE_CACHE_VERSION`.
-    const PINNED_ENGINE: &str = "5fce41decee7506c";
+    /// Re-pinned without a bump for SmoothLife's appended parameters
+    /// (2026-10-13): a recipe without them takes their defaults, the
+    /// shader's old arithmetic exactly.
+    const PINNED_ENGINE: &str = "b151725d41e5bed4";
 
     /// When this fails, the simulation's shaders or the tone map changed,
     /// and a cached texture may no longer be what its recipe makes. If

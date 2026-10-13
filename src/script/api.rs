@@ -1650,7 +1650,7 @@ fn register_sim(engine: &mut Engine) {
                     // Order matters: dt first, because switching model
                     // set it to the model default and a preset may
                     // override; then parameters over the defaults.
-                    cfg.sim.dt = model.default_dt;
+                    cfg.sim.dt = p.dt.unwrap_or(model.default_dt);
                     for (k, v) in p.params {
                         model_params(&mut cfg).insert((*k).to_string(), *v);
                     }
