@@ -994,6 +994,14 @@ fn apply_config_value(
         (ConfigPath::EscapeShadingTextureScale, ConfigValue::Float(v)) => {
             config.escape.shading.texture_scale = v.clamp(0.25, 64.0);
         }
+        (ConfigPath::EscapeShadingTextureAngle, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::TEXTURE_ANGLE_RANGE;
+            config.escape.shading.texture_angle = v.clamp(lo, hi);
+        }
+        (ConfigPath::EscapeShadingTextureAngleSoft, ConfigValue::Float(v)) => {
+            let (lo, hi) = crate::config::escape::TEXTURE_ANGLE_SOFT_RANGE;
+            config.escape.shading.texture_angle_soft = v.clamp(lo, hi);
+        }
         (ConfigPath::EscapeShadingElevation, ConfigValue::Float(v)) => {
             config.escape.shading.elevation = v.clamp(0.0, 90.0);
         }

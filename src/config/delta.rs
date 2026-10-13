@@ -583,6 +583,11 @@ pub enum ConfigPath {
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
+    /// Where the surface texture applies by slope, and the slope it turns
+    /// at, ± its softness (docs/projects/surface-textures.md).
+    EscapeShadingTextureWhere,
+    EscapeShadingTextureAngle,
+    EscapeShadingTextureAngleSoft,
     // Relief lighting (survey item 7): model, elevation, ambient, the
     // slope stencil, and a curve on the height.
     EscapeShadingModel,
@@ -1278,6 +1283,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
             ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
+            ConfigPath::EscapeShadingTextureWhere => write!(f, "Texture Where"),
+            ConfigPath::EscapeShadingTextureAngle => write!(f, "Texture Slope Angle"),
+            ConfigPath::EscapeShadingTextureAngleSoft => write!(f, "Texture Slope Softness"),
             ConfigPath::EscapeShadingModel => write!(f, "Relief Lighting Model"),
             ConfigPath::EscapeShadingElevation => write!(f, "Relief Light Elevation"),
             ConfigPath::EscapeShadingAmbient => write!(f, "Relief Ambient"),
@@ -1717,6 +1725,11 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
             ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
+            ConfigPath::EscapeShadingTextureWhere => I18nKey::simple("history.param.escape_shading_texture_where"),
+            ConfigPath::EscapeShadingTextureAngle => I18nKey::simple("history.param.escape_shading_texture_angle"),
+            ConfigPath::EscapeShadingTextureAngleSoft => {
+                I18nKey::simple("history.param.escape_shading_texture_angle_soft")
+            }
             ConfigPath::EscapeShadingModel => I18nKey::simple("history.param.escape_shading_model"),
             ConfigPath::EscapeShadingElevation => I18nKey::simple("history.param.escape_shading_elevation"),
             ConfigPath::EscapeShadingAmbient => I18nKey::simple("history.param.escape_shading_ambient"),
@@ -3163,6 +3176,9 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
             | ConfigPath::EscapeShadingTextureScale
+            | ConfigPath::EscapeShadingTextureWhere
+            | ConfigPath::EscapeShadingTextureAngle
+            | ConfigPath::EscapeShadingTextureAngleSoft
             | ConfigPath::EscapeShadingModel
             | ConfigPath::EscapeShadingElevation
             | ConfigPath::EscapeShadingAmbient
@@ -3703,6 +3719,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
             ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
+            ConfigPath::EscapeShadingTextureWhere => "Escape.Shading.TextureWhere".to_string(),
+            ConfigPath::EscapeShadingTextureAngle => "Escape.Shading.TextureAngle".to_string(),
+            ConfigPath::EscapeShadingTextureAngleSoft => "Escape.Shading.TextureAngleSoft".to_string(),
             ConfigPath::EscapeShadingModel => "Escape.Shading.Model".to_string(),
             ConfigPath::EscapeShadingElevation => "Escape.Shading.Elevation".to_string(),
             ConfigPath::EscapeShadingAmbient => "Escape.Shading.Ambient".to_string(),
@@ -3992,6 +4011,9 @@ impl ConfigPath {
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
                 ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
+                ["Shading", "TextureWhere"] => return Some(ConfigPath::EscapeShadingTextureWhere),
+                ["Shading", "TextureAngle"] => return Some(ConfigPath::EscapeShadingTextureAngle),
+                ["Shading", "TextureAngleSoft"] => return Some(ConfigPath::EscapeShadingTextureAngleSoft),
                 ["Shading", "Model"] => return Some(ConfigPath::EscapeShadingModel),
                 ["Shading", "Elevation"] => return Some(ConfigPath::EscapeShadingElevation),
                 ["Shading", "Ambient"] => return Some(ConfigPath::EscapeShadingAmbient),
@@ -4901,6 +4923,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePathFocus
         | ConfigPath::EscapeShadingTextureStrength
         | ConfigPath::EscapeShadingTextureScale
+        | ConfigPath::EscapeShadingTextureAngle
+        | ConfigPath::EscapeShadingTextureAngleSoft
         | ConfigPath::EscapeShadingElevation
         | ConfigPath::EscapeShadingAmbient
         | ConfigPath::EscapeShadingHeightPre
@@ -4961,6 +4985,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePaletteStepped
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
+        | ConfigPath::EscapeShadingTextureWhere
         // Embossed's type picks a different integer field, and its
         // sections count is a whole number of sectors: neither has a
         // value part-way between two keyframes.

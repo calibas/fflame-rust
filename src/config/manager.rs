@@ -2218,6 +2218,11 @@ impl ConfigManager {
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
+            ConfigPath::EscapeShadingTextureWhere => Ok(ConfigValue::String(
+                config.escape.shading.texture_where.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingTextureAngle => Ok(config.escape.shading.texture_angle.into()),
+            ConfigPath::EscapeShadingTextureAngleSoft => Ok(config.escape.shading.texture_angle_soft.into()),
             ConfigPath::EscapeShadingHighlightBlend => Ok(ConfigValue::String(
                 crate::config::escape::shading_blend_to_str(config.escape.shading.highlight_blend)
                     .to_string(),
@@ -3872,6 +3877,20 @@ impl ConfigManager {
             ConfigPath::EscapeShadingTextureScale => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.texture_scale = v.clamp(0.25, 64.0);
+            }
+            ConfigPath::EscapeShadingTextureWhere => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.texture_where = crate::config::escape::TextureWhere::from_name(&v);
+            }
+            ConfigPath::EscapeShadingTextureAngle => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::TEXTURE_ANGLE_RANGE;
+                self.current.escape.shading.texture_angle = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingTextureAngleSoft => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::TEXTURE_ANGLE_SOFT_RANGE;
+                self.current.escape.shading.texture_angle_soft = v.clamp(lo, hi);
             }
             ConfigPath::EscapeShadingModel => {
                 let v: String = value.try_into()?;

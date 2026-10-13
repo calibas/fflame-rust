@@ -378,10 +378,21 @@ impl EscapeConfig {
             .any(|c| c.name == self.coloring && c.has_feature(crate::escape::ColoringFeature::TextureInLoop));
         #[cfg(not(feature = "engine-escape"))]
         let coloring = false;
-        self.texture.is_some()
-            && (self.texture_overlay.enabled
-                || coloring
-                || (self.shading.enabled && self.shading.texture_kind == ShadingTexture::Simulation))
+        // The relief's simulation micro-texture, or a terrain's (which
+        // lights its own surface whether the 2D relief is on or not).
+        let surface = self.shading.texture_kind == ShadingTexture::Simulation
+            && (self.shading.enabled || self.terrain_active());
+        self.texture.is_some() && (self.texture_overlay.enabled || coloring || surface)
+    }
+
+    /// Whether the 3D terrain carries the surface texture: a kind at a
+    /// strength (docs/projects/surface-textures.md). It has its own
+    /// lighting, so the 2D relief's switch does not enter.
+    pub fn surface_texture_active(&self) -> bool {
+        self.terrain_active()
+            && self.shading.texture_kind != ShadingTexture::None
+            && self.shading.texture_strength > 0.0
+            && (self.shading.texture_kind != ShadingTexture::Simulation || self.texture.is_some())
     }
 }
 
@@ -1496,6 +1507,15 @@ pub struct EscapeShading {
     /// Feature size in DISPLAY pixels — how coarse the grain is.
     #[serde(default = "default_texture_scale")]
     pub texture_scale: f32,
+    /// Where the texture applies, by slope (`TextureWhere`), and the
+    /// slope it turns at, ± its softness (degrees). The 3D terrain and the
+    /// 2D relief share them (docs/projects/surface-textures.md).
+    #[serde(default, skip_serializing_if = "TextureWhere::is_default")]
+    pub texture_where: TextureWhere,
+    #[serde(default = "default_texture_angle", skip_serializing_if = "is_default_texture_angle")]
+    pub texture_angle: f32,
+    #[serde(default = "default_texture_angle_soft", skip_serializing_if = "is_default_texture_angle_soft")]
+    pub texture_angle_soft: f32,
 
     /// How a slope becomes light: the signed tilt (the default, and
     /// every picture before this option) or Lambert's law.
@@ -1627,6 +1647,9 @@ impl Default for EscapeShading {
             texture_kind: ShadingTexture::None,
             texture_strength: 0.0,
             texture_scale: default_texture_scale(),
+            texture_where: TextureWhere::Everywhere,
+            texture_angle: default_texture_angle(),
+            texture_angle_soft: default_texture_angle_soft(),
             model: ReliefModel::default(),
             elevation: default_relief_elevation(),
             ambient: 0.0,
@@ -1825,15 +1848,21 @@ pub enum ShadingTexture {
     /// luminance as the micro-relief (docs/archive/projects/sim-textures.md,
     /// phase 3). Nothing without a texture.
     Simulation,
+    /// Ridged octaves with a fractal falloff: weathered stone, for
+    /// roughening cliffs (docs/projects/surface-textures.md).
+    Rock,
 }
 
 impl ShadingTexture {
+    pub const ALL: [ShadingTexture; 5] =
+        [ShadingTexture::None, ShadingTexture::Grain, ShadingTexture::Paper, ShadingTexture::Rock, ShadingTexture::Simulation];
     pub fn to_gpu(self) -> u32 {
         match self {
             ShadingTexture::None => 0,
             ShadingTexture::Grain => 1,
             ShadingTexture::Paper => 2,
             ShadingTexture::Simulation => 3,
+            ShadingTexture::Rock => 4,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -1842,6 +1871,7 @@ impl ShadingTexture {
             ShadingTexture::Grain => "grain",
             ShadingTexture::Paper => "paper",
             ShadingTexture::Simulation => "simulation",
+            ShadingTexture::Rock => "rock",
         }
     }
     pub fn from_str_or_default(s: &str) -> Self {
@@ -1849,9 +1879,67 @@ impl ShadingTexture {
             "grain" => ShadingTexture::Grain,
             "paper" => ShadingTexture::Paper,
             "simulation" => ShadingTexture::Simulation,
+            "rock" => ShadingTexture::Rock,
             _ => ShadingTexture::None,
         }
     }
+}
+
+/// Where on the surface the texture applies, by its slope: everywhere,
+/// on the steep faces (cliffs), or on the flats. The slope is the 3D
+/// terrain's true normal's, or the 2D relief's tilt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureWhere {
+    #[default]
+    Everywhere,
+    Steep,
+    Flat,
+}
+
+impl TextureWhere {
+    pub const ALL: [TextureWhere; 3] = [TextureWhere::Everywhere, TextureWhere::Steep, TextureWhere::Flat];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TextureWhere::Everywhere => 0,
+            TextureWhere::Steep => 1,
+            TextureWhere::Flat => 2,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureWhere::Everywhere => "everywhere",
+            TextureWhere::Steep => "steep",
+            TextureWhere::Flat => "flat",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "steep" => TextureWhere::Steep,
+            "flat" => TextureWhere::Flat,
+            _ => TextureWhere::Everywhere,
+        }
+    }
+    fn is_default(v: &TextureWhere) -> bool {
+        *v == TextureWhere::Everywhere
+    }
+}
+
+/// The slope where Steep begins, in degrees (`EscapeShading::texture_angle`).
+pub const TEXTURE_ANGLE_RANGE: (f32, f32) = (0.0, 90.0);
+/// The half-width of the change about it.
+pub const TEXTURE_ANGLE_SOFT_RANGE: (f32, f32) = (0.0, 45.0);
+fn default_texture_angle() -> f32 {
+    45.0
+}
+fn is_default_texture_angle(v: &f32) -> bool {
+    *v == default_texture_angle()
+}
+fn default_texture_angle_soft() -> f32 {
+    10.0
+}
+fn is_default_texture_angle_soft(v: &f32) -> bool {
+    *v == default_texture_angle_soft()
 }
 
 fn default_texture_scale() -> f32 {
@@ -2591,6 +2679,9 @@ mod shading_tests {
             texture_kind: ShadingTexture::Paper,
             texture_strength: 0.6,
             texture_scale: 3.5,
+            texture_where: TextureWhere::Steep,
+            texture_angle: 60.0,
+            texture_angle_soft: 5.0,
             model: ReliefModel::Lambert,
             elevation: 55.0,
             ambient: 0.3,
@@ -2652,6 +2743,12 @@ mod shading_tests {
         }
         for p in CreasePattern::ALL {
             assert_eq!(CreasePattern::from_name(p.as_str()), p);
+        }
+        for k in ShadingTexture::ALL {
+            assert_eq!(ShadingTexture::from_str_or_default(k.as_str()), k);
+        }
+        for w in TextureWhere::ALL {
+            assert_eq!(TextureWhere::from_name(w.as_str()), w);
         }
         for s in TerrainSource::ALL {
             assert_eq!(TerrainSource::from_str_or_default(s.as_str()), s);

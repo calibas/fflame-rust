@@ -648,9 +648,15 @@ struct ShadeParamsGpu {
     overlay_ratio: f32,
     overlay_tile: f32,
     overlay_blue: u32,
+    /// Where the texture applies by the relief's tilt (`TextureWhere`),
+    /// and the tilt it turns at ± its softness, in radians -- the 3D
+    /// terrain's mask, on the 2D relief (surface-textures.md).
+    texture_where: u32,
+    texture_angle: f32,
+    texture_soft: f32,
     /// std140 rounds the struct up to a multiple of its largest member
-    /// alignment (vec3 -> 16): WGSL sees 144 bytes.
-    _pad: [u32; 2],
+    /// alignment (vec3 -> 16): WGSL sees 160 bytes.
+    _pad: [u32; 3],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -6299,11 +6305,19 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            // A copy source too: a terrain's surface texture is copied from
+            // it (`TerrainRenderer::set_surface_image`).
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
         (texture, view)
+    }
+
+    /// The simulation texture and its key, for the terrain renderer's
+    /// surface texture to copy (`TerrainRenderer::set_surface_image`).
+    pub(crate) fn texture_for_copy(&self) -> Option<(&str, &Texture)> {
+        self.texture_image.as_ref().map(|(k, t, _)| (k.as_str(), t))
     }
 
     /// The cache key of the texture on the GPU, if any.
@@ -6951,7 +6965,10 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 crate::config::escape::OVERLAY_TILE_RANGE.1,
             ),
             overlay_blue: u32::from(self.overlay_owns_blue(escape)),
-            _pad: [0; 2],
+            texture_where: shading.texture_where.to_gpu(),
+            texture_angle: shading.texture_angle.to_radians(),
+            texture_soft: shading.texture_angle_soft.to_radians(),
+            _pad: [0; 3],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -6971,6 +6988,8 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None => true,
         };
         if rebuild {
+            // The surface texture's noise: Rock's (surface-textures.md).
+            let surface_noise = crate::escape::surface::SURFACE_NOISE_WGSL;
             let src = format!(
                 r#"
 struct ShadeParams {{
@@ -7003,6 +7022,9 @@ struct ShadeParams {{
     overlay_ratio: f32,
     overlay_tile: f32,
     overlay_blue: u32,
+    texture_where: u32,
+    texture_angle: f32,
+    texture_soft: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -7180,6 +7202,8 @@ fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f
 // no trig or self-compare is involved (see the fast-math notes in
 // CLAUDE.md); the mix is smoothstep-interpolated value noise, which
 // is cheap and has no directional artefacts of its own.
+{surface_noise}
+
 fn shade_hash(p: vec2<i32>) -> f32 {{
     var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
     h = (h ^ (h >> 13u)) * 1274126177u;
@@ -7207,6 +7231,19 @@ fn shade_texture(q: vec2<f32>) -> f32 {{
     // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
     if (shade.texture_kind == 1u) {{
         return shade_value_noise(q) - 0.5;
+    }}
+    // 4 = ROCK: ridged gradient-noise octaves with a fractal falloff, the
+    // terrain's own (surface-textures.md), here on the screen's pixels.
+    if (shade.texture_kind == 4u) {{
+        var r = 0.0;
+        var amp = 1.0;
+        var f = 1.0;
+        for (var o = 0; o < 4; o = o + 1) {{
+            r = r + amp * surf_ridged(q * f + vec2<f32>(f32(o) * 17.0, f32(o) * 31.0)).x;
+            amp = amp * 0.5;
+            f = f * 2.0;
+        }}
+        return r * 0.5;
     }}
     // 2 = PAPER: octaves at falling amplitude, each STRETCHED along a
     // different axis. The stretch is what makes it read as fibre
@@ -7285,13 +7322,24 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // independent of both the coloring's value scale and the relief
     // depth, and it is lit by the same light, so it reads as the
     // surface being grainy rather than as an overlay.
-    if (shade.texture_strength > 0.0 && shade.texture_kind > 0u) {{
+    // Where it applies, by the relief's tilt: everywhere, the steep
+    // faces or the flats (`TextureWhere`), as the 3D terrain's mask.
+    var texture_mask = 1.0;
+    if (shade.texture_where != 0u) {{
+        let steep = smoothstep(
+            shade.texture_angle - max(shade.texture_soft, 1.0e-4),
+            shade.texture_angle + max(shade.texture_soft, 1.0e-4),
+            atan(length(g)),
+        );
+        texture_mask = select(1.0 - steep, steep, shade.texture_where == 1u);
+    }}
+    if (shade.texture_strength * texture_mask > 0.0 && shade.texture_kind > 0u) {{
         let sc = max(shade.texture_scale, 0.25);
         let q = vec2<f32>(f32(p.x), f32(p.y)) / sc;
         let e = 1.0 / sc;
         let nx = shade_texture(q + vec2<f32>(e, 0.0)) - shade_texture(q - vec2<f32>(e, 0.0));
         let ny = shade_texture(q + vec2<f32>(0.0, e)) - shade_texture(q - vec2<f32>(0.0, e));
-        g = g + vec2<f32>(-nx, ny) * (shade.texture_strength * 8.0);
+        g = g + vec2<f32>(-nx, ny) * (shade.texture_strength * texture_mask * 8.0);
     }}
 
     // THE SIGNED TILT TOWARD THE LIGHT, and not a Lambert dot product.

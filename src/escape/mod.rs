@@ -38,6 +38,7 @@ pub mod fields;
 pub mod ifs;
 pub mod lens;
 pub mod formulas;
+pub mod surface;
 pub mod presets;
 pub mod diag;
 pub mod path_core;

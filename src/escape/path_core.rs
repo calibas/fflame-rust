@@ -518,6 +518,11 @@ struct PtHit {
     // -- the config's, or a material's own (a terrain's lake).
     f0: f32,
     rough: f32,
+    // The TRUE normal, on the same side, where a surface texture tilts the
+    // shading normal `n` (surface-textures.md): the next ray leaves along
+    // it, and no light or bounce passes under it. Zero where there is no
+    // tilt: `n` is the true normal.
+    ng: vec3<f32>,
 };
 
 // The radiance a path brings back from its first surface `first`,
@@ -544,8 +549,11 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             break;
         }
         let n = h.n;
+        // The true surface, where a texture tilted the shading normal.
+        let bumped = dot(h.ng, h.ng) > 0.5;
+        let ng = select(n, h.ng, bumped);
         let albedo = h.albedo.rgb;
-        let start = p + n * h.bias;
+        let start = p + ng * h.bias;
         // Its glow.
         radiance = radiance + through * albedo * pt.mat.z;
         // The coat: Lambert under a gloss of reflectance f0 at normal
@@ -569,7 +577,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
             let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
             let ndl = dot(n, ld);
-            if (ndl > 0.0) {
+            if (ndl > 0.0 && (!bumped || dot(ng, ld) > 0.0)) {
                 var vis = 1.0;
                 if (pt.misc.z > 0.0) {
                     vis = mix(1.0, select(0.0, 1.0, pt_scene_visible(start, ld, travelled)), clamp(pt.misc.z, 0.0, 1.0));
@@ -645,6 +653,11 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             // still take (1 - cos)^5 of a glance.
             let coat = select(0.0, pt_fresnel(f0, nv), f0 > 0.0);
             through = through * albedo * ((1.0 - coat) / (1.0 - p_spec));
+        }
+        // A tilted normal can send a bounce under the true surface: it has
+        // nowhere to go.
+        if (bumped && dot(ng, nd) <= 0.0) {
+            break;
         }
         if (bounce >= 1u) {
             let q = clamp(max(through.r, max(through.g, through.b)), 0.05, 0.95);

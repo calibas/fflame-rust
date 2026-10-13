@@ -820,75 +820,6 @@ pub fn render_escape_content(
                     }
                 });
                 relief_lighting_controls(ui, config_manager, &sh);
-                // ---- Surface texture ----
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.shading_texture"));
-                    let cur = sh.texture_kind;
-                    egui::ComboBox::from_id_salt("escape_shading_texture")
-                        .selected_text(match cur {
-                            ShadingTexture::None => t!("escape_panel.texture_none"),
-                            ShadingTexture::Grain => t!("escape_panel.texture_grain"),
-                            ShadingTexture::Paper => t!("escape_panel.texture_paper"),
-                            ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
-                        })
-                        .show_ui(ui, |ui| {
-                            for k in [
-                                ShadingTexture::None,
-                                ShadingTexture::Grain,
-                                ShadingTexture::Paper,
-                                ShadingTexture::Simulation,
-                            ] {
-                                let label = match k {
-                                    ShadingTexture::None => t!("escape_panel.texture_none"),
-                                    ShadingTexture::Grain => t!("escape_panel.texture_grain"),
-                                    ShadingTexture::Paper => t!("escape_panel.texture_paper"),
-                                    ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
-                                };
-                                if ui.selectable_label(cur == k, label.as_ref()).clicked()
-                                    && cur != k
-                                {
-                                    let _ = config_manager.update_param(
-                                        ConfigPath::EscapeShadingTextureKind,
-                                        ConfigValue::String(k.as_str().to_string()),
-                                    );
-                                }
-                            }
-                        });
-                })
-                .response
-                .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
-                if sh.texture_kind == ShadingTexture::Simulation && esc.texture.is_none() {
-                    ui.weak(t!("escape_panel.texture_simulation_none"));
-                }
-                if sh.texture_kind != ShadingTexture::None {
-                    ui.horizontal(|ui| {
-                        ui.label(t!("escape_panel.texture_strength"));
-                        let mut v = sh.texture_strength;
-                        if ui
-                            .add(egui::Slider::new(&mut v, 0.0..=4.0))
-                            .on_hover_text(t!("escape_panel.tooltip_texture_strength"))
-                            .changed()
-                        {
-                            let _ = config_manager.update_param(
-                                ConfigPath::EscapeShadingTextureStrength,
-                                v.into(),
-                            );
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(t!("escape_panel.texture_scale"));
-                        let mut v = sh.texture_scale;
-                        if ui
-                            .add(egui::Slider::new(&mut v, 0.25..=64.0).logarithmic(true))
-                            .on_hover_text(t!("escape_panel.tooltip_texture_scale"))
-                            .changed()
-                        {
-                            let _ = config_manager
-                                .update_param(ConfigPath::EscapeShadingTextureScale, v.into());
-                        }
-                    });
-                }
-
                 let folds = crate::escape::get_formula(&esc.formula)
                     .has_feature(crate::escape::FormulaFeature::Creases);
                 ui.horizontal(|ui| {
@@ -1084,6 +1015,12 @@ pub fn render_escape_content(
                     ConfigPath::EscapeShadingHighlightStrength,
                     ConfigPath::EscapeShadingHighlightBlend,
                 );
+            });
+            // The surface texture: the relief's and the 3D terrain's alike,
+            // so it is offered whenever either draws.
+            ui.separator();
+            ui.add_enabled_ui(sh.enabled || esc.terrain_active(), |ui| {
+                surface_texture_controls(ui, config_manager, &esc, &sh);
             });
         });
 
@@ -3119,6 +3056,119 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// The surface texture (docs/projects/surface-textures.md): its kind,
+/// strength and scale, and where on the slope it applies. One set for the
+/// 2D relief and the 3D terrain.
+fn surface_texture_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    sh: &crate::config::escape::EscapeShading,
+) {
+    use crate::config::escape::{TextureWhere, TEXTURE_ANGLE_RANGE, TEXTURE_ANGLE_SOFT_RANGE};
+    let name = |k: ShadingTexture| match k {
+        ShadingTexture::None => t!("escape_panel.texture_none"),
+        ShadingTexture::Grain => t!("escape_panel.texture_grain"),
+        ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+        ShadingTexture::Rock => t!("escape_panel.texture_rock"),
+        ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
+    };
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_texture"));
+        let cur = sh.texture_kind;
+        egui::ComboBox::from_id_salt("escape_shading_texture")
+            .selected_text(name(cur))
+            .show_ui(ui, |ui| {
+                for k in ShadingTexture::ALL {
+                    if ui.selectable_label(cur == k, name(k).as_ref()).clicked() && cur != k {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingTextureKind,
+                            ConfigValue::String(k.as_str().to_string()),
+                        );
+                    }
+                }
+            });
+    })
+    .response
+    .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
+    if sh.texture_kind == ShadingTexture::Simulation && esc.texture.is_none() {
+        ui.weak(t!("escape_panel.texture_simulation_none"));
+    }
+    if sh.texture_kind == ShadingTexture::None {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.texture_strength"));
+        let mut v = sh.texture_strength;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=4.0))
+            .on_hover_text(t!("escape_panel.tooltip_texture_strength"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureStrength, v.into());
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.texture_scale"));
+        let mut v = sh.texture_scale;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.25..=64.0).logarithmic(true))
+            .on_hover_text(t!("escape_panel.tooltip_texture_scale"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureScale, v.into());
+        }
+    });
+    let place = |w: TextureWhere| match w {
+        TextureWhere::Everywhere => t!("escape_panel.texture_where_everywhere"),
+        TextureWhere::Steep => t!("escape_panel.texture_where_steep"),
+        TextureWhere::Flat => t!("escape_panel.texture_where_flat"),
+    };
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.texture_where"));
+        egui::ComboBox::from_id_salt("escape_texture_where")
+            .selected_text(place(sh.texture_where))
+            .show_ui(ui, |ui| {
+                for w in TextureWhere::ALL {
+                    if ui.selectable_label(sh.texture_where == w, place(w).as_ref()).clicked() && sh.texture_where != w {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingTextureWhere,
+                            ConfigValue::String(w.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_texture_where"));
+    });
+    if sh.texture_where != TextureWhere::Everywhere {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.texture_angle"));
+            let mut v = sh.texture_angle;
+            let (lo, hi) = TEXTURE_ANGLE_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).suffix("°"))
+                .on_hover_text(t!("escape_panel.tooltip_texture_angle"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureAngle, v.into());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.texture_angle_soft"));
+            let mut v = sh.texture_angle_soft;
+            let (lo, hi) = TEXTURE_ANGLE_SOFT_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).suffix("°"))
+                .on_hover_text(t!("escape_panel.tooltip_texture_angle_soft"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureAngleSoft, v.into());
+            }
+        });
     }
 }
 

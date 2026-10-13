@@ -942,6 +942,30 @@ impl FixedPoint {
         fe.to_f64()
     }
 
+    /// `self / 2^k` mod `2^p`, its fraction to about 2^-40: the bits of
+    /// the binary expansion from 2^(k + p) down to 2^(k - 40), read off
+    /// the limbs. The phase of a point on a lattice of 2^p cells of side
+    /// 2^k, exact however deep (the surface texture's anchoring), where an
+    /// f64 holds the point to 2^-53 of its size and no further.
+    pub fn bits_mod(&self, k: i64, p: u32) -> f64 {
+        let fb = frac_bits(self.limbs.len()) as i64;
+        let total = 64 * self.limbs.len() as i64;
+        // Bit b of the magnitude weighs 2^(b - fb); over 2^k, 2^(b - fb - k).
+        let (lo, hi) = ((fb + k - 40).max(0), (fb + k + p as i64).min(total));
+        let mut acc = 0.0f64;
+        for b in lo..hi.max(lo) {
+            if (self.limbs[(b / 64) as usize] >> (b % 64)) & 1 == 1 {
+                acc += ((b - fb - k) as f64).exp2();
+            }
+        }
+        let period = (p as f64).exp2();
+        if self.neg && acc > 0.0 {
+            period - acc
+        } else {
+            acc
+        }
+    }
+
     /// Exact export to mantissa + exponent form via leading-zero count
     /// — the operation the plan calls out as first-class: near-zero
     /// orbit values must convert exactly (2Zₙ at tiny |Zₙ| is where

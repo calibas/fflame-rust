@@ -83,7 +83,7 @@ struct TerrainParamsGpu {
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
     /// two per light (direction and power, colour), [20] the sky, [21]
     /// the colour by the height.
-    fdata: [[f32; 4]; 22],
+    fdata: [[f32; 4]; 28],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -695,7 +695,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 22>,
+    fdata: array<vec4<f32>, 28>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -1811,10 +1811,14 @@ const RELIGHT_WGSL: &str = r#"
 @group(0) @binding(4) var hf_sampler: sampler;
 @group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
 @group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
+@group(0) @binding(8) var surf_image: texture_2d<f32>;
+@group(0) @binding(9) var surf_sampler: sampler;
 
 //__HF_GROUND__
 
 //__HF_ALBEDO__
+
+//__SURFACE__
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1842,8 +1846,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // A wall's normal is level, a surface's never is (the spline's
     // (-du, -dv, 1)): a wall keeps the colour at its top.
     let albedo = hf_albedo_at(p.xy, select(HF_NO_HEIGHT, p.z, abs(n.z) > 1.0e-4), foot);
-    let sun = unpack4x8unorm(g.z);
-    let rgb = ifs_rig(albedo.rgb, n, nz_ao.y, sun, dir, t);
+    var sun = unpack4x8unorm(g.z);
+    // The surface texture tilts the shading normal (surface-textures.md).
+    // The walk tested each light's shadow from the true surface, and left
+    // one the true surface faces away from unshadowed: it stays dark.
+    let nb = surf_bump(n, p, foot);
+    for (var li = 0u; li < min(ifs_light_count(), 4u); li = li + 1u) {
+        if (dot(n, ifs_light_dir(li)) <= 0.0) {
+            sun[li] = 0.0;
+        }
+    }
+    // A face in shade sees the texture too: the ambient takes the sky the
+    // tilted normal faces over what the true one does, a micro-occlusion.
+    // Exactly 1 without a texture.
+    let sky = (0.5 + 0.5 * nb.z) / max(0.5 + 0.5 * n.z, 1.0e-3);
+    let rgb = ifs_rig(albedo.rgb, nb, nz_ao.y * clamp(sky, 0.0, 2.0), sun, dir, t);
     // The fog: the ground's coverage fading with view depth past its
     // start (fdata[7].x its density, .y its start), so it melts into
     // the background exactly.
@@ -1879,10 +1896,14 @@ const PATH_WGSL: &str = r#"
 @group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
 @group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
 @group(0) @binding(11) var hf_palette: texture_2d<f32>;
+@group(0) @binding(12) var surf_image: texture_2d<f32>;
+@group(0) @binding(13) var surf_sampler: sampler;
 
 //__HF_HELPERS__
 
 //__HF_ALBEDO__
+
+//__SURFACE__
 
 // The height field's side of the path tracer (`path_core`). Rays start
 // at the eye, in the world's units.
@@ -1923,17 +1944,28 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     // lake's roughness, over the tint.
     out.f0 = pt.mat.x;
     out.rough = pt.mat.y;
+    var lake = false;
     if (hf_lake_cell(ps.x, ps.y)) {
         n = vec3<f32>(0.0, 0.0, 1.0);
         out.f0 = 0.02;
         out.rough = pt.mat.w;
+        lake = true;
+    }
+    let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
+    // The surface texture tilts the shading normal (surface-textures.md):
+    // of the true surface, so a bump seen from below is a dent. Not on a
+    // lake, nor on the ground's edge.
+    var nb = n;
+    if (!lake && !wall) {
+        nb = surf_bump(n, p, foot);
     }
     // The side the ray sees: a height field is two-sided.
     if (dot(n, d) > 0.0) {
         n = -n;
+        nb = -nb;
     }
-    out.n = n;
-    let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
+    out.n = nb;
+    out.ng = n;
     out.albedo = hf_albedo_at(p.xy, select(p.z, HF_NO_HEIGHT, wall), foot);
     // Off the surface by a thousandth of its cell, and by what f32 can
     // tell apart at its distance from the origin and the eye's.
@@ -2118,8 +2150,17 @@ pub fn assemble_relight() -> String {
     format!(
         "{}\n{}",
         WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
-        RELIGHT_WGSL.replace("//__HF_GROUND__", GROUND_WGSL).replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+        RELIGHT_WGSL
+            .replace("//__HF_GROUND__", GROUND_WGSL)
+            .replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+            .replace("//__SURFACE__", &surface_wgsl())
     )
+}
+
+/// The surface texture's WGSL (`super::surface`): its noise, then its
+/// kinds and bump.
+fn surface_wgsl() -> String {
+    format!("{}\n{}", super::surface::SURFACE_NOISE_WGSL, super::surface::SURFACE_WGSL)
 }
 
 /// The path tracer's WGSL, assembled: the rig's accessors and camera, the
@@ -2138,6 +2179,7 @@ pub fn assemble_path() -> String {
                     .replace("//__HF_GROUND__", GROUND_WGSL)
             )
             .replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+            .replace("//__SURFACE__", &surface_wgsl())
     )
 }
 
@@ -2191,6 +2233,9 @@ pub struct TerrainView {
     /// (camera-unification C7): the coat's reflectance and roughness,
     /// and the glow (`path_core::lit_material`).
     pub material: [f32; 3],
+    /// The surface texture's bump (docs/projects/surface-textures.md);
+    /// off for a simulation's terrain.
+    pub surface: super::surface::SurfaceTexture,
 }
 
 pub use super::path_core::PathSettings;
@@ -2238,7 +2283,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 22]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 28]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -2422,6 +2467,14 @@ pub struct TerrainRenderer {
     range_reduce_pipeline: ComputePipeline,
     /// The ground's range, read back for a lock to pin (H3).
     range_read: RangeRead,
+    /// The surface texture's image (surface-textures.md): the simulation
+    /// texture with its mip chain, keyed as the section renderer's is; a
+    /// 1x1 stand-in without one.
+    surface_image: Option<(String, Texture, TextureView)>,
+    surface_dummy: (Texture, TextureView),
+    surface_sampler: Sampler,
+    surface_mip_layout: BindGroupLayout,
+    surface_mip_pipeline: ComputePipeline,
     /// The nearest ground the view shows (`probe_main`, on the walk's
     /// layout), and its read.
     probe_pipeline: ComputePipeline,
@@ -2464,6 +2517,18 @@ impl TerrainRenderer {
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Texture {
                 sample_type: TextureSampleType::Float { filterable: false },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        // The surface texture's image, sampled with filtering between its
+        // mips.
+        let tex_filtered = |binding: u32| BindGroupLayoutEntry {
+            binding,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
                 view_dimension: TextureViewDimension::D2,
                 multisampled: false,
             },
@@ -2538,6 +2603,13 @@ impl TerrainRenderer {
                 },
                 storage(6, true),
                 storage(7, true),
+                tex_filtered(8),
+                BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let albedo_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2564,7 +2636,18 @@ impl TerrainRenderer {
                 uniform(9),
                 storage(10, false),
                 tex(11),
+                tex_filtered(12),
+                BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
+        });
+        let surface_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Surface Mips"),
+            entries: &[tex(0), storage_tex(1, TextureFormat::Rgba8Unorm)],
         });
         let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Ingest"),
@@ -2630,6 +2713,20 @@ impl TerrainRenderer {
         let grid_pipeline = entry("Terrain Grid", &ingest_layout, GRID_WGSL, "grid_main");
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let albedo_mip_pipeline = entry("Terrain Albedo Mips", &albedo_mip_layout, ALBEDO_MIP_WGSL, "main");
+        let surface_mip_src = ALBEDO_MIP_WGSL.replace("rgba16float", "rgba8unorm");
+        let surface_mip_pipeline = entry("Terrain Surface Mips", &surface_mip_layout, &surface_mip_src, "main");
+        // The surface texture tiles: it repeats, and filters between mips.
+        let surface_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Terrain Surface"),
+            address_mode_u: AddressMode::Repeat,
+            address_mode_v: AddressMode::Repeat,
+            address_mode_w: AddressMode::Repeat,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let surface_dummy = Self::create_surface_image(device, 1, 1);
         let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path());
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Terrain Albedo"),
@@ -2697,6 +2794,11 @@ impl TerrainRenderer {
             building: None,
             range,
             range_read: RangeRead::default(),
+            surface_image: None,
+            surface_dummy,
+            surface_sampler,
+            surface_mip_layout,
+            surface_mip_pipeline,
             probe_pipeline,
             near,
             near_read: NearRead::default(),
@@ -2864,6 +2966,10 @@ impl TerrainRenderer {
         if let Some(b) = &self.near_read.stage {
             b.destroy();
         }
+        if let Some((_, t, _)) = &self.surface_image {
+            t.destroy();
+        }
+        self.surface_dummy.0.destroy();
         if let Some((_, _, pair)) = &self.scratch {
             pair[0].0.destroy();
             pair[1].0.destroy();
@@ -3369,6 +3475,78 @@ impl TerrainRenderer {
         self.near_read.landed.is_some()
     }
 
+    fn create_surface_image(device: &Device, w: u32, h: u32) -> (Texture, TextureView) {
+        let levels = 32 - w.max(h).max(1).leading_zeros();
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Terrain Surface Texture"),
+            size: Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    fn surface_view(&self) -> &TextureView {
+        self.surface_image.as_ref().map_or(&self.surface_dummy.1, |(_, _, v)| v)
+    }
+
+    /// The surface texture's key, if it holds one.
+    pub fn surface_key(&self) -> Option<&str> {
+        self.surface_image.as_ref().map(|(k, _, _)| k.as_str())
+    }
+
+    /// Take the surface texture from `src` (the section renderer's
+    /// simulation texture, `key` its cache key): copied on the GPU into
+    /// a texture of its own, and its mip chain built, so distant ground
+    /// reads the texture's average rather than whichever texel a ray
+    /// struck.
+    pub fn set_surface_image(&mut self, device: &Device, queue: &Queue, key: &str, src: &Texture) {
+        let (w, h) = (src.width(), src.height());
+        let (texture, view) = Self::create_surface_image(device, w, h);
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Surface Texture") });
+        enc.copy_texture_to_texture(
+            TexelCopyTextureInfo { texture: src, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        {
+            let level_view = |l: u32| {
+                texture.create_view(&TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() })
+            };
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Surface Mips"), timestamp_writes: None });
+            pass.set_pipeline(&self.surface_mip_pipeline);
+            for l in 1..texture.mip_level_count() {
+                let (s, d) = (level_view(l - 1), level_view(l));
+                let bg = device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Terrain Surface Mips"),
+                    layout: &self.surface_mip_layout,
+                    entries: &[
+                        BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&s) },
+                        BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&d) },
+                    ],
+                });
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups((w >> l).max(1).div_ceil(8), (h >> l).max(1).div_ceil(8), 1);
+            }
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        if let Some((_, old, _)) = self.surface_image.replace((key.to_string(), texture, view)) {
+            old.destroy();
+        }
+    }
+
+    /// Drop the surface texture's image.
+    pub fn clear_surface_image(&mut self) {
+        if let Some((_, old, _)) = self.surface_image.take() {
+            old.destroy();
+        }
+    }
+
     /// Start making atlas layer `layer` -- `n x m` samples -- from
     /// footprint regions, each rendered as `filter` says.
     pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest, filter: SectionFilter) {
@@ -3750,12 +3928,14 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 22];
+        let mut fdata = [[0.0f32; 4]; 28];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
         // after the tonemap's gamma. The rig gets none.
         pack_rig(&view.camera, &view.shading, (0.0, 0.0, view.fog.2), &mut fdata);
+        // The surface texture (surface-textures.md), 22..28.
+        fdata[22..28].copy_from_slice(&view.surface.to_fdata());
         // The material, in the w of the camera's rows (`ifs_gloss`,
         // `ifs_rough`, `ifs_glow`).
         for k in 0..3 {
@@ -3853,6 +4033,8 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&self.palette) },
                     BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
+                    BindGroupEntry { binding: 8, resource: BindingResource::TextureView(self.surface_view()) },
+                    BindGroupEntry { binding: 9, resource: BindingResource::Sampler(&self.surface_sampler) },
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Relight"), timestamp_writes: None });
@@ -3938,6 +4120,8 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 9, resource: buf.as_entire_binding() },
                     BindGroupEntry { binding: 10, resource: self.path.guide_buffer().as_entire_binding() },
                     BindGroupEntry { binding: 11, resource: BindingResource::TextureView(&self.palette) },
+                    BindGroupEntry { binding: 12, resource: BindingResource::TextureView(self.surface_view()) },
+                    BindGroupEntry { binding: 13, resource: BindingResource::Sampler(&self.surface_sampler) },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
@@ -4183,7 +4367,7 @@ mod tests {
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
         // 8 words, three vec4s (the tile's), twenty-two vec4s.
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 352);
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 448);
     }
 
     #[test]
@@ -4441,6 +4625,7 @@ pub(crate) mod gpu_tests {
             invert: false,
             range: None,
             material: [0.0, 0.5, 0.0],
+            surface: crate::escape::surface::SurfaceTexture::off(),
         }
     }
 
