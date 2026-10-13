@@ -1634,9 +1634,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Delta iteration state: w = delta / S, m = reference index.
     // Parameter plane: delta_0 = 0 (both orbits start at z = 0) and
     // the +d0 term generates delta_1 = delta_c. Julia: c is constant
-    // (the term drops) and the SEED differs by the pixel offset.
+    // (the term drops) and the SEED differs by the pixel offset. A
+    // tier that seeds its parameter plane at the pixel starts at d0
+    // on both (`w_init`).
     let is_julia_perturb = (perturb.flags & 2u) != 0u;
-    var w = select(vec2<f32>(0.0, 0.0), d0, is_julia_perturb);
+    //__W_INIT__
     let d0_term = select(d0, vec2<f32>(0.0, 0.0), is_julia_perturb);
     let px_index = gid.y * params.width + gid.x;
     var m = 0u;
@@ -3537,6 +3539,12 @@ fn state_tail(tier: PerturbTier) -> (String, String, String) {
 /// starts it at the pixel itself, so its delta is d0. Manowar seeds
 /// z_0 = z_-1 = c -- the pixel again -- so BOTH of its deltas start
 /// at d0 even though it is a parameter-plane map.
+///
+/// Both rungs' templates splice it. The scaled one hard-coded the
+/// zero start until 2026-10-13, which seeded every parameter-plane
+/// Kaliset pixel at the view centre -- a different picture at every
+/// depth, mistaken for the inversion's inaccuracy (Manowar runs the
+/// deep rung only, so it never met that line).
 fn w_init(tier: PerturbTier, floatexp: bool) -> String {
     match (tier, floatexp) {
         // Kaliset seeds z_0 = c on the parameter plane (and the pixel

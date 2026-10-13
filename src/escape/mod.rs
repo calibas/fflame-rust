@@ -50,7 +50,7 @@ pub mod terrain;
 #[cfg(feature = "terrain")]
 pub mod terrain_tiers;
 
-pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};
+pub use renderer::{set_viewport_render_lines, viewport_render_lines, DerivativeGap, EscapeRenderer, UsableDepth};
 
 /// Capability flags a formula can opt into — same pattern as the
 /// variation system's `Feature` enum (a slice on the def, absence ⇒

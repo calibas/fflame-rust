@@ -30,19 +30,70 @@ use super::reference::OrbitCache;
 mod solid_path;
 pub use solid_path::{EXPORT_FRAME_MS, VIEWPORT_FRAME_MS};
 
-/// Above this zoom the direct path's f32 pixel mapping visibly
-/// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
-/// resolving pixel spacing a couple of octaves before it equals it —
-/// field-observed at zoom 16, so the switch sits at 14. The scaled
-/// f32 delta pipeline holds to roughly zoom 54 (w-squared overflow);
-/// the floatexp rung takes over beyond [`PERTURB_FLOATEXP_ZOOM`].
 /// Highest supersampling factor offered: 8x is 64 samples per display
 /// pixel. Whether a given view can actually have it is decided by the
 /// render-pixel budget in [`EscapeRenderer::resize`], which reduces
 /// the factor rather than failing.
 pub use crate::config::escape::MAX_SUPERSAMPLE;
 
+/// The deepest the direct path ever runs: past this zoom a view with
+/// a perturbation tier always perturbs, whatever its size. Shallower,
+/// [`EscapeRenderer::direct_limit_zoom`] decides by the render's own
+/// pixel spacing, and switches EARLIER for a tall render or a high
+/// supersample. The scaled f32 delta pipeline holds to roughly zoom 54
+/// (w-squared overflow); the floatexp rung takes over beyond
+/// [`PERTURB_FLOATEXP_ZOOM`].
 pub const PERTURB_MIN_ZOOM: f64 = 14.0;
+
+/// The shallowest a view ever perturbs. A choice, not a limit: every
+/// tier measured agrees with the direct path at zoom 4 and 6. It keeps
+/// the presets and the whole-set views on the direct path, the faster
+/// one, at any size -- where even the most sensitive Julia view
+/// measured would show f32 error only at 4K with 8x supersampling
+/// (A / r about 0.25 at zoom 6, against the 1/16 aimed for).
+pub const PERTURB_FLOOR_ZOOM: f64 = 6.0;
+
+/// How many f32 ulps of the centre a render pixel must span for the
+/// direct path's error to stay invisible: a parameter plane's, then a
+/// Julia plane's.
+///
+/// Measured. The direct path's error is fixed in the plane -- each
+/// step rounds at the ulp of the iterate -- so what makes it visible
+/// is its size against the colour step from one pixel to the next.
+/// That ratio is `A / r`, `r` the pixel spacing in ulps of the centre
+/// and `A` the view's sensitivity, and it held to a few percent across
+/// zooms and render heights (`diag_tier_sensitivity`, 2026-10-13):
+/// every parameter plane measured A = 0.11 to 1.34 (Multibrot 4 and
+/// Feather the highest), Julia planes 0.12 to 15 -- a Julia orbit
+/// starts AT the pixel, and one that passes near the critical point
+/// shrinks the pixel's signal while the rounding stays. The Phoenix
+/// view reported as blurring before the switch was the 15, the
+/// Mandelbrot dragon 4.7. Both constants are A over a target ratio of
+/// 1/16, at A = 2 and A = 16.
+pub const DIRECT_ULPS_PLANE: f64 = 32.0;
+pub const DIRECT_ULPS_JULIA: f64 = 256.0;
+
+/// The viewport's escape render height in render pixels, for the
+/// panel's notes on which path the view takes -- which depends on its
+/// size ([`EscapeRenderer::wants_perturbation`]). Written by the app
+/// when it sizes the viewport's renderer, and by nothing else: a
+/// thumbnail or an export renders at its own size and decides for
+/// itself.
+static VIEWPORT_RENDER_LINES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// See [`VIEWPORT_RENDER_LINES`].
+pub fn set_viewport_render_lines(lines: u32) {
+    VIEWPORT_RENDER_LINES.store(lines, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The viewport's render height ([`VIEWPORT_RENDER_LINES`]); 1080
+/// before the viewport has rendered an escape frame.
+pub fn viewport_render_lines() -> u32 {
+    match VIEWPORT_RENDER_LINES.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => 1080,
+        n => n,
+    }
+}
 
 /// Above this zoom the scaled-f32 delta rung approaches its w-squared
 /// overflow (~zoom 54) and the floatexp rung takes over. Below it the
@@ -863,6 +914,10 @@ pub struct EscapeRenderer {
     /// view both ways.
     #[cfg(test)]
     pub(crate) force_perturbed: bool,
+    /// Test-only: the direct path, however deep (a comparison against
+    /// the perturbed one past the switch).
+    #[cfg(test)]
+    pub(crate) force_direct: bool,
     /// Test-only: with `force_perturbed`, use the floatexp rung.
     #[cfg(test)]
     pub(crate) force_floatexp: bool,
@@ -1829,6 +1884,8 @@ impl EscapeRenderer {
             pipelines: HashMap::new(),
             #[cfg(test)]
             force_perturbed: false,
+            #[cfg(test)]
+            force_direct: false,
             #[cfg(test)]
             force_floatexp: false,
             #[cfg(test)]
@@ -3004,7 +3061,7 @@ impl EscapeRenderer {
         }
         // The perturbed path's per-pixel state is one storage buffer,
         // and it is by far the largest thing here.
-        if Self::wants_perturbation(escape) {
+        if Self::wants_perturbation(escape, rh.min(u32::MAX as u64) as u32) {
             // The ACTUAL stride for this formula's tier and rung, not
             // the widest one: only the two-term recurrences on the
             // deep rung carry the larger state, and assuming it would
@@ -3305,11 +3362,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn perturbed_path(&self, escape: &EscapeConfig) -> bool {
         #[cfg(test)]
         {
-            Self::wants_perturbation(escape) || self.force_perturbed
+            (Self::wants_perturbation(escape, self.height) || self.force_perturbed) && !self.force_direct
         }
         #[cfg(not(test))]
         {
-            Self::wants_perturbation(escape)
+            Self::wants_perturbation(escape, self.height)
         }
     }
 
@@ -3799,8 +3856,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// confident wrong one. Flat is honest but silent, and the panel
     /// is where the silence gets explained. Pinned against the
     /// assembler's own `HAS_DERIVATIVE` decision by test, so the two
-    /// cannot drift.
-    pub fn derivative_gap(escape: &EscapeConfig) -> Option<DerivativeGap> {
+    /// cannot drift. `render_lines` as [`Self::wants_perturbation`]
+    /// takes it: whether the view perturbs depends on its size.
+    pub fn derivative_gap(escape: &EscapeConfig, render_lines: u32) -> Option<DerivativeGap> {
         if super::fields::get_field(&escape.formula).is_some()
             || super::ifs::get_ifs(&escape.formula).is_some()
         {
@@ -3813,7 +3871,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // formula (docs/archive/escape-time/derivative-under-perturbation.md). The
         // two-term ones (Phoenix, Manowar) define none, so the formula
         // test above has already answered for them.
-        if Self::wants_perturbation(escape) {
+        if Self::wants_perturbation(escape, render_lines) {
             let single = !matches!(
                 Self::perturb_tier(escape),
                 Some(assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar) | None
@@ -3825,40 +3883,48 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         None
     }
 
-    /// Whether this view renders through the perturbation path:
-    /// Mandelbrot parameter plane, plain iteration, past the direct
-    /// path's f32 ceiling. Everything else stays direct (and deep
-    /// zooms of unsupported combinations render the direct path's
-    /// f32 mush honestly rather than wrong perturbation math).
-    pub(crate) fn wants_perturbation(escape: &EscapeConfig) -> bool {
-        match Self::perturb_tier(escape) {
-            Some(tier) => {
-                escape.zoom_log2 > Self::tier_min_zoom(tier)
-                    && !escape.is_damped()
-                    && escape.biomorph == crate::config::escape::BiomorphMode::Off
-            }
-            None => false,
-        }
+    /// Whether this view renders through the perturbation path, at
+    /// `render_lines` render pixels tall (display height times the
+    /// supersample in use): a formula with a perturbation tier, plain
+    /// iteration, past the direct path's f32 limit for that size.
+    /// Everything else stays direct (and deep zooms of unsupported
+    /// combinations render the direct path's f32 mush honestly rather
+    /// than wrong perturbation math).
+    pub(crate) fn wants_perturbation(escape: &EscapeConfig, render_lines: u32) -> bool {
+        Self::perturb_tier(escape).is_some()
+            && escape.zoom_log2 > Self::direct_limit_zoom(escape, render_lines)
+            && !escape.is_damped()
+            && escape.biomorph == crate::config::escape::BiomorphMode::Off
     }
 
-    /// The depth a tier's delta form is ACCURATE from, which is not
-    /// the same question as the depth the direct path runs out at.
+    /// The zoom past which the direct path stops resolving this view
+    /// at `render_lines` render pixels tall: where a render pixel
+    /// spans [`DIRECT_ULPS_PLANE`] (Julia: [`DIRECT_ULPS_JULIA`]) f32
+    /// ulps of the centre, held between [`PERTURB_FLOOR_ZOOM`] and
+    /// [`PERTURB_MIN_ZOOM`].
     ///
-    /// Only Kaliset needs a floor of its own. Its map is an inversion,
-    /// so the delta picks up a 1/|Z|^2 amplification that the other
-    /// tiers have no analogue for, and it needs a genuinely small
-    /// delta before that settles. Measured against exact orbits on an
-    /// inverting view: 37% out at zoom 10 and 20% at 14 (the direct
-    /// path is 0.2% there), 2.4e-2 at 18, then 3.6e-4 at 24 and
-    /// 5.7e-6 at 30. Below the floor it renders direct -- which is
-    /// what it did before this tier existed, so the floor costs
-    /// nothing and shipping without one would have made the picture
-    /// WORSE exactly at the threshold.
-    fn tier_min_zoom(tier: assembler::PerturbTier) -> f64 {
-        match tier {
-            assembler::PerturbTier::Kaliset => 24.0,
-            _ => PERTURB_MIN_ZOOM,
+    /// A render's pixel is 4 / (2^zoom lines) tall, so doubling the
+    /// height -- or the supersample -- moves the limit an octave
+    /// shallower: a 4K export at 2x supersampling switches two octaves
+    /// before a 1080-line viewport. At the old fixed threshold every
+    /// size switched at 14, and the taller ones showed the direct
+    /// path's grain first.
+    ///
+    /// The centre's magnitude sets the ulp (to the binade, floored at
+    /// 0.5: an orbit's iterates reach O(1) wherever the view sits).
+    /// Every tier is accurate from the floor down -- Kaliset's own
+    /// floor of 24 answered a bug in its scaled rung's seed, since
+    /// fixed.
+    pub(crate) fn direct_limit_zoom(escape: &EscapeConfig, render_lines: u32) -> f64 {
+        if escape.zoom_log2 > PERTURB_MIN_ZOOM {
+            return PERTURB_MIN_ZOOM;
         }
+        let part = |s: &str| s.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map_or(0.0, f64::abs);
+        let m = part(&escape.center_re).max(part(&escape.center_im)).max(0.5);
+        let ulp = (m.log2().floor() - 23.0).exp2();
+        let need = if escape.julia { DIRECT_ULPS_JULIA } else { DIRECT_ULPS_PLANE };
+        let limit = (4.0 / (render_lines.max(1) as f64 * ulp * need)).log2();
+        limit.clamp(PERTURB_FLOOR_ZOOM, PERTURB_MIN_ZOOM)
     }
 
     /// Rows the direct path may cover in one dispatch.
@@ -8184,9 +8250,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Deep zoom: the perturbation path. Falls back to direct on a
         // center-parse failure (matching center_f64's fallback view).
         #[cfg(test)]
-        let use_perturbed = Self::wants_perturbation(escape) || self.force_perturbed;
+        let use_perturbed = (Self::wants_perturbation(escape, self.height) || self.force_perturbed) && !self.force_direct;
         #[cfg(not(test))]
-        let use_perturbed = Self::wants_perturbation(escape);
+        let use_perturbed = Self::wants_perturbation(escape, self.height);
         // ...unless this frame's per-pixel state will not fit the
         // device. Decided HERE rather than deeper in, so the direct
         // path below simply runs: it bands by rows and fits any size.
@@ -8873,7 +8939,7 @@ mod tests {
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.zoom_log2 = 10.0;
         esc.max_iter = 10_100_100;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+        assert!(!EscapeRenderer::wants_perturbation(&esc, 768), "shallow stays direct");
 
         // A band's work must respect the budget, and a render must
         // still be reachable in a finite number of them.
@@ -9156,47 +9222,102 @@ mod tests {
     fn perturbation_gate_is_tight() {
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.zoom_log2 = 30.0;
-        assert!(EscapeRenderer::wants_perturbation(&esc));
+        assert!(EscapeRenderer::wants_perturbation(&esc, 720));
         esc.zoom_log2 = 10.0;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+        assert!(!EscapeRenderer::wants_perturbation(&esc, 720), "shallow stays direct");
         esc.zoom_log2 = 30.0;
         esc.julia = true;
-        assert!(EscapeRenderer::wants_perturbation(&esc), "julia is in the trivial tier");
+        assert!(EscapeRenderer::wants_perturbation(&esc, 720), "julia is in the trivial tier");
         esc.julia = false;
         esc.formula = "burning_ship".to_string();
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "the Ship family is in the diffabs tier"
         );
         esc.zoom_log2 = 60.0;
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "deep Ship rides the floatexp diffabs rung"
         );
         esc.zoom_log2 = 30.0;
         esc.formula_params.insert("variant".to_string(), 3.0);
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "every fold variant has its own delta algebra now"
         );
         esc.formula_params.clear();
         esc.formula = "weierstrass".to_string();
         assert!(
-            !EscapeRenderer::wants_perturbation(&esc),
+            !EscapeRenderer::wants_perturbation(&esc, 720),
             "mode B fields never perturb"
         );
         esc.formula = "burning_ship".to_string();
         esc.formula = "multibrot".to_string();
-        assert!(EscapeRenderer::wants_perturbation(&esc), "integer multibrot is in the tier");
+        assert!(EscapeRenderer::wants_perturbation(&esc, 720), "integer multibrot is in the tier");
         esc.formula_params.insert("power".to_string(), 3.5);
         assert!(
-            !EscapeRenderer::wants_perturbation(&esc),
+            !EscapeRenderer::wants_perturbation(&esc, 720),
             "non-integer power stays direct (binomial needs an integer exponent)"
         );
         esc.formula_params.clear();
         esc.formula = "mandelbrot".to_string();
         esc.damping_re = 0.5;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "damped not in v1");
+        assert!(!EscapeRenderer::wants_perturbation(&esc, 720), "damped not in v1");
+    }
+
+    /// The direct path's limit follows the render's pixel spacing: an
+    /// octave shallower per doubling of the height or the supersample,
+    /// three octaves shallower for a Julia plane, never past 14 nor
+    /// before 6 -- and the views reported going soft at the switch now
+    /// perturb at the size they were seen at.
+    #[test]
+    fn the_switch_follows_the_render_pixel() {
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.7436".to_string();
+        esc.center_im = "0.1318".to_string();
+        let at = |esc: &crate::config::escape::EscapeConfig, lines: u32| EscapeRenderer::direct_limit_zoom(esc, lines);
+        // 4 / (2^z 1080 2^-24) = 32 ulps.
+        let z1080 = at(&esc, 1080);
+        assert!((z1080 - (26.0 - 1080f64.log2() - 5.0)).abs() < 1e-9, "{z1080}");
+        assert!((at(&esc, 2160) - (z1080 - 1.0)).abs() < 1e-9, "a doubled height is an octave");
+        // A 4K render at 2x supersampling: four times the lines.
+        assert!((at(&esc, 4320) - (z1080 - 2.0)).abs() < 1e-9);
+        // The ulp is the binade's: past |c| = 1 it doubles.
+        let mut wide = esc.clone();
+        wide.center_re = "-1.75".to_string();
+        assert!((at(&wide, 1080) - (z1080 - 1.0)).abs() < 1e-9, "|c| in [1, 2) halves the resolution");
+        let mut julia = esc.clone();
+        julia.julia = true;
+        assert!((at(&julia, 1080) - (z1080 - 3.0)).abs() < 1e-9, "a Julia plane wants 8x the ulps");
+        // The clamps: a thumbnail switches where everything used to, a
+        // poster never before the floor.
+        assert_eq!(at(&esc, 64), PERTURB_MIN_ZOOM);
+        assert_eq!(at(&julia, 200_000), PERTURB_FLOOR_ZOOM);
+
+        // The reports: Phoenix soft at 13.56, Kaliset blocky at 20.3,
+        // both Julia views. Each now perturbs at viewport sizes, and
+        // Phoenix already at zoom 9.
+        let mut phoenix = crate::config::escape::EscapeConfig::default();
+        phoenix.formula = "phoenix".to_string();
+        phoenix.julia = true;
+        phoenix.julia_re = 0.5667;
+        phoenix.center_re = "0.2326184593499811".to_string();
+        phoenix.center_im = "0.7029418800117250".to_string();
+        for (zoom, lines) in [(13.56, 720), (13.56, 1080), (9.0, 720), (9.0, 1080)] {
+            phoenix.zoom_log2 = zoom;
+            assert!(EscapeRenderer::wants_perturbation(&phoenix, lines), "phoenix at {zoom}, {lines} lines");
+        }
+        phoenix.zoom_log2 = 4.0;
+        assert!(!EscapeRenderer::wants_perturbation(&phoenix, 100_000), "whole-set views stay direct");
+        let mut kaliset = crate::config::escape::EscapeConfig::default();
+        kaliset.formula = "kaliset".to_string();
+        kaliset.julia = true;
+        kaliset.julia_re = 0.6;
+        kaliset.julia_im = 0.4;
+        kaliset.center_re = "-0.0595709396088629".to_string();
+        kaliset.center_im = "0.5576624027876171".to_string();
+        kaliset.zoom_log2 = 20.3;
+        assert!(EscapeRenderer::wants_perturbation(&kaliset, 720), "kaliset has no floor of its own");
     }
 
     #[test]

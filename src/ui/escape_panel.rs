@@ -955,7 +955,7 @@ pub fn render_escape_content(
                             let _ = config_manager.update_param(ConfigPath::EscapeShadingOffset, v.into());
                         }
                     });
-                    if crate::escape::EscapeRenderer::wants_perturbation(&esc) {
+                    if crate::escape::EscapeRenderer::wants_perturbation(&esc, crate::escape::viewport_render_lines()) {
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 170, 90),
                             if embossed {
@@ -969,7 +969,7 @@ pub fn render_escape_content(
                 // Analytic slopes need the derivative orbit: flat where
                 // there is none, and said so rather than left silent.
                 if sh.field == ShadingField::Analytic {
-                    if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
+                    if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc, crate::escape::viewport_render_lines()) {
                         let msg = match gap {
                             crate::escape::DerivativeGap::Formula => t!(
                                 "escape_panel.analytic_relief_no_formula",
@@ -2349,7 +2349,7 @@ fn show_coloring_section(
     // missing one). Flat is honest but silent, so say why — otherwise
     // the only signal is a blank picture.
     if coloring.has_feature(crate::escape::ColoringFeature::NeedsDerivative) {
-        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
+        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc, crate::escape::viewport_render_lines()) {
             let msg = match gap {
                 crate::escape::DerivativeGap::Formula => t!(
                     "escape_panel.no_derivative_formula",
@@ -2893,7 +2893,7 @@ mod tests {
 
             let src = assembler::assemble(f, &colorings::DISTANCE_ESTIMATE, false);
             let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
-            let panel_says = EscapeRenderer::derivative_gap(&esc).is_none();
+            let panel_says = EscapeRenderer::derivative_gap(&esc, 720).is_none();
             assert_eq!(
                 shader_has, panel_says,
                 "{}: the shader compiles HAS_DERIVATIVE={shader_has} but the panel \
@@ -2917,7 +2917,7 @@ mod tests {
             if f.name == "mcmullen" {
                 esc.julia = true;
             }
-            if !EscapeRenderer::wants_perturbation(&esc) {
+            if !EscapeRenderer::wants_perturbation(&esc, 720) {
                 continue;
             }
             let tier = EscapeRenderer::perturb_tier(&esc).expect("a perturbed view has a tier");
@@ -2931,7 +2931,7 @@ mod tests {
                 EscapeRenderer::perturbed_derivative(&esc, floatexp),
             );
             let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
-            let panel_says = EscapeRenderer::derivative_gap(&esc).is_none();
+            let panel_says = EscapeRenderer::derivative_gap(&esc, 720).is_none();
             assert_eq!(shader_has, panel_says, "{}: the perturbed shader and the hint disagree", f.name);
         }
     }
@@ -2948,21 +2948,21 @@ mod tests {
 
         esc.zoom_log2 = 4.0;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "shallow Mandelbrot renders direct and has its derivative"
         );
 
         esc.zoom_log2 = 30.0;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "the scaled rung carries the derivative"
         );
 
         esc.zoom_log2 = 60.0;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "the floatexp rung carries the derivative too"
         );
@@ -2970,7 +2970,7 @@ mod tests {
         // A formula with no derivative is blamed as the formula, at any
         // depth.
         esc.formula = "burning_ship".to_string();
-        assert_eq!(EscapeRenderer::derivative_gap(&esc), Some(DerivativeGap::Formula));
+        assert_eq!(EscapeRenderer::derivative_gap(&esc, 720), Some(DerivativeGap::Formula));
         esc.formula = "mandelbrot".to_string();
 
         // Damping takes the same view OFF the perturbed path, so the
@@ -2978,7 +2978,7 @@ mod tests {
         // it would keep warning here.
         esc.damping_re = 0.5;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "damping renders direct at any depth, so the derivative is available"
         );

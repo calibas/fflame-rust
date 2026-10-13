@@ -2853,6 +2853,9 @@ impl App {
                 if escape.resize(&self.gpu.device, renderer.width, renderer.height, aa_factor) {
                     self.escape_dirty = true;
                 }
+                crate::escape::set_viewport_render_lines(
+                    renderer.height.saturating_mul(escape.effective_supersample()),
+                );
                 // The viewport's corner says what it is drawn at, and why
                 // that is below the setting when it is.
                 self.egui_layer.update_escape_aa(Some(aa_governor::readout(

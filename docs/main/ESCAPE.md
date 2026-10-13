@@ -53,10 +53,11 @@ render is split into dispatches, the settled image is the same.
 
 **The view is a point and a depth.** The centre is a pair of exact
 decimal strings and the zoom a base-2 exponent (`zoom_log2`). An f32
-pixel mapping stops separating neighbouring pixels at about zoom 14; past
-that the engine iterates small deltas against one full-precision
-reference orbit (perturbation), and the centre's digits are what the
-reference is computed from. See [Deep zoom](#deep-zoom).
+pixel mapping stops separating neighbouring pixels somewhere between
+zoom 6 and 14 -- sooner for a taller render, a higher supersample, or a
+Julia plane; past that the engine iterates small deltas against one
+full-precision reference orbit (perturbation), and the centre's digits
+are what the reference is computed from. See [Deep zoom](#deep-zoom).
 
 **The output is shaped like a flame's.** The engine writes an
 `Rgba32Float` image in the flame accumulator's layout — `rgb` linear
@@ -224,7 +225,7 @@ A toggle, not a list of formulas: `julia` on makes the pixel `z₀` with
 | `tricorn` | Tricorn | `z̄ᵖ + c` (Mandelbar at `p` = 2). Anti-holomorphic derivative; perturbs at integer `p` |
 | `burning_ship` | Burning Ship | the quadratic step with abs folds, six variants: Burning Ship, Perpendicular Mandelbrot, Perpendicular Ship, Celtic, Buffalo, Perpendicular Celtic. Perturbs |
 | `mcmullen` | McMullen | `zⁿ + c/zᵐ`, Sierpiński-carpet Julia sets; seeds the pixel. Derivative; perturbs in Julia mode |
-| `kaliset` | Kaliset | `|z|/⟨z,z⟩ − c` (or `+ c`). `NonEscaping`; perturbs from zoom 24 |
+| `kaliset` | Kaliset | `|z|/⟨z,z⟩ − c` (or `+ c`). `NonEscaping` |
 | `phoenix` | Phoenix | `z² + c + p·z_prev`. `NeedsPrevZ`; perturbs |
 | `lambda` | Lambda (Logistic) | `λ·z(1 − z)`, seeded at 1/2. Derivative; perturbs |
 | `spider` | Spider | Fractint: `z ← z² + c; c ← c/2 + z`. `MutatesC`; derivative |
@@ -460,16 +461,17 @@ records the next piece of work and returns whether the image is final.
 
 | path | when | chunks by |
 | --- | --- | --- |
-| direct | mode A, `zoom_log2` ≤ 14, or a config that does not perturb | row band |
-| perturbed, scaled rung | perturbing config, zoom 14–48 (`PERTURB_MIN_ZOOM`, `PERTURB_FLOATEXP_ZOOM`) | iteration window |
+| direct | mode A short of its direct limit (zoom 6–14, [below](#where-the-direct-path-ends)), or a config that does not perturb | row band |
+| perturbed, scaled rung | perturbing config past its direct limit, to zoom 48 (`PERTURB_FLOATEXP_ZOOM`) | iteration window |
 | perturbed, floatexp rung | past zoom 48; Manowar at every perturbed depth | iteration window |
 | field | mode B | row band |
 | walk | mode D | row band, by walk steps |
 | recolour | the iteration is unchanged since the last settled render | one dispatch |
 
 The perturbed path is taken only when the formula has a tier, damping is
-off and biomorph is off (`wants_perturbation`); otherwise a deep view
-renders the direct path's honest f32 mush. `usable_depth` reports which
+off, biomorph is off and the view is past the direct path's limit at the
+render's size (`wants_perturbation(escape, render_lines)`); otherwise a
+deep view renders the direct path's honest f32 mush. `usable_depth` reports which
 case the panel is in (`UsableDepth::Perturbed` or
 `UsableDepth::Direct(14)`), and `derivative_gap` why a derivative
 colouring would be flat. A perturbing view also falls back to the direct
@@ -671,6 +673,46 @@ eviction is newest-first under a byte cap — **Orbit Cache (MB)** in
 Settings (`SystemSettings::orbit_cache_mb`, default 1024) — and a cap of
 50 files. Any parse failure or version mismatch is a miss.
 
+### Where the direct path ends
+
+The direct path's f32 error is fixed in the plane -- each step rounds at
+the ulp of the iterate -- so what makes it visible is its size against
+the colour step from one RENDER pixel to the next. Measured, that ratio
+is `A / r`: `r` the pixel spacing in f32 ulps of the centre, `A` the
+view's sensitivity, steady to a few percent across zooms and render
+heights. Parameter planes measured A = 0.11 to 1.34; Julia planes 0.12 to
+15, because a Julia orbit starts at the pixel, and one that passes near
+the critical point shrinks the pixel's signal while the rounding stays.
+
+`direct_limit_zoom(escape, render_lines)` therefore switches where a
+render pixel spans `DIRECT_ULPS_PLANE` = 32 (Julia: `DIRECT_ULPS_JULIA`
+= 256) ulps of the centre -- `A` of 2 and 16 against a target ratio of
+1/16 -- held between `PERTURB_FLOOR_ZOOM` (6) and `PERTURB_MIN_ZOOM`
+(14). `render_lines` is the display height times the supersample in use,
+so a doubled height or supersample moves the switch an octave earlier,
+and a centre past |c| = 1 one more. For a centre with |c| in [0.5, 1):
+
+| render lines | parameter plane | Julia plane |
+| --- | --- | --- |
+| 180 (thumbnail) | 13.5 | 10.5 |
+| 720 | 11.5 | 8.5 |
+| 1080 | 10.9 | 7.9 |
+| 2160 (4K, or 1080 at 2x) | 9.9 | 6.9 |
+| 4320 (4K at 2x) | 8.9 | 6 (floor) |
+
+Every tier agrees with direct at those depths (`perturbed_agrees_with_direct_at_moderate_zoom`,
+`the_non_escaping_tiers_are_accurate_from_the_floor`), and costs two to
+three times the direct path's time there. The calibration is
+`diag_tier_sensitivity`. Until 2026-10-13 the switch sat at zoom 14 for
+every size, so a tall render or a Julia view showed grain before it --
+Phoenix's dynamical plane visibly from zoom 9 at 720 lines -- and
+Kaliset waited until 24, for a reason that turned out to be a bug in its
+scaled rung's seed (`w_init`).
+
+The panel's notes about the path read the viewport's render height
+(`viewport_render_lines`), which the app publishes when it sizes the
+viewport; a thumbnail or an export decides at its own size.
+
 ### The derivative under perturbation
 
 Both rungs carry the derivative for every single-term tier, stored per
@@ -681,7 +723,7 @@ Design record: [derivative-under-perturbation.md](../archive/escape-time/derivat
 
 ### Which formulas perturb
 
-Common conditions: zoom past 14, no damping, biomorph off.
+Common conditions: past the view's [direct limit](#where-the-direct-path-ends), no damping, biomorph off.
 
 | formula | tier | condition | BLA |
 | --- | --- | --- | --- |
@@ -697,14 +739,13 @@ Common conditions: zoom past 14, no damping, biomorph off.
 | `magnet` | `Magnet(v)` | both variants | no |
 | `newton` | `Newton` | integer `p` 2–12; the three polynomial functions; `rootfinder_has_delta` (Chebyshev declines the two non-unity ones) | no |
 | `nova` | `Nova(p)` | integer `p` 2–12 | no |
-| `kaliset` | `Kaliset` | from zoom 24, both sign branches | no |
+| `kaliset` | `Kaliset` | both sign branches | no |
 | `ducks` | `Ducks(v)` | variants 0 and 4 | no |
 
 `EscapeRenderer::perturb_tier` is the authority. Everything else —
 the transcendental formulas, Spider, Barnsley, Cactus, Collatz,
 Littlewood, Origami, Lattès, Novaretti, the fields and mode D — renders
-the direct path at every depth. The panel's depth hint does not yet
-show Kaliset's zoom-24 floor. The per-tier error measurements are in
+the direct path at every depth. The per-tier error measurements are in
 [escape-time-completion.md](../archive/escape-time/escape-time-completion.md);
 the theory in [pertubation-theory.md](../archive/escape-time/pertubation-theory.md).
 
