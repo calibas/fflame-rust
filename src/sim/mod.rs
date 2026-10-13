@@ -85,6 +85,13 @@ pub struct SimPreset {
     /// Steps to a settled or developed picture, measured. Used as the
     /// config's `steps` when the preset is applied.
     pub steps: u32,
+    /// The time step it was measured at, where that is not the model's
+    /// `default_dt`. Not a tuning: SmoothLife's 2011 glider set glides
+    /// only in the discrete form, dt 1 ("the same generic gliders can
+    /// not be found at the same birth/death values" in the continuous
+    /// one, Rafler), and SmoothLifeL's only at 0.05. `None` applies the
+    /// default.
+    pub dt: Option<f32>,
     /// The initial field this preset needs, when it needs a particular
     /// one.
     ///
