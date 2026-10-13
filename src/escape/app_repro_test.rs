@@ -1639,6 +1639,153 @@ mod tests {
         );
     }
 
+    /// One render's output colour, linear RGBA, on the path chosen
+    /// whatever the zoom.
+    fn output_on(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &crate::renderer::compute_kernel::FlameRenderer,
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        perturbed: bool,
+    ) -> Vec<f32> {
+        let mut escape = crate::escape::EscapeRenderer::new(device, w, h);
+        escape.force_perturbed = perturbed;
+        escape.force_direct = !perturbed;
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cal") });
+            let settled = escape.render(device, queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled { break; }
+            guard += 1;
+            assert!(guard < 100_000);
+        }
+        let px: Vec<f32> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_texture(device, queue, escape.output_texture_for_test(), 0, w, h, 16)).to_vec();
+        escape.destroy();
+        px
+    }
+
+    /// DIAGNOSTIC: each perturbation tier's f32 sensitivity `A`. Walks
+    /// every preset of every tiered formula to a boundary point (the
+    /// slowest-escaping pixel, zoom by zoom), then sweeps zoom and
+    /// fits the direct path's visible error -- the median of
+    /// |direct - perturbed| over the step to the next pixel, in output
+    /// colour -- to `A / r`, r the pixel spacing in f32 ulps of the
+    /// centre. The calibration of `DIRECT_ULPS_PLANE` / `_JULIA`.
+    /// DIAG_F filters formulas by name.
+    ///
+    /// A row whose ratio is already high at zoom 6 is not measuring
+    /// f32: the walk landed somewhere the colour changes faster than
+    /// the pixels (Burning Ship's dust, Newton's and Nova's basin
+    /// edges), and there both paths flip pixels at the faintest
+    /// difference. Look at those side by side rather than trust A.
+    #[test]
+    #[ignore = "diagnostic"]
+    fn diag_tier_sensitivity() {
+        let (device, queue) = repro_device();
+        let filter = std::env::var("DIAG_F").unwrap_or_default();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (480u32, 270u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let formulas = [
+            "mandelbrot", "multibrot", "phoenix", "lambda", "magnet", "mcmullen", "feather",
+            "manowar", "tricorn", "burning_ship", "newton", "nova", "kaliset", "ducks",
+        ];
+        for name in formulas {
+            if !filter.is_empty() && !filter.split(',').any(|f| f == name) {
+                continue;
+            }
+            let def = crate::escape::get_formula(name);
+            for (pi, pre) in def.presets.iter().enumerate() {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = name.to_string();
+                esc.coloring = pre.coloring.to_string();
+                esc.max_iter = pre.max_iter;
+                esc.julia = pre.julia.is_some();
+                if let Some((re, im)) = pre.julia {
+                    esc.julia_re = re;
+                    esc.julia_im = im;
+                }
+                esc.formula_params = pre.formula_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                esc.coloring_params = pre.coloring_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                let coloring = crate::escape::get_coloring(pre.coloring);
+                let fparams = crate::escape::packed_formula_params(def, &esc.formula_params);
+                esc.bailout = pre
+                    .bailout
+                    .or_else(|| crate::escape::suggested_bailout(def, &fparams, coloring, true))
+                    .unwrap_or(crate::config::escape::LEGACY_BAILOUT);
+                if crate::escape::EscapeRenderer::perturb_tier(&esc).is_none() {
+                    continue;
+                }
+                // Walk to a boundary: the slowest pixel that still
+                // escapes (or converges), three octaves at a time.
+                let (ww, wh) = (160u32, 90u32);
+                let (mut cx, mut cy): (f64, f64) = (pre.center_re.parse().unwrap(), pre.center_im.parse().unwrap());
+                let mut zoom = pre.zoom_log2;
+                let mut lost = false;
+                while zoom < 9.0 {
+                    esc.center_re = format!("{cx:.17}");
+                    esc.center_im = format!("{cy:.17}");
+                    esc.zoom_log2 = zoom;
+                    let recs = records_on(&esc, ww, wh, false, false, true);
+                    let mx = esc.max_iter as u32;
+                    // Interior pixels hold n = max_iter; the boundary
+                    // is where the finite counts peak.
+                    let best = recs.iter().enumerate().filter(|(_, r)| r.n < mx).max_by_key(|(_, r)| r.n);
+                    let Some((i, _)) = best else { lost = true; break };
+                    let (px, py) = (i as u32 % ww, i as u32 / ww);
+                    let span_y = 4.0 / zoom.exp2();
+                    let span_x = span_y * ww as f64 / wh as f64;
+                    cx += ((px as f64 + 0.5) / ww as f64 - 0.5) * span_x;
+                    cy -= ((py as f64 + 0.5) / wh as f64 - 0.5) * span_y;
+                    zoom += 3.0;
+                }
+                if lost {
+                    println!("{name}#{pi} {}: no boundary found", pre.name);
+                    continue;
+                }
+                esc.center_re = format!("{cx:.17}");
+                esc.center_im = format!("{cy:.17}");
+                let m = cx.abs().max(cy.abs()).max(0.5);
+                let ulp = (m.log2().floor() - 23.0).exp2();
+                let mut fits = Vec::new();
+                let mut row = String::new();
+                for z in [6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0] {
+                    esc.zoom_log2 = z;
+                    let d = output_on(&device, &queue, &renderer, &esc, w, h, false);
+                    let p = output_on(&device, &queue, &renderer, &esc, w, h, true);
+                    let col = |v: &[f32], i: usize| [v[i * 4], v[i * 4 + 1], v[i * 4 + 2]];
+                    let dist = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()) as f64;
+                    let mut ratios = Vec::new();
+                    for y in 0..h as usize - 1 {
+                        for x in 0..w as usize - 1 {
+                            let i = y * w as usize + x;
+                            let grad = dist(col(&p, i), col(&p, i + 1)).max(dist(col(&p, i), col(&p, i + w as usize)));
+                            if grad < 1e-4 {
+                                continue;
+                            }
+                            ratios.push(dist(col(&d, i), col(&p, i)) / grad);
+                        }
+                    }
+                    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    let med = ratios.get(ratios.len() / 2).copied().unwrap_or(f64::NAN);
+                    let r = (4.0 / z.exp2() / h as f64) / ulp;
+                    if med > 0.03 && med < 3.0 {
+                        fits.push(med * r);
+                    }
+                    row.push_str(&format!(" z{z}:{med:.3}"));
+                }
+                let a = if fits.is_empty() { f64::NAN } else { (fits.iter().map(|v| v.ln()).sum::<f64>() / fits.len() as f64).exp() };
+                println!("{name}#{pi} {} julia={} at ({cx:.6}, {cy:.6}): A = {a:.3} [{} fits]{row}", pre.name, esc.julia, fits.len());
+            }
+        }
+    }
+
     /// The crease field (`ShadingField::Creases`) the iterate pass stores
     /// is `origami_creases_at`'s: the height in the relief channel and
     /// the slope -- a tenth of -grad h, rotation 0, no supersampling --
@@ -2978,6 +3125,18 @@ mod tests {
         deep: bool,
         perturbed: bool,
     ) -> Vec<crate::escape::renderer::IterRecord> {
+        records_on(esc, w, h, deep, perturbed, false)
+    }
+
+    /// As [`records_via`], `direct` forcing the direct path however deep.
+    fn records_on(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        deep: bool,
+        perturbed: bool,
+        direct: bool,
+    ) -> Vec<crate::escape::renderer::IterRecord> {
         let (device, queue) = repro_device();
         let config = crate::config::FractalConfig::default();
         let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
@@ -2991,6 +3150,7 @@ mod tests {
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
         escape.force_perturbed = perturbed;
+        escape.force_direct = direct;
         escape.force_floatexp = deep && perturbed;
         let mut guard = 0u32;
         loop {
@@ -3524,8 +3684,7 @@ mod tests {
             ("ducks", "magnitude_average", "-0.4", "0.3", 20.0, false, &[]),
             ("ducks", "magnitude_average", "-0.4", "0.3", 20.0, false, &[("variant", 4.0)]),
             ("ducks", "magnitude_average", "0.15", "-0.2", 20.0, true, &[]),
-            // Kaliset carries a floor of 24 (tier_min_zoom).
-            ("kaliset", "magnitude_average", "0.35", "0.28", 26.0, false, &[]),
+            ("kaliset", "magnitude_average", "0.35", "0.28", 20.0, false, &[]),
         ];
         for (formula, coloring, cre, cim, zoom, julia, params) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -3576,81 +3735,80 @@ mod tests {
         }
     }
 
-    /// The non-escaping tiers must engage only where their delta
-    /// form is actually better than the path it replaces.
+    /// The non-escaping tiers' deltas are at least as good as the
+    /// direct path from the shallowest zoom the switch hands them.
     ///
-    /// This is the test the user's report earned: "it changes the
-    /// moment perturbation starts" is a real failure mode, and the
-    /// only way to answer it is to score BOTH paths against exact
-    /// per-pixel orbits rather than against each other.
+    /// "It changes the moment perturbation starts" is a real failure
+    /// mode, and the only way to answer it is to score BOTH paths
+    /// against exact per-pixel orbits rather than against each other.
     ///
     /// Measured (mean relative error of the orbit-average field vs
-    /// exact orbits, 96x72, 60 iterations):
+    /// exact orbits, 96x72):
     ///
-    ///   kaliset (0.35, 0.28)   z10  direct 2.1e-3   perturbed 3.7e-1
-    ///                          z14  direct 2.3e-3   perturbed 2.0e-1
-    ///                          z18/24/30 perturbed 2.4e-2 / 3.6e-4 / 5.7e-6
-    ///   kaliset (1.226, 1.574) z14  direct 2.2e-2   perturbed 9.4e-3
-    ///   ducks   (-0.4, 0.3)    every depth 10..30: both ~4e-7
-    ///   ducks   (0.15, -0.2)   every depth 10..30: both ~1e-7
+    ///   kaliset (0.35, 0.28)   z8   direct 2.7e-3   perturbed 1.9e-3
+    ///                          z14  direct 2.3e-3   perturbed 2.1e-5
+    ///   kaliset julia (24 it)  z8   direct 5.2e-5   perturbed 1.3e-5
+    ///                          z14  direct 1.7e-4   perturbed 4.3e-6
+    ///   ducks   (-0.4, 0.3)    z8, z14: both 4.0e-7
     ///
-    /// So Ducks is safe from the ordinary threshold and Kaliset needs
-    /// its own floor -- see `tier_min_zoom`.
+    /// Kaliset carried a floor of 24 from the first view's old numbers,
+    /// 3.7e-1 at zoom 10 and 2.0e-1 at 14, read as its inversion
+    /// amplifying the delta. They were its scaled rung starting every
+    /// parameter-plane delta at ZERO -- the reference's seed, not the
+    /// pixel's: the template hard-coded the zero start instead of
+    /// splicing `w_init`, which seeds Kaliset at d0. The deep rung had
+    /// the seed all along.
     #[test]
     #[ignore = "needs a GPU"]
-    fn the_non_escaping_tiers_engage_only_where_they_are_accurate() {
-        use crate::escape::EscapeRenderer;
-        let mut esc = crate::config::escape::EscapeConfig::default();
-        esc.coloring = "magnitude_average".to_string();
-        esc.max_iter = 60;
-
-        esc.formula = "kaliset".to_string();
-        esc.center_re = "0.35".to_string();
-        esc.center_im = "0.28".to_string();
-        for z in [14.0, 18.0, 23.0] {
-            esc.zoom_log2 = z;
-            assert!(
-                !EscapeRenderer::wants_perturbation(&esc),
-                "kaliset must not perturb at zoom {z}: measured worse than direct there"
-            );
-        }
-        esc.zoom_log2 = 26.0;
-        assert!(
-            EscapeRenderer::wants_perturbation(&esc),
-            "kaliset must perturb past its floor, or it gains no depth at all"
-        );
-
-        // Ducks: accurate from the ordinary threshold, and the check
-        // that its delta really is as good as direct where both work.
-        esc.formula = "ducks".to_string();
-        esc.center_re = "-0.4".to_string();
-        esc.center_im = "0.3".to_string();
-        esc.zoom_log2 = 16.0;
-        assert!(EscapeRenderer::wants_perturbation(&esc));
-        esc.zoom_log2 = 10.0;
+    fn the_non_escaping_tiers_are_accurate_from_the_floor() {
+        use crate::escape::reference::{MAP_DUCKS, MAP_KALISET};
         let (w, h) = (96u32, 72u32);
-        let truth =
-            exact_mean_magnitude(&esc, w, h, crate::escape::reference::MAP_DUCKS, [0.0, 0.0]);
-        let score = |what: &str, recs: &[crate::escape::renderer::IterRecord]| -> f64 {
-            let mut total = 0.0;
-            for (r, t) in recs.iter().zip(&truth) {
-                let m = r.accum[0] as f64 / (r.accum[1] as f64).max(1.0);
-                total += (m - t).abs() / t.abs().max(1e-9);
+        // A Julia orbit decorrelates from its neighbours within a few
+        // dozen steps here, and past that both paths only sample the
+        // chaos: 24 iterations keep it a field.
+        for (what, formula, (cre, cim), julia, max_iter, map) in [
+            ("kaliset plane", "kaliset", ("0.35", "0.28"), None, 60, MAP_KALISET),
+            ("kaliset julia", "kaliset", ("-0.0595709", "0.5576624"), Some((0.6, 0.4)), 24, MAP_KALISET),
+            ("ducks plane", "ducks", ("-0.4", "0.3"), None, 60, MAP_DUCKS),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "magnitude_average".to_string();
+            esc.formula = formula.to_string();
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.max_iter = max_iter;
+            if let Some((re, im)) = julia {
+                esc.julia = true;
+                esc.julia_re = re;
+                esc.julia_im = im;
             }
-            let mean = total / truth.len() as f64;
-            println!("ducks {what}: mean relative error vs exact orbits {mean:.3e}");
-            mean
-        };
-        let direct = score("direct", &records_via(&esc, w, h, false, false));
-        let perturbed = score("perturbed", &records_via(&esc, w, h, false, true));
-        assert!(
-            perturbed < 1e-5 && perturbed <= direct * 4.0,
-            "ducks perturbed {perturbed:.3e} vs direct {direct:.3e} -- the delta has regressed"
-        );
+            for z in [crate::escape::renderer::PERTURB_FLOOR_ZOOM + 2.0, 14.0] {
+                esc.zoom_log2 = z;
+                let truth = exact_mean_magnitude(&esc, w, h, map, [0.0, 0.0]);
+                let score = |recs: &[crate::escape::renderer::IterRecord]| -> f64 {
+                    recs.iter()
+                        .zip(&truth)
+                        .map(|(r, t)| (r.accum[0] as f64 / (r.accum[1] as f64).max(1.0) - t).abs() / t.abs().max(1e-9))
+                        .sum::<f64>()
+                        / truth.len() as f64
+                };
+                let direct = score(&records_on(&esc, w, h, false, false, true));
+                let perturbed = score(&records_on(&esc, w, h, false, true, false));
+                println!("{what} z{z}: direct {direct:.2e} perturbed {perturbed:.2e}");
+                assert!(
+                    perturbed <= 2.0 * direct + 1e-6,
+                    "{what} at zoom {z}: perturbed {perturbed:.3e} against direct {direct:.3e}"
+                );
+            }
+        }
     }
 
     /// Kaliset on the parameter plane at zoom 30, both sign branches,
-    /// both rungs: the orbit-average field against exact orbits.
+    /// both rungs: the orbit-average field against exact orbits. Then
+    /// the view whose orbit depends most on its SEED, against the
+    /// field's own step from pixel to pixel -- the absolute tolerance
+    /// above passed a scaled rung that seeded every pixel at the view
+    /// centre, 275 pixel steps out at every depth.
     #[test]
     #[ignore = "needs a GPU"]
     fn perturbed_kaliset_matches_an_exact_orbit_at_depth() {
@@ -3677,6 +3835,30 @@ mod tests {
                 let gpu = perturbed_records(&esc, w, h, deep);
                 compare_means(&format!("kaliset plus_c {plus} deep {deep}"), &gpu, &truth);
             }
+        }
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "kaliset".to_string();
+        esc.coloring = "magnitude_average".to_string();
+        esc.center_re = "0.35".to_string();
+        esc.center_im = "0.28".to_string();
+        esc.zoom_log2 = 24.0;
+        esc.max_iter = 60;
+        let truth = exact_mean_magnitude(&esc, w, h, crate::escape::reference::MAP_KALISET, [0.0, 0.0]);
+        let step = (0..truth.len() - 1)
+            .map(|i| (truth[i + 1] - truth[i]).abs() / truth[i].abs().max(1e-9))
+            .sum::<f64>()
+            / truth.len() as f64;
+        for deep in [false, true] {
+            let gpu = perturbed_records(&esc, w, h, deep);
+            let err = gpu
+                .iter()
+                .zip(&truth)
+                .map(|(g, t)| (g.accum[0] as f64 / (g.accum[1] as f64).max(1.0) - t).abs() / t.abs().max(1e-9))
+                .sum::<f64>()
+                / truth.len() as f64;
+            println!("kaliset seed view deep {deep}: error {err:.2e} against a pixel step of {step:.2e}");
+            assert!(err < 0.25 * step, "deep {deep}: {err:.3e} is {:.0} pixel steps", err / step);
         }
     }
 
@@ -3798,7 +3980,7 @@ mod tests {
         esc.zoom_log2 = 20.0;
         esc.formula_params.insert("variant".to_string(), 0.0);
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "the view must want perturbation, or this tests nothing"
         );
 
@@ -5304,7 +5486,7 @@ fn main() {
         esc.bailout = 4.0;
         esc.formula_params.insert("variant".to_string(), 0.0);
         assert!(
-            crate::escape::EscapeRenderer::wants_perturbation(&esc),
+            crate::escape::EscapeRenderer::wants_perturbation(&esc, h),
             "the reported view must be past the threshold, or this tests nothing"
         );
         let truth =
@@ -13554,13 +13736,22 @@ fn main() {
         assert_has_structure("nova", &img);
         check("nova-floatexp", &nv_cfg, true);
 
-        // Kaliset is deliberately NOT here. It is non-escaping and
-        // inverting, and its delta form only becomes accurate past
-        // zoom 24 (`tier_min_zoom`), so forcing it onto a shallow view
-        // would be testing it outside the regime the engine ever uses
-        // it in. Its accuracy is pinned by the exact-orbit test at
-        // zoom 30 and by
-        // `the_non_escaping_tiers_engage_only_where_they_are_accurate`.
+        // Kaliset seeds its parameter plane at the PIXEL, like Manowar,
+        // and on a view whose orbit leans on that seed. Left out of
+        // here while its delta was believed inaccurate shallower than
+        // zoom 24 -- which was the scaled rung seeding every pixel at
+        // the view centre, a different picture at every depth that
+        // this comparison draws in one glance.
+        let mut ks_cfg = crate::config::escape::EscapeConfig::default();
+        ks_cfg.formula = "kaliset".to_string();
+        ks_cfg.coloring = "magnitude_average".to_string();
+        ks_cfg.center_re = "0.35".to_string();
+        ks_cfg.center_im = "0.28".to_string();
+        ks_cfg.zoom_log2 = 8.0;
+        ks_cfg.max_iter = 60;
+        let img = check("kaliset", &ks_cfg, false);
+        assert_has_structure("kaliset", &img);
+        check("kaliset-floatexp", &ks_cfg, true);
 
         // Ducks: the transcendental one. Its delta is log1p of the
         // fold's ratio, and it is the tier whose branch cut bites --

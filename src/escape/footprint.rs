@@ -1028,7 +1028,9 @@ impl EscapeTerrain {
         // (`COARSE_SAMPLES`); a direct one costs too little to bother.
         let coarse = self.coarse_samples;
         let samples = |key: &SectionKey| -> u32 {
-            if wanted.hidden_roots.contains(key) && EscapeRenderer::wants_perturbation(&section_config(&fp, &anchor, *key, coarse)) {
+            if wanted.hidden_roots.contains(key)
+                && EscapeRenderer::wants_perturbation(&section_config(&fp, &anchor, *key, coarse), SECTION_SAMPLES)
+            {
                 coarse
             } else {
                 SECTION_SAMPLES

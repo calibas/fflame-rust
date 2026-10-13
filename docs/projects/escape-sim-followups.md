@@ -176,10 +176,6 @@ else in that record is built. These are not:
   Recorded so it is not re-attempted blind.
 - **Series approximation** — absent, and still unmeasured against
   BLA. Worth a Phase-0 measurement before any building.
-- **Kaliset's zoom-24 floor** — it perturbs correctly above zoom 24
-  and declines below it, because the inversion amplifies the delta
-  faster than the rung holds. The panel's depth hint does not yet
-  express that nuance (it reads "unlimited" from zoom 14).
 - **Row banding of the perturbed path** — would let a frame exceed a
   device's buffer limit by sizing the per-pixel state to a band, as
   the direct path already does via `tile_y0`. Only needed where a
