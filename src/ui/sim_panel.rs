@@ -1298,6 +1298,25 @@ impl LayerSlot {
     }
 }
 
+/// A whole initial field as config changes: its kind, then what it is
+/// made of. The kind alone kept the last field's radius and count and
+/// reset noise to 0.05: half the presets want noise at 1, and an Ising
+/// or a percolation started from a near-uniform field.
+fn init_changes(init: crate::config::sim::SimInit) -> Vec<(ConfigPath, crate::config::delta::ConfigValue)> {
+    use crate::config::sim::SimInit;
+    let mut changes = vec![(ConfigPath::SimInitKind, init.kind_name().to_string().into())];
+    match init {
+        SimInit::Noise { amplitude } => changes.push((ConfigPath::SimInitAmplitude, amplitude.into())),
+        SimInit::Blob { radius } | SimInit::Ring { radius } => changes.push((ConfigPath::SimInitRadius, radius.into())),
+        SimInit::Blobs { count, radius } => {
+            changes.push((ConfigPath::SimInitRadius, radius.into()));
+            changes.push((ConfigPath::SimInitCount, count.into()));
+        }
+        SimInit::Line | SimInit::Center | SimInit::BrokenWave => {}
+    }
+    changes
+}
+
 /// Everything a model preset sets, aimed at one slot.
 ///
 /// A preset is a whole recipe, not a parameter set: its measured step
@@ -1332,7 +1351,7 @@ fn preset_changes(
     // a flat field from noise, so applying only the numbers would ship
     // a picture of nothing.
     if let Some(init) = pre.init {
-        changes.push((ConfigPath::SimInitKind, init.kind_name().to_string().into()));
+        changes.extend(init_changes(init));
     }
     // Which colouring a model wants is a property of its state layout,
     // not a taste the user should have to acquire.
@@ -1528,8 +1547,18 @@ fn render_model_section(
                             .clicked()
                             && m.name != model.name
                         {
-                            let _ = config_manager
-                                .update_param(slot.model_path(), m.name.to_string().into());
+                            // A model starts from its first preset's initial
+                            // field: the last model's could be one it does
+                            // nothing with (Ising from Gray-Scott's blobs).
+                            // The field is the whole simulation's, so a layer
+                            // switch leaves it.
+                            let mut changes = vec![(slot.model_path(), m.name.to_string().into())];
+                            if slot == LayerSlot::Flat {
+                                if let Some(init) = m.presets.first().and_then(|p| p.init) {
+                                    changes.extend(init_changes(init));
+                                }
+                            }
+                            let _ = config_manager.update_batch(changes, "history.action.sim_model".to_string());
                         }
                     }
                 });
@@ -1761,6 +1790,44 @@ fn render_model_section(
                 }
             });
     });
+}
+
+#[cfg(test)]
+mod init_tests {
+    use super::*;
+    use crate::config::sim::SimInit;
+
+    /// Every model preset names the initial field it was measured from:
+    /// one left to whatever the user had ran from a field it may do
+    /// nothing with (Ising from Gray-Scott's blobs).
+    #[test]
+    fn every_preset_names_its_initial_field() {
+        for model in crate::sim::MODELS {
+            for pre in model.presets {
+                assert!(pre.init.is_some(), "{}/{} names no initial field", model.name, pre.name);
+            }
+        }
+    }
+
+    /// Applying a preset leaves exactly its initial field -- the kind and
+    /// what it is made of -- whatever field came before. The kind alone
+    /// kept the last radius and count and put noise at 0.05.
+    #[test]
+    fn a_preset_applies_its_whole_initial_field() {
+        for before in [SimInit::Ring { radius: 99 }, SimInit::Blobs { count: 40, radius: 3 }, SimInit::Noise { amplitude: 0.3 }] {
+            for model in crate::sim::MODELS {
+                for pre in model.presets {
+                    let mut config = crate::config::FractalConfig::default();
+                    config.render_mode = crate::scene::transforms::RenderMode::Simulation;
+                    config.sim.model = model.name.to_string();
+                    config.sim.init = before;
+                    let mut manager = ConfigManager::new(config);
+                    let _ = manager.update_batch(preset_changes(model, pre, LayerSlot::Flat), "preset".to_string());
+                    assert_eq!(Some(manager.config().sim.init), pre.init, "{}/{} from {before:?}", model.name, pre.name);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
