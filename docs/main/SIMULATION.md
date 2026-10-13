@@ -137,8 +137,16 @@ kind alone kept the last field's radius and count and reset noise to
 0.05, so the presets that want noise at 1 (Ising, percolation, Lenia
 and most others) started from a near-uniform field. Every preset names
 a field (`every_preset_names_its_initial_field`); Gray–Scott's are the
-default blobs. **Choosing a model** in the panel applies its first
-preset's field too, so a model never starts from the last one's field.
+default blobs. **The boundary too** (`SimPreset::boundary`, required): a
+preset applies the boundary it was measured with. Before, none did, and a
+model ran on whatever the last one left. Viscous fingering's inlet and
+outlet meet on a wrapping grid, so its front never moved; a sandpile is
+defined with an open edge; a growing front's bottom row wraps to the
+top. Clamp: fingering, Kobayashi, the snowfake, DLA, DBM. Zero: the
+sandpile, percolation, invasion percolation, Packard's snowflake, Eden's
+rough front. Everything else is periodic. **Choosing a model** in the panel applies its first
+preset's field and boundary too, so a model never starts from the last
+one's.
 A layer's model leaves it, since the field belongs to the whole
 simulation.
 

@@ -92,6 +92,13 @@ pub struct SimPreset {
     /// one, Rafler), and SmoothLifeL's only at 0.05. `None` applies the
     /// default.
     pub dt: Option<f32>,
+    /// The boundary it was measured with. Not a taste either: viscous
+    /// fingering's inlet and outlet are the grid's last and first rows,
+    /// and on a wrapping grid they meet and the front never moves; a
+    /// sandpile is defined with an open (Zero) edge; a growing front's
+    /// bottom row wraps to the top and ends the run on step one. Every
+    /// preset names one, so none inherits the last model's.
+    pub boundary: crate::config::sim::SimBoundary,
     /// The initial field this preset needs, when it needs a particular
     /// one.
     ///

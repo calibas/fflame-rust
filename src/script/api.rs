@@ -1651,6 +1651,7 @@ fn register_sim(engine: &mut Engine) {
                     // set it to the model default and a preset may
                     // override; then parameters over the defaults.
                     cfg.sim.dt = p.dt.unwrap_or(model.default_dt);
+                    cfg.sim.boundary = p.boundary;
                     for (k, v) in p.params {
                         model_params(&mut cfg).insert((*k).to_string(), *v);
                     }
