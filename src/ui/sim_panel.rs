@@ -1831,6 +1831,46 @@ mod init_tests {
 }
 
 #[cfg(test)]
+mod coloring_tests {
+    use super::*;
+
+    /// Applying a preset leaves exactly its colouring and every parameter
+    /// it names, from any colouring before -- first time, not second
+    /// (field-reported: Percolation's `mask_channel` 0 showed as the
+    /// label colouring's default 1 until the preset was applied again).
+    #[test]
+    fn a_preset_applies_its_colouring_params_the_first_time() {
+        for model in crate::sim::MODELS {
+            for pre in model.presets {
+                let Some(coloring) = pre.coloring else { continue };
+                for before in ["channel", "label", "palette_value"] {
+                    if before == coloring {
+                        continue;
+                    }
+                    let mut config = crate::config::FractalConfig::default();
+                    config.render_mode = crate::scene::transforms::RenderMode::Simulation;
+                    config.sim.model = model.name.to_string();
+                    config.sim.coloring = before.to_string();
+                    config.sim.coloring_params.clear();
+                    let mut manager = ConfigManager::new(config);
+                    let _ = manager.update_batch(preset_changes(model, pre, LayerSlot::Flat), "preset".to_string());
+                    assert_eq!(manager.config().sim.coloring, coloring);
+                    for (k, v) in pre.coloring_params {
+                        let got = manager.get_value(&ConfigPath::SimColoringParam { param: (*k).to_string() }).unwrap();
+                        assert!(
+                            got.approx_eq(&(*v).into()),
+                            "{}/{} from {before}: {k} is {got:?}, the preset says {v}",
+                            model.name,
+                            pre.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod locale_tests {
     /// Every `sim_panel.*` key this file asks for must exist in the
     /// English table.
