@@ -1194,6 +1194,7 @@ history:
   # Action descriptions (for batch updates and load operations)
   action:
     sim_preset: "Apply Simulation Preset"
+    sim_model: "Change Simulation Model"
     sim_table: "Edit Scales as a Table"
     sim_layers: "Edit Simulation Layers"
     texture_pick: "Use Texture"
