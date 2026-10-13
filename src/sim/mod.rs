@@ -172,6 +172,12 @@ pub enum ModelFeature {
     /// many levels it has, and McCabe's texture came out visibly
     /// axis-aligned on it. See `scripts/sim_prototypes/proto_mccabe_pyramid.py`.
     NeedsPyramid,
+    /// The model's step reads exact disc averages from the spectral stage
+    /// (`pyr_exact()`, `pyr_diff_cell`) when its layer has one -- the
+    /// discs `spectral_scales` names, by FFT -- and gathers its own
+    /// otherwise: a grid without an FFT plan, or a boundary that is not
+    /// periodic. SmoothLife's: its rings are 1849 taps a cell at r_a 21.
+    ExactDiscs,
     /// The model carries a population of AGENTS: a storage buffer of
     /// 16-byte records that move themselves and deposit into an
     /// integer accumulation buffer, which the step pass then folds
@@ -416,6 +422,7 @@ pub fn spectral_scales(
 ) -> Option<Vec<spectral::SpectralScale>> {
     match model {
         "mccabe" => Some(models::mccabe_scale_discs(params)),
+        "smoothlife" => Some(models::smoothlife_discs(params)),
         _ => None,
     }
 }

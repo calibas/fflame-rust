@@ -41,12 +41,22 @@ pub struct SpectralScale {
     pub rb: f32,
     pub stretch: f32,
     pub angle: f32,
+    /// The ANNULUS between the discs, averaged -- (disc_a - disc_b) over
+    /// the difference of their sums -- rather than the difference of
+    /// their averages: SmoothLife's neighbourhood, whose weights are the
+    /// direct gather's own.
+    pub annulus: bool,
 }
 
 impl SpectralScale {
     /// Round discs.
     pub fn round(ra: f32, rb: f32) -> Self {
-        SpectralScale { ra, rb, stretch: 1.0, angle: 0.0 }
+        SpectralScale { ra, rb, stretch: 1.0, angle: 0.0, annulus: false }
+    }
+
+    /// The round annulus between `rb` and `ra`, averaged.
+    pub fn annulus(ra: f32, rb: f32) -> Self {
+        SpectralScale { annulus: true, ..Self::round(ra, rb) }
     }
 
     /// The map taking a cell offset to the disc's frame: rotate by
@@ -83,7 +93,9 @@ struct SpecGpu {
     m01: f32,
     m10: f32,
     m11: f32,
-    pad: [u32; 2],
+    /// 1: the scale is the annulus's average (`SpectralScale::annulus`).
+    annulus: u32,
+    pad: u32,
 }
 
 const SPECTRAL_WGSL: &str = r#"
@@ -102,7 +114,7 @@ struct SpecParams {
     m01: f32,
     m10: f32,
     m11: f32,
-    pad1: u32,
+    annulus: u32,
     pad2: u32,
 };
 
@@ -156,7 +168,8 @@ fn fill(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // A scale's spectrum from its two discs' transform: each disc is
 // symmetric, so its transform is real and sits in one part; its
-// zero-frequency term is its sum, so dividing by it normalises it.
+// zero-frequency term is its sum, so dividing by it normalises it. An
+// annulus is the discs' difference over the difference of their sums.
 @compute @workgroup_size(8, 8, 1)
 fn extract(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = cell(gid);
@@ -166,7 +179,11 @@ fn extract(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = sp.width * sp.height;
     let dc = cin[0];
     let v = cin[c];
-    spectra[sp.scale_i * n + u32(c)] = v.x / dc.x - v.y / dc.y;
+    var h = v.x / dc.x - v.y / dc.y;
+    if (sp.annulus != 0u) {
+        h = (v.x - v.y) / (dc.x - dc.y);
+    }
+    spectra[sp.scale_i * n + u32(c)] = h;
 }
 
 // F . (H_i + i H_j) / n: two scales' convolutions in one complex field.
@@ -467,7 +484,8 @@ impl SpectralAverages {
             m01: 0.0,
             m10: 0.0,
             m11: 1.0,
-            pad: [0; 2],
+            annulus: 0,
+            pad: 0,
         };
         let mut bytes = vec![0u8; (self.stride * SLOTS) as usize];
         let mut put = |slot: u32, v: SpecGpu| {
@@ -477,7 +495,10 @@ impl SpectralAverages {
         put(SLOT_PACK, base);
         for (k, s) in radii.iter().enumerate() {
             let [m00, m01, m10, m11] = s.metric();
-            put(slot_scale(k), SpecGpu { scale_i: k as u32, ra: s.ra, rb: s.rb, m00, m01, m10, m11, ..base });
+            put(
+                slot_scale(k),
+                SpecGpu { scale_i: k as u32, ra: s.ra, rb: s.rb, m00, m01, m10, m11, annulus: u32::from(s.annulus), ..base },
+            );
         }
         for q in 0..radii.len().div_ceil(2) {
             let (i, j) = (2 * q, 2 * q + 1);

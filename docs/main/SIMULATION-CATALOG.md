@@ -750,6 +750,19 @@ seed):
 - **The patch seed was the other half.** Squares of r_i at 0.4–0.5
   fill the field into a still foam in every rule set. The rules'
   gliders grow from structures wider than the outer ring.
+- **By FFT (`ModelFeature::ExactDiscs`):** on a periodic grid with an
+  FFT plan, both averages come from the spectral stage, one forward and
+  one inverse 2D FFT per step (`smoothlife_discs`):
+  - the inner disc against a disc of radius 0 (slice 0 is the average
+    less the cell);
+  - the annulus, averaged (`SpectralScale::annulus`: the discs'
+    difference over their sums' difference, the gather's own weights).
+
+  Measured at 1024², r_a 20: 1.5 ms a step against 40 ms for the
+  gather, about 27×. One step agrees with the gather to 8-bit rounding.
+  640 increment steps diverge chaotically, so SmoothLifeL's baseline was
+  re-recorded; the other two hold. Fallback: a grid with a prime factor
+  past 64 (a 1366-wide window), or another boundary, gathers as before.
 
 ---
 
