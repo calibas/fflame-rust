@@ -551,7 +551,50 @@ impl ColoringDef {
 /// the only ones with anything in it -- so the others keep the narrow
 /// records (32 B) and state, and the deep-zoom pixel budget with them.
 pub fn accum_is_wide(coloring: &ColoringDef) -> bool {
-    coloring.has_feature(ColoringFeature::NeedsOrbitAccum)
+    accum_width(coloring).is_wide()
+}
+
+/// How much of a colouring's accumulator the terminal records and the
+/// perturbed resume state keep.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AccumWidth {
+    /// `.xy`: a colouring with nothing in its accumulator.
+    #[default]
+    Narrow,
+    /// All four floats of the `vec4`.
+    Wide,
+    /// All four, and this many `vec4`s more: a custom colouring's state
+    /// past four floats (escape::lang, up to 32 floats in all), which it
+    /// keeps in its private `ufc_ext` and the templates save and
+    /// restore beside the `vec4`.
+    Extended(usize),
+}
+
+impl AccumWidth {
+    pub fn is_wide(self) -> bool {
+        self != AccumWidth::Narrow
+    }
+
+    /// The `vec4`s past the first.
+    pub fn ext(self) -> usize {
+        match self {
+            AccumWidth::Extended(k) => k,
+            _ => 0,
+        }
+    }
+}
+
+/// [`AccumWidth`] of a colouring: narrow without an accumulator, wide
+/// with one, extended for a custom colouring keeping more than four
+/// floats.
+pub fn accum_width(coloring: &ColoringDef) -> AccumWidth {
+    if !coloring.has_feature(ColoringFeature::NeedsOrbitAccum) {
+        return AccumWidth::Narrow;
+    }
+    match custom::accum_ext(coloring.name) {
+        0 => AccumWidth::Wide,
+        k => AccumWidth::Extended(k),
+    }
 }
 
 /// Whether `layer` can be drawn over `base` in one shader: they share
@@ -629,10 +672,15 @@ pub fn layer_of(escape: &crate::config::escape::EscapeConfig) -> Option<&'static
     layer_fits(base, layer).then_some(layer)
 }
 
-/// Whether a config's records carry the wide accumulator: the base's,
-/// or a layer's that owns the accumulator.
-pub fn config_accum_is_wide(escape: &crate::config::escape::EscapeConfig) -> bool {
-    accum_is_wide_named(&escape.coloring) || layer_of(escape).is_some_and(accum_is_wide)
+/// The accumulator width a config's records and resume state carry: the
+/// base's, or that of a layer that owns the accumulator (at most one of
+/// the two has one, [`layer_fits`]).
+pub fn config_accum_width(escape: &crate::config::escape::EscapeConfig) -> AccumWidth {
+    let base = find_coloring(&escape.coloring).map_or(AccumWidth::Narrow, accum_width);
+    if base.is_wide() {
+        return base;
+    }
+    layer_of(escape).map_or(AccumWidth::Narrow, accum_width)
 }
 
 /// [`accum_is_wide`] for a config's colouring name. A name that is not
