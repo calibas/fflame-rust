@@ -133,6 +133,9 @@ pub struct Run {
     /// The colouring's `#index` and `#solid`, when one ran.
     pub index: f64,
     pub solid: bool,
+    /// The iterate's derivative with respect to the pixel, for a
+    /// program the derivative pass extended (zero otherwise).
+    pub dz: C64,
 }
 
 /// Run a formula, and a colouring alongside it when given.
@@ -171,7 +174,8 @@ pub fn run(
         let prog = c.prog;
         c.exec(&prog.final_body, &mut sh);
     }
-    Run { z: sh.z, n: sh.numiter, escaped, index: sh.index, solid: sh.solid }
+    let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
+    Run { z: sh.z, n: sh.numiter, escaped, index: sh.index, solid: sh.solid, dz }
 }
 
 impl<'p> Machine<'p> {
@@ -261,6 +265,11 @@ impl<'p> Machine<'p> {
                 Value::Bool(b) => Value::Bool(b),
             },
             IExprKind::Unary(UnOp::Not, a) => Value::Bool(!self.eval(a, sh).as_bool()),
+            // A real factor scales (IExpr::is_lifted_real).
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty == Ty::Complex && (a.is_lifted_real() || b.is_lifted_real()) => {
+                let (k, z) = if a.is_lifted_real() { (a, b) } else { (b, a) };
+                Value::Complex(self.eval(z, sh).as_c64().scale(self.eval(k, sh).as_c64().re))
+            }
             IExprKind::Binary(op, a, b) => binary(*op, self.eval(a, sh), self.eval(b, sh), e.ty, self.prog.dialect),
             IExprKind::PowInt(a, n) => match self.eval(a, sh) {
                 Value::Complex(c) => Value::Complex(c.powi(*n)),
@@ -277,6 +286,10 @@ impl<'p> Machine<'p> {
             IExprKind::UserCall(id, a) => {
                 let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
                 Value::Complex(f.eval_c(self.eval(a, sh).as_c64()))
+            }
+            IExprKind::UserDeriv(id, a) => {
+                let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
+                Value::Complex(f.deriv_c(self.eval(a, sh).as_c64()))
             }
         }
     }

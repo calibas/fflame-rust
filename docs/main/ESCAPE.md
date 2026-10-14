@@ -297,8 +297,9 @@ compiles them to WGSL. The plan, its phases and what is left are in
 **Where it lives.** `src/escape/lang/`: `lexer.rs`, `parser.rs` (a file
 into entries and sections), `check.rs` (names and types, UF's rules,
 into the typed `ir.rs`), `interp.rs` (the program in f64: the reference
-the WGSL is tested against), `wgsl.rs` (the shader), `builtins.rs` (the
-function table). `src/escape/custom.rs` registers a compiled entry.
+the WGSL is tested against), `wgsl.rs` (the shader), `derive.rs` (a
+formula's derivative), `builtins.rs` (the function table).
+`src/escape/custom.rs` registers a compiled entry.
 
 **An entry** is `Name(setting) { ... }` in a `.ufm` (formulas), `.ucl`
 (colourings) or `.frm` (Fractint) file; `;` comments to the end of a
@@ -324,7 +325,8 @@ isnan`, and Fractint's `cosxx`. Parameters are `@name` (Fractint's
 `@f(z)` (Fractint's `fn1..fn4`), chosen in the panel from a list.
 Symbols: `#pixel`, `#z`, `#numiter` (in `final:`), `#maxiter`, `#pi`,
 `#e`, `#random`, `#center`, `#magn`, `#x`, `#y`, `#width`, `#height`,
-`#screenpixel`, `#index` and `#solid`.
+`#screenpixel`, `#index` and `#solid`. A product with a real factor
+(`2 * z`) scales the other operand, as the built-ins write it.
 
 **Fractint's conventions** apply to a `.frm` file, or with the editor's
 language set to Fractint (from its `parser.c`): a test is true when its
@@ -340,8 +342,7 @@ read; a formula that reads `ismand` gets the Julia toggle, which sets it
 picture reproduces; `srand` is not supported.
 
 **Not yet:** UF's classes and plug-ins, arrays, colour values and direct
-colouring, `global:` and `switch:` sections, the derivative (so no
-distance estimation for a custom formula), and deep zoom for custom
+colouring, `global:` and `switch:` sections, and deep zoom for custom
 formulas.
 
 **How it joins the engine.** A compiled entry is registered as a
@@ -359,6 +360,17 @@ name, so a saved file, a PNG or an upload renders anywhere.
   relief (the offset relief stands in). A float or complex parameter
   named `bailout` is the panel's bailout, UF's convention, so the smooth
   colourings and the formula escape at the same radius.
+- A formula's **derivative** with respect to `#pixel` is derived from
+  the program (`lang/derive.rs`, forward mode): every complex variable
+  the iterate depends on gets a companion assigned just before it, and
+  the result is an ordinary program, compiled in place of the plain one
+  when a colouring reads the derivative (`formula_dz`). So distance
+  estimation and the analytic relief work for a custom formula, on
+  either plane. A user function's derivative is chosen with it (zero for
+  a choice with none: `abs`, `conj`, `real` ...). A formula whose
+  iterate passes through a fold (`abs`, `conj`, `real`, `imag`, `|x|`, a
+  real variable that follows the pixel) has none, and the panel reports
+  the gap as it does for Burning Ship.
 - A **colouring** compiles to the built-in colouring interface, so it
   runs on every path, perturbed and recoloured included. Its variables
   that live from one iteration to the next share the 4-float
@@ -384,7 +396,9 @@ files ship (`assets/formulas/`), each entry compiled by
 Measured against the built-ins it rewrites, the language's Mandelbrot,
 Lambda and Magnet I are identical, and so is a custom colouring at
 depth on the perturbed path
-(`custom_entries_render_as_their_built_ins`).
+(`custom_entries_render_as_their_built_ins`); distance estimation on
+the language's Mandelbrot is identical on both planes
+(`a_custom_formulas_derivative_drives_distance_estimation`).
 
 ---
 

@@ -170,6 +170,21 @@ pub struct IExpr {
     pub ty: Ty,
 }
 
+impl IExpr {
+    /// A real value lifted to complex: a literal with a zero imaginary
+    /// part, or a converted int or float. A complex product with one
+    /// scales the other operand, as both back ends compute it: cheaper,
+    /// and as the built-ins write `2.0 * z` (the full product's
+    /// `0 * inf` would make an overflowed operand NaN).
+    pub fn is_lifted_real(&self) -> bool {
+        match &self.kind {
+            IExprKind::Complex(_, im) => *im == 0.0,
+            IExprKind::Convert(a) => self.ty == Ty::Complex && matches!(a.ty, Ty::Int | Ty::Float),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum IExprKind {
     Bool(bool),
@@ -197,6 +212,10 @@ pub enum IExprKind {
     /// (an int argument is converted first unless the result is int).
     Call(Builtin, Box<IExpr>),
     UserCall(FuncId, Box<IExpr>),
+    /// The derivative of the user's chosen function at the operand
+    /// (zero for a choice with no complex derivative): the derivative
+    /// pass's, never the checker's.
+    UserDeriv(FuncId, Box<IExpr>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -255,6 +274,9 @@ pub struct Program {
     /// A colouring's variables that live from one section, or one
     /// iteration, to the next: what its packed state holds, in order.
     pub state: Vec<VarId>,
+    /// The variable holding the iterate's derivative with respect to
+    /// the pixel, in a program the derivative pass extended.
+    pub dz_var: Option<VarId>,
 }
 
 impl Program {
@@ -271,7 +293,7 @@ impl Program {
         fn e(x: &IExpr, p: Predef) -> bool {
             match &x.kind {
                 IExprKind::Predef(q) => *q == p,
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) => e(a, p),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => e(a, p),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => e(a, p) || e(b, p),
                 _ => false,
             }

@@ -1857,7 +1857,7 @@ mod tests {
              "L {\ninit:\n z = 0.5\nloop:\n z = #pixel * (z * (1 - z))\nbailout:\n |z| < @bailout\n}", "L", 0.0),
             ("magnet I", "magnet", &[("variant", 0.0)], ("1", "0"), -0.8,
              "Mg {\ninit:\n z = 0\nloop:\n zold = z\n z = sqr((z^2 + #pixel - 1) / (2*z + #pixel - 2))\n\
-              bailout:\n |z| < @bailout && |z - zold| >= 1e-12\n}", "Mg", 0.002),
+              bailout:\n |z| < @bailout && |z - zold| >= 1e-12\n}", "Mg", 0.0),
             ("multibrot 3", "multibrot", &[("power", 3.0)], ("0", "0"), 0.2,
              "M3 {\ninit:\n z = 0\nloop:\n z = z^3 + #pixel\nbailout:\n |z| < @bailout\n}", "M3", 0.03),
             ("tricorn", "tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2,
@@ -1998,6 +1998,69 @@ final:
             println!("julia {julia}: differs on {:.3}%", d * 100.0);
             assert!(d == 0.0, "julia {julia}: the Fractint formula differs on {:.3}% of pixels", d * 100.0);
         }
+    }
+
+    /// A custom formula carries its own derivative (lang::derive), and
+    /// distance estimation reads it as it reads a built-in's: the same
+    /// arithmetic (`2 z dz + 1`, scaled by a real 2), the same picture,
+    /// on both planes.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formulas_derivative_drives_distance_estimation() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let uf = CustomSource {
+            dialect: CustomDialect::UltraFractal,
+            entry: "M".into(),
+            source: "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}".into(),
+        };
+        let fractint = CustomSource {
+            dialect: CustomDialect::Fractint,
+            entry: "MJ".into(),
+            source: "MJ {\n if (ismand)\n  c = pixel, z = 0\n else\n  c = p1, z = pixel\n endif\n :\n z = sqr(z) + c, |z| <= 4\n}".into(),
+        };
+        for (src, julia) in [(&uf, false), (&fractint, false), (&fractint, true)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "distance_estimate".into();
+            esc.max_iter = 200;
+            esc.bailout = 4.0;
+            esc.center_re = if julia { "0".into() } else { "-0.6".into() };
+            esc.zoom_log2 = 0.3;
+            esc.julia = julia;
+            esc.julia_re = -0.8;
+            esc.julia_im = 0.156;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let mut custom = esc.clone();
+            custom.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, src);
+            custom.custom_formula = Some(src.clone());
+            custom.formula_params.insert("p1.re".into(), -0.8);
+            custom.formula_params.insert("p1.im".into(), 0.156);
+            let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+            assert!(!crate::escape::get_formula(&custom.formula).wgsl_derivative.is_empty(), "{}: no derivative", src.entry);
+            assert!(crate::escape::EscapeRenderer::derivative_gap(&custom, 1080).is_none());
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{} julia {julia}: distance estimate differs on {:.3}%", src.entry, d * 100.0);
+            assert!(d == 0.0, "{} julia {julia}: differs on {:.3}% of pixels", src.entry, d * 100.0);
+        }
+        // A formula iterating through a fold has none, and says so.
+        let ship = CustomSource {
+            dialect: CustomDialect::UltraFractal,
+            entry: "B".into(),
+            source: "B {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n}".into(),
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "distance_estimate".into();
+        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &ship);
+        esc.custom_formula = Some(ship);
+        crate::escape::custom::ensure(&esc);
+        assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_some());
     }
 
     /// The crease field (`ShadingField::Creases`) the iterate pass stores

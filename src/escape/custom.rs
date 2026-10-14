@@ -201,9 +201,18 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
     }
     let p = check_entry(EntryKind::Formula, src)?;
     let wgsl = lang::wgsl::formula(&p);
+    // The same program carrying its derivative, for distance estimation
+    // and analytic relief; empty when the iterate has none, which those
+    // report as they do for a built-in without one.
+    let derivative = lang::wgsl::formula_with_derivative(&p).unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = lang::wgsl::validate_formula(&wgsl) {
-        return Err(vec![Diag::error(lang::Span::default(), format!("the compiler produced invalid WGSL (a bug): {e}"))]);
+    for w in [&wgsl, &derivative] {
+        if w.is_empty() {
+            continue;
+        }
+        if let Err(e) = lang::wgsl::validate_formula(w) {
+            return Err(vec![Diag::error(lang::Span::default(), format!("the compiler produced invalid WGSL (a bug): {e}"))]);
+        }
     }
     let def: &'static FormulaDef = Box::leak(Box::new(FormulaDef {
         name: leak(name.to_string()),
@@ -223,7 +232,7 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         escape_metric: EscapeMetric::NormSq,
         escape_degree: None,
         derived_data: None,
-        wgsl_derivative: "",
+        wgsl_derivative: leak(derivative),
         presets: &[],
     }));
     if let Ok(mut r) = registry().write() {

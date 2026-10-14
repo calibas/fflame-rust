@@ -1229,13 +1229,19 @@ fn program_c_decl() -> Vec<String> {
     ]
 }
 
-fn program_step(z_before: bool) -> Vec<String> {
+/// A program carrying its derivative (`derivative`: the formula's
+/// `wgsl_derivative` is compiled in) reports it after each step; the
+/// template's seed is never read, since the escape test follows.
+fn program_step(z_before: bool, derivative: bool) -> Vec<String> {
     let mut out = Vec::new();
     if z_before {
         out.push("        let z_before = z;".to_string());
     }
     out.push("        fs = formula_loop(fs, pixel);".to_string());
     out.push("        z = fs.z;".to_string());
+    if derivative {
+        out.push("        dz = formula_dz(fs);".to_string());
+    }
     out
 }
 
@@ -8103,7 +8109,11 @@ pub fn assemble_layered(
             "//__LENS_APPLY__" => lens_apply_span(&mut out, lens),
             "//__FORMULA__" => {
                 out.push(format!("// formula: {}", formula.name));
-                out.push(formula.wgsl.to_string());
+                // A program's derivative is the whole program again,
+                // carrying it: one or the other.
+                if !(program && needs_derivative) {
+                    out.push(formula.wgsl.to_string());
+                }
                 if needs_derivative {
                     out.push(formula.wgsl_derivative.to_string());
                 }
@@ -8274,7 +8284,7 @@ pub fn assemble_layered(
                     out.push(format!("    var z_prev = {init};"));
                 }
             }
-            "//__STEP__" if program => out.extend(program_step(convergent || needs_accum)),
+            "//__STEP__" if program => out.extend(program_step(convergent || needs_accum, needs_derivative)),
             "//__STEP__" => {
                 out.extend(step_lines(formula, damped, convergent || needs_accum, needs_derivative));
             }

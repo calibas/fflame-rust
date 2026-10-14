@@ -4,7 +4,8 @@ Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
 (`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
 engine and config, the Formula Editor panel and its library, the script
 functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
-progress** (order of work below).
+progress** (order of work below): Fractint's conventions and the
+derivative done 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -289,7 +290,7 @@ Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
 as the Julia toggle; (2) the derivative; (3) interior detection and the
 embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
 colouring cap measured against real UF colourings; (7) test files for
-both dialects.
+both dialects. Done: (1) and (2), 2026-10-14.
 
 **Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
 `&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
@@ -305,6 +306,28 @@ per-pixel copy (Fractint's write outlived the pixel, a quirk not kept).
 the claim that magnification 1 shows a height of 4 comes from another
 program's documentation. Not applied until checked.
 
+**The derivative (done).** `lang/derive.rs` differentiates a checked
+program with respect to `#pixel`, forward mode, into another ordinary
+program: each complex variable the iterate depends on (a fixpoint over
+the assignments; tests only choose a branch) gets a `d_` companion
+assigned just before it from the values before it, and `dz_var` names
+the iterate's. Differentiating by the pixel covers both planes at once
+(`z = 0, c = #pixel` gives `2 z dz + 1`; `z = #pixel` starts `dz` at 1).
+The interpreter and the WGSL back end run the result unchanged; the
+registry compiles it as `wgsl_derivative` (with `formula_dz(s)`), and
+the direct template uses it in place of the plain program when a
+colouring reads the derivative, stepping `dz = formula_dz(fs)`.
+Decisions: a fold in the iterate's dependencies (`abs`, `conj`, `real`,
+`imag`, `flip`, `|x|`, a real variable that follows the pixel) means no
+derivative, reported as for a built-in; a user function's derivative is
+chosen at run time with it (`uf_user_d`, `Builtin::deriv_c`), and is
+zero for a choice that has none. A complex product with a real factor
+now scales the other operand in both back ends (`IExpr::is_lifted_real`),
+as the built-ins write `2.0 * z`: it differs from the full product only
+where an operand is infinite (`0 * inf`), and it made Magnet I exact.
+Measured: distance estimation on the language's Mandelbrot is identical
+to the built-in's on both planes, UF and Fractint.
+
 - Fractint semantics: every variable complex, bool as `(1, 0)` / `0`,
   truthiness by real part, writable parameters (copied to locals),
   `LastSqr` (set by `sqr` and `|x|`), `whitesq`, `scrnpix`, `scrnmax`,
@@ -314,8 +337,8 @@ program's documentation. Not applied until checked.
   `global:` (evaluated on the CPU into `fdata`), `default:` view
   settings as a preset (`center`, `magn`, `angle`, `maxiter`; **to
   verify:** what span UF's `magn = 1` shows).
-- A symbolic derivative: distance estimation, normal maps, analytic
-  relief for holomorphic programs.
+- ~~A symbolic derivative: distance estimation, normal maps, analytic
+  relief for holomorphic programs.~~ Done (above).
 - Interior detection and the embossed relief for programs.
 - Measure the colouring cap against real UF colourings; widen past 4
   floats (a second `vec4` in `IterState` and `IterResult`) if many need
