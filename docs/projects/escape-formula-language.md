@@ -6,7 +6,7 @@ engine and config, the Formula Editor panel and its library, the script
 functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
 progress** (order of work below): Fractint's conventions, the
 derivative, interior detection and the embossed relief for programs,
-and `global:` done 2026-10-14.
+`global:` and `switch:` done 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -291,7 +291,7 @@ Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
 as the Julia toggle; (2) the derivative; (3) interior detection and the
 embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
 colouring cap measured against real UF colourings; (7) test files for
-both dialects. Done: (1) to (4), 2026-10-14.
+both dialects. Done: (1) to (5), 2026-10-14.
 
 **Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
 `&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
@@ -334,9 +334,29 @@ to the built-in's on both planes, UF and Fractint.
   `LastSqr` (set by `sqr` and `|x|`), `whitesq`, `scrnpix`, `scrnmax`,
   `ismand` (the Julia toggle), `center`, `magxmag`, `rotskew`, Fractint's
   precedence.
-- `switch:` (a Mandelbrot / Julia pair becomes our Julia toggle),
-  `default:` view settings as a preset (`center`, `magn`, `angle`,
+- `default:` view settings as a preset (`center`, `magn`, `angle`,
   `maxiter`; **to verify:** what span UF's `magn = 1` shows).
+- ~~`switch:` (a Mandelbrot / Julia pair becomes our Julia toggle).~~
+  Done. UF's help ("Switch feature"): the last section; `type` names a
+  formula in the same file; `destination = source` copies a parameter,
+  `#pixel` the clicked point, to a complex parameter only; a copy
+  between different types is ignored; what is not copied takes its
+  default. Its `seed` / `bailout` "lookup" is the example's own copies,
+  not an implicit rule. Here (`lang/switch.rs`): a switch that passes
+  `#pixel` makes the pair ONE program, each section
+  `if (ismand) formula else target`, so the toggle is Fractint's,
+  already driven; the target's variables follow the formula's, a copied
+  parameter reads the formula's (or the new `Predef::JuliaC`), an
+  uncopied one is the target's own, renamed `<target>_<name>` when the
+  name is taken. A switch without `#pixel` (a Julia's back to its
+  Mandelbrot), a missing target or one that does not compile leaves the
+  formula alone, with a warning. The editor and the examples carry the
+  target's text in the config (`custom::carried_source`), so the hash
+  covers both and Live re-applies an edit to either. Measured: UF's own
+  example pair renders the built-in Julia set exactly with the toggle
+  on; off, 0.031% of pixels differ from the built-in Mandelbrot (the
+  f64 interpreter runs the pair identically to each entry alone, so
+  the ulps are the driver's code for the loop inside the branch).
 - ~~`global:` (evaluated on the CPU into `fdata`).~~ Done. UF's help
   ("Global sections"): run once per image; its variables are "treated
   as read-only in other sections". Here: the checker marks what

@@ -79,6 +79,8 @@ pub struct Env {
     pub random: C64,
     /// The Julia toggle (Fractint's `ismand` is its opposite).
     pub julia: bool,
+    /// The Julia constant, which a `switch:` target reads.
+    pub julia_c: C64,
     /// The view's rotation, radians.
     pub rotation: f64,
 }
@@ -86,7 +88,7 @@ pub struct Env {
 impl Env {
     /// A pixel with nothing else set: tests that only need `#pixel`.
     pub fn at(pixel: C64, maxiter: u32) -> Self {
-        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, rotation: 0.0 }
+        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, julia_c: C64::ZERO, rotation: 0.0 }
     }
 }
 
@@ -361,6 +363,7 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::IsMand => Value::Complex(C64::real(if env.julia { 0.0 } else { 1.0 })),
         Predef::MagXMag => Value::Complex(C64::new(env.magn, 1.0)),
         Predef::RotSkew => Value::Complex(C64::real(env.rotation.to_degrees())),
+        Predef::JuliaC => Value::Complex(env.julia_c),
     }
 }
 

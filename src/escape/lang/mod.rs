@@ -17,6 +17,7 @@ pub mod interp;
 pub mod ir;
 pub mod lexer;
 pub mod parser;
+pub mod switch;
 pub mod wgsl;
 
 /// Which language a file is written in. Ultra Fractal's is the native

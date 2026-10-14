@@ -3,7 +3,8 @@
 ; A float parameter named `bailout` is the panel's Bailout control.
 
 Mandelbrot {
-; z <- z^2 + c, with c the pixel.
+; z <- z^2 + c, with c the pixel. Its switch: section names the Julia
+; below, so the Julia toggle runs that, its seed the Julia constant.
 init:
   z = @start
 loop:
@@ -22,6 +23,10 @@ default:
     caption = "Bailout"
     default = 10000
   endparam
+switch:
+  type = "Julia"
+  seed = #pixel
+  bailout = bailout
 }
 
 Julia {

@@ -100,12 +100,36 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
     };
     // Errors elsewhere in the file are not this entry's.
     diags.retain(|d| d.span.start >= entry.span.start && d.span.end <= entry.span.end);
-    let (program, d) = lang::check::check(entry, kind, dialect(src.dialect));
+    // A formula's `switch:` target, when the source carries it, makes
+    // the pair one program with the Julia toggle (lang::switch).
+    let (program, d) = match kind {
+        EntryKind::Formula => lang::switch::check_formula(&file, entry, dialect(src.dialect)),
+        EntryKind::Coloring => lang::check::check(entry, kind, dialect(src.dialect)),
+    };
     diags.extend(d);
     match program {
         Some(p) if !lang::has_errors(&diags) => Ok(p),
         _ => Err(diags),
     }
+}
+
+/// The source a config carries for entry `e` of a file (`text`, parsed
+/// as `file`): the entry's own text, and the formula its `switch:` names
+/// when that is another entry of the file, which the Julia toggle runs
+/// (lang::switch).
+pub fn carried_source(text: &str, file: &lang::ast::File, e: &lang::ast::Entry) -> String {
+    let own = |e: &lang::ast::Entry| text.get(e.span.start..e.span.end.min(text.len())).unwrap_or_default().to_string();
+    let mut source = own(e);
+    let target = e.switch.get("type").and_then(|t| match &t.value {
+        lang::ast::SettingValue::Strings(v) => v.first().cloned(),
+        _ => None,
+    });
+    if let Some(t) = target.and_then(|n| file.entries.iter().find(|x| x.name.eq_ignore_ascii_case(&n))) {
+        if t.span != e.span {
+            source = format!("{source}\n\n{}", own(t));
+        }
+    }
+    source
 }
 
 fn leak(s: String) -> &'static str {
@@ -380,7 +404,7 @@ mod tests {
                 let src = CustomSource {
                     dialect: if is_fractint(file) { CustomDialect::Fractint } else { CustomDialect::UltraFractal },
                     entry: e.name.clone(),
-                    source: text[e.span.start..e.span.end].to_string(),
+                    source: carried_source(text, &parsed, e),
                 };
                 let kind = if is_coloring_file(file) { EntryKind::Coloring } else { EntryKind::Formula };
                 let name = name_of(kind, &src);
@@ -393,6 +417,13 @@ mod tests {
                 }
             }
         }
+        // The Mandelbrot example switches to its Julia: the toggle.
+        let (_, text) = EXAMPLES.iter().find(|(f, _)| f.ends_with(".ufm")).expect("a formula file");
+        let (parsed, _) = lang::parser::parse_file(text);
+        let m = parsed.entries.iter().find(|e| e.name == "Mandelbrot").expect("the Mandelbrot example");
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: m.name.clone(), source: carried_source(text, &parsed, m) };
+        let def = compile_formula(&src, &name_of(EntryKind::Formula, &src)).expect("compiles");
+        assert!(super::super::formula_julia_is_meaningful(def), "the switch is the Julia toggle");
     }
 
     #[test]

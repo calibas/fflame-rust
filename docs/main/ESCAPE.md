@@ -298,7 +298,8 @@ compiles them to WGSL. The plan, its phases and what is left are in
 into entries and sections), `check.rs` (names and types, UF's rules,
 into the typed `ir.rs`), `interp.rs` (the program in f64: the reference
 the WGSL is tested against), `wgsl.rs` (the shader), `derive.rs` (a
-formula's derivative), `builtins.rs` (the function table).
+formula's derivative), `switch.rs` (a `switch:` pair as one program),
+`builtins.rs` (the function table).
 `src/escape/custom.rs` registers a compiled entry.
 
 **An entry** is `Name(setting) { ... }` in a `.ufm` (formulas), `.ucl`
@@ -315,7 +316,15 @@ the interpreter, whenever a parameter or the view it can read changes.
 What it sets is read-only elsewhere (UF's rule), and it cannot read
 what belongs to a pixel (`#pixel`, `#z`, `#x`, `#random` ...). Without
 arrays it holds single values: a formula's go into the uniform's `fdata`
-(256 floats), a colouring's share its 16-float parameter block.
+(256 floats), a colouring's share its 16-float parameter block. A
+formula may end with `switch:`, UF's switch to another formula of the
+same file: `type = "Julia"`, then `destination = source` copies, the
+source one of its own parameters or `#pixel` (`seed = #pixel`,
+`bailout = bailout`). Here a switch that passes `#pixel` is the Julia
+toggle: off, the formula runs; on, its target does, with `#pixel`'s copy
+read from the Julia constant and the rest of the target's parameters its
+own (`lang/switch.rs` splices the pair into one program). The config
+carries both entries' text.
 
 **The language.** Types `bool`, `int`, `float`, `complex`; an
 undeclared variable is complex. Conversion only widens; `/` never makes
@@ -348,7 +357,7 @@ read; a formula that reads `ismand` gets the Julia toggle, which sets it
 picture reproduces; `srand` is not supported.
 
 **Not yet:** UF's classes and plug-ins, arrays, colour values and direct
-colouring, `switch:` sections, and deep zoom for custom formulas.
+colouring, and deep zoom for custom formulas.
 
 **How it joins the engine.** A compiled entry is registered as a
 `FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
@@ -361,7 +370,8 @@ name, so a saved file, a PNG or an upload renders anywhere.
   template drives: its own seed, loop and bailout. It renders on the
   direct path only, so deep views stop at the f32 limit (about zoom 14),
   as for a built-in with no perturbation tier. It has no Julia toggle
-  (its `#pixel` is written in) unless it reads Fractint's `ismand`.
+  (its `#pixel` is written in) unless it reads Fractint's `ismand` or
+  its `switch:` passes `#pixel`.
   Interior detection compares its whole state (`formula_same`: `z` can
   repeat while the rest has moved on), and the embossed relief runs its
   pair through the program's own functions. A float or complex

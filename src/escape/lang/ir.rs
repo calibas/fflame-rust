@@ -105,6 +105,9 @@ pub enum Predef {
     MagXMag,
     /// Fractint's: (rotation in degrees, skew 0).
     RotSkew,
+    /// The Julia constant: what a `switch:` target's `#pixel` copy
+    /// reads ([`super::switch`]); no name in either language.
+    JuliaC,
 }
 
 impl Predef {
@@ -114,7 +117,9 @@ impl Predef {
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index => Ty::Float,
             Predef::Solid => Ty::Bool,
-            Predef::WhiteSq | Predef::ScrnMax | Predef::IsMand | Predef::MagXMag | Predef::RotSkew => Ty::Complex,
+            Predef::WhiteSq | Predef::ScrnMax | Predef::IsMand | Predef::MagXMag | Predef::RotSkew | Predef::JuliaC => {
+                Ty::Complex
+            }
         }
     }
 }

@@ -158,7 +158,10 @@ impl FormulaEditorPanel {
                     .map(render)
                     .collect();
                 let check = |kind| {
-                    let (p, d) = lang::check::check(e, kind, dialect);
+                    let (p, d) = match kind {
+                        EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
+                        EntryKind::Coloring => lang::check::check(e, kind, dialect),
+                    };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
                     // A colouring that sets neither #index nor #solid
@@ -175,7 +178,8 @@ impl FormulaEditorPanel {
                 };
                 EntryRow {
                     name: e.name.clone(),
-                    source: text[e.span.start..e.span.end.min(text.len())].to_string(),
+                    // With its `switch:` target, which the Julia toggle runs.
+                    source: custom::carried_source(&text, &file, e),
                     likely,
                     as_formula: check(EntryKind::Formula),
                     as_coloring: check(EntryKind::Coloring),

@@ -490,6 +490,7 @@ impl<'p> Gen<'p> {
             (Predef::ScrnMax, _) => "vec2<f32>(f32(esc_env_size.x), f32(esc_env_size.y))".into(),
             (Predef::IsMand, _) => "vec2<f32>(select(1.0, 0.0, (params.flags & 1u) != 0u), 0.0)".into(),
             (Predef::MagXMag, _) => "vec2<f32>(esc_env_magn, 1.0)".into(),
+            (Predef::JuliaC, _) => "params.julia_c".into(),
             (Predef::RotSkew, _) => {
                 format!("vec2<f32>(degrees({}(params.rot_cs.y, params.rot_cs.x)), 0.0)", self.use_(Helper::Atan2))
             }
@@ -1208,6 +1209,7 @@ struct HarnessParams {
     max_iter: u32,
     flags: u32,
     rot_cs: vec2<f32>,
+    julia_c: vec2<f32>,
 }
 @group(0) @binding(0) var<uniform> params: HarnessParams;
 fn fparam(i: u32) -> f32 {
