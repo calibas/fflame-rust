@@ -5007,12 +5007,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// path's f32 mush at the threshold, which is how Phoenix came to
     /// render one flat colour past zoom 48.
     pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
-        // A custom formula with UF's perturbation equations, on the
-        // scaled rung only until its floatexp rung lands (plan, phase 3):
-        // deeper, it renders on the direct path as a formula with no
-        // tier does.
+        // A custom formula with UF's perturbation equations, on both
+        // rungs (escape::lang, plan phase 3).
         if escape.formula.starts_with(super::custom::PREFIX) {
-            return super::custom::perturb_tier(escape, PERTURB_FLOATEXP_ZOOM);
+            return super::custom::perturb_tier(escape);
         }
         match escape.formula.as_str() {
             "mandelbrot" => Some(assembler::PerturbTier::Power(2)),

@@ -3193,8 +3193,9 @@ pub enum PerturbTier {
     /// (`MAP_CUSTOM`). `hash` is the formula's name's (`custom-<hash>`),
     /// so the pipeline key follows the source; `rebase` is whether the
     /// loop carries nothing but z (`lang::perturb`), else the pixel
-    /// rebases only at the orbit's end. Scaled rung only for now (plan,
-    /// phase 3): the renderer refuses it deeper.
+    /// rebases only at the orbit's end. Both rungs: the equations hold
+    /// the deviation in units of S on the scaled one and as `CFe2` on
+    /// the floatexp one (`lang::wgsl`).
     Custom { hash: u64, rebase: bool },
 }
 
@@ -3775,7 +3776,9 @@ fn w_init(tier: PerturbTier, floatexp: bool) -> String {
         (PerturbTier::Custom { .. }, false) => format!(
             "    var w = formula_perturb_init_scaled(ref_z(0u), {CUSTOM_PIXEL}, d0, perturb.s);"
         ),
-        (PerturbTier::Custom { .. }, true) => "    w = cfe2_zero();".to_string(),
+        (PerturbTier::Custom { .. }, true) => {
+            "    w = formula_perturb_init_fe(ref_orbit[0], ref_orbit_lo[0], ref_orbit_e[0], params.center, d0);".to_string()
+        }
         // Kaliset seeds z_0 = c on the parameter plane (and the pixel
         // on the Julia plane): its delta starts at d0 either way.
         (PerturbTier::Manowar, false) | (PerturbTier::Kaliset, false) => {
@@ -3809,11 +3812,13 @@ fn delta_step_custom() -> String {
 }
 
 /// A custom formula's own test on the pixel's full z, in place of the
-/// squared-norm margin: true iterates again.
-fn escape_test_custom() -> String {
+/// squared-norm margin: true iterates again. On the deep rung the pixel
+/// is the view's centre, which it is to f32 there.
+fn escape_test_custom(floatexp: bool) -> String {
+    let pixel = if floatexp { "params.center" } else { CUSTOM_PIXEL };
     format!(
         "        // A custom formula's own test (escape::lang).\n\
-         \x20       if (!formula_perturb_bailout(z_full, {CUSTOM_PIXEL})) {{\n\
+         \x20       if (!formula_perturb_bailout(z_full, {pixel})) {{\n\
          \x20           escaped = true;\n\
          \x20           n = i;\n\
          \x20           break;\n\
@@ -5370,9 +5375,8 @@ pub fn assemble_perturbed_full(
                 PerturbTier::Nova(p) => delta_step_rootfinder_fe(p.clamp(2, 12), 0, 0, true),
                 PerturbTier::Kaliset => delta_step_kaliset_fe(),
                 PerturbTier::Ducks(v) => delta_step_ducks_fe(v),
-                // Scaled rung only (plan, phase 3): the renderer refuses
-                // the custom tier past it, so this holds the delta.
-                PerturbTier::Custom { .. } => "        var w_new = w;".to_string(),
+                // A custom formula's equations over CFe2 (escape::lang).
+                PerturbTier::Custom { .. } => "        var w_new = formula_perturb_loop_fe(z_ref_m, z_ref_lo_m, z_ref_e, w, params.center, d0);".to_string(),
             }),
             "//__ESCAPE_MARGIN__" => {
                 // The delta-aware escape test. A NON-ESCAPING tier
@@ -5381,9 +5385,7 @@ pub fn assemble_perturbed_full(
                 // max_iter for its orbit accumulators. A custom formula
                 // tests with its own test.
                 if matches!(tier, PerturbTier::Custom { .. }) {
-                    if !floatexp {
-                        out.push(escape_test_custom());
-                    }
+                    out.push(escape_test_custom(floatexp));
                 } else if !tier.is_non_escaping() {
                     out.push(if floatexp { escape_margin_fe() } else { escape_margin_scaled() });
                 }
@@ -5417,6 +5419,11 @@ pub fn assemble_perturbed_full(
                     out.push(format!("// formula: {}", f.name));
                     out.push(CUSTOM_FORMULA_READERS_WGSL.trim().to_string());
                     out.push(f.wgsl.to_string());
+                    // The deep rung's own form of its equations.
+                    if floatexp {
+                        out.push(crate::escape::lang::wgsl::PERTURB_FE_HELPERS.trim().to_string());
+                        out.push(crate::escape::custom::perturb_fe_wgsl(f.name).unwrap_or_default().to_string());
+                    }
                 }
                 out.push(format!(
                     "const COLORING_COLORS_INTERIOR: bool = {colors_interior};"
@@ -9342,10 +9349,13 @@ mod tests {
                     let what = format!("{} {} fe={floatexp}", &source[..2], coloring.name);
                     let wgsl = assemble_perturbed(coloring, floatexp, tier);
                     let module = validate(&wgsl, &what);
-                    if !floatexp {
+                    assert!(wgsl.contains("!formula_perturb_bailout(z_full,"), "{what}: the test");
+                    if floatexp {
+                        assert!(wgsl.contains("formula_perturb_loop_fe(z_ref_m, z_ref_lo_m, z_ref_e, w,"), "{what}: the step");
+                        assert!(wgsl.contains("formula_perturb_init_fe(ref_orbit[0]"), "{what}: the start");
+                    } else {
                         assert!(wgsl.contains("formula_perturb_loop_scaled(z_ref, w,"), "{what}: the step");
                         assert!(wgsl.contains("formula_perturb_init_scaled(ref_z(0u)"), "{what}: the start");
-                        assert!(wgsl.contains("!formula_perturb_bailout(z_full,"), "{what}: the test");
                         assert_eq!(wgsl.contains("dot(rebase_delta, rebase_delta)"), rebase, "{what}: the rebase");
                     }
                     let mut layouter = naga::proc::Layouter::default();

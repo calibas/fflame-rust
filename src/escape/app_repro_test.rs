@@ -2281,11 +2281,22 @@ final:
             std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap())
         };
         let (w, h) = (64u32, 48u32);
-        for (iters, need) in [(300u32, 0.99), (2000, 0.0)] {
+        // Zoom 20 on the scaled rung; past 48 the floatexp rung, at the
+        // visual suite's deep edge views (`fe-threshold-floatexp`,
+        // `fe-zoom-60-edge`).
+        let shallow = ("-0.743643887037158704752191506114774", "0.131825904205311970493132056385139");
+        let threshold = ("-0.74364388703715870475481082977993857803", "0.13182590420531251981651559677435626549");
+        let edge = ("-0.74364388703715870475481082977993857803", "0.13182590420531291981651559677435626549");
+        for (centre, zoom, iters, need, stride) in [
+            (shallow, 20.0f64, 300u32, 0.99, 7usize),
+            (shallow, 20.0, 2000, 0.0, 7),
+            (threshold, 48.5, 8000, 0.9, 13),
+            (edge, 60.0, 30000, 0.9, 29),
+        ] {
             let mut esc = crate::config::escape::EscapeConfig::default();
-            esc.center_re = "-0.743643887037158704752191506114774".into();
-            esc.center_im = "0.131825904205311970493132056385139".into();
-            esc.zoom_log2 = 20.0;
+            esc.center_re = centre.0.into();
+            esc.center_im = centre.1.into();
+            esc.zoom_log2 = zoom;
             esc.max_iter = iters;
             esc.bailout = 4.0;
             let custom = with_custom(esc.clone(), Some((PM, "PM")), None);
@@ -2294,8 +2305,9 @@ final:
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, .. })), "{tier:?}");
             let built_in = records_on(&esc, w, h, false, true, false);
             let got = records_on(&custom, w, h, false, true, false);
-            // The truth: each sampled pixel's orbit in 256-bit floats.
-            let n = 4;
+            // The truth: each sampled pixel's orbit in big floats, wide
+            // enough for the view.
+            let n = if zoom > 50.0 { 6 } else { 4 };
             let centre = BigComplex::from_fixed(&FixedComplex {
                 re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(),
                 im: FixedPoint::from_decimal(&esc.center_im, n).unwrap(),
@@ -2303,7 +2315,8 @@ final:
             let span_y = 4.0 / esc.zoom_log2.exp2();
             let span_x = span_y * w as f64 / h as f64;
             let (mut exact_built_in, mut exact_custom, mut total) = (0usize, 0usize, 0usize);
-            for idx in (0..(w * h) as usize).step_by(7) {
+            let mut counts = std::collections::BTreeSet::new();
+            for idx in (0..(w * h) as usize).step_by(stride) {
                 let (px, py) = (idx as u32 % w, idx as u32 / w);
                 let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
                 let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
@@ -2318,10 +2331,15 @@ final:
                     }
                 }
                 total += 1;
+                counts.insert(count);
                 exact_built_in += usize::from(built_in[idx].n == count);
                 exact_custom += usize::from(got[idx].n == count);
             }
-            println!("{iters} iterations: of {total} pixels, the built-in tier counts {exact_built_in} exactly, the custom {exact_custom}");
+            println!(
+                "zoom {zoom}, {iters} iterations: of {total} pixels ({} distinct counts), the built-in tier counts {exact_built_in} exactly, the custom {exact_custom}",
+                counts.len()
+            );
+            assert!(counts.len() > 20, "zoom {zoom}: a view of {} counts tests little", counts.len());
             assert!(exact_custom as f64 >= need * total as f64, "{iters}: {exact_custom} of {total} exact");
             assert!(exact_custom + total * 3 / 100 >= exact_built_in, "{iters}: {exact_custom} against the built-in's {exact_built_in}");
         }

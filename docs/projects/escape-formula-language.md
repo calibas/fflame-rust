@@ -9,7 +9,7 @@ detection and the embossed relief for programs, `global:`, `switch:`,
 the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
 measurement under phase 2). **Phase 3 in progress** (deep zoom for
-custom formulas; its plan and order of work below): steps 1 and 2 done
+custom formulas; its plan and order of work below): steps 1 to 3 done
 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
@@ -516,10 +516,25 @@ Order of work (2026-10-14):
    blocking cache path loaded stored orbits with the family clamped to
    5, so Magnet I, Kaliset (-c) or Ducks v0 could be served a stored
    Feather(2) orbit at the same centre.
-3. **The floatexp rung**: `perturbloop:` compiled to floatexp, its
-   values classed Small (`#dz`, `#dpixel` and what they make: floatexp)
-   or Full (`#z`, parameters, constants: f32); Small times anything is
-   Small, Full plus Small is Full, a function of a Small refused.
+3. **The floatexp rung** (done). Planned with Small/Full classes as on
+   the scaled rung; built simpler and more precise: every value of the
+   equations is a `CFe2` (the deep template's double-float mantissa
+   with an exponent), Full and Small alike, so `#z` keeps the
+   reference's double-float entry and a coefficient like `2 #z` the
+   precision the built-in deep steps give it (a bare f32 `Z^(p-k)` is
+   what split a depth-426 power-4 view along a rebase seam once).
+   `formula_perturb_init_fe` / `formula_perturb_loop_fe`
+   (`lang::wgsl::formula_perturb_fe`, `ufe_` helpers) and
+   `PERTURB_FE_HELPERS` (neg, sub, conj, flip, parts, `abs2`, `powi`,
+   and a reciprocal refined by one double-float Newton step) are
+   spliced into the deep template only; what has no floatexp form runs
+   on true values in f32. Measured against the truth (big floats,
+   `a_custom_formula_perturbs_by_its_own_equations`): the visual
+   suite's deep edge views, zoom 48.5 with 8000 iterations, 223 of 237
+   pixels exact (195 distinct counts) against the built-in tier's 194,
+   and zoom 60 with 30000, 104 of 106 (48 distinct) against 97 -- the
+   built-in skips by BLA there, an approximation; the custom tier
+   iterates every step, exact and slower.
 4. The delta derived from the IR, so a formula needs no
    `perturbloop:`: the same Small/Full algebra over the loop's own
    expression, with the rules our hand-written tiers use (binomial
