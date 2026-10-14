@@ -1945,6 +1945,8 @@ impl ConfigManager {
 
             // Escape-time
             ConfigPath::EscapeFormula => Ok(ConfigValue::String(config.escape.formula.clone())),
+            ConfigPath::EscapeCustomFormula => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_formula))),
+            ConfigPath::EscapeCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_coloring))),
             ConfigPath::EscapeJulia => Ok(config.escape.julia.into()),
             ConfigPath::EscapeJuliaRe => Ok(config.escape.julia_re.into()),
             ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
@@ -3146,6 +3148,14 @@ impl ConfigManager {
             // Escape-time
             ConfigPath::EscapeFormula => {
                 self.current.escape.formula = value.try_into()?;
+            }
+            ConfigPath::EscapeCustomFormula => {
+                let s: String = value.try_into()?;
+                self.current.escape.custom_formula = custom_source_from_json(&s)?;
+            }
+            ConfigPath::EscapeCustomColoring => {
+                let s: String = value.try_into()?;
+                self.current.escape.custom_coloring = custom_source_from_json(&s)?;
             }
             ConfigPath::EscapeJulia => {
                 self.current.escape.julia = value.try_into()?;
@@ -5415,6 +5425,20 @@ impl TryFrom<ConfigValue> for ToneCurve {
             _ => Err(ConfigError::TypeMismatch),
         }
     }
+}
+
+/// A custom source as a config path's value: its JSON, or empty for
+/// none (`ConfigPath::EscapeCustomFormula` / `EscapeCustomColoring`).
+pub fn custom_source_json(src: &Option<crate::config::escape::CustomSource>) -> String {
+    src.as_ref().and_then(|s| serde_json::to_string(s).ok()).unwrap_or_default()
+}
+
+/// The inverse of [`custom_source_json`].
+pub fn custom_source_from_json(s: &str) -> Result<Option<crate::config::escape::CustomSource>, ConfigError> {
+    if s.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(s).map(Some).map_err(|_| ConfigError::TypeMismatch)
 }
 
 #[cfg(test)]

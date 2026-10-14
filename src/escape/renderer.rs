@@ -3883,6 +3883,15 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         None
     }
 
+    /// A custom colouring that reads the pixel's position cannot be
+    /// recoloured under a lens: the recolour pass rebuilds the position
+    /// from the pixel without the lens's warp, which the iterate pass
+    /// applied, so the picture would change on a palette edit.
+    fn recolor_misses_the_lens(escape: &EscapeConfig) -> bool {
+        super::custom::coloring(&escape.coloring).is_some_and(|c| c.wgsl.contains("esc_env_pixel"))
+            && super::lens::is_active(escape, &crate::variations::global_registry())
+    }
+
     /// Whether this view renders through the perturbation path, at
     /// `render_lines` render pixels tall (display height times the
     /// supersample in use): a formula with a perturbation tier, plain
@@ -8022,6 +8031,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let coloring = super::get_coloring(&escape.coloring);
             super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
             super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+            // A program's `bailout` parameter IS the escape radius, UF's
+            // own convention, in the same squared units as its `|z|`: the
+            // panel's bailout drives it, and the smooth colourings read
+            // the radius the formula escapes at.
+            // Undeclared, `@bailout` is complex (UF's default type), and
+            // its real part is the radius.
+            if formula.has_feature(super::FormulaFeature::Program) {
+                if let Some(i) = formula.parameters.iter().position(|p| p.name == "bailout" || p.name == "bailout.re") {
+                    if let Some(slot) = fparams.as_flattened_mut().get_mut(i) {
+                        *slot = escape.bailout;
+                    }
+                }
+            }
             if let Some(layer) = super::layer_of(escape) {
                 super::pack_params(layer.parameters, &escape.layer.params, lparams.as_flattened_mut());
             }
@@ -8125,6 +8147,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         palette_view: &TextureView,
         palette_generation: u64,
     ) -> bool {
+        // A config carrying a formula or colouring as source: compile
+        // and register it under its name before anything resolves it.
+        super::custom::ensure(escape);
         self.palette_generation = palette_generation;
         // Whatever made this frame render changed the solid's picture:
         // its path-traced samples are of something else now.
@@ -8189,6 +8214,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 && self.results_key.as_deref() == Some(ik)
                 && !escape.shading.wants_offset_orbits()
                 && !escape.wants_creases()
+                && !Self::recolor_misses_the_lens(escape)
             {
                 let t0 = web_time::Instant::now();
                 let ckey = Self::contrast_key(escape, ik);

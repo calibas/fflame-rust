@@ -1,8 +1,9 @@
 # Escape-time formula language: Ultra Fractal and Fractint formulas and colourings
 
 Status: **planned 2026-10-13; phase 1 in progress** on `escape-expansion`:
-steps 1-3 (front end, interpreter, WGSL back end) done in
-`src/escape/lang/`; step 4 (engine integration) next.
+steps 1-5 done (the language in `src/escape/lang/`, the runtime registry
+in `src/escape/custom.rs`, the engine and config wired); step 6 (the
+editor, the library, scripts, docs) next.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -201,12 +202,17 @@ controls for it.
 the config's bailout bound to it, which is UF's own convention; others
 keep the panel's bailout for the colourings only.
 
-**A custom colouring.** `#z` is the iterate; `#pixel` the pixel's c on
-the parameter plane, the pixel itself on the Julia plane (the templates
-gain `esc_pixel`, also in recolour, which rebuilds it from the pixel
-position); `#numiter` and `#maxiter` from the summary and params.
-`#solid = true` returns a sentinel from `coloring_map` that the
-templates read as no coverage (the background), like an interior pixel.
+**A custom colouring.** `#z` is the iterate; `#pixel` the pixel's point
+in the plane, from private globals the templates set only when a program
+reads them (`lang::wgsl::ENV_DECLS`: also `#x`, `#y`, `#width`,
+`#height`, `#center`, `#magn`, `#random`), so every built-in shader is
+byte-identical. The recolour pass rebuilds the point from the pixel's
+position without the lens, so a lensed view whose custom colouring reads
+`#pixel` re-iterates instead of recolouring. `#numiter` and `#maxiter`
+come from the summary and params. `#solid` sets a private flag the
+templates read straight after their own `coloring_map` call (offset
+relief calls it again beside the pixel), and the pixel is left to the
+background, like an interior one.
 Tags: untagged colours inside and outside (`ColorsInterior`),
 `OUTSIDE` outside only, `INSIDE` inside only. A separate inside
 colouring is the survey's P8 (`escape-coloring-survey.md`), not this
@@ -265,6 +271,16 @@ compiler.
    the web); open and save. The script API sets a custom formula or
    colouring from source. ESCAPE.md gets a section; visual configs
    carry a custom formula and a custom colouring.
+
+**Measured (step 5, `custom_entries_render_as_their_built_ins`):** the
+language's Mandelbrot, Lambda and Magnet I render as the built-ins do,
+pixel for pixel, with a custom escape-count colouring too; Multibrot 3
+differs on 0.057% of pixels and Tricorn on 0.008% (the built-ins raise
+to a power in polar form, the language multiplies); Burning Ship on
+1.95% (the built-in doubles one product, `sqr` adds two, which the
+driver may fuse into an fma, and the ship's boundary is chaotic). A
+custom accumulating colouring at zoom 20, perturbed, matches its
+built-in exactly.
 
 ### Phase 2: Fractint, the rest of UF's formula language, the derivative
 

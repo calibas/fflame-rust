@@ -24,6 +24,9 @@ pub fn render_escape_content(
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
+    // A formula or colouring the config carries as source: compiled and
+    // registered before anything below resolves its name.
+    crate::escape::custom::ensure(&esc);
 
     // ---- A way in, not a toggle ----
     //
@@ -277,7 +280,13 @@ pub fn render_escape_content(
         (None, Some(f)) => (f.parameters, f.name),
         (None, None) => (formula.parameters, formula.name),
     };
+    let program = formula.has_feature(crate::escape::FormulaFeature::Program);
     for p in formula_params {
+        // A compiled formula's `bailout` parameter is the bailout control
+        // below (the renderer binds it), so it has no slider of its own.
+        if program && matches!(p.name, "bailout" | "bailout.re" | "bailout.im") {
+            continue;
+        }
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
         let slow = crate::escape::is_slow_param(owner, p.name);
         if param_control(ui, &mut v, p, "formula", slow) {

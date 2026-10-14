@@ -1786,6 +1786,176 @@ mod tests {
         }
     }
 
+    /// A config whose formula or colouring is the given entry, compiled
+    /// from source (`escape::custom`).
+    fn with_custom(
+        mut esc: crate::config::escape::EscapeConfig,
+        formula: Option<(&str, &str)>,
+        coloring: Option<(&str, &str)>,
+    ) -> crate::config::escape::EscapeConfig {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        if let Some((text, entry)) = formula {
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+            esc.formula = crate::escape::custom::name_of(EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+        }
+        if let Some((text, entry)) = coloring {
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+            esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+            esc.custom_coloring = Some(src);
+        }
+        esc
+    }
+
+    /// The share of pixels two renders disagree on, by colour or by
+    /// coverage.
+    fn differing(a: &[f32], b: &[f32]) -> f64 {
+        let px = a.len() / 4;
+        let bad = (0..px)
+            .filter(|&i| (0..4).any(|k| (a[i * 4 + k] - b[i * 4 + k]).abs() > 1e-4))
+            .count();
+        bad as f64 / px as f64
+    }
+
+    /// Built-ins rewritten in the formula language render as the
+    /// built-ins do (plan step 5). Exact where the arithmetic is the
+    /// same; Multibrot and Tricorn raise to a power by polar form where
+    /// the language multiplies, and Burning Ship doubles one product
+    /// (`2 ax ay`) where `sqr` adds two (`ax ay + ay ax`), which the
+    /// driver may fuse into an fma: equal in exact arithmetic, an ulp
+    /// apart in f32, which the ship's chaotic boundary amplifies in a
+    /// few percent of its pixels (measured 1.95%). And a custom
+    /// colouring renders as its built-in on the
+    /// PERTURBED path at depth, which is where custom colourings reach
+    /// in phase 1.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_entries_render_as_their_built_ins() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const EC: &str = "EC(OUTSIDE) {\nfinal:\n #index = #numiter * @scale\ndefault:\n float param scale\n  default = 0.05\n endparam\n}";
+        let base = || {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc
+        };
+        // (what, built-in formula, its params, centre, zoom, source, entry, allowed share)
+        let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64, &str, &str, f64)] = &[
+            ("mandelbrot", "mandelbrot", &[], ("-0.6", "0"), 0.4,
+             "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}", "M", 0.0),
+            ("burning ship", "burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5,
+             "B {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n}", "B", 0.03),
+            ("lambda", "lambda", &[], ("1", "0"), -0.5,
+             "L {\ninit:\n z = 0.5\nloop:\n z = #pixel * (z * (1 - z))\nbailout:\n |z| < @bailout\n}", "L", 0.0),
+            ("magnet I", "magnet", &[("variant", 0.0)], ("1", "0"), -0.8,
+             "Mg {\ninit:\n z = 0\nloop:\n zold = z\n z = sqr((z^2 + #pixel - 1) / (2*z + #pixel - 2))\n\
+              bailout:\n |z| < @bailout && |z - zold| >= 1e-12\n}", "Mg", 0.002),
+            ("multibrot 3", "multibrot", &[("power", 3.0)], ("0", "0"), 0.2,
+             "M3 {\ninit:\n z = 0\nloop:\n z = z^3 + #pixel\nbailout:\n |z| < @bailout\n}", "M3", 0.03),
+            ("tricorn", "tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2,
+             "T {\ninit:\n z = 0\nloop:\n z = sqr(conj(z)) + #pixel\nbailout:\n |z| < @bailout\n}", "T", 0.03),
+        ];
+        for &(what, formula, params, (cre, cim), zoom, src, entry, allowed) in cases {
+            let mut esc = base();
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            // The same view with the custom formula, and then also the
+            // custom colouring: two substitutions, one at a time.
+            let custom_f = with_custom(esc.clone(), Some((src, entry)), None);
+            let both = with_custom(custom_f.clone(), None, Some((EC, "EC")));
+            let a = output_on(&device, &queue, &renderer, &custom_f, w, h, false);
+            let b = output_on(&device, &queue, &renderer, &both, w, h, false);
+            assert!(crate::escape::get_formula(&custom_f.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "{what}: the view shows too little ({covered})");
+            let (da, db) = (differing(&built_in, &a), differing(&built_in, &b));
+            println!("{what}: custom formula differs on {:.3}% of pixels, with the custom colouring {:.3}%", da * 100.0, db * 100.0);
+            assert!(da <= allowed, "{what}: the custom formula differs on {:.3}%", da * 100.0);
+            assert!(db <= allowed, "{what}: the custom colouring differs on {:.3}%", db * 100.0);
+        }
+
+        // An accumulating colouring at depth, perturbed: the same z every
+        // iteration, the same arithmetic, the same picture.
+        const MA: &str = "MA {\ninit:\n float s = 0\n float n = 0\nloop:\n s = s + cabs(#z)\n n = n + 1\n\
+                          final:\n #index = (s / n - @offset) * @scale\ndefault:\n float param scale\n  default = 1\n endparam\n\
+                          float param offset\n  default = 0\n endparam\n}";
+        let mut deep = crate::config::escape::EscapeConfig::default();
+        deep.formula = "mandelbrot".into();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        deep.coloring = "magnitude_average".into();
+        deep.coloring_params.insert("scale".into(), 0.3);
+        deep.coloring_params.insert("offset".into(), 0.0);
+        deep.coloring_params.insert("deband".into(), 0.0);
+        let built_in = output_on(&device, &queue, &renderer, &deep, w, h, true);
+        let custom = with_custom(deep.clone(), None, Some((MA, "MA")));
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, true);
+        let d = differing(&built_in, &got);
+        println!("perturbed magnitude average: custom differs on {:.3}%", d * 100.0);
+        assert!(d == 0.0, "the custom colouring at depth differs on {:.3}% of pixels", d * 100.0);
+    }
+
+    /// `#solid` leaves a pixel to the background on every path, and the
+    /// environment (`#pixel`) reaches a colouring there too: a colouring
+    /// solid exactly on the interior covers what escape count covers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_colourings_solid_and_pixel_work_on_every_path() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (128u32, 96u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const S: &str = "S {
+final:
+ #index = cabs(#pixel) + #numiter * 0.01
+ if #numiter >= #maxiter
+  #solid = true
+ endif
+}";
+        for (zoom, perturbed) in [(0.5, false), (14.5, true)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = "-0.743643887037158704752191506114774".into();
+            esc.center_im = "0.131825904205311970493132056385139".into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 400;
+            esc.coloring = "escape_count".into();
+            let reference = output_on(&device, &queue, &renderer, &esc, w, h, perturbed);
+            let custom = with_custom(esc, None, Some((S, "S")));
+            let px = output_on(&device, &queue, &renderer, &custom, w, h, perturbed);
+            let covered = |v: &[f32]| v.chunks(4).map(|p| p[3] > 0.5).collect::<Vec<_>>();
+            let (want, got) = (covered(&reference), covered(&px));
+            let n_in = want.iter().filter(|c| !**c).count();
+            println!("zoom {zoom}: {n_in} interior pixels");
+            assert!(n_in > 0 && n_in < want.len(), "zoom {zoom}: the view is all one side");
+            let lost = want.iter().zip(&got).filter(|(w, g)| **w && !**g).count();
+            let gained = want.iter().zip(&got).filter(|(w, g)| !**w && **g).count();
+            println!("zoom {zoom}: covered by escape count but solid: {lost}; interior but covered: {gained}");
+            // A pixel that escapes ON the last iteration has #numiter ==
+            // #maxiter: UF's test calls it inside, the engine outside.
+            // Measured: one such pixel at 14.5, none at 0.5.
+            assert_eq!(gained, 0, "zoom {zoom}: an interior pixel was covered");
+            assert!(lost <= 2, "zoom {zoom}: {lost} escaping pixels went solid");
+        }
+    }
+
     /// The crease field (`ShadingField::Creases`) the iterate pass stores
     /// is `origami_creases_at`'s: the height in the relief channel and
     /// the slope -- a tenth of -grad h, rotation 0, no supersampling --
