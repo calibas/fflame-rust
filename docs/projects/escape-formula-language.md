@@ -3,11 +3,12 @@
 Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
 (`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
 engine and config, the Formula Editor panel and its library, the script
-functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
-progress** (order of work below): Fractint's conventions, the
-derivative, interior detection and the embossed relief for programs,
-`global:`, `switch:` and the measurement against UF's public library
-done 2026-10-14; the state cap's decision is the user's (numbers below).
+functions, the docs (ESCAPE.md, "The formula language"). **Phase 2
+done 2026-10-14**: Fractint's conventions, the derivative, interior
+detection and the embossed relief for programs, `global:`, `switch:`,
+the measurement against UF's public library, and the test files. The
+state cap's decision is the user's (numbers under phase 2). Phase 3
+(deep zoom for custom formulas) is next.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -293,7 +294,7 @@ Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
 as the Julia toggle; (2) the derivative; (3) interior detection and the
 embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
 colouring cap measured against real UF colourings; (7) test files for
-both dialects. Done: (1) to (6), 2026-10-14.
+both dialects. All done, 2026-10-14.
 
 **Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
 `&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
@@ -419,7 +420,18 @@ to the built-in's on both planes, UF and Fractint.
   invalid). What still stops entries: classes (`import`, 325), arrays
   (296), the state cap (335 colourings), parameters past 64 floats
   (about 200), colour functions (46).
-- Test files covering every construct, in both dialects.
+- ~~Test files covering every construct, in both dialects.~~ Done:
+  `tests/formulas/language.ufm`, `language.ucl` and `fractint.frm`,
+  written for this project (24 entries). `every_test_file_entry_compiles_to_valid_wgsl`
+  compiles each to WGSL that validates (a formula's derivative too);
+  `test_files_run_on_the_gpu_as_the_interpreter_does` (GPU) runs each
+  formula two iterations at five points and compares the iterate, its
+  derivative and the test with the f64 interpreter, and each colouring
+  beside a Mandelbrot at seven points, comparing `#index`, `#solid` and
+  the count (134 comparisons; a mutation of Fractint's `round` fails
+  it). The probe feeds the parameter blocks and globals through a
+  storage buffer in the uniform's layout. The interpreter now applies
+  an `INSIDE` colouring's region as its WGSL does.
 
 ### Phase 3: deep zoom for custom formulas
 

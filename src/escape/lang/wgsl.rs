@@ -1686,6 +1686,264 @@ pub(crate) mod tests {
         }
     }
 
+    /// The test files (`tests/formulas/`): name, text, kind, dialect.
+    const TEST_FILES: &[(&str, &str, EntryKind, Dialect)] = &[
+        ("language.ufm", include_str!("../../../tests/formulas/language.ufm"), EntryKind::Formula, Dialect::UltraFractal),
+        ("language.ucl", include_str!("../../../tests/formulas/language.ucl"), EntryKind::Coloring, Dialect::UltraFractal),
+        ("fractint.frm", include_str!("../../../tests/formulas/fractint.frm"), EntryKind::Formula, Dialect::Fractint),
+    ];
+
+    /// Every entry of the test files, checked as the registry checks it
+    /// (a formula with its `switch:` target): (file, entry, program).
+    fn test_file_entries() -> Vec<(&'static str, String, Program)> {
+        let mut out = Vec::new();
+        let mut failures = Vec::new();
+        for &(file, text, kind, dialect) in TEST_FILES {
+            let (parsed, d) = parse_file(text);
+            assert!(!super::super::has_errors(&d), "{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
+            for e in &parsed.entries {
+                let (p, d) = match kind {
+                    EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
+                    EntryKind::Coloring => check(e, kind, dialect),
+                };
+                let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
+                match p {
+                    Some(p) if errors.is_empty() => out.push((file, e.name.clone(), p)),
+                    _ => failures.push(format!("{file} / {}: {errors:?}", e.name)),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        out
+    }
+
+    /// Every entry of the test files compiles, to WGSL that validates:
+    /// a formula's derivative too where it has one.
+    #[test]
+    fn every_test_file_entry_compiles_to_valid_wgsl() {
+        let entries = test_file_entries();
+        assert!(entries.len() >= 24, "{} entries", entries.len());
+        for (file, name, p) in &entries {
+            let checked = match p.kind {
+                EntryKind::Formula => validate_formula(&formula(p)).and_then(|_| match formula_with_derivative(p) {
+                    Some(d) => validate_formula(&d),
+                    None => Ok(()),
+                }),
+                EntryKind::Coloring => validate_coloring(&coloring(p)),
+            };
+            if let Err(e) = checked {
+                panic!("{file} / {name}: {e}");
+            }
+        }
+        // What the files are for: the switch pair, the Julia toggle from
+        // `ismand`, globals, directives and a derivative all present.
+        let find = |n: &str| &entries.iter().find(|(_, m, _)| m == n).unwrap_or_else(|| panic!("{n}")).2;
+        assert!(find("SwitchM").reads(Predef::IsMand) && find("FrScreen").reads(Predef::IsMand));
+        assert!(!find("Globals").globals.is_empty() && !find("GlobalScale").globals.is_empty());
+        assert!(formula_with_derivative(find("Control")).is_some());
+        assert!(formula_with_derivative(find("Functions")).is_none(), "it reads abs and real");
+    }
+
+    /// A parameter block as the GPU holds it: the defaults, in slot
+    /// order, then the user functions' choices.
+    fn default_slots(p: &Program) -> Vec<f32> {
+        let mut out = Vec::new();
+        for param in &p.params {
+            out.push(param.default.0 as f32);
+            if param.ty() == Ty::Complex {
+                out.push(param.default.1 as f32);
+            }
+        }
+        out.extend(p.funcs.iter().map(|f| f.default as f32));
+        out
+    }
+
+    /// The probe for whole programs: a formula, with a colouring when
+    /// given, over `io` (two vec4 per point, the point in the first) and
+    /// `blocks` (fparams, cparams, then fdata, as the uniform holds them).
+    fn gpu_program_probe(body: &str, wgsl: &[&str], points: &[(f64, f64)], blocks: &[f32], max_iter: u32) -> Option<Vec<[f32; 8]>> {
+        use egui_wgpu::wgpu;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        let src = format!(
+            "@group(0) @binding(0) var<storage, read_write> io: array<vec4<f32>>;\n\
+             @group(0) @binding(1) var<storage, read> blocks: array<f32>;\n\
+             struct OrbitSummary {{\n    z: vec2<f32>,\n    n: u32,\n    escaped: bool,\n    converged: bool,\n    period: u32,\n    dz: vec2<f32>,\n}}\n\
+             struct ProbeParams {{\n    max_iter: u32,\n    flags: u32,\n    rot_cs: vec2<f32>,\n    julia_c: vec2<f32>,\n}}\n\
+             var<private> params: ProbeParams;\n\
+             fn fparam(i: u32) -> f32 {{\n    return blocks[i];\n}}\n\
+             fn cparam(i: u32) -> f32 {{\n    return blocks[64u + i];\n}}\n\
+             fn fdata4(i: u32) -> vec4<f32> {{\n    let k = 128u + 4u * i;\n    return vec4<f32>(blocks[k], blocks[k + 1u], blocks[k + 2u], blocks[k + 3u]);\n}}\n\
+             {ENV_DECLS}{}\n\
+             @compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) g: vec3<u32>) {{\n\
+             \x20   if (2u * g.x >= arrayLength(&io)) {{\n        return;\n    }}\n\
+             \x20   let px = io[2u * g.x].xy;\n\
+             \x20   _ = blocks[0];\n\
+             \x20   params = ProbeParams({max_iter}u, 0u, vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 0.0));\n\
+             \x20   esc_env_px = vec2<i32>(0, 0);\n    esc_env_size = vec2<i32>(1, 1);\n    esc_env_pixel = px;\n\
+             \x20   esc_env_center = vec2<f32>(0.0, 0.0);\n    esc_env_magn = 1.0;\n    esc_env_solid = false;\n\
+             {body}\n}}\n",
+            wgsl.join("\n")
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("program probe"), source: wgpu::ShaderSource::Wgsl(src.into()) });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("program probe"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let host: Vec<[f32; 4]> = points.iter().flat_map(|&(x, y)| [[x as f32, y as f32, 0.0, 0.0], [0.0; 4]]).collect();
+        let bytes: &[u8] = bytemuck::cast_slice(&host);
+        let mut block = vec![0.0f32; 128 + 256];
+        block[..blocks.len()].copy_from_slice(blocks);
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+        let storage = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: bytes.len() as u64, usage, mapped_at_creation: false });
+        queue.write_buffer(&storage, 0, bytes);
+        let block_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (block.len() * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&block_buf, 0, bytemuck::cast_slice(&block));
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: storage.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: block_buf.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups((points.len() as u32).div_ceil(64), 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&storage, 0, &readback, 0, bytes.len() as u64);
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let view = slice.get_mapped_range();
+        let got: &[[f32; 8]] = bytemuck::cast_slice(&view);
+        Some(got.to_vec())
+    }
+
+    /// Close enough for f32 against f64 over a few iterations.
+    fn near(gpu: f32, cpu: f64, tol: f64) -> bool {
+        (gpu as f64 - cpu).abs() <= tol * cpu.abs().max(1.0)
+    }
+
+    /// Every test file entry runs on the GPU as the f64 interpreter runs
+    /// it: a formula's iterate, derivative and test after a few
+    /// iterations; a colouring's `#index`, `#solid` and count beside a
+    /// Mandelbrot, in UF's order (formula loop, colouring loop, test).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn test_files_run_on_the_gpu_as_the_interpreter_does() {
+        use super::super::builtins::C64;
+        use super::super::interp::{globals, run, Env, ParamValues};
+        let entries = test_file_entries();
+        let mut bad = Vec::new();
+        let (mut compared, mut skipped) = (0usize, 0usize);
+        // Formulas: two iterations at small points.
+        const STEPS: u32 = 2;
+        let points = [(0.3, -0.2), (-0.4, 0.1), (0.1, 0.45), (-0.25, -0.3), (0.05, 0.02)];
+        for (file, name, p) in entries.iter().filter(|(_, _, p)| p.kind == EntryKind::Formula) {
+            let params = ParamValues::defaults(p);
+            let mut blocks = default_slots(p);
+            blocks.resize(128, 0.0);
+            blocks.extend(globals(p, &params, &Env::at(C64::ZERO, STEPS)));
+            let derived = formula_with_derivative(p);
+            let wgsl = derived.clone().unwrap_or_else(|| formula(p));
+            let dz = if derived.is_some() { "formula_dz(s)" } else { "vec2<f32>(0.0, 0.0)" };
+            let body = format!(
+                "    var s = formula_init(px);\n    for (var i = 0u; i < {STEPS}u; i = i + 1u) {{\n        s = formula_loop(s, px);\n    }}\n\
+                 \x20   let go = formula_bailout(s, px);\n    io[2u * g.x] = vec4<f32>(s.z, select(0.0, 1.0, go), 0.0);\n\
+                 \x20   io[2u * g.x + 1u] = vec4<f32>({dz}, 0.0, 0.0);"
+            );
+            let Some(out) = gpu_program_probe(&body, &[&wgsl], &points, &blocks, STEPS) else {
+                eprintln!("no GPU");
+                return;
+            };
+            let program = super::super::derive::with_derivative(p).unwrap_or_else(|| p.clone());
+            for (&(x, y), got) in points.iter().zip(&out) {
+                let px = C64::new(x as f32 as f64, y as f32 as f64);
+                let want = run(&program, &ParamValues::defaults(&program), None, &Env::at(px, STEPS));
+                // A point that left before the last step is not compared.
+                if want.escaped && want.n < STEPS {
+                    skipped += 1;
+                    continue;
+                }
+                compared += 1;
+                let go = !want.escaped;
+                let ok = near(got[0], want.z.re, 1e-4)
+                    && near(got[1], want.z.im, 1e-4)
+                    && (got[2] == 1.0) == go
+                    && near(got[4], want.dz.re, 1e-3)
+                    && near(got[5], want.dz.im, 1e-3);
+                if !ok {
+                    bad.push(format!("{file} / {name} at ({x}, {y}): gpu z ({}, {}) go {} dz ({}, {}); f64 z {:?} go {go} dz {:?}", got[0], got[1], got[2], got[4], got[5], want.z, want.dz));
+                }
+            }
+        }
+        // Colourings: beside the Mandelbrot, inside and outside points.
+        let (mfile, _) = parse_file("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}");
+        let (m, _) = check(&mfile.entries[0], EntryKind::Formula, Dialect::UltraFractal);
+        let m = m.unwrap();
+        const MAX: u32 = 40;
+        let points = [(-0.2, 0.1), (0.1, 0.1), (-1.0, 0.05), (1.0, 1.0), (-2.1, 0.1), (-0.5, 1.2), (0.6, 0.6)];
+        for (file, name, c) in entries.iter().filter(|(_, _, p)| p.kind == EntryKind::Coloring) {
+            let cparams = ParamValues::defaults(c);
+            let mut blocks = vec![0.0f32; 64];
+            let mut cblock = default_slots(c);
+            cblock.extend(globals(c, &cparams, &Env::at(C64::ZERO, MAX)));
+            cblock.resize(64, 0.0);
+            blocks.extend(cblock);
+            let cw = coloring(c);
+            let body = "    var s = formula_init(px);\n    var z = s.z;\n    var st = ufc_init();\n    var n = 0u;\n    var escaped = false;\n\
+                        \x20   for (var i = 0u; i < params.max_iter; i = i + 1u) {\n        let zp = z;\n        s = formula_loop(s, px);\n        z = s.z;\n\
+                        \x20       st = coloring_accum(z, zp, px, st);\n        if (!formula_bailout(s, px)) {\n            escaped = true;\n            n = i + 1u;\n            break;\n        }\n    }\n\
+                        \x20   if (!escaped) {\n        n = params.max_iter;\n    }\n\
+                        \x20   let index = coloring_map(OrbitSummary(z, n, escaped, false, 0u, vec2<f32>(0.0, 0.0)), st);\n\
+                        \x20   io[2u * g.x] = vec4<f32>(index, select(0.0, 1.0, esc_env_solid), f32(n), select(0.0, 1.0, escaped));";
+            let Some(out) = gpu_program_probe(body, &[&formula(&m), &cw.wgsl], &points, &blocks, MAX) else {
+                eprintln!("no GPU");
+                return;
+            };
+            for (&(x, y), got) in points.iter().zip(&out) {
+                let px = C64::new(x as f32 as f64, y as f32 as f64);
+                let want = run(&m, &ParamValues::defaults(&m), Some((c, &cparams)), &Env::at(px, MAX));
+                let solid = got[1] == 1.0;
+                let ok = solid == want.solid
+                    && got[2] as u32 == want.n
+                    && (got[3] == 1.0) == want.escaped
+                    && (solid || near(got[0], want.index, 1e-3));
+                if !ok {
+                    bad.push(format!("{file} / {name} at ({x}, {y}): gpu index {} solid {solid} n {}; f64 index {} solid {} n {}", got[0], got[2], want.index, want.solid, want.n));
+                }
+                compared += 1;
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+        println!("compared {compared} (entry, point) pairs; skipped {skipped} that left early");
+        assert!(skipped * 10 < compared, "too few points compared: {compared}, {skipped} skipped");
+    }
+
     #[test]
     fn literals_are_valid_wgsl_floats() {
         assert_eq!(lit_f32(1.0), "1.0");

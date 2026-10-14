@@ -377,6 +377,12 @@ stops the rest: classes (`import`, 325 entries), arrays (296), the
 colouring state cap (335 colourings), parameters past 64 floats (about
 200), colour functions (46).
 
+**Test files.** `tests/formulas/` holds entries in both dialects that
+between them use every construct (`language.ufm`, `language.ucl`,
+`fractint.frm`); each compiles, and on the GPU runs as the f64
+interpreter does (`test_files_run_on_the_gpu_as_the_interpreter_does`).
+A construct added to the language gets an entry there.
+
 **How it joins the engine.** A compiled entry is registered as a
 `FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
 its source, which every name-keyed cache then keys on. The config
