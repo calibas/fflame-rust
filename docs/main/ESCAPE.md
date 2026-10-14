@@ -309,7 +309,13 @@ empty `:` starts the loop, and its last statement is the test. A
 colouring has `init:`, `loop:` (after the formula's loop, each
 iteration) and `final:`, which writes `#index` (the palette position) or
 sets `#solid`. `default:` holds `title`, the view (`center`, `magn`,
-`maxiter`, `angle`) and the parameter blocks.
+`maxiter`, `angle`) and the parameter blocks. Either kind may start with
+`global:`, which runs once per image, before any pixel: on the CPU, in
+the interpreter, whenever a parameter or the view it can read changes.
+What it sets is read-only elsewhere (UF's rule), and it cannot read
+what belongs to a pixel (`#pixel`, `#z`, `#x`, `#random` ...). Without
+arrays it holds single values: a formula's go into the uniform's `fdata`
+(256 floats), a colouring's share its 16-float parameter block.
 
 **The language.** Types `bool`, `int`, `float`, `complex`; an
 undeclared variable is complex. Conversion only widens; `/` never makes
@@ -342,8 +348,7 @@ read; a formula that reads `ismand` gets the Julia toggle, which sets it
 picture reproduces; `srand` is not supported.
 
 **Not yet:** UF's classes and plug-ins, arrays, colour values and direct
-colouring, `global:` and `switch:` sections, and deep zoom for custom
-formulas.
+colouring, `switch:` sections, and deep zoom for custom formulas.
 
 **How it joins the engine.** A compiled entry is registered as a
 `FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of

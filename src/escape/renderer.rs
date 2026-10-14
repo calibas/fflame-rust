@@ -8055,6 +8055,33 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     *slot = v;
                 }
             }
+            // A custom entry's `global:` values (escape::lang), computed
+            // on the CPU from the image and the parameters as packed: a
+            // formula's into `fdata`, a colouring's after its parameters.
+            let image = super::lang::interp::Env {
+                pixel: super::lang::builtins::C64::ZERO,
+                maxiter: escape.max_iter.max(1),
+                center: super::lang::builtins::C64::new(cx, cy),
+                // As the shader's `esc_env_magn`.
+                magn: 4.0 / span_y,
+                x: 0,
+                y: 0,
+                width: self.width as i32,
+                height: self.height as i32,
+                random: super::lang::builtins::C64::ZERO,
+                julia: escape.julia,
+                rotation: f64::from(escape.rotation),
+            };
+            if let Some((at, values)) = super::custom::globals(&formula.name, fparams.as_flattened(), &image) {
+                for (slot, v) in fdata.as_flattened_mut().iter_mut().skip(at).zip(values) {
+                    *slot = v;
+                }
+            }
+            if let Some((at, values)) = super::custom::globals(&coloring.name, cparams.as_flattened(), &image) {
+                for (slot, v) in cparams.as_flattened_mut().iter_mut().skip(at).zip(values) {
+                    *slot = v;
+                }
+            }
         }
 
         EscapeParamsGpu {

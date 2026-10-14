@@ -70,6 +70,9 @@ pub struct Var {
     /// one float (a colouring's state packing; every read is still
     /// complex, so the program means the same).
     pub stored_real: bool,
+    /// Set in `global:`: one value per image, read-only elsewhere (UF's
+    /// rule), computed on the CPU and read from the uniform.
+    pub global: bool,
 }
 
 /// The predefined symbols a program reads or writes.
@@ -265,6 +268,12 @@ pub struct Program {
     pub funcs: Vec<UserFunc>,
     pub init: Vec<IStmt>,
     pub loop_body: Vec<IStmt>,
+    /// `global:`, run once per image (on the CPU, by the interpreter).
+    pub global_body: Vec<IStmt>,
+    /// The global variables the other sections read, in the order they
+    /// are packed: a formula's into the uniform's `fdata`, a colouring's
+    /// into its parameter block after its parameters.
+    pub globals: Vec<VarId>,
     /// The formula's continue test (true: iterate again).
     pub bailout: Option<IExpr>,
     /// A colouring's `final:`.
@@ -288,6 +297,11 @@ impl Program {
             .sum()
     }
 
+    /// Floats the packed globals take: two for a complex, one otherwise.
+    pub fn global_floats(&self) -> usize {
+        self.globals.iter().map(|&v| self.vars[v].ty.floats()).sum()
+    }
+
     /// Whether any section reads `p`.
     pub fn reads(&self, p: Predef) -> bool {
         fn e(x: &IExpr, p: Predef) -> bool {
@@ -305,7 +319,11 @@ impl Program {
                 IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
             })
         }
-        s(&self.init, p) || s(&self.loop_body, p) || s(&self.final_body, p) || self.bailout.as_ref().is_some_and(|b| e(b, p))
+        s(&self.global_body, p)
+            || s(&self.init, p)
+            || s(&self.loop_body, p)
+            || s(&self.final_body, p)
+            || self.bailout.as_ref().is_some_and(|b| e(b, p))
     }
 
     /// Slots the parameters take in a 16-float block: one each, two for

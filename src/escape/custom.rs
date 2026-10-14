@@ -16,7 +16,7 @@
 //! on a pause in typing, not per keystroke.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::lang::{self, ir, Diag, Dialect, EntryKind};
 use super::{ColoringDef, ColoringFeature, EscapeMetric, EscapeParamDef, FormulaDef, FormulaFeature};
@@ -32,6 +32,9 @@ struct Registry {
     /// Names whose embedded source failed to compile: not retried every
     /// frame. A new source is a new name.
     failed: HashSet<String>,
+    /// The programs with `global:` values, which the renderer has the
+    /// interpreter compute ([`globals`]).
+    programs: HashMap<String, Arc<ir::Program>>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -237,6 +240,9 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
     }));
     if let Ok(mut r) = registry().write() {
         r.formulas.insert(name.to_string(), def);
+        if !p.globals.is_empty() {
+            r.programs.insert(name.to_string(), Arc::new(p));
+        }
     }
     Ok(def)
 }
@@ -272,8 +278,50 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     }));
     if let Ok(mut r) = registry().write() {
         r.colorings.insert(name.to_string(), def);
+        if !p.globals.is_empty() {
+            r.programs.insert(name.to_string(), Arc::new(p));
+        }
     }
     Ok(def)
+}
+
+/// A compiled entry's `global:` values for one render, from its
+/// parameter block as the GPU holds it (`block`) and the image: where
+/// they go in their block and the values, or `None` for a name with
+/// none. A formula's fill the uniform's `fdata` from the start; a
+/// colouring's follow its parameters in its own block.
+///
+/// UF runs `global:` once per image; the renderer asks every frame, so
+/// the last answer per name is kept and reused while nothing it read
+/// has changed.
+pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(usize, Vec<f32>)> {
+    let p = registry().read().ok()?.programs.get(name)?.clone();
+    let at = if p.kind == EntryKind::Coloring { p.param_slots() } else { 0 };
+    // Everything `global:` can read: the parameters and the image.
+    let mut key: Vec<u64> = block.iter().map(|v| u64::from(v.to_bits())).collect();
+    key.extend([
+        u64::from(env.maxiter),
+        env.center.re.to_bits(),
+        env.center.im.to_bits(),
+        env.magn.to_bits(),
+        env.width as u64,
+        env.height as u64,
+        u64::from(env.julia),
+        env.rotation.to_bits(),
+    ]);
+    static LAST: OnceLock<Mutex<HashMap<String, (Vec<u64>, Vec<f32>)>>> = OnceLock::new();
+    let last = LAST.get_or_init(Default::default);
+    if let Some((k, v)) = last.lock().ok()?.get(name) {
+        if *k == key {
+            return Some((at, v.clone()));
+        }
+    }
+    let params = lang::interp::ParamValues::from_slots(&p, block);
+    let values = lang::interp::globals(&p, &params, env);
+    if let Ok(mut l) = last.lock() {
+        l.insert(name.to_string(), (key, values.clone()));
+    }
+    Some((at, values))
 }
 
 /// Register the config's embedded sources under the names it gives

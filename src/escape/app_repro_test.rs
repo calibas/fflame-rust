@@ -2079,6 +2079,57 @@ final:
         assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_some());
     }
 
+    /// `global:` values reach the GPU: a formula's in `fdata`, a
+    /// colouring's after its parameters, recomputed when a parameter
+    /// they read changes. Each entry computes its built-in's constant
+    /// there (doubling, exact), so the pictures are the built-ins'.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn global_values_reach_the_gpu() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const J: &str = "J {\nglobal:\n complex c = @seed * 2\n float r = @radius * 2\ninit:\n z = #pixel\nloop:\n\
+                         z = sqr(z) + c\nbailout:\n |z| < r\ndefault:\n param seed\n  default = (-0.4, 0.078)\n endparam\n\
+                         float param radius\n  default = 2\n endparam\n}";
+        const EC: &str = "EC(OUTSIDE) {\nglobal:\n float s = @half * 2\nfinal:\n #index = #numiter * s\ndefault:\n\
+                          float param half\n  default = 0.025\n endparam\n}";
+        let custom = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+        for (seed, half) in [((-0.4f32, 0.078f32), 0.025f32), ((-0.0615, 0.3725), 0.0125)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), half * 2.0);
+            esc.max_iter = 150;
+            esc.bailout = 4.0;
+            esc.center_re = "0".into();
+            esc.zoom_log2 = 0.3;
+            esc.julia = true;
+            esc.julia_re = seed.0 * 2.0;
+            esc.julia_im = seed.1 * 2.0;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let mut c = esc.clone();
+            let (f, col) = (custom(J, "J"), custom(EC, "EC"));
+            c.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &f);
+            c.custom_formula = Some(f);
+            c.coloring = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &col);
+            c.custom_coloring = Some(col);
+            c.formula_params.insert("seed.re".into(), seed.0);
+            c.formula_params.insert("seed.im".into(), seed.1);
+            c.formula_params.insert("radius".into(), 2.0);
+            c.coloring_params.insert("half".into(), half);
+            let got = output_on(&device, &queue, &renderer, &c, w, h, false);
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("seed {seed:?}, half {half}: differs on {:.3}%", d * 100.0);
+            assert_eq!(d, 0.0, "seed {seed:?}, half {half}: the globals' picture differs");
+        }
+    }
+
     /// A program's interior detection compares its whole state
     /// (`formula_same`), and is as invisible as a built-in's: a state
     /// that repeats to the bit is periodic, so stopping renders what

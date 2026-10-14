@@ -104,6 +104,42 @@ impl ParamValues {
             funcs: p.funcs.iter().map(|f| f.default).collect(),
         }
     }
+
+    /// The values a parameter block holds, as the GPU reads them: one
+    /// slot each, two for a complex, then one per user function.
+    pub fn from_slots(p: &Program, slots: &[f32]) -> Self {
+        let mut at = 0;
+        let mut next = || {
+            let v = slots.get(at).copied().unwrap_or(0.0) as f64;
+            at += 1;
+            v
+        };
+        let values = p
+            .params
+            .iter()
+            .map(|x| if x.ty() == Ty::Complex { (next(), next()) } else { (next(), 0.0) })
+            .collect();
+        let funcs = p.funcs.iter().map(|_| next().round().max(0.0) as usize).collect();
+        ParamValues { values, funcs }
+    }
+}
+
+/// A program's `global:` values, packed as the GPU reads them
+/// ([`Program::globals`]: two floats for a complex, one otherwise; an
+/// int and a bool as numbers). Runs `global:` once, as UF does per
+/// image; `env`'s per-pixel fields are not read there.
+pub fn globals(p: &Program, params: &ParamValues, env: &Env) -> Vec<f32> {
+    let mut m = Machine::new(p, params);
+    let mut sh = Shared { env, z: C64::ZERO, numiter: 0, index: 0.0, solid: false };
+    m.exec(&p.global_body, &mut sh);
+    let mut out = Vec::with_capacity(p.global_floats());
+    for &v in &p.globals {
+        match m.vars[v] {
+            Value::Complex(c) => out.extend([c.re as f32, c.im as f32]),
+            other => out.push(other.as_f64() as f32),
+        }
+    }
+    out
 }
 
 /// One program's running state.
@@ -148,6 +184,12 @@ pub fn run(
     let mut f = Machine::new(formula, fparams);
     let mut c = coloring.map(|(p, v)| Machine::new(p, v));
     let mut sh = Shared { env, z: C64::ZERO, numiter: 0, index: 0.0, solid: false };
+    // `global:` first: per image on the GPU, per call here.
+    f.exec(&formula.global_body, &mut sh);
+    if let Some(c) = c.as_mut() {
+        let prog = c.prog;
+        c.exec(&prog.global_body, &mut sh);
+    }
     f.exec(&formula.init, &mut sh);
     if let Some(c) = c.as_mut() {
         let prog = c.prog;
@@ -620,6 +662,28 @@ mod tests {
         let julia = Env { julia: true, ..env };
         let zj = run_in(src, Dialect::Fractint, &julia).z;
         assert!((z.re - zj.re - 100.0).abs() < 1e-9, "ismand follows the Julia toggle");
+    }
+
+    /// `global:` values are the program's own constants: a formula
+    /// computing its constant there runs as one writing it inline, and
+    /// `globals` packs what the GPU reads, the image's names included.
+    #[test]
+    fn global_values_run_first_and_pack() {
+        let src = "G {\nglobal:\n complex c = @seed * 2\n float k = #magn + #width\n int n = #maxiter\n bool b = n > 10\n\
+                   init:\n z = #pixel\nloop:\n z = sqr(z) + c\nbailout:\n |z| < 4 && b && k > 0\n\
+                   default:\n param seed\n  default = (-0.4, 0.078)\n endparam\n}";
+        let inline = "I {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + (-0.8, 0.156)\nbailout:\n |z| < 4\n}";
+        let at = C64::new(0.1, -0.2);
+        assert_eq!(run_in(src, Dialect::UltraFractal, &Env::at(at, 60)), run_in(inline, Dialect::UltraFractal, &Env::at(at, 60)));
+
+        let p = program_in(src, EntryKind::Formula, Dialect::UltraFractal);
+        let env = Env { magn: 2.5, width: 640, ..Env::at(C64::ZERO, 50) };
+        let packed = globals(&p, &ParamValues::defaults(&p), &env);
+        // `n` is read in `global:` alone, so it is not packed.
+        assert_eq!(packed, vec![-0.8, 0.156, 642.5, 1.0]);
+        // The parameters as the GPU holds them read back the same.
+        let slots = [-0.4f32, 0.078];
+        assert_eq!(ParamValues::from_slots(&p, &slots).values, vec![(-0.4f32 as f64, 0.078f32 as f64)]);
     }
 
     #[test]

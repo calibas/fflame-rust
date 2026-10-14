@@ -21,6 +21,10 @@ pub const STATE_CAP_FLOATS: usize = 4;
 /// Floats of parameters each of a formula and a colouring may have
 /// (the uniform's `fparams` / `cparams`, 4 vec4s).
 pub const PARAM_SLOTS: usize = 16;
+/// Floats of `global:` values a formula may have: the uniform's
+/// `fdata` (64 vec4s), which nothing else of a custom formula's uses. A
+/// colouring's share its parameter block, [`PARAM_SLOTS`] in all.
+pub const FDATA_FLOATS: usize = 256;
 /// The most times one `while` or `repeat` runs per evaluation; past it
 /// the loop ends, so no formula can hang the GPU.
 pub const LOOP_CAP: u32 = 4096;
@@ -98,9 +102,16 @@ impl Checker {
 
         // Declarations and assignments make the variables, before any
         // expression is resolved: a name means the same thing on every
-        // line.
-        for (_, body) in sections.iter() {
+        // line. `global:` comes first, and what it makes is global.
+        for (kind, body) in sections.iter() {
+            self.section = kind.0;
+            let before = self.vars.len();
             self.declare(body);
+            if kind.0 == SectionKind::Global {
+                for v in &mut self.vars[before..] {
+                    v.global = true;
+                }
+            }
         }
         // Fractint's `LastSqr` is a variable `sqr()` writes; read anywhere,
         // it exists.
@@ -115,6 +126,7 @@ impl Checker {
             self.lastsqr = Some(id);
         }
 
+        let mut global_body = Vec::new();
         let mut init = Vec::new();
         let mut loop_body = Vec::new();
         let mut final_body = Vec::new();
@@ -122,6 +134,7 @@ impl Checker {
         for (kind, body) in sections {
             self.section = kind.0;
             match kind {
+                (SectionKind::Global, _) => global_body = self.stmts(body),
                 (SectionKind::Init, _) => init = self.stmts(body),
                 (SectionKind::Loop, last_is_bailout) => {
                     if last_is_bailout {
@@ -168,6 +181,8 @@ impl Checker {
             vars: std::mem::take(&mut self.vars),
             params: std::mem::take(&mut self.params),
             funcs: std::mem::take(&mut self.funcs),
+            global_body,
+            globals: Vec::new(),
             init,
             loop_body,
             bailout,
@@ -177,6 +192,17 @@ impl Checker {
             state: Vec::new(),
             dz_var: None,
         };
+        // The globals the other sections read are what the GPU needs.
+        let mut f = Flow::default();
+        flow(&program.init, &mut f);
+        flow(&program.loop_body, &mut f);
+        flow(&program.final_body, &mut f);
+        if let Some(b) = &program.bailout {
+            reads(b, &mut f);
+        }
+        let mut globals: Vec<VarId> = f.exposed.into_iter().filter(|&v| program.vars[v].global).collect();
+        globals.sort_unstable();
+        program.globals = globals;
         if program.param_slots() > PARAM_SLOTS {
             self.error(
                 entry.span,
@@ -184,6 +210,20 @@ impl Checker {
                     "the parameters take {} floats; at most {PARAM_SLOTS} fit (a complex takes two)",
                     program.param_slots()
                 ),
+            );
+        } else if self.kind == EntryKind::Coloring && program.param_slots() + program.global_floats() > PARAM_SLOTS {
+            self.error(
+                entry.span,
+                format!(
+                    "the parameters and the `global:` values take {} floats; a colouring has {PARAM_SLOTS}                      (a complex takes two)",
+                    program.param_slots() + program.global_floats()
+                ),
+            );
+        }
+        if self.kind == EntryKind::Formula && program.global_floats() > FDATA_FLOATS {
+            self.error(
+                entry.span,
+                format!("the `global:` values take {} floats; at most {FDATA_FLOATS} fit", program.global_floats()),
             );
         }
         if self.kind == EntryKind::Coloring {
@@ -215,10 +255,7 @@ impl Checker {
                 }
             }
             let allowed = match (self.kind, kind) {
-                (_, SectionKind::Global) => {
-                    self.error(s.span, "`global:` sections are not supported yet");
-                    continue;
-                }
+                (_, SectionKind::Global) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => {
                     self.warn(s.span, format!("`{}:` is ignored: custom formulas do not perturb yet", kind.label()));
                     continue;
@@ -259,10 +296,11 @@ impl Checker {
         }
         // Execution order, whatever order they were written in.
         let rank = |k: SectionKind| match k {
-            SectionKind::Init => 0,
-            SectionKind::Loop => 1,
-            SectionKind::Bailout => 2,
-            _ => 3,
+            SectionKind::Global => 0,
+            SectionKind::Init => 1,
+            SectionKind::Loop => 2,
+            SectionKind::Bailout => 3,
+            _ => 4,
         };
         out.sort_by_key(|((k, _), _)| rank(*k));
         Some(out)
@@ -509,8 +547,12 @@ impl Checker {
                         None
                     };
                     if let Some(of) = shadow {
-                        self.new_var(n, Ty::Complex, target.span);
-                        self.shadows.push((self.vars.len() - 1, of));
+                        if self.section == SectionKind::Global {
+                            self.error(target.span, format!("`{n}` cannot be written in `global:`"));
+                        } else {
+                            self.new_var(n, Ty::Complex, target.span);
+                            self.shadows.push((self.vars.len() - 1, of));
+                        }
                     }
                 }
             }
@@ -520,7 +562,7 @@ impl Checker {
 
     fn new_var(&mut self, name: &str, ty: Ty, span: Span) {
         self.var_ids.insert(name.to_string(), self.vars.len());
-        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false });
+        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false });
     }
 
     fn param(&mut self, name: &str, span: Span) -> ParamId {
@@ -595,6 +637,9 @@ impl Checker {
                 return None;
             }
         };
+        if !self.per_image_ok(p, &format!("#{name}"), span) {
+            return None;
+        }
         let colouring = self.kind == EntryKind::Coloring;
         if matches!(p, Predef::Index | Predef::Solid | Predef::NumIter) {
             if !colouring {
@@ -611,6 +656,29 @@ impl Checker {
         Some(p)
     }
 
+    /// `global:` runs once per image, before any pixel: what belongs to
+    /// a pixel has no value there.
+    fn per_image_ok(&mut self, p: Predef, name: &str, span: Span) -> bool {
+        let per_pixel = matches!(
+            p,
+            Predef::Pixel
+                | Predef::Z
+                | Predef::X
+                | Predef::Y
+                | Predef::ScreenPixel
+                | Predef::Random
+                | Predef::WhiteSq
+                | Predef::Index
+                | Predef::Solid
+                | Predef::NumIter
+        );
+        if self.section == SectionKind::Global && per_pixel {
+            self.error(span, format!("`{name}` belongs to a pixel; `global:` runs once per image"));
+            return false;
+        }
+        true
+    }
+
     /// A bare name read: a variable, `z` in a formula, or a predefined
     /// symbol or parameter written without its prefix.
     fn name(&mut self, n: &str, span: Span) -> Option<IExpr> {
@@ -618,6 +686,9 @@ impl Checker {
             return Some(IExpr { kind: IExprKind::Var(id), ty: self.vars[id].ty });
         }
         if self.kind == EntryKind::Formula && n == "z" {
+            if !self.per_image_ok(Predef::Z, n, span) {
+                return None;
+            }
             return Some(predef_expr(Predef::Z));
         }
         if is_alias(n) {
@@ -640,6 +711,9 @@ impl Checker {
                 _ => None,
             };
             if let Some(p) = p {
+                if !self.per_image_ok(p, n, span) {
+                    return None;
+                }
                 return Some(predef_expr(p));
             }
         }
@@ -743,6 +817,10 @@ impl Checker {
         match &target.kind {
             ExprKind::Name(n) => {
                 if let Some(&id) = self.var_ids.get(n) {
+                    if self.vars[id].global && self.section != SectionKind::Global {
+                        self.error(target.span, format!("`{n}` is set in `global:` and is read-only elsewhere"));
+                        return None;
+                    }
                     return Some((Place::Var(id), self.vars[id].ty));
                 }
                 if self.kind == EntryKind::Formula && n == "z" {
@@ -1053,10 +1131,11 @@ impl Checker {
     fn pack_state(&mut self, p: &mut Program, span: Span) {
         let mut state: BTreeSet<VarId> = BTreeSet::new();
         // Read in an iteration before being written in it: carried from
-        // the last iteration, or from init.
+        // the last iteration, or from init. A global is the image's, not
+        // the pixel's.
         let mut loop_flow = Flow::default();
         flow(&p.loop_body, &mut loop_flow);
-        state.extend(loop_flow.exposed.iter().copied());
+        state.extend(loop_flow.exposed.iter().copied().filter(|&v| !p.vars[v].global));
         // Read in final, written before it.
         let mut written: HashSet<VarId> = HashSet::new();
         let mut init_flow = Flow::default();
@@ -1075,6 +1154,7 @@ impl Checker {
         // state variable is only as real as what is added to it.
         let mut real: HashSet<VarId> = (0..p.vars.len()).filter(|&v| p.vars[v].ty == Ty::Complex).collect();
         let mut assigns: Vec<(VarId, IExpr)> = Vec::new();
+        collect_assigns(&p.global_body, &mut assigns);
         collect_assigns(&p.init, &mut assigns);
         collect_assigns(&p.loop_body, &mut assigns);
         collect_assigns(&p.final_body, &mut assigns);
@@ -1465,6 +1545,44 @@ mod tests {
         assert!(e.iter().any(|m| m.contains("colour functions")), "{e:?}");
         let e = errors("C {\nloop:\n #index = 1\nfinal:\n #index = 0\n}", EntryKind::Coloring);
         assert!(e.iter().any(|m| m.contains("belongs to `final:`")), "{e:?}");
+    }
+
+    /// `global:` runs first, once per image: what it sets is read-only
+    /// elsewhere (UF's rule), what belongs to a pixel has no value in
+    /// it, and only the globals the other sections read are packed.
+    #[test]
+    fn global_sections_set_read_only_values() {
+        let p = ok(
+            "G {\nglobal:\n float k = 2 * #pi\n int n = #maxiter\n tmp = @a * 3\n complex c = tmp + 1\n\
+             init:\n z = 0\nloop:\n z = sqr(z) + #pixel * k + c\nbailout:\n |z| < n\n}",
+            EntryKind::Formula,
+        );
+        let names: Vec<_> = p.globals.iter().map(|&v| p.vars[v].name.as_str()).collect();
+        assert_eq!(names, ["k", "n", "c"], "`tmp` is read in `global:` alone");
+        assert!(p.vars.iter().filter(|v| v.global).count() == 4);
+        assert_eq!(p.global_floats(), 4);
+        assert!(!p.global_body.is_empty());
+
+        let e = errors("G {\nglobal:\n k = 1\nloop:\n k = 2\n z = k\nbailout:\n true\n}", EntryKind::Formula);
+        assert!(e.iter().any(|m| m.contains("`k` is set in `global:` and is read-only")), "{e:?}");
+        for sym in ["#pixel", "#z", "#x", "#random", "z"] {
+            let src = format!("G {{\nglobal:\n k = {sym}\nloop:\n z = k\nbailout:\n true\n}}");
+            let e = errors(&src, EntryKind::Formula);
+            assert!(e.iter().any(|m| m.contains("`global:` runs once per image")), "{sym}: {e:?}");
+        }
+        // A colouring's globals share its 16-float parameter block.
+        let e = errors(
+            "C {\nglobal:\n a = 1\n b = 2\n c = 3\nfinal:\n #index = real(a + b + c + @p1 + @p2 + @p3 + @p4 + @p5 + @p6)\n}",
+            EntryKind::Coloring,
+        );
+        assert!(e.iter().any(|m| m.contains("the parameters and the `global:` values take 18")), "{e:?}");
+        // And are never the pixel's state.
+        let p = ok(
+            "C {\nglobal:\n float k = 3\ninit:\n float s = 0\nloop:\n s = s + k\nfinal:\n #index = s\n}",
+            EntryKind::Coloring,
+        );
+        let state: Vec<_> = p.state.iter().map(|&v| p.vars[v].name.as_str()).collect();
+        assert_eq!(state, ["s"]);
     }
 
     #[test]

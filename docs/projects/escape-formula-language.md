@@ -5,8 +5,8 @@ Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
 engine and config, the Formula Editor panel and its library, the script
 functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
 progress** (order of work below): Fractint's conventions, the
-derivative, and interior detection and the embossed relief for
-programs done 2026-10-14.
+derivative, interior detection and the embossed relief for programs,
+and `global:` done 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -291,7 +291,7 @@ Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
 as the Julia toggle; (2) the derivative; (3) interior detection and the
 embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
 colouring cap measured against real UF colourings; (7) test files for
-both dialects. Done: (1), (2) and (3), 2026-10-14.
+both dialects. Done: (1) to (4), 2026-10-14.
 
 **Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
 `&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
@@ -335,9 +335,26 @@ to the built-in's on both planes, UF and Fractint.
   `ismand` (the Julia toggle), `center`, `magxmag`, `rotskew`, Fractint's
   precedence.
 - `switch:` (a Mandelbrot / Julia pair becomes our Julia toggle),
-  `global:` (evaluated on the CPU into `fdata`), `default:` view
-  settings as a preset (`center`, `magn`, `angle`, `maxiter`; **to
-  verify:** what span UF's `magn = 1` shows).
+  `default:` view settings as a preset (`center`, `magn`, `angle`,
+  `maxiter`; **to verify:** what span UF's `magn = 1` shows).
+- ~~`global:` (evaluated on the CPU into `fdata`).~~ Done. UF's help
+  ("Global sections"): run once per image; its variables are "treated
+  as read-only in other sections". Here: the checker marks what
+  `global:` makes as global, refuses a write elsewhere and a per-pixel
+  symbol inside it, and packs the globals the other sections read
+  (`Program::globals`; one float each, two for a complex). The
+  interpreter computes them (`interp::globals`) whenever the renderer's
+  `params_for` sees a parameter or the image change (cached per name in
+  `custom::globals`); a formula's fill `fdata` (256 floats, unused by
+  custom formulas otherwise), a colouring's follow its parameters in
+  `cparams` (16 floats in all, refused past it). They are not per-pixel
+  state, are constant to the derivative, and are not compared by
+  interior detection. The image's names in `global:` are the shader's:
+  `#width` / `#height` in render pixels, `#magn` = 4 / span, `#center`
+  the (sample-jittered) centre. Arrays, UF's main use for `global:`,
+  wait with arrays. Measured: a formula and a colouring computing their
+  built-ins' constants in `global:` render the built-ins exactly,
+  before and after a parameter change.
 - ~~A symbolic derivative: distance estimation, normal maps, analytic
   relief for holomorphic programs.~~ Done (above).
 - ~~Interior detection and the embossed relief for programs.~~ Done:
