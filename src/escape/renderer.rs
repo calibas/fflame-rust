@@ -8070,6 +8070,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 height: self.height as i32,
                 random: super::lang::builtins::C64::ZERO,
                 julia: escape.julia,
+                julia_c: super::lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
                 rotation: f64::from(escape.rotation),
             };
             if let Some((at, values)) = super::custom::globals(&formula.name, fparams.as_flattened(), &image) {

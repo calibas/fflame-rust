@@ -2016,6 +2016,56 @@ final:
         }
     }
 
+    /// UF's `switch:` is the Julia toggle (lang::switch): its own example
+    /// pair renders the built-in Mandelbrot with the toggle off, and the
+    /// built-in Julia set with it on, the seed read from the Julia
+    /// constant. On is exact; off measured 0.031% (6 boundary pixels):
+    /// the f64 interpreter runs the pair identically to each entry alone
+    /// (`lang::switch` tests), so the ulps are the driver's code for the
+    /// loop inside the toggle's branch, which the boundary amplifies.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_switch_pair_follows_the_julia_toggle() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const PAIR: &str = "Mandelbrot {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                            default:\n float param bailout\n  default = 4\n endparam\nswitch:\n type = \"Julia\"\n\
+                            seed = #pixel\n bailout = bailout\n}\n\n\
+                            Julia {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < @bailout\n\
+                            default:\n param seed\n  default = (-0.75, 0.2)\n endparam\n float param bailout\n  default = 4\n\
+                            endparam\nswitch:\n type = \"Mandelbrot\"\n bailout = bailout\n}\n";
+        for julia in [false, true] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 150;
+            esc.bailout = 4.0;
+            esc.center_re = if julia { "0".into() } else { "-0.6".into() };
+            esc.zoom_log2 = 0.3;
+            esc.julia = julia;
+            esc.julia_re = -0.123;
+            esc.julia_im = 0.745;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let custom = with_custom(esc.clone(), Some((PAIR, "Mandelbrot")), None);
+            if let Err(e) = crate::escape::custom::compile_formula(custom.custom_formula.as_ref().unwrap(), &custom.formula) {
+                panic!("{:?}", e.iter().map(|d| d.render(PAIR)).collect::<Vec<_>>());
+            }
+            let def = crate::escape::get_formula(&custom.formula);
+            assert!(def.has_feature(crate::escape::FormulaFeature::Program), "did not compile");
+            assert!(crate::escape::formula_julia_is_meaningful(def), "the switch offers the Julia toggle");
+            let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("julia {julia}: the switch pair differs on {:.3}%", d * 100.0);
+            assert!(d <= 0.001, "julia {julia}: the switch pair differs on {:.3}%", d * 100.0);
+        }
+    }
+
     /// A custom formula carries its own derivative (lang::derive), and
     /// distance estimation reads it as it reads a built-in's: the same
     /// arithmetic (`2 z dz + 1`, scaled by a real 2), the same picture,
