@@ -3,7 +3,8 @@
 Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
 (`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
 engine and config, the Formula Editor panel and its library, the script
-functions, the docs (ESCAPE.md, "The formula language"). Phase 2 next.
+functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
+progress** (order of work below).
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -283,6 +284,26 @@ custom accumulating colouring at zoom 20, perturbed, matches its
 built-in exactly.
 
 ### Phase 2: Fractint, the rest of UF's formula language, the derivative
+
+Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
+as the Julia toggle; (2) the derivative; (3) interior detection and the
+embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
+colouring cap measured against real UF colourings; (7) test files for
+both dialects.
+
+**Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
+`&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
+when its real part is nonzero (`dStkJumpOnFalse`, and `Formula()` stops
+iterating when the last value's real part is exactly 0); `==` and the
+orderings compare real parts only; `sqr()` sets `LastSqr` to its
+argument's squared modulus, `|x|` does not; `round(x)` is
+`floor(x + 0.5)`; `whitesq` is `(row + col) & 1`; `scrnpix` is
+`(col, row)`; `ismand` is a global flag, 1 for the Mandelbrot. Writing to
+a parameter or a predefined name works in Fractint; here it makes a
+per-pixel copy (Fractint's write outlived the pixel, a quirk not kept).
+**Unverified:** UF's `magn`. Its help says only that the default is 1;
+the claim that magnification 1 shows a height of 4 comes from another
+program's documentation. Not applied until checked.
 
 - Fractint semantics: every variable complex, bool as `(1, 0)` / `0`,
   truthiness by real part, writable parameters (copied to locals),

@@ -30,6 +30,7 @@ use super::ast::{BinOp, UnOp};
 use super::builtins::{Builtin, USER_FUNCTIONS};
 use super::check::LOOP_CAP;
 use super::ir::*;
+use super::Dialect;
 
 /// The per-pixel environment a custom program reads, declared by every
 /// template that hosts one and set at the top of its entry point.
@@ -346,6 +347,8 @@ impl<'p> Gen<'p> {
                     (Ty::Bool, Ty::Complex) => format!("vec2<f32>(select(0.0, 1.0, {v}), 0.0)"),
                     (Ty::Int, Ty::Bool) => format!("({v} != 0i)"),
                     (Ty::Float, Ty::Bool) => format!("({v} != 0.0)"),
+                    // Fractint tests the real part alone.
+                    (Ty::Complex, Ty::Bool) if self.p.dialect == Dialect::Fractint => format!("({v}.x != 0.0)"),
                     (Ty::Complex, Ty::Bool) => format!("any({v} != vec2<f32>(0.0, 0.0))"),
                     (from, to) => unreachable!("the checker never narrows {from:?} to {to:?}"),
                 }
@@ -409,6 +412,13 @@ impl<'p> Gen<'p> {
             (Predef::ScreenPixel, _) => "vec2<f32>(f32(esc_env_px.x), f32(esc_env_px.y))".into(),
             (Predef::Index, _) => "index".into(),
             (Predef::Solid, _) => "solid".into(),
+            (Predef::WhiteSq, _) => "vec2<f32>(f32((esc_env_px.x + esc_env_px.y) & 1), 0.0)".into(),
+            (Predef::ScrnMax, _) => "vec2<f32>(f32(esc_env_size.x), f32(esc_env_size.y))".into(),
+            (Predef::IsMand, _) => "vec2<f32>(select(1.0, 0.0, (params.flags & 1u) != 0u), 0.0)".into(),
+            (Predef::MagXMag, _) => "vec2<f32>(esc_env_magn, 1.0)".into(),
+            (Predef::RotSkew, _) => {
+                format!("vec2<f32>(degrees({}(params.rot_cs.y, params.rot_cs.x)), 0.0)", self.use_(Helper::Atan2))
+            }
         }
     }
 
@@ -419,6 +429,8 @@ impl<'p> Gen<'p> {
         match op {
             And => format!("({l} && {r})"),
             Or => format!("({l} || {r})"),
+            // Fractint compares real parts, equality too.
+            Eq | Ne if ty == Ty::Complex && self.p.dialect == Dialect::Fractint => format!("({l}.x {} {r}.x)", op.symbol()),
             Eq | Ne if ty == Ty::Complex => {
                 if op == Eq {
                     format!("all({l} == {r})")
@@ -442,6 +454,15 @@ impl<'p> Gen<'p> {
     fn call(&mut self, f: Builtin, a: &IExpr, ty: Ty) -> String {
         use Builtin::*;
         let v = self.expr(a);
+        // Fractint's round is floor(x + 0.5), halves always up.
+        if f == Round && self.p.dialect == Dialect::Fractint {
+            return match (a.ty, ty) {
+                (Ty::Int, _) => v,
+                (_, Ty::Int) => format!("i32(floor({v} + 0.5))"),
+                (Ty::Complex, _) => format!("floor({v} + vec2<f32>(0.5, 0.5))"),
+                _ => format!("floor({v} + 0.5)"),
+            };
+        }
         if a.ty == Ty::Complex {
             return match f {
                 Real => format!("{v}.x"),
@@ -1052,6 +1073,8 @@ struct OrbitSummary {
 }
 struct HarnessParams {
     max_iter: u32,
+    flags: u32,
+    rot_cs: vec2<f32>,
 }
 @group(0) @binding(0) var<uniform> params: HarnessParams;
 fn fparam(i: u32) -> f32 {
@@ -1307,6 +1330,23 @@ pub(crate) mod tests {
             let pixel = super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64);
             let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(pixel, 1)).z;
             assert!(close(*got, want), "({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im);
+        }
+    }
+
+    /// A Fractint program using every name of its own compiles to valid
+    /// WGSL, in both kinds of context.
+    #[test]
+    fn fractint_names_compile_to_valid_wgsl() {
+        let (file, d) = parse_file(
+            "F { z = pixel + whitesq + scrnpix + scrnmax + magxmag + rotskew + center, c = p1, p1 = p1 * 2 : \
+             if (ismand) \n z = sqr(z) + pixel \n else \n z = sqr(z) + c \n endif, z = z + round(z) * 0, LastSqr <= 4 && |z| >= 0 }",
+        );
+        assert!(d.is_empty(), "{d:?}");
+        let (p, d) = check(&file.entries[0], EntryKind::Formula, Dialect::Fractint);
+        assert!(!super::super::has_errors(&d), "{d:?}");
+        let module = formula_module(&p.unwrap());
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
         }
     }
 

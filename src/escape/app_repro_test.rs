@@ -1956,6 +1956,50 @@ final:
         }
     }
 
+    /// A Fractint formula reading `ismand` follows the Julia toggle: off,
+    /// it renders the built-in Mandelbrot; on, the built-in Julia set of
+    /// its `p1` -- pixel for pixel, the arithmetic being the same.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_fractint_formula_follows_the_julia_toggle_through_ismand() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let src = CustomSource {
+            dialect: CustomDialect::Fractint,
+            entry: "MJ".into(),
+            source: "MJ {\n if (ismand)\n  c = pixel, z = 0\n else\n  c = p1, z = pixel\n endif\n :\n z = sqr(z) + c, |z| <= 4\n}".into(),
+        };
+        for julia in [false, true] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 120;
+            esc.bailout = 4.0;
+            esc.center_re = if julia { "0".into() } else { "-0.6".into() };
+            esc.zoom_log2 = 0.3;
+            esc.julia = julia;
+            esc.julia_re = -0.8;
+            esc.julia_im = 0.156;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let mut custom = esc.clone();
+            custom.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            custom.custom_formula = Some(src.clone());
+            custom.formula_params.insert("p1.re".into(), -0.8);
+            custom.formula_params.insert("p1.im".into(), 0.156);
+            let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+            let def = crate::escape::get_formula(&custom.formula);
+            assert!(crate::escape::formula_julia_is_meaningful(def), "ismand offers the Julia toggle");
+            let d = differing(&built_in, &got);
+            println!("julia {julia}: differs on {:.3}%", d * 100.0);
+            assert!(d == 0.0, "julia {julia}: the Fractint formula differs on {:.3}% of pixels", d * 100.0);
+        }
+    }
+
     /// The crease field (`ShadingField::Creases`) the iterate pass stores
     /// is `origami_creases_at`'s: the height in the relief channel and
     /// the slope -- a tenth of -grad h, rotation 0, no supersampling --
