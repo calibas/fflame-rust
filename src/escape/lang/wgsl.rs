@@ -2,8 +2,9 @@
 //!
 //! A FORMULA becomes a program the direct template drives:
 //! `struct FormulaState` (the iterate and every variable),
-//! `formula_init(pixel)`, `formula_loop(s, pixel)` and
-//! `formula_bailout(s, pixel)` (true: iterate again). A COLOURING
+//! `formula_init(pixel)`, `formula_loop(s, pixel)`,
+//! `formula_bailout(s, pixel)` (true: iterate again) and
+//! `formula_same(a, b)` (interior detection's repeat). A COLOURING
 //! becomes the built-in colouring interface, so every template that
 //! takes a colouring takes it: `ufc_init()` for `accum_init`,
 //! `coloring_accum` packing its persistent variables into the `vec4`
@@ -90,6 +91,24 @@ pub fn formula(p: &Program) -> String {
     let _ = write!(
         body,
         "fn formula_bailout(s: FormulaState, pixel: vec2<f32>) -> bool {{\n    return {test};\n}}\n"
+    );
+    // Two states equal to the bit, for interior detection: the state is
+    // everything the loop and the test read that changes, so a repeat
+    // proves the orbit periodic. Bits, not `==`: +0 and -0 compare
+    // equal and can continue differently, and Metal's fast-math folds
+    // float comparisons (CLAUDE.md).
+    let mut same = vec!["all(bitcast<vec2<u32>>(a.z) == bitcast<vec2<u32>>(b.z))".to_string()];
+    for (i, v) in p.vars.iter().enumerate() {
+        same.push(match v.ty {
+            Ty::Complex => format!("all(bitcast<vec2<u32>>(a.v{i}) == bitcast<vec2<u32>>(b.v{i}))"),
+            Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
+            Ty::Int | Ty::Bool => format!("a.v{i} == b.v{i}"),
+        });
+    }
+    let _ = write!(
+        body,
+        "\nfn formula_same(a: FormulaState, b: FormulaState) -> bool {{\n    return {};\n}}\n",
+        same.join("\n        && ")
     );
     g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
 }

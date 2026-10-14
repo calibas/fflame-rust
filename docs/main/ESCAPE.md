@@ -356,10 +356,12 @@ name, so a saved file, a PNG or an upload renders anywhere.
   template drives: its own seed, loop and bailout. It renders on the
   direct path only, so deep views stop at the f32 limit (about zoom 14),
   as for a built-in with no perturbation tier. It has no Julia toggle
-  (its `#pixel` is written in), no interior detection and no embossed
-  relief (the offset relief stands in). A float or complex parameter
-  named `bailout` is the panel's bailout, UF's convention, so the smooth
-  colourings and the formula escape at the same radius.
+  (its `#pixel` is written in) unless it reads Fractint's `ismand`.
+  Interior detection compares its whole state (`formula_same`: `z` can
+  repeat while the rest has moved on), and the embossed relief runs its
+  pair through the program's own functions. A float or complex
+  parameter named `bailout` is the panel's bailout, UF's convention, so
+  the smooth colourings and the formula escape at the same radius.
 - A formula's **derivative** with respect to `#pixel` is derived from
   the program (`lang/derive.rs`, forward mode): every complex variable
   the iterate depends on gets a companion assigned just before it, and
@@ -398,7 +400,8 @@ Lambda and Magnet I are identical, and so is a custom colouring at
 depth on the perturbed path
 (`custom_entries_render_as_their_built_ins`); distance estimation on
 the language's Mandelbrot is identical on both planes
-(`a_custom_formulas_derivative_drives_distance_estimation`).
+(`a_custom_formulas_derivative_drives_distance_estimation`), and so is
+its Embossed relief, every reduction (`a_program_embosses_as_its_built_in`).
 
 ---
 
@@ -519,7 +522,8 @@ pipelines by a key naming everything spliced.
 The direct template also splices **interior detection** when it is
 invisible: a bit-exact repeat of `z` (compared through `bitcast`, at
 Brent checkpoints) proves the f32 orbit is periodic, so the pixel stops
-early with the same result it would reach at `max_iter`. It is off for
+early with the same result it would reach at `max_iter`; for a custom
+formula, a repeat of its whole state. It is off for
 colourings that draw the interior, accumulate, or detect the period
 themselves.
 

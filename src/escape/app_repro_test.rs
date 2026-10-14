@@ -1650,9 +1650,25 @@ mod tests {
         h: u32,
         perturbed: bool,
     ) -> Vec<f32> {
+        output_with(device, queue, renderer, esc, w, h, perturbed, |_| {})
+    }
+
+    /// [`output_on`] with the renderer set up first.
+    #[allow(clippy::too_many_arguments)]
+    fn output_with(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &crate::renderer::compute_kernel::FlameRenderer,
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        perturbed: bool,
+        setup: impl FnOnce(&mut crate::escape::EscapeRenderer),
+    ) -> Vec<f32> {
         let mut escape = crate::escape::EscapeRenderer::new(device, w, h);
         escape.force_perturbed = perturbed;
         escape.force_direct = !perturbed;
+        setup(&mut escape);
         let mut guard = 0u32;
         loop {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cal") });
@@ -2061,6 +2077,87 @@ final:
         esc.custom_formula = Some(ship);
         crate::escape::custom::ensure(&esc);
         assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_some());
+    }
+
+    /// A program's interior detection compares its whole state
+    /// (`formula_same`), and is as invisible as a built-in's: a state
+    /// that repeats to the bit is periodic, so stopping renders what
+    /// running to the limit would. Its speedup is printed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_programs_interior_detection_is_invisible() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        // A state beyond z: a counter that wraps, a float and a bool the
+        // test reads. Every type `formula_same` compares.
+        const M: &str = "M {\ninit:\n z = 0\n int k = 0\n float r = 0\n bool far = false\nloop:\n\
+                         k = (k + 1) % 3\n z = sqr(z) + #pixel\n r = cabs(z)\n far = r > 2\n\
+                         bailout:\n !far && k >= 0\n}";
+        let mut esc = with_custom(crate::config::escape::EscapeConfig::default(), Some((M, "M")), None);
+        assert_eq!(esc.coloring, "smooth", "smooth leaves the interior to the background");
+        esc.zoom_log2 = 0.0;
+        esc.max_iter = 20_000;
+        let time = |disable: bool| {
+            let t = std::time::Instant::now();
+            let px = output_with(&device, &queue, &renderer, &esc, w, h, false, |e| e.disable_interior = disable);
+            (px, t.elapsed())
+        };
+        let _ = time(false);
+        let (off, t_off) = time(true);
+        let (on, t_on) = time(false);
+        let interior = off.chunks(4).filter(|p| p[3] < 0.5).count();
+        assert!(interior > 1000, "the view shows too little interior ({interior})");
+        assert_eq!(differing(&off, &on), 0.0, "interior detection changed the picture");
+        println!(
+            "program interior detection: {:.0} ms -> {:.0} ms ({:.1}x) at max_iter {}",
+            t_off.as_secs_f64() * 1000.0,
+            t_on.as_secs_f64() * 1000.0,
+            t_off.as_secs_f64() / t_on.as_secs_f64().max(1e-9),
+            esc.max_iter
+        );
+    }
+
+    /// Embossed runs a program's own functions for its pair: the
+    /// language's Mandelbrot embosses as the built-in does, every
+    /// reduction.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_program_embosses_as_its_built_in() {
+        use crate::config::escape::{EmbossType, ShadingField};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const M: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.75".into();
+        esc.center_im = "0.1".into();
+        esc.zoom_log2 = 1.5;
+        esc.max_iter = 64;
+        esc.bailout = 4.0;
+        esc.supersample = 1;
+        esc.shading.enabled = true;
+        esc.shading.field = ShadingField::Embossed;
+        esc.shading.offset = 0.004;
+        for kind in EmbossType::ALL {
+            let mut e = esc.clone();
+            e.shading.emboss = kind;
+            e.shading.emboss_sections = 3;
+            let built_in = output_on(&device, &queue, &renderer, &e, w, h, false);
+            let custom = output_on(&device, &queue, &renderer, &with_custom(e.clone(), Some((M, "M")), None), w, h, false);
+            let flat = output_on(&device, &queue, &renderer, &{ let mut f = e.clone(); f.shading.enabled = false; f }, w, h, false);
+            let lit = differing(&built_in, &flat);
+            assert!(lit > 0.01, "{kind:?}: the relief shows too little ({lit})");
+            let d = differing(&built_in, &custom);
+            println!("{kind:?}: the program's emboss differs on {:.3}%", d * 100.0);
+            assert_eq!(d, 0.0, "{kind:?}: the program embosses differently");
+        }
     }
 
     /// The crease field (`ShadingField::Creases`) the iterate pass stores

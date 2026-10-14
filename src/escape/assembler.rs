@@ -943,6 +943,37 @@ fn emboss_wgsl(formula: &FormulaDef, damped: bool, param_seed: &str) -> String {
     out.join("\n")
 }
 
+/// Embossed's pair for a PROGRAM formula: [`EMBOSS_WGSL`]'s response
+/// with each orbit a `FormulaState`, seeded, stepped and tested by the
+/// program's own functions (the pixel's loop runs the same ones).
+fn program_emboss_wgsl() -> String {
+    let mut src = EMBOSS_WGSL.trim().to_string();
+    for (from, to) in [
+        ("var z0 = esc_emboss_seed(p0);", "var s0 = formula_init(p0);"),
+        ("var z1 = esc_emboss_seed(p1);", "var s1 = formula_init(p1);"),
+        ("var c0 = select(p0, params.julia_c, is_julia);", ""),
+        ("var c1 = select(p1, params.julia_c, is_julia);", ""),
+        ("var q0 = esc_emboss_prev(z0);", ""),
+        ("var q1 = esc_emboss_prev(z1);", ""),
+        ("esc_emboss_step(&z0, &c0, &q0, i)", "esc_emboss_program_step(&s0, p0)"),
+        ("esc_emboss_step(&z1, &c1, &q1, i)", "esc_emboss_program_step(&s1, p1)"),
+        ("esc_emboss_last(z0,", "esc_emboss_last(s0.z,"),
+        ("esc_emboss_last(z1,", "esc_emboss_last(s1.z,"),
+        ("esc_emboss_each(z0,", "esc_emboss_each(s0.z,"),
+        ("esc_emboss_each(z1,", "esc_emboss_each(s1.z,"),
+    ] {
+        assert_eq!(src.matches(from).count(), 1, "EMBOSS_WGSL changed: {from}");
+        src = src.replace(from, to);
+    }
+    format!(
+        "// One step of one orbit of the program; true once it has bailed out.\n\
+         fn esc_emboss_program_step(sp: ptr<function, FormulaState>, pixel: vec2<f32>) -> bool {{\n\
+         \x20   *sp = formula_loop(*sp, pixel);\n\
+         \x20   return !formula_bailout(*sp, pixel);\n\
+         }}\n{src}"
+    )
+}
+
 /// The formula step as the loop runs it, over the locals `z`, `c`,
 /// `z_prev`, `dz` and `i`. Shared by the pixel's own loop and
 /// Embossed's pair, so the two cannot step differently.
@@ -8044,21 +8075,13 @@ pub fn assemble_layered(
     // period it measured. Where none of that holds, a non-escaping
     // pixel renders the background no matter which iteration it
     // stopped on.
-    // A program's state is more than z: z can repeat while the rest has
-    // moved on, so its repeat proves nothing.
+    // A program's state is more than z (z can repeat while the rest has
+    // moved on), so its repeat is the whole state's (`formula_same`).
     let program = formula.has_feature(FormulaFeature::Program);
     let interior_ok = interior_detect
-        && !program
         && !colors_interior
         && !needs_accum
         && !needs_period;
-    // Embossed re-emits the formula's step, which a program does not
-    // have; the offset relief runs whole orbits and works for it.
-    let relief_orbits = if program && matches!(relief_orbits, ReliefOrbits::Embossed) {
-        ReliefOrbits::Offset
-    } else {
-        relief_orbits
-    };
     let needs_derivative = (either(ColoringFeature::NeedsDerivative) || analytic_relief)
         && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
@@ -8091,6 +8114,7 @@ pub fn assemble_layered(
             "//__RELIEF_ORBITS_FNS__" => match relief_orbits {
                 ReliefOrbits::None => {}
                 ReliefOrbits::Offset => out.push(OFFSET_RELIEF_FNS_WGSL.trim().to_string()),
+                ReliefOrbits::Embossed if program => out.push(program_emboss_wgsl()),
                 ReliefOrbits::Embossed => out.push(emboss_wgsl(formula, damped, param_seed)),
             },
             "//__RELIEF_ORBITS__" => match relief_orbits {
@@ -8212,11 +8236,19 @@ pub fn assemble_layered(
             }
             "//__INTERIOR_DECL__" => {
                 if interior_ok {
-                    out.push("    var isnap = z;".to_string());
+                    out.push(if program { "    var isnap = fs;" } else { "    var isnap = z;" }.to_string());
                 }
             }
             "//__INTERIOR_TEST__" => {
-                if interior_ok {
+                if interior_ok && program {
+                    // As below, with the program's whole state.
+                    out.push("        if (formula_same(fs, isnap)) {".to_string());
+                    out.push("            break;".to_string());
+                    out.push("        }".to_string());
+                    out.push("        if (((i + 1u) & i) == 0u) {".to_string());
+                    out.push("            isnap = fs;".to_string());
+                    out.push("        }".to_string());
+                } else if interior_ok {
                     // Exact-repeat interior detection (Brent epochs).
                     //
                     // The direct path's whole iteration state IS z, and
@@ -8590,6 +8622,37 @@ mod tests {
         );
         assert_eq!(plain.matches("esc_run(").count(), 2, "one definition and one call without relief orbits");
         assert!(!plain.contains("fn esc_emboss"), "Embossed spliced into a pipeline without it");
+
+        // Programs (escape::lang): interior detection compares the whole
+        // state, Embossed runs the program's own functions, and the
+        // analytic relief steps the derivative the program carries.
+        use crate::config::escape::{CustomDialect, CustomSource};
+        for (entry, text) in [
+            ("M", "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}"),
+            (
+                "S",
+                "S {\ninit:\n z = 0\n int k = 0\n float r = 0\n bool b = false\nloop:\n k = k + 1\n\
+                 z = sqr(z) + #pixel\n r = cabs(z)\n b = r > 2\nbailout:\n !b && k > 0\n}",
+            ),
+        ] {
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+            let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            let f = crate::escape::custom::compile_formula(&src, &name).expect("compiles");
+            for (analytic, orbits) in [
+                (true, ReliefOrbits::None),
+                (false, ReliefOrbits::Offset),
+                (false, ReliefOrbits::Embossed),
+                (true, ReliefOrbits::Embossed),
+            ] {
+                let src = assemble_layered(f, smooth, None, false, true, analytic, orbits, None);
+                let what = format!("program {entry} analytic={analytic} {orbits:?}");
+                validate(&src, &what);
+                assert!(!src.contains("//__"), "{what} left a marker");
+                assert!(src.contains("formula_same(fs, isnap)"), "{what}: no interior detection");
+                assert_eq!(src.contains("fn esc_emboss("), orbits == ReliefOrbits::Embossed, "{what}");
+                assert_eq!(src.contains("dz = formula_dz(fs);"), analytic, "{what}");
+            }
+        }
     }
 
     /// The layer's renaming touches whole identifiers only.
