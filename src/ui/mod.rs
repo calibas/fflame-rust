@@ -53,6 +53,7 @@ mod escape_panel;
 mod sim_panel;
 pub mod slow_controls;
 mod textures_panel;
+mod formula_editor;
 pub mod workspace;
 mod palette_generate;
 mod script_params;
@@ -914,6 +915,7 @@ pub struct EguiLayer {
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
     /// The Texture panel's state, created when the panel is first shown.
     textures_panel: Option<textures_panel::TexturesPanel>,
+    formula_editor: Option<formula_editor::FormulaEditorPanel>,
 
     // API: flame metadata loaded from Online tab (passed through to UiResponse)
     loaded_api_flame_id: Option<String>,
@@ -1089,6 +1091,7 @@ impl EguiLayer {
             script_animation: None,
             fractal_browser_panel: None,
             textures_panel: None,
+            formula_editor: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
             loaded_api_flame_user_id: None,
@@ -1896,6 +1899,7 @@ impl EguiLayer {
                         // Fractal browser panel state
                         fractal_browser_panel: &mut self.fractal_browser_panel,
                         textures_panel: &mut self.textures_panel,
+                        formula_editor: &mut self.formula_editor,
 
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,

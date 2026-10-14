@@ -1,0 +1,87 @@
+; Colouring examples, in Ultra Fractal's language.
+; Pick an entry in the Formula Editor and press "Use as colouring".
+; `final:` writes #index, the palette position (it wraps), or sets
+; #solid to leave the pixel to the background.
+
+Smooth(OUTSIDE) {
+; The continuous escape count.
+final:
+  float r = cabs(#z)
+  #index = (#numiter + 1 - log(log(r)) / log(2)) * @scale
+default:
+  title = "Smooth"
+  float param scale
+    caption = "Scale"
+    default = 0.02
+  endparam
+}
+
+RingTrap {
+; The closest the orbit comes to a circle.
+init:
+  float d = 1e10
+loop:
+  float t = abs(cabs(#z) - @radius)
+  if t < d
+    d = t
+  endif
+final:
+  #index = d * @scale
+default:
+  title = "Ring Trap"
+  float param radius
+    caption = "Radius"
+    default = 1
+  endparam
+  float param scale
+    caption = "Scale"
+    default = 1
+  endparam
+}
+
+Average {
+; The mean of |z| over the orbit. `sum` and `n` are undeclared, so
+; complex, but only ever hold real values: each keeps one float.
+init:
+  sum = 0
+  n = 0
+loop:
+  sum = sum + cabs(#z)
+  n = n + 1
+final:
+  #index = real(sum / n) * @scale
+default:
+  title = "Magnitude Average"
+  float param scale
+    caption = "Scale"
+    default = 0.5
+  endparam
+}
+
+Stripes(OUTSIDE) {
+; The stripe average: how the orbit's angle turns, averaged.
+init:
+  float s = 0
+loop:
+  s = s + 0.5 * sin(@density * atan2(#z)) + 0.5
+final:
+  #index = s / #numiter * @scale
+default:
+  title = "Stripes"
+  float param density
+    caption = "Density"
+    default = 5
+  endparam
+  float param scale
+    caption = "Scale"
+    default = 1
+  endparam
+}
+
+InsideOnly(INSIDE) {
+; Colours only the inside: where the orbit ended up.
+final:
+  #index = atan2(#z) / (2 * #pi) + 0.5
+default:
+  title = "Inside Angle"
+}

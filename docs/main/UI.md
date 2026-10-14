@@ -26,7 +26,7 @@ bar with a single menu button (see [Compact (mobile) UI](#compact-mobile-ui)).
 ## Panels
 
 `PanelType` in [src/ui/workspace.rs](../../src/ui/workspace.rs) defines
-**30 panels**. Each renders from its own `src/ui/*.rs` file;
+**31 panels**. Each renders from its own `src/ui/*.rs` file;
 `src/ui/mod.rs` coordinates docking and returns cross-panel results to
 the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uiresponse)).
 
@@ -35,7 +35,7 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 | The picture | Fractal Viewport (effectively always present) |
 | The camera, every mode's | View (see [The View panel](#the-view-panel)) |
 | The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
-| The other engines | Escape Fractal, Simulation, Textures |
+| The other engines | Escape Fractal, Formula Editor, Simulation, Textures |
 | Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
 | Workflow | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
 | Kept for saved layouts | Solid & Lighting (draws the View panel's Lighting & Material section; no Window menu row) |
@@ -242,6 +242,7 @@ Panels:
 | Escape Fractal | Show | Show | Show | Grey (other engine) |
 | Simulation | Show | Show | Grey (other engine) | Show |
 | Textures | Grey | Grey | Show | Show |
+| Formula Editor (escape-time formulas and colourings in Ultra Fractal's and Fractint's languages; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Grey | Grey | Show | Grey (other engine) |
 | Solid & Lighting (follows `Solid::of`, not the mode) | Grey | Show | Show for a solid formula or a terrain, else Grey | Show for a terrain, else Grey |
 | Every other panel | Show | Show | Show | Show |
 

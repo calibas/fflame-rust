@@ -1,0 +1,158 @@
+{
+  "flame": {
+    "name": "Escape custom-sine-ring",
+    "transforms": [
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 2.0
+        },
+        "variation_params": {},
+        "color": 0.0,
+        "color_speed": 0.5,
+        "opacity": 1.0
+      }
+    ],
+    "render_mode": "TwoD",
+    "projection": "Orthographic"
+  },
+  "zoom": 1.0,
+  "pan_x": 0.0,
+  "pan_y": 0.0,
+  "rotation": 0.0,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
+  "camera_z": 0.0,
+  "density_scale": 1.0,
+  "speed_factor": 0.5,
+  "max_iterations": 501187233,
+  "histogram_color_scale": 100.0,
+  "low_density_smoothing": 0.5,
+  "density_compression_strength": 0.0,
+  "blend_factor": 0.1,
+  "use_dynamic_blend": true,
+  "target_iterations_per_pixel": 0,
+  "iterations_per_thread": 500,
+  "speed_multiplier": 4,
+  "color_mode": "Palette",
+  "palette_index": 0,
+  "palette": {
+    "name": "Rainbow (Custom)",
+    "stops": [
+      {
+        "position": 0.4509804,
+        "color": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.627451,
+        "color": [
+          1.0,
+          0.5,
+          0.0
+        ]
+      },
+      {
+        "position": 0.7254902,
+        "color": [
+          1.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.77254903,
+        "color": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.8627451,
+        "color": [
+          0.0,
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "position": 0.8901961,
+        "color": [
+          0.5,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "position": 1.0,
+        "color": [
+          1.0,
+          0.0,
+          0.5
+        ]
+      }
+    ],
+    "locked": false
+  },
+  "palette_rotation": 0.0,
+  "background_color": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "tonemap_mode": "linear",
+  "tonemap_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  },
+  "use_curve": false,
+  "exposure": 1.0,
+  "gamma": 2.2,
+  "gamma_threshold": 0.0025,
+  "brightness": 4.0,
+  "vibrancy": 1.0,
+  "saturation": 1.0,
+  "hue_shift": 0.0,
+  "value_scale": 1.0,
+  "deterministic_rng": true,
+  "version": 3,
+  "render_mode": "escape",
+  "escape": {
+    "formula": "custom-bbccdbf87b06f1d8",
+    "coloring": "custom-45b517c78d610fe6",
+    "max_iter": 300,
+    "center_re": "-0.55",
+    "center_im": "0",
+    "zoom_log2": 0.3,
+    "bailout": 64.0,
+    "custom_formula": {
+      "dialect": "ultra_fractal",
+      "entry": "SineMandel",
+      "source": "SineMandel {\n; A Mandelbrot whose orbit is bent by a sine each step.\ninit:\n  z = 0\nloop:\n  z = sqr(z) + #pixel\n  z = z + @mix * sin(z)\nbailout:\n  |z| < @bailout\ndefault:\n  title = \"Sine Mandelbrot\"\n  float param mix\n    caption = \"Sine mix\"\n    default = 0.25\n    min = 0\n    max = 1\n  endparam\n  float param bailout\n    default = 64\n  endparam\n}"
+    },
+    "custom_coloring": {
+      "dialect": "ultra_fractal",
+      "entry": "RingTrap",
+      "source": "RingTrap {\n; Distance to a circle, the closest the orbit comes.\ninit:\n  float d = 1e10\nloop:\n  float t = abs(cabs(#z) - @radius)\n  if t < d\n    d = t\n  endif\nfinal:\n  #index = d * @scale + #numiter * 0.004\ndefault:\n  title = \"Ring Trap\"\n  float param radius\n    default = 0.8\n  endparam\n  float param scale\n    default = 1.5\n  endparam\n}"
+    }
+  }
+}

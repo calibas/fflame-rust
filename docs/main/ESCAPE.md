@@ -287,6 +287,95 @@ is [escape-coloring-survey.md](../projects/escape-coloring-survey.md).
 
 ---
 
+## The formula language
+
+Formulas and colourings can also be written as text, in **Ultra Fractal's
+formula language**, which accepts Fractint's shape too; `escape::lang`
+compiles them to WGSL. The plan, its phases and what is left are in
+[escape-formula-language.md](../projects/escape-formula-language.md).
+
+**Where it lives.** `src/escape/lang/`: `lexer.rs`, `parser.rs` (a file
+into entries and sections), `check.rs` (names and types, UF's rules,
+into the typed `ir.rs`), `interp.rs` (the program in f64: the reference
+the WGSL is tested against), `wgsl.rs` (the shader), `builtins.rs` (the
+function table). `src/escape/custom.rs` registers a compiled entry.
+
+**An entry** is `Name(setting) { ... }` in a `.ufm` (formulas), `.ucl`
+(colourings) or `.frm` (Fractint) file; `;` comments to the end of a
+line. A formula has `init:`, `loop:` and `bailout:` (the loop repeats
+while the bailout test holds, at least once), or Fractint's shape: an
+empty `:` starts the loop, and its last statement is the test. A
+colouring has `init:`, `loop:` (after the formula's loop, each
+iteration) and `final:`, which writes `#index` (the palette position) or
+sets `#solid`. `default:` holds `title`, the view (`center`, `magn`,
+`maxiter`, `angle`) and the parameter blocks.
+
+**The language.** Types `bool`, `int`, `float`, `complex`; an
+undeclared variable is complex. Conversion only widens; `/` never makes
+an int. `if / elseif / else / endif`, `while / endwhile`, `repeat /
+until` (each loop capped at 4096 passes on the GPU). `|z|` is the
+SQUARED modulus; unary minus binds tighter than `^`, so `-x^2` is
+`(-x)^2`. Functions: `sqr sqrt log exp abs cabs recip ident zero`, the
+trigonometric and hyperbolic functions and their inverses, `atan2`,
+`cotan`, `cotanh`, `round trunc ceil floor real imag conj flip isinf
+isnan`, and Fractint's `cosxx`. Parameters are `@name` (Fractint's
+`p1..p6` without the `@`), declared with `param ... endparam` blocks
+(`caption`, `default`, `min`, `max`, `enum`, `hint`); user functions are
+`@f(z)` (Fractint's `fn1..fn4`), chosen in the panel from a list.
+Symbols: `#pixel`, `#z`, `#numiter` (in `final:`), `#maxiter`, `#pi`,
+`#e`, `#random`, `#center`, `#magn`, `#x`, `#y`, `#width`, `#height`,
+`#screenpixel`, `#index` and `#solid`.
+
+**Not yet:** UF's classes and plug-ins, arrays, colour values and direct
+colouring, `global:` and `switch:` sections, Fractint's numeric
+conventions (`LastSqr`, writable parameters and the like), the
+derivative (so no distance estimation for a custom formula), and deep
+zoom for custom formulas.
+
+**How it joins the engine.** A compiled entry is registered as a
+`FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
+its source, which every name-keyed cache then keys on. The config
+carries the source (`EscapeConfig::custom_formula`, `custom_coloring`),
+and the renderer, the CLI and the panel compile it before resolving the
+name, so a saved file, a PNG or an upload renders anywhere.
+
+- A **formula** is a program (`FormulaFeature::Program`) the direct
+  template drives: its own seed, loop and bailout. It renders on the
+  direct path only, so deep views stop at the f32 limit (about zoom 14),
+  as for a built-in with no perturbation tier. It has no Julia toggle
+  (its `#pixel` is written in), no interior detection and no embossed
+  relief (the offset relief stands in). A float or complex parameter
+  named `bailout` is the panel's bailout, UF's convention, so the smooth
+  colourings and the formula escape at the same radius.
+- A **colouring** compiles to the built-in colouring interface, so it
+  runs on every path, perturbed and recoloured included. Its variables
+  that live from one iteration to the next share the 4-float
+  accumulator, and the compile fails past it; an undeclared variable
+  that only ever holds real values takes one float, not two. An
+  untagged colouring colours inside and outside; `(OUTSIDE)` and
+  `(INSIDE)` one side. `#solid` leaves the pixel to the background.
+
+**The Formula Editor** (Window menu, Escape mode; `src/ui/formula_editor.rs`)
+lists a file's entries above its source, checks each as a formula and as
+a colouring on a pause in typing, and offers it as what it compiles as
+(a colouring only if it sets `#index` or `#solid`). Using one puts it in
+the config, one undo step; a formula's `center` and `maxiter` come with
+it the first time (its `magn` does not yet: what span UF's magnification
+1 shows is unverified). **Live** re-applies the entry in use whenever an
+edit to it compiles again. Files live in a `formulas/` folder in the app's
+data directory (localStorage on the web, `storage::formula_store`); Open
+reads a `.ufm`, `.ucl` or `.frm` from disk, Export writes one; two example
+files ship (`assets/formulas/`), each entry compiled by
+`every_example_entry_compiles`. Scripts: `escape.custom_formula` and
+`escape.custom_coloring` ([SCRIPTING.md](SCRIPTING.md)).
+
+Measured against the built-ins it rewrites, the language's Mandelbrot,
+Lambda and Magnet I are identical, and so is a custom colouring at
+depth on the perturbed path
+(`custom_entries_render_as_their_built_ins`).
+
+---
+
 ## Mode B: fields
 
 A field has no escape and no classification: `field_init` and

@@ -1791,6 +1791,87 @@ fn register_escape(engine: &mut Engine) {
         },
     );
 
+    // A formula or colouring written in Ultra Fractal's language (or
+    // Fractint's), compiled here and carried in the config as source
+    // (escape::custom). A compile error throws, with each message's
+    // line and column in the source.
+    #[cfg(feature = "engine-escape")]
+    fn custom_source(
+        source: &str,
+        entry: &str,
+        dialect: &str,
+    ) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
+        use crate::config::escape::CustomDialect;
+        let dialect = match dialect {
+            "uf" | "ultra_fractal" | "ufm" | "ucl" => CustomDialect::UltraFractal,
+            "fractint" | "frm" => CustomDialect::Fractint,
+            other => return Err(err(format!("unknown formula language `{other}` - use \"uf\" or \"fractint\""))),
+        };
+        Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string() })
+    }
+    #[cfg(feature = "engine-escape")]
+    fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::escape::lang::Diag]) -> Box<EvalAltResult> {
+        let lines: Vec<String> = diags
+            .iter()
+            .filter(|d| d.severity == crate::escape::lang::Severity::Error)
+            .map(|d| d.render(&src.source))
+            .collect();
+        err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
+    }
+    #[cfg(feature = "engine-escape")]
+    fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
+        use crate::escape::lang::EntryKind;
+        let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
+        if let Err(d) = crate::escape::custom::compile_formula(&src, &name) {
+            return Err(compile_error(&src, &d));
+        }
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        if cfg.escape.formula != name {
+            cfg.escape.formula_params.clear();
+        }
+        cfg.escape.formula = name;
+        cfg.escape.custom_formula = Some(src);
+        Ok(())
+    }
+    #[cfg(feature = "engine-escape")]
+    fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
+        use crate::escape::lang::EntryKind;
+        let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+        if let Err(d) = crate::escape::custom::compile_coloring(&src, &name) {
+            return Err(compile_error(&src, &d));
+        }
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        if cfg.escape.coloring != name {
+            cfg.escape.coloring_params.clear();
+        }
+        cfg.escape.coloring = name;
+        cfg.escape.custom_coloring = Some(src);
+        Ok(())
+    }
+    #[cfg(feature = "engine-escape")]
+    {
+        engine.register_fn(
+            "custom_formula",
+            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+                set_custom_formula(e, custom_source(source, entry, "uf")?)
+            },
+        );
+        engine.register_fn(
+            "custom_formula",
+            |e: &mut EscapeHandle, source: &str, entry: &str, dialect: &str| -> Result<(), Box<EvalAltResult>> {
+                set_custom_formula(e, custom_source(source, entry, dialect)?)
+            },
+        );
+        engine.register_fn(
+            "custom_coloring",
+            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+                set_custom_coloring(e, custom_source(source, entry, "uf")?)
+            },
+        );
+    }
+
     engine.register_fn("formulas", |_e: &mut EscapeHandle| -> Array {
         crate::escape::FORMULAS
             .iter()
@@ -2132,9 +2213,7 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::FORMULAS
-                .iter()
-                .find(|f| f.name == cfg.escape.formula)
+            let def = crate::escape::find_formula(&cfg.escape.formula)
                 .ok_or_else(|| err(format!("no such formula `{}`", cfg.escape.formula)))?;
             if !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
@@ -2154,9 +2233,7 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::COLORINGS
-                .iter()
-                .find(|c| c.name == cfg.escape.coloring)
+            let def = crate::escape::find_coloring(&cfg.escape.coloring)
                 .ok_or_else(|| err(format!("no such coloring `{}`", cfg.escape.coloring)))?;
             if !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
@@ -2209,9 +2286,7 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::COLORINGS
-                .iter()
-                .find(|c| c.name == cfg.escape.layer.coloring)
+            let def = crate::escape::find_coloring(&cfg.escape.layer.coloring)
                 .ok_or_else(|| err("no texture layer - call escape.layer(...) first"))?;
             if !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
@@ -2233,9 +2308,7 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn("params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        crate::escape::FORMULAS
-            .iter()
-            .find(|f| f.name == cfg.escape.formula)
+        crate::escape::find_formula(&cfg.escape.formula)
             .map(|d| {
                 d.parameters
                     .iter()
@@ -2246,9 +2319,7 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn("coloring_params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        crate::escape::COLORINGS
-            .iter()
-            .find(|c| c.name == cfg.escape.coloring)
+        crate::escape::find_coloring(&cfg.escape.coloring)
             .map(|d| {
                 d.parameters
                     .iter()

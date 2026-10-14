@@ -305,6 +305,34 @@ mod tests {
         CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string() }
     }
 
+    /// Every entry of the example files compiles, as the kind its file
+    /// holds, and validates.
+    #[test]
+    fn every_example_entry_compiles() {
+        use crate::storage::formula_store::{is_coloring_file, is_fractint, EXAMPLES};
+        for (file, text) in EXAMPLES {
+            let (parsed, d) = lang::parser::parse_file(text);
+            assert!(d.is_empty(), "{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
+            assert!(parsed.entries.len() >= 4, "{file}: too few examples");
+            for e in &parsed.entries {
+                let src = CustomSource {
+                    dialect: if is_fractint(file) { CustomDialect::Fractint } else { CustomDialect::UltraFractal },
+                    entry: e.name.clone(),
+                    source: text[e.span.start..e.span.end].to_string(),
+                };
+                let kind = if is_coloring_file(file) { EntryKind::Coloring } else { EntryKind::Formula };
+                let name = name_of(kind, &src);
+                let ok = match kind {
+                    EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
+                    EntryKind::Coloring => compile_coloring(&src, &name).map(|_| ()),
+                };
+                if let Err(d) = ok {
+                    panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());
+                }
+            }
+        }
+    }
+
     #[test]
     fn names_are_stable_and_follow_the_source() {
         let a = src("M {\nloop:\n z = z^2 + #pixel\nbailout:\n |z| < 4\n}", "M");

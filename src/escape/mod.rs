@@ -304,6 +304,12 @@ pub struct IterationControls {
 
 /// What a mode-A formula's shader actually reads.
 pub fn iteration_controls(formula: &FormulaDef) -> IterationControls {
+    // A compiled program owns its step and its escape test, so neither
+    // damping nor the biomorph reaches it; the bailout does, through its
+    // `bailout` parameter and the colourings that read the radius.
+    if formula.has_feature(FormulaFeature::Program) {
+        return IterationControls { bailout: true, biomorph: false, damping: false };
+    }
     let escapes = !formula.has_feature(FormulaFeature::NonEscaping);
     IterationControls { bailout: escapes, biomorph: escapes, damping: true }
 }

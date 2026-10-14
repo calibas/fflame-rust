@@ -558,15 +558,21 @@ fn complex_helper(f: Builtin) -> Helper {
 /// Whether a colouring can mark a pixel solid: it writes `#solid`, or it
 /// colours the inside only.
 pub fn writes_solid(p: &Program) -> bool {
-    fn any(stmts: &[IStmt]) -> bool {
-        stmts.iter().any(|s| match s {
-            IStmt::Assign(Place::Solid, _) => true,
-            IStmt::Assign(..) => false,
-            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| any(b)) || any(otherwise),
-            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => any(body),
-        })
-    }
-    p.region == Region::Inside || any(&p.final_body)
+    p.region == Region::Inside || writes(&p.final_body, Place::Solid)
+}
+
+/// Whether a colouring sets anything a pixel shows: `#index` or `#solid`.
+/// One that sets neither compiles, and draws one flat colour.
+pub fn colours_anything(p: &Program) -> bool {
+    writes(&p.final_body, Place::Index) || writes_solid(p)
+}
+
+fn writes(stmts: &[IStmt], place: Place) -> bool {
+    stmts.iter().any(|s| match s {
+        IStmt::Assign(p, _) => *p == place,
+        IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes(b, place)) || writes(otherwise, place),
+        IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes(body, place),
+    })
 }
 
 fn wgsl_ty(t: Ty) -> &'static str {
