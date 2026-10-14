@@ -208,6 +208,7 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
     if formula.perturb_loop.is_empty() {
         return None;
     }
+    let test = super::perturb::perturb_test(formula);
     let renv = Env { pixel: reference, ..*env };
     let mut r = Machine::new(formula, params);
     let mut rsh = Shared::new(&renv);
@@ -238,7 +239,7 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
         m += 1;
         z_full = orbit[m.min(orbit.len() - 1)].add(sh.dz);
         sh.z = z_full;
-        if !formula.bailout.as_ref().map_or(true, |t| p.eval(t, &sh).as_bool()) {
+        if !test.as_ref().map_or(true, |t| p.eval(t, &sh).as_bool()) {
             escaped = true;
             n = i + 1;
             break;
@@ -452,6 +453,22 @@ fn predef(p: Predef, sh: &Shared) -> Value {
     }
 }
 
+/// `|c + d| - |c|` by sign case, as the GPU's `uf_diffabs`: exact
+/// where the difference would cancel.
+pub fn diffabs(c: f64, d: f64) -> f64 {
+    if c >= 0.0 {
+        if c + d >= 0.0 {
+            d
+        } else {
+            -(2.0 * c + d)
+        }
+    } else if c + d > 0.0 {
+        2.0 * c + d
+    } else {
+        -d
+    }
+}
+
 /// Operands arrive converted to the operation's type (comparisons:
 /// their common one).
 fn binary(op: BinOp, l: Value, r: Value, ty: Ty, dialect: Dialect) -> Value {
@@ -474,6 +491,7 @@ fn binary(op: BinOp, l: Value, r: Value, ty: Ty, dialect: Dialect) -> Value {
         Le => Value::Bool(l.as_f64() <= r.as_f64()),
         Gt => Value::Bool(l.as_f64() > r.as_f64()),
         Ge => Value::Bool(l.as_f64() >= r.as_f64()),
+        DiffAbs => Value::Float(diffabs(l.as_f64(), r.as_f64())),
         Add | Sub | Mul | Div | Mod | Pow => match ty {
             Ty::Int => {
                 let (a, b) = (l.as_int(), r.as_int());

@@ -148,9 +148,9 @@ pub fn formula(p: &Program) -> String {
         );
         g.sstmts(&p.perturb_loop, 1, &mut body);
         body.push_str("    return w;\n}\n");
-        if let Some(b) = p.bailout.as_ref().filter(|b| !reads_a_variable(b, p)) {
+        if let Some(b) = super::perturb::perturb_test(p) {
             g.ctx = Ctx::PerturbBailout;
-            let test = g.expr(b);
+            let test = g.expr(&b);
             let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>) -> bool {{\n    return {test};\n}}\n");
         }
     }
@@ -237,6 +237,29 @@ fn cfe2_times_i(a: CFe2) -> CFe2 {
 // A reference entry: its double-float mantissa and exponent.
 fn cfe2_ref(zm: vec2<f32>, zlo: vec2<f32>, ze: i32) -> CFe2 {
     return cfe2_norm(CFe2(zm, zlo, ze));
+}
+
+// Each part's absolute value (UF's abs; a real's imaginary part is 0):
+// a normalised part's sign is its high part's.
+fn cfe2_abs(a: CFe2) -> CFe2 {
+    let s = select(vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, -1.0), a.hi < vec2<f32>(0.0, 0.0));
+    return CFe2(a.hi * s, a.lo * s, a.e);
+}
+
+// |c + d| - |c| of real CFe2s by sign case (the built-in deep Ship's
+// `sfe_diffabs`): a normalised value's sign is its high part's.
+fn cfe2_diffabs(c: CFe2, d: CFe2) -> CFe2 {
+    let sum = cfe2_add(c, d);
+    if (c.hi.x >= 0.0) {
+        if (sum.hi.x >= 0.0) {
+            return d;
+        }
+        return cfe2_neg(cfe2_add(cfe2_add(c, c), d));
+    }
+    if (sum.hi.x > 0.0) {
+        return cfe2_add(cfe2_add(c, c), d);
+    }
+    return cfe2_neg(d);
 }
 
 // |a|^2, a real CFe2.
@@ -781,6 +804,7 @@ impl<'p> Gen<'p> {
             Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
             Mul | Div | Mod => format!("({l} {} {r})", op.symbol()),
+            DiffAbs => format!("{}({l}, {r})", self.use_(Helper::DiffAbs)),
         }
     }
 
@@ -939,6 +963,18 @@ impl<'p> Gen<'p> {
                     }
                 }
             }
+            IExprKind::Binary(BinOp::DiffAbs, a, b) => {
+                // Positively homogeneous: diffabs(C, S w) / S is
+                // diffabs(C / S, w), as the built-in Ship tier has it.
+                let (ca, ka) = self.sgen(a);
+                let (cb, kb) = self.sgen(b);
+                let f = self.use_(Helper::DiffAbs);
+                if kb == Small {
+                    (format!("{f}({}, {cb})", as_class(ca, ka, Small)), Small)
+                } else {
+                    (format!("{f}({}, {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
+                }
+            }
             IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => {
                 let (ca, ka) = self.sgen(a);
                 if ka == Full {
@@ -1094,6 +1130,10 @@ impl<'p> Gen<'p> {
                 }
             }
             IExprKind::Modulus(a) if numeric(a.ty) => format!("cfe2_abs2({})", self.fegen(a)),
+            IExprKind::Binary(BinOp::DiffAbs, a, b) => {
+                let (ca, cb) = (self.fegen(a), self.fegen(b));
+                format!("cfe2_diffabs({ca}, {cb})")
+            }
             IExprKind::Call(f, a) if numeric(a.ty) && numeric(e.ty) => {
                 let complex = a.ty == Ty::Complex;
                 match f {
@@ -1101,6 +1141,7 @@ impl<'p> Gen<'p> {
                     Builtin::Ident => self.fegen(a),
                     Builtin::Zero => "cfe2_zero()".into(),
                     Builtin::Recip => format!("cfe2_recip({})", self.fegen(a)),
+                    Builtin::Abs => format!("cfe2_abs({})", self.fegen(a)),
                     Builtin::Conj if complex => format!("cfe2_conj({})", self.fegen(a)),
                     Builtin::Flip if complex => format!("cfe2_flip({})", self.fegen(a)),
                     Builtin::Real if complex => format!("cfe2_re({})", self.fegen(a)),
@@ -1373,6 +1414,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
                 }
             }
             IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => class(a, small),
+            IExprKind::Binary(BinOp::DiffAbs, _, b) => class(b, small),
             IExprKind::Modulus(a) => class(a, small),
             IExprKind::Call(f, a) if a.ty != Ty::Int => {
                 let complex = a.ty == Ty::Complex;
@@ -1405,10 +1447,17 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
     let mut all = Vec::new();
     assigns(&p.perturb_init, &mut all);
     assigns(&p.perturb_loop, &mut all);
+    // A literal zero is zero in any unit: it leaves a deviation small
+    // (a derived equation's arm that leaves one unchanged from zero).
+    let zero = |e: &IExpr| match &e.kind {
+        IExprKind::Float(x) => *x == 0.0,
+        IExprKind::Complex(x, y) => *x == 0.0 && *y == 0.0,
+        _ => false,
+    };
     loop {
         let mut changed = false;
         for (v, e) in &all {
-            if small[*v] && class(e, &small) == Class::Full {
+            if small[*v] && !zero(e) && class(e, &small) == Class::Full {
                 small[*v] = false;
                 changed = true;
             }
@@ -1579,6 +1628,7 @@ enum Helper {
     CCeil,
     CFloor,
     CCosxx,
+    DiffAbs,
     User,
     UserD,
     Opaque,
@@ -1594,6 +1644,7 @@ impl Helper {
             IsNan => "uf_isnan",
             IsInf => "uf_isinf",
             FSq => "uf_fsq",
+            DiffAbs => "uf_diffabs",
             FPow => "uf_powf",
             FPowI => "uf_powi",
             IMod => "uf_imod",
@@ -1712,6 +1763,20 @@ impl Helper {
 }",
             FSq => "fn uf_fsq(x: f32) -> f32 {
     return x * x;
+}",
+            // |c + d| - |c| by sign case: exact where the difference
+            // cancels (derived perturbation equations, `lang::delta`).
+            DiffAbs => "fn uf_diffabs(c: f32, d: f32) -> f32 {
+    if (c >= 0.0) {
+        if (c + d >= 0.0) {
+            return d;
+        }
+        return -(2.0 * c + d);
+    }
+    if (c + d > 0.0) {
+        return 2.0 * c + d;
+    }
+    return -d;
 }",
             // WGSL's pow is undefined for a negative base; a whole
             // exponent keeps it real, as the f64 interpreter's powf.

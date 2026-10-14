@@ -9338,6 +9338,14 @@ mod tests {
               perturbloop:\n #dz = 2 * #z * #dz + sqr(#dz) + #dpixel\n}", true),
             ("PH {\ninit:\n z = 0\n zold = 0\nloop:\n t = z\n z = sqr(z) + #pixel + zold * 0.1\n zold = t\n\
               bailout:\n |z| < 4\nperturbinit:\n #dz = 0\nperturbloop:\n #dz = 2 * #z * #dz + sqr(#dz) + #dpixel\n}", false),
+            // Equations derived from the loop (lang::delta): a temporary,
+            // a quotient, a power, a reciprocal and a conjugate.
+            ("DG {\ninit:\n z = 0\n c = #pixel\nloop:\n t = z^3 + c\n z = t / (1 + 0.1 * t) + 0.01 * recip(t + 3) + conj(z) * 0.01\n\
+              bailout:\n |z| < 1e4\n}", true),
+            // ...and a branch on a parameter, z written in steps, a test
+            // reading the init's constant, abs (diffabs).
+            ("DB {\ninit:\n z = 0\n b = @bail\nloop:\n t = sqr(abs(z)) + abs(real(z)) * 0.1\n if @mode == 1\n  t = t * z\n endif\n z = t\n z = z + #pixel\n\
+              bailout:\n |z| < b\ndefault:\n int param mode\n  default = 1\n endparam\n float param bail\n  default = 4\n endparam\n}", true),
         ] {
             let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into() };
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);

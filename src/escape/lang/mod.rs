@@ -13,6 +13,7 @@ pub mod ast;
 pub mod bigeval;
 pub mod builtins;
 pub mod check;
+pub mod delta;
 pub mod derive;
 pub mod interp;
 pub mod ir;

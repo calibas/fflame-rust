@@ -245,6 +245,17 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         return Ok(def);
     }
     let p = check_entry(EntryKind::Formula, src)?;
+    // Without equations of its own, a formula gets them from its loop
+    // when the rules cover it (lang::delta): the perturbed path at depth.
+    // Derived equations whose WGSL does not validate (a bug) leave the
+    // formula as it was rather than fail it.
+    let p = match lang::delta::with_derived_equations(&p) {
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(d) if lang::wgsl::validate_formula(&lang::wgsl::formula(&d)).is_ok() => d,
+        #[cfg(target_arch = "wasm32")]
+        Some(d) => d,
+        _ => p,
+    };
     let wgsl = lang::wgsl::formula(&p);
     // The same program carrying its derivative, for distance estimation
     // and analytic relief; empty when the iterate has none, which those
@@ -630,6 +641,90 @@ mod tests {
         assert_eq!(super::super::get_formula(&esc.formula).name, "mandelbrot");
     }
 
+    /// What first keeps a formula from derived perturbation equations:
+    /// a rough tally for the measurement, by the loop's shape.
+    fn perturb_blocker(p: &ir::Program) -> String {
+        use ir::*;
+        use lang::builtins::Builtin;
+        if p.bailout.is_some() && lang::perturb::perturb_test(p).is_none() {
+            return "its test reads a variable the loop changes".into();
+        }
+        let Some(inits) = lang::delta::init_values(p) else {
+            return "a branch or loop in the init".into();
+        };
+        fn first(e: &IExpr, out: &mut Option<String>) {
+            if out.is_some() {
+                return;
+            }
+            match &e.kind {
+                IExprKind::Call(f, a) => {
+                    if !matches!(
+                        f,
+                        Builtin::Sqr | Builtin::Ident | Builtin::Zero | Builtin::Conj | Builtin::Flip | Builtin::Real | Builtin::Imag | Builtin::Recip | Builtin::Abs
+                    ) {
+                        *out = Some(format!("function {}", f.name()));
+                        return;
+                    }
+                    first(a, out);
+                }
+                IExprKind::UserCall(..) => *out = Some("a user function".into()),
+                IExprKind::Binary(lang::ast::BinOp::Pow, ..) => *out = Some("a real or complex power".into()),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::UserDeriv(_, a) => first(a, out),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+                    first(a, out);
+                    first(b, out);
+                }
+                _ => {}
+            }
+        }
+        // What makes a branch's condition differ from pixel to pixel.
+        fn varies(e: &IExpr, p: &Program, inits: &[Option<IExpr>]) -> Option<&'static str> {
+            fn pixel(e: &IExpr) -> bool {
+                match &e.kind {
+                    IExprKind::Predef(Predef::Pixel | Predef::Z) => true,
+                    IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => pixel(a),
+                    IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => pixel(a) || pixel(b),
+                    _ => false,
+                }
+            }
+            match &e.kind {
+                IExprKind::Predef(Predef::Pixel | Predef::Z) => Some("a branch on the iterate"),
+                IExprKind::Predef(Predef::NumIter) => Some("a branch on the iteration count"),
+                IExprKind::Var(v) if !p.vars[*v].global => {
+                    let by_pixel = lang::delta::writes_var(&p.loop_body, *v) || inits[*v].as_ref().map_or(p.init.iter().any(|s| matches!(s, IStmt::Assign(Place::Var(w), _) if w == v)), pixel);
+                    by_pixel.then_some("a branch on the iterate")
+                }
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => varies(a, p, inits),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => varies(a, p, inits).or_else(|| varies(b, p, inits)),
+                _ => None,
+            }
+        }
+        fn walk(stmts: &[IStmt], p: &Program, inits: &[Option<IExpr>], found: &mut Option<String>) {
+            for s in stmts {
+                if found.is_some() {
+                    return;
+                }
+                match s {
+                    IStmt::Assign(_, e) => first(e, found),
+                    IStmt::If { arms, otherwise } => {
+                        for (c, b) in arms {
+                            if let Some(why) = varies(c, p, inits) {
+                                *found = Some(why.into());
+                                return;
+                            }
+                            walk(b, p, inits, found);
+                        }
+                        walk(otherwise, p, inits, found);
+                    }
+                    IStmt::While { .. } | IStmt::Repeat { .. } => *found = Some("a loop inside the loop".into()),
+                }
+            }
+        }
+        let mut found = None;
+        walk(&p.loop_body, p, &inits, &mut found);
+        found.unwrap_or_else(|| "carried state, an int or bool written in the loop, or another shape".into())
+    }
+
     /// MEASUREMENT (plan, phase 2 item 6): every entry of a folder of UF
     /// files (`UF_CORPUS`), checked as the editor would, with the first
     /// error of each that fails tallied, each colouring's state counted
@@ -670,6 +765,8 @@ mod tests {
         let (mut entries, mut compiled, mut parse_failed_files, mut over_cap_only) = ([0usize; 2], [0usize; 2], 0usize, 0usize);
         let mut invalid = Vec::new();
         let mut with_derivative = 0usize;
+        let (mut own_equations, mut derived_equations) = (0usize, 0usize);
+        let mut blockers: BTreeMap<String, usize> = BTreeMap::new();
         for path in paths {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             let kind = match ext.as_str() {
@@ -696,6 +793,17 @@ mod tests {
                                 invalid.push(format!("{} / {}: {}", path.display(), e.name, err.lines().next().unwrap_or("")));
                             }
                         } else {
+                            if lang::perturb::perturbation(&p).is_ok() {
+                                own_equations += 1;
+                            } else if let Some(d) = lang::delta::with_derived_equations(&p) {
+                                match lang::perturb::perturbation(&d) {
+                                    Ok(_) => derived_equations += 1,
+                                    Err(why) => *blockers.entry(why).or_default() += 1,
+                                }
+                            } else {
+                                let why = perturb_blocker(&p);
+                                *blockers.entry(why).or_default() += 1;
+                            }
                             let w = lang::wgsl::formula(&p);
                             if let Err(err) = lang::wgsl::validate_formula(&w) {
                                 invalid.push(format!("{} / {}: {}", path.display(), e.name, err.lines().next().unwrap_or("")));
@@ -742,6 +850,12 @@ mod tests {
             println!("{name}: {} of {} entries compile", compiled[k], entries[k]);
         }
         println!("formulas with a derivative: {with_derivative}");
+        println!("formulas that perturb: {own_equations} by their own equations, {derived_equations} by derived ones");
+        let mut ranked: Vec<_> = blockers.iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(a.1));
+        for (why, n) in ranked.iter().take(25) {
+            println!("  {n:>5} {why}");
+        }
         println!("colouring state floats (compiling, or failing on the cap alone; {over_cap_only} of the latter):");
         for (floats, n) in &state {
             println!("  {floats:>3} floats: {n}");
