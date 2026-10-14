@@ -157,6 +157,135 @@ pub fn formula(p: &Program) -> String {
     g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
 }
 
+/// A formula's perturbation equations for the perturbed path's
+/// floatexp rung: `formula_perturb_init_fe` and `formula_perturb_loop_fe`,
+/// over `CFe2` (the deep template's double-float mantissa with a binary
+/// exponent), the reference iterate given as its stored entry (`zm`,
+/// `zlo`, `ze`). Every value of the equations is a `CFe2` -- the
+/// reference's scale and the deviation's alike, so a coefficient like
+/// `2 #z` keeps the reference's double-float precision, as the built-in
+/// deep steps do; what has no floatexp form runs on the true values in
+/// f32. Spliced only into the deep template, which defines `CFe2` and
+/// its helpers; its own helpers are `ufe_`-prefixed. `None` without
+/// equations.
+pub fn formula_perturb_fe(p: &Program) -> Option<String> {
+    if p.perturb_loop.is_empty() {
+        return None;
+    }
+    let mut g = Gen::new(p, Ctx::PerturbFe, "ufe_");
+    g.small_vars = p.vars.iter().map(|v| v.perturb && matches!(v.ty, Ty::Float | Ty::Complex)).collect();
+    let locals: String = p
+        .vars
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.perturb)
+        .map(|(i, v)| match v.ty {
+            Ty::Float | Ty::Complex => format!("    var v{i}: CFe2 = cfe2_zero();\n"),
+            t => format!("    var v{i}: {} = {};\n", wgsl_ty(t), zero_of(t)),
+        })
+        .collect();
+    let mut body = String::new();
+    let _ = write!(
+        body,
+        "fn formula_perturb_init_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, pixel: vec2<f32>, d0: CFe2) -> CFe2 {{\n    var w = cfe2_zero();\n{locals}"
+    );
+    g.festmts(&p.perturb_init, 1, &mut body);
+    body.push_str("    return w;\n}\n\n");
+    let _ = write!(
+        body,
+        "fn formula_perturb_loop_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, w_in: CFe2, pixel: vec2<f32>, d0: CFe2) -> CFe2 {{\n    var w = w_in;\n{locals}"
+    );
+    g.festmts(&p.perturb_loop, 1, &mut body);
+    body.push_str("    return w;\n}\n");
+    Some(g.finish(&format!("// custom formula's floatexp equations: {}\n", sanitize(&p.name)), body))
+}
+
+/// What [`formula_perturb_fe`] calls beyond the deep template's own
+/// `CFe2` helpers: spliced beside it.
+pub const PERTURB_FE_HELPERS: &str = "
+// The custom formulas' floatexp operations (escape::lang), beside the
+// deep template's own CFe2 helpers.
+fn cfe2_neg(a: CFe2) -> CFe2 {
+    return CFe2(-a.hi, -a.lo, a.e);
+}
+
+fn cfe2_sub(a: CFe2, b: CFe2) -> CFe2 {
+    return cfe2_add(a, cfe2_neg(b));
+}
+
+fn cfe2_conj(a: CFe2) -> CFe2 {
+    return CFe2(vec2<f32>(a.hi.x, -a.hi.y), vec2<f32>(a.lo.x, -a.lo.y), a.e);
+}
+
+fn cfe2_flip(a: CFe2) -> CFe2 {
+    return CFe2(a.hi.yx, a.lo.yx, a.e);
+}
+
+fn cfe2_re(a: CFe2) -> CFe2 {
+    return cfe2_norm(CFe2(vec2<f32>(a.hi.x, 0.0), vec2<f32>(a.lo.x, 0.0), a.e));
+}
+
+fn cfe2_im(a: CFe2) -> CFe2 {
+    return cfe2_norm(CFe2(vec2<f32>(a.hi.y, 0.0), vec2<f32>(a.lo.y, 0.0), a.e));
+}
+
+// a * i.
+fn cfe2_times_i(a: CFe2) -> CFe2 {
+    return CFe2(vec2<f32>(-a.hi.y, a.hi.x), vec2<f32>(-a.lo.y, a.lo.x), a.e);
+}
+
+// A reference entry: its double-float mantissa and exponent.
+fn cfe2_ref(zm: vec2<f32>, zlo: vec2<f32>, ze: i32) -> CFe2 {
+    return cfe2_norm(CFe2(zm, zlo, ze));
+}
+
+// |a|^2, a real CFe2.
+fn cfe2_abs2(a: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    let ax = vec2<f32>(a.hi.x, a.lo.x);
+    let ay = vec2<f32>(a.hi.y, a.lo.y);
+    let r = df_add(df_mul(ax, ax), df_mul(ay, ay));
+    return cfe2_norm(CFe2(vec2<f32>(r.x, 0.0), vec2<f32>(r.y, 0.0), a.e * 2));
+}
+
+// 1/b: the f32 reciprocal of the mantissa, then one Newton step in
+// double float, r(2 - b r), for the double float's precision. A zero
+// divisor gives a large value, as the f32 helpers' do.
+fn cfe2_recip(b: CFe2) -> CFe2 {
+    if (b.e == CFE_ZERO_E) {
+        return cfe2_from_f32(vec2<f32>(1.0e30, 0.0));
+    }
+    let h = b.hi;
+    let r0 = cfe2_norm(CFe2(vec2<f32>(h.x, -h.y) / dot(h, h), vec2<f32>(0.0, 0.0), -b.e));
+    let two = cfe2_from_f32(vec2<f32>(2.0, 0.0));
+    return cfe2_mul(r0, cfe2_sub(two, cfe2_mul(b, r0)));
+}
+
+fn cfe2_div(a: CFe2, b: CFe2) -> CFe2 {
+    return cfe2_mul(a, cfe2_recip(b));
+}
+
+// a^n, n >= 1, by repeated squaring.
+fn cfe2_powi(a: CFe2, n: i32) -> CFe2 {
+    var acc = cfe2_from_f32(vec2<f32>(1.0, 0.0));
+    var base = a;
+    var k = n;
+    for (var t = 0; t < 32; t = t + 1) {
+        if (k <= 0) {
+            break;
+        }
+        if ((k & 1) == 1) {
+            acc = cfe2_mul(acc, base);
+        }
+        base = cfe2_sqr(base);
+        k = k >> 1u;
+    }
+    return acc;
+}
+";
+
 /// The WGSL of a formula carrying its derivative with respect to the
 /// pixel ([`super::derive`]), compiled in place of [`formula`]'s where a
 /// colouring reads the derivative: the same functions, a state with the
@@ -294,6 +423,9 @@ enum Ctx {
     /// The formula's test on the perturbed path: `#z` is the pixel's
     /// full `z`.
     PerturbBailout,
+    /// The perturbation equations on the floatexp rung: values are
+    /// `CFe2`; plain f32 code reads them through `cfe2_to_f32`.
+    PerturbFe,
 }
 
 struct Gen<'p> {
@@ -358,7 +490,7 @@ impl<'p> Gen<'p> {
     /// A formula's function, whose parameters are `fparam`'s and whose
     /// globals are in `fdata`.
     fn formula_side(&self) -> bool {
-        matches!(self.ctx, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout)
+        matches!(self.ctx, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe)
     }
 
     fn param_fn(&self) -> &'static str {
@@ -375,6 +507,11 @@ impl<'p> Gen<'p> {
         }
         if self.true_small && self.small_vars.get(v).copied().unwrap_or(false) {
             return format!("(s * v{v})");
+        }
+        // On the floatexp rung a value of the equations is a CFe2; plain
+        // code reads its f32 value.
+        if self.ctx == Ctx::PerturbFe && self.small_vars.get(v).copied().unwrap_or(false) {
+            return if self.p.vars[v].ty == Ty::Float { format!("cfe2_to_f32(v{v}).x") } else { format!("cfe2_to_f32(v{v})") };
         }
         if self.ctx == Ctx::Formula {
             format!("s.v{v}")
@@ -569,7 +706,10 @@ impl<'p> Gen<'p> {
 
     fn predef(&mut self, p: Predef) -> String {
         match (p, self.ctx) {
-            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout) => "pixel".into(),
+            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe) => "pixel".into(),
+            (Predef::Z, Ctx::PerturbFe) => "cfe2_to_f32(cfe2_ref(zm, zlo, ze))".into(),
+            (Predef::DZ, Ctx::PerturbFe) => "cfe2_to_f32(w)".into(),
+            (Predef::DPixel, Ctx::PerturbFe) => "cfe2_to_f32(d0)".into(),
             (Predef::Z, Ctx::Perturb) => "z_ref".into(),
             (Predef::Z, Ctx::PerturbBailout) => "z".into(),
             // The equations' deviation and offset, held in units of S.
@@ -834,6 +974,141 @@ impl<'p> Gen<'p> {
                 }
             }
             _ => (self.true_expr(e), Full),
+        }
+    }
+
+    // ---- the perturbation equations on the floatexp rung ---------------
+
+    fn festmts(&mut self, stmts: &[IStmt], depth: usize, out: &mut String) {
+        for s in stmts {
+            self.festmt(s, depth, out);
+        }
+    }
+
+    fn festmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
+        let pad = "    ".repeat(depth);
+        match s {
+            IStmt::Assign(place, e) => {
+                let (target, cfe) = match place {
+                    Place::Var(v) => (format!("v{v}"), self.small_vars[*v]),
+                    // The checker lets the equations write nothing else.
+                    _ => ("w".to_string(), true),
+                };
+                let code = if cfe { self.fegen(e) } else { self.expr(e) };
+                let _ = writeln!(out, "{pad}{target} = {code};");
+            }
+            IStmt::If { arms, otherwise } => {
+                for (k, (cond, body)) in arms.iter().enumerate() {
+                    let c = self.expr(cond);
+                    if k == 0 {
+                        let _ = writeln!(out, "{pad}if ({c}) {{");
+                    } else {
+                        let _ = writeln!(out, "{pad}}} else if ({c}) {{");
+                    }
+                    self.festmts(body, depth + 1, out);
+                }
+                if !otherwise.is_empty() {
+                    let _ = writeln!(out, "{pad}}} else {{");
+                    self.festmts(otherwise, depth + 1, out);
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            IStmt::While { cond, body } => {
+                let k = self.loops;
+                self.loops += 1;
+                let c = self.expr(cond);
+                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+                self.festmts(body, depth + 1, out);
+                let _ = writeln!(out, "{pad}}}");
+            }
+            IStmt::Repeat { body, cond } => {
+                let k = self.loops;
+                self.loops += 1;
+                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                self.festmts(body, depth + 1, out);
+                let c = self.expr(cond);
+                let _ = writeln!(out, "{pad}    if ({c}) {{\n{pad}        break;\n{pad}    }}");
+                let _ = writeln!(out, "{pad}}}");
+            }
+        }
+    }
+
+    /// Whether an expression reads a CFe2 value: a deviation, the
+    /// reference iterate, or one of the equations' numeric variables.
+    fn reads_cfe(&self, e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Predef(Predef::DZ | Predef::DPixel | Predef::Z) => true,
+            IExprKind::Var(v) => self.small_vars.get(*v).copied().unwrap_or(false),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+                self.reads_cfe(a)
+            }
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => self.reads_cfe(a) || self.reads_cfe(b),
+            _ => false,
+        }
+    }
+
+    /// A numeric expression as a CFe2 (a float's imaginary part zero).
+    fn fegen(&mut self, e: &IExpr) -> String {
+        let plain = |g: &mut Self, e: &IExpr| {
+            let v = g.expr(e);
+            let v = match e.ty {
+                Ty::Complex => v,
+                Ty::Int => format!("vec2<f32>(f32({v}), 0.0)"),
+                Ty::Bool => format!("vec2<f32>(select(0.0, 1.0, {v}), 0.0)"),
+                Ty::Float => format!("vec2<f32>({v}, 0.0)"),
+            };
+            format!("cfe2_from_f32({v})")
+        };
+        if !self.reads_cfe(e) {
+            return plain(self, e);
+        }
+        let numeric = |t: Ty| matches!(t, Ty::Float | Ty::Complex);
+        match &e.kind {
+            IExprKind::Predef(Predef::DZ) => "w".into(),
+            IExprKind::Predef(Predef::DPixel) => "d0".into(),
+            IExprKind::Predef(Predef::Z) => "cfe2_ref(zm, zlo, ze)".into(),
+            IExprKind::Var(v) => format!("v{v}"),
+            IExprKind::Convert(a) if numeric(a.ty) && numeric(e.ty) => self.fegen(a),
+            IExprKind::MakeComplex(a, b) => {
+                let (ca, cb) = (self.fegen(a), self.fegen(b));
+                format!("cfe2_add({ca}, cfe2_times_i({cb}))")
+            }
+            IExprKind::Unary(UnOp::Neg, a) if numeric(a.ty) => format!("cfe2_neg({})", self.fegen(a)),
+            IExprKind::Binary(op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div), a, b) if numeric(e.ty) => {
+                let (ca, cb) = (self.fegen(a), self.fegen(b));
+                let f = match op {
+                    BinOp::Add => "cfe2_add",
+                    BinOp::Sub => "cfe2_sub",
+                    BinOp::Mul => "cfe2_mul",
+                    _ => "cfe2_div",
+                };
+                format!("{f}({ca}, {cb})")
+            }
+            IExprKind::PowInt(a, n) if *n >= 1 && numeric(a.ty) => {
+                let ca = self.fegen(a);
+                match *n {
+                    1 => ca,
+                    2 => format!("cfe2_sqr({ca})"),
+                    n => format!("cfe2_powi({ca}, {n}i)"),
+                }
+            }
+            IExprKind::Modulus(a) if numeric(a.ty) => format!("cfe2_abs2({})", self.fegen(a)),
+            IExprKind::Call(f, a) if numeric(a.ty) && numeric(e.ty) => {
+                let complex = a.ty == Ty::Complex;
+                match f {
+                    Builtin::Sqr => format!("cfe2_sqr({})", self.fegen(a)),
+                    Builtin::Ident => self.fegen(a),
+                    Builtin::Zero => "cfe2_zero()".into(),
+                    Builtin::Recip => format!("cfe2_recip({})", self.fegen(a)),
+                    Builtin::Conj if complex => format!("cfe2_conj({})", self.fegen(a)),
+                    Builtin::Flip if complex => format!("cfe2_flip({})", self.fegen(a)),
+                    Builtin::Real if complex => format!("cfe2_re({})", self.fegen(a)),
+                    Builtin::Imag if complex => format!("cfe2_im({})", self.fegen(a)),
+                    _ => plain(self, e),
+                }
+            }
+            _ => plain(self, e),
         }
     }
 

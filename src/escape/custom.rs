@@ -39,8 +39,9 @@ struct Registry {
     /// state past the first ([`accum_ext`]).
     accum_ext: HashMap<String, usize>,
     /// The formulas that take the perturbed path: the program, for the
-    /// reference orbit, and how it perturbs ([`perturb_tier`]).
-    perturbable: HashMap<String, (Arc<ir::Program>, lang::perturb::Perturbable)>,
+    /// reference orbit, how it perturbs ([`perturb_tier`]), and its
+    /// equations for the floatexp rung ([`perturb_fe_wgsl`]).
+    perturbable: HashMap<String, (Arc<ir::Program>, lang::perturb::Perturbable, &'static str)>,
     /// What each reference identity handed out names ([`reference_identity`]).
     references: HashMap<u64, ReferenceInputs>,
 }
@@ -284,7 +285,8 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         r.formulas.insert(name.to_string(), def);
         let p = Arc::new(p);
         if let Some(how) = perturbs {
-            r.perturbable.insert(name.to_string(), (p.clone(), how));
+            let fe = leak(lang::wgsl::formula_perturb_fe(&p).unwrap_or_default());
+            r.perturbable.insert(name.to_string(), (p.clone(), how, fe));
         }
         if !p.globals.is_empty() {
             r.programs.insert(name.to_string(), p);
@@ -294,16 +296,14 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
 }
 
 /// A custom formula's perturbation tier for a view, when it has one:
-/// equations a formula of its shape can take (`lang::perturb`), its
-/// `perturb` setting holding for these parameters, and the view no
-/// deeper than `max_zoom_log2` -- the scaled rung's, until the custom
-/// tier has its floatexp rung (plan, phase 3).
-pub fn perturb_tier(escape: &EscapeConfig, max_zoom_log2: f64) -> Option<super::assembler::PerturbTier> {
-    if !escape.formula.starts_with(PREFIX) || escape.zoom_log2 > max_zoom_log2 {
+/// equations a formula of its shape can take (`lang::perturb`), and its
+/// `perturb` setting holding for these parameters.
+pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTier> {
+    if !escape.formula.starts_with(PREFIX) {
         return None;
     }
     ensure(escape);
-    let (prog, how) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
+    let (prog, how, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
     let inputs = reference_inputs(escape, &prog)?;
     if !lang::interp::perturb_holds(&prog, &inputs.params, &inputs.env) {
         return None;
@@ -339,6 +339,12 @@ fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<Re
         rotation: f64::from(escape.rotation),
     };
     Some(ReferenceInputs { prog: prog.clone(), params, env })
+}
+
+/// A compiled formula's perturbation equations for the floatexp rung
+/// (`lang::wgsl::formula_perturb_fe`), by its name.
+pub fn perturb_fe_wgsl(name: &str) -> Option<&'static str> {
+    registry().read().ok()?.perturbable.get(name).map(|e| e.2).filter(|s| !s.is_empty())
 }
 
 /// The reference identity of a config's custom formula: the two map

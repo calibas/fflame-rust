@@ -379,15 +379,16 @@ its test reads `#z` alone and it reads nothing of the screen
 big floats (`lang/bigeval.rs`, the `MAP_CUSTOM` family), and the
 equations compile with each value classed Full (the reference's scale)
 or Small (the deviation's, held in units of S as the built-in tiers'
-`w`). A formula whose loop carries more than z (a `zold`) rebases only
-where the orbit ends. For now the scaled rung only: deeper than zoom
-48 such a formula renders on the direct path, as one without equations
-does at any depth. No BLA and no derivative there.
+`w`); on the floatexp rung (past zoom 48) every value of the equations
+is a `CFe2`, `#z` read from the reference's double-float entry
+(`lang::wgsl::formula_perturb_fe`, with `PERTURB_FE_HELPERS` beside the
+template's own). A formula whose loop carries more than z (a `zold`)
+rebases only where the orbit ends. No BLA and no derivative on this
+tier, so a deep custom view iterates every step.
 `interp::run_perturbed` is the f64 model of the path.
 
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
-and direct colouring, a custom formula's floatexp rung (past zoom 48),
-and the delta derived without written equations.
+and direct colouring, and the delta derived without written equations.
 
 **Measured against UF's public formula library** (its full download,
 read for measurement and never bundled; `measure_a_uf_corpus`, an
@@ -416,7 +417,7 @@ name, so a saved file, a PNG or an upload renders anywhere.
   template drives: its own seed, loop and bailout. Without perturbation
   equations it renders on the direct path only, so deep views stop at
   the f32 limit (about zoom 14), as for a built-in with no perturbation
-  tier; with them, `PerturbTier::Custom` takes it to zoom 48 (above). It has no Julia toggle
+  tier; with them, `PerturbTier::Custom` takes it to any depth (above). It has no Julia toggle
   (its `#pixel` is written in) unless it reads Fractint's `ismand` or
   its `switch:` passes `#pixel`.
   Interior detection compares its whole state (`formula_same`: `z` can
