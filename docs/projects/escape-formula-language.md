@@ -4,8 +4,9 @@ Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
 (`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
 engine and config, the Formula Editor panel and its library, the script
 functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
-progress** (order of work below): Fractint's conventions and the
-derivative done 2026-10-14.
+progress** (order of work below): Fractint's conventions, the
+derivative, and interior detection and the embossed relief for
+programs done 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -290,7 +291,7 @@ Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
 as the Julia toggle; (2) the derivative; (3) interior detection and the
 embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
 colouring cap measured against real UF colourings; (7) test files for
-both dialects. Done: (1) and (2), 2026-10-14.
+both dialects. Done: (1), (2) and (3), 2026-10-14.
 
 **Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
 `&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
@@ -339,7 +340,16 @@ to the built-in's on both planes, UF and Fractint.
   verify:** what span UF's `magn = 1` shows).
 - ~~A symbolic derivative: distance estimation, normal maps, analytic
   relief for holomorphic programs.~~ Done (above).
-- Interior detection and the embossed relief for programs.
+- ~~Interior detection and the embossed relief for programs.~~ Done:
+  the repeat is the whole `FormulaState`'s, bit for bit
+  (`formula_same`, derivative variables included: they repeat too, and
+  a true repeat is all that matters), and Embossed's pair is
+  `EMBOSS_WGSL` with each orbit a `FormulaState` run by `formula_init`,
+  `formula_loop` and `formula_bailout` (`program_emboss_wgsl`).
+  Measured: interior detection invisible on a program with an int, a
+  float and a bool in its state (5.5x faster at 20,000 iterations on the
+  home view); the language's Mandelbrot embosses as the built-in does
+  under all six reductions.
 - Measure the colouring cap against real UF colourings; widen past 4
   floats (a second `vec4` in `IterState` and `IterResult`) if many need
   it.
