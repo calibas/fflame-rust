@@ -2400,6 +2400,143 @@ final:
         assert!(exact_custom + total * 3 / 100 >= exact_built_in && exact_custom * 10 >= total * 9, "Julia: {exact_custom} against {exact_built_in}");
     }
 
+    /// Each sampled pixel's iteration count, iterated in big floats
+    /// `n_limbs` wide: the truth the perturbed paths are held to.
+    #[allow(clippy::too_many_arguments)]
+    fn truth_counts(
+        src: &str,
+        params: crate::escape::lang::interp::ParamValues,
+        centre: (&str, &str),
+        zoom: f64,
+        iters: u32,
+        (w, h): (u32, u32),
+        stride: usize,
+        n_limbs: usize,
+    ) -> Vec<(usize, u32)> {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
+        let (file, _) = lang::parser::parse_file(src);
+        let prog = std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap());
+        let c = BigComplex::from_fixed(&FixedComplex {
+            re: FixedPoint::from_decimal(centre.0, n_limbs).unwrap(),
+            im: FixedPoint::from_decimal(centre.1, n_limbs).unwrap(),
+        });
+        let span_y = 4.0 / zoom.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        (0..(w * h) as usize)
+            .step_by(stride)
+            .map(|idx| {
+                let (px, py) = (idx as u32 % w, idx as u32 / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                let env = lang::interp::Env::at(lang::builtins::C64::ZERO, iters);
+                let mut m = lang::bigeval::BigMachine::new(prog.clone(), params.clone(), env, c.add(&BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
+                let mut count = iters;
+                for i in 0..iters {
+                    if !m.step().unwrap() {
+                        count = i + 1;
+                        break;
+                    }
+                }
+                (idx, count)
+            })
+            .collect()
+    }
+
+    /// A custom formula with no perturbation equations of its own gets
+    /// them from its loop (`lang::delta`) and takes the perturbed path
+    /// by them on both rungs: the plain language Mandelbrot and a cubic,
+    /// held to the truth (big floats) beside the built-in tiers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_perturbs_by_derived_equations() {
+        const M: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                         default:\n float param bailout\n  default = 4\n endparam\n}";
+        const C3: &str = "C3 {\ninit:\n z = 0\n c = #pixel\nloop:\n z = z^3 + c\nbailout:\n |z| < @bailout\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        // The Mandelbrot through a branch on a parameter, z written in
+        // steps, the test reading the init's copy of the bailout.
+        const MB: &str = "MB {\ninit:\n z = 0\n b = @bailout\nloop:\n if @mode == 1\n  z = sqr(z)\n else\n  z = z^3\n endif\n\
+                          z = z + #pixel\nbailout:\n |z| < b\ndefault:\n float param bailout\n  default = 4\n endparam\n\
+                          int param mode\n  default = 1\n endparam\n}";
+        // The Burning Ship: abs by diffabs.
+        const SH: &str = "SH {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        // The visual suite's deep Ship views (ship-deep-perturbed,
+        // ship-deep-floatexp).
+        let ship_shallow = ("-1.5716", "0.0");
+        let ship_deep = (
+            "-1.57157854065215755011786748993868954298323462588175571130705",
+            "-0.00000777222351578037991074677002308517488925824657687722262413561",
+        );
+        let threshold = ("-0.74364388703715870475481082977993857803", "0.13182590420531251981651559677435626549");
+        let shallow = ("-0.743643887037158704752191506114774", "0.131825904205311970493132056385139");
+        let (w, h) = (64u32, 48u32);
+        let params = crate::escape::lang::interp::ParamValues { values: vec![(4.0, 0.0)], funcs: vec![] };
+        let mb_params = crate::escape::lang::interp::ParamValues { values: vec![(4.0, 0.0), (1.0, 0.0)], funcs: vec![] };
+        // The cubic's boundary: the slowest escaping pixel, walked in
+        // three octaves at a time on the direct path.
+        let cubic_edge = {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "multibrot".into();
+            esc.formula_params.insert("power".into(), 3.0);
+            esc.max_iter = 1000;
+            let (mut cx, mut cy, mut zoom) = (-0.3f64, 0.6f64, 0.0f64);
+            while zoom < 15.0 {
+                esc.center_re = format!("{cx:.17}");
+                esc.center_im = format!("{cy:.17}");
+                esc.zoom_log2 = zoom;
+                let recs = records_on(&esc, w, h, false, false, true);
+                let Some((i, _)) = recs.iter().enumerate().filter(|(_, r)| r.n < 1000).max_by_key(|(_, r)| r.n) else { break };
+                let (px, py) = (i as u32 % w, i as u32 / w);
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                cx += ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                cy -= ((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                zoom += 3.0;
+            }
+            (format!("{cx:.17}"), format!("{cy:.17}"))
+        };
+        // The last field: the share of pixels counted exactly that the
+        // equations must reach, in percent. The deep Ship's 25000
+        // iterations cross a chaotic region the built-in tier counts 60%
+        // of exactly.
+        for (src, entry, params, built_in_formula, power, centre, zoom, iters, stride, n, floor) in [
+            (M, "M", &params, "mandelbrot", None, shallow, 20.0f64, 600u32, 7usize, 4usize, 80usize),
+            (M, "M", &params, "mandelbrot", None, threshold, 48.5, 4000, 13, 6, 80),
+            (C3, "C3", &params, "multibrot", Some(3.0f32), (cubic_edge.0.as_str(), cubic_edge.1.as_str()), 24.0, 1000, 7, 4, 80),
+            (MB, "MB", &mb_params, "mandelbrot", None, shallow, 20.0, 600, 7, 4, 80),
+            (MB, "MB", &mb_params, "mandelbrot", None, threshold, 48.5, 4000, 13, 6, 80),
+            (SH, "SH", &params, "burning_ship", None, ship_shallow, 16.0, 2000, 7, 4, 80),
+            (SH, "SH", &params, "burning_ship", None, ship_deep, 60.0, 25000, 29, 6, 75),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = built_in_formula.into();
+            if let Some(p) = power {
+                esc.formula_params.insert("power".into(), p);
+            }
+            esc.center_re = centre.0.into();
+            esc.center_im = centre.1.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let custom = with_custom(esc.clone(), Some((src, entry)), None);
+            crate::escape::custom::ensure(&custom);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, .. })), "{entry}: {tier:?}");
+            let built_in = records_on(&esc, w, h, false, true, false);
+            let got = records_on(&custom, w, h, false, true, false);
+            let truth = truth_counts(src, params.clone(), centre, zoom, iters, (w, h), stride, n);
+            let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+            let exact = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, c)| r[*i].n == *c).count();
+            let (eb, ec) = (exact(&built_in), exact(&got));
+            println!("{entry} zoom {zoom}: of {} pixels ({} distinct counts), the built-in tier counts {eb} exactly, the derived equations {ec}", truth.len(), distinct.len());
+            assert!(distinct.len() > 10, "{entry} zoom {zoom}: the view tests little");
+            assert!(ec * 100 >= truth.len() * floor && ec + truth.len() * 3 / 100 >= eb, "{entry} zoom {zoom}: {ec} against {eb}");
+        }
+    }
+
     /// A parameter past the first 16 floats reaches the GPU: the block
     /// holds 64 (UF's public formulas need them). Nine complex
     /// parameters come first, so the seed sits in slots 18 and 19.

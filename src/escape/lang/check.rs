@@ -1121,6 +1121,10 @@ impl Checker {
         let l = self.expr(a)?;
         let r = self.expr(b)?;
         match op {
+            BinOp::DiffAbs => {
+                self.error(span, "`diffabs` is the compiler's own".to_string());
+                None
+            }
             BinOp::And | BinOp::Or => {
                 let l = self.to_bool(l, a.span)?;
                 let r = self.to_bool(r, b.span)?;

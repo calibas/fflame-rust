@@ -282,6 +282,12 @@ impl BigMachine {
                     _ => d >= 0,
                 })
             }
+            // Only in derived perturbation equations, which the reference
+            // never runs; |c + d| - |c| all the same.
+            DiffAbs => {
+                let (c, d) = (self.to_f(l), self.to_f(r));
+                BigValue::Float(c.add(&d).abs().sub(&c.abs()))
+            }
             Add | Sub | Mul | Div | Mod | Pow => match ty {
                 Ty::Int => {
                     let (BigValue::Int(a), BigValue::Int(b)) = (&l, &r) else { return Err(Stop) };

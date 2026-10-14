@@ -34,10 +34,10 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
     if p.perturb_loop.is_empty() {
         return Err("it has no perturbation equations (`perturbloop:`)".into());
     }
-    let Some(test) = &p.bailout else {
+    if p.bailout.is_none() {
         return Err("it has no test".into());
-    };
-    if reads_a_variable(test, p) {
+    }
+    if perturb_test(p).is_none() {
         return Err("its test reads more than `#z`".into());
     }
     for place in [Predef::X, Predef::Y, Predef::ScreenPixel, Predef::Random, Predef::WhiteSq] {
@@ -55,6 +55,39 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
     // it, and written in it.
     let carried = carried_vars(&p.loop_body);
     Ok(Perturbable { rebase: carried.is_empty() })
+}
+
+/// The formula's test as the perturbed path evaluates it, on the pixel's
+/// full z: as written when it reads no variable, else with the init's
+/// constants put in by value -- variables the init sets from the pixel,
+/// the parameters and the constants, which the loop never writes (a
+/// `bailout = 4` in `init:`, common in UF-format conversions of Fractint
+/// formulas). `None` when it reads anything else.
+pub fn perturb_test(p: &Program) -> Option<IExpr> {
+    let test = p.bailout.as_ref()?;
+    if !reads_a_variable(test, p) {
+        return Some(test.clone());
+    }
+    let values = super::delta::init_values(p)?;
+    fn constants_only(e: &IExpr, p: &Program, values: &[Option<IExpr>]) -> bool {
+        match &e.kind {
+            IExprKind::Var(v) => {
+                p.vars[*v].global || (values[*v].is_some() && !super::delta::writes_var(&p.loop_body, *v))
+            }
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+                constants_only(a, p, values)
+            }
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => constants_only(a, p, values) && constants_only(b, p, values),
+            _ => true,
+        }
+    }
+    if !constants_only(test, p, &values) {
+        return None;
+    }
+    let mut ok = true;
+    let poisoned = vec![false; p.vars.len()];
+    let t = super::delta::subst(test, &values, &poisoned, p, &mut ok);
+    (ok && !reads_a_variable(&t, p)).then_some(t)
 }
 
 /// Variables the loop reads before writing in an iteration and also
@@ -149,5 +182,32 @@ mod tests {
         assert!(perturbation(&test).unwrap_err().contains("test reads more"));
         let screen = program(&format!("S {{\ninit:\n z = #x * 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n{EQ}}}"));
         assert!(perturbation(&screen).unwrap_err().contains("place on the screen"));
+    }
+
+    #[test]
+    fn a_test_reads_the_inits_constants_by_value() {
+        // `b` set once in the init, from a parameter through another
+        // variable: the test is `|z| < @bail * 2`.
+        let c = program(&format!(
+            "C {{\ninit:\n z = 0\n k = @bail\n b = k * 2\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < b\n{EQ}default:\n float param bail\n  default = 2\n endparam\n}}"
+        ));
+        assert!(perturbation(&c).is_ok());
+        let t = perturb_test(&c).unwrap();
+        assert!(!reads_a_variable(&t, &c));
+        // The interpreter's perturbed run escapes where the direct one
+        // does, at the same count.
+        use super::super::builtins::C64;
+        use super::super::interp::{run, run_perturbed, Env, ParamValues};
+        let env = Env::at(C64::new(0.3, 0.6), 200);
+        let params = ParamValues::defaults(&c);
+        let direct = run(&c, &params, None, &env);
+        let perturbed = run_perturbed(&c, &params, &env, C64::new(0.3, 0.6001), true).unwrap();
+        assert!(direct.escaped && perturbed.escaped);
+        assert_eq!(direct.n, perturbed.n);
+        // A variable the loop changes stays out of it.
+        let w = program(&format!(
+            "W {{\ninit:\n z = 0\n b = 4\nloop:\n z = sqr(z) + #pixel\n b = b + 1\nbailout:\n |z| < b\n{EQ}}}"
+        ));
+        assert!(perturb_test(&w).is_none());
     }
 }

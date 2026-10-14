@@ -9,7 +9,7 @@ detection and the embossed relief for programs, `global:`, `switch:`,
 the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
 measurement under phase 2). **Phase 3 in progress** (deep zoom for
-custom formulas; its plan and order of work below): steps 1 to 3 done
+custom formulas; its plan and order of work below): steps 1 to 4 done
 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
@@ -535,10 +535,65 @@ Order of work (2026-10-14):
    and zoom 60 with 30000, 104 of 106 (48 distinct) against 97 -- the
    built-in skips by BLA there, an approximation; the custom tier
    iterates every step, exact and slower.
-4. The delta derived from the IR, so a formula needs no
-   `perturbloop:`: the same Small/Full algebra over the loop's own
-   expression, with the rules our hand-written tiers use (binomial
-   powers, the quotient form `(dN - q dD)/(D + dD)`, `diffabs`).
+4. **The delta derived from the IR** (done), so a formula needs no
+   `perturbloop:` (`lang/delta.rs`). Planned as the Small/Full algebra
+   over the loop's expressions; built one level up, as a source
+   transformation: every value of the loop becomes a pair of new
+   variables of the equations (its value at the reference, from `#z`
+   and `#pixel - #dpixel`; the pixel's deviation, from `#dz` and
+   `#dpixel`), and the result is ordinary `perturbinit:` /
+   `perturbloop:` sections that steps 2 and 3's code generators compile
+   as they do a formula's own. The rules: sums, products, the quotient
+   form `(da - q db)/(B + db)`, binomial integer powers, `sqr`, `recip`,
+   `|a|`, `conj`/`flip`/`real`/`imag`, and `abs` by `diffabs` (a new
+   internal operator, `BinOp::DiffAbs`, never parsed; `uf_diffabs`,
+   homogeneous so the scaled rung passes `C/S` as the built-in Ship
+   does; `cfe2_diffabs`, and `cfe2_abs` so `abs(#z)` keeps the double
+   float on the floatexp rung -- without it the deep Ship view below
+   counted 70, not 84). The init's variables are constants per pixel,
+   their values substituted in order. One pair per variable, whichever
+   arm writes it, the deviation assigned first (a reference value
+   reads no deviation), so a branch whose conditions are the same for
+   every pixel (a parameter, a constant) derives arm by arm; a variable
+   is written after it when written before or in every arm. z written
+   in steps gets its own reference variable, `#z` until the first
+   write. The test may read the init's constants
+   (`perturb::perturb_test` puts their values in, for a formula's own
+   equations too: UF-format conversions of Fractint formulas set
+   `bailout = 4` in `init:`). One change in step 2's classes: a
+   literal zero no longer makes a variable Full (an arm that leaves a
+   deviation at zero). `custom::compile_formula` derives at compile
+   time and keeps the formula as written when the derived WGSL fails
+   validation (desktop; the measurement found none).
+   Measured against the truth (`a_custom_formula_perturbs_by_derived_equations`,
+   exact counts of the sampled pixels; the built-in tier at the same
+   view beside it):
+
+   | View | Built-in | Derived |
+   |---|---|---|
+   | Mandelbrot, seahorse valley, zoom 20, 600 iterations | 420 of 439 | 416 |
+   | Mandelbrot, zoom 48.5 (floatexp), 4000 iterations | 234 of 237 | 236 |
+   | Cubic, a walked boundary, zoom 24, 1000 iterations | 381 of 439 | 381 |
+   | The Mandelbrot through a parameter branch and two writes of z | 420 / 234 | 416 / 236 |
+   | Burning Ship, ship-deep-perturbed's view, zoom 16, 2000 iterations | 418 of 439 | 418 |
+   | Burning Ship, ship-deep-floatexp's view, zoom 60, 25000 iterations | 64 of 106 | 84 |
+
+   The built-in Ship's deep step takes the reference's components as
+   f32 (`sfe_diffabs(X: f32, ..)`); whether that is its whole gap is
+   not investigated. UF's public library: 2 formulas perturb by
+   their own equations and 308 by derived ones (249 before
+   branches, z in steps, the test's constants and `abs`). What stops
+   the rest, by the first thing the measurement finds: a test that
+   reads a variable the loop changes (2,747), a user function (1,425),
+   a branch or loop in the init (1,400), a branch on the iterate
+   (1,105), a real or complex power (643), carried state or an int or
+   bool written in the loop (582), a loop inside the loop (327), and
+   the transcendental functions (`sqrt` 224, `sin` 130, `cos` 90, and
+   others). The next candidates, should step 4 be extended: branches in
+   the init on parameters (the init's values as a selection), and the
+   transcendental functions by their difference forms (`sin(A + d) -
+   sin(A) = 2 cos(A + d/2) sin(d/2)` and kin, which a user function's
+   choice would need too).
 5. Kalles Fraktaler-style hybrids.
 
 ### Phase 4: distribution

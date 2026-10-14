@@ -374,8 +374,9 @@ reference point (UF's own Mandelbrot: `#dz = 2*#z*#dz + sqr(#dz) +
 own variables and see no other section's (the reference keeps only z);
 `perturb = <bool>` in `default:` says when the equations hold. Such a
 formula takes the perturbed path past the direct path's f32 limit, when
-its test reads `#z` alone and it reads nothing of the screen
-(`lang/perturb.rs`); its reference orbit is the formula itself run in
+its test reads `#z` alone (or the init's constants: a `bailout = 4`
+set in `init:` is put in by value, `perturb::perturb_test`) and it
+reads nothing of the screen (`lang/perturb.rs`); its reference orbit is the formula itself run in
 big floats (`lang/bigeval.rs`, the `MAP_CUSTOM` family), and the
 equations compile with each value classed Full (the reference's scale)
 or Small (the deviation's, held in units of S as the built-in tiers'
@@ -387,8 +388,30 @@ rebases only where the orbit ends. No BLA and no derivative on this
 tier, so a deep custom view iterates every step.
 `interp::run_perturbed` is the f64 model of the path.
 
+**Derived equations.** A formula without `perturbloop:` -- most of
+UF's, every Fractint one -- gets equations derived from its own loop
+when it can (`lang/delta.rs`, at compile time in
+`custom::compile_formula`, which keeps the formula as written if the
+derived WGSL fails validation). Each value becomes a pair: its value
+at the reference (from `#z` and the reference point `#pixel -
+#dpixel`) and the pixel's deviation (from `#dz` and `#dpixel`), by
+rules free of the cancellation `f(Z + d) - f(Z)` suffers: sums,
+products, the quotient form `(da - (A/B) db) / (B + db)`, binomial
+integer powers, `sqr`, `recip`, `|a|`, `conj`/`flip`/`real`/`imag`,
+and `abs` by `diffabs` (`|A + d| - |A|` by sign case, per part for a
+complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
+`cfe2_diffabs`). The init's variables are constants per pixel (their
+values substituted in order). A branch derives when its conditions are
+the same for every pixel (a parameter's choice, a constant), so the
+reference and the pixel take the same arm; z written in steps reads
+its own reference value after each. What does not derive: a
+transcendental function, a real or complex power, a user function of
+the iterate, a branch on it, a loop inside the loop, a branch in the
+init, state carried between iterations besides z. Such a formula stays
+on the direct path, as before.
+
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
-and direct colouring, and the delta derived without written equations.
+and direct colouring.
 
 **Measured against UF's public formula library** (its full download,
 read for measurement and never bundled; `measure_a_uf_corpus`, an
@@ -398,7 +421,10 @@ WGSL of every one that compiles validates, its derivative's too. What
 stops the rest: classes (`import`, 325 entries), arrays (296), the
 colouring state cap (335 colourings at 4 floats; it is 32 since, which
 admits 96% of the colourings that reach it), parameters past 64 floats
-(about 200), colour functions (46).
+(about 200), colour functions (46). Deep zoom: 2 of the formulas carry
+their own perturbation equations and 308 more get derived ones; the
+commonest blockers for the rest are a test that reads a variable the
+loop changes, a user function, and a branch in the init.
 
 **Test files.** `tests/formulas/` holds entries in both dialects that
 between them use every construct (`language.ufm`, `language.ucl`,

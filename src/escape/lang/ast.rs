@@ -145,6 +145,10 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    /// `|a + b| - |a|` of reals, by sign case (laser blaster's
+    /// `diffabs`): the deviation of `abs` in derived perturbation
+    /// equations (`lang::delta`). Never parsed.
+    DiffAbs,
 }
 
 impl BinOp {
@@ -164,6 +168,7 @@ impl BinOp {
             BinOp::Ge => ">=",
             BinOp::And => "&&",
             BinOp::Or => "||",
+            BinOp::DiffAbs => "diffabs",
         }
     }
 }
