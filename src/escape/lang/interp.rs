@@ -11,6 +11,7 @@ use super::ast::{BinOp, UnOp};
 use super::builtins::{Builtin, C64, USER_FUNCTIONS};
 use super::check::LOOP_CAP;
 use super::ir::*;
+use super::Dialect;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
@@ -76,12 +77,16 @@ pub struct Env {
     pub width: i32,
     pub height: i32,
     pub random: C64,
+    /// The Julia toggle (Fractint's `ismand` is its opposite).
+    pub julia: bool,
+    /// The view's rotation, radians.
+    pub rotation: f64,
 }
 
 impl Env {
     /// A pixel with nothing else set: tests that only need `#pixel`.
     pub fn at(pixel: C64, maxiter: u32) -> Self {
-        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO }
+        Env { pixel, maxiter, center: C64::ZERO, magn: 1.0, x: 0, y: 0, width: 1, height: 1, random: C64::ZERO, julia: false, rotation: 0.0 }
     }
 }
 
@@ -240,6 +245,8 @@ impl<'p> Machine<'p> {
             IExprKind::Convert(a) => {
                 let v = self.eval(a, sh);
                 match e.ty {
+                    // Fractint tests the real part alone.
+                    Ty::Bool if self.prog.dialect == Dialect::Fractint => Value::Bool(v.as_f64() != 0.0),
                     Ty::Bool => Value::Bool(v.as_bool()),
                     Ty::Int => Value::Int(v.as_int()),
                     Ty::Float => Value::Float(v.as_f64()),
@@ -254,7 +261,7 @@ impl<'p> Machine<'p> {
                 Value::Bool(b) => Value::Bool(b),
             },
             IExprKind::Unary(UnOp::Not, a) => Value::Bool(!self.eval(a, sh).as_bool()),
-            IExprKind::Binary(op, a, b) => binary(*op, self.eval(a, sh), self.eval(b, sh), e.ty),
+            IExprKind::Binary(op, a, b) => binary(*op, self.eval(a, sh), self.eval(b, sh), e.ty, self.prog.dialect),
             IExprKind::PowInt(a, n) => match self.eval(a, sh) {
                 Value::Complex(c) => Value::Complex(c.powi(*n)),
                 v => Value::Float(v.as_f64().powi(*n as i32)),
@@ -266,7 +273,7 @@ impl<'p> Machine<'p> {
                     Value::Float(x * x)
                 }
             },
-            IExprKind::Call(f, a) => call(*f, self.eval(a, sh), e.ty),
+            IExprKind::Call(f, a) => call(*f, self.eval(a, sh), e.ty, self.prog.dialect),
             IExprKind::UserCall(id, a) => {
                 let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
                 Value::Complex(f.eval_c(self.eval(a, sh).as_c64()))
@@ -294,18 +301,25 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::ScreenPixel => Value::Complex(C64::new(f64::from(env.x), f64::from(env.y))),
         Predef::Index => Value::Float(sh.index),
         Predef::Solid => Value::Bool(sh.solid),
+        Predef::WhiteSq => Value::Complex(C64::real(f64::from((env.x + env.y) & 1))),
+        Predef::ScrnMax => Value::Complex(C64::new(f64::from(env.width), f64::from(env.height))),
+        Predef::IsMand => Value::Complex(C64::real(if env.julia { 0.0 } else { 1.0 })),
+        Predef::MagXMag => Value::Complex(C64::new(env.magn, 1.0)),
+        Predef::RotSkew => Value::Complex(C64::real(env.rotation.to_degrees())),
     }
 }
 
 /// Operands arrive converted to the operation's type (comparisons:
 /// their common one).
-fn binary(op: BinOp, l: Value, r: Value, ty: Ty) -> Value {
+fn binary(op: BinOp, l: Value, r: Value, ty: Ty, dialect: Dialect) -> Value {
     use BinOp::*;
     match op {
         And => Value::Bool(l.as_bool() && r.as_bool()),
         Or => Value::Bool(l.as_bool() || r.as_bool()),
         Eq | Ne => {
             let eq = match (l, r) {
+                // Fractint compares real parts, equality too.
+                (Value::Complex(a), Value::Complex(b)) if dialect == Dialect::Fractint => a.re == b.re,
                 (Value::Complex(a), Value::Complex(b)) => a == b,
                 (Value::Bool(a), Value::Bool(b)) => a == b,
                 (a, b) => a.as_f64() == b.as_f64(),
@@ -362,7 +376,19 @@ fn binary(op: BinOp, l: Value, r: Value, ty: Ty) -> Value {
     }
 }
 
-fn call(f: Builtin, arg: Value, ty: Ty) -> Value {
+fn call(f: Builtin, arg: Value, ty: Ty, dialect: Dialect) -> Value {
+    // Fractint's round is floor(x + 0.5), halves always up.
+    if f == Builtin::Round && dialect == Dialect::Fractint {
+        let r = |x: f64| (x + 0.5).floor();
+        return match (arg, ty) {
+            (Value::Int(i), Ty::Int) => Value::Int(i),
+            (_, Ty::Int) => Value::Int(r(arg.as_f64()) as i32),
+            (v, _) => {
+                let c = v.as_c64();
+                Value::Complex(C64::new(r(c.re), r(c.im)))
+            }
+        };
+    }
     match (arg, ty) {
         (_, Ty::Bool) => {
             let c = arg.as_c64();
@@ -506,6 +532,81 @@ mod tests {
         params.values[1] = (0.0, 0.0);
         let r = run(&p, &params, None, &Env::at(C64::ZERO, 50));
         assert_eq!(r.z, C64::new(0.5, -1.0).scale(-2.0));
+    }
+
+    fn program_in(src: &str, kind: EntryKind, dialect: Dialect) -> Program {
+        let (file, d) = parse_file(src);
+        assert!(d.is_empty(), "{d:?}");
+        let (p, d) = check(&file.entries[0], kind, dialect);
+        assert!(!super::super::has_errors(&d), "{:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>());
+        p.unwrap()
+    }
+
+    fn run_in(src: &str, dialect: Dialect, env: &Env) -> Run {
+        let p = program_in(src, EntryKind::Formula, dialect);
+        run(&p, &ParamValues::defaults(&p), None, env)
+    }
+
+    /// Fractint tests the real part alone; UF any part.
+    #[test]
+    fn fractint_truth_is_the_real_part() {
+        let src = "T { z = (0, 1) : z = z, z }";
+        let f = run_in(src, Dialect::Fractint, &Env::at(C64::ZERO, 50));
+        assert!(f.escaped && f.n == 1, "Fractint stops on a zero real part");
+        let u = run_in(src, Dialect::UltraFractal, &Env::at(C64::ZERO, 50));
+        assert!(!u.escaped && u.n == 50, "UF reads (0, 1) as true");
+        // Equality compares real parts in Fractint.
+        let src = "E { z = 0 : z = (1, 5) == (1, 7), 0 }";
+        assert_eq!(run_in(src, Dialect::Fractint, &Env::at(C64::ZERO, 5)).z, C64::ONE);
+        assert_eq!(run_in(src, Dialect::UltraFractal, &Env::at(C64::ZERO, 5)).z, C64::ZERO);
+    }
+
+    /// Fractint rounds halves up, floor(x + 0.5); UF away from zero.
+    #[test]
+    fn fractint_rounds_halves_up() {
+        let src = "R { z = round((-2.5, 2.5)) : z = z, 0 }";
+        assert_eq!(run_in(src, Dialect::Fractint, &Env::at(C64::ZERO, 1)).z, C64::new(-2.0, 3.0));
+        assert_eq!(run_in(src, Dialect::UltraFractal, &Env::at(C64::ZERO, 1)).z, C64::new(-3.0, 3.0));
+    }
+
+    /// `sqr()` leaves its argument's squared modulus in `LastSqr`, read
+    /// from before the assignment: the test sees the PREVIOUS iterate.
+    #[test]
+    fn fractint_lastsqr_is_the_last_squared_argument() {
+        let c = C64::new(0.3, 0.5);
+        let r = run_in("L { z = 0, c = pixel : z = sqr(z) + c, LastSqr <= 4 }", Dialect::Fractint, &Env::at(c, 500));
+        let mut z = C64::ZERO;
+        let mut n = 0;
+        loop {
+            let last = z.norm_sqr();
+            z = z.mul(z).add(c);
+            n += 1;
+            if last > 4.0 || n == 500 {
+                break;
+            }
+        }
+        assert_eq!((r.n, r.z), (n, z));
+    }
+
+    /// Writing a parameter or a predefined name makes a per-pixel copy
+    /// that starts as the original.
+    #[test]
+    fn fractint_writes_parameters_and_predefined_names_as_copies() {
+        let px = C64::new(0.25, -0.5);
+        let r = run_in("W { p1 = p1 + 1, pixel = pixel * 2, z = p1 + pixel : z = z, 0 }", Dialect::Fractint, &Env::at(px, 1));
+        assert_eq!(r.z, C64::ONE.add(px.scale(2.0)));
+    }
+
+    /// Fractint's screen and view names.
+    #[test]
+    fn fractint_screen_and_view_names() {
+        let env = Env { x: 3, y: 4, width: 10, height: 20, magn: 2.0, rotation: std::f64::consts::FRAC_PI_2, ..Env::at(C64::ZERO, 1) };
+        let src = "S { z = whitesq + scrnpix + scrnmax * (0, 1) + ismand * 100 + magxmag * 1000 + rotskew : z = z, 0 }";
+        let z = run_in(src, Dialect::Fractint, &env).z;
+        assert!((z.re - 2174.0).abs() < 1e-9 && (z.im - 1014.0).abs() < 1e-9, "{z:?}");
+        let julia = Env { julia: true, ..env };
+        let zj = run_in(src, Dialect::Fractint, &julia).z;
+        assert!((z.re - zj.re - 100.0).abs() < 1e-9, "ismand follows the Julia toggle");
     }
 
     #[test]

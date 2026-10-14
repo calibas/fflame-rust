@@ -4,7 +4,7 @@
 
 use super::ast::{BinOp, UnOp};
 use super::builtins::Builtin;
-use super::{EntryKind, Span};
+use super::{Dialect, EntryKind, Span};
 
 /// A value's type. `color` is phase 4 (direct colouring).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -91,6 +91,17 @@ pub enum Predef {
     ScreenPixel,
     Index,
     Solid,
+    /// Fractint's: 1 on the pixels where (row + col) is odd.
+    WhiteSq,
+    /// Fractint's: the frame's size in pixels, (width, height).
+    ScrnMax,
+    /// Fractint's: 1 on the parameter plane, 0 on the Julia plane (the
+    /// Julia toggle).
+    IsMand,
+    /// Fractint's: (magnification, x-magnification factor 1).
+    MagXMag,
+    /// Fractint's: (rotation in degrees, skew 0).
+    RotSkew,
 }
 
 impl Predef {
@@ -100,6 +111,7 @@ impl Predef {
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index => Ty::Float,
             Predef::Solid => Ty::Bool,
+            Predef::WhiteSq | Predef::ScrnMax | Predef::IsMand | Predef::MagXMag | Predef::RotSkew => Ty::Complex,
         }
     }
 }
@@ -225,6 +237,9 @@ pub struct ViewSettings {
 #[derive(Clone, Debug)]
 pub struct Program {
     pub kind: EntryKind,
+    /// Fractint's tests read the real part alone, and its `round` is
+    /// `floor(x + 0.5)`; the back ends follow this.
+    pub dialect: Dialect,
     pub name: String,
     pub vars: Vec<Var>,
     pub params: Vec<Param>,
@@ -249,6 +264,26 @@ impl Program {
             .iter()
             .map(|&v| if self.vars[v].stored_real { 1 } else { self.vars[v].ty.floats() })
             .sum()
+    }
+
+    /// Whether any section reads `p`.
+    pub fn reads(&self, p: Predef) -> bool {
+        fn e(x: &IExpr, p: Predef) -> bool {
+            match &x.kind {
+                IExprKind::Predef(q) => *q == p,
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) => e(a, p),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => e(a, p) || e(b, p),
+                _ => false,
+            }
+        }
+        fn s(st: &[IStmt], p: Predef) -> bool {
+            st.iter().any(|x| match x {
+                IStmt::Assign(_, v) => e(v, p),
+                IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),
+                IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
+            })
+        }
+        s(&self.init, p) || s(&self.loop_body, p) || s(&self.final_body, p) || self.bailout.as_ref().is_some_and(|b| e(b, p))
     }
 
     /// Slots the parameters take in a 16-float block: one each, two for

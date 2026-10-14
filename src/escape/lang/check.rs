@@ -25,8 +25,8 @@ pub const PARAM_SLOTS: usize = 16;
 /// the loop ends, so no formula can hang the GPU.
 pub const LOOP_CAP: u32 = 4096;
 
-/// Fractint's names for things this compiler does not have yet.
-const FRACTINT_LATER: &[&str] = &["lastsqr", "whitesq", "scrnpix", "scrnmax", "ismand", "center", "magxmag", "rotskew"];
+/// Fractint's own predefined names, read in Fractint's dialect only.
+const FRACTINT_NAMES: &[&str] = &["lastsqr", "whitesq", "scrnpix", "scrnmax", "ismand", "center", "magxmag", "rotskew"];
 
 /// Check one entry as a formula or a colouring.
 pub fn check(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Program>, Vec<Diag>) {
@@ -42,6 +42,8 @@ pub fn check(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Progra
         func_ids: HashMap::new(),
         section: SectionKind::Init,
         warned_bool: false,
+        shadows: Vec::new(),
+        lastsqr: None,
     };
     let program = c.run(entry);
     let failed = super::has_errors(&c.diags);
@@ -61,6 +63,18 @@ struct Checker {
     /// The section being lowered, for what may be read and written.
     section: SectionKind,
     warned_bool: bool,
+    /// Parameters and predefined names a formula writes (Fractint's
+    /// habit): each a per-pixel copy, set from the original first.
+    shadows: Vec<(VarId, Shadowed)>,
+    /// Fractint's `LastSqr`: the variable `sqr()` writes, when read.
+    lastsqr: Option<VarId>,
+}
+
+/// What a written parameter or predefined name copies.
+#[derive(Clone, Debug)]
+enum Shadowed {
+    Param(String),
+    Predef(String),
 }
 
 impl Checker {
@@ -87,6 +101,18 @@ impl Checker {
         // line.
         for (_, body) in sections.iter() {
             self.declare(body);
+        }
+        // Fractint's `LastSqr` is a variable `sqr()` writes; read anywhere,
+        // it exists.
+        if self.dialect == Dialect::Fractint && sections.iter().any(|(_, b)| mentions(b, "lastsqr")) {
+            let id = match self.var_ids.get("lastsqr") {
+                Some(&id) => id,
+                None => {
+                    self.new_var("lastsqr", Ty::Complex, entry.span);
+                    self.vars.len() - 1
+                }
+            };
+            self.lastsqr = Some(id);
         }
 
         let mut init = Vec::new();
@@ -115,8 +141,29 @@ impl Checker {
             }
         }
 
+        // A written parameter or predefined name starts each pixel as the
+        // original.
+        let mut first = Vec::new();
+        for (id, of) in self.shadows.clone() {
+            let v = match of {
+                Shadowed::Param(n) => {
+                    let p = self.param(&n, entry.span);
+                    Some(IExpr { kind: IExprKind::Param(p), ty: self.params[p].ty() })
+                }
+                Shadowed::Predef(n) => self.predef(alias_target(&n), entry.span).map(predef_expr),
+            };
+            if let Some(v) = v {
+                if let Some(v) = self.convert(v, Ty::Complex, entry.span) {
+                    first.push(IStmt::Assign(Place::Var(id), v));
+                }
+            }
+        }
+        first.extend(init);
+        let init = first;
+
         let mut program = Program {
             kind: self.kind,
+            dialect: self.dialect,
             name: entry.name.clone(),
             vars: std::mem::take(&mut self.vars),
             params: std::mem::take(&mut self.params),
@@ -446,8 +493,24 @@ impl Checker {
         if let ExprKind::Assign(target, value) = &e.kind {
             if let ExprKind::Name(n) = &target.kind {
                 let writes_z = self.kind == EntryKind::Formula && n == "z";
-                if !writes_z && !self.var_ids.contains_key(n) && !is_alias(n) {
-                    self.new_var(n, Ty::Complex, target.span);
+                if !writes_z && !self.var_ids.contains_key(n) {
+                    // Writing a parameter (`p1`, in either dialect: UF
+                    // allows it for Fractint's sake) or, in Fractint, a
+                    // predefined name makes a per-pixel copy of it.
+                    let shadow = if is_fractint_param(n) {
+                        Some(Shadowed::Param(n.clone()))
+                    } else if is_alias(n) && self.dialect == Dialect::Fractint {
+                        Some(Shadowed::Predef(n.clone()))
+                    } else if is_alias(n) {
+                        None
+                    } else {
+                        self.new_var(n, Ty::Complex, target.span);
+                        None
+                    };
+                    if let Some(of) = shadow {
+                        self.new_var(n, Ty::Complex, target.span);
+                        self.shadows.push((self.vars.len() - 1, of));
+                    }
                 }
             }
             self.declare_in_expr(value);
@@ -564,8 +627,23 @@ impl Checker {
             let id = self.param(n, span);
             return Some(IExpr { kind: IExprKind::Param(id), ty: self.params[id].ty() });
         }
-        if FRACTINT_LATER.contains(&n) {
-            self.error(span, format!("Fractint's `{n}` is not supported yet"));
+        if self.dialect == Dialect::Fractint {
+            let p = match n {
+                "whitesq" => Some(Predef::WhiteSq),
+                "scrnpix" => Some(Predef::ScreenPixel),
+                "scrnmax" => Some(Predef::ScrnMax),
+                "ismand" => Some(Predef::IsMand),
+                "center" => Some(Predef::Center),
+                "magxmag" => Some(Predef::MagXMag),
+                "rotskew" => Some(Predef::RotSkew),
+                _ => None,
+            };
+            if let Some(p) = p {
+                return Some(predef_expr(p));
+            }
+        }
+        if FRACTINT_NAMES.contains(&n) {
+            self.error(span, format!("`{n}` is Fractint's: set the language to Fractint"));
             return None;
         }
         self.error(span, format!("`{n}` is used before anything is assigned to it"));
@@ -640,6 +718,20 @@ impl Checker {
             }
             _ => self.expr(value)?,
         };
+        // Fractint's `sqr()` leaves its argument's squared modulus in
+        // `LastSqr`: the last call evaluated, read from the values before
+        // this assignment, so it is set first.
+        if let (Some(ls), Some(arg)) = (self.lastsqr, last_sqr_argument(value)) {
+            if let Some(a) = self.expr(arg) {
+                let a = if a.ty == Ty::Int { self.convert(a, Ty::Float, arg.span) } else { Some(a) };
+                if let Some(a) = a.filter(|a| a.ty != Ty::Bool) {
+                    let m = IExpr { kind: IExprKind::Modulus(Box::new(a)), ty: Ty::Float };
+                    if let Some(m) = self.convert(m, Ty::Complex, arg.span) {
+                        out.push(IStmt::Assign(Place::Var(ls), m));
+                    }
+                }
+            }
+        }
         let (place, ty) = self.place(target)?;
         let v = self.convert(v, ty, value.span)?;
         out.push(IStmt::Assign(place, v));
@@ -1064,6 +1156,45 @@ fn user_function_index(b: Builtin) -> usize {
 }
 
 /// Names UF accepts without `#` for Fractint's sake.
+/// Whether any statement reads or writes the bare name `n`.
+fn mentions(body: &[Stmt], n: &str) -> bool {
+    fn e(x: &Expr, n: &str) -> bool {
+        match &x.kind {
+            ExprKind::Name(m) => m == n,
+            ExprKind::Complex(a, b) | ExprKind::Binary(_, a, b) | ExprKind::Assign(a, b) => e(a, n) || e(b, n),
+            ExprKind::Unary(_, a) | ExprKind::Modulus(a) => e(a, n),
+            ExprKind::Call { args, .. } => args.iter().any(|a| e(a, n)),
+            _ => false,
+        }
+    }
+    body.iter().any(|s| match s {
+        Stmt::Decl { name, init, .. } => name == n || init.as_ref().is_some_and(|i| e(i, n)),
+        Stmt::Expr(x) => e(x, n),
+        Stmt::If { arms, otherwise, .. } => {
+            arms.iter().any(|(c, b)| e(c, n) || mentions(b, n)) || otherwise.as_ref().is_some_and(|b| mentions(b, n))
+        }
+        Stmt::While { cond, body, .. } | Stmt::Repeat { body, cond, .. } => e(cond, n) || mentions(body, n),
+    })
+}
+
+/// The argument of the last `sqr()` call an expression evaluates (its
+/// arguments first, left to right).
+fn last_sqr_argument(x: &Expr) -> Option<&Expr> {
+    let inner = match &x.kind {
+        ExprKind::Complex(a, b) | ExprKind::Binary(_, a, b) | ExprKind::Assign(a, b) => {
+            last_sqr_argument(b).or_else(|| last_sqr_argument(a))
+        }
+        ExprKind::Unary(_, a) | ExprKind::Modulus(a) => last_sqr_argument(a),
+        ExprKind::Call { args, .. } => args.iter().rev().find_map(last_sqr_argument),
+        _ => None,
+    };
+    match &x.kind {
+        // This call comes after its own argument's calls.
+        ExprKind::Call { name, args, user: false } if name == "sqr" && args.len() == 1 => Some(&args[0]),
+        _ => inner,
+    }
+}
+
 fn is_alias(n: &str) -> bool {
     matches!(n, "pixel" | "maxit" | "rand" | "pi" | "e")
 }
@@ -1324,7 +1455,7 @@ mod tests {
         let e = errors("A {\nloop:\n #pixel = 1\nbailout:\n true\n}", EntryKind::Formula);
         assert!(e.iter().any(|m| m.contains("cannot be written")), "{e:?}");
         let e = errors("A {\nloop:\n z = lastsqr\nbailout:\n true\n}", EntryKind::Formula);
-        assert!(e.iter().any(|m| m.contains("Fractint's `lastsqr`")), "{e:?}");
+        assert!(e.iter().any(|m| m.contains("`lastsqr` is Fractint's")), "{e:?}");
         let e = errors("A {\nloop:\n z = 1\n}", EntryKind::Formula);
         assert!(e.iter().any(|m| m.contains("needs a `bailout:`")), "{e:?}");
         let e = errors("A {\nloop:\n z = 1\nbailout:\n true\nfinal:\n #index = 0\n}", EntryKind::Formula);

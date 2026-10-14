@@ -209,8 +209,13 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         name: leak(name.to_string()),
         display_name: display_name(&p),
         // A program owns its seed, its escape and its plane: the Julia
-        // toggle has nothing to swap.
-        features: &[FormulaFeature::Program, FormulaFeature::DynamicalOnly],
+        // toggle has nothing to swap, unless it reads Fractint's
+        // `ismand`, which the toggle sets.
+        features: if p.reads(ir::Predef::IsMand) {
+            &[FormulaFeature::Program]
+        } else {
+            &[FormulaFeature::Program, FormulaFeature::DynamicalOnly]
+        },
         parameters: Box::leak(param_defs(&p).into_boxed_slice()),
         wgsl: leak(wgsl),
         wgsl_param_seed: "",

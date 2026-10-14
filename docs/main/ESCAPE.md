@@ -326,11 +326,23 @@ Symbols: `#pixel`, `#z`, `#numiter` (in `final:`), `#maxiter`, `#pi`,
 `#e`, `#random`, `#center`, `#magn`, `#x`, `#y`, `#width`, `#height`,
 `#screenpixel`, `#index` and `#solid`.
 
+**Fractint's conventions** apply to a `.frm` file, or with the editor's
+language set to Fractint (from its `parser.c`): a test is true when its
+REAL part is nonzero, and `==` compares real parts; `round` is
+`floor(x + 0.5)`; `sqr()` leaves its argument's squared modulus in
+`LastSqr`; writing a parameter or a predefined name (`p1`, `pixel`)
+makes a per-pixel copy that starts as the original. Its names `whitesq`
+(the checkerboard), `scrnpix`, `scrnmax`, `center`, `magxmag`
+(magnification, 1), `rotskew` (rotation in degrees, 0) and `ismand` are
+read; a formula that reads `ismand` gets the Julia toggle, which sets it
+(the Julia constant is whatever the formula makes it, usually `p1`).
+`rand` is a per-pixel hash, not Fractint's time-seeded generator, so a
+picture reproduces; `srand` is not supported.
+
 **Not yet:** UF's classes and plug-ins, arrays, colour values and direct
-colouring, `global:` and `switch:` sections, Fractint's numeric
-conventions (`LastSqr`, writable parameters and the like), the
-derivative (so no distance estimation for a custom formula), and deep
-zoom for custom formulas.
+colouring, `global:` and `switch:` sections, the derivative (so no
+distance estimation for a custom formula), and deep zoom for custom
+formulas.
 
 **How it joins the engine.** A compiled entry is registered as a
 `FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
