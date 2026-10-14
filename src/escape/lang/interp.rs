@@ -132,7 +132,7 @@ impl ParamValues {
 /// image; `env`'s per-pixel fields are not read there.
 pub fn globals(p: &Program, params: &ParamValues, env: &Env) -> Vec<f32> {
     let mut m = Machine::new(p, params);
-    let mut sh = Shared { env, z: C64::ZERO, numiter: 0, index: 0.0, solid: false };
+    let mut sh = Shared::new(env);
     m.exec(&p.global_body, &mut sh);
     let mut out = Vec::with_capacity(p.global_floats());
     for &v in &p.globals {
@@ -158,6 +158,15 @@ struct Shared<'e> {
     numiter: u32,
     index: f64,
     solid: bool,
+    /// The perturbation equations' `#dz` and `#dpixel`.
+    dz: C64,
+    dpixel: C64,
+}
+
+impl<'e> Shared<'e> {
+    fn new(env: &'e Env) -> Self {
+        Shared { env, z: C64::ZERO, numiter: 0, index: 0.0, solid: false, dz: C64::ZERO, dpixel: C64::ZERO }
+    }
 }
 
 /// The result of running a formula, with or without a colouring.
@@ -176,6 +185,65 @@ pub struct Run {
     pub dz: C64,
 }
 
+/// A pixel as the perturbed path runs it, in f64: the formula's own
+/// orbit at `reference` (its init and loop, `#z` kept each iteration,
+/// until its test fails or `maxiter`), then the pixel as a deviation
+/// from it by the formula's perturbation equations (`#z` the
+/// reference's value, `#dpixel` the pixel's offset), tested on the
+/// reference's `z` plus the deviation, and rebased onto the orbit's
+/// start (Zhuoran) when the orbit ends, and with `rebase` on also when
+/// that deviation is the smaller, as the GPU's. The model the GPU path is held to,
+/// and the check that a formula's equations agree with its loop.
+/// `None` when the formula has no equations.
+pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, reference: C64, rebase: bool) -> Option<Run> {
+    if formula.perturb_loop.is_empty() {
+        return None;
+    }
+    let renv = Env { pixel: reference, ..*env };
+    let mut r = Machine::new(formula, params);
+    let mut rsh = Shared::new(&renv);
+    r.exec(&formula.global_body, &mut rsh);
+    r.exec(&formula.init, &mut rsh);
+    let mut orbit = vec![rsh.z];
+    for _ in 0..env.maxiter {
+        r.exec(&formula.loop_body, &mut rsh);
+        orbit.push(rsh.z);
+        if !formula.bailout.as_ref().map_or(true, |t| r.eval(t, &rsh).as_bool()) {
+            break;
+        }
+    }
+    // The pixel: the equations' own temporaries, the test on z alone.
+    let mut p = Machine::new(formula, params);
+    let mut sh = Shared::new(env);
+    p.exec(&formula.global_body, &mut sh);
+    sh.dpixel = env.pixel.sub(reference);
+    sh.z = orbit[0];
+    p.exec(&formula.perturb_init, &mut sh);
+    let mut m = 0usize;
+    let mut escaped = false;
+    let mut n = env.maxiter;
+    let mut z_full = orbit[0].add(sh.dz);
+    for i in 0..env.maxiter {
+        sh.z = orbit[m];
+        p.exec(&formula.perturb_loop, &mut sh);
+        m += 1;
+        z_full = orbit[m.min(orbit.len() - 1)].add(sh.dz);
+        sh.z = z_full;
+        if !formula.bailout.as_ref().map_or(true, |t| p.eval(t, &sh).as_bool()) {
+            escaped = true;
+            n = i + 1;
+            break;
+        }
+        // Past the orbit's end there is nothing to follow but its
+        // start; `rebase` adds the smaller-deviation test.
+        if m + 1 >= orbit.len() || (rebase && z_full.norm_sqr() < sh.dz.norm_sqr()) {
+            sh.dz = z_full.sub(orbit[0]);
+            m = 0;
+        }
+    }
+    Some(Run { z: z_full, n, escaped, index: 0.0, solid: false, dz: C64::ZERO })
+}
+
 /// Run a formula, and a colouring alongside it when given.
 pub fn run(
     formula: &Program,
@@ -185,7 +253,7 @@ pub fn run(
 ) -> Run {
     let mut f = Machine::new(formula, fparams);
     let mut c = coloring.map(|(p, v)| Machine::new(p, v));
-    let mut sh = Shared { env, z: C64::ZERO, numiter: 0, index: 0.0, solid: false };
+    let mut sh = Shared::new(env);
     // `global:` first: per image on the GPU, per call here.
     f.exec(&formula.global_body, &mut sh);
     if let Some(c) = c.as_mut() {
@@ -242,6 +310,7 @@ impl<'p> Machine<'p> {
                         Place::Z => sh.z = v.as_c64(),
                         Place::Index => sh.index = v.as_f64(),
                         Place::Solid => sh.solid = v.as_bool(),
+                        Place::DZ => sh.dz = v.as_c64(),
                     }
                 }
                 IStmt::If { arms, otherwise } => {
@@ -369,6 +438,8 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::MagXMag => Value::Complex(C64::new(env.magn, 1.0)),
         Predef::RotSkew => Value::Complex(C64::real(env.rotation.to_degrees())),
         Predef::JuliaC => Value::Complex(env.julia_c),
+        Predef::DZ => Value::Complex(sh.dz),
+        Predef::DPixel => Value::Complex(sh.dpixel),
     }
 }
 
@@ -692,6 +763,49 @@ mod tests {
         // The parameters as the GPU holds them read back the same.
         let slots = [-0.4f32, 0.078];
         assert_eq!(ParamValues::from_slots(&p, &slots).values, vec![(-0.4f32 as f64, 0.078f32 as f64)]);
+    }
+
+    /// UF's perturbation example: run as the perturbed path runs it, a
+    /// pixel near the reference iterates as it does directly -- the
+    /// same count, the same final z to f64's reach -- on both planes,
+    /// with and without rebasing.
+    #[test]
+    fn perturbation_equations_run_as_the_formula_does() {
+        let m = program_in(
+            "PM {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\nperturbinit:\n #dz = 0\n\
+             perturbloop:\n #dz = 2 * #z * #dz + sqr(#dz) + #dpixel\n}",
+            EntryKind::Formula,
+            Dialect::UltraFractal,
+        );
+        let j = program_in(
+            "PJ {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < 4\nperturbinit:\n #dz = #dpixel\n\
+             perturbloop:\n #dz = 2 * #z * #dz + sqr(#dz)\ndefault:\n param seed\n  default = (-0.123, 0.745)\n endparam\n}",
+            EntryKind::Formula,
+            Dialect::UltraFractal,
+        );
+        let mut compared = 0;
+        for (p, reference) in [(&m, C64::new(-0.7436, 0.1318)), (&j, C64::new(0.02, -0.03))] {
+            let params = ParamValues::defaults(p);
+            for k in 0..12 {
+                let t = k as f64 * 0.5236;
+                let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-4 * (1.0 + k as f64)));
+                let env = Env::at(px, 400);
+                let direct = run(p, &params, None, &env);
+                for rebase in [false, true] {
+                    let pert = run_perturbed(p, &params, &env, reference, rebase).expect("it has equations");
+                    assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "{} at {px:?}, rebase {rebase}", p.name);
+                    if direct.escaped {
+                        let err = pert.z.sub(direct.z).abs() / direct.z.abs();
+                        assert!(err < 1e-6, "{} at {px:?}: {:?} vs {:?}", p.name, pert.z, direct.z);
+                    }
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 48);
+        // No equations: nothing to run.
+        let plain = program_in("P {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}", EntryKind::Formula, Dialect::UltraFractal);
+        assert!(run_perturbed(&plain, &ParamValues::defaults(&plain), &Env::at(C64::ZERO, 10), C64::ZERO, true).is_none());
     }
 
     #[test]

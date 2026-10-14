@@ -34,11 +34,25 @@ pub fn with_derivative(p: &Program) -> Option<Program> {
         // A global is one value per image: constant in the pixel.
         if v.ty == Ty::Complex && need[i] && !v.global {
             dvar[i] = Some(out.vars.len());
-            out.vars.push(Var { name: format!("d_{}", v.name), ty: Ty::Complex, span: v.span, stored_real: false, global: false });
+            out.vars.push(Var {
+                name: format!("d_{}", v.name),
+                ty: Ty::Complex,
+                span: v.span,
+                stored_real: false,
+                global: false,
+                perturb: false,
+            });
         }
     }
     let dz = out.vars.len();
-    out.vars.push(Var { name: "d_z".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false });
+    out.vars.push(Var {
+        name: "d_z".to_string(),
+        ty: Ty::Complex,
+        span: Default::default(),
+        stored_real: false,
+        global: false,
+        perturb: false,
+    });
     let d = D { taint: &taint, dvar: &dvar, dz };
     out.init = d.stmts(&p.init)?;
     out.loop_body = d.stmts(&p.loop_body)?;

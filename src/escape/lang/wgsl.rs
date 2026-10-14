@@ -121,6 +121,37 @@ pub fn formula(p: &Program) -> String {
         "\nfn formula_same(a: FormulaState, b: FormulaState) -> bool {{\n    return {};\n}}\n",
         same.join("\n        && ")
     );
+    // UF's perturbation equations, for the perturbed path: the start
+    // and the step of the pixel's deviation `dz` from the reference,
+    // with the equations' own variables as locals, and the formula's
+    // test on the pixel's full z when it reads nothing else.
+    if !p.perturb_loop.is_empty() {
+        g.ctx = Ctx::Perturb;
+        let locals: String = p
+            .vars
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.perturb)
+            .map(|(i, v)| format!("    var v{i}: {} = {};\n", wgsl_ty(v.ty), zero_of(v.ty)))
+            .collect();
+        let _ = write!(
+            body,
+            "\nfn formula_perturb_init(z_ref: vec2<f32>, pixel: vec2<f32>, dpixel: vec2<f32>) -> vec2<f32> {{\n    var dz = vec2<f32>(0.0, 0.0);\n{locals}"
+        );
+        g.stmts(&p.perturb_init, 1, &mut body);
+        body.push_str("    return dz;\n}\n");
+        let _ = write!(
+            body,
+            "\nfn formula_perturb_loop(z_ref: vec2<f32>, dz_in: vec2<f32>, pixel: vec2<f32>, dpixel: vec2<f32>) -> vec2<f32> {{\n    var dz = dz_in;\n{locals}"
+        );
+        g.stmts(&p.perturb_loop, 1, &mut body);
+        body.push_str("    return dz;\n}\n");
+        if let Some(b) = p.bailout.as_ref().filter(|b| !reads_a_variable(b, p)) {
+            g.ctx = Ctx::PerturbBailout;
+            let test = g.expr(b);
+            let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>) -> bool {{\n    return {test};\n}}\n");
+        }
+    }
     g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
 }
 
@@ -255,6 +286,12 @@ enum Ctx {
     ColoringInit,
     ColoringLoop,
     ColoringFinal,
+    /// The perturbation equations: `#z` is the reference's `z_ref`,
+    /// variables are the functions' locals.
+    Perturb,
+    /// The formula's test on the perturbed path: `#z` is the pixel's
+    /// full `z`.
+    PerturbBailout,
 }
 
 struct Gen<'p> {
@@ -310,8 +347,14 @@ impl<'p> Gen<'p> {
         out.replace("uf_", self.prefix)
     }
 
+    /// A formula's function, whose parameters are `fparam`'s and whose
+    /// globals are in `fdata`.
+    fn formula_side(&self) -> bool {
+        matches!(self.ctx, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout)
+    }
+
     fn param_fn(&self) -> &'static str {
-        if self.ctx == Ctx::Formula {
+        if self.formula_side() {
             "fparam"
         } else {
             "cparam"
@@ -333,7 +376,7 @@ impl<'p> Gen<'p> {
     /// `fdata`, a colouring's parameter block after its parameters.
     fn global(&self, v: VarId, k: usize) -> String {
         let slot = |k: usize| {
-            if self.ctx == Ctx::Formula {
+            if self.formula_side() {
                 format!("fdata4({}u).{}", k / 4, ["x", "y", "z", "w"][k % 4])
             } else {
                 format!("cparam({}u)", self.p.param_slots() + k)
@@ -370,6 +413,7 @@ impl<'p> Gen<'p> {
                     Place::Z => "s.z".to_string(),
                     Place::Index => "index".to_string(),
                     Place::Solid => "solid".to_string(),
+                    Place::DZ => "dz".to_string(),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
@@ -514,7 +558,11 @@ impl<'p> Gen<'p> {
 
     fn predef(&mut self, p: Predef) -> String {
         match (p, self.ctx) {
-            (Predef::Pixel, Ctx::Formula) => "pixel".into(),
+            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout) => "pixel".into(),
+            (Predef::Z, Ctx::Perturb) => "z_ref".into(),
+            (Predef::Z, Ctx::PerturbBailout) => "z".into(),
+            (Predef::DZ, _) => "dz".into(),
+            (Predef::DPixel, _) => "dpixel".into(),
             (Predef::Pixel, _) => "esc_env_pixel".into(),
             (Predef::Z, Ctx::Formula) => "s.z".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
@@ -714,6 +762,20 @@ fn complex_helper(f: Builtin) -> Helper {
         Zero => Helper::CZero,
         Atan2 => Helper::CArgC,
         IsNan | IsInf => unreachable!("bool-valued"),
+    }
+}
+
+/// Whether an expression reads a variable that is not a global: what
+/// the perturbed path does not have, which keeps the reference's `z`
+/// alone.
+pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
+    match &e.kind {
+        IExprKind::Var(v) => !p.vars[*v].global,
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+            reads_a_variable(a, p)
+        }
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => reads_a_variable(a, p) || reads_a_variable(b, p),
+        _ => false,
     }
 }
 
@@ -1967,6 +2029,31 @@ pub(crate) mod tests {
         assert!(bad.is_empty(), "{}", bad.join("\n"));
         println!("compared {compared} (entry, point) pairs; skipped {skipped} that left early");
         assert!(skipped * 10 < compared, "too few points compared: {compared}, {skipped} skipped");
+    }
+
+    /// A formula's perturbation equations compile beside it: the start,
+    /// the step and the test on the full z, valid WGSL; a test that
+    /// reads another variable leaves the last out.
+    #[test]
+    fn perturbation_equations_compile_to_valid_wgsl() {
+        let p = program(
+            "P {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\nperturbinit:\n #dz = 0\n\
+             perturbloop:\n t = 2 * #z\n #dz = t * #dz + sqr(#dz) + #dpixel\n}",
+            EntryKind::Formula,
+        );
+        let module = formula_module(&p);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+        for f in ["fn formula_perturb_init(", "fn formula_perturb_loop(", "fn formula_perturb_bailout("] {
+            assert!(module.contains(f), "{f}");
+        }
+        let q = program(
+            "Q {\ninit:\n z = 0\nloop:\n w = z\n z = sqr(z) + #pixel\nbailout:\n |z - w| < 4\nperturbloop:\n #dz = #dpixel\n}",
+            EntryKind::Formula,
+        );
+        let module = formula_module(&q);
+        assert!(module.contains("fn formula_perturb_loop(") && !module.contains("fn formula_perturb_bailout("));
     }
 
     #[test]

@@ -73,6 +73,9 @@ pub struct Var {
     /// Set in `global:`: one value per image, read-only elsewhere (UF's
     /// rule), computed on the CPU and read from the uniform.
     pub global: bool,
+    /// Made in `perturbinit:` or `perturbloop:`: a temporary of the
+    /// perturbation equations, which see no other section's variables.
+    pub perturb: bool,
 }
 
 /// The predefined symbols a program reads or writes.
@@ -108,6 +111,11 @@ pub enum Predef {
     /// The Julia constant: what a `switch:` target's `#pixel` copy
     /// reads ([`super::switch`]); no name in either language.
     JuliaC,
+    /// `#dz`: the pixel's deviation from the reference orbit, in the
+    /// perturbation sections (where `#z` is the reference's value).
+    DZ,
+    /// `#dpixel`: the pixel's offset from the reference point.
+    DPixel,
 }
 
 impl Predef {
@@ -117,9 +125,14 @@ impl Predef {
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index => Ty::Float,
             Predef::Solid => Ty::Bool,
-            Predef::WhiteSq | Predef::ScrnMax | Predef::IsMand | Predef::MagXMag | Predef::RotSkew | Predef::JuliaC => {
-                Ty::Complex
-            }
+            Predef::WhiteSq
+            | Predef::ScrnMax
+            | Predef::IsMand
+            | Predef::MagXMag
+            | Predef::RotSkew
+            | Predef::JuliaC
+            | Predef::DZ
+            | Predef::DPixel => Ty::Complex,
         }
     }
 }
@@ -232,6 +245,8 @@ pub enum Place {
     Z,
     Index,
     Solid,
+    /// `#dz`, in the perturbation sections.
+    DZ,
 }
 
 #[derive(Clone, Debug)]
@@ -283,6 +298,15 @@ pub struct Program {
     pub bailout: Option<IExpr>,
     /// A colouring's `final:`.
     pub final_body: Vec<IStmt>,
+    /// UF's perturbation equations (`perturbinit:`, `perturbloop:`):
+    /// the pixel's deviation `#dz` from the reference orbit, its start
+    /// and its step, with `#z` the reference's value and `#dpixel` the
+    /// pixel's offset. Empty: the formula has none.
+    pub perturb_init: Vec<IStmt>,
+    pub perturb_loop: Vec<IStmt>,
+    /// The `perturb` setting: when the equations hold (parameters and
+    /// constants only; absent, always).
+    pub perturb_when: Option<IExpr>,
     pub region: Region,
     pub view: ViewSettings,
     /// A colouring's variables that live from one section, or one
@@ -329,6 +353,8 @@ impl Program {
             || s(&self.loop_body, p)
             || s(&self.final_body, p)
             || self.bailout.as_ref().is_some_and(|b| e(b, p))
+            || s(&self.perturb_init, p)
+            || s(&self.perturb_loop, p)
     }
 
     /// Slots the parameters take in a 16-float block: one each, two for
