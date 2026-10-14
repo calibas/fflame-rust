@@ -19,8 +19,13 @@
 //! zero-pair-exact helper, NaN and infinity tested by bits, no
 //! self-division, no subnormal literals.
 //!
+//! A program's `global:` values are computed once per image on the CPU
+//! ([`super::interp::globals`]) and read here from the uniform: a
+//! formula's from `fdata4`, a colouring's from `cparam` after its
+//! parameters. They are not part of any per-pixel state.
+//!
 //! What the templates provide: `params.max_iter`, `fparam` / `cparam`,
-//! `OrbitSummary`, and the per-pixel environment as private globals
+//! `fdata4`, `OrbitSummary`, and the per-pixel environment as private globals
 //! `esc_env_px`, `esc_env_size`, `esc_env_pixel`, `esc_env_center`,
 //! `esc_env_magn` (see [`ENV_DECLS`]).
 
@@ -75,10 +80,12 @@ pub struct ColoringWgsl {
 pub fn formula(p: &Program) -> String {
     let mut g = Gen::new(p, Ctx::Formula, "uff_");
     let mut body = String::new();
-    // The state: z and every variable.
+    // The state: z and every variable but the globals.
     body.push_str("struct FormulaState {\n    z: vec2<f32>,\n");
     for (i, v) in p.vars.iter().enumerate() {
-        let _ = writeln!(body, "    v{i}: {},", wgsl_ty(v.ty));
+        if !v.global {
+            let _ = writeln!(body, "    v{i}: {},", wgsl_ty(v.ty));
+        }
     }
     body.push_str("}\n\n");
     body.push_str("fn formula_init(pixel: vec2<f32>) -> FormulaState {\n    var s: FormulaState;\n");
@@ -98,7 +105,7 @@ pub fn formula(p: &Program) -> String {
     // equal and can continue differently, and Metal's fast-math folds
     // float comparisons (CLAUDE.md).
     let mut same = vec!["all(bitcast<vec2<u32>>(a.z) == bitcast<vec2<u32>>(b.z))".to_string()];
-    for (i, v) in p.vars.iter().enumerate() {
+    for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global) {
         same.push(match v.ty {
             Ty::Complex => format!("all(bitcast<vec2<u32>>(a.v{i}) == bitcast<vec2<u32>>(b.v{i}))"),
             Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
@@ -172,7 +179,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     // The other variables are locals of each function.
     let locals = |out: &mut String| {
         for (i, v) in p.vars.iter().enumerate() {
-            if !p.state.contains(&i) {
+            if !p.state.contains(&i) && !v.global {
                 let _ = writeln!(out, "    var v{i}: {} = {};", wgsl_ty(v.ty), zero_of(v.ty));
             }
         }
@@ -235,6 +242,8 @@ struct Gen<'p> {
     slots: Vec<usize>,
     /// The user functions' slots, after the parameters.
     func_slots: Vec<usize>,
+    /// Each packed global's first float in its block.
+    global_slots: Vec<Option<usize>>,
     loops: usize,
 }
 
@@ -247,7 +256,13 @@ impl<'p> Gen<'p> {
             at += param.ty().floats();
         }
         let func_slots = (0..p.funcs.len()).map(|i| at + i).collect();
-        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, loops: 0 }
+        let mut global_slots = vec![None; p.vars.len()];
+        let mut g = 0;
+        for &v in &p.globals {
+            global_slots[v] = Some(g);
+            g += p.vars[v].ty.floats();
+        }
+        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, global_slots, loops: 0 }
     }
 
     /// Helpers, then the body; `uf_` becomes the program's prefix.
@@ -277,10 +292,31 @@ impl<'p> Gen<'p> {
     }
 
     fn var(&self, v: VarId) -> String {
+        if let Some(k) = self.global_slots[v] {
+            return self.global(v, k);
+        }
         if self.ctx == Ctx::Formula {
             format!("s.v{v}")
         } else {
             format!("v{v}")
+        }
+    }
+
+    /// A global's value, from the block the CPU filled: a formula's
+    /// `fdata`, a colouring's parameter block after its parameters.
+    fn global(&self, v: VarId, k: usize) -> String {
+        let slot = |k: usize| {
+            if self.ctx == Ctx::Formula {
+                format!("fdata4({}u).{}", k / 4, ["x", "y", "z", "w"][k % 4])
+            } else {
+                format!("cparam({}u)", self.p.param_slots() + k)
+            }
+        };
+        match self.p.vars[v].ty {
+            Ty::Complex => format!("vec2<f32>({}, {})", slot(k), slot(k + 1)),
+            Ty::Float => slot(k),
+            Ty::Int => format!("i32(round({}))", slot(k)),
+            Ty::Bool => format!("({} != 0.0)", slot(k)),
         }
     }
 
@@ -1180,6 +1216,9 @@ fn fparam(i: u32) -> f32 {
 fn cparam(i: u32) -> f32 {
     return f32(i);
 }
+fn fdata4(i: u32) -> vec4<f32> {
+    return vec4<f32>(f32(i));
+}
 ";
 
 
@@ -1513,6 +1552,37 @@ pub(crate) mod tests {
         if let Err(e) = validate(&module) {
             panic!("{e}\n---\n{module}");
         }
+    }
+
+    /// Globals of every type compile in both kinds of entry: read from
+    /// the uniform, kept out of the per-pixel state.
+    #[test]
+    fn globals_compile_to_valid_wgsl() {
+        let f = program(
+            "G {\nglobal:\n complex c = @a * 2\n float k = #magn\n int n = #maxiter - 2\n bool b = k > 1\n\
+             init:\n z = 0\nloop:\n z = sqr(z) + #pixel * k + c\nbailout:\n |z| < n && b\n}",
+            EntryKind::Formula,
+        );
+        let module = formula_module(&f);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+        let state = &module[module.find("struct FormulaState").unwrap()..];
+        let state = &state[..state.find('}').unwrap()];
+        assert_eq!(state.matches(':').count(), 1, "only z is per pixel: {state}");
+        assert!(module.contains("fdata4(0u).x") && module.contains("fdata4(0u).w"), "{module}");
+
+        let c = program(
+            "C {\nglobal:\n float k = @scale * 2\n complex w = (1, 2)\ninit:\n float s = 0\nloop:\n s = s + k\n\
+             final:\n #index = s + real(w)\ndefault:\n float param scale\n  default = 1\n endparam\n}",
+            EntryKind::Coloring,
+        );
+        let module = coloring_module(&c);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+        // After the one parameter: slots 1, 2 and 3.
+        assert!(module.contains("cparam(1u)") && module.contains("cparam(3u)"), "{module}");
     }
 
     #[test]

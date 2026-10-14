@@ -31,13 +31,14 @@ pub fn with_derivative(p: &Program) -> Option<Program> {
     // depends on, then the iterate's.
     let mut dvar: Vec<Option<VarId>> = vec![None; p.vars.len()];
     for (i, v) in p.vars.iter().enumerate() {
-        if v.ty == Ty::Complex && need[i] {
+        // A global is one value per image: constant in the pixel.
+        if v.ty == Ty::Complex && need[i] && !v.global {
             dvar[i] = Some(out.vars.len());
-            out.vars.push(Var { name: format!("d_{}", v.name), ty: Ty::Complex, span: v.span, stored_real: false });
+            out.vars.push(Var { name: format!("d_{}", v.name), ty: Ty::Complex, span: v.span, stored_real: false, global: false });
         }
     }
     let dz = out.vars.len();
-    out.vars.push(Var { name: "d_z".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false });
+    out.vars.push(Var { name: "d_z".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false });
     let d = D { taint: &taint, dvar: &dvar, dz };
     out.init = d.stmts(&p.init)?;
     out.loop_body = d.stmts(&p.loop_body)?;
@@ -402,6 +403,14 @@ mod tests {
         matches_differences(&j, C64::new(0.1, 0.2), 6);
         let r = run(&with_derivative(&j).unwrap(), &ParamValues::defaults(&j), None, &Env::at(C64::new(0.1, 0.2), 0));
         assert_eq!(r.dz, C64::ONE);
+        // A `global:` value is the image's: constant in the pixel, and
+        // no derivative variable of its own.
+        let g = program(
+            "G {\nglobal:\n c = (0.15, 0.25) * 2\ninit:\n z = #pixel\nloop:\n z = z^2 + c\nbailout:\n true\n}",
+            Dialect::UltraFractal,
+        );
+        matches_differences(&g, C64::new(0.1, 0.2), 6);
+        assert!(!with_derivative(&g).unwrap().vars.iter().any(|v| v.name == "d_c"));
     }
 
     /// Every rule at once: products, quotients, both kinds of power,
