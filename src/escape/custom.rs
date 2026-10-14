@@ -38,6 +38,20 @@ struct Registry {
     /// The colourings keeping more than four floats: the `vec4`s of
     /// state past the first ([`accum_ext`]).
     accum_ext: HashMap<String, usize>,
+    /// The formulas that take the perturbed path: the program, for the
+    /// reference orbit, and how it perturbs ([`perturb_tier`]).
+    perturbable: HashMap<String, (Arc<ir::Program>, lang::perturb::Perturbable)>,
+    /// What each reference identity handed out names ([`reference_identity`]).
+    references: HashMap<u64, ReferenceInputs>,
+}
+
+/// Everything a custom formula's reference orbit is a function of
+/// besides its point and precision.
+#[derive(Clone)]
+struct ReferenceInputs {
+    prog: Arc<ir::Program>,
+    params: lang::interp::ParamValues,
+    env: lang::interp::Env,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -265,13 +279,129 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         wgsl_derivative: leak(derivative),
         presets: &[],
     }));
+    let perturbs = lang::perturb::perturbation(&p).ok();
     if let Ok(mut r) = registry().write() {
         r.formulas.insert(name.to_string(), def);
+        let p = Arc::new(p);
+        if let Some(how) = perturbs {
+            r.perturbable.insert(name.to_string(), (p.clone(), how));
+        }
         if !p.globals.is_empty() {
-            r.programs.insert(name.to_string(), Arc::new(p));
+            r.programs.insert(name.to_string(), p);
         }
     }
     Ok(def)
+}
+
+/// A custom formula's perturbation tier for a view, when it has one:
+/// equations a formula of its shape can take (`lang::perturb`), its
+/// `perturb` setting holding for these parameters, and the view no
+/// deeper than `max_zoom_log2` -- the scaled rung's, until the custom
+/// tier has its floatexp rung (plan, phase 3).
+pub fn perturb_tier(escape: &EscapeConfig, max_zoom_log2: f64) -> Option<super::assembler::PerturbTier> {
+    if !escape.formula.starts_with(PREFIX) || escape.zoom_log2 > max_zoom_log2 {
+        return None;
+    }
+    ensure(escape);
+    let (prog, how) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
+    let inputs = reference_inputs(escape, &prog)?;
+    if !lang::interp::perturb_holds(&prog, &inputs.params, &inputs.env) {
+        return None;
+    }
+    let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
+    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase })
+}
+
+/// The program and inputs a config's custom formula iterates with: its
+/// parameters as the GPU packs them (the panel's bailout bound to the
+/// program's own), and the image's values it may read.
+fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<ReferenceInputs> {
+    let def = formula(&escape.formula)?;
+    let mut slots = super::packed_formula_params(def, &escape.formula_params);
+    if let Some(i) = def.parameters.iter().position(|p| p.name == "bailout" || p.name == "bailout.re") {
+        slots[i] = escape.bailout;
+    }
+    let params = lang::interp::ParamValues::from_slots(prog, &slots);
+    let (cx, cy) = escape.center_f64();
+    let env = lang::interp::Env {
+        pixel: lang::builtins::C64::ZERO,
+        maxiter: escape.max_iter.max(1),
+        center: lang::builtins::C64::new(cx, cy),
+        // As the shader's `esc_env_magn`: 4 / span.
+        magn: escape.zoom_factor(),
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        random: lang::builtins::C64::ZERO,
+        julia: escape.julia,
+        julia_c: lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
+        rotation: f64::from(escape.rotation),
+    };
+    Some(ReferenceInputs { prog: prog.clone(), params, env })
+}
+
+/// The reference identity of a config's custom formula: the two map
+/// parameters the reference orbit's cache keys already compare
+/// (`ReferenceOrbit::map_params`), carrying a 46-bit hash of everything
+/// the orbit is a function of besides its point and precision -- the
+/// program, its parameters, the plane, and what of the image it reads.
+/// Each half is a normal f32 in [1, 2), so equality compares bits.
+pub fn reference_identity(escape: &EscapeConfig) -> Option<[f32; 2]> {
+    let prog = registry().read().ok()?.perturbable.get(&escape.formula)?.0.clone();
+    let inputs = reference_inputs(escape, &prog)?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |v: u64| {
+        for b in v.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for b in escape.formula.bytes() {
+        eat(u64::from(b));
+    }
+    for (re, im) in &inputs.params.values {
+        eat(re.to_bits());
+        eat(im.to_bits());
+    }
+    for f in &inputs.params.funcs {
+        eat(*f as u64);
+    }
+    let env = &inputs.env;
+    eat(u64::from(env.julia));
+    eat(env.julia_c.re.to_bits());
+    eat(env.julia_c.im.to_bits());
+    if prog.reads(ir::Predef::MaxIter) {
+        eat(u64::from(env.maxiter));
+    }
+    if prog.reads(ir::Predef::Magn) || prog.reads(ir::Predef::MagXMag) {
+        eat(env.magn.to_bits());
+    }
+    if prog.reads(ir::Predef::RotSkew) {
+        eat(env.rotation.to_bits());
+    }
+    let id = h & ((1u64 << 46) - 1);
+    if let Ok(mut r) = registry().write() {
+        // One a parameter set seen; a session that drags a slider
+        // through thousands starts over rather than grow without end
+        // (a reference already computed keeps its machine).
+        if r.references.len() >= 1024 && !r.references.contains_key(&id) {
+            r.references.clear();
+        }
+        r.references.insert(id, inputs);
+    }
+    let half = |bits: u64| f32::from_bits(0x3F80_0000 | (bits & 0x7F_FFFF) as u32);
+    Some([half(id), half(id >> 23)])
+}
+
+/// The program a reference identity names, started at the reference
+/// point in big floats `n_limbs` wide: the custom family's state in a
+/// reference orbit. `None` for an identity this session did not hand
+/// out, or a start the big floats cannot make.
+pub fn reference_machine(map_params: [f32; 2], center: &crate::escape::bigfloat::BigComplex, n_limbs: usize) -> Option<lang::bigeval::BigMachine> {
+    let id = u64::from(map_params[0].to_bits() & 0x7F_FFFF) | (u64::from(map_params[1].to_bits() & 0x7F_FFFF) << 23);
+    let inputs = registry().read().ok()?.references.get(&id).cloned()?;
+    lang::bigeval::BigMachine::new(inputs.prog, inputs.params, inputs.env, center.clone(), n_limbs).ok()
 }
 
 /// Compile a colouring entry and register it under `name`.

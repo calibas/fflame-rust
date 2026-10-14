@@ -2257,6 +2257,131 @@ final:
         assert_eq!(d, 0.0, "split into chunks, the extended state differs on {:.3}% of pixels", d * 100.0);
     }
 
+    /// A custom formula with UF's perturbation equations takes the
+    /// perturbed path by them (plan, phase 3), and at depth, where f32
+    /// has long run out, counts its pixels' iterations as exactly as the
+    /// built-in Mandelbrot's tier does: the language's Mandelbrot with
+    /// UF's own example equations against the built-in, both held to the
+    /// truth, each sampled pixel iterated in big floats. Measured (GTX
+    /// 1660): at zoom 20 with 300 iterations, 438 and 439 of 439 exact;
+    /// with 2000 in the seahorse valley, where f32's rounding grows
+    /// chaotically, 402 and 404 with the same plain reference (410 with
+    /// the built-in's nucleus reference, which custom formulas lack).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_perturbs_by_its_own_equations() {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
+        const PM: &str = "PM {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                          perturbinit:\n #dz = 0\nperturbloop:\n #dz = 2 * #z * #dz + sqr(#dz) + #dpixel\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        let prog = {
+            let (file, _) = lang::parser::parse_file(PM);
+            std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap())
+        };
+        let (w, h) = (64u32, 48u32);
+        for (iters, need) in [(300u32, 0.99), (2000, 0.0)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = "-0.743643887037158704752191506114774".into();
+            esc.center_im = "0.131825904205311970493132056385139".into();
+            esc.zoom_log2 = 20.0;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let custom = with_custom(esc.clone(), Some((PM, "PM")), None);
+            crate::escape::custom::ensure(&custom);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, .. })), "{tier:?}");
+            let built_in = records_on(&esc, w, h, false, true, false);
+            let got = records_on(&custom, w, h, false, true, false);
+            // The truth: each sampled pixel's orbit in 256-bit floats.
+            let n = 4;
+            let centre = BigComplex::from_fixed(&FixedComplex {
+                re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(),
+                im: FixedPoint::from_decimal(&esc.center_im, n).unwrap(),
+            });
+            let span_y = 4.0 / esc.zoom_log2.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let (mut exact_built_in, mut exact_custom, mut total) = (0usize, 0usize, 0usize);
+            for idx in (0..(w * h) as usize).step_by(7) {
+                let (px, py) = (idx as u32 % w, idx as u32 / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                let env = lang::interp::Env::at(lang::builtins::C64::ZERO, iters);
+                let params = lang::interp::ParamValues { values: vec![(4.0, 0.0)], funcs: vec![] };
+                let mut m = lang::bigeval::BigMachine::new(prog.clone(), params, env, centre.add(&BigComplex::from_f64(dx, dy, n)), n).unwrap();
+                let mut count = iters;
+                for i in 0..iters {
+                    if !m.step().unwrap() {
+                        count = i + 1;
+                        break;
+                    }
+                }
+                total += 1;
+                exact_built_in += usize::from(built_in[idx].n == count);
+                exact_custom += usize::from(got[idx].n == count);
+            }
+            println!("{iters} iterations: of {total} pixels, the built-in tier counts {exact_built_in} exactly, the custom {exact_custom}");
+            assert!(exact_custom as f64 >= need * total as f64, "{iters}: {exact_custom} of {total} exact");
+            assert!(exact_custom + total * 3 / 100 >= exact_built_in, "{iters}: {exact_custom} against the built-in's {exact_built_in}");
+        }
+
+        // The Julia plane: the deviation starts at the pixel's offset
+        // (`#dz = #dpixel`) and no offset enters the step.
+        const PJ: &str = "PJ {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < @bailout\n\
+                          perturbinit:\n #dz = #dpixel\nperturbloop:\n #dz = 2 * #z * #dz + sqr(#dz)\n\
+                          default:\n param seed\n  default = (-0.8, 0.156)\n endparam\n float param bailout\n  default = 4\n endparam\n}";
+        let prog = {
+            let (file, _) = lang::parser::parse_file(PJ);
+            std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap())
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "0.0312461250000003".into();
+        esc.center_im = "0.6458823041987114".into();
+        esc.zoom_log2 = 24.0;
+        esc.max_iter = 600;
+        esc.bailout = 4.0;
+        esc.julia = true;
+        esc.julia_re = -0.8;
+        esc.julia_im = 0.156;
+        let mut custom = with_custom(esc.clone(), Some((PJ, "PJ")), None);
+        custom.julia = false;
+        crate::escape::custom::ensure(&custom);
+        assert!(crate::escape::EscapeRenderer::perturb_tier(&custom).is_some());
+        let built_in = records_on(&esc, w, h, false, true, false);
+        let got = records_on(&custom, w, h, false, true, false);
+        let n = 4;
+        let centre = BigComplex::from_fixed(&FixedComplex {
+            re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(),
+            im: FixedPoint::from_decimal(&esc.center_im, n).unwrap(),
+        });
+        let span_y = 4.0 / esc.zoom_log2.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let (mut exact_built_in, mut exact_custom, mut total, mut escaped) = (0usize, 0usize, 0usize, 0usize);
+        for idx in (0..(w * h) as usize).step_by(7) {
+            let (px, py) = (idx as u32 % w, idx as u32 / w);
+            let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+            let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+            let env = lang::interp::Env::at(lang::builtins::C64::ZERO, 600);
+            let params = lang::interp::ParamValues { values: vec![(-0.8f32 as f64, 0.156f32 as f64), (4.0, 0.0)], funcs: vec![] };
+            let mut m = lang::bigeval::BigMachine::new(prog.clone(), params, env, centre.add(&BigComplex::from_f64(dx, dy, n)), n).unwrap();
+            let mut count = 600;
+            for i in 0..600 {
+                if !m.step().unwrap() {
+                    count = i + 1;
+                    break;
+                }
+            }
+            total += 1;
+            escaped += usize::from(count < 600);
+            exact_built_in += usize::from(built_in[idx].n == count);
+            exact_custom += usize::from(got[idx].n == count);
+        }
+        println!("Julia: of {total} pixels ({escaped} escaping), the built-in tier counts {exact_built_in} exactly, the custom {exact_custom}");
+        assert!(escaped > total / 10, "the Julia view shows too little ({escaped} escape)");
+        assert!(exact_custom + total * 3 / 100 >= exact_built_in && exact_custom * 10 >= total * 9, "Julia: {exact_custom} against {exact_built_in}");
+    }
+
     /// A parameter past the first 16 floats reaches the GPU: the block
     /// holds 64 (UF's public formulas need them). Nine complex
     /// parameters come first, so the seed sits in slots 18 and 19.

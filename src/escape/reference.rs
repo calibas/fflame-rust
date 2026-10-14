@@ -296,11 +296,17 @@ pub const MAP_KALISET: u32 = 18;
 /// variant (0 and 4 perturb). The step is transcendental, so the
 /// reference runs on the big-float `ln`/`atan2` core.
 pub const MAP_DUCKS: u32 = 19;
+/// A custom formula (escape::lang) with UF's perturbation equations:
+/// its program, run in big floats (`lang::bigeval`), is the orbit, and
+/// its own test ends it. `map_params` carry the program's identity
+/// (`custom::reference_identity`), which names the program, its
+/// parameters and the plane; never stored, as no big family is.
+pub const MAP_CUSTOM: u32 = 20;
 
 /// Whether a (ship, variant) pair names one of the families whose
 /// reference state lives in a [`BigComplex`] rather than fixed point.
 pub fn map_is_big(ship: bool, variant: u32) -> bool {
-    !ship && (MAP_NEWTON_BASE..=MAP_DUCKS).contains(&variant)
+    !ship && (MAP_NEWTON_BASE..=MAP_CUSTOM).contains(&variant)
 }
 
 /// The Newton family's variant for a (scheme, func) pair.
@@ -621,6 +627,8 @@ pub struct ReferenceOrbit {
     zb: BigComplex,
     cb: BigComplex,
     pb: BigComplex,
+    /// The custom family's state: the program at the reference point.
+    custom: Option<Box<crate::escape::lang::bigeval::BigMachine>>,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -857,6 +865,9 @@ impl ReferenceOrbit {
             re: FixedPoint::from_decimal(center_re, n)?,
             im: FixedPoint::from_decimal(center_im, n)?,
         };
+        // The custom family starts at its program's own start, at the
+        // reference point (below).
+        let custom_at = (!ship && ship_variant == MAP_CUSTOM).then(|| BigComplex::from_fixed(&center));
         // Parameter plane: z0 = 0, c = center. Julia (dynamical)
         // plane: z0 = center, c = the fixed Julia constant (f32
         // config values — exact in fixed-point).
@@ -953,6 +964,7 @@ impl ReferenceOrbit {
             zb,
             cb,
             pb,
+            custom: None,
             store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
@@ -970,6 +982,18 @@ impl ReferenceOrbit {
             shadow: [f64::NAN; 4],
             c_dd: [0.0; 4],
         };
+        // The custom family's start is its program's: `global:` and
+        // `init:` at the reference point (the formula decides its own
+        // plane), in big floats.
+        if let Some(at) = custom_at {
+            let machine = crate::escape::custom::reference_machine(map_params, &at, n)?;
+            orbit.zb = machine.z().clone();
+            let (hi, lo, ee, _) = split_entry_big(&orbit.zb);
+            orbit.orbit = vec![hi];
+            orbit.orbit_lo = vec![lo];
+            orbit.orbit_e = vec![ee];
+            orbit.custom = Some(Box::new(machine));
+        }
         orbit.init_shadow();
         orbit.extend(max_iter);
         Some(orbit)
@@ -1062,6 +1086,19 @@ impl ReferenceOrbit {
             MAP_DUCKS => self.step_ducks(),
             _ => false,
         }
+    }
+
+    /// One loop pass of the custom family's program: `Some(true)` when
+    /// its test holds (the iterate pushed), `Some(false)` when it fails
+    /// (the escaping iterate pushed: the orbit ends there, as the
+    /// fixed-point families end on theirs), `None` when the big floats
+    /// cannot take the step (nothing pushed).
+    fn step_custom(&mut self) -> Option<bool> {
+        let machine = self.custom.as_mut()?;
+        let go = machine.step().ok()?;
+        self.zb = machine.z().clone();
+        self.push_entry_big();
+        Some(go)
     }
 
     /// Newton / Halley / Chebyshev over the polynomial functions, with
@@ -1180,6 +1217,15 @@ impl ReferenceOrbit {
             return;
         }
         while (self.orbit.len() as u32) <= max_iter {
+            if self.custom.is_some() {
+                match self.step_custom() {
+                    Some(true) => continue,
+                    _ => {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                }
+            }
             if map_is_big(self.ship, self.ship_variant) {
                 // The big-float families: their own step, their own
                 // end (a divisor exactly zero ends the orbit the way an
@@ -1837,6 +1883,7 @@ impl ReferenceOrbit {
                     zb: BigComplex::zero(0),
                     cb: BigComplex::zero(0),
                     pb: BigComplex::zero(0),
+                    custom: None,
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -2002,6 +2049,7 @@ impl ReferenceOrbit {
             zb: BigComplex::zero(0),
             cb: BigComplex::zero(0),
             pb: BigComplex::zero(0),
+            custom: None,
             corrections,
             shadow,
             c_dd,
@@ -3089,7 +3137,10 @@ impl OrbitCache {
                 julia_c,
                 power,
                 ship,
-                ship_variant.min(5),
+                // Only a Ship FOLD variant clamps: a family number past 5
+                // clamped to Feather's, and a Magnet I, Kaliset (-c) or
+                // Ducks v0 request could load a stored Feather(2) orbit.
+                if ship { ship_variant.min(5) } else { ship_variant },
                 map_params,
                 zoom_log2,
                 self.height_px.max(1.0),
@@ -3355,7 +3406,7 @@ mod big_family_tests {
                 assert!(map_is_big(false, v));
             }
         }
-        for v in [MAP_NOVA, MAP_KALISET, MAP_DUCKS] {
+        for v in [MAP_NOVA, MAP_KALISET, MAP_DUCKS, MAP_CUSTOM] {
             assert!(map_is_big(false, v));
         }
         for v in [MAP_PLAIN, MAP_CONJ, MAP_PHOENIX, MAP_MANOWAR, MAP_LAMBDA, MAP_FEATHER, MAP_MCMULLEN, MAP_MAGNET] {

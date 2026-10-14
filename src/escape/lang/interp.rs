@@ -185,6 +185,15 @@ pub struct Run {
     pub dz: C64,
 }
 
+/// The `perturb` setting's answer for these parameters and this image
+/// (absent: the equations always hold).
+pub fn perturb_holds(p: &Program, params: &ParamValues, env: &Env) -> bool {
+    let Some(e) = &p.perturb_when else { return true };
+    let m = Machine::new(p, params);
+    let sh = Shared::new(env);
+    m.eval(e, &sh).as_bool()
+}
+
 /// A pixel as the perturbed path runs it, in f64: the formula's own
 /// orbit at `reference` (its init and loop, `#z` kept each iteration,
 /// until its test fails or `maxiter`), then the pixel as a deviation
