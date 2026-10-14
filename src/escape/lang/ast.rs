@@ -197,6 +197,9 @@ pub enum ExprKind {
     Modulus(Box<Expr>),
     /// `target = value`; an expression, so `a = b = 1` chains.
     Assign(Box<Expr>, Box<Expr>),
+    /// A string: a value only where UF compares an enum parameter with
+    /// an item's name, `@type == "Sine"`.
+    Str(String),
 }
 
 /// The `default:` (or `switch:`) section: `name = value` settings and

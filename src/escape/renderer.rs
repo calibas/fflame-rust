@@ -24,7 +24,7 @@ use egui_wgpu::wgpu::{
 
 use crate::config::escape::EscapeConfig;
 
-use super::assembler::{self, PARAM_VEC4S};
+use super::assembler::{self, LAYER_PARAM_VEC4S, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
 mod solid_path;
@@ -637,7 +637,7 @@ struct EscapeParamsGpu {
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// The texture layer's colouring parameters (`ColoringLayer`).
-    lparams: [[f32; 4]; PARAM_VEC4S],
+    lparams: [[f32; 4]; LAYER_PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
     /// vec4-packed; zero for formulas without the hook.
     fdata: [[f32; 4]; FDATA_VEC4S],
@@ -7951,7 +7951,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
-        let mut lparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut lparams = [[0.0f32; 4]; LAYER_PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
         // The smooth count's log base: the formula's degree in mode A, 2
         // elsewhere.
@@ -9381,15 +9381,15 @@ mod tests {
         // palette map's vec4 (16) + 3 param arrays (192) + the
         // derived-data table (1024) + the crease row (16) = 1328, and
         // every vec4 must start 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1328);
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1712);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 96);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 160);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 224);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 288);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, crease), 1312);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 352);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 608);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 672);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, crease), 1696);
     }
 }
 

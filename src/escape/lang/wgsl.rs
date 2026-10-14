@@ -245,6 +245,9 @@ struct Gen<'p> {
     /// Each packed global's first float in its block.
     global_slots: Vec<Option<usize>>,
     loops: usize,
+    /// Inside a constant subexpression: its literals go through
+    /// `uf_k`, so WGSL does not fold it ([`constant`]).
+    opaque: bool,
 }
 
 impl<'p> Gen<'p> {
@@ -262,7 +265,7 @@ impl<'p> Gen<'p> {
             global_slots[v] = Some(g);
             g += p.vars[v].ty.floats();
         }
-        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, global_slots, loops: 0 }
+        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, global_slots, loops: 0, opaque: false }
     }
 
     /// Helpers, then the body; `uf_` becomes the program's prefix.
@@ -387,10 +390,32 @@ impl<'p> Gen<'p> {
     // ---- expressions ----------------------------------------------------
 
     fn expr(&mut self, e: &IExpr) -> String {
+        // WGSL folds a constant expression when it validates, and refuses
+        // one whose value is not finite (`sqrt(-3)`, `1 / 0`, an
+        // overflow), where UF computes NaN or infinity. Through `uf_k` a
+        // constant is not WGSL's constant: the driver still folds it.
+        if !self.opaque && constant(e) && !literal(e) {
+            self.opaque = true;
+            let s = self.expr(e);
+            self.opaque = false;
+            return s;
+        }
         match &e.kind {
             IExprKind::Bool(b) => b.to_string(),
+            IExprKind::Int(i) if self.opaque => {
+                self.use_(Helper::Opaque);
+                format!("uf_ki({}i)", *i as i32)
+            }
             IExprKind::Int(i) => format!("{}i", *i as i32),
+            IExprKind::Float(f) if self.opaque => {
+                self.use_(Helper::Opaque);
+                format!("uf_k({})", lit_f32(*f))
+            }
             IExprKind::Float(f) => lit_f32(*f),
+            IExprKind::Complex(re, im) if self.opaque => {
+                self.use_(Helper::Opaque);
+                format!("uf_kc(vec2<f32>({}, {}))", lit_f32(*re), lit_f32(*im))
+            }
             IExprKind::Complex(re, im) => format!("vec2<f32>({}, {})", lit_f32(*re), lit_f32(*im)),
             IExprKind::Var(v) => self.var(*v),
             IExprKind::Param(id) => {
@@ -668,6 +693,28 @@ fn complex_helper(f: Builtin) -> Helper {
     }
 }
 
+/// Whether WGSL would take an expression for a constant: no variable,
+/// parameter, symbol or user function in it.
+fn constant(e: &IExpr) -> bool {
+    match &e.kind {
+        IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
+        IExprKind::Var(_) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) => false,
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => {
+            constant(a)
+        }
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => constant(a) && constant(b),
+    }
+}
+
+/// A literal, negated or widened: always finite, nothing to fold.
+fn literal(e: &IExpr) -> bool {
+    match &e.kind {
+        IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
+        IExprKind::Unary(UnOp::Neg, a) | IExprKind::Convert(a) => literal(a),
+        _ => false,
+    }
+}
+
 /// Whether a colouring can mark a pixel solid: it writes `#solid`, or it
 /// colours the inside only.
 pub fn writes_solid(p: &Program) -> bool {
@@ -794,6 +841,7 @@ enum Helper {
     CCosxx,
     User,
     UserD,
+    Opaque,
 }
 
 impl Helper {
@@ -853,6 +901,7 @@ impl Helper {
             CCosxx => "uf_ccosxx",
             User => "uf_user",
             UserD => "uf_user_d",
+            Opaque => "uf_k",
         }
     }
 
@@ -868,7 +917,8 @@ impl Helper {
             CExp | CSin | CCos | CSinh | CCosh => &[Reduce],
             CTan | CCotan => &[CSin, CCos, CDiv],
             CTanh | CCotanh => &[CSinh, CCosh, CDiv],
-            CAsin | CAcos => &[CMul, CSqrt, CLog],
+            CAsin => &[CMul, CSqrt, CLog],
+            CAcos => &[CAsin],
             CAtan | CAtanh => &[CDiv, CLog],
             CAsinh | CAcosh => &[CMul, CSqrt, CLog],
             CRound => &[Round],
@@ -1141,6 +1191,16 @@ impl Helper {
 }",
             User => return user_source(),
             UserD => return user_d_source(),
+            // The identity, which WGSL does not fold: see `Gen::expr`.
+            Opaque => "fn uf_k(x: f32) -> f32 {
+    return x;
+}
+fn uf_ki(x: i32) -> i32 {
+    return x;
+}
+fn uf_kc(x: vec2<f32>) -> vec2<f32> {
+    return x;
+}",
         };
         src.to_string()
     }
@@ -1585,6 +1645,45 @@ pub(crate) mod tests {
         }
         // After the one parameter: slots 1, 2 and 3.
         assert!(module.contains("cparam(1u)") && module.contains("cparam(3u)"), "{module}");
+    }
+
+    /// Each built-in called alone brings every helper it needs (the
+    /// user-function switch brings them all, which hid `acos` needing
+    /// `asin`, found by compiling UF's public formulas).
+    #[test]
+    fn every_builtin_alone_brings_its_helpers() {
+        for (name, b) in super::super::builtins::BUILTINS {
+            // The tests are bools: used as one.
+            let body = if matches!(b, Builtin::IsInf | Builtin::IsNan) {
+                format!("if {name}(z)\n  z = 0\n endif")
+            } else {
+                format!("z = {name}(z) + #pixel")
+            };
+            let src = format!("B {{\ninit:\n z = #pixel\nloop:\n {body}\nbailout:\n |z| < 4\n}}");
+            let module = formula_module(&program(&src, EntryKind::Formula));
+            if let Err(e) = validate(&module) {
+                panic!("{name}: {e}");
+            }
+        }
+    }
+
+    /// WGSL refuses a constant expression whose value is not finite,
+    /// where UF computes NaN or infinity: a constant argument out of a
+    /// function's domain, a division by zero, an overflow. Found
+    /// compiling UF's public formulas (`sqrt(-3)` in a colouring).
+    #[test]
+    fn constants_out_of_range_still_compile() {
+        for e in [
+            "sqrt(-3)", "log(0)", "log(-1)", "asin(2)", "acos(2)", "acosh(0.5)", "atanh(1)", "atanh(2)",
+            "1 / 0", "1.0 / 0.0", "0.0 / 0.0", "1e30 * 1e30", "-1e30 * 1e30", "exp(1000)", "sinh(1000)", "cosh(1000)",
+            "tan(1.5707963267948966)", "1e38 + 1e38", "(-8)^(1/3)", "0^-1", "recip(0)", "cotan(0)",
+        ] {
+            let src = format!("C {{\ninit:\n float x = {e}\nloop:\n z = z + x + #pixel\nbailout:\n |z| < 4\n}}");
+            let module = formula_module(&program(&src, EntryKind::Formula));
+            if let Err(err) = validate(&module) {
+                panic!("{e}: {err}");
+            }
+        }
     }
 
     #[test]

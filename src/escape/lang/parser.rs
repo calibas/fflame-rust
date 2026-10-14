@@ -571,10 +571,9 @@ impl Parser<'_> {
                 }
                 at(ExprKind::Modulus(Box::new(e)), start.to(self.prev_span()))
             }
-            Tok::Str(_) => {
+            Tok::Str(s) => {
                 self.bump();
-                self.error(start, "a string is not a value here");
-                at(ExprKind::Int(0), start)
+                at(ExprKind::Str(s), start)
             }
             _ => {
                 self.error(start, "expected a value");
@@ -658,7 +657,8 @@ impl Parser<'_> {
                 // keeps block order, so their settings are not needed.
                 let _ = self.block_settings("endheading", start);
             }
-            Tok::Ident(_) => {
+            // `switch:` copies may name parameters with their `@`.
+            Tok::Ident(_) | Tok::At(_) => {
                 if let Some(s) = self.setting() {
                     out.items.push(s);
                 }
@@ -697,10 +697,14 @@ impl Parser<'_> {
         }
     }
 
-    /// `name = value`.
+    /// `name = value`, ended by the line or, as many files write a
+    /// block on one line, by a comma.
     fn setting(&mut self) -> Option<Setting> {
         let start = self.span();
-        let Tok::Ident(name) = self.bump().tok else { return None };
+        let name = match self.bump().tok {
+            Tok::Ident(n) | Tok::At(n) => n,
+            _ => return None,
+        };
         if !self.eat(&Tok::Assign) {
             self.error(start, format!("expected `=` after `{name}`"));
             self.recover();
@@ -724,12 +728,14 @@ impl Parser<'_> {
             }
             _ => SettingValue::Expr(self.expr()),
         };
-        if !matches!(self.peek(), Tok::Newline | Tok::Eof) {
+        if !matches!(self.peek(), Tok::Newline | Tok::Eof | Tok::Comma) {
             let s = self.span();
             self.error(s, "expected the end of the setting");
             self.recover();
         }
-        Some(Setting { name, value, span: start.to(self.prev_span()) })
+        let span = start.to(self.prev_span());
+        self.eat(&Tok::Comma);
+        Some(Setting { name, value, span })
     }
 }
 
@@ -769,6 +775,7 @@ mod tests {
             ExprKind::Binary(op, l, r) => format!("({} {} {})", show(l), op.symbol(), show(r)),
             ExprKind::Modulus(e) => format!("|{}|", show(e)),
             ExprKind::Assign(t, v) => format!("({} = {})", show(t), show(v)),
+            ExprKind::Str(s) => format!("{s:?}"),
         }
     }
 

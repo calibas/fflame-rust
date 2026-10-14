@@ -2180,6 +2180,40 @@ final:
         }
     }
 
+    /// A parameter past the first 16 floats reaches the GPU: the block
+    /// holds 64 (UF's public formulas need them). Nine complex
+    /// parameters come first, so the seed sits in slots 18 and 19.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_parameter_past_sixteen_floats_reaches_the_gpu() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const J: &str = "J {\nglobal:\n float unused = real(@d1 + @d2 + @d3 + @d4 + @d5 + @d6 + @d7 + @d8 + @d9)\n\
+                         init:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < 4\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 150;
+        esc.bailout = 4.0;
+        esc.zoom_log2 = 0.3;
+        esc.julia = true;
+        esc.julia_re = -0.123;
+        esc.julia_im = 0.745;
+        let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+        let mut custom = with_custom(esc.clone(), Some((J, "J")), None);
+        custom.formula_params.insert("seed.re".into(), -0.123);
+        custom.formula_params.insert("seed.im".into(), 0.745);
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+        let def = crate::escape::get_formula(&custom.formula);
+        assert_eq!(def.parameters.iter().position(|p| p.name == "seed.re"), Some(18));
+        let d = differing(&built_in, &got);
+        assert_eq!(d, 0.0, "the seed in slots 18-19 did not arrive ({:.3}% differ)", d * 100.0);
+    }
+
     /// A program's interior detection compares its whole state
     /// (`formula_same`), and is as invisible as a built-in's: a state
     /// that repeats to the bit is periodic, so stopping renders what

@@ -6,7 +6,8 @@ engine and config, the Formula Editor panel and its library, the script
 functions, the docs (ESCAPE.md, "The formula language"). **Phase 2 in
 progress** (order of work below): Fractint's conventions, the
 derivative, interior detection and the embossed relief for programs,
-`global:` and `switch:` done 2026-10-14.
+`global:`, `switch:` and the measurement against UF's public library
+done 2026-10-14; the state cap's decision is the user's (numbers below).
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -221,11 +222,12 @@ Tags: untagged colours inside and outside (`ColorsInterior`),
 colouring is the survey's P8 (`escape-coloring-survey.md`), not this
 project.
 
-**Parameters.** 16 floats each for the formula and the colouring
-(`PARAM_VEC4S`): float, int, bool and enum take one, complex two
-(`name.re`, `name.im` in the config's map), a user function one (its
-index in the built-in list; the WGSL switches on it, so changing it does
-not recompile). Past 16 the compile fails.
+**Parameters.** 64 floats each for the formula and the colouring
+(`PARAM_VEC4S` = 16 vec4s; 16 floats until the measurement below):
+float, int, bool and enum take one, complex two (`name.re`, `name.im` in
+the config's map), a user function one (its index in the built-in list;
+the WGSL switches on it, so changing it does not recompile). Past 64 the
+compile fails.
 
 **The config.** `EscapeConfig` gains `custom_formula` and
 `custom_coloring: Option<CustomSource>` (`dialect`, `entry`, the entry's
@@ -291,7 +293,7 @@ Order of work (2026-10-14): (1) Fractint's numeric conventions, `ismand`
 as the Julia toggle; (2) the derivative; (3) interior detection and the
 embossed relief for programs; (4) `global:`; (5) `switch:`; (6) the
 colouring cap measured against real UF colourings; (7) test files for
-both dialects. Done: (1) to (5), 2026-10-14.
+both dialects. Done: (1) to (6), 2026-10-14.
 
 **Fractint, from its `parser.c`** (xfractint 20.4.10): comparisons and
 `&&` / `||` push a real 1 or 0 with a zero imaginary part; a test is true
@@ -387,9 +389,36 @@ to the built-in's on both planes, UF and Fractint.
   float and a bool in its state (5.5x faster at 20,000 iterations on the
   home view); the language's Mandelbrot embosses as the built-in does
   under all six reductions.
-- Measure the colouring cap against real UF colourings; widen past 4
+- ~~Measure the colouring cap against real UF colourings~~; widen past 4
   floats (a second `vec4` in `IterState` and `IterResult`) if many need
-  it.
+  it: **the user's decision**. Measured 2026-10-14 against UF's full
+  public library (its download, `https://www.ultrafractal.com/cgi/
+  uf-formulas.zip?full`, read for measurement only and never bundled;
+  `custom::tests::measure_a_uf_corpus`, ignored, `UF_CORPUS=<folder>`).
+  Of the 758 colourings that compile or fail on the cap alone, the cap
+  admits: 4 floats 56%, 6 66%, 8 74%, 12 85%, 16 89%, 24 94%, 32 96%.
+  The measurement also drove the compatibility work done with it:
+  - strings continued over lines with `\` (3,188 entries stopped there);
+  - UF's compiler directives (`$define`, `$undef`, `$ifdef`, `$else`,
+    `$endif`, case-insensitive; UF 6 defines `ULTRAFRACTAL` and `VER20`
+    to `VER60`, its reference "Compiler directives");
+  - an enum parameter compared with an item's name (`@type == "Sine"`);
+  - `switch:` copies naming parameters with `@`, and settings separated
+    by commas on one line;
+  - Fractint's screen and view names in UF's language too (UF-format
+    conversions of Fractint formulas test `whitesq`, 731 uses);
+    `LastSqr` stays Fractint's, as it changes what `sqr()` does;
+  - the parameter blocks widened from 16 to 64 floats (1,640 entries
+    needed more: 71% of them fit in 32, 90% in 64, 98.7% in 128);
+  - two compiler bugs: `acos` alone missed its `asin` helper, and WGSL
+    refused constants whose value is not finite (`sqrt(-3)`), now
+    emitted through an opaque identity (`uf_k`) so the GPU computes
+    UF's NaN or infinity.
+  Result: formulas 4,791 to 9,250 of 9,831 compile; colourings 289 to
+  423 of 1,209; every compiled WGSL validates (it did not: 96, then 117
+  invalid). What still stops entries: classes (`import`, 325), arrays
+  (296), the state cap (335 colourings), parameters past 64 floats
+  (about 200), colour functions (46).
 - Test files covering every construct, in both dialects.
 
 ### Phase 3: deep zoom for custom formulas

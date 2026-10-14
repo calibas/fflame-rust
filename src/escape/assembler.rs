@@ -22,10 +22,15 @@ use super::fields::{FieldColoringDef, FieldDef};
 use super::ifs::{IfsColoringDef, IfsDef};
 use super::{ColoringDef, ColoringFeature, FormulaDef, FormulaFeature};
 
-/// Number of vec4 slots for each param block in the uniform — 16 float
-/// params per formula / per coloring. Mirrored in the Rust-side
+/// Number of vec4 slots for the formula's and the colouring's param
+/// blocks in the uniform: 64 floats each, which UF's public formulas
+/// need (90% of those past 16 fit in 64; measured, docs/projects/
+/// escape-formula-language.md). Mirrored in the Rust-side
 /// `EscapeParamsGpu`; a def exceeding it logs in `pack_params`.
-pub const PARAM_VEC4S: usize = 4;
+pub const PARAM_VEC4S: usize = 16;
+
+/// The texture layer's param block: 16 floats, a built-in colouring's.
+pub const LAYER_PARAM_VEC4S: usize = 4;
 
 const TEMPLATE: &str = r#"
 // Escape-time compute pass (assembled per formula x coloring).
@@ -56,8 +61,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,  // formula params, slot-ordered
-    cparams: array<vec4<f32>, 4>,  // coloring params, slot-ordered
+    fparams: array<vec4<f32>, 16>,  // formula params, slot-ordered
+    cparams: array<vec4<f32>, 16>,  // coloring params, slot-ordered
     lparams: array<vec4<f32>, 4>,  // the texture layer's params, slot-ordered
     // CPU-derived formula data (FormulaDef::derived_data), vec4-packed.
     // Zero for formulas without the hook. Origami's fold-line table
@@ -1553,8 +1558,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
@@ -2073,8 +2078,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
@@ -5424,8 +5429,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
@@ -5749,8 +5754,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
@@ -5906,8 +5911,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     // Mode D keeps the whole-IFS constants here: see
     // `escape::ifs::pack_globals` for the layout.
@@ -6434,8 +6439,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
@@ -6617,8 +6622,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
@@ -6838,8 +6843,8 @@ struct EscapeParams {
     degree: f32,           // the formula's degree at infinity (the smooth count's log base)
     pmap_flags: u32,       // PaletteMap: transfer curve in bits 0-7, palette curve in bits 8-15
     pmap: vec4<f32>,       // the transfer's pivot, the layer's weight, the relief step, the light's azimuth
-    fparams: array<vec4<f32>, 4>,
-    cparams: array<vec4<f32>, 4>,
+    fparams: array<vec4<f32>, 16>,
+    cparams: array<vec4<f32>, 16>,
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
@@ -9325,8 +9330,9 @@ mod tests {
         for f in FORMULAS {
             assert!(f.parameters.len() <= PARAM_VEC4S * 4, "{}", f.name);
         }
+        // A built-in colouring can be the texture layer.
         for c in COLORINGS {
-            assert!(c.parameters.len() <= PARAM_VEC4S * 4, "{}", c.name);
+            assert!(c.parameters.len() <= LAYER_PARAM_VEC4S * 4, "{}", c.name);
         }
     }
 }

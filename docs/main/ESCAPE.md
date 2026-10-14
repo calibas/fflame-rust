@@ -176,8 +176,9 @@ old file without the key meant).
 `discrete_params_are_labelled_across_their_whole_range` holds `max` to
 the list. Slot *i* is `parameters[i]`, packed by `pack_params` with
 defaults for absent keys, and read in WGSL as `fparam(i)` / `cparam(i)`.
-There are 16 slots each for the formula, the colouring and the texture
-layer (`PARAM_VEC4S` = 4 vec4s). The config keeps values in `BTreeMap`s
+There are 64 slots each for the formula and the colouring
+(`PARAM_VEC4S` = 16 vec4s, which UF's public formulas need) and 16 for
+the texture layer (`LAYER_PARAM_VEC4S`). The config keeps values in `BTreeMap`s
 keyed by name, and keeps every formula's values when another is active,
 so switching back restores them. `param_default` answers a missing key's
 default from whichever registry owns it, which is what undo reads.
@@ -316,7 +317,7 @@ the interpreter, whenever a parameter or the view it can read changes.
 What it sets is read-only elsewhere (UF's rule), and it cannot read
 what belongs to a pixel (`#pixel`, `#z`, `#x`, `#random` ...). Without
 arrays it holds single values: a formula's go into the uniform's `fdata`
-(256 floats), a colouring's share its 16-float parameter block. A
+(256 floats), a colouring's share its 64-float parameter block. A
 formula may end with `switch:`, UF's switch to another formula of the
 same file: `type = "Julia"`, then `destination = source` copies, the
 source one of its own parameters or `#pixel` (`seed = #pixel`,
@@ -341,7 +342,14 @@ isnan`, and Fractint's `cosxx`. Parameters are `@name` (Fractint's
 Symbols: `#pixel`, `#z`, `#numiter` (in `final:`), `#maxiter`, `#pi`,
 `#e`, `#random`, `#center`, `#magn`, `#x`, `#y`, `#width`, `#height`,
 `#screenpixel`, `#index` and `#solid`. A product with a real factor
-(`2 * z`) scales the other operand, as the built-ins write it.
+(`2 * z`) scales the other operand, as the built-ins write it. An enum
+parameter compares with an item's name (`@type == "Sine"`). A string
+continues over lines with a `\` at the end of each. UF's compiler
+directives choose lines: `$define`, `$undef`, `$ifdef`, `$else`,
+`$endif`, with `ULTRAFRACTAL` and `VER20` to `VER60` defined, as Ultra
+Fractal 6 defines them. Settings may share a line, separated by commas.
+A constant expression WGSL would refuse to fold (`sqrt(-3)`, `1 / 0`)
+reaches the GPU unfolded, which computes UF's NaN or infinity.
 
 **Fractint's conventions** apply to a `.frm` file, or with the editor's
 language set to Fractint (from its `parser.c`): a test is true when its
@@ -351,13 +359,23 @@ REAL part is nonzero, and `==` compares real parts; `round` is
 makes a per-pixel copy that starts as the original. Its names `whitesq`
 (the checkerboard), `scrnpix`, `scrnmax`, `center`, `magxmag`
 (magnification, 1), `rotskew` (rotation in degrees, 0) and `ismand` are
-read; a formula that reads `ismand` gets the Julia toggle, which sets it
+read, in UF's language too (UF-format conversions of Fractint formulas
+test `whitesq`); a formula that reads `ismand` gets the Julia toggle, which sets it
 (the Julia constant is whatever the formula makes it, usually `p1`).
 `rand` is a per-pixel hash, not Fractint's time-seeded generator, so a
 picture reproduces; `srand` is not supported.
 
-**Not yet:** UF's classes and plug-ins, arrays, colour values and direct
-colouring, and deep zoom for custom formulas.
+**Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
+and direct colouring, and deep zoom for custom formulas.
+
+**Measured against UF's public formula library** (its full download,
+read for measurement and never bundled; `measure_a_uf_corpus`, an
+ignored test pointed at a folder by `UF_CORPUS`): 9,250 of its 9,831
+formula entries compile (94%), and 423 of its 1,209 colourings. The
+WGSL of every one that compiles validates, its derivative's too. What
+stops the rest: classes (`import`, 325 entries), arrays (296), the
+colouring state cap (335 colourings), parameters past 64 floats (about
+200), colour functions (46).
 
 **How it joins the engine.** A compiled entry is registered as a
 `FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
