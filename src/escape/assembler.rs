@@ -20,7 +20,7 @@
 
 use super::fields::{FieldColoringDef, FieldDef};
 use super::ifs::{IfsColoringDef, IfsDef};
-use super::{ColoringDef, ColoringFeature, FormulaDef, FormulaFeature};
+use super::{AccumWidth, ColoringDef, ColoringFeature, FormulaDef, FormulaFeature};
 
 /// Number of vec4 slots for the formula's and the colouring's param
 /// blocks in the uniform: 64 floats each, which UF's public formulas
@@ -1116,28 +1116,48 @@ fn accum_owner<'a>(
     Some((l, layer_source(l.wgsl_accum)))
 }
 
-/// Resolve a mode-A template's accumulator width ([`accum_is_wide`]).
+/// Resolve a mode-A template's accumulator width ([`AccumWidth`]).
 ///
 /// A wide colouring stores all four accumulator floats: the records
 /// and the perturbed resume state gain `accum2` after `accum`, and the
 /// stores and loads carry `.zw` through it. A narrow one stores `.xy`
 /// and resumes with zeros, so its layouts are what they always were.
-///
-/// [`accum_is_wide`]: crate::escape::accum_is_wide
-fn with_accum_width(template: &str, wide: bool) -> String {
+/// An extended one (a custom colouring keeping more than four floats)
+/// also stores its private `ufc_ext` after `accum2`, and every load of
+/// the accumulator restores it.
+fn with_accum_width(template: &str, width: AccumWidth) -> String {
+    let wide = width.is_wide();
+    let ext = width.ext();
+    let store = match (wide, ext) {
+        (false, _) => "",
+        (true, 0) => "accum_state.zw, ",
+        (true, _) => "accum_state.zw, ufc_ext, ",
+    };
     let mut out = Vec::new();
     for line in template.lines() {
         if line.trim() == "//__ACCUM_WIDE__" {
             if wide {
                 out.push("    accum2: vec2<f32>,".to_string());
             }
+            if ext > 0 {
+                out.push(format!("    accum_ext: array<vec4<f32>, {ext}>,"));
+            }
             continue;
         }
         out.push(
-            line.replace("/*ACCUM2_STORE*/ ", if wide { "accum_state.zw, " } else { "" })
+            line.replace("/*ACCUM2_STORE*/ ", store)
                 .replace("/*ST_ACCUM2*/", if wide { "st.accum2" } else { "vec2<f32>(0.0)" })
                 .replace("/*R_ACCUM2*/", if wide { "r.accum2" } else { "vec2<f32>(0.0)" }),
         );
+        if ext > 0 {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            if line.contains("/*ST_ACCUM2*/") {
+                out.push(format!("{indent}ufc_ext = st.accum_ext;"));
+            }
+            if line.contains("/*R_ACCUM2*/") {
+                out.push(format!("{indent}ufc_ext = r.accum_ext;"));
+            }
+        }
     }
     out.join("\n")
 }
@@ -1476,11 +1496,13 @@ fn deriv_splices(floatexp: bool) -> DerivSplices {
 pub const RESULT_BYTES: u64 = 32;
 pub const RESULT_BYTES_WIDE: u64 = 40;
 
-pub fn result_bytes(wide: bool) -> u64 {
-    if wide {
-        RESULT_BYTES_WIDE
-    } else {
-        RESULT_BYTES
+/// An extended record's `accum_ext` follows `accum2` at offset 32, and
+/// its vec4s align the struct to 16 bytes.
+pub fn result_bytes(width: AccumWidth) -> u64 {
+    match width {
+        AccumWidth::Narrow => RESULT_BYTES,
+        AccumWidth::Wide => RESULT_BYTES_WIDE,
+        AccumWidth::Extended(k) => (RESULT_BYTES_WIDE + 16 * k as u64).next_multiple_of(16),
     }
 }
 
@@ -3692,7 +3714,7 @@ pub const ITER_STATE_BYTES_DERIV_FE: u64 = 16;
 /// Per-pixel state a given tier needs, at an accumulator width, with or
 /// without the derivative. The tiers that carry one are single-term, so
 /// even wide and with it they stay under [`ITER_STATE_BYTES_MAX`].
-pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, wide: bool, deriv: bool) -> u64 {
+pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, width: AccumWidth, deriv: bool) -> u64 {
     let base = match (tier, floatexp) {
         // The scaled rung hides Phoenix's history in `w_lo`, which is
         // dead there, so only the deep rung actually grows.
@@ -3704,7 +3726,13 @@ pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, wide: bool, deriv: bo
         (true, false) => ITER_STATE_BYTES_DERIV,
         (true, true) => ITER_STATE_BYTES_DERIV_FE,
     };
-    base + if wide { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 } + d
+    let bytes = base + if width.is_wide() { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 } + d;
+    match width.ext() {
+        0 => bytes,
+        // `accum_ext` follows `accum2` at offset 32, and its vec4s align
+        // the struct to 16 bytes.
+        k => (bytes + 16 * k as u64).next_multiple_of(16),
+    }
 }
 
 /// The struct tail, resume and save splices for a tier. They are
@@ -5197,7 +5225,7 @@ pub fn assemble_perturbed_full(
             } else {
                 PERTURBED_TEMPLATE
             },
-            owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o)),
+            owner.as_ref().map_or(AccumWidth::Narrow, |(o, _)| crate::escape::accum_width(o)),
         ),
         coloring,
         "accum_state",
@@ -5675,11 +5703,11 @@ fn layer_probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// The recolour module with [`LAYER_PROBE_WGSL`]'s entry point
 /// (`layer_probe_main`) appended. `layer` must be a layer that fits.
 pub fn assemble_layer_probe(coloring: &ColoringDef, layer: &ColoringDef, has_derivative: bool) -> String {
-    let wide = accum_owner(coloring, Some(layer)).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
+    let width = accum_owner(coloring, Some(layer)).map_or(AccumWidth::Narrow, |(o, _)| crate::escape::accum_width(o));
     format!(
         "{}\n{}",
         assemble_recolor_layered(coloring, Some(layer), has_derivative),
-        with_accum_width(LAYER_PROBE_WGSL, wide)
+        with_accum_width(LAYER_PROBE_WGSL, width)
     )
 }
 
@@ -5691,9 +5719,9 @@ pub fn assemble_recolor_layered(
     let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
     let colors_interior = coloring.has_feature(ColoringFeature::ColorsInterior);
     let bounded = coloring.has_feature(ColoringFeature::Bounded);
-    let wide = accum_owner(coloring, layer).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
+    let width = accum_owner(coloring, layer).map_or(AccumWidth::Narrow, |(o, _)| crate::escape::accum_width(o));
     let mut out = Vec::new();
-    let template = with_alpha(with_accum_width(RECOLOR_TEMPLATE, wide), coloring, "state");
+    let template = with_alpha(with_accum_width(RECOLOR_TEMPLATE, width), coloring, "state");
     let env = reads_env(coloring.wgsl) || layer.is_some_and(|l| reads_env(l.wgsl));
     let template = with_env(with_solid(template, reads_env(coloring.wgsl)), env, EnvAt::Recolor);
     for line in template.lines() {
@@ -8102,10 +8130,11 @@ pub fn assemble_layered(
         "vec2<f32>(0.0, 0.0)"
     };
 
+    let width = owner.as_ref().map_or(AccumWidth::Narrow, |(o, _)| crate::escape::accum_width(o));
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
     let template = with_alpha(
-        with_accum_width(TEMPLATE, owner.as_ref().is_some_and(|(o, _)| crate::escape::accum_is_wide(o))),
+        with_accum_width(TEMPLATE, width),
         coloring,
         "accum_state",
     );
@@ -8122,15 +8151,29 @@ pub fn assemble_layered(
                 ReliefOrbits::Embossed if program => out.push(program_emboss_wgsl()),
                 ReliefOrbits::Embossed => out.push(emboss_wgsl(formula, damped, param_seed)),
             },
-            "//__RELIEF_ORBITS__" => match relief_orbits {
-                ReliefOrbits::None => {}
-                ReliefOrbits::Offset => {
-                    out.push("        slope = esc_offset_slope(pixel, raw);".to_string())
+            "//__RELIEF_ORBITS__" => {
+                match relief_orbits {
+                    ReliefOrbits::None => {}
+                    ReliefOrbits::Offset => {
+                        out.push("        slope = esc_offset_slope(pixel, raw);".to_string())
+                    }
+                    ReliefOrbits::Embossed => {
+                        out.push("        slope = vec2<f32>(esc_emboss(pixel), 0.0);".to_string())
+                    }
                 }
-                ReliefOrbits::Embossed => {
-                    out.push("        slope = vec2<f32>(esc_emboss(pixel), 0.0);".to_string())
+                // The offset orbits ran the colouring for the points
+                // beside the pixel: its extended state is the pixel's
+                // again, for the colour and the records.
+                if width.ext() > 0 && relief_orbits == ReliefOrbits::Offset {
+                    out.push("        ufc_ext = accum_ext;".to_string());
                 }
-            },
+            }
+            // An extended colouring's state past the accumulator, as the
+            // pixel's own orbit left it.
+            "let accum_state = run.accum_state;" if width.ext() > 0 => {
+                out.push(line.to_string());
+                out.push("    let accum_ext = ufc_ext;".to_string());
+            }
             // The lens: its variation functions and helper
             // libraries at top level, and the warp itself on the
             // screen offset. Both empty without one, so the shader is
@@ -9106,8 +9149,11 @@ mod tests {
             (PerturbTier::Magnet(1), false),
             (PerturbTier::Magnet(1), true),
         ] {
-            for coloring in [&colorings::SMOOTH, &colorings::STRIPE_AVERAGE] {
-            let wide = crate::escape::accum_is_wide(coloring);
+            // Narrow, wide, and custom colourings extended by one,
+            // three and seven vec4s (escape::lang's 32-float cap).
+            let extended: Vec<&'static ColoringDef> = [5usize, 13, 32].iter().map(|&n| extended_coloring(n)).collect();
+            for coloring in [&colorings::SMOOTH, &colorings::STRIPE_AVERAGE].into_iter().chain(extended) {
+            let wide = crate::escape::accum_width(coloring);
             let src = assemble_perturbed(coloring, floatexp, tier);
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("{tier:?} fe={floatexp} parse: {e}"));
@@ -9127,13 +9173,13 @@ mod tests {
             assert_eq!(
                 size_of("IterResult"),
                 result_bytes(wide),
-                "{tier:?} fe={floatexp} wide={wide}: the records' stride disagrees"
+                "{tier:?} fe={floatexp} wide={wide:?}: the records' stride disagrees"
             );
             let shader_bytes = size_of("IterState");
             assert_eq!(
                 shader_bytes,
                 iter_state_bytes(tier, floatexp, wide, false),
-                "{tier:?} fe={floatexp} wide={wide}: the shader's IterState is {shader_bytes} B \
+                "{tier:?} fe={floatexp} wide={wide:?}: the shader's IterState is {shader_bytes} B \
                  but the renderer allocates {} B per pixel",
                 iter_state_bytes(tier, floatexp, wide, false)
             );
@@ -9155,13 +9201,63 @@ mod tests {
                 assert_eq!(
                     layouter[handle].size as u64,
                     iter_state_bytes(tier, floatexp, wide, true),
-                    "{tier:?} fe={floatexp} wide={wide}: the derivative's state disagrees"
+                    "{tier:?} fe={floatexp} wide={wide:?}: the derivative's state disagrees"
                 );
-                if !matches!(tier, PerturbTier::Phoenix | PerturbTier::Manowar) {
+                if !matches!(tier, PerturbTier::Phoenix | PerturbTier::Manowar) && wide.ext() == 0 {
                     assert!(iter_state_bytes(tier, floatexp, wide, true) <= ITER_STATE_BYTES_MAX);
                 }
             }
             }
+        }
+    }
+
+    /// A custom colouring keeping `floats` floats of state: a sum each,
+    /// read back in `final:` so none is dead.
+    fn extended_coloring(floats: usize) -> &'static ColoringDef {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let decls: String = (0..floats).map(|i| format!(" float s{i} = 0\n")).collect();
+        let sums: String = (0..floats).map(|i| format!(" s{i} = s{i} + real(#z) * {}\n", i + 1)).collect();
+        let total: String = (0..floats).map(|i| format!(" + s{i}")).collect();
+        let source = format!("W {{\ninit:\n{decls}loop:\n{sums}final:\n #index = 0{total}\n}}");
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "W".into(), source };
+        let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &src);
+        let def = crate::escape::custom::compile_coloring(&src, &name).expect("compiles");
+        let want = if floats <= 4 { AccumWidth::Wide } else { AccumWidth::Extended((floats - 4).div_ceil(4)) };
+        assert_eq!(crate::escape::accum_width(def), want, "{floats} floats");
+        def
+    }
+
+    /// Every template takes an extended colouring: the direct one with
+    /// each relief, the recolour, the layer probe and both perturbed
+    /// rungs, each validating, and each carrying `ufc_ext` through its
+    /// records (and, perturbed, its resume state).
+    #[test]
+    fn an_extended_colouring_validates_in_every_template() {
+        let validate = |src: &str, what: &str| {
+            let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{what}: parse: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{what}: validation: {e:?}"));
+        };
+        let c = extended_coloring(20);
+        let m = crate::escape::get_formula("mandelbrot");
+        for (analytic, orbits) in [(false, ReliefOrbits::None), (false, ReliefOrbits::Offset), (true, ReliefOrbits::Embossed)] {
+            let src = assemble_layered(m, c, None, false, true, analytic, orbits, None);
+            validate(&src, &format!("direct {orbits:?}"));
+            assert!(src.contains("accum_ext: array<vec4<f32>, 4>"), "{orbits:?}: the records keep it");
+            assert!(src.contains("let accum_ext = ufc_ext;"));
+            assert_eq!(src.contains("ufc_ext = accum_ext;"), orbits == ReliefOrbits::Offset, "{orbits:?}");
+        }
+        let src = assemble_recolor_layered(c, None, false);
+        validate(&src, "recolour");
+        assert!(src.contains("ufc_ext = r.accum_ext;"));
+        let layer = crate::escape::get_coloring("smooth");
+        let src = assemble_layer_probe(layer, c, false);
+        validate(&src, "layer probe");
+        for floatexp in [false, true] {
+            let src = assemble_perturbed(c, floatexp, PerturbTier::Power(2));
+            validate(&src, &format!("perturbed fe={floatexp}"));
+            assert!(src.contains("ufc_ext = st.accum_ext;") && src.contains("accum_state.zw, ufc_ext,"), "fe={floatexp}");
         }
     }
 

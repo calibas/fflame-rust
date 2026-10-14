@@ -374,8 +374,9 @@ ignored test pointed at a folder by `UF_CORPUS`): 9,250 of its 9,831
 formula entries compile (94%), and 423 of its 1,209 colourings. The
 WGSL of every one that compiles validates, its derivative's too. What
 stops the rest: classes (`import`, 325 entries), arrays (296), the
-colouring state cap (335 colourings), parameters past 64 floats (about
-200), colour functions (46).
+colouring state cap (335 colourings at 4 floats; it is 32 since, which
+admits 96% of the colourings that reach it), parameters past 64 floats
+(about 200), colour functions (46).
 
 **Test files.** `tests/formulas/` holds entries in both dialects that
 between them use every construct (`language.ufm`, `language.ucl`,
@@ -414,9 +415,14 @@ name, so a saved file, a PNG or an upload renders anywhere.
   the gap as it does for Burning Ship.
 - A **colouring** compiles to the built-in colouring interface, so it
   runs on every path, perturbed and recoloured included. Its variables
-  that live from one iteration to the next share the 4-float
-  accumulator, and the compile fails past it; an undeclared variable
-  that only ever holds real values takes one float, not two. An
+  that live from one iteration to the next keep up to 32 floats, and
+  the compile fails past it; an undeclared variable that only ever
+  holds real values takes one float, not two. The first four are the
+  accumulator's `vec4`; the rest (`AccumWidth::Extended`) are the
+  colouring's private `ufc_ext`, which every template saves beside the
+  accumulator, in the records after `accum2` and in the perturbed
+  resume state, and restores wherever it loads them. Each `vec4` past
+  the first adds 16 bytes a render pixel to both. An
   untagged colouring colours inside and outside; `(OUTSIDE)` and
   `(INSIDE)` one side. `#solid` leaves the pixel to the background.
 

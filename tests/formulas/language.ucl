@@ -84,6 +84,42 @@ default:
   endparam
 }
 
+Extended {
+; State past the accumulator's four floats (here 13: three complex, an
+; int, a bool, and five floats), every one read in final.
+init:
+  complex lo = (1e10, 1e10)
+  complex hi = (-1e10, -1e10)
+  complex total = 0
+  int steps = 0
+  bool crossed = false
+  float a = 0
+  float b = 0
+  float c = 0
+  float d = 0
+  float e = 0
+loop:
+  if real(#z) < real(lo)
+    lo = #z
+  endif
+  if real(#z) > real(hi)
+    hi = #z
+  endif
+  total = total + #z
+  steps = steps + 1
+  crossed = crossed || imag(#z) < 0
+  a = a + cabs(#z)
+  b = b + real(#z) * real(#z)
+  c = c + imag(#z)
+  if cabs(#z) > d
+    d = cabs(#z)
+  endif
+  e = e + atan2(#z)
+final:
+  #index = cabs(lo - hi) * 0.1 + cabs(total) / steps + (a + b - c + d + e) * 0.01 \
+           + (crossed) * 0.5
+}
+
 Unlabelled {
   #index = cabs(#z) * 0.1 + #numiter * 0.01
 }

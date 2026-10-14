@@ -2180,6 +2180,83 @@ final:
         }
     }
 
+    /// A custom colouring keeping more than four floats (20 here, five
+    /// vec4s) keeps them all where the accumulator goes: in the records,
+    /// so a palette edit recolours to exactly what a fresh render draws,
+    /// and in the perturbed resume state, so a render split into many
+    /// chunks draws exactly what one chunk does. Each float weighs in
+    /// the index, so one lost anywhere changes the picture.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn an_extended_colouring_survives_records_and_chunks() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let decls: String = (0..20).map(|i| format!(" float s{i} = 0\n")).collect();
+        let sums: String = (0..20).map(|i| format!(" s{i} = s{i} + real(#z) * {} + imag(#z) * {i}\n", i + 1)).collect();
+        let total: String = (0..20).map(|i| format!(" + s{i} * {}", 1.0 / (i as f64 + 3.0))).collect();
+        let wide = format!("Wide {{\ninit:\n{decls}loop:\n{sums}final:\n #index = (0{total}) * 0.01\n}}");
+        let mut esc = with_custom(crate::config::escape::EscapeConfig::default(), None, Some((&wide, "Wide")));
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0.1".into();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 100;
+        crate::escape::custom::ensure(&esc);
+        assert_eq!(crate::escape::config_accum_width(&esc), crate::escape::AccumWidth::Extended(4));
+
+        // The records: a palette edit recolours, to a fresh render's picture.
+        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("extended") });
+                let settled = escape.render(&device, &queue, &mut enc, esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("extended tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+        };
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_direct = true;
+        let before = settle(&mut escape, &mut renderer, &esc);
+        config.palette_reverse = true;
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let after = settle(&mut escape, &mut renderer, &esc);
+        assert_eq!(escape.last_path, "recolor", "a palette edit should recolour from the records");
+        assert_ne!(before, after, "the palette edit changed nothing");
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        fresh.force_direct = true;
+        assert_eq!(after, settle(&mut fresh, &mut renderer, &esc), "the recolour differs from a fresh render");
+        fresh.destroy();
+        escape.destroy();
+
+        // The resume state: perturbed at depth, many chunks against one.
+        let mut deep = esc.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        let one = output_with(&device, &queue, &renderer, &deep, w, h, true, |e| e.chunk_override = Some(1_000_000));
+        let many = output_with(&device, &queue, &renderer, &deep, w, h, true, |e| e.chunk_override = Some(37));
+        let covered = one.chunks(4).filter(|p| p[3] > 0.5).count();
+        assert!(covered > 1000, "the deep view shows too little ({covered})");
+        let d = differing(&one, &many);
+        assert_eq!(d, 0.0, "split into chunks, the extended state differs on {:.3}% of pixels", d * 100.0);
+    }
+
     /// A parameter past the first 16 floats reaches the GPU: the block
     /// holds 64 (UF's public formulas need them). Nine complex
     /// parameters come first, so the seed sits in slots 18 and 19.
@@ -4496,7 +4573,7 @@ final:
         let stride = crate::escape::assembler::iter_state_bytes(
             crate::escape::assembler::PerturbTier::Ducks(0),
             false,
-            crate::escape::accum_is_wide_named(&esc.coloring),
+            crate::escape::config_accum_width(&esc),
             false,
         );
         let lim = device.limits();

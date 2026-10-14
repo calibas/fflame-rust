@@ -35,6 +35,9 @@ struct Registry {
     /// The programs with `global:` values, which the renderer has the
     /// interpreter compute ([`globals`]).
     programs: HashMap<String, Arc<ir::Program>>,
+    /// The colourings keeping more than four floats: the `vec4`s of
+    /// state past the first ([`accum_ext`]).
+    accum_ext: HashMap<String, usize>,
 }
 
 fn registry() -> &'static RwLock<Registry> {
@@ -302,11 +305,24 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
     }));
     if let Ok(mut r) = registry().write() {
         r.colorings.insert(name.to_string(), def);
+        if c.ext_vec4s > 0 {
+            r.accum_ext.insert(name.to_string(), c.ext_vec4s);
+        }
         if !p.globals.is_empty() {
             r.programs.insert(name.to_string(), Arc::new(p));
         }
     }
     Ok(def)
+}
+
+/// The `vec4`s of state a compiled colouring keeps past the first four
+/// floats (its private `ufc_ext`, which the templates save and restore
+/// beside the accumulator); 0 for any other name.
+pub fn accum_ext(name: &str) -> usize {
+    if !name.starts_with(PREFIX) {
+        return 0;
+    }
+    registry().read().ok().and_then(|r| r.accum_ext.get(name).copied()).unwrap_or(0)
 }
 
 /// A compiled entry's `global:` values for one render, from its

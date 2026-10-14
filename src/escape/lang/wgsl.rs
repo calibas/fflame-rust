@@ -74,6 +74,10 @@ pub struct ColoringWgsl {
     /// The colouring keeps state or has a loop: it needs the
     /// accumulator compiled in.
     pub needs_accum: bool,
+    /// The `vec4`s of state past the first four floats, kept in the
+    /// private `ufc_ext` that the templates save and restore beside the
+    /// accumulator (`AccumWidth::Extended`).
+    pub ext_vec4s: usize,
 }
 
 /// The WGSL of a formula program.
@@ -138,29 +142,38 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     let needs_accum = !p.state.is_empty() || !p.init.is_empty() || !p.loop_body.is_empty();
     let mut body = String::new();
 
-    // Where each state variable sits in the vec4.
+    // Where each state variable sits: the first four floats in the
+    // accumulator's vec4, the rest in `ufc_ext`.
     let mut offsets = Vec::new();
     let mut at = 0usize;
     for &v in &p.state {
         offsets.push((v, at));
         at += if p.vars[v].stored_real { 1 } else { p.vars[v].ty.floats() };
     }
+    let ext_vec4s = at.saturating_sub(4).div_ceil(4);
     let lanes = ["x", "y", "z", "w"];
+    let slot = |o: usize| {
+        if o < 4 {
+            format!("state.{}", lanes[o])
+        } else {
+            format!("uf_ext[{}].{}", (o - 4) / 4, lanes[(o - 4) % 4])
+        }
+    };
     let unpack = |out: &mut String| {
         for &(v, o) in &offsets {
             let var = &p.vars[v];
             let read = match (var.ty, var.stored_real) {
-                (Ty::Complex, true) => format!("vec2<f32>(state.{}, 0.0)", lanes[o]),
-                (Ty::Complex, false) => format!("vec2<f32>(state.{}, state.{})", lanes[o], lanes[o + 1]),
-                (Ty::Float, _) => format!("state.{}", lanes[o]),
-                (Ty::Int, _) => format!("i32(round(state.{}))", lanes[o]),
-                (Ty::Bool, _) => format!("(state.{} != 0.0)", lanes[o]),
+                (Ty::Complex, true) => format!("vec2<f32>({}, 0.0)", slot(o)),
+                (Ty::Complex, false) => format!("vec2<f32>({}, {})", slot(o), slot(o + 1)),
+                (Ty::Float, _) => slot(o),
+                (Ty::Int, _) => format!("i32(round({}))", slot(o)),
+                (Ty::Bool, _) => format!("({} != 0.0)", slot(o)),
             };
             let _ = writeln!(out, "    var v{v}: {} = {read};", wgsl_ty(var.ty));
         }
     };
     let pack = |out: &mut String| {
-        let mut parts = vec!["0.0".to_string(); 4];
+        let mut parts = vec!["0.0".to_string(); 4 + 4 * ext_vec4s];
         for &(v, o) in &offsets {
             let var = &p.vars[v];
             match (var.ty, var.stored_real) {
@@ -174,7 +187,10 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
                 (Ty::Bool, _) => parts[o] = format!("select(0.0, 1.0, v{v})"),
             }
         }
-        let _ = writeln!(out, "    return vec4<f32>({});", parts.join(", "));
+        for k in 0..ext_vec4s {
+            let _ = writeln!(out, "    uf_ext[{k}] = vec4<f32>({});", parts[4 + 4 * k..8 + 4 * k].join(", "));
+        }
+        let _ = writeln!(out, "    return vec4<f32>({});", parts[..4].join(", "));
     };
     // The other variables are locals of each function.
     let locals = |out: &mut String| {
@@ -185,6 +201,14 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
         }
     };
 
+    if ext_vec4s > 0 {
+        let _ = write!(
+            body,
+            "// The state past the accumulator's four floats: per pixel, saved\n\
+             // and restored beside the accumulator by the templates.\n\
+             var<private> uf_ext: array<vec4<f32>, {ext_vec4s}>;\n\n"
+        );
+    }
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
     body.push_str("fn ufc_init() -> vec4<f32> {\n");
     for &(v, _) in &offsets {
@@ -222,7 +246,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     body.push_str("    return index;\n}\n");
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
-    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: "ufc_init()".to_string(), needs_accum }
+    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: "ufc_init()".to_string(), needs_accum, ext_vec4s }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1741,6 +1765,7 @@ pub(crate) mod tests {
         assert!(find("SwitchM").reads(Predef::IsMand) && find("FrScreen").reads(Predef::IsMand));
         assert!(!find("Globals").globals.is_empty() && !find("GlobalScale").globals.is_empty());
         assert!(formula_with_derivative(find("Control")).is_some());
+        assert!(coloring(find("Extended")).ext_vec4s > 0, "state past the accumulator's four floats");
         assert!(formula_with_derivative(find("Functions")).is_none(), "it reads abs and real");
     }
 

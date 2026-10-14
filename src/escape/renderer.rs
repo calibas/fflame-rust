@@ -2881,9 +2881,10 @@ impl EscapeRenderer {
             if self.results_dummy.is_none() {
                 self.results_dummy = Some(device.create_buffer(&BufferDescriptor {
                     label: Some("Escape Results Dummy"),
-                    // One record of the widest layout: a binding must
-                    // hold at least one element of the shader's array.
-                    size: assembler::RESULT_BYTES_WIDE,
+                    // One record of the layout in use, or the widest
+                    // built-in one: a binding must hold at least one
+                    // element of the shader's array.
+                    size: self.results_stride.max(assembler::RESULT_BYTES_WIDE),
                     usage: BufferUsages::STORAGE,
                     mapped_at_creation: false,
                 }));
@@ -2958,9 +2959,12 @@ impl EscapeRenderer {
         let data = slice.get_mapped_range();
         let f = |rec: &[u8], at: usize| f32::from_le_bytes(rec[at..at + 4].try_into().unwrap());
         // A wide record puts `accum2` after `accum`, which moves n and
-        // the tags along by eight bytes.
-        let wide = stride == assembler::RESULT_BYTES_WIDE as usize;
-        let tail = if wide { 32 } else { 24 };
+        // the tags along by eight bytes; an extended one its `accum_ext`
+        // after that, 16 bytes a vec4 (`result_bytes`).
+        let wide = stride >= assembler::RESULT_BYTES_WIDE as usize;
+        // 48 + 16k bytes: 40 and k vec4s, padded to the vec4s' alignment.
+        let ext = if stride > assembler::RESULT_BYTES_WIDE as usize { (stride - 48) / 16 } else { 0 };
+        let tail = if wide { 32 + 16 * ext } else { 24 };
         let out = data
             .chunks_exact(stride)
             .map(|rec| IterRecord {
@@ -3034,7 +3038,7 @@ impl EscapeRenderer {
             * assembler::iter_state_bytes(
                 tier,
                 floatexp,
-                super::config_accum_is_wide(escape),
+                super::config_accum_width(escape),
                 Self::perturbed_derivative(escape, floatexp).is_some(),
             );
         let lim = device.limits();
@@ -3074,7 +3078,7 @@ impl EscapeRenderer {
                 * assembler::iter_state_bytes(
                     tier,
                     floatexp,
-                    super::config_accum_is_wide(escape),
+                    super::config_accum_width(escape),
                     Self::perturbed_derivative(escape, floatexp).is_some(),
                 );
             let cap = lim.max_storage_buffer_binding_size as u64;
@@ -8198,7 +8202,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let _diag_cpu = super::diag::CpuTimer::start();
         let results_active = self.ensure_results(
             device,
-            assembler::result_bytes(super::config_accum_is_wide(escape)),
+            assembler::result_bytes(super::config_accum_width(escape)),
         );
         // Once, at the top: every path below -- direct, field,
         // perturbed, mode D -- binds the same lens group, and a
@@ -8467,7 +8471,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     assembler::iter_state_bytes(
                         tier,
                         floatexp,
-                        super::config_accum_is_wide(escape),
+                        super::config_accum_width(escape),
                         Self::perturbed_derivative(escape, floatexp).is_some(),
                     ),
                 ) {

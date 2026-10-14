@@ -7,8 +7,9 @@ functions, the docs (ESCAPE.md, "The formula language"). **Phase 2
 done 2026-10-14**: Fractint's conventions, the derivative, interior
 detection and the embossed relief for programs, `global:`, `switch:`,
 the measurement against UF's public library, and the test files. The
-state cap's decision is the user's (numbers under phase 2). Phase 3
-(deep zoom for custom formulas) is next.
+state cap is 32 floats (the user's decision, 2026-10-14, from the
+measurement under phase 2). Phase 3 (deep zoom for custom formulas) is
+next.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -32,12 +33,12 @@ API. This is the plan being followed; it is updated as the work lands.
    path until then (the f32 limit, roughly zoom 14). Custom colourings
    work at every depth from phase 1, because the perturbed path hands
    every iteration's full `z` to the colouring.
-5. **A colouring's per-pixel state is capped at a fixed size for now.**
-   The engine's accumulator is one `vec4` (4 floats), shared by every
+5. **A colouring's per-pixel state is capped at a fixed size.** The
+   engine's accumulator is one `vec4` (4 floats), shared by every
    built-in colouring, and it is what the perturbed path and the recolour
-   records keep per pixel (`IterState`, `IterResult`). Phase 1 caps
-   custom colourings at those 4 floats; phase 2 measures how many real UF
-   colourings need more before widening it.
+   records keep per pixel (`IterState`, `IterResult`). Phase 1 capped
+   custom colourings at those 4 floats; phase 2 measured UF's public
+   colourings and the cap became 32 (below, "the state cap").
 
 ## Why compile, not paste shader code
 
@@ -151,7 +152,7 @@ back ends:
    the reference orbit (through `BigComplex`).
 3. **Phase 3: the delta form**, from the IR.
 
-**Packing a colouring's state.** A variable counts against the 4 floats
+**Packing a colouring's state.** A variable counts against the cap
 when it is written in `init:` or `loop:` and read in a later iteration or
 in `final:`. UF makes an undeclared variable complex, so `sum = 0` costs
 two floats; the compiler narrows a complex variable to one float when
@@ -390,9 +391,24 @@ to the built-in's on both planes, UF and Fractint.
   float and a bool in its state (5.5x faster at 20,000 iterations on the
   home view); the language's Mandelbrot embosses as the built-in does
   under all six reductions.
-- ~~Measure the colouring cap against real UF colourings~~; widen past 4
-  floats (a second `vec4` in `IterState` and `IterResult`) if many need
-  it: **the user's decision**. Measured 2026-10-14 against UF's full
+- ~~Measure the colouring cap against real UF colourings; widen past 4
+  floats if many need it.~~ **The state cap is 32 floats** (the user's
+  decision on the numbers below, 2026-10-14). Floats past the
+  accumulator's four live in the colouring's private
+  `ufc_ext: array<vec4<f32>, k>` (k up to 7), packed by its own
+  `ufc_init`, `coloring_accum` and `coloring_map`; `AccumWidth`
+  (Narrow, Wide, Extended(k)) replaces the wide flag, and every template
+  stores `ufc_ext` after `accum2` (records and perturbed resume state)
+  and restores it after each load. The direct template saves the
+  pixel's right after its orbit and restores it after the offset
+  relief's orbits beside it. Sizes: a record 48 + 16k bytes, the resume
+  state its width plus 16k, rounded to 16 (measured against the shader
+  for every tier). Too big for the device, the records fall back to
+  re-iterating and the frame to the direct path, as before. Measured
+  exact: a palette edit recolours an extended colouring to a fresh
+  render's picture, and a perturbed render in 37-iteration chunks to a
+  one-chunk render's (each check fails with its restore removed).
+  Measured 2026-10-14 against UF's full
   public library (its download, `https://www.ultrafractal.com/cgi/
   uf-formulas.zip?full`, read for measurement only and never bundled;
   `custom::tests::measure_a_uf_corpus`, ignored, `UF_CORPUS=<folder>`).

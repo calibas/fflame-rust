@@ -16,8 +16,10 @@ use super::ir::*;
 use super::{Diag, Dialect, EntryKind, Span};
 
 /// Floats a colouring may keep per pixel: the engine's accumulator, one
-/// `vec4`, which the perturbed path and the recolour records store.
-pub const STATE_CAP_FLOATS: usize = 4;
+/// `vec4`, and seven more (`AccumWidth::Extended`), which the perturbed
+/// path and the recolour records store. 32 admits 96% of UF's public
+/// colourings that compile (measured, plan phase 2).
+pub const STATE_CAP_FLOATS: usize = 32;
 /// Floats of parameters each of a formula and a colouring may have
 /// (the uniform's `fparams` / `cparams`, `assembler::PARAM_VEC4S`
 /// vec4s).
@@ -1636,12 +1638,19 @@ mod tests {
         // sqrt leaves the real line: no narrowing.
         let p = ok("Sq {\ninit:\n s = 0\nloop:\n s = sqrt(s - 1)\nfinal:\n #index = real(s)\n}", EntryKind::Coloring);
         assert_eq!(p.state_floats(), 2);
-        // Past the cap: named, with the way out.
-        let e = errors(
-            "Big {\nloop:\n a = #z\n b = #z * 2\n c = #z * 3\nfinal:\n #index = real(a + b + c)\n}",
-            EntryKind::Coloring,
-        );
-        assert!(e.iter().any(|m| m.contains("keeps 6 floats") && m.contains("`a` (2)")), "{e:?}");
+        // Up to the cap, 32 floats: sixteen complex values.
+        let vars = |n: usize| -> (String, String) {
+            let set: String = (0..n).map(|i| format!(" v{i} = #z * {}\n", i + 1)).collect();
+            let sum: String = (0..n).map(|i| format!(" + v{i}")).collect();
+            (set, sum)
+        };
+        let (set, sum) = vars(16);
+        let p = ok(&format!("Max {{\nloop:\n{set}final:\n #index = real(0{sum})\n}}"), EntryKind::Coloring);
+        assert_eq!(p.state_floats(), 32);
+        // Past it: named, with the way out.
+        let (set, sum) = vars(17);
+        let e = errors(&format!("Big {{\nloop:\n{set}final:\n #index = real(0{sum})\n}}"), EntryKind::Coloring);
+        assert!(e.iter().any(|m| m.contains("keeps 34 floats") && m.contains("`v0` (2)")), "{e:?}");
         // An unlabelled colouring is all final.
         let p = ok("N {\n #index = #numiter / 10\n}", EntryKind::Coloring);
         assert!(p.state.is_empty() && p.final_body.len() == 1);
