@@ -10,6 +10,7 @@
 //! program; the back ends evaluate it on the CPU or emit WGSL.
 
 pub mod ast;
+pub mod bigeval;
 pub mod builtins;
 pub mod check;
 pub mod derive;
@@ -17,6 +18,7 @@ pub mod interp;
 pub mod ir;
 pub mod lexer;
 pub mod parser;
+pub mod perturb;
 pub mod switch;
 pub mod wgsl;
 

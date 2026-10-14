@@ -8,8 +8,9 @@ done 2026-10-14**: Fractint's conventions, the derivative, interior
 detection and the embossed relief for programs, `global:`, `switch:`,
 the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
-measurement under phase 2). Phase 3 (deep zoom for custom formulas) is
-next.
+measurement under phase 2). **Phase 3 in progress** (deep zoom for
+custom formulas; its plan and order of work below): step 1 done
+2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -451,14 +452,58 @@ to the built-in's on both planes, UF and Fractint.
 
 ### Phase 3: deep zoom for custom formulas
 
-- UF's own perturbation sections first: `perturbinit:` / `perturbloop:`
-  give the delta (`#dz`, `#dpixel`); the reference orbit is the loop
-  section interpreted in `BigComplex` (which has add, mul, div, recip,
-  exp, ln, sin, cos, sqrt, atan2, powf).
-- Then the delta derived from the IR, rule by rule (the rules our
-  hand-written tiers already use: product, quotient, `diffabs`, `log1p`),
-  on the scaled rung, then the floatexp rung.
-- Kalles Fraktaler-style hybrids.
+UF's model (its help, "Perturbation equations", "Perturbation
+calculations", the `perturb` setting), which this follows:
+`perturbinit:` sets `#dz`, the pixel's deviation from the reference
+orbit, and `perturbloop:` steps it, with `#z` the REFERENCE's iterate
+there and `#dpixel` the pixel's offset from the reference point (the
+example: `#dz = 2*#z*#dz + sqr(#dz) + #dpixel`). The formula's own
+`bailout:` tests the pixel's full `z`. UF keeps only the reference's
+`z`. `perturb = <bool>` in `default:` (parameters and constants; absent,
+true) says when the equations hold. UF fixes glitches with more
+references; this engine rebases (Zhuoran), as its built-in tiers do.
+
+Order of work (2026-10-14):
+
+1. **The language side** (done). The sections, `#dz` / `#dpixel` /
+   `#z` there, their own variables (no other section's: the reference
+   keeps only z), the `perturb` setting (`lang/check.rs`); the WGSL
+   functions `formula_perturb_init(z_ref, pixel, dpixel)`,
+   `formula_perturb_loop(z_ref, dz, pixel, dpixel)` and, when the test
+   reads only z, `formula_perturb_bailout(z, pixel)` (`lang/wgsl.rs`);
+   `interp::run_perturbed`, the f64 model of the perturbed path
+   (reference orbit, deviation, rebase), measured to iterate as the
+   formula does; `lang/bigeval.rs`, the program in big floats for the
+   reference orbit (measured equal to the f64 run, every function, to
+   1e-12, and keeping digits past f64); `lang/perturb.rs`, whether a
+   formula perturbs (equations, a test of z alone, no screen position)
+   and whether it rebases (only when the loop carries nothing but z).
+2. **The custom tier on the scaled rung.** `PerturbTier::Custom { hash,
+   rebase }` (Copy + Eq; the hash is the formula's name's, so the
+   pipeline key and the reference identity follow the source). The
+   reference: a new big family (`MAP_CUSTOM`, never stored on disk, as
+   no big family is) whose state is a `BigMachine`, its identity the
+   program and its parameter values encoded into the two `map_params`
+   floats the reference tuple already threads everywhere (normal f32s,
+   no NaN patterns, so equality works); the orbit ends where the
+   program's own test fails. The step: `w' = F(Z, S w, S d0) / S`, F
+   the compiled `perturbloop:` (the delta in f32 is S*w, representable
+   down to the scaled rung's floor), the start `perturbinit:` the same
+   way, `d0` passed as `#dpixel` on both planes (so the built-ins'
+   Julia `d0_term` convention does not apply), the test the program's
+   own on `z_full`, rebase default or only at the orbit's end. No BLA,
+   no derivative under perturbation (`derivative_gap` reports it).
+   Refused past the scaled rung (zoom 48) until step 3, so a deep view
+   renders on the direct path, as for a formula with no tier.
+3. **The floatexp rung**: `perturbloop:` compiled to floatexp, its
+   values classed Small (`#dz`, `#dpixel` and what they make: floatexp)
+   or Full (`#z`, parameters, constants: f32); Small times anything is
+   Small, Full plus Small is Full, a function of a Small refused.
+4. The delta derived from the IR, so a formula needs no
+   `perturbloop:`: the same Small/Full algebra over the loop's own
+   expression, with the rules our hand-written tiers use (binomial
+   powers, the quotient form `(dN - q dD)/(D + dD)`, `diffabs`).
+5. Kalles Fraktaler-style hybrids.
 
 ### Phase 4: distribution
 

@@ -130,6 +130,8 @@ impl Checker {
         }
 
         let mut global_body = Vec::new();
+        let mut perturb_init = Vec::new();
+        let mut perturb_loop = Vec::new();
         let mut init = Vec::new();
         let mut loop_body = Vec::new();
         let mut final_body = Vec::new();
@@ -138,6 +140,8 @@ impl Checker {
             self.section = kind.0;
             match kind {
                 (SectionKind::Global, _) => global_body = self.stmts(body),
+                (SectionKind::PerturbInit, _) => perturb_init = self.stmts(body),
+                (SectionKind::PerturbLoop, _) => perturb_loop = self.stmts(body),
                 (SectionKind::Init, _) => init = self.stmts(body),
                 (SectionKind::Loop, last_is_bailout) => {
                     if last_is_bailout {
@@ -176,6 +180,7 @@ impl Checker {
         }
         first.extend(init);
         let init = first;
+        let perturb_when = self.perturb_setting(&entry.default);
 
         let mut program = Program {
             kind: self.kind,
@@ -190,6 +195,9 @@ impl Checker {
             loop_body,
             bailout,
             final_body,
+            perturb_init,
+            perturb_loop,
+            perturb_when,
             region,
             view,
             state: Vec::new(),
@@ -259,11 +267,8 @@ impl Checker {
             }
             let allowed = match (self.kind, kind) {
                 (_, SectionKind::Global) => true,
-                (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => {
-                    self.warn(s.span, format!("`{}:` is ignored: custom formulas do not perturb yet", kind.label()));
-                    continue;
-                }
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
+                (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Coloring, SectionKind::Init | SectionKind::Loop | SectionKind::Final) => true,
                 _ => false,
             };
@@ -303,7 +308,9 @@ impl Checker {
             SectionKind::Init => 1,
             SectionKind::Loop => 2,
             SectionKind::Bailout => 3,
-            _ => 4,
+            SectionKind::PerturbInit => 4,
+            SectionKind::PerturbLoop => 5,
+            _ => 6,
         };
         out.sort_by_key(|((k, _), _)| rank(*k));
         Some(out)
@@ -565,7 +572,8 @@ impl Checker {
 
     fn new_var(&mut self, name: &str, ty: Ty, span: Span) {
         self.var_ids.insert(name.to_string(), self.vars.len());
-        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false });
+        let perturb = matches!(self.section, SectionKind::PerturbInit | SectionKind::PerturbLoop);
+        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false, perturb });
     }
 
     fn param(&mut self, name: &str, span: Span) -> ParamId {
@@ -627,8 +635,15 @@ impl Checker {
             "screenpixel" => Predef::ScreenPixel,
             "index" => Predef::Index,
             "solid" => Predef::Solid,
+            "dz" | "dpixel" if self.in_perturb() => {
+                if name == "dz" {
+                    Predef::DZ
+                } else {
+                    Predef::DPixel
+                }
+            }
             "dz" | "dpixel" => {
-                self.error(span, format!("`#{name}` belongs to the perturbation sections, which are not supported yet"));
+                self.error(span, format!("`#{name}` belongs to `perturbinit:` and `perturbloop:`"));
                 return None;
             }
             "color" => {
@@ -659,6 +674,27 @@ impl Checker {
         Some(p)
     }
 
+    /// In `perturbinit:` or `perturbloop:`.
+    fn in_perturb(&self) -> bool {
+        matches!(self.section, SectionKind::PerturbInit | SectionKind::PerturbLoop)
+    }
+
+    /// The `perturb` setting: when the perturbation equations hold, a
+    /// bool of parameters and constants (UF's; absent, always).
+    fn perturb_setting(&mut self, d: &Settings) -> Option<IExpr> {
+        let s = d.get("perturb")?;
+        let SettingValue::Expr(e) = &s.value else {
+            self.error(s.span, "`perturb` is a bool expression");
+            return None;
+        };
+        // Parameters and constants only: what `global:` may read.
+        let saved = self.section;
+        self.section = SectionKind::Global;
+        let v = self.expr(e).and_then(|v| self.to_bool(v, e.span));
+        self.section = saved;
+        v
+    }
+
     /// `global:` runs once per image, before any pixel: what belongs to
     /// a pixel has no value there.
     fn per_image_ok(&mut self, p: Predef, name: &str, span: Span) -> bool {
@@ -686,6 +722,18 @@ impl Checker {
     /// symbol or parameter written without its prefix.
     fn name(&mut self, n: &str, span: Span) -> Option<IExpr> {
         if let Some(&id) = self.var_ids.get(n) {
+            // The perturbation equations and the formula's own sections
+            // share no variables: the reference orbit keeps only `#z`.
+            let var = &self.vars[id];
+            if !var.global && var.perturb != self.in_perturb() {
+                let why = if self.in_perturb() {
+                    "the perturbation equations read `#z`, `#dz`, `#dpixel`, parameters and their own variables"
+                } else {
+                    "it belongs to the perturbation equations"
+                };
+                self.error(span, format!("`{n}` cannot be read here: {why}"));
+                return None;
+            }
             return Some(IExpr { kind: IExprKind::Var(id), ty: self.vars[id].ty });
         }
         if self.kind == EntryKind::Formula && n == "z" {
@@ -827,9 +875,17 @@ impl Checker {
                         self.error(target.span, format!("`{n}` is set in `global:` and is read-only elsewhere"));
                         return None;
                     }
+                    if self.vars[id].perturb != self.in_perturb() {
+                        self.error(target.span, format!("`{n}` cannot be written here: the perturbation equations have their own variables"));
+                        return None;
+                    }
                     return Some((Place::Var(id), self.vars[id].ty));
                 }
                 if self.kind == EntryKind::Formula && n == "z" {
+                    if self.in_perturb() {
+                        self.error(target.span, "`#z` is the reference orbit's here: write `#dz`");
+                        return None;
+                    }
                     return Some((Place::Z, Ty::Complex));
                 }
                 self.error(target.span, format!("`{n}` cannot be written"));
@@ -838,13 +894,15 @@ impl Checker {
             ExprKind::Predef(n) => {
                 let p = self.predef(n, target.span)?;
                 let ok = match p {
-                    Predef::Z => self.kind == EntryKind::Formula,
+                    Predef::Z => self.kind == EntryKind::Formula && !self.in_perturb(),
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
+                    Predef::DZ => true,
                     _ => false,
                 };
                 if !ok {
                     let why = match p {
                         Predef::Index | Predef::Solid => format!("`#{n}` is written in `final:`"),
+                        Predef::Z if self.in_perturb() => "`#z` is the reference orbit's here: write `#dz`".to_string(),
                         _ => format!("`#{n}` cannot be written here"),
                     };
                     self.error(target.span, why);
@@ -853,6 +911,7 @@ impl Checker {
                 Some(match p {
                     Predef::Z => (Place::Z, Ty::Complex),
                     Predef::Index => (Place::Index, Ty::Float),
+                    Predef::DZ => (Place::DZ, Ty::Complex),
                     _ => (Place::Solid, Ty::Bool),
                 })
             }
@@ -1340,6 +1399,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::Z => IExprKind::Predef(Predef::Z),
         Place::Index => IExprKind::Predef(Predef::Index),
         Place::Solid => IExprKind::Predef(Predef::Solid),
+        Place::DZ => IExprKind::Predef(Predef::DZ),
     })
 }
 
@@ -1617,6 +1677,33 @@ mod tests {
         );
         let state: Vec<_> = p.state.iter().map(|&v| p.vars[v].name.as_str()).collect();
         assert_eq!(state, ["s"]);
+    }
+
+    /// The perturbation sections: `#dz` and `#dpixel` theirs alone,
+    /// `#z` the reference's and read-only there, their own variables,
+    /// and the `perturb` setting a bool of parameters and constants.
+    #[test]
+    fn perturbation_sections_and_their_symbols() {
+        let p = ok(
+            "P {\ninit:\n z = 0\nloop:\n z = z^@power + #pixel\nbailout:\n |z| < 4\nperturbinit:\n #dz = 0\n\
+             perturbloop:\n t = 2 * #z\n #dz = t * #dz + sqr(#dz) + #dpixel\n\
+             default:\n float param power\n  default = 2\n endparam\n perturb = @power == 2\n}",
+            EntryKind::Formula,
+        );
+        assert_eq!((p.perturb_init.len(), p.perturb_loop.len()), (1, 2));
+        assert!(p.perturb_when.is_some());
+        assert!(p.vars.iter().any(|v| v.name == "t" && v.perturb));
+        let cases = [
+            ("loop:\n z = sqr(z) + #dz\nbailout:\n |z| < 4", "belongs to `perturbinit:` and `perturbloop:`"),
+            ("loop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\nperturbloop:\n #z = #dz", "the reference orbit's here"),
+            ("loop:\n w = z\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\nperturbloop:\n #dz = w", "cannot be read here"),
+            ("loop:\n z = sqr(z) + #pixel + t\nbailout:\n |z| < 4\nperturbloop:\n t = 1\n #dz = t", "cannot be read here"),
+            ("loop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\ndefault:\n perturb = #pixel", "belongs to a pixel"),
+        ];
+        for (body, want) in cases {
+            let e = errors(&format!("E {{\n{body}\n}}"), EntryKind::Formula);
+            assert!(e.iter().any(|m| m.contains(want)), "{body}: {e:?}");
+        }
     }
 
     #[test]
