@@ -19,8 +19,9 @@ use super::{Diag, Dialect, EntryKind, Span};
 /// `vec4`, which the perturbed path and the recolour records store.
 pub const STATE_CAP_FLOATS: usize = 4;
 /// Floats of parameters each of a formula and a colouring may have
-/// (the uniform's `fparams` / `cparams`, 4 vec4s).
-pub const PARAM_SLOTS: usize = 16;
+/// (the uniform's `fparams` / `cparams`, `assembler::PARAM_VEC4S`
+/// vec4s).
+pub const PARAM_SLOTS: usize = 64;
 /// Floats of `global:` values a formula may have: the uniform's
 /// `fdata` (64 vec4s), which nothing else of a custom formula's uses. A
 /// colouring's share its parameter block, [`PARAM_SLOTS`] in all.
@@ -215,7 +216,7 @@ impl Checker {
             self.error(
                 entry.span,
                 format!(
-                    "the parameters and the `global:` values take {} floats; a colouring has {PARAM_SLOTS}                      (a complex takes two)",
+                    "the parameters and the `global:` values take {} floats; a colouring has {PARAM_SLOTS} (a complex takes two)",
                     program.param_slots() + program.global_floats()
                 ),
             );
@@ -699,7 +700,9 @@ impl Checker {
             let id = self.param(n, span);
             return Some(IExpr { kind: IExprKind::Param(id), ty: self.params[id].ty() });
         }
-        if self.dialect == Dialect::Fractint {
+        // Fractint's screen and view names: UF reads them too (UF-format
+        // conversions of Fractint formulas test `whitesq`).
+        {
             let p = match n {
                 "whitesq" => Some(Predef::WhiteSq),
                 "scrnpix" => Some(Predef::ScreenPixel),
@@ -717,6 +720,7 @@ impl Checker {
                 return Some(predef_expr(p));
             }
         }
+        // `LastSqr` changes what `sqr()` does, so it stays Fractint's.
         if FRACTINT_NAMES.contains(&n) {
             self.error(span, format!("`{n}` is Fractint's: set the language to Fractint"));
             return None;
@@ -915,6 +919,12 @@ impl Checker {
             ExprKind::Float(v) => lit(IExprKind::Float(*v), Ty::Float),
             ExprKind::Imag(v) => lit(IExprKind::Complex(0.0, *v), Ty::Complex),
             ExprKind::Bool(b) => lit(IExprKind::Bool(*b), Ty::Bool),
+            // Compared with an enum parameter, a string is its item (see
+            // `binary`); anywhere else it has no value.
+            ExprKind::Str(_) => {
+                self.error(e.span, "a string is not a value here");
+                None
+            }
             ExprKind::Complex(a, b) => {
                 let re = self.expr(a)?;
                 let im = self.expr(b)?;
@@ -1025,6 +1035,28 @@ impl Checker {
     }
 
     fn binary(&mut self, op: BinOp, a: &Expr, b: &Expr, span: Span) -> Option<IExpr> {
+        // UF compares an enum parameter with an item's name.
+        if matches!(op, BinOp::Eq | BinOp::Ne) {
+            let named = match (&a.kind, &b.kind) {
+                (ExprKind::Param(p), ExprKind::Str(s)) | (ExprKind::Str(s), ExprKind::Param(p)) => Some((p, s)),
+                _ => None,
+            };
+            if let Some((p, s)) = named {
+                let Some(&id) = self.param_ids.get(p.as_str()).filter(|&&id| self.params[id].kind == ParamKind::Enum) else {
+                    self.error(span, format!("only an enum parameter compares with a string, and `@{p}` is not one"));
+                    return None;
+                };
+                let choices = &self.params[id].choices;
+                let item = choices.iter().position(|c| c == s).or_else(|| choices.iter().position(|c| c.eq_ignore_ascii_case(s)));
+                let Some(item) = item else {
+                    self.error(span, format!("\"{s}\" is not one of `@{p}`'s items"));
+                    return None;
+                };
+                let l = IExpr { kind: IExprKind::Param(id), ty: Ty::Int };
+                let r = IExpr { kind: IExprKind::Int(item as i64), ty: Ty::Int };
+                return Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Bool });
+            }
+        }
         let l = self.expr(a)?;
         let r = self.expr(b)?;
         match op {
@@ -1570,12 +1602,12 @@ mod tests {
             let e = errors(&src, EntryKind::Formula);
             assert!(e.iter().any(|m| m.contains("`global:` runs once per image")), "{sym}: {e:?}");
         }
-        // A colouring's globals share its 16-float parameter block.
-        let e = errors(
-            "C {\nglobal:\n a = 1\n b = 2\n c = 3\nfinal:\n #index = real(a + b + c + @p1 + @p2 + @p3 + @p4 + @p5 + @p6)\n}",
-            EntryKind::Coloring,
-        );
-        assert!(e.iter().any(|m| m.contains("the parameters and the `global:` values take 18")), "{e:?}");
+        // A colouring's globals share its parameter block: 31 complex
+        // parameters and two complex globals are 66 floats.
+        let sum: String = (1..=31).map(|i| format!(" + @p{i}")).collect();
+        let src = format!("C {{\nglobal:\n a = 1\n b = 2\nfinal:\n #index = real(a + b{sum})\n}}");
+        let e = errors(&src, EntryKind::Coloring);
+        assert!(e.iter().any(|m| m.contains("the parameters and the `global:` values take 66")), "{e:?}");
         // And are never the pixel's state.
         let p = ok(
             "C {\nglobal:\n float k = 3\ninit:\n float s = 0\nloop:\n s = s + k\nfinal:\n #index = s\n}",

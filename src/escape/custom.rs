@@ -477,4 +477,148 @@ mod tests {
         ensure(&esc);
         assert_eq!(super::super::get_formula(&esc.formula).name, "mandelbrot");
     }
+
+    /// MEASUREMENT (plan, phase 2 item 6): every entry of a folder of UF
+    /// files (`UF_CORPUS`), checked as the editor would, with the first
+    /// error of each that fails tallied, each colouring's state counted
+    /// against the 4-float cap, and the WGSL of each that compiles
+    /// validated (an invalid one is a compiler bug). The files are
+    /// third-party, read for measurement and never bundled.
+    #[test]
+    #[ignore = "measurement: set UF_CORPUS to a folder of .ucl / .ufm files"]
+    fn measure_a_uf_corpus() {
+        use std::collections::BTreeMap;
+        let Ok(dir) = std::env::var("UF_CORPUS") else {
+            eprintln!("UF_CORPUS is not set");
+            return;
+        };
+        // A message with its names and numbers blanked, so like counts
+        // with like.
+        let shape = |m: &str| {
+            let mut out = String::new();
+            let mut quoted = false;
+            for ch in m.chars() {
+                if ch == '`' {
+                    quoted = !quoted;
+                    if quoted {
+                        out.push_str("`_`");
+                    }
+                } else if !quoted {
+                    out.push(if ch.is_ascii_digit() { 'N' } else { ch });
+                }
+            }
+            out
+        };
+        let mut paths: Vec<_> = std::fs::read_dir(&dir).expect("UF_CORPUS").filter_map(|e| e.ok().map(|e| e.path())).collect();
+        paths.sort();
+        let mut first_errors: BTreeMap<(&str, String), usize> = BTreeMap::new();
+        let mut samples: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut param_floats: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut state: BTreeMap<usize, usize> = BTreeMap::new();
+        let (mut entries, mut compiled, mut parse_failed_files, mut over_cap_only) = ([0usize; 2], [0usize; 2], 0usize, 0usize);
+        let mut invalid = Vec::new();
+        let mut with_derivative = 0usize;
+        for path in paths {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            let kind = match ext.as_str() {
+                "ucl" => EntryKind::Coloring,
+                "ufm" => EntryKind::Formula,
+                _ => continue,
+            };
+            let k = (kind == EntryKind::Coloring) as usize;
+            let text = String::from_utf8_lossy(&std::fs::read(&path).expect("read")).into_owned();
+            let (parsed, d) = lang::parser::parse_file(&text);
+            if lang::has_errors(&d) {
+                parse_failed_files += 1;
+            }
+            for e in &parsed.entries {
+                entries[k] += 1;
+                let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e) };
+                match check_entry(kind, &src) {
+                    Ok(p) => {
+                        compiled[k] += 1;
+                        if kind == EntryKind::Coloring {
+                            *state.entry(p.state_floats()).or_default() += 1;
+                            let c = lang::wgsl::coloring(&p);
+                            if let Err(err) = lang::wgsl::validate_coloring(&c) {
+                                invalid.push(format!("{} / {}: {}", path.display(), e.name, err.lines().next().unwrap_or("")));
+                            }
+                        } else {
+                            let w = lang::wgsl::formula(&p);
+                            if let Err(err) = lang::wgsl::validate_formula(&w) {
+                                invalid.push(format!("{} / {}: {}", path.display(), e.name, err.lines().next().unwrap_or("")));
+                            }
+                            if let Some(dw) = lang::wgsl::formula_with_derivative(&p) {
+                                with_derivative += 1;
+                                if let Err(err) = lang::wgsl::validate_formula(&dw) {
+                                    invalid.push(format!("{} / {} (derivative): {}", path.display(), e.name, err.lines().next().unwrap_or("")));
+                                }
+                            }
+                        }
+                    }
+                    Err(d) => {
+                        let errors: Vec<&Diag> = d.iter().filter(|x| x.severity == lang::Severity::Error).collect();
+                        let cap: Vec<usize> = errors
+                            .iter()
+                            .filter_map(|x| x.message.strip_prefix("this colouring keeps "))
+                            .filter_map(|m| m.split_whitespace().next()?.parse().ok())
+                            .collect();
+                        for x in &errors {
+                            if let Some(n) = x.message.strip_prefix("the parameters take ").and_then(|m| m.split_whitespace().next()?.parse::<usize>().ok()) {
+                                *param_floats.entry(n.div_ceil(8) * 8).or_default() += 1;
+                            }
+                        }
+                        if errors.len() == 1 && cap.len() == 1 {
+                            over_cap_only += 1;
+                            *state.entry(cap[0]).or_default() += 1;
+                        }
+                        let first = errors.first().map_or("(no error)".to_string(), |x| shape(&x.message));
+                        if let Some(x) = errors.first() {
+                            let list = samples.entry(first.clone()).or_default();
+                            if list.len() < 3 {
+                                let line = src.source.lines().nth(lang::line_col(&src.source, x.span.start).0.saturating_sub(1)).unwrap_or("");
+                                list.push(format!("{} / {}: {} | {}", path.file_name().unwrap().to_string_lossy(), e.name, x.render(&src.source), line.trim()));
+                            }
+                        }
+                        *first_errors.entry((if k == 1 { "colouring" } else { "formula" }, first)).or_default() += 1;
+                    }
+                }
+            }
+        }
+        println!("files that do not parse cleanly: {parse_failed_files}");
+        for (k, name) in [(0, "formulas"), (1, "colourings")] {
+            println!("{name}: {} of {} entries compile", compiled[k], entries[k]);
+        }
+        println!("formulas with a derivative: {with_derivative}");
+        println!("colouring state floats (compiling, or failing on the cap alone; {over_cap_only} of the latter):");
+        for (floats, n) in &state {
+            println!("  {floats:>3} floats: {n}");
+        }
+        println!("entries over the parameter cap, by floats needed (rounded up to 8s):");
+        for (floats, n) in &param_floats {
+            println!("  <= {floats:>3}: {n}");
+        }
+        let mut ranked: Vec<_> = first_errors.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("first errors, most common:");
+        for ((kind, m), n) in ranked.iter().take(45) {
+            println!("  {n:>5}  {kind}: {m}");
+            if std::env::var("UF_SAMPLES").is_ok() {
+                for s in samples.get(m).into_iter().flatten() {
+                    println!("           {s}");
+                }
+            }
+        }
+        println!("invalid WGSL (compiler bugs): {}", invalid.len());
+        for line in invalid.iter().take(3) {
+            println!("  {line}");
+        }
+        let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+        for line in &invalid {
+            *kinds.entry(line.rsplit(": error: ").next().unwrap_or("").to_string()).or_default() += 1;
+        }
+        for (k, n) in kinds {
+            println!("  {n:>5} {k}");
+        }
+    }
 }
