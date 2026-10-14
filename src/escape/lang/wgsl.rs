@@ -94,6 +94,19 @@ pub fn formula(p: &Program) -> String {
     g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
 }
 
+/// The WGSL of a formula carrying its derivative with respect to the
+/// pixel ([`super::derive`]), compiled in place of [`formula`]'s where a
+/// colouring reads the derivative: the same functions, a state with the
+/// derivative variables, and `formula_dz(s)`. `None` when the iterate
+/// has no derivative.
+pub fn formula_with_derivative(p: &Program) -> Option<String> {
+    let d = super::derive::with_derivative(p)?;
+    let dz = d.dz_var?;
+    let mut out = formula(&d);
+    let _ = write!(out, "\nfn formula_dz(s: FormulaState) -> vec2<f32> {{\n    return s.v{dz};\n}}\n");
+    Some(out)
+}
+
 /// The WGSL of a colouring.
 pub fn coloring(p: &Program) -> ColoringWgsl {
     let needs_accum = !p.state.is_empty() || !p.init.is_empty() || !p.loop_body.is_empty();
@@ -386,6 +399,12 @@ impl<'p> Gen<'p> {
                 let f = self.param_fn();
                 format!("{}(i32(round({f}({k}u))), {v})", self.use_(Helper::User))
             }
+            IExprKind::UserDeriv(id, a) => {
+                let v = self.expr(a);
+                let k = self.func_slots[*id];
+                let f = self.param_fn();
+                format!("{}(i32(round({f}({k}u))), {v})", self.use_(Helper::UserD))
+            }
         }
     }
 
@@ -424,6 +443,13 @@ impl<'p> Gen<'p> {
 
     fn binary(&mut self, op: BinOp, a: &IExpr, b: &IExpr) -> String {
         use BinOp::*;
+        // A real factor scales (IExpr::is_lifted_real).
+        if op == Mul && a.ty == Ty::Complex && (a.is_lifted_real() || b.is_lifted_real()) {
+            let (k, z) = if a.is_lifted_real() { (a, b) } else { (b, a) };
+            let k = self.real_of(k);
+            let z = self.expr(z);
+            return format!("({k} * {z})");
+        }
         let (l, r) = (self.expr(a), self.expr(b));
         let ty = a.ty;
         match op {
@@ -448,6 +474,16 @@ impl<'p> Gen<'p> {
             Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
             Mul | Div | Mod => format!("({l} {} {r})", op.symbol()),
+        }
+    }
+
+    /// The real value a lifted real holds.
+    fn real_of(&mut self, e: &IExpr) -> String {
+        match &e.kind {
+            IExprKind::Complex(re, _) => lit_f32(*re),
+            IExprKind::Convert(a) if a.ty == Ty::Int => format!("f32({})", self.expr(a)),
+            IExprKind::Convert(a) => self.expr(a),
+            _ => unreachable!("is_lifted_real said so"),
         }
     }
 
@@ -701,6 +737,7 @@ enum Helper {
     CFloor,
     CCosxx,
     User,
+    UserD,
 }
 
 impl Helper {
@@ -759,6 +796,7 @@ impl Helper {
             CFloor => "uf_cfloor",
             CCosxx => "uf_ccosxx",
             User => "uf_user",
+            UserD => "uf_user_d",
         }
     }
 
@@ -786,6 +824,7 @@ impl Helper {
                 CSqr, CSqrt, CLog, CExp, CAbs, CCabs, CConj, CFlip, CIdent, CZero, CRecip, CReal, CImag, CCosxx,
                 CRound, CTrunc, CCeil, CFloor,
             ],
+            UserD => &[CMul, CDiv, CSqr, CSqrt, CRecip, CExp, CSin, CCos, CSinh, CCosh],
             _ => &[],
         }
     }
@@ -1045,6 +1084,7 @@ impl Helper {
     return vec2<f32>(c.x, -c.y);
 }",
             User => return user_source(),
+            UserD => return user_d_source(),
         };
         src.to_string()
     }
@@ -1058,6 +1098,44 @@ fn user_source() -> String {
         let _ = writeln!(s, "        case {i}: {{\n            return {}(z);\n        }}", complex_helper(*f).name());
     }
     s.push_str("        default: {\n            return z;\n        }\n    }\n}");
+    s
+}
+
+/// `uf_user_d(k, z)`: the derivative of the user function at index `k`
+/// ([`Builtin::deriv_c`] on the CPU): zero for a choice with none, and
+/// out of range the identity's, 1.
+fn user_d_source() -> String {
+    use Builtin::*;
+    let mut s = String::from(
+        "fn uf_user_d(k: i32, z: vec2<f32>) -> vec2<f32> {\n    let one = vec2<f32>(1.0, 0.0);\n    switch k {\n",
+    );
+    for (i, f) in USER_FUNCTIONS.iter().enumerate() {
+        let d = match f {
+            Sqr => "2.0 * z",
+            Sqrt => "uf_cdiv(vec2<f32>(0.5, 0.0), uf_csqrt(z))",
+            Log => "uf_crecip(z)",
+            Exp => "uf_cexp(z)",
+            Recip => "-uf_crecip(uf_csqr(z))",
+            Ident => "one",
+            Sin => "uf_ccos(z)",
+            Cos => "-uf_csin(z)",
+            Tan => "uf_crecip(uf_csqr(uf_ccos(z)))",
+            Cotan => "-uf_crecip(uf_csqr(uf_csin(z)))",
+            Sinh => "uf_ccosh(z)",
+            Cosh => "uf_csinh(z)",
+            Tanh => "uf_crecip(uf_csqr(uf_ccosh(z)))",
+            Cotanh => "-uf_crecip(uf_csqr(uf_csinh(z)))",
+            Asin => "uf_crecip(uf_csqrt(one - uf_csqr(z)))",
+            Acos => "-uf_crecip(uf_csqrt(one - uf_csqr(z)))",
+            Atan => "uf_crecip(one + uf_csqr(z))",
+            Asinh => "uf_crecip(uf_csqrt(uf_csqr(z) + one))",
+            Acosh => "uf_crecip(uf_cmul(uf_csqrt(z - one), uf_csqrt(z + one)))",
+            Atanh => "uf_crecip(one - uf_csqr(z))",
+            _ => "vec2<f32>(0.0, 0.0)",
+        };
+        let _ = writeln!(s, "        case {i}: {{\n            return {d};\n        }}");
+    }
+    s.push_str("        default: {\n            return one;\n        }\n    }\n}");
     s
 }
 
@@ -1214,6 +1292,21 @@ pub(crate) mod tests {
     /// Run a formula's init and one loop on the GPU for each input point,
     /// `sel` as every parameter slot's value; returns the iterates.
     fn gpu_one_step(p: &Program, inputs: &[(f32, f32, f32)]) -> Option<Vec<(f32, f32)>> {
+        let out = gpu_run(&formula(p), "vec4<f32>(s.z, 0.0, 0.0)", inputs)?;
+        Some(out.iter().map(|v| (v[0], v[1])).collect())
+    }
+
+    /// [`gpu_one_step`] for a formula carrying its derivative: the
+    /// iterates and their derivatives.
+    fn gpu_one_step_dz(p: &Program, inputs: &[(f32, f32, f32)]) -> Option<Vec<((f32, f32), (f32, f32))>> {
+        let wgsl = formula_with_derivative(p).expect("differentiable");
+        let out = gpu_run(&wgsl, "vec4<f32>(s.z, formula_dz(s))", inputs)?;
+        Some(out.iter().map(|v| ((v[0], v[1]), (v[2], v[3]))).collect())
+    }
+
+    /// The probe: `wgsl`'s init and one loop per input, `out` (of `s`)
+    /// written back.
+    fn gpu_run(wgsl: &str, out: &str, inputs: &[(f32, f32, f32)]) -> Option<Vec<[f32; 4]>> {
         use egui_wgpu::wgpu;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -1226,8 +1319,8 @@ pub(crate) mod tests {
              var<private> sel: f32;\nfn fparam(i: u32) -> f32 {{\n    return sel;\n}}\n{ENV_DECLS}{}\n\
              @compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) g: vec3<u32>) {{\n    \
              if (g.x >= arrayLength(&io)) {{\n        return;\n    }}\n    let v = io[g.x];\n    sel = v.z;\n    \
-             var s = formula_init(v.xy);\n    s = formula_loop(s, v.xy);\n    io[g.x] = vec4<f32>(s.z, 0.0, 0.0);\n}}\n",
-            formula(p)
+             var s = formula_init(v.xy);\n    s = formula_loop(s, v.xy);\n    io[g.x] = {out};\n}}\n",
+            wgsl
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lang probe"),
@@ -1270,8 +1363,8 @@ pub(crate) mod tests {
         slice.map_async(wgpu::MapMode::Read, |_| {});
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         let view = slice.get_mapped_range();
-        let out: &[[f32; 4]] = bytemuck::cast_slice(&view);
-        Some(out.iter().map(|v| (v[0], v[1])).collect())
+        let got: &[[f32; 4]] = bytemuck::cast_slice(&view);
+        Some(got.to_vec())
     }
 
     /// Off every branch cut and every .5, so f32 and f64 agree on which
@@ -1330,6 +1423,59 @@ pub(crate) mod tests {
             let pixel = super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64);
             let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(pixel, 1)).z;
             assert!(close(*got, want), "({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im);
+        }
+    }
+
+    /// Every user function's derivative (`uf_user_d`) against its f64
+    /// one: `z = @f(#pixel)` carries `dz = f'(pixel)`.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn every_user_derivative_matches_f64_on_the_gpu() {
+        let p = program("U {\ninit:\n z = #pixel\nloop:\n z = @f(z)\nbailout:\n false\n}", EntryKind::Formula);
+        let mut inputs = Vec::new();
+        for (k, _) in USER_FUNCTIONS.iter().enumerate() {
+            for &(x, y) in POINTS {
+                inputs.push((x as f32, y as f32, k as f32));
+            }
+        }
+        let Some(out) = gpu_one_step_dz(&p, &inputs) else {
+            eprintln!("no GPU");
+            return;
+        };
+        let mut bad = Vec::new();
+        for ((x, y, k), (_, got)) in inputs.iter().zip(&out) {
+            let f = USER_FUNCTIONS[*k as usize];
+            let want = f.deriv_c(super::super::builtins::C64::new(*x as f64, *y as f64));
+            if !close(*got, want) {
+                bad.push(format!("{f:?}'({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im));
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+
+    /// A derived program's derivative on the GPU against the
+    /// interpreter's: the rules, emitted.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn derivatives_match_the_interpreter_on_the_gpu() {
+        let p = program(
+            "D {\ninit:\n z = #pixel\n w = 0.5 * z\nloop:\n w = sin(w) / (z + 3) + exp(z) * 0.1\n\
+             z = z^3 * 0.2 + w - sqrt(z + 2) + log(z + 4) + (z + 3)^(0.5, 0.1) + 2^z * 0.05 + recip(z + 5) - z / (z^2 + 7)\n\
+             bailout:\n false\n}",
+            EntryKind::Formula,
+        );
+        let inputs: Vec<(f32, f32, f32)> = POINTS.iter().map(|&(x, y)| (x as f32, y as f32, 0.0)).collect();
+        let Some(out) = gpu_one_step_dz(&p, &inputs) else {
+            eprintln!("no GPU");
+            return;
+        };
+        let d = super::super::derive::with_derivative(&p).unwrap();
+        let params = super::super::interp::ParamValues::defaults(&d);
+        for (&(x, y), (z, dz)) in POINTS.iter().zip(&out) {
+            let pixel = super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64);
+            let want = super::super::interp::run(&d, &params, None, &super::super::interp::Env::at(pixel, 1));
+            assert!(close(*z, want.z), "({x}, {y}): gpu z {z:?}, f64 {:?}", want.z);
+            assert!(close(*dz, want.dz), "({x}, {y}): gpu dz {dz:?}, f64 {:?}", want.dz);
         }
     }
 

@@ -328,6 +328,39 @@ impl Builtin {
         }
     }
 
+    /// The complex derivative at `z`, for a user function's choice
+    /// (`wgsl::Helper::UserD` is the GPU's): zero for a function with
+    /// none (the folds and parts, `abs`, `conj`, `real` ...; the
+    /// roundings, whose derivative is zero where it exists).
+    pub fn deriv_c(self, z: C64) -> C64 {
+        use Builtin::*;
+        let one = C64::ONE;
+        match self {
+            Sqr => z.scale(2.0),
+            Sqrt => C64::real(0.5).div(z.sqrt()),
+            Log => one.div(z),
+            Exp => z.exp(),
+            Recip => one.div(z.mul(z)).neg(),
+            Ident => one,
+            Sin => Cos.eval_c(z),
+            Cos => Sin.eval_c(z).neg(),
+            Tan => one.div(Cos.eval_c(z).mul(Cos.eval_c(z))),
+            Cotan => one.div(Sin.eval_c(z).mul(Sin.eval_c(z))).neg(),
+            Sinh => Cosh.eval_c(z),
+            Cosh => Sinh.eval_c(z),
+            Tanh => one.div(Cosh.eval_c(z).mul(Cosh.eval_c(z))),
+            Cotanh => one.div(Sinh.eval_c(z).mul(Sinh.eval_c(z))).neg(),
+            Asin => one.div(one.sub(z.mul(z)).sqrt()),
+            Acos => one.div(one.sub(z.mul(z)).sqrt()).neg(),
+            Atan => one.div(one.add(z.mul(z))),
+            Asinh => one.div(z.mul(z).add(one).sqrt()),
+            Acosh => one.div(z.sub(one).sqrt().mul(z.add(one).sqrt())),
+            Atanh => one.div(one.sub(z.mul(z))),
+            Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
+            | IsNan => C64::ZERO,
+        }
+    }
+
     /// Evaluate on a real argument with a real result (`result_ty` gave
     /// Float, Int or Bool): the real function, which differs from the
     /// complex one off its domain (`sqrt(-1)` is NaN here, `i` there).
@@ -416,6 +449,27 @@ mod tests {
         assert!(Builtin::Sqrt.eval_f(-1.0).is_nan(), "the real sqrt stays real");
         assert_eq!(round_half_away(2.5), 3.0);
         assert_eq!(round_half_away(-2.5), -3.0);
+    }
+
+    /// Each derivative against a central difference, away from the cuts.
+    #[test]
+    fn derivatives_match_finite_differences() {
+        let z = C64::new(0.37, -0.61);
+        let h = 1e-6;
+        for f in USER_FUNCTIONS {
+            let d = f.deriv_c(z);
+            let fd = f.eval_c(z.add(C64::real(h))).sub(f.eval_c(z.sub(C64::real(h)))).scale(0.5 / h);
+            use Builtin::*;
+            let holomorphic = !matches!(f, Abs | Cabs | Real | Imag | Conj | Flip | Cosxx | Round | Trunc | Ceil | Floor);
+            assert_eq!(holomorphic, d != C64::ZERO || *f == Zero, "{f:?}");
+            if holomorphic {
+                assert!((d.re - fd.re).abs() < 1e-6 && (d.im - fd.im).abs() < 1e-6, "{f:?}: {d:?} vs {fd:?}");
+                // Along the imaginary axis too: the Cauchy-Riemann check.
+                let fi = f.eval_c(z.add(C64::new(0.0, h))).sub(f.eval_c(z.sub(C64::new(0.0, h)))).scale(0.5 / h);
+                let di = d.mul(C64::I);
+                assert!((di.re - fi.re).abs() < 1e-6 && (di.im - fi.im).abs() < 1e-6, "{f:?} along i");
+            }
+        }
     }
 
     #[test]
