@@ -1,0 +1,1262 @@
+//! A checked program to WGSL.
+//!
+//! A FORMULA becomes a program the direct template drives:
+//! `struct FormulaState` (the iterate and every variable),
+//! `formula_init(pixel)`, `formula_loop(s, pixel)` and
+//! `formula_bailout(s, pixel)` (true: iterate again). A COLOURING
+//! becomes the built-in colouring interface, so every template that
+//! takes a colouring takes it: `ufc_init()` for `accum_init`,
+//! `coloring_accum` packing its persistent variables into the `vec4`
+//! state, and `coloring_map`.
+//!
+//! The helpers each program uses are emitted into its own source under
+//! its own prefix (`uff_` formula, `ufc_` colouring), so a custom
+//! formula and a custom colouring compile side by side, and a colouring
+//! carries everything it needs into the perturbed and recolour
+//! templates, which have no formula helpers. The cross-platform rules
+//! (CLAUDE.md, Metal) hold by construction: `atan2` only through the
+//! zero-pair-exact helper, NaN and infinity tested by bits, no
+//! self-division, no subnormal literals.
+//!
+//! What the templates provide: `params.max_iter`, `fparam` / `cparam`,
+//! `OrbitSummary`, and the per-pixel environment as private globals
+//! `esc_env_px`, `esc_env_size`, `esc_env_pixel`, `esc_env_center`,
+//! `esc_env_magn` (see [`ENV_DECLS`]).
+
+use std::collections::BTreeSet;
+use std::fmt::Write;
+
+use super::ast::{BinOp, UnOp};
+use super::builtins::{Builtin, USER_FUNCTIONS};
+use super::check::LOOP_CAP;
+use super::ir::*;
+
+/// The per-pixel environment a custom program reads, declared by every
+/// template that hosts one and set at the top of its entry point.
+pub const ENV_DECLS: &str = "\
+// The pixel's environment, for custom formulas and colourings
+// (escape::lang): its position and the frame's size in render pixels,
+// its point in the plane, and the view.
+var<private> esc_env_px: vec2<i32>;
+var<private> esc_env_size: vec2<i32>;
+var<private> esc_env_pixel: vec2<f32>;
+var<private> esc_env_center: vec2<f32>;
+var<private> esc_env_magn: f32;
+";
+
+/// What `coloring_map` returns for `#solid`: the templates read a value
+/// below [`SOLID_BELOW`] as no coverage. A huge negative, not a NaN,
+/// because Metal's fast-math cannot test for NaN.
+pub const SOLID_SENTINEL: &str = "-3.0e38";
+pub const SOLID_BELOW: f32 = -1.0e38;
+
+/// A custom colouring's three pieces, as `ColoringDef` holds them.
+#[derive(Clone, Debug)]
+pub struct ColoringWgsl {
+    /// `coloring_map`, `ufc_init`, `coloring_accum` and the helpers.
+    pub wgsl: String,
+    /// Empty: `coloring_accum` is in `wgsl`, which the templates splice
+    /// before the accumulator marker.
+    pub wgsl_accum: String,
+    /// `ufc_init()`.
+    pub accum_init: String,
+    /// The colouring keeps state or has a loop: it needs the
+    /// accumulator compiled in.
+    pub needs_accum: bool,
+}
+
+/// The WGSL of a formula program.
+pub fn formula(p: &Program) -> String {
+    let mut g = Gen::new(p, Ctx::Formula, "uff_");
+    let mut body = String::new();
+    // The state: z and every variable.
+    body.push_str("struct FormulaState {\n    z: vec2<f32>,\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    v{i}: {},", wgsl_ty(v.ty));
+    }
+    body.push_str("}\n\n");
+    body.push_str("fn formula_init(pixel: vec2<f32>) -> FormulaState {\n    var s: FormulaState;\n");
+    g.stmts(&p.init, 1, &mut body);
+    body.push_str("    return s;\n}\n\n");
+    body.push_str("fn formula_loop(s_in: FormulaState, pixel: vec2<f32>) -> FormulaState {\n    var s = s_in;\n");
+    g.stmts(&p.loop_body, 1, &mut body);
+    body.push_str("    return s;\n}\n\n");
+    let test = p.bailout.as_ref().map_or_else(|| "true".to_string(), |b| g.expr(b));
+    let _ = write!(
+        body,
+        "fn formula_bailout(s: FormulaState, pixel: vec2<f32>) -> bool {{\n    return {test};\n}}\n"
+    );
+    g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
+}
+
+/// The WGSL of a colouring.
+pub fn coloring(p: &Program) -> ColoringWgsl {
+    let needs_accum = !p.state.is_empty() || !p.init.is_empty() || !p.loop_body.is_empty();
+    let mut body = String::new();
+
+    // Where each state variable sits in the vec4.
+    let mut offsets = Vec::new();
+    let mut at = 0usize;
+    for &v in &p.state {
+        offsets.push((v, at));
+        at += if p.vars[v].stored_real { 1 } else { p.vars[v].ty.floats() };
+    }
+    let lanes = ["x", "y", "z", "w"];
+    let unpack = |out: &mut String| {
+        for &(v, o) in &offsets {
+            let var = &p.vars[v];
+            let read = match (var.ty, var.stored_real) {
+                (Ty::Complex, true) => format!("vec2<f32>(state.{}, 0.0)", lanes[o]),
+                (Ty::Complex, false) => format!("vec2<f32>(state.{}, state.{})", lanes[o], lanes[o + 1]),
+                (Ty::Float, _) => format!("state.{}", lanes[o]),
+                (Ty::Int, _) => format!("i32(round(state.{}))", lanes[o]),
+                (Ty::Bool, _) => format!("(state.{} != 0.0)", lanes[o]),
+            };
+            let _ = writeln!(out, "    var v{v}: {} = {read};", wgsl_ty(var.ty));
+        }
+    };
+    let pack = |out: &mut String| {
+        let mut parts = vec!["0.0".to_string(); 4];
+        for &(v, o) in &offsets {
+            let var = &p.vars[v];
+            match (var.ty, var.stored_real) {
+                (Ty::Complex, true) => parts[o] = format!("v{v}.x"),
+                (Ty::Complex, false) => {
+                    parts[o] = format!("v{v}.x");
+                    parts[o + 1] = format!("v{v}.y");
+                }
+                (Ty::Float, _) => parts[o] = format!("v{v}"),
+                (Ty::Int, _) => parts[o] = format!("f32(v{v})"),
+                (Ty::Bool, _) => parts[o] = format!("select(0.0, 1.0, v{v})"),
+            }
+        }
+        let _ = writeln!(out, "    return vec4<f32>({});", parts.join(", "));
+    };
+    // The other variables are locals of each function.
+    let locals = |out: &mut String| {
+        for (i, v) in p.vars.iter().enumerate() {
+            if !p.state.contains(&i) {
+                let _ = writeln!(out, "    var v{i}: {} = {};", wgsl_ty(v.ty), zero_of(v.ty));
+            }
+        }
+    };
+
+    let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
+    body.push_str("fn ufc_init() -> vec4<f32> {\n");
+    for &(v, _) in &offsets {
+        let _ = writeln!(body, "    var v{v}: {} = {};", wgsl_ty(p.vars[v].ty), zero_of(p.vars[v].ty));
+    }
+    locals(&mut body);
+    g.stmts(&p.init, 1, &mut body);
+    pack(&mut body);
+    body.push_str("}\n\n");
+
+    g.ctx = Ctx::ColoringLoop;
+    body.push_str(
+        "fn coloring_accum(z: vec2<f32>, z_prev: vec2<f32>, c: vec2<f32>, state: vec4<f32>) -> vec4<f32> {\n",
+    );
+    unpack(&mut body);
+    locals(&mut body);
+    g.stmts(&p.loop_body, 1, &mut body);
+    pack(&mut body);
+    body.push_str("}\n\n");
+
+    g.ctx = Ctx::ColoringFinal;
+    body.push_str("fn coloring_map(sum: OrbitSummary, state: vec4<f32>) -> f32 {\n");
+    unpack(&mut body);
+    locals(&mut body);
+    body.push_str("    var index: f32 = 0.0;\n    var solid: bool = false;\n");
+    g.stmts(&p.final_body, 1, &mut body);
+    // An INSIDE colouring leaves the outside to the background, and an
+    // OUTSIDE one never sees the inside (no ColorsInterior).
+    if p.region == Region::Inside {
+        body.push_str("    if (sum.escaped) {\n        solid = true;\n    }\n");
+    }
+    let _ = write!(body, "    if (solid) {{\n        return {SOLID_SENTINEL};\n    }}\n    return index;\n}}\n");
+
+    let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
+    ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: "ufc_init()".to_string(), needs_accum }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ctx {
+    Formula,
+    ColoringInit,
+    ColoringLoop,
+    ColoringFinal,
+}
+
+struct Gen<'p> {
+    p: &'p Program,
+    ctx: Ctx,
+    prefix: &'static str,
+    used: BTreeSet<Helper>,
+    /// Each parameter's first slot.
+    slots: Vec<usize>,
+    /// The user functions' slots, after the parameters.
+    func_slots: Vec<usize>,
+    loops: usize,
+}
+
+impl<'p> Gen<'p> {
+    fn new(p: &'p Program, ctx: Ctx, prefix: &'static str) -> Self {
+        let mut slots = Vec::new();
+        let mut at = 0;
+        for param in &p.params {
+            slots.push(at);
+            at += param.ty().floats();
+        }
+        let func_slots = (0..p.funcs.len()).map(|i| at + i).collect();
+        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, loops: 0 }
+    }
+
+    /// Helpers, then the body; `uf_` becomes the program's prefix.
+    fn finish(&self, header: &str, body: String) -> String {
+        let mut all: BTreeSet<Helper> = BTreeSet::new();
+        let mut stack: Vec<Helper> = self.used.iter().copied().collect();
+        while let Some(h) = stack.pop() {
+            if all.insert(h) {
+                stack.extend(h.deps().iter().copied());
+            }
+        }
+        let mut out = String::from(header);
+        for h in &all {
+            out.push_str(&h.source());
+            out.push('\n');
+        }
+        out.push_str(&body);
+        out.replace("uf_", self.prefix)
+    }
+
+    fn param_fn(&self) -> &'static str {
+        if self.ctx == Ctx::Formula {
+            "fparam"
+        } else {
+            "cparam"
+        }
+    }
+
+    fn var(&self, v: VarId) -> String {
+        if self.ctx == Ctx::Formula {
+            format!("s.v{v}")
+        } else {
+            format!("v{v}")
+        }
+    }
+
+    fn use_(&mut self, h: Helper) -> &'static str {
+        self.used.insert(h);
+        h.name()
+    }
+
+    // ---- statements -----------------------------------------------------
+
+    fn stmts(&mut self, stmts: &[IStmt], depth: usize, out: &mut String) {
+        for s in stmts {
+            self.stmt(s, depth, out);
+        }
+    }
+
+    fn stmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
+        let pad = "    ".repeat(depth);
+        match s {
+            IStmt::Assign(place, e) => {
+                let v = self.expr(e);
+                let target = match place {
+                    Place::Var(id) => self.var(*id),
+                    Place::Z => "s.z".to_string(),
+                    Place::Index => "index".to_string(),
+                    Place::Solid => "solid".to_string(),
+                };
+                let _ = writeln!(out, "{pad}{target} = {v};");
+            }
+            IStmt::If { arms, otherwise } => {
+                for (k, (cond, body)) in arms.iter().enumerate() {
+                    let c = self.expr(cond);
+                    if k == 0 {
+                        let _ = writeln!(out, "{pad}if ({c}) {{");
+                    } else {
+                        let _ = writeln!(out, "{pad}}} else if ({c}) {{");
+                    }
+                    self.stmts(body, depth + 1, out);
+                }
+                if !otherwise.is_empty() {
+                    let _ = writeln!(out, "{pad}}} else {{");
+                    self.stmts(otherwise, depth + 1, out);
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            IStmt::While { cond, body } => {
+                // Capped: a loop that never ends must not hang the GPU.
+                let k = self.loops;
+                self.loops += 1;
+                let c = self.expr(cond);
+                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+                self.stmts(body, depth + 1, out);
+                let _ = writeln!(out, "{pad}}}");
+            }
+            IStmt::Repeat { body, cond } => {
+                let k = self.loops;
+                self.loops += 1;
+                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                self.stmts(body, depth + 1, out);
+                let c = self.expr(cond);
+                let _ = writeln!(out, "{pad}    if ({c}) {{\n{pad}        break;\n{pad}    }}");
+                let _ = writeln!(out, "{pad}}}");
+            }
+        }
+    }
+
+    // ---- expressions ----------------------------------------------------
+
+    fn expr(&mut self, e: &IExpr) -> String {
+        match &e.kind {
+            IExprKind::Bool(b) => b.to_string(),
+            IExprKind::Int(i) => format!("{}i", *i as i32),
+            IExprKind::Float(f) => lit_f32(*f),
+            IExprKind::Complex(re, im) => format!("vec2<f32>({}, {})", lit_f32(*re), lit_f32(*im)),
+            IExprKind::Var(v) => self.var(*v),
+            IExprKind::Param(id) => {
+                let k = self.slots[*id];
+                let f = self.param_fn();
+                match self.p.params[*id].ty() {
+                    Ty::Bool => format!("({f}({k}u) != 0.0)"),
+                    Ty::Int => format!("i32(round({f}({k}u)))"),
+                    Ty::Float => format!("{f}({k}u)"),
+                    Ty::Complex => format!("vec2<f32>({f}({k}u), {f}({}u))", k + 1),
+                }
+            }
+            IExprKind::Predef(p) => self.predef(*p),
+            IExprKind::Convert(a) => {
+                let v = self.expr(a);
+                match (a.ty, e.ty) {
+                    (Ty::Int, Ty::Float) => format!("f32({v})"),
+                    (Ty::Int, Ty::Complex) => format!("vec2<f32>(f32({v}), 0.0)"),
+                    (Ty::Float, Ty::Complex) => format!("vec2<f32>({v}, 0.0)"),
+                    (Ty::Bool, Ty::Int) => format!("select(0i, 1i, {v})"),
+                    (Ty::Bool, Ty::Float) => format!("select(0.0, 1.0, {v})"),
+                    (Ty::Bool, Ty::Complex) => format!("vec2<f32>(select(0.0, 1.0, {v}), 0.0)"),
+                    (Ty::Int, Ty::Bool) => format!("({v} != 0i)"),
+                    (Ty::Float, Ty::Bool) => format!("({v} != 0.0)"),
+                    (Ty::Complex, Ty::Bool) => format!("any({v} != vec2<f32>(0.0, 0.0))"),
+                    (from, to) => unreachable!("the checker never narrows {from:?} to {to:?}"),
+                }
+            }
+            IExprKind::MakeComplex(a, b) => {
+                let (a, b) = (self.expr(a), self.expr(b));
+                format!("vec2<f32>({a}, {b})")
+            }
+            IExprKind::Unary(UnOp::Neg, a) => format!("(-{})", self.expr(a)),
+            IExprKind::Unary(UnOp::Not, a) => format!("(!{})", self.expr(a)),
+            IExprKind::Binary(op, a, b) => self.binary(*op, a, b),
+            IExprKind::PowInt(a, n) => {
+                let v = self.expr(a);
+                match (a.ty, n) {
+                    (_, 0) => if a.ty == Ty::Complex { "vec2<f32>(1.0, 0.0)".to_string() } else { "1.0".to_string() },
+                    (_, 1) => v,
+                    (Ty::Complex, 2) => format!("{}({v})", self.use_(Helper::CSqr)),
+                    (Ty::Complex, _) => format!("{}({v}, {n}i)", self.use_(Helper::CPowI)),
+                    (_, 2) => format!("{}({v})", self.use_(Helper::FSq)),
+                    (_, _) => format!("{}({v}, {n}i)", self.use_(Helper::FPowI)),
+                }
+            }
+            IExprKind::Modulus(a) => {
+                let v = self.expr(a);
+                if a.ty == Ty::Complex {
+                    format!("{}({v})", self.use_(Helper::CNorm))
+                } else {
+                    format!("{}({v})", self.use_(Helper::FSq))
+                }
+            }
+            IExprKind::Call(f, a) => self.call(*f, a, e.ty),
+            IExprKind::UserCall(id, a) => {
+                let v = self.expr(a);
+                let k = self.func_slots[*id];
+                let f = self.param_fn();
+                format!("{}(i32(round({f}({k}u))), {v})", self.use_(Helper::User))
+            }
+        }
+    }
+
+    fn predef(&mut self, p: Predef) -> String {
+        match (p, self.ctx) {
+            (Predef::Pixel, Ctx::Formula) => "pixel".into(),
+            (Predef::Pixel, _) => "esc_env_pixel".into(),
+            (Predef::Z, Ctx::Formula) => "s.z".into(),
+            (Predef::Z, Ctx::ColoringLoop) => "z".into(),
+            (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
+            // A colouring's init runs before the first iterate.
+            (Predef::Z, Ctx::ColoringInit) => "vec2<f32>(0.0, 0.0)".into(),
+            (Predef::NumIter, _) => "i32(sum.n)".into(),
+            (Predef::MaxIter, _) => "i32(params.max_iter)".into(),
+            (Predef::Pi, _) => "3.14159265358979".into(),
+            (Predef::E, _) => "2.71828182845905".into(),
+            (Predef::Random, _) => format!("{}()", self.use_(Helper::Random)),
+            (Predef::Center, _) => "esc_env_center".into(),
+            (Predef::Magn, _) => "esc_env_magn".into(),
+            (Predef::X, _) => "esc_env_px.x".into(),
+            (Predef::Y, _) => "esc_env_px.y".into(),
+            (Predef::Width, _) => "esc_env_size.x".into(),
+            (Predef::Height, _) => "esc_env_size.y".into(),
+            (Predef::ScreenPixel, _) => "vec2<f32>(f32(esc_env_px.x), f32(esc_env_px.y))".into(),
+            (Predef::Index, _) => "index".into(),
+            (Predef::Solid, _) => "solid".into(),
+        }
+    }
+
+    fn binary(&mut self, op: BinOp, a: &IExpr, b: &IExpr) -> String {
+        use BinOp::*;
+        let (l, r) = (self.expr(a), self.expr(b));
+        let ty = a.ty;
+        match op {
+            And => format!("({l} && {r})"),
+            Or => format!("({l} || {r})"),
+            Eq | Ne if ty == Ty::Complex => {
+                if op == Eq {
+                    format!("all({l} == {r})")
+                } else {
+                    format!("any({l} != {r})")
+                }
+            }
+            // Complex values order by their real parts.
+            Lt | Le | Gt | Ge if ty == Ty::Complex => format!("({l}.x {} {r}.x)", op.symbol()),
+            Eq | Ne | Lt | Le | Gt | Ge => format!("({l} {} {r})", op.symbol()),
+            Add | Sub => format!("({l} {} {r})", op.symbol()),
+            Mul if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CMul)),
+            Div if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CDiv)),
+            Pow if ty == Ty::Complex => format!("{}({l}, {r})", self.use_(Helper::CPow)),
+            Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
+            Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
+            Mul | Div | Mod => format!("({l} {} {r})", op.symbol()),
+        }
+    }
+
+    fn call(&mut self, f: Builtin, a: &IExpr, ty: Ty) -> String {
+        use Builtin::*;
+        let v = self.expr(a);
+        if a.ty == Ty::Complex {
+            return match f {
+                Real => format!("{v}.x"),
+                Imag => format!("{v}.y"),
+                Ident => v,
+                Zero => "vec2<f32>(0.0, 0.0)".into(),
+                Conj => format!("{}({v})", self.use_(Helper::CConj)),
+                Flip => format!("{v}.yx"),
+                Cabs => format!("length({v})"),
+                Abs => format!("abs({v})"),
+                Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
+                IsNan => format!("{}({v})", self.use_(Helper::CIsNan)),
+                IsInf => format!("{}({v})", self.use_(Helper::CIsInf)),
+                _ => {
+                    let h = complex_helper(f);
+                    format!("{}({v})", self.use_(h))
+                }
+            };
+        }
+        // A real argument with a complex result: lift it first.
+        if ty == Ty::Complex {
+            let lifted = format!("vec2<f32>({}, 0.0)", if a.ty == Ty::Int { format!("f32({v})") } else { v });
+            let h = complex_helper(f);
+            return format!("{}({lifted})", self.use_(h));
+        }
+        if a.ty == Ty::Int && ty == Ty::Int {
+            return match f {
+                Sqr => format!("({v} * {v})"),
+                Abs => format!("abs({v})"),
+                Zero => "0i".into(),
+                _ => v,
+            };
+        }
+        let real = match f {
+            Sqr => format!("{}({v})", self.use_(Helper::FSq)),
+            Sqrt => format!("sqrt({v})"),
+            Log => format!("log({v})"),
+            Exp => format!("exp({v})"),
+            Abs | Cabs => format!("abs({v})"),
+            Recip => format!("(1.0 / {v})"),
+            Ident | Real => v,
+            Zero | Imag => "0.0".into(),
+            Sin => format!("sin({}({v}))", self.use_(Helper::Reduce)),
+            Cos => format!("cos({}({v}))", self.use_(Helper::Reduce)),
+            Tan => format!("tan({}({v}))", self.use_(Helper::Reduce)),
+            Cotan => format!("(1.0 / tan({}({v})))", self.use_(Helper::Reduce)),
+            Sinh => format!("sinh({v})"),
+            Cosh => format!("cosh({v})"),
+            Tanh => format!("tanh({v})"),
+            Cotanh => format!("(1.0 / tanh({v}))"),
+            Asin => format!("asin({v})"),
+            Acos => format!("acos({v})"),
+            Atan => format!("atan({v})"),
+            Asinh => format!("asinh({v})"),
+            Acosh => format!("acosh({v})"),
+            Atanh => format!("atanh({v})"),
+            Atan2 => format!("{}(0.0, {v})", self.use_(Helper::Atan2)),
+            Round => format!("{}({v})", self.use_(Helper::Round)),
+            Trunc => format!("trunc({v})"),
+            Ceil => format!("ceil({v})"),
+            Floor => format!("floor({v})"),
+            IsNan => return format!("{}({v})", self.use_(Helper::IsNan)),
+            IsInf => return format!("{}({v})", self.use_(Helper::IsInf)),
+            Conj | Flip | Cosxx => unreachable!("complex-valued"),
+        };
+        if ty == Ty::Int {
+            format!("i32({real})")
+        } else {
+            real
+        }
+    }
+}
+
+fn complex_helper(f: Builtin) -> Helper {
+    use Builtin::*;
+    match f {
+        Sqr => Helper::CSqr,
+        Sqrt => Helper::CSqrt,
+        Log => Helper::CLog,
+        Exp => Helper::CExp,
+        Recip => Helper::CRecip,
+        Sin => Helper::CSin,
+        Cos => Helper::CCos,
+        Tan => Helper::CTan,
+        Cotan => Helper::CCotan,
+        Sinh => Helper::CSinh,
+        Cosh => Helper::CCosh,
+        Tanh => Helper::CTanh,
+        Cotanh => Helper::CCotanh,
+        Asin => Helper::CAsin,
+        Acos => Helper::CAcos,
+        Atan => Helper::CAtan,
+        Asinh => Helper::CAsinh,
+        Acosh => Helper::CAcosh,
+        Atanh => Helper::CAtanh,
+        Round => Helper::CRound,
+        Trunc => Helper::CTrunc,
+        Ceil => Helper::CCeil,
+        Floor => Helper::CFloor,
+        Conj => Helper::CConj,
+        Flip => Helper::CFlip,
+        Cosxx => Helper::CCosxx,
+        Abs => Helper::CAbs,
+        Cabs => Helper::CCabs,
+        Real => Helper::CReal,
+        Imag => Helper::CImag,
+        Ident => Helper::CIdent,
+        Zero => Helper::CZero,
+        Atan2 => Helper::CArgC,
+        IsNan | IsInf => unreachable!("bool-valued"),
+    }
+}
+
+fn wgsl_ty(t: Ty) -> &'static str {
+    match t {
+        Ty::Bool => "bool",
+        Ty::Int => "i32",
+        Ty::Float => "f32",
+        Ty::Complex => "vec2<f32>",
+    }
+}
+
+fn zero_of(t: Ty) -> &'static str {
+    match t {
+        Ty::Bool => "false",
+        Ty::Int => "0i",
+        Ty::Float => "0.0",
+        Ty::Complex => "vec2<f32>(0.0, 0.0)",
+    }
+}
+
+/// An f32 literal WGSL accepts: finite, never subnormal (it would flush
+/// to zero on the GPU, and the shader lint refuses it), always with a
+/// point or an exponent.
+pub fn lit_f32(v: f64) -> String {
+    let f = v as f32;
+    let f = if !f.is_finite() {
+        if v.is_nan() {
+            0.0
+        } else if v > 0.0 {
+            f32::MAX
+        } else {
+            f32::MIN
+        }
+    } else if f != 0.0 && f.abs() < f32::MIN_POSITIVE {
+        0.0
+    } else {
+        f
+    };
+    let s = format!("{f:?}");
+    if s.contains('.') || s.contains('e') || s.contains("inf") || s.contains("NaN") {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
+/// A comment-safe rendering of an entry name.
+fn sanitize(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The helper functions, written with the `uf_` prefix that `finish`
+/// replaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Helper {
+    Reduce,
+    Atan2,
+    Round,
+    IsNan,
+    IsInf,
+    FSq,
+    FPow,
+    FPowI,
+    IMod,
+    Random,
+    CMul,
+    CDiv,
+    CNorm,
+    CSqr,
+    CPowI,
+    CPow,
+    CRecip,
+    CConj,
+    CFlip,
+    CAbs,
+    CCabs,
+    CReal,
+    CImag,
+    CIdent,
+    CZero,
+    CArg,
+    CArgC,
+    CIsNan,
+    CIsInf,
+    CLog,
+    CExp,
+    CSqrt,
+    CSin,
+    CCos,
+    CTan,
+    CCotan,
+    CSinh,
+    CCosh,
+    CTanh,
+    CCotanh,
+    CAsin,
+    CAcos,
+    CAtan,
+    CAsinh,
+    CAcosh,
+    CAtanh,
+    CRound,
+    CTrunc,
+    CCeil,
+    CFloor,
+    CCosxx,
+    User,
+}
+
+impl Helper {
+    fn name(self) -> &'static str {
+        use Helper::*;
+        match self {
+            Reduce => "uf_reduce",
+            Atan2 => "uf_atan2",
+            Round => "uf_round",
+            IsNan => "uf_isnan",
+            IsInf => "uf_isinf",
+            FSq => "uf_fsq",
+            FPow => "uf_powf",
+            FPowI => "uf_powi",
+            IMod => "uf_imod",
+            Random => "uf_random",
+            CMul => "uf_cmul",
+            CDiv => "uf_cdiv",
+            CNorm => "uf_cnorm",
+            CSqr => "uf_csqr",
+            CPowI => "uf_cpowi",
+            CPow => "uf_cpow",
+            CRecip => "uf_crecip",
+            CConj => "uf_cconj",
+            CFlip => "uf_cflip",
+            CAbs => "uf_cabsc",
+            CCabs => "uf_ccabs",
+            CReal => "uf_creal",
+            CImag => "uf_cimag",
+            CIdent => "uf_cident",
+            CZero => "uf_czero",
+            CArg => "uf_carg",
+            CArgC => "uf_cargc",
+            CIsNan => "uf_cisnan",
+            CIsInf => "uf_cisinf",
+            CLog => "uf_clog",
+            CExp => "uf_cexp",
+            CSqrt => "uf_csqrt",
+            CSin => "uf_csin",
+            CCos => "uf_ccos",
+            CTan => "uf_ctan",
+            CCotan => "uf_ccotan",
+            CSinh => "uf_csinh",
+            CCosh => "uf_ccosh",
+            CTanh => "uf_ctanh",
+            CCotanh => "uf_ccotanh",
+            CAsin => "uf_casin",
+            CAcos => "uf_cacos",
+            CAtan => "uf_catan",
+            CAsinh => "uf_casinh",
+            CAcosh => "uf_cacosh",
+            CAtanh => "uf_catanh",
+            CRound => "uf_cround",
+            CTrunc => "uf_ctrunc",
+            CCeil => "uf_cceil",
+            CFloor => "uf_cfloor",
+            CCosxx => "uf_ccosxx",
+            User => "uf_user",
+        }
+    }
+
+    fn deps(self) -> &'static [Helper] {
+        use Helper::*;
+        match self {
+            FPow => &[],
+            CSqr | CPowI => &[CMul, CDiv],
+            CPow => &[CMul, CLog, CExp],
+            CRecip => &[CDiv],
+            CArg | CArgC => &[Atan2],
+            CLog => &[Atan2],
+            CExp | CSin | CCos | CSinh | CCosh => &[Reduce],
+            CTan | CCotan => &[CSin, CCos, CDiv],
+            CTanh | CCotanh => &[CSinh, CCosh, CDiv],
+            CAsin | CAcos => &[CMul, CSqrt, CLog],
+            CAtan | CAtanh => &[CDiv, CLog],
+            CAsinh | CAcosh => &[CMul, CSqrt, CLog],
+            CRound => &[Round],
+            CCosxx => &[CCos],
+            CIsNan => &[IsNan],
+            CIsInf => &[IsInf],
+            User => &[
+                CSin, CCos, CTan, CCotan, CSinh, CCosh, CTanh, CCotanh, CAsin, CAcos, CAtan, CAsinh, CAcosh, CAtanh,
+                CSqr, CSqrt, CLog, CExp, CAbs, CCabs, CConj, CFlip, CIdent, CZero, CRecip, CReal, CImag, CCosxx,
+                CRound, CTrunc, CCeil, CFloor,
+            ],
+            _ => &[],
+        }
+    }
+
+    fn source(self) -> String {
+        use Helper::*;
+        let src: &str = match self {
+            // Cody-Waite reduction of a trig argument: the template's
+            // `esc_reduce`, which the measured M2 cos error needed.
+            Reduce => "fn uf_reduce(t: f32) -> f32 {
+    let k = round(t * 0.15915494309189535);
+    var r = fma(-k, 6.2831855, t);
+    r = fma(-k, -1.7484555e-7, r);
+    r = fma(-k, -7.1054274e-15, r);
+    return r;
+}",
+            // IEEE-exact at the zero pairs, where Metal's atan2 is wrong
+            // (CLAUDE.md; shaders/core/utilities.wgsl `ff_atan2`).
+            Atan2 => "fn uf_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}",
+            // Halves away from zero, as UF's round (WGSL's goes to even).
+            Round => "fn uf_round(x: f32) -> f32 {
+    let r = floor(abs(x) + 0.5);
+    return select(r, -r, x < 0.0);
+}",
+            // By bits: Metal's fast-math folds every comparison test.
+            IsNan => "fn uf_isnan(x: f32) -> bool {
+    let b = bitcast<u32>(x);
+    return (b & 0x7f800000u) == 0x7f800000u && (b & 0x007fffffu) != 0u;
+}",
+            IsInf => "fn uf_isinf(x: f32) -> bool {
+    return (bitcast<u32>(x) & 0x7fffffffu) == 0x7f800000u;
+}",
+            FSq => "fn uf_fsq(x: f32) -> f32 {
+    return x * x;
+}",
+            // WGSL's pow is undefined for a negative base; a whole
+            // exponent keeps it real, as the f64 interpreter's powf.
+            FPow => "fn uf_powf(a: f32, b: f32) -> f32 {
+    if (b == 0.0) {
+        return 1.0;
+    }
+    if (a < 0.0 && b == floor(b) && abs(b) < 16777216.0) {
+        let m = pow(-a, b);
+        return select(m, -m, (i32(abs(b)) & 1) == 1);
+    }
+    return pow(a, b);
+}",
+            FPowI => "fn uf_powi(x: f32, n: i32) -> f32 {
+    var base = select(x, 1.0 / x, n < 0);
+    var e = abs(n);
+    var acc = 1.0;
+    for (var k = 0; k < 32; k = k + 1) {
+        if (e == 0) {
+            break;
+        }
+        if ((e & 1) == 1) {
+            acc = acc * base;
+        }
+        base = base * base;
+        e = e >> 1u;
+    }
+    return acc;
+}",
+            // Truncated, the sign of `a`, as WGSL defines `%` -- spelled
+            // out, because the hardware operator measured otherwise on a
+            // GTX 1660 under Vulkan (-5 % 3 gave 2, not -2). `-1` is
+            // its own case: MIN / -1 overflows.
+            IMod => "fn uf_imod(a: i32, b: i32) -> i32 {
+    if (b == 0 || b == -1) {
+        return 0;
+    }
+    return a - b * (a / b);
+}",
+            // One value per pixel, from its position: a hash, so a frame
+            // reproduces exactly.
+            Random => "fn uf_random() -> vec2<f32> {
+    var h = u32(esc_env_px.x) * 1664525u + u32(esc_env_px.y) * 22695477u + 1013904223u;
+    h = (h ^ (h >> 16u)) * 2246822519u;
+    let a = h ^ (h >> 13u);
+    let b = (a * 3266489917u) ^ (a >> 16u);
+    return vec2<f32>(f32(a >> 8u), f32(b >> 8u)) / 16777216.0;
+}",
+            CMul => "fn uf_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}",
+            // Plain IEEE, unguarded: UF and Fractint check nothing either.
+            CDiv => "fn uf_cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    let d = b.x * b.x + b.y * b.y;
+    return vec2<f32>(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / d;
+}",
+            CNorm => "fn uf_cnorm(z: vec2<f32>) -> f32 {
+    return z.x * z.x + z.y * z.y;
+}",
+            CSqr => "fn uf_csqr(z: vec2<f32>) -> vec2<f32> {
+    return uf_cmul(z, z);
+}",
+            CPowI => "fn uf_cpowi(z: vec2<f32>, n: i32) -> vec2<f32> {
+    var base = z;
+    if (n < 0) {
+        base = uf_cdiv(vec2<f32>(1.0, 0.0), z);
+    }
+    var e = abs(n);
+    var acc = vec2<f32>(1.0, 0.0);
+    for (var k = 0; k < 32; k = k + 1) {
+        if (e == 0) {
+            break;
+        }
+        if ((e & 1) == 1) {
+            acc = uf_cmul(acc, base);
+        }
+        base = uf_cmul(base, base);
+        e = e >> 1u;
+    }
+    return acc;
+}",
+            CPow => "fn uf_cpow(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
+    if (z.x == 0.0 && z.y == 0.0) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return uf_cexp(uf_cmul(w, uf_clog(z)));
+}",
+            CRecip => "fn uf_crecip(z: vec2<f32>) -> vec2<f32> {
+    return uf_cdiv(vec2<f32>(1.0, 0.0), z);
+}",
+            CConj => "fn uf_cconj(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(z.x, -z.y);
+}",
+            CFlip => "fn uf_cflip(z: vec2<f32>) -> vec2<f32> {
+    return z.yx;
+}",
+            CAbs => "fn uf_cabsc(z: vec2<f32>) -> vec2<f32> {
+    return abs(z);
+}",
+            CCabs => "fn uf_ccabs(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(length(z), 0.0);
+}",
+            CReal => "fn uf_creal(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(z.x, 0.0);
+}",
+            CImag => "fn uf_cimag(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(z.y, 0.0);
+}",
+            CIdent => "fn uf_cident(z: vec2<f32>) -> vec2<f32> {
+    return z;
+}",
+            CZero => "fn uf_czero(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(0.0, 0.0);
+}",
+            CArg => "fn uf_carg(z: vec2<f32>) -> f32 {
+    return uf_atan2(z.y, z.x);
+}",
+            CArgC => "fn uf_cargc(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(uf_atan2(z.y, z.x), 0.0);
+}",
+            CIsNan => "fn uf_cisnan(z: vec2<f32>) -> bool {
+    return uf_isnan(z.x) || uf_isnan(z.y);
+}",
+            CIsInf => "fn uf_cisinf(z: vec2<f32>) -> bool {
+    return uf_isinf(z.x) || uf_isinf(z.y);
+}",
+            CLog => "fn uf_clog(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(log(length(z)), uf_atan2(z.y, z.x));
+}",
+            CExp => "fn uf_cexp(z: vec2<f32>) -> vec2<f32> {
+    let y = uf_reduce(z.y);
+    return exp(z.x) * vec2<f32>(cos(y), sin(y));
+}",
+            // The half-angle form: neither side of the cut cancels.
+            CSqrt => "fn uf_csqrt(z: vec2<f32>) -> vec2<f32> {
+    let r = length(z);
+    if (r == 0.0) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    let t = sqrt((r + abs(z.x)) * 0.5);
+    if (z.x >= 0.0) {
+        return vec2<f32>(t, z.y / (2.0 * t));
+    }
+    let neg = (bitcast<u32>(z.y) & 0x80000000u) != 0u;
+    return vec2<f32>(abs(z.y) / (2.0 * t), select(t, -t, neg));
+}",
+            CSin => "fn uf_csin(z: vec2<f32>) -> vec2<f32> {
+    let x = uf_reduce(z.x);
+    return vec2<f32>(sin(x) * cosh(z.y), cos(x) * sinh(z.y));
+}",
+            CCos => "fn uf_ccos(z: vec2<f32>) -> vec2<f32> {
+    let x = uf_reduce(z.x);
+    return vec2<f32>(cos(x) * cosh(z.y), -sin(x) * sinh(z.y));
+}",
+            CTan => "fn uf_ctan(z: vec2<f32>) -> vec2<f32> {
+    return uf_cdiv(uf_csin(z), uf_ccos(z));
+}",
+            CCotan => "fn uf_ccotan(z: vec2<f32>) -> vec2<f32> {
+    return uf_cdiv(uf_ccos(z), uf_csin(z));
+}",
+            CSinh => "fn uf_csinh(z: vec2<f32>) -> vec2<f32> {
+    let y = uf_reduce(z.y);
+    return vec2<f32>(sinh(z.x) * cos(y), cosh(z.x) * sin(y));
+}",
+            CCosh => "fn uf_ccosh(z: vec2<f32>) -> vec2<f32> {
+    let y = uf_reduce(z.y);
+    return vec2<f32>(cosh(z.x) * cos(y), sinh(z.x) * sin(y));
+}",
+            CTanh => "fn uf_ctanh(z: vec2<f32>) -> vec2<f32> {
+    return uf_cdiv(uf_csinh(z), uf_ccosh(z));
+}",
+            CCotanh => "fn uf_ccotanh(z: vec2<f32>) -> vec2<f32> {
+    return uf_cdiv(uf_ccosh(z), uf_csinh(z));
+}",
+            // asin z = -i log(iz + sqrt(1 - z^2))
+            CAsin => "fn uf_casin(z: vec2<f32>) -> vec2<f32> {
+    let w = uf_csqrt(vec2<f32>(1.0, 0.0) - uf_cmul(z, z));
+    let l = uf_clog(vec2<f32>(-z.y, z.x) + w);
+    return vec2<f32>(l.y, -l.x);
+}",
+            CAcos => "fn uf_cacos(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(1.5707963267948966, 0.0) - uf_casin(z);
+}",
+            // atan z = (i/2) log((i + z) / (i - z))
+            CAtan => "fn uf_catan(z: vec2<f32>) -> vec2<f32> {
+    let l = uf_clog(uf_cdiv(vec2<f32>(z.x, 1.0 + z.y), vec2<f32>(-z.x, 1.0 - z.y)));
+    return vec2<f32>(-0.5 * l.y, 0.5 * l.x);
+}",
+            CAsinh => "fn uf_casinh(z: vec2<f32>) -> vec2<f32> {
+    return uf_clog(z + uf_csqrt(uf_cmul(z, z) + vec2<f32>(1.0, 0.0)));
+}",
+            CAcosh => "fn uf_cacosh(z: vec2<f32>) -> vec2<f32> {
+    let one = vec2<f32>(1.0, 0.0);
+    return uf_clog(z + uf_cmul(uf_csqrt(z + one), uf_csqrt(z - one)));
+}",
+            CAtanh => "fn uf_catanh(z: vec2<f32>) -> vec2<f32> {
+    let one = vec2<f32>(1.0, 0.0);
+    return 0.5 * uf_clog(uf_cdiv(one + z, one - z));
+}",
+            CRound => "fn uf_cround(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(uf_round(z.x), uf_round(z.y));
+}",
+            CTrunc => "fn uf_ctrunc(z: vec2<f32>) -> vec2<f32> {
+    return trunc(z);
+}",
+            CCeil => "fn uf_cceil(z: vec2<f32>) -> vec2<f32> {
+    return ceil(z);
+}",
+            CFloor => "fn uf_cfloor(z: vec2<f32>) -> vec2<f32> {
+    return floor(z);
+}",
+            // Fractint's cos with the imaginary part negated: its bug
+            // before v16, kept so the old pictures reproduce.
+            CCosxx => "fn uf_ccosxx(z: vec2<f32>) -> vec2<f32> {
+    let c = uf_ccos(z);
+    return vec2<f32>(c.x, -c.y);
+}",
+            User => return user_source(),
+        };
+        src.to_string()
+    }
+}
+
+/// `uf_user(k, z)`: the user function at index `k` of
+/// [`USER_FUNCTIONS`]; out of range is the identity.
+fn user_source() -> String {
+    let mut s = String::from("fn uf_user(k: i32, z: vec2<f32>) -> vec2<f32> {\n    switch k {\n");
+    for (i, f) in USER_FUNCTIONS.iter().enumerate() {
+        let _ = writeln!(s, "        case {i}: {{\n            return {}(z);\n        }}", complex_helper(*f).name());
+    }
+    s.push_str("        default: {\n            return z;\n        }\n    }\n}");
+    s
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::super::check::check;
+    use super::super::parser::parse_file;
+    use super::super::{Dialect, EntryKind};
+    use super::*;
+    use egui_wgpu::wgpu::naga;
+
+    /// What the templates provide, enough to validate a program alone.
+    const HARNESS: &str = "
+struct OrbitSummary {
+    z: vec2<f32>,
+    n: u32,
+    escaped: bool,
+    converged: bool,
+    period: u32,
+    dz: vec2<f32>,
+}
+struct HarnessParams {
+    max_iter: u32,
+}
+@group(0) @binding(0) var<uniform> params: HarnessParams;
+fn fparam(i: u32) -> f32 {
+    return f32(i);
+}
+fn cparam(i: u32) -> f32 {
+    return f32(i);
+}
+";
+
+    pub(crate) fn validate(src: &str) -> Result<(), String> {
+        let module = naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .map_err(|e| format!("{e:?}"))?;
+        let lint = crate::variations::shader_lint::self_operations(src);
+        if !lint.is_empty() {
+            return Err(format!("fast-math self-operations: {lint:?}"));
+        }
+        let sub = crate::variations::shader_lint::subnormal_literals(src);
+        if !sub.is_empty() {
+            return Err(format!("subnormal literals: {sub:?}"));
+        }
+        Ok(())
+    }
+
+    fn program(src: &str, kind: EntryKind) -> Program {
+        let (file, d) = parse_file(src);
+        assert!(d.is_empty(), "{d:?}");
+        let (p, d) = check(&file.entries[0], kind, Dialect::UltraFractal);
+        assert!(!super::super::has_errors(&d), "{d:?}");
+        p.unwrap()
+    }
+
+    fn formula_module(p: &Program) -> String {
+        format!(
+            "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var s = formula_init(vec2<f32>(0.1, 0.2));\n    \
+             s = formula_loop(s, vec2<f32>(0.1, 0.2));\n    let go = formula_bailout(s, vec2<f32>(0.1, 0.2));\n}}\n",
+            formula(p)
+        )
+    }
+
+    fn coloring_module(p: &Program) -> String {
+        let c = coloring(p);
+        format!(
+            "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
+             st = coloring_accum(vec2<f32>(0.1, 0.2), vec2<f32>(0.0), vec2<f32>(0.1, 0.2), st);\n    \
+             let v = coloring_map(OrbitSummary(vec2<f32>(1.0), 3u, true, false, 0u, vec2<f32>(1.0)), st);\n}}\n",
+            c.wgsl, c.accum_init
+        )
+    }
+
+    /// Every built-in, every operator and type, every statement: the
+    /// generated WGSL parses, validates and passes the fast-math lint.
+    #[test]
+    fn everything_the_language_has_compiles_to_valid_wgsl() {
+        let mut calls = String::new();
+        for (name, _) in super::super::builtins::BUILTINS {
+            let _ = writeln!(calls, "  c = c + {name}(z)");
+            if !matches!(*name, "conj" | "flip" | "cosxx" | "isnan" | "isinf") {
+                let _ = writeln!(calls, "  f = f + real({name}(f))");
+            }
+        }
+        let src = format!(
+            "All {{\ninit:\n  complex c = (0.5, -0.25)\n  float f = 1.5\n  int i = 3\n  bool b = true\n  z = #pixel\nloop:\n{calls}\
+             \n  i = i % 2 + round(f) - 1\n  f = f ^ 2.5 + 2^0.5 + (-f)^3 + |c| + |f| + #pi * #e\n  c = c ^ (1, 1) + c ^ 3 + c^-2 + c / z + @p\n\
+             \n  b = (c == z) || (c < z) && !b || (f >= 1) || isnan(c) || isinf(f)\n  if b\n   z = z * 2\n  elseif i > 2\n   z = @fn(z)\n  else\n   z = fn1(z)\n  endif\n\
+             \n  while i < 5\n   i = i + 1\n  endwhile\n  repeat\n   i = i - 1\n  until i <= 0\n  z = z + c + f + #random + #center * #magn + #screenpixel\
+             \nbailout:\n  |z| < 1e10 && #x >= 0 && #width > 0 && #maxiter > 0\n}}\n"
+        );
+        let p = program(&src, EntryKind::Formula);
+        let module = formula_module(&p);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+    }
+
+    #[test]
+    fn a_colouring_compiles_with_its_state_packed() {
+        let p = program(
+            "Avg {\ninit:\n sum = 0\n int count = 0\n w = (0, 0)\nloop:\n sum = sum + cabs(#z)\n count = count + 1\n w = #z\n\
+             final:\n #index = real(sum) / count + cabs(w) + #numiter / #maxiter\n if count > 3\n  #solid = true\n endif\n}",
+            EntryKind::Coloring,
+        );
+        // sum (real: 1), count (1), w (2).
+        assert_eq!(p.state_floats(), 4, "{:?}", p.state.iter().map(|&v| &p.vars[v].name).collect::<Vec<_>>());
+        let module = coloring_module(&p);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+        let c = coloring(&p);
+        assert!(c.needs_accum);
+        assert!(c.wgsl.contains("ufc_"), "helpers carry the colouring's prefix");
+        assert!(!c.wgsl.contains("uf_"), "no unprefixed helper is left");
+    }
+
+    /// Run a formula's init and one loop on the GPU for each input point,
+    /// `sel` as every parameter slot's value; returns the iterates.
+    fn gpu_one_step(p: &Program, inputs: &[(f32, f32, f32)]) -> Option<Vec<(f32, f32)>> {
+        use egui_wgpu::wgpu;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        let src = format!(
+            "@group(0) @binding(0) var<storage, read_write> io: array<vec4<f32>>;\n\
+             var<private> sel: f32;\nfn fparam(i: u32) -> f32 {{\n    return sel;\n}}\n{ENV_DECLS}{}\n\
+             @compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) g: vec3<u32>) {{\n    \
+             if (g.x >= arrayLength(&io)) {{\n        return;\n    }}\n    let v = io[g.x];\n    sel = v.z;\n    \
+             var s = formula_init(v.xy);\n    s = formula_loop(s, v.xy);\n    io[g.x] = vec4<f32>(s.z, 0.0, 0.0);\n}}\n",
+            formula(p)
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lang probe"),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("lang probe"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let host: Vec<[f32; 4]> = inputs.iter().map(|&(x, y, s)| [x, y, s, 0.0]).collect();
+        let bytes: &[u8] = bytemuck::cast_slice(&host);
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+        let storage = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: bytes.len() as u64, usage, mapped_at_creation: false });
+        queue.write_buffer(&storage, 0, bytes);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: storage.as_entire_binding() }],
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups((inputs.len() as u32).div_ceil(64), 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&storage, 0, &readback, 0, bytes.len() as u64);
+        queue.submit(std::iter::once(enc.finish()));
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let view = slice.get_mapped_range();
+        let out: &[[f32; 4]] = bytemuck::cast_slice(&view);
+        Some(out.iter().map(|v| (v[0], v[1])).collect())
+    }
+
+    /// Off every branch cut and every .5, so f32 and f64 agree on which
+    /// side they are.
+    const POINTS: &[(f64, f64)] = &[(0.3, -0.7), (1.4, 0.2), (-1.7, 0.6), (0.1, 1.3), (-0.45, -0.35), (2.2, -1.9), (0.8, 0.05)];
+
+    fn close(gpu: (f32, f32), cpu: super::super::builtins::C64) -> bool {
+        let scale = cpu.abs().max(1.0);
+        ((gpu.0 as f64 - cpu.re).abs() / scale) < 2e-5 && ((gpu.1 as f64 - cpu.im).abs() / scale) < 2e-5
+    }
+
+    /// Every user-selectable function's WGSL against its f64 definition.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn every_complex_function_matches_f64_on_the_gpu() {
+        let p = program("U {\ninit:\n z = #pixel\nloop:\n z = @f(z)\nbailout:\n false\n}", EntryKind::Formula);
+        let mut inputs = Vec::new();
+        for (k, _) in USER_FUNCTIONS.iter().enumerate() {
+            for &(x, y) in POINTS {
+                inputs.push((x as f32, y as f32, k as f32));
+            }
+        }
+        let Some(out) = gpu_one_step(&p, &inputs) else {
+            eprintln!("no GPU");
+            return;
+        };
+        let mut bad = Vec::new();
+        for ((x, y, k), got) in inputs.iter().zip(&out) {
+            let f = USER_FUNCTIONS[*k as usize];
+            let want = f.eval_c(super::super::builtins::C64::new(*x as f64, *y as f64));
+            if !close(*got, want) {
+                bad.push(format!("{f:?}({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im));
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+
+    /// The operators: integer and complex powers, division, real powers
+    /// of a negative base, mixed types, comparisons.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn operators_match_the_interpreter_on_the_gpu() {
+        let p = program(
+            "O {\ninit:\n z = #pixel\nloop:\n float x = real(z) * 3\n int i = round(x)\n\
+             z = z^3 - z^(0.5, 0.25) + z^-2 + z / (1.5, -0.5) + (-x)^3 + |x|^2.5 + (-2.0)^i + i % 3 + |z| * (z < 1)\n\
+             bailout:\n false\n}",
+            EntryKind::Formula,
+        );
+        let inputs: Vec<(f32, f32, f32)> = POINTS.iter().map(|&(x, y)| (x as f32, y as f32, 0.0)).collect();
+        let Some(out) = gpu_one_step(&p, &inputs) else {
+            eprintln!("no GPU");
+            return;
+        };
+        let params = super::super::interp::ParamValues::defaults(&p);
+        for (&(x, y), got) in POINTS.iter().zip(&out) {
+            let pixel = super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64);
+            let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(pixel, 1)).z;
+            assert!(close(*got, want), "({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im);
+        }
+    }
+
+    #[test]
+    fn literals_are_valid_wgsl_floats() {
+        assert_eq!(lit_f32(1.0), "1.0");
+        assert_eq!(lit_f32(-2.5), "-2.5");
+        assert_eq!(lit_f32(1e-45), "0.0", "subnormal flushes here, not on the GPU");
+        assert_eq!(lit_f32(1e40), format!("{:?}", f32::MAX));
+        assert!(lit_f32(1e-7).contains('e'));
+    }
+}

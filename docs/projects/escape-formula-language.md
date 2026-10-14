@@ -1,6 +1,8 @@
 # Escape-time formula language: Ultra Fractal and Fractint formulas and colourings
 
-Status: **planned 2026-10-13; phase 1 in progress** on `escape-expansion`.
+Status: **planned 2026-10-13; phase 1 in progress** on `escape-expansion`:
+steps 1-3 (front end, interpreter, WGSL back end) done in
+`src/escape/lang/`; step 4 (engine integration) next.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -83,17 +85,19 @@ Bool converts to and from numbers only in Fractint files (UF warns).
 
 **Operators**, high to low: `|x|` (squared modulus, parenthetic),
 unary `!` and `-`, `^`, `* / %`, `+ -`, comparisons, `&& ||`, `=`
-(right-associative); the rest left-associative. **To verify:** UF's
-operator page lists unary minus above `^` while its prose says `-x^2` is
-`-(x^2)`, and Fractint gives both precedence 2. We pin whichever UF
-actually does with a test before importing files.
+(right-associative); the rest left-associative. UF's operator page says
+negation has the higher precedence than power, so `-x^2` is `(-x)^2`
+(pinned by `precedence_follows_uf_s_table`). Fractint's `parser.c` gives
+both precedence 2: phase 2 checks what it does with `-x^2`.
 
 **Complex comparisons** compare real parts (Fractint; to verify for UF).
 
 **Predefined symbols.** Read: `#pixel`, `#z` (written by formulas only),
 `#numiter`, `#maxiter`, `#pi`, `#e`, `#random`, `#center`, `#magn`,
 `#x`, `#y`, `#width`, `#height`, `#screenpixel`. Written by colourings:
-`#index`, `#solid`. Phase 3: `#dz`, `#dpixel`. Fractint names map onto
+`#index`, `#solid`. `#numiter`, `#index` and `#solid` belong to a
+colouring's `final:` (UF reads `#numiter` there, and only there do the
+templates have the orbit's summary). Phase 3: `#dz`, `#dpixel`. Fractint names map onto
 these (`pixel`, `z`, `maxit`, `rand`, `pi`, `e`); Fractint's own
 `LastSqr`, `whitesq`, `scrnpix`, `scrnmax`, `ismand`, `center`,
 `magxmag`, `rotskew` are phase 2.
@@ -152,6 +156,12 @@ the count and the variables.
 **Errors** carry line and column and show in the editor. The generated
 WGSL is validated with naga at compile time, so a compiler bug surfaces
 as an error message rather than a GPU validation failure.
+
+**Measured while building the back end:** the hardware `%` on a negative
+`i32` does not follow WGSL on a GTX 1660 under Vulkan: `-5 % 3` gave 2,
+where WGSL (and the f64 interpreter) give -2. The generated remainder is
+spelled `a - b * (a / b)`, which measured right. Any existing shader
+that takes `%` of a signed value that can be negative is worth a look.
 
 ## The engine (survey of 2026-10-13)
 
@@ -293,6 +303,18 @@ compiler.
 - Direct colouring (`#color`, the `color` type, the colour functions).
 - A custom colouring as the texture layer, if phase 1 has not already
   made it free.
+
+### Later: transformations as flame variations
+
+UF's third entry kind, the transformation (`.uxf`, a `transform:` section
+rewriting `#pixel`), is a flame variation's shape: a point to a point,
+with parameters. The front end, the function table, the WGSL rules and
+the interpreter carry over; a compiled transformation would produce a
+`VariationDef` (parameters and 2D WGSL) and register it as the plug-in
+and API variations do. The gaps: 3D variations need a vector type,
+and variations that draw random numbers or read JWildfire's accumulator
+need hooks. The escape engine's camera lens warps the view by any
+variation, so one custom transformation would serve both.
 
 ## Licensing
 
