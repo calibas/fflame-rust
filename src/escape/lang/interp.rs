@@ -217,6 +217,11 @@ pub fn run(
     if let Some(c) = c.as_mut() {
         let prog = c.prog;
         c.exec(&prog.final_body, &mut sh);
+        // An INSIDE colouring leaves the outside to the background, as
+        // its WGSL does.
+        if prog.region == Region::Inside && escaped {
+            sh.solid = true;
+        }
     }
     let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
     Run { z: sh.z, n: sh.numiter, escaped, index: sh.index, solid: sh.solid, dz }
