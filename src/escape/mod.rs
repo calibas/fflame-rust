@@ -114,8 +114,9 @@ pub enum FormulaFeature {
     /// its WGSL defines `FormulaState`, `formula_init(pixel)`,
     /// `formula_loop(s, pixel)` and `formula_bailout(s, pixel)` instead
     /// of `formula_step`, and owns its seed and its escape test. The
-    /// direct template drives it; nothing perturbs it (no tier matches
-    /// its name).
+    /// direct template drives it; the perturbed path runs it by its own
+    /// perturbation equations when it has them
+    /// (`assembler::PerturbTier::Custom`).
     Program,
 }
 

@@ -45,6 +45,12 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
             return Err("it reads the pixel's place on the screen, which the reference point has none of".into());
         }
     }
+    // The reference orbit is computed apart from any render's size.
+    for size in [Predef::Width, Predef::Height, Predef::ScrnMax] {
+        if p.reads(size) {
+            return Err("it reads the image's size".into());
+        }
+    }
     // What the loop carries across iterations: read before written in
     // it, and written in it.
     let carried = carried_vars(&p.loop_body);

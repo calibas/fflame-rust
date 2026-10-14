@@ -9,7 +9,7 @@ detection and the embossed relief for programs, `global:`, `switch:`,
 the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
 measurement under phase 2). **Phase 3 in progress** (deep zoom for
-custom formulas; its plan and order of work below): step 1 done
+custom formulas; its plan and order of work below): steps 1 and 2 done
 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
@@ -478,7 +478,7 @@ Order of work (2026-10-14):
    1e-12, and keeping digits past f64); `lang/perturb.rs`, whether a
    formula perturbs (equations, a test of z alone, no screen position)
    and whether it rebases (only when the loop carries nothing but z).
-2. **The custom tier on the scaled rung.** `PerturbTier::Custom { hash,
+2. **The custom tier on the scaled rung** (done). `PerturbTier::Custom { hash,
    rebase }` (Copy + Eq; the hash is the formula's name's, so the
    pipeline key and the reference identity follow the source). The
    reference: a new big family (`MAP_CUSTOM`, never stored on disk, as
@@ -495,6 +495,27 @@ Order of work (2026-10-14):
    no derivative under perturbation (`derivative_gap` reports it).
    Refused past the scaled rung (zoom 48) until step 3, so a deep view
    renders on the direct path, as for a formula with no tier.
+   As built: the step is not `F(Z, S w, S d0) / S` after all. Measured
+   against the truth (each sampled pixel iterated in big floats), that
+   form's three extra roundings a step cost it in chaotic regions (391
+   of 439 exact against the built-in tier's 404 with the same plain
+   reference, seahorse valley, zoom 20, 2000 iterations). So the
+   equations compile with step 3's Small/Full classes already, Small
+   values held in units of S (`Gen::sgen` in `lang/wgsl.rs`): a Small
+   times a Full is Small, two Smalls' product carries one S, a Small
+   over a Full is Small, a ratio of Smalls Full; anything else runs on
+   true values. UF's Mandelbrot equations then compile to the built-in
+   step's arithmetic: 402 of 439 against 404, 439 of 439 at 300
+   iterations, and 439 of 439 on a deep Julia view
+   (`a_custom_formula_perturbs_by_its_own_equations`; 410 for the
+   built-in with its nucleus reference, which the custom family has
+   not). The reference identity rides in `map_params` as two normal
+   f32s (46 bits of a hash over the program, its packed parameters,
+   the plane and the image values it reads); `custom::reference_machine`
+   starts the program for the orbit. Found on the way and fixed: the
+   blocking cache path loaded stored orbits with the family clamped to
+   5, so Magnet I, Kaliset (-c) or Ducks v0 could be served a stored
+   Feather(2) orbit at the same centre.
 3. **The floatexp rung**: `perturbloop:` compiled to floatexp, its
    values classed Small (`#dz`, `#dpixel` and what they make: floatexp)
    or Full (`#z`, parameters, constants: f32); Small times anything is

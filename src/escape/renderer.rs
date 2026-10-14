@@ -2064,6 +2064,9 @@ impl EscapeRenderer {
             }
             // Abs-folds (and a log): not holomorphic, no linear model.
             assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
+            // A custom formula's step is its own; no table models it
+            // (plan, phase 3).
+            assembler::PerturbTier::Custom { .. } => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings -- base or texture layer -- keep the
@@ -3383,7 +3386,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
         let tier = Self::perturb_tier(escape)?;
-        let single = !matches!(tier, assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar);
+        // A custom formula's tier carries no derivative (plan, phase 3).
+        let single = !matches!(
+            tier,
+            assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { .. }
+        );
         // Both rungs carry it; the argument stays for the callers that
         // size the state per rung.
         let _ = floatexp;
@@ -3878,7 +3885,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if Self::wants_perturbation(escape, render_lines) {
             let single = !matches!(
                 Self::perturb_tier(escape),
-                Some(assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar) | None
+                Some(
+                    assembler::PerturbTier::Phoenix
+                        | assembler::PerturbTier::Manowar
+                        | assembler::PerturbTier::Custom { .. }
+                ) | None
             );
             if !single {
                 return Some(DerivativeGap::Perturbed);
@@ -4892,6 +4903,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// cache keyed without it would silently reuse a stale one).
     /// Zero for every family that has no such parameter.
     fn map_params_for(escape: &EscapeConfig) -> [f32; 2] {
+        // A custom formula's reference is a function of its program and
+        // parameters: their identity rides here (MAP_CUSTOM).
+        if escape.formula.starts_with(super::custom::PREFIX) {
+            return super::custom::reference_identity(escape).unwrap_or([0.0, 0.0]);
+        }
         // Manowar is the same two-term map with p = 1, fixed by the
         // formula rather than by a parameter.
         if escape.formula == "manowar" {
@@ -4991,6 +5007,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// path's f32 mush at the threshold, which is how Phoenix came to
     /// render one flat colour past zoom 48.
     pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
+        // A custom formula with UF's perturbation equations, on the
+        // scaled rung only until its floatexp rung lands (plan, phase 3):
+        // deeper, it renders on the direct path as a formula with no
+        // tier does.
+        if escape.formula.starts_with(super::custom::PREFIX) {
+            return super::custom::perturb_tier(escape, PERTURB_FLOATEXP_ZOOM);
+        }
         match escape.formula.as_str() {
             "mandelbrot" => Some(assembler::PerturbTier::Power(2)),
             "multibrot" => {
@@ -5382,6 +5405,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
             assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
             assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
+            assembler::PerturbTier::Custom { .. } => (2, false, super::reference::MAP_CUSTOM),
         };
         let height_px = self.height.max(1) as f64;
         let req = OrbitRequest {
@@ -5739,6 +5763,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
             assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
             assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
+            assembler::PerturbTier::Custom { .. } => (2, false, super::reference::MAP_CUSTOM),
         };
         let period_hint = if julia_c.is_none() && !ship {
             escape.reference_period.filter(|&p| p > 0)

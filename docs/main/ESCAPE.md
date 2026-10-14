@@ -365,8 +365,29 @@ test `whitesq`); a formula that reads `ismand` gets the Julia toggle, which sets
 `rand` is a per-pixel hash, not Fractint's time-seeded generator, so a
 picture reproduces; `srand` is not supported.
 
+**Deep zoom: UF's perturbation equations.** A formula may carry
+`perturbinit:` and `perturbloop:` (UF's): the start and the step of
+`#dz`, the pixel's deviation from the reference orbit, with `#z` the
+reference's iterate there and `#dpixel` the pixel's offset from the
+reference point (UF's own Mandelbrot: `#dz = 2*#z*#dz + sqr(#dz) +
+#dpixel`; its Julia starts `#dz = #dpixel`). The sections have their
+own variables and see no other section's (the reference keeps only z);
+`perturb = <bool>` in `default:` says when the equations hold. Such a
+formula takes the perturbed path past the direct path's f32 limit, when
+its test reads `#z` alone and it reads nothing of the screen
+(`lang/perturb.rs`); its reference orbit is the formula itself run in
+big floats (`lang/bigeval.rs`, the `MAP_CUSTOM` family), and the
+equations compile with each value classed Full (the reference's scale)
+or Small (the deviation's, held in units of S as the built-in tiers'
+`w`). A formula whose loop carries more than z (a `zold`) rebases only
+where the orbit ends. For now the scaled rung only: deeper than zoom
+48 such a formula renders on the direct path, as one without equations
+does at any depth. No BLA and no derivative there.
+`interp::run_perturbed` is the f64 model of the path.
+
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
-and direct colouring, and deep zoom for custom formulas.
+and direct colouring, a custom formula's floatexp rung (past zoom 48),
+and the delta derived without written equations.
 
 **Measured against UF's public formula library** (its full download,
 read for measurement and never bundled; `measure_a_uf_corpus`, an
@@ -392,9 +413,10 @@ and the renderer, the CLI and the panel compile it before resolving the
 name, so a saved file, a PNG or an upload renders anywhere.
 
 - A **formula** is a program (`FormulaFeature::Program`) the direct
-  template drives: its own seed, loop and bailout. It renders on the
-  direct path only, so deep views stop at the f32 limit (about zoom 14),
-  as for a built-in with no perturbation tier. It has no Julia toggle
+  template drives: its own seed, loop and bailout. Without perturbation
+  equations it renders on the direct path only, so deep views stop at
+  the f32 limit (about zoom 14), as for a built-in with no perturbation
+  tier; with them, `PerturbTier::Custom` takes it to zoom 48 (above). It has no Julia toggle
   (its `#pixel` is written in) unless it reads Fractint's `ismand` or
   its `switch:` passes `#pixel`.
   Interior detection compares its whole state (`formula_same`: `z` can

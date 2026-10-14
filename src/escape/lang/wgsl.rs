@@ -121,12 +121,14 @@ pub fn formula(p: &Program) -> String {
         "\nfn formula_same(a: FormulaState, b: FormulaState) -> bool {{\n    return {};\n}}\n",
         same.join("\n        && ")
     );
-    // UF's perturbation equations, for the perturbed path: the start
-    // and the step of the pixel's deviation `dz` from the reference,
-    // with the equations' own variables as locals, and the formula's
-    // test on the pixel's full z when it reads nothing else.
+    // UF's perturbation equations, for the perturbed path's scaled
+    // rung: the start and the step of the pixel's deviation from the
+    // reference, held in units of S (`w = dz / S`, the built-in tiers'
+    // form), with the equations' own variables as locals; and the
+    // formula's test on the pixel's full z when it reads nothing else.
     if !p.perturb_loop.is_empty() {
         g.ctx = Ctx::Perturb;
+        g.small_vars = perturb_var_classes(p);
         let locals: String = p
             .vars
             .iter()
@@ -136,16 +138,16 @@ pub fn formula(p: &Program) -> String {
             .collect();
         let _ = write!(
             body,
-            "\nfn formula_perturb_init(z_ref: vec2<f32>, pixel: vec2<f32>, dpixel: vec2<f32>) -> vec2<f32> {{\n    var dz = vec2<f32>(0.0, 0.0);\n{locals}"
+            "\nfn formula_perturb_init_scaled(z_ref: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32) -> vec2<f32> {{\n    var w = vec2<f32>(0.0, 0.0);\n{locals}"
         );
-        g.stmts(&p.perturb_init, 1, &mut body);
-        body.push_str("    return dz;\n}\n");
+        g.sstmts(&p.perturb_init, 1, &mut body);
+        body.push_str("    return w;\n}\n");
         let _ = write!(
             body,
-            "\nfn formula_perturb_loop(z_ref: vec2<f32>, dz_in: vec2<f32>, pixel: vec2<f32>, dpixel: vec2<f32>) -> vec2<f32> {{\n    var dz = dz_in;\n{locals}"
+            "\nfn formula_perturb_loop_scaled(z_ref: vec2<f32>, w_in: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32) -> vec2<f32> {{\n    var w = w_in;\n{locals}"
         );
-        g.stmts(&p.perturb_loop, 1, &mut body);
-        body.push_str("    return dz;\n}\n");
+        g.sstmts(&p.perturb_loop, 1, &mut body);
+        body.push_str("    return w;\n}\n");
         if let Some(b) = p.bailout.as_ref().filter(|b| !reads_a_variable(b, p)) {
             g.ctx = Ctx::PerturbBailout;
             let test = g.expr(b);
@@ -309,6 +311,12 @@ struct Gen<'p> {
     /// Inside a constant subexpression: its literals go through
     /// `uf_k`, so WGSL does not fold it ([`constant`]).
     opaque: bool,
+    /// The perturbation equations' variables that hold a deviation
+    /// (Small, in units of S), by id ([`perturb_var_classes`]).
+    small_vars: Vec<bool>,
+    /// Emitting a deviation at its true size (`S` times its held value):
+    /// inside an operation the scaled form has no rule for.
+    true_small: bool,
 }
 
 impl<'p> Gen<'p> {
@@ -326,7 +334,7 @@ impl<'p> Gen<'p> {
             global_slots[v] = Some(g);
             g += p.vars[v].ty.floats();
         }
-        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, global_slots, loops: 0, opaque: false }
+        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, global_slots, loops: 0, opaque: false, small_vars: Vec::new(), true_small: false }
     }
 
     /// Helpers, then the body; `uf_` becomes the program's prefix.
@@ -364,6 +372,9 @@ impl<'p> Gen<'p> {
     fn var(&self, v: VarId) -> String {
         if let Some(k) = self.global_slots[v] {
             return self.global(v, k);
+        }
+        if self.true_small && self.small_vars.get(v).copied().unwrap_or(false) {
+            return format!("(s * v{v})");
         }
         if self.ctx == Ctx::Formula {
             format!("s.v{v}")
@@ -561,8 +572,11 @@ impl<'p> Gen<'p> {
             (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout) => "pixel".into(),
             (Predef::Z, Ctx::Perturb) => "z_ref".into(),
             (Predef::Z, Ctx::PerturbBailout) => "z".into(),
-            (Predef::DZ, _) => "dz".into(),
-            (Predef::DPixel, _) => "dpixel".into(),
+            // The equations' deviation and offset, held in units of S.
+            (Predef::DZ, _) if self.true_small => "(s * w)".into(),
+            (Predef::DPixel, _) if self.true_small => "(s * d0)".into(),
+            (Predef::DZ, _) => "w".into(),
+            (Predef::DPixel, _) => "d0".into(),
             (Predef::Pixel, _) => "esc_env_pixel".into(),
             (Predef::Z, Ctx::Formula) => "s.z".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
@@ -627,6 +641,246 @@ impl<'p> Gen<'p> {
             Pow => format!("{}({l}, {r})", self.use_(Helper::FPow)),
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
             Mul | Div | Mod => format!("({l} {} {r})", op.symbol()),
+        }
+    }
+
+    // ---- the perturbation equations on the scaled rung -----------------
+    //
+    // Each value is Full (the reference's scale: `#z`, parameters,
+    // constants) or Small (the deviation's: `#dz`, `#dpixel` and what
+    // they make), and a Small one is held in units of S. The rules are
+    // the built-in tiers' derivations: a Small times a Full is Small,
+    // a product of two Smalls carries one factor S (`S w^2`), a Small
+    // over a Full is Small and a ratio of Smalls is Full. Anything else
+    // takes the true values (`S` times the held one) and is Full: right,
+    // merely without the scaled form's protection from rounding.
+
+    fn sstmts(&mut self, stmts: &[IStmt], depth: usize, out: &mut String) {
+        for s in stmts {
+            self.sstmt(s, depth, out);
+        }
+    }
+
+    fn sstmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
+        let pad = "    ".repeat(depth);
+        match s {
+            IStmt::Assign(place, e) => {
+                let (code, class) = self.sgen(e);
+                let (target, want) = match place {
+                    Place::Var(v) => (format!("v{v}"), if self.small_vars[*v] { Class::Small } else { Class::Full }),
+                    // The checker lets the equations write nothing else.
+                    _ => ("w".to_string(), Class::Small),
+                };
+                let code = as_class(code, class, want);
+                let _ = writeln!(out, "{pad}{target} = {code};");
+            }
+            IStmt::If { arms, otherwise } => {
+                for (k, (cond, body)) in arms.iter().enumerate() {
+                    let c = self.full_code(cond);
+                    if k == 0 {
+                        let _ = writeln!(out, "{pad}if ({c}) {{");
+                    } else {
+                        let _ = writeln!(out, "{pad}}} else if ({c}) {{");
+                    }
+                    self.sstmts(body, depth + 1, out);
+                }
+                if !otherwise.is_empty() {
+                    let _ = writeln!(out, "{pad}}} else {{");
+                    self.sstmts(otherwise, depth + 1, out);
+                }
+                let _ = writeln!(out, "{pad}}}");
+            }
+            IStmt::While { cond, body } => {
+                let k = self.loops;
+                self.loops += 1;
+                let c = self.full_code(cond);
+                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+                self.sstmts(body, depth + 1, out);
+                let _ = writeln!(out, "{pad}}}");
+            }
+            IStmt::Repeat { body, cond } => {
+                let k = self.loops;
+                self.loops += 1;
+                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                self.sstmts(body, depth + 1, out);
+                let c = self.full_code(cond);
+                let _ = writeln!(out, "{pad}    if ({c}) {{\n{pad}        break;\n{pad}    }}");
+                let _ = writeln!(out, "{pad}}}");
+            }
+        }
+    }
+
+    /// Whether an expression reads a deviation.
+    fn has_small(&self, e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Predef(Predef::DZ | Predef::DPixel) => true,
+            IExprKind::Var(v) => self.small_vars.get(*v).copied().unwrap_or(false),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+                self.has_small(a)
+            }
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => self.has_small(a) || self.has_small(b),
+            _ => false,
+        }
+    }
+
+    /// An expression's true value.
+    fn full_code(&mut self, e: &IExpr) -> String {
+        let (c, k) = self.sgen(e);
+        as_class(c, k, Class::Full)
+    }
+
+    /// An expression the scaled form has no rule for, on true values.
+    fn true_expr(&mut self, e: &IExpr) -> String {
+        let saved = self.true_small;
+        self.true_small = true;
+        let c = self.expr(e);
+        self.true_small = saved;
+        c
+    }
+
+    /// An expression's code and class: a Small one's code is its value
+    /// in units of S.
+    fn sgen(&mut self, e: &IExpr) -> (String, Class) {
+        use Class::{Full, Small};
+        if !self.has_small(e) {
+            return (self.expr(e), Full);
+        }
+        match &e.kind {
+            IExprKind::Predef(Predef::DZ) => ("w".into(), Small),
+            IExprKind::Predef(Predef::DPixel) => ("d0".into(), Small),
+            IExprKind::Var(v) => (format!("v{v}"), Small),
+            IExprKind::Convert(a) if e.ty != Ty::Bool && a.ty != Ty::Bool => {
+                let (c, k) = self.sgen(a);
+                (convert_code(&c, a.ty, e.ty), k)
+            }
+            IExprKind::MakeComplex(a, b) => {
+                let (ca, ka) = self.sgen(a);
+                let (cb, kb) = self.sgen(b);
+                if ka == Small && kb == Small {
+                    (format!("vec2<f32>({ca}, {cb})"), Small)
+                } else {
+                    (format!("vec2<f32>({}, {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
+                }
+            }
+            IExprKind::Unary(UnOp::Neg, a) => {
+                let (c, k) = self.sgen(a);
+                (format!("(-{c})"), k)
+            }
+            IExprKind::Binary(op @ (BinOp::Add | BinOp::Sub), a, b) if e.ty != Ty::Bool => {
+                let (ca, ka) = self.sgen(a);
+                let (cb, kb) = self.sgen(b);
+                let o = op.symbol();
+                if ka == Small && kb == Small {
+                    (format!("({ca} {o} {cb})"), Small)
+                } else {
+                    (format!("({} {o} {})", as_class(ca, ka, Full), as_class(cb, kb, Full)), Full)
+                }
+            }
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && e.ty != Ty::Int => {
+                let (ca, ka) = self.sgen(a);
+                let (cb, kb) = self.sgen(b);
+                let prod = self.mul_code(&ca, a, ka, &cb, b, kb, e.ty);
+                match (ka, kb) {
+                    (Small, Small) => (format!("(s * {prod})"), Small),
+                    (Full, Full) => (prod, Full),
+                    _ => (prod, Small),
+                }
+            }
+            IExprKind::Binary(BinOp::Div, a, b) if e.ty != Ty::Int => {
+                let (ca, ka) = self.sgen(a);
+                let (cb, kb) = self.sgen(b);
+                match (ka, kb) {
+                    (Small, Full) => (self.div_code(&ca, a.ty, &cb, b.ty), Small),
+                    (Small, Small) => (self.div_code(&ca, a.ty, &cb, b.ty), Full),
+                    _ => {
+                        let (fa, fb) = (as_class(ca, ka, Full), as_class(cb, kb, Full));
+                        (self.div_code(&fa, a.ty, &fb, b.ty), Full)
+                    }
+                }
+            }
+            IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => {
+                let (ca, ka) = self.sgen(a);
+                if ka == Full {
+                    return (self.true_expr(e), Full);
+                }
+                match *n {
+                    1 => (ca, Small),
+                    2 => (format!("(s * {})", self.sq_code(&ca, a.ty)), Small),
+                    n => (format!("(pow(s, {}.0) * {})", n - 1, self.powi_code(&ca, a.ty, n)), Small),
+                }
+            }
+            IExprKind::Modulus(a) => {
+                let (ca, ka) = self.sgen(a);
+                let norm = self.norm_code(&ca, a.ty);
+                if ka == Small {
+                    (format!("(s * {norm})"), Small)
+                } else {
+                    (norm, Full)
+                }
+            }
+            IExprKind::Call(f, a) if a.ty != Ty::Int => {
+                let (ca, ka) = self.sgen(a);
+                let complex = a.ty == Ty::Complex;
+                match (f, ka) {
+                    (Builtin::Sqr, Small) => (format!("(s * {})", self.sq_code(&ca, a.ty)), Small),
+                    (Builtin::Ident, Small) => (ca, Small),
+                    (Builtin::Zero, Small) => (zero_of(e.ty).to_string(), Small),
+                    (Builtin::Conj, Small) if complex => (format!("({ca} * vec2<f32>(1.0, -1.0))"), Small),
+                    (Builtin::Flip, Small) if complex => (format!("({ca}).yx"), Small),
+                    (Builtin::Real, Small) if complex => (format!("({ca}).x"), Small),
+                    (Builtin::Imag, Small) if complex => (format!("({ca}).y"), Small),
+                    _ => (self.true_expr(e), Full),
+                }
+            }
+            _ => (self.true_expr(e), Full),
+        }
+    }
+
+    /// A product's code; a Full lifted real scales.
+    #[allow(clippy::too_many_arguments)]
+    fn mul_code(&mut self, ca: &str, a: &IExpr, ka: Class, cb: &str, b: &IExpr, kb: Class, ty: Ty) -> String {
+        if ty == Ty::Complex && a.ty == Ty::Complex && b.ty == Ty::Complex {
+            if ka == Class::Full && a.is_lifted_real() {
+                return format!("({} * {cb})", self.real_of(a));
+            }
+            if kb == Class::Full && b.is_lifted_real() {
+                return format!("({ca} * {})", self.real_of(b));
+            }
+            return format!("{}({ca}, {cb})", self.use_(Helper::CMul));
+        }
+        format!("({ca} * {cb})")
+    }
+
+    fn div_code(&mut self, ca: &str, at: Ty, cb: &str, bt: Ty) -> String {
+        if at == Ty::Complex && bt == Ty::Complex {
+            format!("{}({ca}, {cb})", self.use_(Helper::CDiv))
+        } else {
+            format!("({ca} / {cb})")
+        }
+    }
+
+    fn sq_code(&mut self, c: &str, t: Ty) -> String {
+        if t == Ty::Complex {
+            format!("{}({c})", self.use_(Helper::CSqr))
+        } else {
+            format!("{}({c})", self.use_(Helper::FSq))
+        }
+    }
+
+    fn powi_code(&mut self, c: &str, t: Ty, n: i64) -> String {
+        if t == Ty::Complex {
+            format!("{}({c}, {n}i)", self.use_(Helper::CPowI))
+        } else {
+            format!("{}({c}, {n}i)", self.use_(Helper::FPowI))
+        }
+    }
+
+    fn norm_code(&mut self, c: &str, t: Ty) -> String {
+        if t == Ty::Complex {
+            format!("{}({c})", self.use_(Helper::CNorm))
+        } else {
+            format!("{}({c})", self.use_(Helper::FSq))
         }
     }
 
@@ -762,6 +1016,131 @@ fn complex_helper(f: Builtin) -> Helper {
         Zero => Helper::CZero,
         Atan2 => Helper::CArgC,
         IsNan | IsInf => unreachable!("bool-valued"),
+    }
+}
+
+/// The scale a perturbation-equation value lives at (see `Gen::sgen`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Class {
+    /// The reference's: its true value.
+    Full,
+    /// The deviation's: held in units of S.
+    Small,
+}
+
+fn as_class(code: String, from: Class, to: Class) -> String {
+    match (from, to) {
+        (Class::Small, Class::Full) => format!("(s * {code})"),
+        (Class::Full, Class::Small) => format!("({code} / s)"),
+        _ => code,
+    }
+}
+
+fn convert_code(c: &str, from: Ty, to: Ty) -> String {
+    match (from, to) {
+        (Ty::Int, Ty::Float) => format!("f32({c})"),
+        (Ty::Int, Ty::Complex) => format!("vec2<f32>(f32({c}), 0.0)"),
+        (Ty::Float, Ty::Complex) => format!("vec2<f32>({c}, 0.0)"),
+        _ => c.to_string(),
+    }
+}
+
+/// Which of the perturbation equations' variables hold a deviation
+/// (Small): every one, unless something it is assigned is Full, to a
+/// fixpoint -- the class each assignment's value has by `Gen::sgen`'s
+/// rules.
+fn perturb_var_classes(p: &Program) -> Vec<bool> {
+    let mut small: Vec<bool> = p.vars.iter().map(|v| v.perturb && v.ty != Ty::Bool && v.ty != Ty::Int).collect();
+    fn class(e: &IExpr, small: &[bool]) -> Class {
+        use Class::{Full, Small};
+        fn has(e: &IExpr, small: &[bool]) -> bool {
+            match &e.kind {
+                IExprKind::Predef(Predef::DZ | Predef::DPixel) => true,
+                IExprKind::Var(v) => small[*v],
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => has(a, small),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => has(a, small) || has(b, small),
+                _ => false,
+            }
+        }
+        if !has(e, small) {
+            return Full;
+        }
+        match &e.kind {
+            IExprKind::Predef(_) | IExprKind::Var(_) => Small,
+            IExprKind::Convert(a) if e.ty != Ty::Bool && a.ty != Ty::Bool => class(a, small),
+            IExprKind::MakeComplex(a, b) => {
+                if class(a, small) == Small && class(b, small) == Small {
+                    Small
+                } else {
+                    Full
+                }
+            }
+            IExprKind::Unary(UnOp::Neg, a) => class(a, small),
+            IExprKind::Binary(BinOp::Add | BinOp::Sub, a, b) if e.ty != Ty::Bool => {
+                if class(a, small) == Small && class(b, small) == Small {
+                    Small
+                } else {
+                    Full
+                }
+            }
+            IExprKind::Binary(BinOp::Mul, a, b) if e.ty != Ty::Bool && e.ty != Ty::Int => {
+                if class(a, small) == Full && class(b, small) == Full {
+                    Full
+                } else {
+                    Small
+                }
+            }
+            IExprKind::Binary(BinOp::Div, a, b) if e.ty != Ty::Int => {
+                if class(a, small) == Small && class(b, small) == Full {
+                    Small
+                } else {
+                    Full
+                }
+            }
+            IExprKind::PowInt(a, n) if *n >= 1 && a.ty != Ty::Int => class(a, small),
+            IExprKind::Modulus(a) => class(a, small),
+            IExprKind::Call(f, a) if a.ty != Ty::Int => {
+                let complex = a.ty == Ty::Complex;
+                let kept = matches!(f, Builtin::Sqr | Builtin::Ident | Builtin::Zero)
+                    || (complex && matches!(f, Builtin::Conj | Builtin::Flip | Builtin::Real | Builtin::Imag));
+                if kept && class(a, small) == Small {
+                    Small
+                } else {
+                    Full
+                }
+            }
+            _ => Full,
+        }
+    }
+    fn assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
+        for s in stmts {
+            match s {
+                IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
+                IStmt::Assign(..) => {}
+                IStmt::If { arms, otherwise } => {
+                    for (_, b) in arms {
+                        assigns(b, out);
+                    }
+                    assigns(otherwise, out);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => assigns(body, out),
+            }
+        }
+    }
+    let mut all = Vec::new();
+    assigns(&p.perturb_init, &mut all);
+    assigns(&p.perturb_loop, &mut all);
+    loop {
+        let mut changed = false;
+        for (v, e) in &all {
+            if small[*v] && class(e, &small) == Class::Full {
+                small[*v] = false;
+                changed = true;
+            }
+        }
+        if !changed {
+            return small;
+        }
     }
 }
 
@@ -2045,7 +2424,7 @@ pub(crate) mod tests {
         if let Err(e) = validate(&module) {
             panic!("{e}\n---\n{module}");
         }
-        for f in ["fn formula_perturb_init(", "fn formula_perturb_loop(", "fn formula_perturb_bailout("] {
+        for f in ["fn formula_perturb_init_scaled(", "fn formula_perturb_loop_scaled(", "fn formula_perturb_bailout("] {
             assert!(module.contains(f), "{f}");
         }
         let q = program(
@@ -2053,7 +2432,7 @@ pub(crate) mod tests {
             EntryKind::Formula,
         );
         let module = formula_module(&q);
-        assert!(module.contains("fn formula_perturb_loop(") && !module.contains("fn formula_perturb_bailout("));
+        assert!(module.contains("fn formula_perturb_loop_scaled(") && !module.contains("fn formula_perturb_bailout("));
     }
 
     #[test]
