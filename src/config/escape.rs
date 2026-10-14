@@ -123,6 +123,17 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
+    /// The formula's SOURCE, when `formula` names one compiled from it
+    /// (`custom-...`, `escape::lang`): carried whole, so the file renders
+    /// on any machine without a formula library or the API. Kept when
+    /// another formula is picked, so undo and switching back find it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_formula: Option<CustomSource>,
+
+    /// The colouring's source, the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_coloring: Option<CustomSource>,
+
     /// The **camera lens**: a variation applied to the normalised
     /// screen offset before the view scale, by name. Empty is no lens.
     ///
@@ -2499,6 +2510,25 @@ impl EscapeConfig {
     }
 }
 
+/// One entry of a formula file, as a config carries it: the language
+/// it is written in, the entry's name, and the entry's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomSource {
+    pub dialect: CustomDialect,
+    pub entry: String,
+    pub source: String,
+}
+
+/// The language of a [`CustomSource`]: Ultra Fractal's (`.ufm`, `.ucl`),
+/// or Fractint's (`.frm`), which differs in its numeric conventions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomDialect {
+    #[default]
+    UltraFractal,
+    Fractint,
+}
+
 impl Default for EscapeConfig {
     fn default() -> Self {
         Self {
@@ -2526,6 +2556,8 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            custom_formula: None,
+            custom_coloring: None,
             lens: String::new(),
             lens_params: BTreeMap::new(),
             lens_amount: default_lens_amount(),
@@ -2958,6 +2990,8 @@ mod tests {
             ConfigPath::EscapeBailout,
             ConfigPath::EscapeBiomorph,
             ConfigPath::EscapeColoring,
+            ConfigPath::EscapeCustomFormula,
+            ConfigPath::EscapeCustomColoring,
             ConfigPath::EscapeFormulaParam { param: "power".into() },
             ConfigPath::EscapeColoringParam { param: "trap_radius".into() },
             ConfigPath::EscapeLens,

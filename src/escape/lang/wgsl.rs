@@ -42,13 +42,17 @@ var<private> esc_env_size: vec2<i32>;
 var<private> esc_env_pixel: vec2<f32>;
 var<private> esc_env_center: vec2<f32>;
 var<private> esc_env_magn: f32;
+// Set by a custom colouring's coloring_map: this pixel is `#solid`, and
+// the template leaves it to the background (lang::wgsl).
+var<private> esc_env_solid: bool;
 ";
 
-/// What `coloring_map` returns for `#solid`: the templates read a value
-/// below [`SOLID_BELOW`] as no coverage. A huge negative, not a NaN,
-/// because Metal's fast-math cannot test for NaN.
-pub const SOLID_SENTINEL: &str = "-3.0e38";
-pub const SOLID_BELOW: f32 = -1.0e38;
+/// The private flag a colouring sets for `#solid`. The templates read
+/// it straight after their own `coloring_map` call (offset relief calls
+/// it again for the points beside the pixel) and leave the pixel to the
+/// background; `coloring_map` returns 0 for it, which keeps the relief
+/// flat there, as an interior pixel's.
+pub const SOLID_FLAG: &str = "esc_env_solid";
 
 /// A custom colouring's three pieces, as `ColoringDef` holds them.
 #[derive(Clone, Debug)]
@@ -172,7 +176,10 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     if p.region == Region::Inside {
         body.push_str("    if (sum.escaped) {\n        solid = true;\n    }\n");
     }
-    let _ = write!(body, "    if (solid) {{\n        return {SOLID_SENTINEL};\n    }}\n    return index;\n}}\n");
+    if writes_solid(p) {
+        let _ = write!(body, "    {SOLID_FLAG} = solid;\n    if (solid) {{\n        return 0.0;\n    }}\n");
+    }
+    body.push_str("    return index;\n}\n");
 
     let wgsl = g.finish(&format!("// custom colouring: {}\n", sanitize(&p.name)), body);
     ColoringWgsl { wgsl, wgsl_accum: String::new(), accum_init: "ufc_init()".to_string(), needs_accum }
@@ -546,6 +553,20 @@ fn complex_helper(f: Builtin) -> Helper {
         Atan2 => Helper::CArgC,
         IsNan | IsInf => unreachable!("bool-valued"),
     }
+}
+
+/// Whether a colouring can mark a pixel solid: it writes `#solid`, or it
+/// colours the inside only.
+pub fn writes_solid(p: &Program) -> bool {
+    fn any(stmts: &[IStmt]) -> bool {
+        stmts.iter().any(|s| match s {
+            IStmt::Assign(Place::Solid, _) => true,
+            IStmt::Assign(..) => false,
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| any(b)) || any(otherwise),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => any(body),
+        })
+    }
+    p.region == Region::Inside || any(&p.final_body)
 }
 
 fn wgsl_ty(t: Ty) -> &'static str {
@@ -1013,16 +1034,8 @@ fn user_source() -> String {
     s
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::super::check::check;
-    use super::super::parser::parse_file;
-    use super::super::{Dialect, EntryKind};
-    use super::*;
-    use egui_wgpu::wgpu::naga;
-
-    /// What the templates provide, enough to validate a program alone.
-    const HARNESS: &str = "
+/// What the templates provide, enough to validate a program alone.
+const HARNESS: &str = "
 struct OrbitSummary {
     z: vec2<f32>,
     n: u32,
@@ -1043,11 +1056,51 @@ fn cparam(i: u32) -> f32 {
 }
 ";
 
+
+/// naga's verdict on a whole module.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_module(src: &str) -> Result<(), String> {
+    use egui_wgpu::wgpu::naga;
+    let module = naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&module)
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(())
+}
+
+/// Validate a compiled formula against the template's interface. A
+/// failure is a compiler bug, reported as a message rather than as a
+/// GPU validation error. Desktop only: the web build has no naga, and
+/// the browser validates.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_formula(wgsl: &str) -> Result<(), String> {
+    validate_module(&format!(
+        "{HARNESS}{ENV_DECLS}{wgsl}\n@compute @workgroup_size(1)\nfn main() {{\n    \
+         var s = formula_init(vec2<f32>(0.0, 0.0));\n    s = formula_loop(s, vec2<f32>(0.0, 0.0));\n    \
+         let go = formula_bailout(s, vec2<f32>(0.0, 0.0));\n}}\n"
+    ))
+}
+
+/// [`validate_formula`] for a colouring.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_coloring(c: &ColoringWgsl) -> Result<(), String> {
+    validate_module(&format!(
+        "{HARNESS}{ENV_DECLS}{}\n@compute @workgroup_size(1)\nfn main() {{\n    var st = {};\n    \
+         st = coloring_accum(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), st);\n    \
+         let v = coloring_map(OrbitSummary(vec2<f32>(1.0, 1.0), 3u, true, false, 0u, vec2<f32>(1.0, 1.0)), st);\n}}\n",
+        c.wgsl, c.accum_init
+    ))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::super::check::check;
+    use super::super::parser::parse_file;
+    use super::super::{Dialect, EntryKind};
+    use super::*;
+
     pub(crate) fn validate(src: &str) -> Result<(), String> {
-        let module = naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .map_err(|e| format!("{e:?}"))?;
+        super::validate_module(src)?;
         let lint = crate::variations::shader_lint::self_operations(src);
         if !lint.is_empty() {
             return Err(format!("fast-math self-operations: {lint:?}"));

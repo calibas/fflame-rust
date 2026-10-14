@@ -36,6 +36,7 @@ pub mod orbit_store;
 pub mod reference;
 pub mod fields;
 pub mod ifs;
+pub mod custom;
 pub mod lang;
 pub mod lens;
 pub mod formulas;
@@ -109,6 +110,13 @@ pub enum FormulaFeature {
     /// without the flag neither is offered, and the assembler never
     /// calls the function.
     Creases,
+    /// The formula is a PROGRAM compiled from source (`escape::lang`):
+    /// its WGSL defines `FormulaState`, `formula_init(pixel)`,
+    /// `formula_loop(s, pixel)` and `formula_bailout(s, pixel)` instead
+    /// of `formula_step`, and owns its seed and its escape test. The
+    /// direct template drives it; nothing perturbs it (no tier matches
+    /// its name).
+    Program,
 }
 
 /// Which quantity the escape test compares against `bailout`
@@ -610,8 +618,8 @@ pub fn layer_of(escape: &crate::config::escape::EscapeConfig) -> Option<&'static
     if !escape.layer.is_on() {
         return None;
     }
-    let layer = COLORINGS.iter().copied().find(|c| c.name == escape.layer.coloring)?;
-    let base = COLORINGS.iter().copied().find(|c| c.name == escape.coloring)?;
+    let layer = find_coloring(&escape.layer.coloring)?;
+    let base = find_coloring(&escape.coloring)?;
     layer_fits(base, layer).then_some(layer)
 }
 
@@ -625,7 +633,18 @@ pub fn config_accum_is_wide(escape: &crate::config::escape::EscapeConfig) -> boo
 /// a mode-A colouring (a field's, a mode-D walk's) is narrow, and is
 /// not warned about as `get_coloring` would.
 pub fn accum_is_wide_named(coloring: &str) -> bool {
-    COLORINGS.iter().any(|c| c.name == coloring && accum_is_wide(c))
+    find_coloring(coloring).is_some_and(accum_is_wide)
+}
+
+/// A mode-A colouring by name, built-in or compiled ([`custom`]), with
+/// no fallback.
+pub fn find_coloring(name: &str) -> Option<&'static ColoringDef> {
+    COLORINGS.iter().copied().find(|c| c.name == name).or_else(|| custom::coloring(name))
+}
+
+/// A mode-A formula by name, built-in or compiled, with no fallback.
+pub fn find_formula(name: &str) -> Option<&'static FormulaDef> {
+    FORMULAS.iter().copied().find(|f| f.name == name).or_else(|| custom::formula(name))
 }
 
 /// Ordered formula registry. **Append-only** — UI ordering and any
@@ -718,10 +737,7 @@ pub fn is_slow_param(def: &str, param: &str) -> bool {
 }
 
 pub fn get_formula(name: &str) -> &'static FormulaDef {
-    FORMULAS
-        .iter()
-        .find(|f| f.name == name)
-        .copied()
+    find_formula(name)
         .unwrap_or_else(|| {
             log::warn!("Unknown escape formula '{name}', rendering '{}'", FORMULAS[0].name);
             FORMULAS[0]
@@ -730,10 +746,7 @@ pub fn get_formula(name: &str) -> &'static FormulaDef {
 
 /// Look up a coloring by name, with the same unknown-name fallback.
 pub fn get_coloring(name: &str) -> &'static ColoringDef {
-    COLORINGS
-        .iter()
-        .find(|c| c.name == name)
-        .copied()
+    find_coloring(name)
         .unwrap_or_else(|| {
             log::warn!("Unknown escape coloring '{name}', using '{}'", COLORINGS[0].name);
             COLORINGS[0]

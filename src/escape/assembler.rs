@@ -1106,6 +1106,148 @@ fn with_accum_width(template: &str, wide: bool) -> String {
     out.join("\n")
 }
 
+/// Where a template's entry point has its pixel, for [`with_env`].
+#[derive(Clone, Copy)]
+enum EnvAt {
+    Direct,
+    Perturbed,
+    PerturbedFe,
+    Recolor,
+}
+
+/// Whether a custom formula or colouring reads the pixel's environment
+/// (`lang::wgsl::ENV_DECLS`). No built-in does.
+fn reads_env(wgsl: &str) -> bool {
+    wgsl.contains("esc_env_")
+}
+
+/// The pixel's environment for a custom formula or colouring
+/// (`escape::lang`): declared at the top, and set where the entry point
+/// knows its pixel. Only when a program reads it, so every built-in
+/// shader stays byte-identical.
+///
+/// The perturbed rungs know the pixel only as the view centre plus its
+/// offset: in f32 on the scaled rung (as its `c_f32`), and not at all
+/// past f32 on the deep one, which reports the centre. The recolour
+/// pass rebuilds it from the pixel's position, without the lens.
+fn with_env(template: String, on: bool, at: EnvAt) -> String {
+    if !on {
+        return template;
+    }
+    let (anchor, before) = match at {
+        EnvAt::Direct => ("let run = esc_run(pixel);", true),
+        EnvAt::Perturbed => ("let c_f32 = select(params.center + (d0 - perturb.ref_offset) * perturb.s", false),
+        EnvAt::PerturbedFe => ("let c_f32 = select(params.center, params.julia_c, is_julia_perturb);", false),
+        EnvAt::Recolor => ("let r = results[gid.y * params.width + gid.x];", true),
+    };
+    let (row, pixel) = match at {
+        EnvAt::Direct => ("py", "pixel".to_string()),
+        EnvAt::Perturbed => ("gid.y", "params.center + (d0 - perturb.ref_offset) * perturb.s".to_string()),
+        EnvAt::PerturbedFe => ("gid.y", "params.center".to_string()),
+        EnvAt::Recolor => (
+            "gid.y",
+            "esc_env_recolor_pixel(vec2<u32>(gid.x, gid.y))".to_string(),
+        ),
+    };
+    let set = [
+        format!("    esc_env_px = vec2<i32>(i32(gid.x), i32({row}));"),
+        "    esc_env_size = vec2<i32>(i32(params.width), i32(params.height));".to_string(),
+        format!("    esc_env_pixel = {pixel};"),
+        "    esc_env_center = params.center;".to_string(),
+        "    esc_env_magn = 4.0 / params.span.y;".to_string(),
+    ];
+    let mut out = vec![crate::escape::lang::wgsl::ENV_DECLS.to_string()];
+    if matches!(at, EnvAt::Recolor) {
+        out.push(RECOLOR_PIXEL_WGSL.trim().to_string());
+    }
+    let mut placed = false;
+    for line in template.lines() {
+        let here = line.trim_start().starts_with(anchor);
+        if here && before {
+            out.extend(set.iter().cloned());
+        }
+        out.push(line.to_string());
+        if here && !before {
+            out.extend(set.iter().cloned());
+        }
+        placed |= here;
+    }
+    debug_assert!(placed, "the environment's anchor `{anchor}` is missing from its template");
+    out.join("\n")
+}
+
+/// The recolour pass's pixel, rebuilt from its position as the direct
+/// template computes it (no lens: a lensed view's custom colouring that
+/// reads `#pixel` is not recoloured, see `EscapeRenderer`).
+const RECOLOR_PIXEL_WGSL: &str = r#"
+fn esc_env_recolor_pixel(g: vec2<u32>) -> vec2<f32> {
+    let uv = (vec2<f32>(f32(g.x), f32(g.y)) + vec2<f32>(0.5, 0.5))
+        / vec2<f32>(f32(params.width), f32(params.height));
+    var d = (uv - vec2<f32>(0.5, 0.5)) * params.span;
+    d.y = -d.y;
+    let rot = params.rot_cs;
+    return params.center + vec2<f32>(
+        d.x * rot.x - d.y * rot.y,
+        d.x * rot.y + d.y * rot.x,
+    );
+}
+"#;
+
+/// A custom colouring's `#solid` (`lang::wgsl::SOLID_FLAG`): read
+/// straight after the template's own `coloring_map` call (the offset
+/// relief calls it again for the points beside the pixel), and the
+/// pixel then left uncovered, to the background, as an interior one.
+fn with_solid(template: String, on: bool) -> String {
+    if !on {
+        return template;
+    }
+    let mut out = Vec::new();
+    for line in template.lines() {
+        let indent = &line[..line.len() - line.trim_start().len()];
+        if line.trim_start().starts_with("let raw = coloring_map(") {
+            out.push(line.to_string());
+            out.push(format!("{indent}let esc_solid_px = {};", crate::escape::lang::wgsl::SOLID_FLAG));
+        } else if line.trim() == "coverage = 1.0;" {
+            out.push(format!("{indent}coverage = select(1.0, 0.0, esc_solid_px);"));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n")
+}
+
+/// The direct template's lines for a PROGRAM formula
+/// (`FormulaFeature::Program`): its state seeded from the pixel, its
+/// loop, and its own bailout test in place of the metric's.
+fn program_c_decl() -> Vec<String> {
+    vec![
+        // c is the pixel for the colourings' accumulators; the program
+        // reads `#pixel` itself.
+        "    let c = pixel;".to_string(),
+        "    var fs = formula_init(pixel);".to_string(),
+        "    z = fs.z;".to_string(),
+    ]
+}
+
+fn program_step(z_before: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if z_before {
+        out.push("        let z_before = z;".to_string());
+    }
+    out.push("        fs = formula_loop(fs, pixel);".to_string());
+    out.push("        z = fs.z;".to_string());
+    out
+}
+
+fn program_escape_test() -> String {
+    "        if (!formula_bailout(fs, pixel)) {\n\
+     \x20           escaped = true;\n\
+     \x20           n = i + 1u;\n\
+     \x20           break;\n\
+     \x20       }"
+        .to_string()
+}
+
 /// A colouring whose colour carries an alpha (`ColoringFeature::
 /// DirectAlpha`) hands it to the pixel's coverage; every other drawn
 /// pixel is opaque. Substituted into the template's text, so no other
@@ -5018,6 +5160,12 @@ pub fn assemble_perturbed_full(
         coloring,
         "accum_state",
     );
+    let env = reads_env(coloring.wgsl) || layer.is_some_and(|l| reads_env(l.wgsl));
+    let template = with_env(
+        with_solid(template, reads_env(coloring.wgsl)),
+        env,
+        if floatexp { EnvAt::PerturbedFe } else { EnvAt::Perturbed },
+    );
     // UF's loop order (SkipsEscapingIterate): after the escape test.
     let late = owner.as_ref().is_some_and(|(o, _)| o.has_feature(ColoringFeature::SkipsEscapingIterate));
 
@@ -5504,6 +5652,8 @@ pub fn assemble_recolor_layered(
     let wide = accum_owner(coloring, layer).is_some_and(|(o, _)| crate::escape::accum_is_wide(o));
     let mut out = Vec::new();
     let template = with_alpha(with_accum_width(RECOLOR_TEMPLATE, wide), coloring, "state");
+    let env = reads_env(coloring.wgsl) || layer.is_some_and(|l| reads_env(l.wgsl));
+    let template = with_env(with_solid(template, reads_env(coloring.wgsl)), env, EnvAt::Recolor);
     for line in template.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
@@ -7888,10 +8038,21 @@ pub fn assemble_layered(
     // period it measured. Where none of that holds, a non-escaping
     // pixel renders the background no matter which iteration it
     // stopped on.
+    // A program's state is more than z: z can repeat while the rest has
+    // moved on, so its repeat proves nothing.
+    let program = formula.has_feature(FormulaFeature::Program);
     let interior_ok = interior_detect
+        && !program
         && !colors_interior
         && !needs_accum
         && !needs_period;
+    // Embossed re-emits the formula's step, which a program does not
+    // have; the offset relief runs whole orbits and works for it.
+    let relief_orbits = if program && matches!(relief_orbits, ReliefOrbits::Embossed) {
+        ReliefOrbits::Offset
+    } else {
+        relief_orbits
+    };
     let needs_derivative = (either(ColoringFeature::NeedsDerivative) || analytic_relief)
         && !formula.wgsl_derivative.is_empty();
     let param_seed = if formula.wgsl_param_seed.is_empty() {
@@ -7914,6 +8075,8 @@ pub fn assemble_layered(
         coloring,
         "accum_state",
     );
+    let env = reads_env(formula.wgsl) || reads_env(coloring.wgsl) || layer.is_some_and(|l| reads_env(l.wgsl));
+    let template = with_env(with_solid(template, reads_env(coloring.wgsl)), env, EnvAt::Direct);
     // UF's loop order (SkipsEscapingIterate): after the escape test.
     let late = owner.as_ref().is_some_and(|(o, _)| o.has_feature(ColoringFeature::SkipsEscapingIterate));
     for line in template.lines() {
@@ -8084,10 +8247,13 @@ pub fn assemble_layered(
                 }
             }
             "//__ESCAPE_TEST__" => {
-                if !non_escaping {
+                if program {
+                    out.push(program_escape_test());
+                } else if !non_escaping {
                     out.push(escape_test(formula.escape_metric));
                 }
             }
+            "//__C_DECL__" if program => out.extend(program_c_decl()),
             "//__C_DECL__" => {
                 // MutatesC formulas write c back each step (Spider).
                 let kw = if mutates_c { "var" } else { "let" };
@@ -8108,6 +8274,7 @@ pub fn assemble_layered(
                     out.push(format!("    var z_prev = {init};"));
                 }
             }
+            "//__STEP__" if program => out.extend(program_step(convergent || needs_accum)),
             "//__STEP__" => {
                 out.extend(step_lines(formula, damped, convergent || needs_accum, needs_derivative));
             }

@@ -320,6 +320,11 @@ pub enum ConfigPath {
     // reset/accumulate distinction to encode per path.
     /// Formula registry name (`config.escape.formula`).
     EscapeFormula,
+    /// The formula's source, when it is compiled from one
+    /// (`config.escape.custom_formula`), as JSON; empty for none.
+    EscapeCustomFormula,
+    /// The colouring's source, the same way.
+    EscapeCustomColoring,
     /// Julia toggle (parameter plane vs dynamical plane).
     EscapeJulia,
     /// Julia seed, real part.
@@ -1120,6 +1125,8 @@ impl Display for ConfigPath {
 
             // Escape-time
             ConfigPath::EscapeFormula => write!(f, "Escape Formula"),
+            ConfigPath::EscapeCustomFormula => write!(f, "Escape Formula Source"),
+            ConfigPath::EscapeCustomColoring => write!(f, "Escape Coloring Source"),
             ConfigPath::EscapeJulia => write!(f, "Julia Mode"),
             ConfigPath::EscapeJuliaRe => write!(f, "Julia Seed Re"),
             ConfigPath::EscapeJuliaIm => write!(f, "Julia Seed Im"),
@@ -1531,6 +1538,8 @@ impl ConfigPath {
 
             // Escape-time
             ConfigPath::EscapeFormula => I18nKey::simple("history.param.escape_formula"),
+            ConfigPath::EscapeCustomFormula => I18nKey::simple("history.param.escape_custom_formula"),
+            ConfigPath::EscapeCustomColoring => I18nKey::simple("history.param.escape_custom_coloring"),
             ConfigPath::EscapeJulia => I18nKey::simple("history.param.escape_julia"),
             ConfigPath::EscapeJuliaRe => I18nKey::simple("history.param.escape_julia_re"),
             ConfigPath::EscapeJuliaIm => I18nKey::simple("history.param.escape_julia_im"),
@@ -3096,6 +3105,8 @@ impl ConfigPath {
             // Escape-time: the fragment renderer re-renders the frame;
             // no flame-style reset/accumulate distinction exists there.
             ConfigPath::EscapeFormula
+            | ConfigPath::EscapeCustomFormula
+            | ConfigPath::EscapeCustomColoring
             | ConfigPath::EscapeJulia
             | ConfigPath::EscapeJuliaRe
             | ConfigPath::EscapeJuliaIm
@@ -3556,6 +3567,8 @@ impl ConfigPath {
 
             // Escape-time
             ConfigPath::EscapeFormula => "Escape.Formula".to_string(),
+            ConfigPath::EscapeCustomFormula => "Escape.CustomFormula".to_string(),
+            ConfigPath::EscapeCustomColoring => "Escape.CustomColoring".to_string(),
             ConfigPath::EscapeJulia => "Escape.Julia".to_string(),
             ConfigPath::EscapeJuliaRe => "Escape.JuliaRe".to_string(),
             ConfigPath::EscapeJuliaIm => "Escape.JuliaIm".to_string(),
@@ -3931,6 +3944,8 @@ impl ConfigPath {
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Formula"] => return Some(ConfigPath::EscapeFormula),
+                ["CustomFormula"] => return Some(ConfigPath::EscapeCustomFormula),
+                ["CustomColoring"] => return Some(ConfigPath::EscapeCustomColoring),
                 ["Julia"] => return Some(ConfigPath::EscapeJulia),
                 ["JuliaRe"] => return Some(ConfigPath::EscapeJuliaRe),
                 ["JuliaIm"] => return Some(ConfigPath::EscapeJuliaIm),
@@ -5009,6 +5024,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // exact — not animatable (centers deliberately: see the plan's
         // open questions on center-path animation).
         ConfigPath::EscapeFormula
+        | ConfigPath::EscapeCustomFormula
+        | ConfigPath::EscapeCustomColoring
         | ConfigPath::EscapeColoring
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend

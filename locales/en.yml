@@ -975,6 +975,8 @@ history:
     escape_damping_im: "Damping (im)"
     escape_biomorph: "Biomorph Mode"
     escape_coloring: "Escape Coloring"
+    escape_custom_formula: "Escape Formula Source"
+    escape_custom_coloring: "Escape Coloring Source"
     escape_formula_param: "Formula %{param}"
     escape_coloring_param: "Coloring %{param}"
     escape_lens: "Camera Lens"

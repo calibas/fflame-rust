@@ -175,7 +175,10 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
         #[cfg(feature = "engine-escape")]
         crate::scene::transforms::RenderMode::Escape => {
             let e = &config.escape;
-            let a = crate::escape::FORMULAS.iter().any(|f| f.name == e.formula);
+            // Sources the config carries name entries of their own: a
+            // source that compiles is known; one that does not is not.
+            crate::escape::custom::ensure(e);
+            let a = crate::escape::find_formula(&e.formula).is_some();
             let b = crate::escape::fields::get_field(&e.formula).is_some();
             let d = crate::escape::ifs::get_ifs(&e.formula).is_some();
             if !(a || b || d) {
@@ -185,7 +188,7 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
             // after a switch, and its default draws; one in no registry
             // is unknown.
             let colouring = |name: &str| {
-                crate::escape::COLORINGS.iter().any(|c| c.name == name)
+                crate::escape::find_coloring(name).is_some()
                     || crate::escape::fields::FIELD_COLORINGS.iter().any(|c| c.name == name)
                     || crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name)
             };
@@ -1148,6 +1151,9 @@ async fn render_escape(
     progress: &mut dyn RenderProgress,
     start_time: web_time::Instant,
 ) -> Result<RenderOutput, RenderError> {
+    // A formula or colouring the config carries as source, compiled
+    // before anything below resolves its name.
+    crate::escape::custom::ensure(&job.config.escape);
     log::info!(
         "Render: escape-time {}x{}, formula '{}', coloring '{}', max_iter {}",
         job.width,
