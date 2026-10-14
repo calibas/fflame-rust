@@ -73,6 +73,9 @@ pub enum PanelType {
     /// Simulation textures an escape-time fractal can use
     /// (docs/archive/projects/sim-textures.md)
     Textures,
+    /// Escape-time formulas and colourings written in Ultra Fractal's or
+    /// Fractint's language (docs/projects/escape-formula-language.md)
+    FormulaEditor,
 }
 
 impl std::fmt::Display for PanelType {
@@ -108,6 +111,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Escape => t!("panels.escape"),
             PanelType::Simulation => t!("panels.simulation"),
             PanelType::Textures => t!("panels.textures"),
+            PanelType::FormulaEditor => t!("panels.formula_editor"),
         };
         write!(f, "{}", title)
     }
@@ -255,6 +259,7 @@ impl Workspace {
             // controls sit above the parameters.
             PanelType::Simulation => egui::vec2(350.0, 560.0),
             PanelType::Textures => egui::vec2(300.0, 480.0),
+            PanelType::FormulaEditor => egui::vec2(440.0, 600.0),
         }
     }
 

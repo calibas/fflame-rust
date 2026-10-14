@@ -1,9 +1,9 @@
 # Escape-time formula language: Ultra Fractal and Fractint formulas and colourings
 
-Status: **planned 2026-10-13; phase 1 in progress** on `escape-expansion`:
-steps 1-5 done (the language in `src/escape/lang/`, the runtime registry
-in `src/escape/custom.rs`, the engine and config wired); step 6 (the
-editor, the library, scripts, docs) next.
+Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
+(`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
+engine and config, the Formula Editor panel and its library, the script
+functions, the docs (ESCAPE.md, "The formula language"). Phase 2 next.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from

@@ -4505,3 +4505,52 @@ fn anim_keys_take_dotted_snake_case() {
     assert!(super::anim::resolve_flame_target("Escape.ZoomLog2").is_ok());
     assert!(super::anim::resolve_flame_target("sim.steps").is_ok());
 }
+
+/// A script can write its own formula and colouring in Ultra Fractal's
+/// language; the config carries the source, and a compile error throws
+/// with the line and column.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn a_script_compiles_a_custom_formula_and_colouring() {
+    let out = run(
+        r#"
+        script("Custom", "generator");
+        let f = `M {
+init:
+  z = 0
+loop:
+  z = z^3 + #pixel
+bailout:
+  |z| < 16
+}`;
+        escape.custom_formula(f, "M");
+        escape.custom_coloring(`C {
+final:
+  #index = #numiter / 30
+}`, "C");
+        "#,
+        3,
+    )
+    .expect("script ran");
+    let esc = out.config.escape;
+    assert!(esc.formula.starts_with(crate::escape::custom::PREFIX));
+    assert!(esc.coloring.starts_with(crate::escape::custom::PREFIX));
+    assert_eq!(esc.custom_formula.as_ref().map(|s| s.entry.as_str()), Some("M"));
+    assert!(crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Program));
+
+    let e = run(
+        r#"
+        escape.custom_formula(`Bad {
+loop:
+  z = nope
+bailout:
+  true
+}`, "Bad");
+        "#,
+        3,
+    )
+    .err()
+    .expect("a compile error throws");
+    let msg = format!("{e:?}");
+    assert!(msg.contains("3:7") && msg.contains("nope"), "{msg}");
+}
