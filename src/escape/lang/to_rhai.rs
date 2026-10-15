@@ -446,6 +446,11 @@ impl<'p> Printer<'p> {
             let t = self.expr(w)?.0;
             out.push_str(&format!("\nfn perturb_when(p{}) {{\n    {t}\n}}\n", self.ctx_arg()));
         }
+        if let Some(w) = &p.degree {
+            self.begin(Fun::When);
+            let t = self.expr(w)?.0;
+            out.push_str(&format!("\nfn degree(p{}) {{\n    {t}\n}}\n", self.ctx_arg()));
+        }
         Ok(out)
     }
 

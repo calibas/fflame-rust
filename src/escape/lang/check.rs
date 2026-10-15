@@ -205,6 +205,7 @@ impl Checker {
         first.extend(init);
         let init = first;
         let perturb_when = self.perturb_setting(&entry.default);
+        let degree = self.degree_setting(&entry.default);
 
         let mut program = Program {
             kind: self.kind,
@@ -222,6 +223,7 @@ impl Checker {
             perturb_init,
             perturb_loop,
             perturb_when,
+            degree,
             region,
             view,
             state: Vec::new(),
@@ -718,6 +720,28 @@ impl Checker {
         let saved = self.section;
         self.section = SectionKind::Global;
         let v = self.expr(e).and_then(|v| self.to_bool(v, e.span));
+        self.section = saved;
+        v
+    }
+
+    /// The `degree` setting: the formula's degree at infinity, a float of
+    /// parameters and constants (ours; [`Program::degree`]).
+    fn degree_setting(&mut self, d: &Settings) -> Option<IExpr> {
+        let s = d.get("degree")?;
+        let SettingValue::Expr(e) = &s.value else {
+            self.error(s.span, "`degree` is a number, or an expression of the parameters");
+            return None;
+        };
+        let saved = self.section;
+        self.section = SectionKind::Global;
+        let v = self.expr(e).and_then(|v| {
+            if matches!(v.ty, Ty::Int | Ty::Float) {
+                self.convert(v, Ty::Float, e.span)
+            } else {
+                self.error(e.span, "`degree` is a real number");
+                None
+            }
+        });
         self.section = saved;
         v
     }

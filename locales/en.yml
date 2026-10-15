@@ -1211,6 +1211,7 @@ history:
     escape_preset: "Apply Escape Preset"
     use_custom_formula: "Use Custom Formula"
     use_hybrid: "Edit Hybrid"
+    edit_as_formula: "Edit as Formula"
     use_custom_coloring: "Use Custom Colouring"
     reset_view: "Reset View"
     reset_rendering: "Reset Rendering to Defaults"
@@ -2454,6 +2455,8 @@ sim_panel:
   matte_edge_tip: "What Softness measures. Both settings put the edge in the same place — a distance field built from cells knows no more about where the boundary is than the cells do, and that was measured. Threshold feathers in the channel's own units, so the same Softness is a different width on every model. Distance builds a distance field every coloured frame, so Softness is a width in cells, the same on every model, and a wide feather stays a feather rather than a smear. It costs a few grid-sized passes per frame."
 
 escape_panel:
+  edit_as_formula: "Edit as Formula"
+  edit_as_formula_tip: "Put this formula's Rhai twin in its place -- the same picture -- and open it in the Formula Editor to change as your own. Mann damping and the biomorph test are the built-in's alone."
   contrast: "Auto Contrast"
   contrast_mode: "Mode"
   contrast_off: "Off"
@@ -2849,6 +2852,7 @@ formula_editor:
   use_formula: "Use as formula"
   use_coloring: "Use as colouring"
   edit_as_rhai: "Edit as Rhai"
+  editing_builtin: "`%{entry}` is in use as your own formula; Save keeps it in your library"
   edit_as_rhai_tip: "Convert this to Rhai and open it here, to change and save as your own. The file you opened stays as it is."
   converted: "Converted `%{entry}` to Rhai; Save keeps it in your library"
   cannot_convert: "`%{entry}` did not convert: %{error}"

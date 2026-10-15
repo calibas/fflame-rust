@@ -42,6 +42,7 @@ pub mod lens;
 pub mod formulas;
 pub mod surface;
 pub mod presets;
+pub mod twins;
 pub mod diag;
 pub mod path_core;
 pub mod renderer;
@@ -498,7 +499,12 @@ pub struct ColoringDef {
 /// grows faster than linearly at these params (see
 /// [`FormulaDef::escape_degree`]); `None` otherwise.
 pub fn polynomial_degree(formula: &FormulaDef, fparams: &[f32]) -> Option<f32> {
-    let p = formula.escape_degree?(fparams);
+    // A compiled formula declares its own (`fn degree(p)`).
+    let p = if formula.has_feature(FormulaFeature::Program) {
+        custom::escape_degree(formula.name, fparams)?
+    } else {
+        formula.escape_degree?(fparams)
+    };
     (p > 1.0001 && p <= 1.0e6).then_some(p)
 }
 

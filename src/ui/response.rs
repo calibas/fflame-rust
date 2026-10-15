@@ -91,6 +91,8 @@ pub struct UiResponse {
     pub open_triangle_editor: bool,
     pub open_preset_library: bool,
     pub open_random_generator: bool,
+    /// Open the Formula Editor, which a panel just gave a formula to.
+    pub open_formula_editor: bool,
 
     // Fractal viewport size (for matching texture dimensions to panel)
     pub fractal_viewport_size: Option<(u32, u32)>,
@@ -259,6 +261,7 @@ impl Default for UiResponse {
             open_triangle_editor: false,
             open_preset_library: false,
             open_random_generator: false,
+            open_formula_editor: false,
             fractal_viewport_size: None,
             fly_mouse_drag: None,
             fly_mode_toggle_requested: false,

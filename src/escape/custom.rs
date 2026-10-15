@@ -44,6 +44,8 @@ struct Registry {
     perturbable: HashMap<String, (Arc<ir::Program>, lang::perturb::Perturbable, &'static str)>,
     /// What each reference identity handed out names ([`reference_identity`]).
     references: HashMap<u64, ReferenceInputs>,
+    /// The formulas declaring their degree at infinity ([`escape_degree`]).
+    degrees: HashMap<String, Arc<ir::Program>>,
 }
 
 /// Everything a custom formula's reference orbit is a function of
@@ -363,6 +365,9 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
     if let Ok(mut r) = registry().write() {
         r.formulas.insert(name.to_string(), def);
         let p = Arc::new(p);
+        if p.degree.is_some() {
+            r.degrees.insert(name.to_string(), p.clone());
+        }
         if let Some(how) = perturbs {
             let fe = leak(lang::wgsl::formula_perturb_fe(&p).unwrap_or_default());
             r.perturbable.insert(name.to_string(), (p.clone(), how, fe));
@@ -372,6 +377,16 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         }
     }
     Ok(def)
+}
+
+/// A compiled formula's declared degree at infinity (`fn degree(p)`;
+/// `lang::ir::Program::degree`) for its slot-ordered parameters: what a
+/// built-in's `escape_degree` gives. `None` when it declares none.
+pub fn escape_degree(name: &str, fparams: &[f32]) -> Option<f32> {
+    let prog = registry().read().ok()?.degrees.get(name)?.clone();
+    let params = lang::interp::ParamValues::from_slots(&prog, fparams);
+    let env = lang::interp::Env::at(lang::builtins::C64::ZERO, 1);
+    lang::interp::degree_of(&prog, &params, &env).map(|d| d as f32)
 }
 
 /// A custom formula's perturbation tier for a view, when it has one:
@@ -783,9 +798,21 @@ mod tests {
         if p.bailout.is_some() && lang::perturb::perturb_test(p).is_none() {
             return "its test reads a variable the loop changes".into();
         }
-        let Some(inits) = lang::delta::init_values(p) else {
-            return "a branch or loop in the init".into();
+        let Some(cases) = lang::delta::init_cases(p) else {
+            return "a loop in the init, or a branch it cannot follow".into();
         };
+        fn on_pixel(e: &IExpr) -> bool {
+            match &e.kind {
+                IExprKind::Predef(Predef::Pixel | Predef::Z | Predef::X | Predef::Y | Predef::ScreenPixel | Predef::Random | Predef::WhiteSq) => true,
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => on_pixel(a),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => on_pixel(a) || on_pixel(b),
+                _ => false,
+            }
+        }
+        if cases.iter().any(|c| c.conds.iter().any(on_pixel)) {
+            return "a branch in the init on the pixel".into();
+        }
+        let inits = cases[0].values.clone();
         fn first(e: &IExpr, out: &mut Option<String>) {
             if out.is_some() {
                 return;
@@ -857,6 +884,46 @@ mod tests {
         let mut found = None;
         walk(&p.loop_body, p, &inits, &mut found);
         found.unwrap_or_else(|| "carried state, an int or bool written in the loop, or another shape".into())
+    }
+
+    /// INSPECTION: one formula of a UF file (`UF_INSPECT=path:entry`), as
+    /// the converter and the derivation see it -- its Rhai, its derived
+    /// equations and their WGSL -- printed, to look into what the
+    /// measurement flags.
+    #[test]
+    #[ignore = "inspection: set UF_INSPECT to path:entry"]
+    fn inspect_a_uf_formula() {
+        let Ok(spec) = std::env::var("UF_INSPECT") else {
+            eprintln!("UF_INSPECT is not set");
+            return;
+        };
+        let (path, entry) = spec.rsplit_once(':').expect("path:entry");
+        let text = String::from_utf8_lossy(&std::fs::read(path).expect("read")).into_owned();
+        let (parsed, _) = lang::parser::parse_file(&text);
+        let e = parsed.entries.iter().find(|e| e.name == entry).expect("the entry");
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e) };
+        let p = check_entry(EntryKind::Formula, &src).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
+        let rhai = lang::to_rhai::formula(&p, &[]).unwrap_or_else(|e| e);
+        println!("---- as Rhai
+{rhai}");
+        match lang::delta::with_derived_equations(&p) {
+            None => println!("---- no equations derived"),
+            Some(d) => {
+                println!("---- perturb_when: {:?}", d.perturb_when.is_some());
+                let w = lang::wgsl::formula(&d);
+                println!("---- WGSL
+{w}");
+                if let Err(err) = lang::wgsl::validate_formula(&w) {
+                    println!("---- invalid: {err}");
+                }
+            }
+        }
+        if let Ok(back) = lang::rhai::program(&rhai) {
+            match lang::delta::with_derived_equations(&back) {
+                None => println!("---- the Rhai derives none"),
+                Some(d) => println!("---- the Rhai derives; perturbs: {:?}", lang::perturb::perturbation(&d)),
+            }
+        }
     }
 
     /// MEASUREMENT (plan, phase 2 item 6): every entry of a folder of UF
@@ -980,9 +1047,19 @@ mod tests {
                             }
                         } else {
                             // Converted, compiled back, run alike; deep zoom kept.
+                            // Equations that hold at the defaults, on either
+                            // plane.
+                            let holds = |d: &ir::Program| {
+                                let params = lang::interp::ParamValues::defaults(d);
+                                [false, true].into_iter().any(|julia| {
+                                    let mut env = lang::interp::Env::at(lang::builtins::C64::ZERO, 100);
+                                    env.julia = julia;
+                                    lang::interp::perturb_holds(d, &params, &env)
+                                })
+                            };
                             let perturbs = |p: &ir::Program| {
-                                lang::perturb::perturbation(p).is_ok()
-                                    || lang::delta::with_derived_equations(p).is_some_and(|d| lang::perturb::perturbation(&d).is_ok())
+                                (lang::perturb::perturbation(p).is_ok() && holds(p))
+                                    || lang::delta::with_derived_equations(p).is_some_and(|d| lang::perturb::perturbation(&d).is_ok() && holds(&d))
                             };
                             let mut fail = |why: String, text: Option<&str>| {
                                 let key = shape(&why);
@@ -1027,8 +1104,14 @@ mod tests {
                             if lang::perturb::perturbation(&p).is_ok() {
                                 own_equations += 1;
                             } else if let Some(d) = lang::delta::with_derived_equations(&p) {
+                                // The equations' WGSL, scaled rung (the floatexp
+                                // one validates assembled, in the GPU tests).
+                                if let Err(err) = lang::wgsl::validate_formula(&lang::wgsl::formula(&d)) {
+                                    invalid.push(format!("{} / {} (derived equations): {}", path.display(), e.name, err.lines().next().unwrap_or("")));
+                                }
                                 match lang::perturb::perturbation(&d) {
-                                    Ok(_) => derived_equations += 1,
+                                    Ok(_) if holds(&d) => derived_equations += 1,
+                                    Ok(_) => *blockers.entry("equations that hold at no default (an arm a parameter picks went without)".into()).or_default() += 1,
                                     Err(why) => *blockers.entry(why).or_default() += 1,
                                 }
                             } else {

@@ -50,6 +50,9 @@
 //!   reference orbit, from `d.z` (the reference's value) and `d.dpixel`
 //!   (the pixel's offset), and return `d`; `perturb_when(p)` says when
 //!   they hold. Without them deep zoom derives its own.
+//! - **`degree(p)`**, optional: the formula's degree at infinity (the
+//!   `p` of `|z_{n+1}| ~ |z_n|^p`), which the smooth colourings divide by
+//!   and which offers their recommended bailout; without it, 2.
 //! - `INFO`: `title`, `center` (a complex), `magn`, `maxiter`, `angle`,
 //!   `cycle`.
 //! - Other functions are helpers, inlined where they are called; they
@@ -562,6 +565,20 @@ impl<'s> Lowerer<'s> {
             let mut body = Vec::new();
             self.state_body(&f.body, &mut scope, &mut body)?;
             sections.push(Section { kind, span, body, last_is_bailout: false, labelled: true });
+        }
+        // Its degree at infinity, for the smooth colourings.
+        if let Some(f) = get(self, "degree") {
+            let mut scope = Scope::new(Fn3::Escaped, Vec::new());
+            if f.params.is_empty() || f.params.len() > 2 {
+                return self.err(f.body.position(), "`degree(p)` or `degree(p, ctx)`");
+            }
+            for (n, role) in f.params.iter().zip([Binding::Params, Binding::Ctx]) {
+                scope.bind(n, role);
+            }
+            self.pure = true;
+            let value = self.pure_body(&f.body, &mut scope);
+            self.pure = false;
+            default.items.push(Setting { name: "degree".into(), value: SettingValue::Expr(value?), span });
         }
         if let Some(f) = get(self, "perturb_when") {
             let mut scope = Scope::new(Fn3::Escaped, Vec::new());
@@ -1455,7 +1472,7 @@ impl<'s> Lowerer<'s> {
                 // first parameter.
                 return self.err(p, format!("call a helper as a function, `{name}(x)`"));
             }
-            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when") {
+            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
             for a in f.args.iter() {

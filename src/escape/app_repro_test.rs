@@ -1914,6 +1914,123 @@ mod tests {
         assert_eq!(same, a.len(), "the same program");
     }
 
+    /// The built-ins' twins (phase 4, step 4: `escape::twins`) render as
+    /// their built-ins: directly, with the smooth colouring (which reads
+    /// the twin's declared degree), on both planes and every Burning Ship
+    /// variant; and perturbed at the visual suite's deep views, by derived
+    /// equations against the built-ins' native tiers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn builtin_twins_render_and_deep_zoom_as_their_builtins() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let twin_of = |esc: &crate::config::escape::EscapeConfig| {
+            let src = crate::escape::twins::custom_source(&esc.formula).expect("a twin");
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            t
+        };
+        // (built-in, its params, centre, zoom, julia, allowed share)
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f64, bool, f64)] = &[
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, false, 0.0),
+            ("mandelbrot", &[], ("0", "0"), 0.0, true, 0.0),
+            ("multibrot", &[("power", 3.0)], ("0", "0"), 0.2, false, 0.03),
+            ("tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2, false, 0.03),
+            ("tricorn", &[("power", 3.0)], ("0", "0"), 0.2, false, 0.03),
+            ("burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5, false, 0.03),
+            ("burning_ship", &[("variant", 1.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 2.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 3.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 4.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 5.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 0.0)], ("0", "0"), 0.0, true, 0.03),
+            ("lambda", &[], ("1", "0"), -0.5, false, 0.0),
+            ("lambda", &[], ("0.5", "0"), 0.0, true, 0.0),
+            ("cactus", &[], ("0", "0"), 0.5, false, 0.0),
+            ("cactus", &[], ("0", "0"), 0.5, true, 0.0),
+        ];
+        for &(formula, params, (cre, cim), zoom, julia, allowed) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "smooth".into();
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.julia = julia;
+            esc.julia_re = if formula == "lambda" { 1.5 } else { -0.8 };
+            esc.julia_im = if formula == "lambda" { 0.4 } else { 0.156 };
+            let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let twin = twin_of(&esc);
+            let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
+            assert!(crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
+            assert!(d <= allowed, "{what}: {:.3}%", d * 100.0);
+        }
+
+        // At depth, perturbed: the twin by derived equations, the built-in
+        // by its native tier. (built-in, params, centre, zoom, iterations)
+        let deep: &[(&str, &[(&str, f32)], (&str, &str), f64, u32)] = &[
+            ("mandelbrot", &[], ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549"), 42.0, 8000),
+            ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000),
+            ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000),
+            ("burning_ship", &[("variant", 0.0)], ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000),
+        ];
+        for &(formula, params, (cre, cim), zoom, max_iter) in deep {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = max_iter;
+            esc.bailout = 4.0;
+            let twin = twin_of(&esc);
+            crate::escape::custom::ensure(&twin);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&twin);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let floatexp = zoom > 48.0;
+            let (a, b) = (records_on(&esc, 64, 48, floatexp, true, false), records_on(&twin, 64, 48, floatexp, true, false));
+            // The truth, in big floats, at every seventh pixel: the
+            // twin's own program, its parameters as the GPU holds them.
+            let src = twin.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = f64::from(esc.bailout);
+                } else if let Some(v) = esc.formula_params.get(&x.name) {
+                    params.values[i].0 = f64::from(*v);
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, max_iter, (64, 48), 7, 6);
+            let agree = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, n)| r[*i].n == *n).count();
+            let (built_in_true, twin_true) = (agree(&a), agree(&b));
+            let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            println!(
+                "{formula} at zoom {zoom}: of {} pixels in big floats ({escaped} escape), the built-in counts {built_in_true} right, the twin {twin_true}",
+                truth.len()
+            );
+            assert!(escaped > truth.len() / 4, "{formula}: the view escapes too little");
+            assert!(twin_true + truth.len() / 50 >= built_in_true, "{formula}: the twin {twin_true}, the built-in {built_in_true}");
+        }
+    }
+
     /// Rhai colourings (phase 4, step 3) through the whole renderer, beside
     /// the built-in Mandelbrot: the examples render as their UF twins,
     /// and UF's example colourings render as they do once converted.

@@ -123,6 +123,15 @@ impl FormulaEditorPanel {
         self.status = None;
     }
 
+    /// Open a formula the config now uses (the Escape panel's Edit as
+    /// Formula): unsaved, and in use, so Live re-applies its edits.
+    pub fn open_in_use(&mut self, file: String, src: &CustomSource) {
+        self.adopt(None, file, src.source.clone());
+        self.in_use.retain(|(k, _, _)| *k != EntryKind::Formula);
+        self.in_use.push((EntryKind::Formula, None, src.entry.clone()));
+        self.status = Some(t!("formula_editor.editing_builtin", entry = src.entry).to_string());
+    }
+
     fn open_stored(&mut self, file: &str) {
         match formula_store::load(file) {
             Some(text) => self.adopt(Some(file.to_string()), file.to_string(), text),

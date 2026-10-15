@@ -1531,6 +1531,7 @@ impl EguiLayer {
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
         let mut open_random_generator = false;
+        let mut open_formula_editor = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -1789,6 +1790,7 @@ impl EguiLayer {
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
+                        open_formula_editor: &mut open_formula_editor,
 
                         // UI state
                         paused,
@@ -2538,6 +2540,7 @@ impl EguiLayer {
             open_triangle_editor,
             open_preset_library,
             open_random_generator,
+            open_formula_editor,
             fractal_viewport_size,
             fly_mouse_drag,
             fly_mode_toggle_requested,

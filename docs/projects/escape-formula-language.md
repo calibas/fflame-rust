@@ -17,7 +17,8 @@ opened; the built-in formulas get Rhai twins. Phase 3's step 6 is
 folded into phase 4's order of work. Phase 4's steps 1 (the animation
 bug) and 2 (the Rhai front end) done 2026-10-14; step 3 (UF and
 Fractint formulas and colourings converted to Rhai, Rhai colourings)
-2026-10-15.
+2026-10-15; step 4 (the built-ins' twins, Edit as Formula, branches in
+the init derived) 2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -992,6 +993,57 @@ keeps compiling as UF; the editor converts what it opens.
    perturbed. With it, from step 6: the derivation takes branches in
    `start` (the init) whose conditions are the same for every pixel --
    the plane, a parameter -- since every built-in has a Julia plane.
+
+   Done 2026-10-15. As built:
+   - **Branches in the init derive** (`delta::init_cases`). Each way
+     through the init's branches on what is the same for every pixel is
+     a case, with its variables' values and z's start (z substituted
+     like any variable), at most 16. The equations branch on the cases'
+     tests, one copy of the loop's each, or one when alike.
+   - **An arm a parameter picks may go without equations.** Neither may
+     an init case. The rest are derived, and the derived `perturb`
+     setting says they hold when that arm is not taken. A branch whose
+     arms all go without has none, so equations that could never hold
+     are not offered. (Beyond the plan, needed for the Tricorn twin's
+     power.)
+   - Found on the way: an int converted to a float lost its conversion
+     in the derived equations (an `i32` compared with `2.0`, invalid
+     WGSL). The library's measurement now validates every derived
+     formula's equations.
+   - **`fn degree(p)`** (`Program::degree`, our own setting): a
+     formula's degree at infinity, which the smooth colourings divide
+     by and which offers their recommended bailout, as a built-in's
+     `escape_degree`.
+   - **The twins** (`escape::twins`, `assets/formulas/twins/`):
+     Mandelbrot, Multibrot, Tricorn, Burning Ship (one formula, the
+     variant a parameter, as the built-in), Lambda, Cactus. Each keeps
+     its built-in's parameters by name, its `bailout` bound to the
+     panel's, and the plane through `ctx`. Multibrot is beyond the plan:
+     it renders, but its power is a real power, which deep zoom does
+     not follow yet (step 6).
+   - **Edit as Formula** (the Escape panel, beside the formula
+     selector): the twin replaces the built-in in the config, one undo
+     step. Parameters carry over by name, and the view and the
+     colouring stay. The twin opens in the Formula Editor in use (Live
+     re-applies its edits); the app opens the panel. Mann damping and
+     the biomorph test are the built-ins' alone; the button's tooltip
+     says so.
+   - **Measured.**
+     - Through the renderer with the smooth colouring, every twin
+       matches its built-in on every pixel, on both planes and every
+       Ship variant. The exceptions are Multibrot and the multicorns
+       (under 0.4%), where the built-in raises to a power by polar form
+       and the twin squares or multiplies.
+     - At the visual suite's deep views, against the big-float truth at
+       439 pixels, the twins count right as often as the built-ins'
+       native tiers: Mandelbrot at zoom 42, 401 and 401; Lambda at 30,
+       354 and 354; Tricorn at 28, 189 and 190; Burning Ship at 60, 346
+       against the built-in's 294.
+     - The UF library now derives equations for 501 formulas (308
+       before), counting only those that hold at their defaults. The
+       conversions keep every one.
+   - Not here: retiring the built-ins (step 9); the twins as entries of
+     the editor's examples.
 5. **Carried state in deep zoom** (the explicit state makes it
    tractable): the reference orbit stores each carried field per step,
    beside z (phase 3, 5b's interleaving, generalised), and the pixel
