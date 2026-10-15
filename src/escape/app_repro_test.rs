@@ -1914,6 +1914,64 @@ mod tests {
         assert_eq!(same, a.len(), "the same program");
     }
 
+    /// Rhai colourings (phase 4, step 3) through the whole renderer, beside
+    /// the built-in Mandelbrot: the examples render as their UF twins,
+    /// and UF's example colourings render as they do once converted.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn rhai_colourings_render_as_their_uf_twins() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let with_rhai_coloring = |mut esc: crate::config::escape::EscapeConfig, source: String| {
+            let title = crate::escape::lang::rhai::title(&source).unwrap_or_default();
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source };
+            esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+            esc.custom_coloring = Some(src);
+            esc
+        };
+        const UF_TRAP: &str = "T {\ninit:\n float c = cabs(#z - @point)\nloop:\n float d = cabs(#z - @point)\n if d < c\n  c = d\n endif\n\
+                               final:\n if c < @width\n  #solid = true\n else\n  #index = sqrt(c) * @scale\n endif\n\
+                               default:\n param point\n  default = (0, 0)\n endparam\n float param width\n  default = 0\n endparam\n\
+                               float param scale\n  default = 2\n endparam\n}";
+        let examples = include_str!("../../assets/formulas/examples.ucl");
+        // (what, the UF source and entry, the Rhai source)
+        let mut cases: Vec<(String, String, String, String)> = vec![
+            ("smooth".into(), examples.into(), "Smooth".into(), include_str!("../../assets/formulas/smooth.rhai").into()),
+            ("orbit trap".into(), UF_TRAP.into(), "T".into(), include_str!("../../assets/formulas/orbit-trap.rhai").into()),
+        ];
+        let (parsed, _) = crate::escape::lang::parser::parse_file(examples);
+        for e in &parsed.entries {
+            let rhai = crate::escape::custom::convert_to_rhai(examples, &e.name, EntryKind::Coloring, CustomDialect::UltraFractal, "examples.ucl")
+                .unwrap_or_else(|why| panic!("{}: {why}", e.name));
+            cases.push((format!("{} converted", e.name), examples.into(), e.name.clone(), rhai));
+        }
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.max_iter = 200;
+        esc.bailout = 4.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        for (what, uf_text, entry, rhai) in &cases {
+            let uf = with_custom(esc.clone(), None, Some((uf_text, entry)));
+            let want = output_on(&device, &queue, &renderer, &uf, w, h, false);
+            let rc = with_rhai_coloring(esc.clone(), rhai.clone());
+            let got = output_on(&device, &queue, &renderer, &rc, w, h, false);
+            assert_eq!(crate::escape::get_coloring(&rc.coloring).name, rc.coloring, "{what} did not compile");
+            let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&want, &got);
+            println!("{what}: the Rhai colouring differs from its UF twin on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.001, "{what}: {:.3}%", d * 100.0);
+        }
+    }
+
     /// A one-group hybrid renders as the built-in it spells: the
     /// presets KF's "To Hybrid" would map, through the whole renderer.
     #[test]
