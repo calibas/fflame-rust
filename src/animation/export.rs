@@ -2570,6 +2570,8 @@ mod tests {
             (EditingTarget::Main, "Escape.MaxIter".to_string(), json!(512)),
             (EditingTarget::Main, "Escape.Supersample".to_string(), json!(2)),
             (EditingTarget::Main, "Escape.FormulaParam.variant".to_string(), json!(2.0)),
+            // A custom formula's complex parameter: a dotted name.
+            (EditingTarget::Main, "Escape.FormulaParam.seed.re".to_string(), json!(-0.75)),
             (EditingTarget::Main, "Escape.ColoringParam.offset".to_string(), json!(1.86)),
             (EditingTarget::Main, "Escape.Shading.LightAngle".to_string(), json!(400.0)),
             (EditingTarget::Main, "Escape.Shading.Height".to_string(), json!(25.0)),
@@ -2603,6 +2605,7 @@ mod tests {
         assert_eq!(config.escape.max_iter, 512);
         assert_eq!(config.escape.supersample, 2);
         assert_eq!(config.escape.formula_params.get("variant"), Some(&2.0));
+        assert_eq!(config.escape.formula_params.get("seed.re"), Some(&-0.75), "a dotted name");
         assert_eq!(config.escape.coloring_params.get("offset"), Some(&1.86));
         assert_eq!(config.escape.shading.light_angle, 40.0, "the light wraps");
         assert_eq!(config.escape.shading.height, 25.0);
