@@ -2469,11 +2469,34 @@ final:
         stride: usize,
         n_limbs: usize,
     ) -> Vec<(usize, u32)> {
-        use crate::escape::bigfloat::BigComplex;
-        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
         use crate::escape::lang;
         let (file, _) = lang::parser::parse_file(src);
         let prog = std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap());
+        truth_counts_of(prog, params, centre, zoom, iters, (w, h), stride, n_limbs)
+    }
+
+    /// Parameter values as the GPU holds them, in f32: the map the
+    /// perturbed path and its reference iterate, and so the truth's.
+    fn as_on_the_gpu(p: crate::escape::lang::interp::ParamValues) -> crate::escape::lang::interp::ParamValues {
+        let f = |v: f64| f64::from(v as f32);
+        crate::escape::lang::interp::ParamValues { values: p.values.into_iter().map(|(a, b)| (f(a), f(b))).collect(), funcs: p.funcs }
+    }
+
+    /// [`truth_counts`] of a checked program.
+    #[allow(clippy::too_many_arguments)]
+    fn truth_counts_of(
+        prog: std::sync::Arc<crate::escape::lang::ir::Program>,
+        params: crate::escape::lang::interp::ParamValues,
+        centre: (&str, &str),
+        zoom: f64,
+        iters: u32,
+        (w, h): (u32, u32),
+        stride: usize,
+        n_limbs: usize,
+    ) -> Vec<(usize, u32)> {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
         let c = BigComplex::from_fixed(&FixedComplex {
             re: FixedPoint::from_decimal(centre.0, n_limbs).unwrap(),
             im: FixedPoint::from_decimal(centre.1, n_limbs).unwrap(),
@@ -2498,6 +2521,103 @@ final:
                 (idx, count)
             })
             .collect()
+    }
+
+    /// A hybrid deep-zooms with a reference per phase (plan, phase 3,
+    /// step 5b), held to the truth in big floats at a boundary walked
+    /// down to the scaled rung (zoom 24) and the floatexp one (zoom 51).
+    /// The hybrids alternate the Mandelbrot with a slightly turned copy
+    /// of itself (`z^2 * (1, 2^-7)`): groups that differ, so a pixel
+    /// stepped by the wrong phase's equations goes wrong at depth, in
+    /// dynamics as tame as the Mandelbrot's, so the counts can be exact
+    /// at all. One alternates (period 2), one starts with a cubic pass
+    /// and repeats the turned group twice (prefix 1, period 3). Alternating
+    /// the Mandelbrot with the Burning Ship walks into regions where the
+    /// counts need 53 to 128 bits a pixel -- f64 misses a fifth of them
+    /// at zoom 6, where 4 and 10 limbs agree on all -- so that preset is
+    /// held only where it is countable, shallow and forced perturbed:
+    /// the folds through the phases.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_hybrid_perturbs_with_a_reference_per_phase() {
+        use crate::escape::lang::hybrid::{Combine, Group, Hybrid, Line, Operator};
+        let (w, h) = (64u32, 48u32);
+        let op = |power: u32, mul: [f64; 2]| Operator { power, mul, ..Default::default() };
+        let group = |repeats: u32, o: Operator| Group { repeats, lines: vec![Line { one: o, two: None, combine: Combine::Add }] };
+        // 2^-7: the same number in f32, where the GPU holds parameters,
+        // as in the truth's big floats.
+        let turned = op(2, [1.0, 0.0078125]);
+        let hybrids = [
+            ("alternating", Hybrid { groups: vec![group(1, op(2, [1.0, 0.0])), group(1, turned.clone())], loop_start: 0 }),
+            ("with a prefix", Hybrid { groups: vec![group(1, op(3, [1.0, 0.0])), group(1, op(2, [1.0, 0.0])), group(2, turned)], loop_start: 1 }),
+        ];
+        let view = |hybrid: &Hybrid, cx: &str, cy: &str, zoom: f64, iters: u32| {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = cx.into();
+            esc.center_im = cy.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let esc = with_hybrid(esc, hybrid);
+            crate::escape::custom::ensure(&esc);
+            esc
+        };
+        for (name, hybrid) in &hybrids {
+            let prog = std::sync::Arc::new(hybrid.program().unwrap());
+            let params = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            // Walk to the boundary: the slowest escaping pixel, three
+            // octaves at a time, on the direct path and then the
+            // perturbed one.
+            let (mut cx, mut cy, mut zoom) = (-0.5f64, 0.0f64, 0.0f64);
+            let mut tested = 0;
+            while zoom <= 51.0 {
+                let iters = 500 + 30 * zoom as u32;
+                let deep = zoom > 15.0;
+                let esc = view(hybrid, &format!("{cx:.20}"), &format!("{cy:.20}"), zoom, iters);
+                if zoom == 24.0 || zoom == 51.0 {
+                    let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+                    let stride = 1 + hybrid.cycle().period as u8;
+                    assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, stride: s, .. }) if s == stride), "{name}: {tier:?}");
+                    let got = records_on(&esc, w, h, false, true, false);
+                    let truth = truth_counts_of(prog.clone(), params.clone(), (&esc.center_re, &esc.center_im), zoom, iters, (w, h), 7, 6);
+                    let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+                    let exact = truth.iter().filter(|(i, c)| got[*i].n == *c).count();
+                    println!("{name} zoom {zoom}: of {} pixels ({} distinct counts) the phases count {exact} exactly", truth.len(), distinct.len());
+                    assert!(distinct.len() > 10, "{name} zoom {zoom}: the view tests little");
+                    // The scaled rung's f32 on busy views (as the derived cubic's
+                    // 381 of 439 at its own walked edge); the floatexp rung's
+                    // double float at depth.
+                    let floor = if zoom < 48.0 { 75 } else { 80 };
+                    assert!(exact * 100 >= truth.len() * floor, "{name} zoom {zoom}: {exact} of {}", truth.len());
+                    tested += 1;
+                }
+                let recs = records_on(&esc, w, h, false, deep, !deep);
+                let Some((i, _)) = recs.iter().enumerate().filter(|(_, r)| r.n < iters).max_by_key(|(_, r)| r.n) else { break };
+                let (px, py) = (i as u32 % w, i as u32 / w);
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                cx += ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                cy -= ((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                zoom += 3.0;
+            }
+            assert_eq!(tested, 2, "{name}: the walk stopped at zoom {zoom}");
+        }
+
+        // The folds through the phases: the Mandelbrot / Burning Ship
+        // preset at a view still countable, perturbed by force.
+        let presets = crate::escape::lang::hybrid::presets();
+        let ms = presets.iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1.clone();
+        let prog = std::sync::Arc::new(ms.program().unwrap());
+        let params = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+        let esc = view(&ms, "-0.25", "-0.75", 3.0, 500);
+        let direct = records_on(&esc, w, h, false, false, true);
+        let got = records_on(&esc, w, h, false, true, false);
+        let truth = truth_counts_of(prog, params, (&esc.center_re, &esc.center_im), 3.0, 500, (w, h), 7, 6);
+        let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+        let (ed, ep) = (truth.iter().filter(|(i, c)| direct[*i].n == *c).count(), truth.iter().filter(|(i, c)| got[*i].n == *c).count());
+        println!("Mandelbrot / Burning Ship zoom 3: of {} pixels ({} distinct counts) direct {ed}, the phases {ep}", truth.len(), distinct.len());
+        assert!(distinct.len() > 10, "the fold view tests little");
+        assert!(ep * 10 >= truth.len() * 9 && ep + truth.len() / 50 >= ed, "{ep} against {ed}");
     }
 
     /// A custom formula with no perturbation equations of its own gets

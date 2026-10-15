@@ -431,10 +431,24 @@ arithmetic. The multipliers are the program's parameters
 structural edit is a new source and a recompile, one undo step. A
 one-group preset renders as the built-in it spells (Mandelbrot, the
 cubic, Burning Ship, Tricorn, the two Perpendiculars:
-`a_hybrid_renders_as_its_built_in`). Hybrids render on the direct path
-for now (deep zoom for them is the plan's step 5b), and distance
-estimation does not reach those that fold: the derivative pass is
-complex-analytic.
+`a_hybrid_renders_as_its_built_in`). Distance estimation does not reach
+those that fold: the derivative pass is complex-analytic.
+
+Deep zoom for hybrids (the plan's step 5b): their equations are
+derived as any formula's (the pass and the phase are the same for
+every pixel), and a pixel must keep the phase of the reference it
+follows, which a rebase onto the orbit's start would break whenever
+the pixel is not at phase 0 -- exactly when one passing near the
+critical point must rebase (KF's manual names this as what breaks its
+single-reference method). So the custom family computes `R = 1 +
+period` references: the main one, and one per phase of the cycle,
+each from the init's z with its pass starting at `prefix + q`
+(`BigMachine::set_pass`). They are interleaved in the one orbit (entry
+`m * R + r`), stepped together, a finished one padded with
+`reference::ORBIT_PAD_E`; the shader's `m` is the flat index, stepping
+by `R`, the equations reading `custom_pass(m)`, and `rebase_phased`
+rebases a pixel at pass `i >= prefix` onto entry `1 + (i - prefix) %
+period`. At most 31 phases (`perturb::MAX_PHASES`).
 
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
 and direct colouring.

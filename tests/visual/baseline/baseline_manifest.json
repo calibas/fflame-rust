@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "b94d602b",
+  "git_hash": "30338885",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -110,9 +110,13 @@
       "bytes": 38653,
       "sha256": "838d103b70d74885745c315424146ceebb7ce69f897f6211a76bd9e8443a3663"
     },
+    "escape-custom-sine-ring.png": {
+      "bytes": 440787,
+      "sha256": "bd7275be3de98cd075c5c6b7d1f216d043b6cec1527048d72b0338170bff0955"
+    },
     "escape-deep-threshold-direct.png": {
-      "bytes": 42510,
-      "sha256": "fe226e582f4605a0654ead23489487f071af47a4e3f80de8908a3d638166fc40"
+      "bytes": 391090,
+      "sha256": "0feae5567434ca6f136cf8698ca8c99ac4d271e1e0f848f6d9f0088ab209ec12"
     },
     "escape-deep-threshold-perturbed.png": {
       "bytes": 38810,
@@ -177,6 +181,10 @@
     "escape-feather.png": {
       "bytes": 11665,
       "sha256": "6fb96b097dcdadc224b0031d93ac98e8ba29b62a7898513815077dbf0aaa43d4"
+    },
+    "escape-hybrid-deep-phases.png": {
+      "bytes": 22872,
+      "sha256": "637eef740e1810756d009b7b9264603b41f365ab5562e1c59f8d7f394a93ab31"
     },
     "escape-ifs-solid-tetrahedron-path.png": {
       "bytes": 9047,
@@ -466,9 +474,25 @@
       "bytes": 46892,
       "sha256": "9163c274dc035c311e03fe72d68efa96c7fde839073d3eb0a613c1ed200c9115"
     },
+    "escape-origami-creases-terrain-rock.png": {
+      "bytes": 20170,
+      "sha256": "4c6011de1aa8c4e925eb8393c09f700dc23917cd1c8d9e2e49a31af14dc6af9f"
+    },
+    "escape-origami-creases-terrain.png": {
+      "bytes": 16591,
+      "sha256": "8d3c6c2bee0804b419f864a889db58c5e1a9772f81eeaa7be649654dc360934d"
+    },
+    "escape-origami-creases.png": {
+      "bytes": 43830,
+      "sha256": "720c06172e4a36d09a4ce9881b1026fe50ffe8ffcf028049fa4b612c8539cf40"
+    },
     "escape-origami-relief-paper.png": {
       "bytes": 49653,
       "sha256": "7420367ac397e62b9a964742e9ff56c7b12883ad93ce0151d07d4b23e0db0d4d"
+    },
+    "escape-origami-relief-rock.png": {
+      "bytes": 46595,
+      "sha256": "9b85c6f2cdc60686015668692f2b3a6deabbd57231258008435960aaa6c51f64"
     },
     "escape-origami-relief-soft.png": {
       "bytes": 47324,

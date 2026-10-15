@@ -303,6 +303,11 @@ pub const MAP_DUCKS: u32 = 19;
 /// parameters and the plane; never stored, as no big family is.
 pub const MAP_CUSTOM: u32 = 20;
 
+/// The exponent marking an interleaved reference's slot after that
+/// reference has ended (the custom family's phases): the shader reads
+/// it as zero and as the end. Far below any real entry's exponent.
+pub const ORBIT_PAD_E: i32 = -2_147_483_647;
+
 /// Whether a (ship, variant) pair names one of the families whose
 /// reference state lives in a [`BigComplex`] rather than fixed point.
 pub fn map_is_big(ship: bool, variant: u32) -> bool {
@@ -627,8 +632,12 @@ pub struct ReferenceOrbit {
     zb: BigComplex,
     cb: BigComplex,
     pb: BigComplex,
-    /// The custom family's state: the program at the reference point.
-    custom: Option<Box<crate::escape::lang::bigeval::BigMachine>>,
+    /// The custom family's state: the program at the reference point;
+    /// for a loop with a cycle (a hybrid), also one machine per phase,
+    /// their entries interleaved (`m * R + r`, R machines) and padded
+    /// with [`ORBIT_PAD_E`] once each has ended.
+    custom: Vec<crate::escape::lang::bigeval::BigMachine>,
+    custom_live: Vec<bool>,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -964,7 +973,8 @@ impl ReferenceOrbit {
             zb,
             cb,
             pb,
-            custom: None,
+            custom: Vec::new(),
+            custom_live: Vec::new(),
             store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
@@ -986,13 +996,19 @@ impl ReferenceOrbit {
         // `init:` at the reference point (the formula decides its own
         // plane), in big floats.
         if let Some(at) = custom_at {
-            let machine = crate::escape::custom::reference_machine(map_params, &at, n)?;
-            orbit.zb = machine.z().clone();
-            let (hi, lo, ee, _) = split_entry_big(&orbit.zb);
-            orbit.orbit = vec![hi];
-            orbit.orbit_lo = vec![lo];
-            orbit.orbit_e = vec![ee];
-            orbit.custom = Some(Box::new(machine));
+            let machines = crate::escape::custom::reference_machines(map_params, &at, n)?;
+            orbit.orbit.clear();
+            orbit.orbit_lo.clear();
+            orbit.orbit_e.clear();
+            for m in &machines {
+                let (hi, lo, ee, _) = split_entry_big(m.z());
+                orbit.orbit.push(hi);
+                orbit.orbit_lo.push(lo);
+                orbit.orbit_e.push(ee);
+            }
+            orbit.zb = machines[0].z().clone();
+            orbit.custom_live = vec![true; machines.len()];
+            orbit.custom = machines;
         }
         orbit.init_shadow();
         orbit.extend(max_iter);
@@ -1092,13 +1108,37 @@ impl ReferenceOrbit {
     /// its test holds (the iterate pushed), `Some(false)` when it fails
     /// (the escaping iterate pushed: the orbit ends there, as the
     /// fixed-point families end on theirs), `None` when the big floats
-    /// cannot take the step (nothing pushed).
+    /// cannot take the step (nothing pushed). With a reference per phase,
+    /// `Some(false)` once every one has ended.
     fn step_custom(&mut self) -> Option<bool> {
-        let machine = self.custom.as_mut()?;
-        let go = machine.step().ok()?;
-        self.zb = machine.z().clone();
-        self.push_entry_big();
-        Some(go)
+        if self.custom.len() == 1 {
+            let machine = self.custom.first_mut()?;
+            let go = machine.step().ok()?;
+            self.zb = machine.z().clone();
+            self.push_entry_big();
+            return Some(go);
+        }
+        // A reference per phase: an entry each a pass, a pad for one
+        // that has ended (its escaping iterate is its last entry). The
+        // orbit ends when they all have.
+        for r in 0..self.custom.len() {
+            if !self.custom_live[r] {
+                self.push_entry_pad();
+                continue;
+            }
+            match self.custom[r].step() {
+                Ok(go) => {
+                    self.zb = self.custom[r].z().clone();
+                    self.push_entry_big();
+                    self.custom_live[r] = go;
+                }
+                Err(_) => {
+                    self.custom_live[r] = false;
+                    self.push_entry_pad();
+                }
+            }
+        }
+        Some(self.custom_live.iter().any(|&l| l))
     }
 
     /// Newton / Halley / Chebyshev over the polynomial functions, with
@@ -1182,6 +1222,16 @@ impl ReferenceOrbit {
         true
     }
 
+    /// An interleaved reference's slot after it has ended.
+    fn push_entry_pad(&mut self) {
+        let idx = self.orbit.len() as u32;
+        self.shadow = [f64::NAN; 4];
+        self.corrections.push(Correction { idx, hi: [0.0; 2], lo: [0.0; 2], e: ORBIT_PAD_E, dd: [0.0; 4] });
+        self.orbit.push([0.0; 2]);
+        self.orbit_lo.push([0.0; 2]);
+        self.orbit_e.push(ORBIT_PAD_E);
+    }
+
     /// Push the big-float iterate's storage triple. These families do
     /// not ride the DD shadow (its step is the power map's), so every
     /// entry is recorded as a correction -- always correct, merely
@@ -1217,7 +1267,7 @@ impl ReferenceOrbit {
             return;
         }
         while (self.orbit.len() as u32) <= max_iter {
-            if self.custom.is_some() {
+            if !self.custom.is_empty() {
                 match self.step_custom() {
                     Some(true) => continue,
                     _ => {
@@ -1883,7 +1933,8 @@ impl ReferenceOrbit {
                     zb: BigComplex::zero(0),
                     cb: BigComplex::zero(0),
                     pb: BigComplex::zero(0),
-                    custom: None,
+                    custom: Vec::new(),
+                    custom_live: Vec::new(),
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -2049,7 +2100,8 @@ impl ReferenceOrbit {
             zb: BigComplex::zero(0),
             cb: BigComplex::zero(0),
             pb: BigComplex::zero(0),
-            custom: None,
+            custom: Vec::new(),
+            custom_live: Vec::new(),
             corrections,
             shadow,
             c_dd,

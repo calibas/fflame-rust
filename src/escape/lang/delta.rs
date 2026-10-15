@@ -42,7 +42,15 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
     if !p.perturb_loop.is_empty() || !p.perturb_init.is_empty() {
         return None;
     }
-    let mut d = Deriver { p, out: p.clone(), pairs: vec![None; p.vars.len()], inits: Vec::new(), z_ref: None, z_written: false };
+    let mut d = Deriver {
+        p,
+        out: p.clone(),
+        pairs: vec![None; p.vars.len()],
+        inits: Vec::new(),
+        z_ref: None,
+        z_written: false,
+        uniforms: vec![None; p.vars.len()],
+    };
     // The init's variables other than z: constant per pixel when their
     // value reads neither z nor anything the loop writes; the loop's
     // reads of them are their init's values, re-derived in each pass.
@@ -95,6 +103,10 @@ struct Deriver<'p> {
     z_ref: Option<VarId>,
     /// Whether the statement being derived reads z after a write.
     z_written: bool,
+    /// The variable standing for each int or bool temporary of the
+    /// loop: its value is the same for every pixel (it has no
+    /// deviation), so the equations keep it once.
+    uniforms: Vec<Option<VarId>>,
 }
 
 /// Each variable's value after the init, as an expression of the
@@ -299,6 +311,27 @@ impl Deriver<'_> {
                             }
                             let (r, d) = self.pair(e, written, is_loop)?;
                             let ty = self.p.vars[*v].ty;
+                            if matches!(ty, Ty::Int | Ty::Bool) {
+                                // The same for every pixel (a pass's phase,
+                                // a count): one variable, no pair.
+                                if d.is_some() {
+                                    return None;
+                                }
+                                let u = match self.uniforms[*v] {
+                                    Some(u) => u,
+                                    None => {
+                                        let name = format!("{}_u", self.p.vars[*v].name);
+                                        let u = self.new_var(name, ty);
+                                        self.uniforms[*v] = Some(u);
+                                        u
+                                    }
+                                };
+                                out.push(IStmt::Assign(Place::Var(u), r));
+                                if !written.contains(v) {
+                                    written.push(*v);
+                                }
+                                continue;
+                            }
                             if !matches!(ty, Ty::Float | Ty::Complex) {
                                 return None;
                             }
@@ -387,12 +420,17 @@ impl Deriver<'_> {
                 | Predef::JuliaC
                 | Predef::IsMand
                 | Predef::MagXMag
-                | Predef::RotSkew,
+                | Predef::RotSkew
+                // The pass the reference is on, which the pixel's phase
+                // matches (step 5b's references, one a phase).
+                | Predef::Pass,
             ) => (e.clone(), None),
             IExprKind::Predef(_) => return None,
             IExprKind::Var(v) => {
                 if self.p.vars[*v].global {
                     (e.clone(), None)
+                } else if let Some(u) = self.uniforms[*v].filter(|_| written.contains(v)) {
+                    (mk(IExprKind::Var(u), self.p.vars[*v].ty), None)
                 } else if let Some((rv, dv)) = self.pairs[*v].filter(|_| written.contains(v)) {
                     let t = self.p.vars[*v].ty;
                     (mk(IExprKind::Var(rv), t), Some(mk(IExprKind::Var(dv), t)))
@@ -740,6 +778,41 @@ mod tests {
             }
             assert_eq!(compared, 10);
         }
+    }
+
+    /// Every hybrid preset derives equations, and with a reference per
+    /// phase (the f64 model of step 5b) a pixel iterates as the hybrid
+    /// does: through the prefix, across rebases at every phase.
+    #[test]
+    fn hybrids_perturb_with_a_reference_per_phase() {
+        let mut rebased_mid_cycle = 0;
+        for (name, h) in super::super::hybrid::presets() {
+            let p = h.program().unwrap();
+            let d = with_derived_equations(&p).unwrap_or_else(|| panic!("{name}: no equations derived"));
+            let how = super::super::perturb::perturbation(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(how.cycle.is_some(), h.groups.len() > 1, "{name}");
+            assert!(how.rebase, "{name}: the phase is no carried state");
+            let params = ParamValues::defaults(&d);
+            for (rx, ry) in [(-0.7436, 0.1318), (-1.76, -0.028), (-0.3, 0.6), (0.27, 0.005)] {
+                let reference = C64::new(rx, ry);
+                for k in 0..8 {
+                    let t = k as f64 * 0.785;
+                    let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-6 * (1.0 + k as f64)));
+                    let env = Env::at(px, 200);
+                    let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+                    let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
+                    assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "{name} at {px:?}");
+                    if direct.escaped {
+                        let err = pert.z.sub(direct.z).abs() / direct.z.abs();
+                        assert!(err < 1e-4, "{name} at {px:?}: {:?} vs {:?}", pert.z, direct.z);
+                        if h.groups.len() > 1 && direct.n > 30 {
+                            rebased_mid_cycle += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(rebased_mid_cycle > 5, "the views test little ({rebased_mid_cycle})");
     }
 
     /// What has no cancellation-free form, or carries state, derives

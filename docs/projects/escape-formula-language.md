@@ -9,9 +9,9 @@ detection and the embossed relief for programs, `global:`, `switch:`,
 the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
 measurement under phase 2). **Phase 3 in progress** (deep zoom for
-custom formulas; its plan and order of work below): steps 1 to 4 done
-2026-10-14; step 5 (hybrids) next, then step 6 (extending step 4), the
-user's order of 2026-10-14.
+custom formulas; its plan and order of work below): steps 1 to 5 done
+2026-10-14; step 6 (extending step 4) next, the user's order of
+2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -674,6 +674,55 @@ Order of work (2026-10-14):
    steps 2 to 4 were, on an alternating Mandelbrot / Burning Ship at
    both rungs, beside a single-reference build to show what the phases
    buy.
+
+   As built (done 2026-10-14), simpler than the table: the `R = 1 +
+   period` references are INTERLEAVED in the one orbit (entry `m * R +
+   r` is reference `r` at its index `m`), stepped in lockstep by `R`
+   big-float machines (`BigMachine::set_pass` starts each at its
+   phase), a reference that has ended padded with `ORBIT_PAD_E`. So
+   the orbit grows, publishes, uploads and caches as one array, as
+   every family's does (the request asks for `R` entries a pass,
+   `renderer::orbit_depth`), and the shader's `m` is the flat index:
+   the pixel steps by `R` (`//__M_STEP__`, `m = m + 1u` for every
+   other tier, so their WGSL is unchanged), its reference and pass are
+   `m % R` and `m / R` (`custom_pass`, which the equations take as
+   `pass_index`), and the state needs no new word. The rebase
+   (`rebase_phased`) goes to entry `1 + (i - prefix) % period` -- the
+   phase's reference at its start, which all share, so the floatexp
+   rung's `fe_rebase_delta` serves unchanged -- on Zhuoran's test or
+   when the reference's next slot is a pad; during the prefix only the
+   main reference serves, and its end there counts the pixel escaped.
+   `Perturbable::cycle` carries the cycle, at most 31 phases
+   (`perturb::MAX_PHASES`); the derivation gained int and bool
+   temporaries whose values are the same for every pixel (the phase).
+   `interp::run_perturbed` models the same references in f64.
+   Measured against the truth (`a_hybrid_perturbs_with_a_reference_per_phase`,
+   64x48, every 7th pixel), at a boundary walked to the scaled rung and
+   on to the floatexp one:
+
+   | Hybrid | Zoom 24 (scaled) | Zoom 51 (floatexp) |
+   |---|---|---|
+   | Mandelbrot / turned Mandelbrot, alternating (period 2) | 391 of 439 (223 distinct counts) | 439 of 439 (79) |
+   | Cubic once, then Mandelbrot / turned twice (prefix 1, period 3) | 343 of 439 (259) | 380 of 439 (228) |
+
+   The turned copy is `z^2 * (1, 2^-7)`: groups that differ, in tame
+   dynamics. Not as planned: the alternating Mandelbrot / Burning Ship
+   walks into regions where the counts need 53 to 128 bits a pixel
+   (the f64 model misses a fifth of them at zoom 6, where 4 and 10
+   limbs agree on every pixel), where no rung can be exact, so that
+   preset is held where it is countable (zoom 3, forced perturbed: 400
+   of 439, as the direct path). And no single-reference build: in the
+   f64 model, the only place it would be cheap, the references are f64
+   too, and at the depths where phases matter their own rounding is the
+   error. Two findings on the way: the GPU holds parameters as f32, so
+   a truth run with a parameter's f64 value iterates a slightly
+   different map (0.01 against its f32, two thirds of the pixels wrong
+   after 2000 passes) -- the test rounds them as the GPU does; and on
+   these views the floatexp rung counts closer to the f64 model than
+   the scaled one (416 and 380 against 391 and 343 at zoom 24, the
+   model 427 and 419): the scaled rung's f32 on long busy orbits, as
+   for every tier. The visual suite has the alternating hybrid at zoom
+   51 (`escape/hybrid-deep-phases`).
 
    Not in step 5: distance estimation for hybrids that fold (abs): the
    derivative pass is complex-analytic, and a fold needs the Jacobian

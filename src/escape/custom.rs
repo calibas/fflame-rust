@@ -329,7 +329,7 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
         return None;
     }
     let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
-    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase })
+    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride: how.references() as u8 })
 }
 
 /// The program and inputs a config's custom formula iterates with: its
@@ -424,10 +424,29 @@ pub fn reference_identity(escape: &EscapeConfig) -> Option<[f32; 2]> {
 /// point in big floats `n_limbs` wide: the custom family's state in a
 /// reference orbit. `None` for an identity this session did not hand
 /// out, or a start the big floats cannot make.
-pub fn reference_machine(map_params: [f32; 2], center: &crate::escape::bigfloat::BigComplex, n_limbs: usize) -> Option<lang::bigeval::BigMachine> {
+pub fn reference_machines(map_params: [f32; 2], center: &crate::escape::bigfloat::BigComplex, n_limbs: usize) -> Option<Vec<lang::bigeval::BigMachine>> {
     let id = u64::from(map_params[0].to_bits() & 0x7F_FFFF) | (u64::from(map_params[1].to_bits() & 0x7F_FFFF) << 23);
     let inputs = registry().read().ok()?.references.get(&id).cloned()?;
-    lang::bigeval::BigMachine::new(inputs.prog, inputs.params, inputs.env, center.clone(), n_limbs).ok()
+    // A loop with a cycle (a hybrid): besides the main reference, one
+    // per phase, its passes starting where that phase first runs
+    // (plan, phase 3, step 5b). Every one starts from the init's z.
+    let cycle = lang::perturb::perturbation(&inputs.prog).ok().and_then(|how| how.cycle);
+    let starts: Vec<u32> = std::iter::once(0).chain(cycle.iter().flat_map(|c| (0..c.period).map(move |q| c.prefix + q))).collect();
+    starts
+        .into_iter()
+        .map(|start| {
+            let mut m = lang::bigeval::BigMachine::new(inputs.prog.clone(), inputs.params.clone(), inputs.env, center.clone(), n_limbs).ok()?;
+            m.set_pass(start);
+            Some(m)
+        })
+        .collect()
+}
+
+/// The cycle a registered custom formula's references follow, when its
+/// loop branches on the pass (a hybrid): the perturbed shader's
+/// constants.
+pub fn cycle(name: &str) -> Option<lang::ir::Cycle> {
+    registry().read().ok()?.perturbable.get(name).and_then(|(_, how, _)| how.cycle)
 }
 
 /// Compile a colouring entry and register it under `name`.

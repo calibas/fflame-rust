@@ -27,6 +27,21 @@ pub struct Perturbable {
     /// The loop carries only the iterate: rebase on the smaller
     /// deviation as well as at the orbit's end.
     pub rebase: bool,
+    /// A loop that branches on its pass (a hybrid): one reference orbit
+    /// per phase of its cycle besides the main one, and a pixel rebases
+    /// only onto the reference of its own phase.
+    pub cycle: Option<Cycle>,
+}
+
+/// The most phases a cycle may have and still perturb: the references
+/// are one orbit each, interleaved in the GPU's orbit buffer.
+pub const MAX_PHASES: u32 = 31;
+
+impl Perturbable {
+    /// The reference orbits: the main one, and one per phase.
+    pub fn references(&self) -> u32 {
+        1 + self.cycle.map_or(0, |c| c.period)
+    }
 }
 
 /// Whether `p` perturbs, or why not.
@@ -54,7 +69,20 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
     // What the loop carries across iterations: read before written in
     // it, and written in it.
     let carried = carried_vars(&p.loop_body);
-    Ok(Perturbable { rebase: carried.is_empty() })
+    // A loop that reads its pass needs its cycle: the pixel follows
+    // only a reference at its own phase.
+    let cycle = if p.reads(Predef::Pass) {
+        match p.cycle {
+            None => return Err("it reads the pass with no cycle to it".into()),
+            Some(c) if c.period == 0 || c.period > MAX_PHASES => {
+                return Err(format!("its cycle has {} passes; deep zoom takes at most {MAX_PHASES}", c.period))
+            }
+            Some(c) => Some(c),
+        }
+    } else {
+        None
+    };
+    Ok(Perturbable { rebase: carried.is_empty(), cycle })
 }
 
 /// The formula's test as the perturbed path evaluates it, on the pixel's
@@ -169,12 +197,12 @@ mod tests {
         // The Mandelbrot: perturbs and rebases; `c`, written in init and
         // only read in the loop, is no carried state.
         let m = program(&format!("M {{\ninit:\n z = 0\n c = #pixel\nloop:\n z = sqr(z) + c\nbailout:\n |z| < 4\n{EQ}}}"));
-        assert_eq!(perturbation(&m), Ok(Perturbable { rebase: true }));
+        assert_eq!(perturbation(&m), Ok(Perturbable { rebase: true, cycle: None }));
         // A history: perturbs, but rebases only at the orbit's end.
         let h = program(&format!(
             "H {{\ninit:\n z = 0\n zold = 0\nloop:\n t = z\n z = sqr(z) + #pixel + zold * 0.1\n zold = t\nbailout:\n |z| < 4\n{EQ}}}"
         ));
-        assert_eq!(perturbation(&h), Ok(Perturbable { rebase: false }));
+        assert_eq!(perturbation(&h), Ok(Perturbable { rebase: false, cycle: None }));
         // No equations, a test of more than z, a screen position: no.
         let none = program("N {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}");
         assert!(perturbation(&none).unwrap_err().contains("no perturbation equations"));
