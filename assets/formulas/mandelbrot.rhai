@@ -11,11 +11,11 @@ const PARAMS = #{
 
 const INFO = #{ title: "Mandelbrot", center: complex(-0.5, 0.0), maxiter: 500 };
 
-fn start(pixel, p, plane) {
+fn start(pixel, p, ctx) {
     // The panel's Julia toggle: on the Julia plane the pixel starts the
     // orbit, and c is the Julia constant.
-    if plane.julia {
-        #{ z: pixel, c: plane.c }
+    if ctx.julia {
+        #{ z: pixel, c: ctx.c }
     } else {
         #{ z: complex(0.0, 0.0), c: pixel }
     }

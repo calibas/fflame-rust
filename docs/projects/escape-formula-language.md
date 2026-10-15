@@ -15,7 +15,8 @@ decisions below): the formula language becomes Rhai, with explicit
 state; UF and Fractint files stay loadable and convert to Rhai when
 opened; the built-in formulas get Rhai twins. Phase 3's step 6 is
 folded into phase 4's order of work. Phase 4's steps 1 (the animation
-bug) and 2 (the Rhai front end) done 2026-10-14.
+bug) and 2 (the Rhai front end) done 2026-10-14; step 3's formulas (UF
+and Fractint converted to Rhai) 2026-10-15, its colourings next.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -819,10 +820,14 @@ fn escaped(s, p) {
 - `p` is the parameters, declared with their metadata in `PARAMS`
   (value, range, step, caption, hint, kind: float, int, bool, complex,
   a choice, a function), which the panel, animation and scripts read.
-- The plane: `start` may take a third argument, the plane (`julia`, the
-  Julia constant), for formulas that offer both.
-- A pass-dependent step (a hybrid) takes the pass as a third argument
-  and declares `CYCLE` (prefix, period) for deep zoom (phase 3, 5b).
+- The context (since step 3; step 2 had a plane argument in `start`
+  and a pass in `step`): every function may take a third argument, the
+  plane (`julia`, `c` the Julia constant), the pass (`pass`; a
+  pass-dependent step, a hybrid, declares `INFO.cycle` for deep zoom,
+  phase 3, 5b) and the view and screen (`maxiter`, `center`, `magn`,
+  `angle`, `x`, `y`, `width`, `height`, `random`).
+- `prepare(p, ctx)`, optional: the per-image values (UF's `global:`),
+  read as `p.name`.
 - Helper functions in the script are inlined; no recursion.
 - Optional `perturb_start` / `perturb_step` keep UF's hand-written
   perturbation equations for formulas that bring them; otherwise they
@@ -896,6 +901,58 @@ keeps compiling as UF; the editor converts what it opens.
    one, the built-ins' twins among them), which deep zoom needs.
 3. **The IR to Rhai printer, and conversion on opening** (formulas,
    then colourings in the same shape); the UF corpus measurement above.
+
+   Formulas done 2026-10-15 (`lang/to_rhai.rs`,
+   `custom::convert_to_rhai`). As built:
+   - **The conversion.**
+     - The state is `z`, every variable a pass reads before it has
+       certainly written it, every variable the bailout reads, and
+       `#pixel` when the loop reads it (the checker's own flow
+       analysis). The rest are `let`s, declared at their first
+       assignment or, when that is nested or after a read, at the top
+       with their type's zero.
+     - Implicit conversions are written where Rhai needs them (a `let`
+       has its value's type), and left out where the checker widens
+       again.
+     - Fractint's real-part tests and equality, and its `round`
+       (`floor(x + 0.5)`), are written out.
+     - The bailout is negated as written, `!(...)`, which a NaN leaves
+       as UF does.
+     - The entry's comments and those just above it come along.
+     - A `switch:` pair becomes one formula on both planes.
+   - **What the front end gained for it.**
+     - The context argument, which replaces step 2's plane and pass
+       arguments, so screen and view symbols (`#x`, `#width`,
+       `#maxiter` ...; heavily used in the library) have a home.
+     - `prepare` for `global:` (553 sections in the library).
+     - `PI()` and `E()`.
+     - `to_float` / `to_int`, the checker's own conversions in Rhai
+       mode, including from a bool. An `if` there would put a branch
+       in the init, which deep zoom cannot derive yet.
+     - `exponential`.
+     - An `else if` whose condition needs statements first nests in
+       the `else`.
+     - Rhai's expression-depth limit raised to 2,048. Rhai counts each
+       link of a chain like `a + b + c` as a level without recursing,
+       and its 64 refused a long sum.
+     - UF's own perturbation equations as `perturb_start`,
+       `perturb_step` (the deviation `d` their state, set and
+       returned, as `step`'s `s`) and `perturb_when` (UF's `perturb`).
+   - **The editor.** Each UF or Fractint formula entry has Edit as
+     Rhai, which opens the converted formula as a new unsaved `.rhai`.
+     The opened file stays as it is, still usable as UF, and a config's
+     UF source keeps compiling as UF. So "convert on opening" is per
+     entry, on request: a file holds many entries, a Rhai file one.
+   - **Measured on UF's public library (345 files):** all 9,250
+     compiling formulas convert, compile back and iterate as the
+     original (the interpreter at seven points on both planes, 100
+     iterations). Deep zoom is kept on all 310 formulas that have it:
+     308 derived, and 2 by their own equations, carried.
+   - **Tests.** The test files' formulas convert and run as written
+     (`to_rhai::tests`). Their conversions run on the GPU as the
+     interpreter does (`test_files_run_on_the_gpu_as_the_interpreter_does`).
+     The editor's path is covered by
+     `a_uf_formula_converts_to_rhai_for_editing`.
 4. **Built-in twins and "Edit as formula"**: the Escape panel opens the
    current built-in in the editor as the user's own formula, with the
    current parameters and view. First the families the derivation

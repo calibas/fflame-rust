@@ -7,8 +7,8 @@ fn start(pixel, p) {
     #{ z: complex(0.0, 0.0), c: pixel }
 }
 
-fn step(s, p, pass) {
-    if pass % 2 == 0 {
+fn step(s, p, ctx) {
+    if ctx.pass % 2 == 0 {
         s.z = s.z ** 2 + s.c;
     } else {
         s.z = fold(s.z) ** 2 + s.c;

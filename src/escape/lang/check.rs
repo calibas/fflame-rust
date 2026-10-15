@@ -1084,6 +1084,9 @@ impl Checker {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], user: bool, span: Span) -> Option<IExpr> {
+        if self.rhai && !user && matches!(name, "to_float" | "to_int") {
+            return self.rhai_conversion(name, args, span);
+        }
         let known = user || is_fractint_fn(name) || Builtin::from_name(name).is_some();
         if known && args.len() != 1 {
             self.error(span, format!("`{name}` takes one argument"));
@@ -1124,6 +1127,28 @@ impl Checker {
         // An int argument becomes a float unless the result is an int.
         let arg = if arg.ty == Ty::Int && ty != Ty::Int { self.convert(arg, Ty::Float, args[0].span)? } else { arg };
         Some(IExpr { kind: IExprKind::Call(b, Box::new(arg)), ty })
+    }
+
+    /// Rhai's conversions, the explicit way a Rhai formula turns a bool
+    /// into a number: `to_float` of a bool (1 for true) or an int,
+    /// `to_int` of a bool or of a float (truncated).
+    fn rhai_conversion(&mut self, name: &str, args: &[Expr], span: Span) -> Option<IExpr> {
+        if args.len() != 1 {
+            self.error(span, format!("`{name}` takes one argument"));
+            return None;
+        }
+        let arg = self.expr(&args[0])?;
+        let to = if name == "to_float" { Ty::Float } else { Ty::Int };
+        match (arg.ty, to) {
+            (t, to) if t == to => Some(arg),
+            (Ty::Bool, _) => Some(IExpr { kind: IExprKind::Convert(Box::new(arg)), ty: to }),
+            (Ty::Int, Ty::Float) => self.convert(arg, Ty::Float, span),
+            (Ty::Float, Ty::Int) => Some(IExpr { kind: IExprKind::Call(Builtin::Trunc, Box::new(arg)), ty: Ty::Int }),
+            (t, _) => {
+                self.error(span, format!("`{name}` takes a bool, an int or a float, not a {}", t.name()));
+                None
+            }
+        }
     }
 
     fn binary(&mut self, op: BinOp, a: &Expr, b: &Expr, span: Span) -> Option<IExpr> {
@@ -1482,16 +1507,16 @@ fn const_int(e: &IExpr) -> Option<i64> {
 
 /// Reads and writes of a statement list, in order.
 #[derive(Default)]
-struct Flow {
+pub(crate) struct Flow {
     /// Definitely written so far.
-    written: HashSet<VarId>,
+    pub(crate) written: HashSet<VarId>,
     /// Written on any path.
-    any_write: HashSet<VarId>,
+    pub(crate) any_write: HashSet<VarId>,
     /// Read where an earlier write is not certain.
-    exposed: HashSet<VarId>,
+    pub(crate) exposed: HashSet<VarId>,
 }
 
-fn flow(stmts: &[IStmt], f: &mut Flow) {
+pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
     for s in stmts {
         match s {
             IStmt::Assign(place, e) => {
@@ -1539,7 +1564,7 @@ fn flow(stmts: &[IStmt], f: &mut Flow) {
     }
 }
 
-fn reads(e: &IExpr, f: &mut Flow) {
+pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
     match &e.kind {
         IExprKind::Var(v) => {
             if !f.written.contains(v) {

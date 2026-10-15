@@ -33,11 +33,22 @@
 //! - **`p`**, the parameters, declared in `PARAMS`: a value alone, or a
 //!   map with `value` and any of `min`, `max`, `caption`, `hint`,
 //!   `choices` (an int's names), `function` (a user function's default,
-//!   called as `p.f(z)`).
-//! - `start` may take the plane as a third argument (`plane.julia`,
-//!   `plane.c`, the Julia constant); `step` the pass as a third (0 on
-//!   the first), with `INFO.cycle` (`#{ prefix, period }`) when deep
-//!   zoom should follow it.
+//!   called as `p.f(z)`), `exponential` (the slider's scale).
+//! - **The context**, every function's optional third argument (`ctx`
+//!   here; the name is the script's): `ctx.julia` (the panel's Julia
+//!   toggle), `ctx.c` (the Julia constant), `ctx.pass` (the pass, 0 on
+//!   the first; with `INFO.cycle`, `#{ prefix, period }`, when deep zoom
+//!   should follow it), `ctx.maxiter`, `ctx.center`, `ctx.magn`,
+//!   `ctx.angle` (the view's rotation, degrees), `ctx.x`, `ctx.y`,
+//!   `ctx.width`, `ctx.height` (the pixel on the screen) and
+//!   `ctx.random`.
+//! - **`prepare(p, ctx)`**, optional: values computed once per image (UF's
+//!   `global:`), returned as a map and read as `p.name`.
+//! - **UF's own perturbation equations**, optional: `perturb_start(d, p)`
+//!   and `perturb_step(d, p)` set `d.dz`, the pixel's deviation from the
+//!   reference orbit, from `d.z` (the reference's value) and `d.dpixel`
+//!   (the pixel's offset), and return `d`; `perturb_when(p)` says when
+//!   they hold. Without them deep zoom derives its own.
 //! - `INFO`: `title`, `center` (a complex), `magn`, `maxiter`, `angle`,
 //!   `cycle`.
 //! - Other functions are helpers, inlined where they are called; they
@@ -48,7 +59,8 @@
 //!   is refused.
 //!
 //! Values are int, float, bool and complex (`complex(re, im)`; Rhai has
-//! no complex literal); a bool and a number do not mix. Operators:
+//! no complex literal); a bool and a number do not mix, except by
+//! `to_float` and `to_int` (1 for true), Rhai's conversions. Operators:
 //! `+ - * / %`, `**` the power (`^` is Rhai's XOR), comparisons,
 //! `&& || !`. Two ints divided is refused -- Rhai would truncate where a
 //! formula wants the quotient. Functions (and as methods, `z.sqr()`):
@@ -57,9 +69,12 @@
 //! zero cosxx isinf isnan`; `abs` (of a complex, its modulus), `fold`
 //! (each part's absolute value: the Burning Ship), `norm_sqr` (`|z|^2`),
 //! `arg` (the angle), `re` and `im` (or `.re`, `.im`), `log` (base 10,
-//! as in Rhai), `pow(a, b)`, `atan2(y, x)`. Loops: `while`, `do ...
+//! as in Rhai), `pow(a, b)`, `atan2(y, x)`, `to_float`, `to_int` (a
+//! float truncated); `PI()` and `E()`. Loops: `while`, `do ...
 //! while/until`, `for i in a..b`; no `break`. What does not compile is
 //! refused with the script's own positions.
+//!
+//! UF and Fractint formulas convert to this shape ([`super::to_rhai`]).
 
 use super::ast::{self, BinOp, Entry, ExprKind, FuncBlock, ParamBlock, Section, SectionKind, Setting, SettingValue, Settings, TypeName, UnOp};
 use super::builtins::Builtin;
@@ -114,6 +129,9 @@ impl Lowered {
 pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
     let mut engine = Engine::new_raw();
     engine.set_optimization_level(OptimizationLevel::None);
+    // Rhai counts each link of a chain (`a + b + c`) as a level of depth,
+    // without recursing: its default, 64 in a function, refuses a long sum.
+    engine.set_max_expr_depths(2048, 2048);
     let pos = Positions::new(source);
     let ast = engine.compile(source).map_err(|e| vec![Diag::error(pos.span(e.position()), format!("{}", e.err_type()))])?;
     let mut l = Lowerer {
@@ -125,13 +143,35 @@ pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
         pure: false,
         types: HashMap::new(),
         param_tys: HashMap::new(),
+        prepared: HashMap::new(),
         names: Vec::new(),
         fresh: 0,
     };
     let mut out = l.run(&ast).map_err(|d| vec![d])?;
     out.names = l.names;
+    // The checker's names for what the context reads.
+    for (uf, rhai) in CTX_FIELDS {
+        out.names.push((format!("#{uf}"), format!("ctx.{rhai}")));
+    }
+    out.names.push(("global:".into(), "prepare".into()));
     Ok(out)
 }
+
+/// The context's fields: the checker's predefined name, the Rhai one.
+/// `julia` (`ismand == 0`) and `angle` (the real part of `rotskew`) are
+/// the context's too.
+const CTX_FIELDS: &[(&str, &str)] = &[
+    ("juliac", "c"),
+    ("pass", "pass"),
+    ("maxiter", "maxiter"),
+    ("center", "center"),
+    ("magn", "magn"),
+    ("x", "x"),
+    ("y", "y"),
+    ("width", "width"),
+    ("height", "height"),
+    ("random", "random"),
+];
 
 // ---- positions --------------------------------------------------------
 
@@ -178,10 +218,8 @@ enum Binding {
     Params,
     /// `start`'s pixel.
     Pixel,
-    /// `start`'s plane.
-    Plane,
-    /// `step`'s pass.
-    Pass,
+    /// The context: every function's optional last argument.
+    Ctx,
     /// A local, by its lowered name.
     Local(String),
     /// A value substituted where read: a helper's argument, a `let` in
@@ -191,10 +229,22 @@ enum Binding {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fn3 {
+    /// `prepare`: the per-image values, UF's `global:`.
+    Prepare,
     Start,
     Step,
     Escaped,
     Helper,
+    /// `perturb_start` or `perturb_step`: UF's own perturbation
+    /// equations, the deviation `d` their state.
+    Perturb,
+}
+
+impl Fn3 {
+    /// Builds its map at the end, its fields new (`start`, `prepare`).
+    fn builds(self) -> bool {
+        matches!(self, Fn3::Start | Fn3::Prepare)
+    }
 }
 
 struct Lowerer<'s> {
@@ -211,6 +261,8 @@ struct Lowerer<'s> {
     /// Lowered variable names (fields and locals) to their types.
     types: HashMap<String, TypeName>,
     param_tys: HashMap<String, TypeName>,
+    /// `prepare`'s fields, read as `p.name`.
+    prepared: HashMap<String, TypeName>,
     names: Vec<(String, String)>,
     fresh: usize,
 }
@@ -276,6 +328,14 @@ fn assign(target: ast::Expr, value: ast::Expr, span: Span) -> ast::Stmt {
 fn field_name(f: &str) -> String {
     format!("s_{f}")
 }
+
+fn prepared_name(f: &str) -> String {
+    format!("g_{f}")
+}
+
+/// The deviation's fields in the perturbation equations: the reference's
+/// value, the pixel's deviation from it, the pixel's offset.
+const DEVIATION: &[&str] = &["z", "dz", "dpixel"];
 
 impl<'s> Lowerer<'s> {
     fn err<T>(&self, p: Position, msg: impl Into<String>) -> R<T> {
@@ -350,12 +410,26 @@ impl<'s> Lowerer<'s> {
             return Err(Diag::error(Span::default(), format!("a formula needs `fn {}`", missing.join("`, `fn "))));
         };
         let span = Span { start: 0, end: self.source.len() };
+        let mut sections = Vec::new();
+        // prepare: once per image, its map's fields read as `p.name`.
+        if let Some(prep) = get("prepare") {
+            let mut scope = Scope::new(Fn3::Prepare, Vec::new());
+            if prep.params.is_empty() || prep.params.len() > 2 {
+                return self.err(prep.body.position(), "`prepare(p)` or `prepare(p, ctx)`");
+            }
+            for (name, role) in prep.params.iter().zip([Binding::Params, Binding::Ctx]) {
+                scope.bind(name, role);
+            }
+            let mut body = Vec::new();
+            self.state_body(&prep.body, &mut scope, &mut body)?;
+            sections.push(Section { kind: SectionKind::Global, span, body, last_is_bailout: false, labelled: true });
+        }
         // start: its map's fields become the state.
         let mut scope = Scope::new(Fn3::Start, Vec::new());
         if start.params.len() > 3 || start.params.len() < 2 {
-            return self.err(start.body.position(), "`start(pixel, p)` or `start(pixel, p, plane)`");
+            return self.err(start.body.position(), "`start(pixel, p)` or `start(pixel, p, ctx)`");
         }
-        for (name, role) in start.params.iter().zip([Binding::Pixel, Binding::Params, Binding::Plane]) {
+        for (name, role) in start.params.iter().zip([Binding::Pixel, Binding::Params, Binding::Ctx]) {
             scope.bind(name, role);
         }
         let mut init = Vec::new();
@@ -367,19 +441,19 @@ impl<'s> Lowerer<'s> {
         // step: the same fields.
         let mut scope = Scope::new(Fn3::Step, fields.clone());
         if step.params.len() > 3 || step.params.len() < 2 {
-            return self.err(step.body.position(), "`step(s, p)` or `step(s, p, pass)`");
+            return self.err(step.body.position(), "`step(s, p)` or `step(s, p, ctx)`");
         }
-        for (name, role) in step.params.iter().zip([Binding::State, Binding::Params, Binding::Pass]) {
+        for (name, role) in step.params.iter().zip([Binding::State, Binding::Params, Binding::Ctx]) {
             scope.bind(name, role);
         }
         let mut lp = Vec::new();
         self.state_body(&step.body, &mut scope, &mut lp)?;
         // escaped: one test, its lets substituted.
         let mut scope = Scope::new(Fn3::Escaped, fields);
-        if escaped.params.len() != 2 {
-            return self.err(escaped.body.position(), "`escaped(s, p)`");
+        if escaped.params.len() > 3 || escaped.params.len() < 2 {
+            return self.err(escaped.body.position(), "`escaped(s, p)` or `escaped(s, p, ctx)`");
         }
-        for (name, role) in escaped.params.iter().zip([Binding::State, Binding::Params]) {
+        for (name, role) in escaped.params.iter().zip([Binding::State, Binding::Params, Binding::Ctx]) {
             scope.bind(name, role);
         }
         self.pure = true;
@@ -387,11 +461,39 @@ impl<'s> Lowerer<'s> {
         self.pure = false;
         let tspan = test.span;
         let go = mk(ExprKind::Unary(UnOp::Not, Box::new(test)), tspan);
-        let sections = vec![
+        sections.extend([
             Section { kind: SectionKind::Init, span, body: init, last_is_bailout: false, labelled: true },
             Section { kind: SectionKind::Loop, span, body: lp, last_is_bailout: false, labelled: true },
             Section { kind: SectionKind::Bailout, span, body: vec![ast::Stmt::Expr(go)], last_is_bailout: false, labelled: true },
-        ];
+        ]);
+        // UF's own perturbation equations, when the formula brings them:
+        // the deviation's start and step, and when they hold.
+        for (name, kind) in [("perturb_start", SectionKind::PerturbInit), ("perturb_step", SectionKind::PerturbLoop)] {
+            let Some(f) = self.fns.get(name).cloned() else { continue };
+            let mut scope = Scope::new(Fn3::Perturb, DEVIATION.iter().map(|f| f.to_string()).collect());
+            if f.params.len() < 2 || f.params.len() > 3 {
+                return self.err(f.body.position(), format!("`{name}(d, p)` or `{name}(d, p, ctx)`"));
+            }
+            for (n, role) in f.params.iter().zip([Binding::State, Binding::Params, Binding::Ctx]) {
+                scope.bind(n, role);
+            }
+            let mut body = Vec::new();
+            self.state_body(&f.body, &mut scope, &mut body)?;
+            sections.push(Section { kind, span, body, last_is_bailout: false, labelled: true });
+        }
+        if let Some(f) = self.fns.get("perturb_when").cloned() {
+            let mut scope = Scope::new(Fn3::Escaped, Vec::new());
+            if f.params.is_empty() || f.params.len() > 2 {
+                return self.err(f.body.position(), "`perturb_when(p)` or `perturb_when(p, ctx)`");
+            }
+            for (n, role) in f.params.iter().zip([Binding::Params, Binding::Ctx]) {
+                scope.bind(n, role);
+            }
+            self.pure = true;
+            let test = self.pure_body(&f.body, &mut scope);
+            self.pure = false;
+            default.items.push(Setting { name: "perturb".into(), value: SettingValue::Expr(test?), span });
+        }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let entry = Entry { name: title, setting: None, span, body: span, sections, default, switch: Settings::default() };
         Ok(Lowered { entry, cycle, names: Vec::new() })
@@ -432,7 +534,16 @@ impl<'s> Lowerer<'s> {
                             Expr::StringConstant(s, _) => function = Some(s.to_string()),
                             _ => return self.err(k.pos, "`function` names one, `\"sin\"`"),
                         },
-                        o => return self.err(k.pos, format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`; not `{o}`")),
+                        "exponential" => match x {
+                            Expr::BoolConstant(..) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
+                            _ => return self.err(k.pos, "`exponential` is `true` or `false`"),
+                        },
+                        o => {
+                            return self.err(
+                                k.pos,
+                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`; not `{o}`"),
+                            )
+                        }
                     }
                 }
             }
@@ -543,7 +654,7 @@ impl<'s> Lowerer<'s> {
                 }
             }
         }
-        if scope.which == Fn3::Start {
+        if scope.which.builds() {
             for k in keys.iter_mut() {
                 k.sort();
             }
@@ -592,8 +703,8 @@ impl<'s> Lowerer<'s> {
                 let mut temps = Vec::new();
                 for (f, p, v) in values {
                     let ty = self.ty_of(&v);
-                    if scope.which == Fn3::Start {
-                        self.declare_field(&f, ty, v, p, scope, out);
+                    if scope.which.builds() {
+                        self.declare_field(&f, ty, v, p, scope, out)?;
                     } else {
                         if !scope.fields.contains(&f) {
                             return self.err(p, format!("`{f}` is not in the state `start` returns"));
@@ -605,7 +716,7 @@ impl<'s> Lowerer<'s> {
                     }
                 }
                 for (f, t, span) in temps {
-                    out.push(assign(self.field_target(&f, span), mk(ExprKind::Name(t), span), span));
+                    out.push(assign(self.field_target(scope.which, &f, span), mk(ExprKind::Name(t), span), span));
                 }
                 Ok(())
             }
@@ -613,27 +724,43 @@ impl<'s> Lowerer<'s> {
         }
     }
 
-    /// A field of the state in `start`: `z` the iterate, any other a
-    /// variable.
-    fn declare_field(&mut self, f: &str, ty: TypeName, v: ast::Expr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) {
+    /// A field of the state in `start` (`z` the iterate, any other a
+    /// variable), or of `prepare`'s map (a global, read as `p.name`).
+    fn declare_field(&mut self, f: &str, ty: TypeName, v: ast::Expr, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
         let span = self.pos.span(p);
         if scope.fields.iter().any(|x| x == f) {
-            out.push(assign(self.field_target(f, span), v, span));
-            return;
+            out.push(assign(self.field_target(scope.which, f, span), v, span));
+            return Ok(());
+        }
+        if scope.which == Fn3::Prepare {
+            if self.param_tys.contains_key(f) {
+                return self.err(p, format!("`{f}` is a parameter's name; `prepare` gives another"));
+            }
+            self.prepared.insert(f.to_string(), ty);
         }
         scope.fields.push(f.to_string());
-        if f == "z" {
-            out.push(assign(mk(ExprKind::Predef("z".into()), span), v, span));
-        } else {
-            let name = field_name(f);
-            self.types.insert(name.clone(), ty);
-            self.names.push((name.clone(), format!("s.{f}")));
-            out.push(ast::Stmt::Decl { ty, name, init: Some(v), span });
+        let target = self.field_target(scope.which, f, span);
+        match target.kind {
+            ExprKind::Name(name) => {
+                self.types.insert(name.clone(), ty);
+                let written = if scope.which == Fn3::Prepare { format!("p.{f}") } else { format!("s.{f}") };
+                self.names.push((name.clone(), written));
+                out.push(ast::Stmt::Decl { ty, name, init: Some(v), span });
+            }
+            _ => out.push(assign(target, v, span)),
         }
+        Ok(())
     }
 
-    fn field_target(&self, f: &str, span: Span) -> ast::Expr {
-        if f == "z" {
+    /// What a field is lowered to: `z` the iterate, a state field a
+    /// variable, a `prepare` field a global; in the perturbation
+    /// equations the deviation's fields (`z` there the reference's).
+    fn field_target(&self, which: Fn3, f: &str, span: Span) -> ast::Expr {
+        if which == Fn3::Perturb {
+            mk(ExprKind::Predef(f.into()), span)
+        } else if which == Fn3::Prepare {
+            mk(ExprKind::Name(prepared_name(f)), span)
+        } else if f == "z" {
             mk(ExprKind::Predef("z".into()), span)
         } else {
             mk(ExprKind::Name(field_name(f)), span)
@@ -646,8 +773,9 @@ impl<'s> Lowerer<'s> {
             Stmt::Var(x, _, p) => {
                 let (ident, value, _) = &**x;
                 let span = self.pos.span(*p);
-                // `let s = #{ ... }` in `start`: the state, built.
-                if scope.which == Fn3::Start {
+                // `let s = #{ ... }` in `start`: the state, built (and
+                // `prepare`'s map).
+                if scope.which.builds() {
                     if let Expr::Map(..) = value {
                         scope.bind(&ident.name, Binding::State);
                         return self.state_value(value, scope, out);
@@ -670,8 +798,7 @@ impl<'s> Lowerer<'s> {
                     let v = self.expr(&be.rhs, scope)?;
                     self.flush(out);
                     let ty = self.ty_of(&v);
-                    self.declare_field(&f, ty, v, fp, scope, out);
-                    return Ok(());
+                    return self.declare_field(&f, ty, v, fp, scope, out);
                 }
                 let target = self.target(&be.lhs, scope)?;
                 let span = target.span;
@@ -684,35 +811,7 @@ impl<'s> Lowerer<'s> {
                 out.push(assign(target, v, span));
                 Ok(())
             }
-            Stmt::If(fc, p) => {
-                let span = self.pos.span(*p);
-                let mut arms = Vec::new();
-                let mut fc = &**fc;
-                let otherwise;
-                loop {
-                    let cond = self.expr(&fc.expr, scope)?;
-                    if !self.pending.is_empty() && !arms.is_empty() {
-                        return self.err(fc.expr.position(), "an `else if` condition holds no `if` value or helper with statements");
-                    }
-                    self.flush(out);
-                    let body = self.block(&fc.body, scope)?;
-                    arms.push((cond, body));
-                    // `else if`: one nested `if` alone in the branch.
-                    match fc.branch.statements() {
-                        [Stmt::If(inner, _)] => fc = &**inner,
-                        [] => {
-                            otherwise = None;
-                            break;
-                        }
-                        _ => {
-                            otherwise = Some(self.block(&fc.branch, scope)?);
-                            break;
-                        }
-                    }
-                }
-                out.push(ast::Stmt::If { arms, otherwise, span });
-                Ok(())
-            }
+            Stmt::If(fc, p) => self.if_chain(fc, self.pos.span(*p), scope, out),
             Stmt::While(fc, p) => {
                 if matches!(fc.expr, Expr::Unit(_)) {
                     return self.err(*p, "`loop` needs `break`, which a formula has not: write `while`");
@@ -779,6 +878,57 @@ impl<'s> Lowerer<'s> {
             Stmt::FnCall(_, p) => self.err(*p, "a call alone does nothing here"),
             other => self.err(other.position(), "not in a formula"),
         }
+    }
+
+    /// An `if` and its `else if`s. A later condition that needs
+    /// statements first (an `if` value, a helper's body) cannot be an
+    /// arm, as they would run before the earlier tests: the chain from
+    /// there nests in the `else`, after them.
+    fn if_chain(&mut self, first: &FlowControl, span: Span, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let mut arms = Vec::new();
+        let mut fc = first;
+        let otherwise;
+        loop {
+            let cond = self.expr(&fc.expr, scope)?;
+            if !arms.is_empty() && !self.pending.is_empty() {
+                let mut rest = std::mem::take(&mut self.pending);
+                let body = self.block(&fc.body, scope)?;
+                let tail = self.else_of(fc, span, scope)?;
+                rest.push(ast::Stmt::If { arms: vec![(cond, body)], otherwise: tail, span });
+                otherwise = Some(rest);
+                break;
+            }
+            self.flush(out);
+            let body = self.block(&fc.body, scope)?;
+            arms.push((cond, body));
+            // `else if`: one nested `if` alone in the branch.
+            match fc.branch.statements() {
+                [Stmt::If(inner, _)] => fc = &**inner,
+                _ => {
+                    otherwise = self.else_of(fc, span, scope)?;
+                    break;
+                }
+            }
+        }
+        out.push(ast::Stmt::If { arms, otherwise, span });
+        Ok(())
+    }
+
+    /// What follows an arm's body: nothing, its `else`, or its `else if`
+    /// chain, lowered on its own.
+    fn else_of(&mut self, fc: &FlowControl, span: Span, scope: &mut Scope) -> R<Option<Vec<ast::Stmt>>> {
+        Ok(match fc.branch.statements() {
+            [] => None,
+            [Stmt::If(inner, _)] => {
+                let outer = std::mem::take(&mut self.pending);
+                let mut o = Vec::new();
+                let r = self.if_chain(inner, span, scope, &mut o);
+                self.pending = outer;
+                r?;
+                Some(o)
+            }
+            _ => Some(self.block(&fc.branch, scope)?),
+        })
     }
 
     /// A block of statements, its own scope; its pending statements its
@@ -877,18 +1027,22 @@ impl<'s> Lowerer<'s> {
                 };
                 let Expr::Property(prop, pp) = &be.rhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
                 let f = prop.2.to_string();
+                if scope.which == Fn3::Perturb && f != "dz" {
+                    return self.err(*pp, format!("`{f}` is read here; the equations set `dz`"));
+                }
                 if !scope.fields.contains(&f) {
                     return self.err(*pp, format!("`{f}` is not in the state `start` returns"));
                 }
-                Ok(self.field_target(&f, self.pos.span(*pp)))
+                Ok(self.field_target(scope.which, &f, self.pos.span(*pp)))
             }
             _ => self.err(e.position(), "set a variable or a field of the state"),
         }
     }
 
-    /// In `start`, `s.f` for a field the state has not got yet.
+    /// In `start` (or `prepare`), `s.f` for a field the map has not got
+    /// yet.
     fn new_field(&self, e: &Expr, scope: &Scope) -> Option<(String, Position)> {
-        if scope.which != Fn3::Start {
+        if !scope.which.builds() {
             return None;
         }
         let Expr::Dot(be, _, _) = e else { return None };
@@ -944,10 +1098,9 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::Local(n)) => mk(ExprKind::Name(n), span),
                 Some(Binding::Value(x)) => x,
                 Some(Binding::Pixel) => mk(ExprKind::Predef("pixel".into()), span),
-                Some(Binding::Pass) => mk(ExprKind::Predef("pass".into()), span),
                 Some(Binding::State) => return self.err(*p, "the state is read by its fields, `s.z`"),
                 Some(Binding::Params) => return self.err(*p, "the parameters are read by name, `p.power`"),
-                Some(Binding::Plane) => return self.err(*p, "the plane is read as `plane.julia` or `plane.c`"),
+                Some(Binding::Ctx) => return self.err(*p, "the context is read by its fields, `ctx.julia`"),
                 None => return self.err(*p, format!("`{}` is not declared", v.1)),
             },
             Expr::Dot(be, _, _) => {
@@ -985,7 +1138,7 @@ impl<'s> Lowerer<'s> {
             match scope.get(v.1.as_str()) {
                 Some(Binding::State) => return Ok(Base::State),
                 Some(Binding::Params) => return Ok(Base::Params),
-                Some(Binding::Plane) => return Ok(Base::Plane),
+                Some(Binding::Ctx) => return Ok(Base::Ctx),
                 _ => {}
             }
         }
@@ -1006,25 +1159,37 @@ impl<'s> Lowerer<'s> {
                 match base {
                     Base::State => {
                         if !scope.fields.iter().any(|f| f == name) {
-                            let when = if scope.which == Fn3::Start { "yet" } else { "that `start` returns" };
+                            let when = if scope.which.builds() { "yet" } else { "that `start` returns" };
                             return self.err(*p, format!("`{name}` is not in the state {when}"));
                         }
-                        Ok(self.field_target(name, span))
+                        Ok(self.field_target(scope.which, name, span))
                     }
                     Base::Params => {
+                        if self.prepared.contains_key(name) {
+                            return Ok(mk(ExprKind::Name(prepared_name(name)), span));
+                        }
                         if !self.param_tys.contains_key(name) {
-                            return self.err(*p, format!("`{name}` is not in `PARAMS`"));
+                            return self.err(*p, format!("`{name}` is not in `PARAMS`, nor made by `prepare`"));
                         }
                         Ok(mk(ExprKind::Param(name.to_string()), span))
                     }
-                    Base::Plane => match name {
+                    Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
                         "julia" => Ok(mk(
                             ExprKind::Binary(BinOp::Eq, Box::new(mk(ExprKind::Name("ismand".into()), span)), Box::new(mk(ExprKind::Int(0), span))),
                             span,
                         )),
-                        "c" => Ok(mk(ExprKind::Predef("juliac".into()), span)),
-                        o => self.err(*p, format!("the plane has `julia` and `c`, not `{o}`")),
+                        // The view's rotation in degrees: Fractint's
+                        // `rotskew` holds it.
+                        "angle" => Ok(mk(ExprKind::Call { name: "real".into(), args: vec![mk(ExprKind::Name("rotskew".into()), span)], user: false }, span)),
+                        o => match CTX_FIELDS.iter().find(|(_, r)| *r == o) {
+                            Some((uf, _)) => Ok(mk(ExprKind::Predef((*uf).into()), span)),
+                            None => {
+                                let all: Vec<String> =
+                                    ["julia", "angle"].into_iter().chain(CTX_FIELDS.iter().map(|(_, r)| *r)).map(|r| format!("`{r}`")).collect();
+                                self.err(*p, format!("the context has {}; not `{o}`", all.join(", ")))
+                            }
+                        },
                     },
                     Base::Value(v) => match name {
                         "re" => Ok(mk(ExprKind::Call { name: "real".into(), args: vec![v], user: false }, span)),
@@ -1084,7 +1249,7 @@ impl<'s> Lowerer<'s> {
                 // first parameter.
                 return self.err(p, format!("call a helper as a function, `{name}(x)`"));
             }
-            if matches!(name, "start" | "step" | "escaped") {
+            if matches!(name, "start" | "step" | "escaped" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
             for a in f.args.iter() {
@@ -1116,6 +1281,13 @@ impl<'s> Lowerer<'s> {
         };
         let call = |n: &str, a: ast::Expr| mk(ExprKind::Call { name: n.to_string(), args: vec![a], user: false }, span);
         Ok(match name {
+            // Rhai's constants, `PI()` and `E()`.
+            "PI" | "E" => {
+                if !args.is_empty() {
+                    return self.err(p, format!("`{name}()` takes no argument"));
+                }
+                mk(ExprKind::Predef(name.to_ascii_lowercase()), span)
+            }
             "complex" => {
                 if args.len() != 2 {
                     return self.err(p, "`complex(re, im)`");
@@ -1186,13 +1358,19 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) if n == "ismand" => TypeName::Complex,
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
-                "pass" => TypeName::Int,
+                "pass" | "maxiter" | "x" | "y" | "width" | "height" => TypeName::Int,
+                "magn" | "pi" | "e" => TypeName::Float,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Call { name, args, user } => {
                 if *user {
                     return TypeName::Complex;
+                }
+                match name.as_str() {
+                    "to_float" => return TypeName::Float,
+                    "to_int" => return TypeName::Int,
+                    _ => {}
                 }
                 let arg = args.first().map(|a| self.ty_of(a)).unwrap_or(TypeName::Complex);
                 let b = match Builtin::from_name(name) {
@@ -1227,7 +1405,7 @@ impl<'s> Lowerer<'s> {
 enum Base {
     State,
     Params,
-    Plane,
+    Ctx,
     Value(ast::Expr),
 }
 
@@ -1263,6 +1441,10 @@ fn rename_function(name: &str) -> Option<&'static str> {
         "re" => "real",
         "im" => "imag",
         "arg" => "atan2",
+        // Rhai's conversions, which the checker makes (a bool to a
+        // number among them).
+        "to_float" => "to_float",
+        "to_int" => "to_int",
         "abs" => "abs",
         other => Builtin::from_name(other)
             .filter(|b| !matches!(b, Builtin::Log | Builtin::Cabs | Builtin::Real | Builtin::Imag | Builtin::Atan2 | Builtin::Cotan | Builtin::Cotanh))
@@ -1372,9 +1554,9 @@ fn escaped(s, p) {
         let ship = rh(r#"
 const PARAMS = #{ bailout: 4.0 };
 fn sq(w) { w ** 2 }
-fn start(pixel, p, plane) {
-    let z0 = if plane.julia { pixel } else { complex(0.0, 0.0) };
-    let c = if plane.julia { plane.c } else { pixel };
+fn start(pixel, p, ctx) {
+    let z0 = if ctx.julia { pixel } else { complex(0.0, 0.0) };
+    let c = if ctx.julia { ctx.c } else { pixel };
     #{ z: z0, c: c }
 }
 fn step(s, p) {
@@ -1421,8 +1603,8 @@ fn escaped(s, p) { s.z.abs() > 2.0 }
         let h = rh(r#"
 const INFO = #{ title: "Alternating", cycle: #{ prefix: 0, period: 2 } };
 fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }
-fn step(s, p, pass) {
-    if pass % 2 == 0 { s.z = s.z ** 2 + s.c; } else { s.z = fold(s.z) ** 2 + s.c; }
+fn step(s, p, ctx) {
+    if ctx.pass % 2 == 0 { s.z = s.z ** 2 + s.c; } else { s.z = fold(s.z) ** 2 + s.c; }
     s
 }
 fn escaped(s, p) { s.z.norm_sqr() > 4.0 }
@@ -1459,7 +1641,7 @@ fn escaped(s, p) { s.z.re > 1e9 }
         let up = uf("P {\ninit:\n z = 0\n prev = 0\n c = #pixel\nloop:\n t = z\n z = z * z + c + (-0.5, 0) * prev\n prev = t\nbailout:\n |z| <= 4\n}");
         same(&ph, &up, false);
         // A `start` whose arms disagree on the state is refused.
-        let bad = "fn start(pixel, p, plane) { if plane.julia { #{ z: pixel, c: pixel } } else { #{ z: pixel } } }\n\
+        let bad = "fn start(pixel, p, ctx) { if ctx.julia { #{ z: pixel, c: pixel } } else { #{ z: pixel } } }\n\
                    fn step(s, p) { s }\nfn escaped(s, p) { true }";
         assert!(program(bad).unwrap_err()[0].message.contains("same fields"));
     }

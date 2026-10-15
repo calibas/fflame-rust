@@ -2567,6 +2567,18 @@ pub(crate) mod tests {
                 Err(d) => failures.push(format!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>())),
             }
         }
+        // Every formula again, converted to Rhai and compiled back
+        // (`lang::to_rhai`): what the editor's Edit as Rhai gives.
+        let converted: Vec<_> = out
+            .iter()
+            .filter(|(file, _, p)| p.kind == EntryKind::Formula && !file.ends_with(".rhai"))
+            .map(|(file, name, p)| {
+                let text = super::super::to_rhai::formula(p, &[]).unwrap_or_else(|e| panic!("{file} / {name}: {e}"));
+                let back = super::super::rhai::program(&text).unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
+                (*file, format!("{name} as Rhai"), back)
+            })
+            .collect();
+        out.extend(converted);
         assert!(failures.is_empty(), "{}", failures.join("\n"));
         out
     }

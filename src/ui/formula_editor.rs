@@ -1,14 +1,17 @@
-//! The Formula Editor: Ultra Fractal and Fractint formula files, checked
-//! as they are typed and used as the escape formula or colouring
-//! (`docs/projects/escape-formula-language.md`; the language is in
-//! `docs/main/ESCAPE.md`, "The formula language").
+//! The Formula Editor: Rhai formulas, and Ultra Fractal and Fractint
+//! formula files, checked as they are typed and used as the escape
+//! formula or colouring (`docs/projects/escape-formula-language.md`; the
+//! language is in `docs/main/ESCAPE.md`, "The formula language").
 //!
-//! A file holds entries, listed above the source. Each is checked as a
-//! formula and as a colouring on a pause in typing, and offered as
-//! whichever it compiles as. Using
-//! one compiles it (`escape::custom`) and puts its source in the config,
-//! one undo step, so the file renders anywhere. With Live on, an entry
-//! in use is re-applied whenever an edit to it compiles again.
+//! A file holds entries, listed above the source (a Rhai file, one).
+//! Each is checked as a formula and as a colouring on a pause in typing,
+//! and offered as whichever it compiles as. Using one compiles it
+//! (`escape::custom`) and puts its source in the config, one undo step,
+//! so the file renders anywhere. With Live on, an entry in use is
+//! re-applied whenever an edit to it compiles again. A UF or Fractint
+//! formula is edited as Rhai: Edit as Rhai converts it
+//! (`custom::convert_to_rhai`) into a new file, the one opened left as
+//! it is.
 
 use std::time::Duration;
 
@@ -310,6 +313,20 @@ impl FormulaEditorPanel {
         }
     }
 
+    /// Open an entry of this UF or Fractint file as a new Rhai file,
+    /// converted.
+    fn edit_as_rhai(&mut self, row: usize) {
+        let Some(entry) = self.entries.get(row).map(|r| r.name.clone()) else { return };
+        match custom::convert_to_rhai(&self.text, &entry, self.dialect, &self.name) {
+            Ok(text) => {
+                let name = formula_store::file_name_for(&format!("{entry}.rhai")).unwrap_or_else(|| "converted.rhai".into());
+                self.adopt(None, name, text);
+                self.status = Some(t!("formula_editor.converted", entry = entry).to_string());
+            }
+            Err(e) => self.status = Some(t!("formula_editor.cannot_convert", entry = entry, error = e).to_string()),
+        }
+    }
+
     fn save(&mut self) {
         // A Rhai file keeps its extension under any name it is given.
         if self.dialect == CustomDialect::Rhai && !formula_store::is_rhai(&self.name) {
@@ -464,6 +481,8 @@ impl FormulaEditorPanel {
             ui.weak(t!("formula_editor.no_entries"));
         }
         let mut clicked: Option<(EntryKind, usize)> = None;
+        let mut convert: Option<usize> = None;
+        let foreign = self.dialect != CustomDialect::Rhai;
         for (i, row) in self.entries.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(&row.name);
@@ -487,6 +506,10 @@ impl FormulaEditorPanel {
                         clicked = Some((kind, i));
                     }
                 }
+                // A UF or Fractint formula is edited as Rhai.
+                if foreign && row.as_formula.is_empty() && ui.button(t!("formula_editor.edit_as_rhai")).on_hover_text(t!("formula_editor.edit_as_rhai_tip")).clicked() {
+                    convert = Some(i);
+                }
             });
             let errors = row.errors(row.likely);
             for e in errors.iter().take(MESSAGES_SHOWN) {
@@ -501,6 +524,9 @@ impl FormulaEditorPanel {
         }
         if let Some((kind, i)) = clicked {
             self.use_entry(cm, kind, i);
+        }
+        if let Some(i) = convert {
+            self.edit_as_rhai(i);
         }
         ui.separator();
         // ---- The source ----
