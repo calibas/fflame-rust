@@ -25,12 +25,20 @@
 //! compile as they do a formula's own. A branch in the loop derives
 //! when its conditions are the same for every pixel -- a parameter's
 //! choice, a constant -- so the reference and the pixel take the same
-//! arm. What has no such form -- a transcendental function, a real or
-//! complex power, a user function of
-//! the iterate, a branch on the iterate, a loop inside the formula's
-//! loop, a branch in the init, or state carried from one iteration to
-//! the next besides z -- leaves the formula without equations, on the
-//! direct path as before.
+//! arm. So does one in the init (phase 4, step 4: the plane, which every
+//! plane-aware formula branches on): each way through the init's
+//! branches is a case, with its own values for what the loop reads, and
+//! the equations branch on the cases' tests, one copy of the loop's
+//! each. What has no such form -- a transcendental function, a real or
+//! complex power, a user function of the iterate, a branch on the
+//! iterate or the pixel, a loop inside the formula's loop or in its
+//! init, or state carried from one iteration to the next besides z --
+//! leaves the formula without equations, on the direct path as before.
+//! Unless it stands in an arm (or an init's case) a parameter's choice
+//! picks: then the equations are derived without it, and hold when that
+//! arm is not taken, which the derived `perturb` setting says (a
+//! Tricorn whose power 2 is squared and any other a real power deep
+//! zooms at 2).
 
 use super::ast::{BinOp, UnOp};
 use super::builtins::Builtin;
@@ -50,16 +58,63 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
         z_ref: None,
         z_written: false,
         uniforms: vec![None; p.vars.len()],
+        path: Vec::new(),
+        excluded: Vec::new(),
     };
-    // The init's variables other than z: constant per pixel when their
-    // value reads neither z nor anything the loop writes; the loop's
-    // reads of them are their init's values, re-derived in each pass.
-    d.inits = init_values(p)?;
-    let loop_body = d.block(&p.loop_body, true)?;
-    let init_body = d.block(&p.init, false)?;
+    // Each way through the init: its variables' values (constant per
+    // pixel, so the loop's reads of them are re-derived in each pass),
+    // z's start, and the tests that pick it.
+    let cases = init_cases(p)?;
+    let (mut tests, mut inits, mut loops) = (Vec::new(), Vec::new(), Vec::new());
+    let mut derived_any = false;
+    for case in &cases {
+        // The same for every pixel, so the reference and the pixel take
+        // the same way.
+        let mut test: Option<IExpr> = None;
+        for c in &case.conds {
+            let (r, dev) = d.pair(c, &[], false)?;
+            if dev.is_some() || r.ty != Ty::Bool {
+                return None;
+            }
+            test = Some(and(test, r));
+        }
+        let test = test.unwrap_or_else(|| mk(IExprKind::Bool(true), Ty::Bool));
+        d.inits = case.values.clone();
+        d.path = vec![test.clone()];
+        let derived = d.block(&p.loop_body, true).and_then(|l| Some((l, d.init_equations(case)?)));
+        match derived {
+            Some((l, i)) => {
+                loops.push(l);
+                inits.push(i);
+                derived_any = true;
+            }
+            // A case a parameter picks may go without: the equations
+            // hold when it is not taken.
+            None if per_image(&test) && cases.len() > 1 => {
+                d.excluded.push(test.clone());
+                loops.push(Vec::new());
+                inits.push(Vec::new());
+            }
+            None => return None,
+        }
+        tests.push(test);
+    }
+    if !derived_any {
+        return None;
+    }
+    let excluded = std::mem::take(&mut d.excluded);
     let mut out = d.out;
-    out.perturb_init = init_body;
-    out.perturb_loop = loop_body;
+    out.perturb_init = by_case(&tests, inits);
+    out.perturb_loop = by_case(&tests, loops);
+    // Where an arm went without equations, they hold when it is not
+    // taken.
+    if let Some(any) = excluded.into_iter().reduce(|a, b| mk(IExprKind::Binary(BinOp::Or, Box::new(a), Box::new(b)), Ty::Bool)) {
+        let holds = mk(IExprKind::Unary(UnOp::Not, Box::new(any)), Ty::Bool);
+        out.perturb_when = Some(match out.perturb_when.take() {
+            Some(w) => and(Some(w), holds),
+            None => holds,
+        });
+    }
     // Belt and braces: the equations read only their own variables and
     // globals, as the checker holds a formula's own to.
     let foreign = |stmts: &[IStmt]| stmts.iter().any(|s| stmt_reads_foreign(s, &out));
@@ -107,6 +162,176 @@ struct Deriver<'p> {
     /// loop: its value is the same for every pixel (it has no
     /// deviation), so the equations keep it once.
     uniforms: Vec<Option<VarId>>,
+    /// The tests of the arms (and the init's case) the statement being
+    /// derived stands in.
+    path: Vec<IExpr>,
+    /// The tests under which the equations do not hold: an arm, picked
+    /// by the parameters, that went without.
+    excluded: Vec<IExpr>,
+}
+
+/// `a && b`, `b` alone when there is no `a`.
+fn and(a: Option<IExpr>, b: IExpr) -> IExpr {
+    match a {
+        None => b,
+        Some(a) => mk(IExprKind::Binary(BinOp::And, Box::new(a), Box::new(b)), Ty::Bool),
+    }
+}
+
+/// Whether a test reads only what the `perturb` setting can: the
+/// parameters, the constants and the image's values -- no variable, no
+/// pass.
+fn per_image(e: &IExpr) -> bool {
+    match &e.kind {
+        IExprKind::Var(_) | IExprKind::Predef(Predef::Pass) => false,
+        IExprKind::Predef(q) => matches!(
+            q,
+            Predef::Pi | Predef::E | Predef::Center | Predef::Magn | Predef::MaxIter | Predef::JuliaC | Predef::IsMand | Predef::MagXMag | Predef::RotSkew
+        ),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => per_image(a),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => per_image(a) && per_image(b),
+        _ => true,
+    }
+}
+
+/// One code per case of the init: the first's when they are alike, else
+/// a branch on the cases' tests, the last case the `else`.
+fn by_case(tests: &[IExpr], codes: Vec<Vec<IStmt>>) -> Vec<IStmt> {
+    let alike = codes.windows(2).all(|w| format!("{:?}", w[0]) == format!("{:?}", w[1]));
+    let n = codes.len();
+    if alike || n < 2 {
+        return codes.into_iter().next().unwrap_or_default();
+    }
+    let mut arms = Vec::new();
+    let mut otherwise = Vec::new();
+    for (k, code) in codes.into_iter().enumerate() {
+        if k + 1 < n {
+            arms.push((tests[k].clone(), code));
+        } else {
+            otherwise = code;
+        }
+    }
+    vec![IStmt::If { arms, otherwise }]
+}
+
+/// The most ways through an init's branches the equations take: a copy
+/// of the loop's equations each.
+const MAX_INIT_CASES: usize = 16;
+
+/// Past this many nodes an expression has stopped being a formula's
+/// constant and started being a substitution's blowup.
+const MAX_NODES: usize = 2000;
+
+/// One way through the init: the arm it takes at each branch, chosen by
+/// conditions the same for every pixel (the plane, a parameter), and
+/// what the init leaves behind that way.
+#[derive(Clone)]
+pub(crate) struct InitCase {
+    /// What picks this way: tests, all true, as the init has its values
+    /// at each branch.
+    pub conds: Vec<IExpr>,
+    /// Each variable's value after the init (as [`init_values`]).
+    pub values: Vec<Option<IExpr>>,
+    poisoned: Vec<bool>,
+    /// z's start; `None` while unset (zero).
+    pub z: Option<IExpr>,
+    /// z's start reads what has no value.
+    z_poisoned: bool,
+}
+
+impl InitCase {
+    /// `e` as this way has it so far: the variables and z by their
+    /// values.
+    fn value_of(&self, e: &IExpr, p: &Program, ok: &mut bool) -> IExpr {
+        let v = subst(e, &self.values, &self.poisoned, p, ok);
+        if !reads_z(&v) {
+            return v;
+        }
+        if self.z_poisoned {
+            *ok = false;
+            return v;
+        }
+        subst_z(&v, &self.z.clone().unwrap_or_else(|| zero_of(Ty::Complex)))
+    }
+}
+
+/// The init's ways through its branches, one when it has none. `None`
+/// when it loops, or has more ways than [`MAX_INIT_CASES`].
+pub(crate) fn init_cases(p: &Program) -> Option<Vec<InitCase>> {
+    let start = InitCase { conds: Vec::new(), values: vec![None; p.vars.len()], poisoned: vec![false; p.vars.len()], z: None, z_poisoned: false };
+    walk_init(&p.init, vec![start], p)
+}
+
+fn walk_init(stmts: &[IStmt], mut cases: Vec<InitCase>, p: &Program) -> Option<Vec<InitCase>> {
+    for s in stmts {
+        match s {
+            IStmt::Assign(place, e) => {
+                for c in &mut cases {
+                    let mut ok = true;
+                    let value = c.value_of(e, p, &mut ok);
+                    let good = ok && nodes(&value) <= MAX_NODES;
+                    match place {
+                        Place::Var(v) => {
+                            c.values[*v] = good.then_some(value);
+                            c.poisoned[*v] = !good;
+                        }
+                        Place::Z => {
+                            c.z = good.then_some(value);
+                            c.z_poisoned = !good;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            IStmt::If { arms, otherwise } => {
+                let mut next = Vec::new();
+                for c in cases {
+                    // Each arm: the earlier tests false, its own true.
+                    let mut earlier: Vec<IExpr> = Vec::new();
+                    for (cond, body) in arms {
+                        let mut ok = true;
+                        let t = c.value_of(cond, p, &mut ok);
+                        if !ok {
+                            return None;
+                        }
+                        let mut case = c.clone();
+                        case.conds.extend(earlier.iter().cloned());
+                        case.conds.push(t.clone());
+                        next.extend(walk_init(body, vec![case], p)?);
+                        earlier.push(mk(IExprKind::Unary(UnOp::Not, Box::new(t)), Ty::Bool));
+                    }
+                    let mut case = c;
+                    case.conds.extend(earlier);
+                    next.extend(walk_init(otherwise, vec![case], p)?);
+                    if next.len() > MAX_INIT_CASES {
+                        return None;
+                    }
+                }
+                cases = next;
+            }
+            IStmt::While { .. } | IStmt::Repeat { .. } => return None,
+        }
+    }
+    Some(cases)
+}
+
+/// `e` with z read as `z`.
+fn subst_z(e: &IExpr, z: &IExpr) -> IExpr {
+    let b = |a: &IExpr| Box::new(subst_z(a, z));
+    let kind = match &e.kind {
+        IExprKind::Predef(Predef::Z) => return z.clone(),
+        IExprKind::Convert(a) => IExprKind::Convert(b(a)),
+        IExprKind::MakeComplex(x, y) => IExprKind::MakeComplex(b(x), b(y)),
+        IExprKind::Unary(op, a) => IExprKind::Unary(*op, b(a)),
+        IExprKind::Binary(op, x, y) => IExprKind::Binary(*op, b(x), b(y)),
+        IExprKind::PowInt(a, n) => IExprKind::PowInt(b(a), *n),
+        IExprKind::Modulus(a) => IExprKind::Modulus(b(a)),
+        IExprKind::Call(f, a) => IExprKind::Call(*f, b(a)),
+        IExprKind::UserCall(f, a) => IExprKind::UserCall(*f, b(a)),
+        IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(*f, b(a)),
+        other => other.clone(),
+    };
+    mk(kind, e.ty)
 }
 
 /// Each variable's value after the init, as an expression of the
@@ -116,9 +341,6 @@ struct Deriver<'p> {
 /// zero (UF's); one whose value reads z, or grows past a bound, has
 /// none. `None` when the init has a branch or a loop.
 pub(crate) fn init_values(p: &Program) -> Option<Vec<Option<IExpr>>> {
-    // Past this many nodes an expression has stopped being a formula's
-    // constant and started being a substitution's blowup.
-    const MAX_NODES: usize = 2000;
     let mut out: Vec<Option<IExpr>> = vec![None; p.vars.len()];
     let mut poisoned = vec![false; p.vars.len()];
     for s in &p.init {
@@ -236,6 +458,16 @@ impl Deriver<'_> {
     fn new_var(&mut self, name: String, ty: Ty) -> VarId {
         self.out.vars.push(Var { name, ty, span: Default::default(), stored_real: false, global: false, perturb: true });
         self.out.vars.len() - 1
+    }
+
+    /// A case's init equations: the deviation z starts with.
+    fn init_equations(&mut self, case: &InitCase) -> Option<Vec<IStmt>> {
+        if case.z_poisoned {
+            return None;
+        }
+        let Some(z) = &case.z else { return Some(Vec::new()) };
+        let (_, dz) = self.pair(z, &[], false)?;
+        Some(vec![IStmt::Assign(Place::DZ, dz.map_or_else(|| zero_of(Ty::Complex), |d| widen(d, Ty::Complex)))])
     }
 
     fn z_ref_var(&mut self) -> VarId {
@@ -361,9 +593,28 @@ impl Deriver<'_> {
                     let mut derived = Vec::new();
                     let mut after: Option<Vec<VarId>> = None;
                     let mut any_z = *wrote_z;
-                    let mut arm = |this: &mut Self, b: &[IStmt]| -> Option<Vec<IStmt>> {
+                    // An arm's equations, under `taken` (the test that
+                    // picks it). One that has none, picked by the
+                    // parameters, is left empty and excluded: the
+                    // equations hold when it is not taken. When every arm
+                    // is, the branch has none.
+                    let mark = self.excluded.len();
+                    let mut kept = 0usize;
+                    let mut arm = |this: &mut Self, b: &[IStmt], taken: IExpr| -> Option<Vec<IStmt>> {
                         let (mut w, mut z) = (written.clone(), *wrote_z);
-                        let code = this.stmts(b, is_loop, &mut w, &mut z)?;
+                        this.path.push(taken.clone());
+                        let code = this.stmts(b, is_loop, &mut w, &mut z);
+                        this.path.pop();
+                        let Some(code) = code else {
+                            let whole = this.path.iter().cloned().fold(None, |acc, t| Some(and(acc, t)));
+                            let whole = and(whole, taken);
+                            if !per_image(&whole) {
+                                return None;
+                            }
+                            this.excluded.push(whole);
+                            return Some(Vec::new());
+                        };
+                        kept += 1;
                         any_z |= z;
                         after = Some(match after.take() {
                             None => w,
@@ -371,15 +622,23 @@ impl Deriver<'_> {
                         });
                         Some(code)
                     };
+                    let mut earlier: Option<IExpr> = None;
                     for (c, b) in arms {
                         self.z_written = *wrote_z;
                         let (rc, dc) = self.pair(c, written, is_loop)?;
                         if dc.is_some() || rc.ty != Ty::Bool {
                             return None;
                         }
-                        derived.push((rc, arm(self, b)?));
+                        let taken = and(earlier.clone(), rc.clone());
+                        derived.push((rc.clone(), arm(self, b, taken)?));
+                        earlier = Some(and(earlier, mk(IExprKind::Unary(UnOp::Not, Box::new(rc)), Ty::Bool)));
                     }
-                    let otherwise = arm(self, otherwise)?;
+                    let taken = earlier.unwrap_or_else(|| mk(IExprKind::Bool(true), Ty::Bool));
+                    let otherwise = arm(self, otherwise, taken)?;
+                    if kept == 0 {
+                        self.excluded.truncate(mark);
+                        return None;
+                    }
                     *written = after.unwrap_or_default();
                     *wrote_z = any_z;
                     out.push(IStmt::If { arms: derived, otherwise });
@@ -446,16 +705,15 @@ impl Deriver<'_> {
                 }
             }
             IExprKind::Convert(a) => {
-                if !matches!(a.ty, Ty::Int | Ty::Float | Ty::Complex) || !matches!(ty, Ty::Float | Ty::Complex) {
-                    let (r, d) = self.pair(a, written, is_loop)?;
+                let (r, d) = self.pair(a, written, is_loop)?;
+                // From an int or a bool, or to one: the same for every
+                // pixel, the conversion kept (`widen` lifts a real to a
+                // complex alone).
+                if !matches!(a.ty, Ty::Float | Ty::Complex) || !matches!(ty, Ty::Float | Ty::Complex) {
                     if d.is_some() {
                         return None;
                     }
                     return Some((mk(IExprKind::Convert(Box::new(r)), ty), None));
-                }
-                let (r, d) = self.pair(a, written, is_loop)?;
-                if a.ty == Ty::Int && d.is_some() {
-                    return None;
                 }
                 (widen(r, ty), d.map(|d| widen(d, ty)))
             }
@@ -751,6 +1009,18 @@ mod tests {
             ),
             // z written in steps, read after each.
             ("S {\ninit:\n z = 0\nloop:\n z = sqr(z)\n z = z + #pixel\n z = z * (1, 0.01)\nbailout:\n |z| < 4\n}", Dialect::UltraFractal, (-0.74, 0.13)),
+            // A branch in the init on the plane (the Julia toggle), and
+            // one on a parameter: a copy of the loop's equations each.
+            (
+                "P {\ninit:\n if ismand\n  z = 0\n  c = #pixel\n else\n  z = #pixel\n  c = (-0.8, 0.156)\n endif\nloop:\n z = sqr(z) + c\nbailout:\n |z| < 4\n}",
+                Dialect::Fractint,
+                (-0.7436, 0.1318),
+            ),
+            (
+                "Q2 {\ninit:\n c = #pixel\n if @cubic\n  z = c * 0.1\n  k = 3\n else\n  z = 0\n  k = 2\n endif\nloop:\n if k == 3\n  z = z^3 + c\n else\n  z = sqr(z) + c\n endif\nbailout:\n |z| < 4\ndefault:\n bool param cubic\n  default = true\n endparam\n}",
+                Dialect::UltraFractal,
+                (-0.55, 0.62),
+            ),
             // abs by diffabs: the Burning Ship (UF's abs folds each
             // part), and a real one.
             ("A {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < 4\n}", Dialect::UltraFractal, (-1.8, 0.0)),
@@ -778,6 +1048,35 @@ mod tests {
             }
             assert_eq!(compared, 10);
         }
+    }
+
+    /// A plane-aware formula's equations follow the Julia toggle: on the
+    /// Julia plane the pixel is the start, c the constant.
+    #[test]
+    fn a_branch_on_the_plane_derives_for_both() {
+        let p = program(
+            "P {\ninit:\n if ismand\n  z = 0\n  c = #pixel\n else\n  z = #pixel\n  c = (-0.8, 0.156)\n endif\nloop:\n z = sqr(z) + c\nbailout:\n |z| < 4\n}",
+            Dialect::Fractint,
+        );
+        let d = with_derived_equations(&p).expect("equations");
+        assert!(matches!(d.perturb_loop.as_slice(), [IStmt::If { .. }]), "a copy a plane");
+        let params = ParamValues::defaults(&d);
+        for (julia, (rx, ry)) in [(false, (-0.7436, 0.1318)), (true, (0.12, -0.31))] {
+            let reference = C64::new(rx, ry);
+            for k in 0..10 {
+                let t = k as f64 * 0.628;
+                let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-5 * (1.0 + k as f64)));
+                let mut env = Env::at(px, 300);
+                env.julia = julia;
+                env.julia_c = C64::new(-0.8, 0.156);
+                let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+                let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
+                assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "julia {julia} at {px:?}");
+            }
+        }
+        // A branch in the init on the pixel stays underived.
+        let on_pixel = program("B {\ninit:\n if real(#pixel) > 0\n  z = 0\n else\n  z = 1\n endif\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}", Dialect::UltraFractal);
+        assert!(with_derived_equations(&on_pixel).is_none());
     }
 
     /// Every hybrid preset derives equations, and with a reference per
@@ -813,6 +1112,40 @@ mod tests {
             }
         }
         assert!(rebased_mid_cycle > 5, "the views test little ({rebased_mid_cycle})");
+    }
+
+    /// An arm a parameter picks that has no equations is left out, and the
+    /// derived `perturb` setting says when the rest hold: a Tricorn whose
+    /// power 2 squares and any other is a real power deep-zooms at 2.
+    #[test]
+    fn an_arm_without_equations_is_excluded_by_the_parameters() {
+        let p = program(
+            "T {\ninit:\n z = 0\nloop:\n if @power == 2\n  z = sqr(conj(z)) + #pixel\n else\n  z = conj(z)^@power + #pixel\n endif\nbailout:\n |z| < 4\n\
+             default:\n float param power\n  default = 2\n endparam\n}",
+            Dialect::UltraFractal,
+        );
+        let d = with_derived_equations(&p).expect("equations for power 2");
+        let env = Env::at(C64::new(-0.3, 0.6), 100);
+        let mut params = ParamValues::defaults(&d);
+        assert!(super::super::interp::perturb_holds(&d, &params, &env), "power 2");
+        let reference = C64::new(-0.3, 0.6);
+        for k in 0..8 {
+            let t = k as f64 * 0.785;
+            let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-5 * (1.0 + k as f64)));
+            let env = Env::at(px, 300);
+            let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+            let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
+            assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "at {px:?}");
+        }
+        params.values[0].0 = 2.5;
+        assert!(!super::super::interp::perturb_holds(&d, &params, &env), "power 2.5 has none");
+        // A branch on the iterate excludes nothing: no equations.
+        let b = program(
+            "B {\ninit:\n z = 0\nloop:\n if @k == 1\n  if real(z) > 0\n   z = exp(z)\n  endif\n endif\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n\
+             default:\n int param k\n  default = 0\n endparam\n}",
+            Dialect::UltraFractal,
+        );
+        assert!(with_derived_equations(&b).is_some(), "the @k == 1 arm is excluded");
     }
 
     /// What has no cancellation-free form, or carries state, derives

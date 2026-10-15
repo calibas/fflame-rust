@@ -15,12 +15,39 @@ use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
 
+/// The Escape panel's Edit as Formula: the built-in `builtin`'s twin
+/// becomes the config's formula, one undo step (its parameters carry over
+/// by name, the view and the colouring stay), and the Formula Editor opens
+/// it in use, so with Live on an edit re-renders.
+fn edit_as_formula(
+    config_manager: &mut ConfigManager,
+    builtin: &str,
+    src: crate::config::escape::CustomSource,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
+) {
+    use crate::escape::lang::EntryKind;
+    let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
+    let changes = vec![
+        (ConfigPath::EscapeCustomFormula, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
+        (ConfigPath::EscapeFormula, ConfigValue::String(name)),
+    ];
+    if config_manager.update_batch(changes, "history.action.edit_as_formula".to_string()).is_err() {
+        return;
+    }
+    let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
+    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(file, &src);
+    *open_formula_editor = true;
+}
+
 /// Render the Escape Fractal panel.
 pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
     terrain_range: Option<[f32; 2]>,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
@@ -179,6 +206,16 @@ pub fn render_escape_content(
                     }
                 }
             });
+        // A built-in with a twin in Rhai (`escape::twins`): put the twin
+        // in its place, the picture unchanged, and open it in the Formula
+        // Editor as the user's own to change.
+        if field.is_none() && ifs_def.is_none() {
+            if let Some(src) = crate::escape::twins::custom_source(&esc.formula) {
+                if ui.button(t!("escape_panel.edit_as_formula")).on_hover_text(t!("escape_panel.edit_as_formula_tip")).clicked() {
+                    edit_as_formula(config_manager, &esc.formula, src, formula_editor, open_formula_editor);
+                }
+            }
+        }
     });
 
     // ---- Mode D: does the loaded flame qualify? ----
@@ -2795,7 +2832,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run_ui(Default::default(), |ui| {
                 egui::CentralPanel::default().show_inside(ui, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None, None);
+                    render_escape_content(ui, &mut manager, &mut None, None, &mut None, &mut false);
                 });
             });
             labels = out
@@ -2806,6 +2843,32 @@ mod tests {
                 .collect();
         }
         labels
+    }
+
+    /// Edit as Formula: the built-in's twin becomes the formula, its
+    /// parameters and the view kept, one undo step back to the built-in;
+    /// the Formula Editor holds the twin in use and asks to be opened.
+    #[test]
+    fn edit_as_formula_puts_the_twin_in_place_and_opens_it() {
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.formula = "burning_ship".into();
+        config.escape.formula_params.insert("variant".into(), 3.0);
+        config.escape.center_re = "-1.75".into();
+        config.escape.zoom_log2 = 7.5;
+        let mut manager = ConfigManager::new(config);
+        let (mut editor, mut open) = (None, false);
+        let src = crate::escape::twins::custom_source("burning_ship").unwrap();
+        edit_as_formula(&mut manager, "burning_ship", src.clone(), &mut editor, &mut open);
+        let esc = &manager.config().escape;
+        assert!(esc.formula.starts_with(crate::escape::custom::PREFIX), "{}", esc.formula);
+        assert_eq!(esc.custom_formula.as_ref().map(|s| s.source.as_str()), Some(src.source.as_str()));
+        assert_eq!(esc.formula_params.get("variant"), Some(&3.0), "the variant carries over");
+        assert_eq!((esc.center_re.as_str(), esc.zoom_log2), ("-1.75", 7.5), "the view stays");
+        assert!(open && editor.is_some(), "the editor opens");
+        crate::escape::custom::ensure(esc);
+        assert!(crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Program));
+        let _ = manager.undo();
+        assert_eq!(manager.config().escape.formula, "burning_ship", "one undo step");
     }
 
     #[test]

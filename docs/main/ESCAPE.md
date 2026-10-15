@@ -408,6 +408,37 @@ fn escaped(s, p) {
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
     interpreter does.
+- **`fn degree(p)`**, optional: the formula's degree at infinity, which
+  the smooth colourings divide by, as a built-in's `escape_degree`
+  (`Program::degree`; `custom::escape_degree` serves it to
+  `polynomial_degree`); it also offers a smooth colouring's recommended
+  bailout. Without it, 2.
+- **The built-ins' twins** (`escape::twins`,
+  `assets/formulas/twins/*.rhai`): Mandelbrot, Multibrot, Tricorn, the
+  Burning Ship family, Lambda, Cactus, each a Rhai formula that renders
+  as its built-in.
+  - Each keeps its built-in's parameters by name, reads the panel's
+    Bailout through its `bailout` parameter and the Julia toggle
+    through `ctx`, and declares its degree.
+  - The Escape panel's **Edit as Formula** puts the twin in the
+    built-in's place, one undo step: the parameters carry over by name,
+    and the view and the colouring stay. It opens the twin in the
+    Formula Editor in use, so with Live on an edit re-renders.
+  - Through the renderer, with the smooth colouring, each matches its
+    built-in on every pixel, on both planes and every Ship variant.
+    The exceptions are Multibrot and the multicorns (under 0.4%),
+    where the built-in raises to a power by polar form and the twin
+    multiplies.
+  - At depth the twins deep-zoom by derived equations: Mandelbrot,
+    Tricorn at power 2, every Ship variant, Lambda, Cactus. Against the
+    big-float truth they count as well as the built-ins' native tiers:
+    401 and 401 of 439 pixels for the Mandelbrot at zoom 42, 354 and
+    354 for Lambda at 30, 189 and 190 for the Tricorn at 28, and 346
+    against 294 for the Ship at 60
+    (`builtin_twins_render_and_deep_zoom_as_their_builtins`).
+  - A Multibrot or multicorn power is a real power, which deep zoom
+    does not follow yet. Mann damping and the biomorph test are the
+    built-ins' alone.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
@@ -535,15 +566,30 @@ products, the quotient form `(da - (A/B) db) / (B + db)`, binomial
 integer powers, `sqr`, `recip`, `|a|`, `conj`/`flip`/`real`/`imag`,
 and `abs` by `diffabs` (`|A + d| - |A|` by sign case, per part for a
 complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
-`cfe2_diffabs`). The init's variables are constants per pixel (their
-values substituted in order). A branch derives when its conditions are
-the same for every pixel (a parameter's choice, a constant), so the
-reference and the pixel take the same arm; z written in steps reads
-its own reference value after each. What does not derive: a
-transcendental function, a real or complex power, a user function of
-the iterate, a branch on it, a loop inside the loop, a branch in the
-init, state carried between iterations besides z. Such a formula stays
-on the direct path, as before.
+`cfe2_diffabs`).
+- The init's variables are constants per pixel (their values
+  substituted in order, z's too).
+- A branch derives when its conditions are the same for every pixel (a
+  parameter's choice, a constant, the plane), so the reference and the
+  pixel take the same arm.
+- **A branch in the init** (phase 4, step 4: every plane-aware formula
+  has one): each way through the init's branches is a case
+  (`delta::init_cases`, at most 16), with its own values and its own
+  start for z. The equations branch on the cases' tests, one copy of
+  the loop's each, or one copy when they come out alike.
+- **An arm a parameter picks may go without:** when it has no
+  equations (a real power, a user function of the iterate), the rest
+  are derived, and the derived `perturb` setting (`perturb_when`) says
+  they hold when that arm is not taken. A branch whose arms all go
+  without has none. So the Tricorn twin, which squares at power 2 and
+  takes a real power otherwise, deep-zooms at 2.
+- z written in steps reads its own reference value after each.
+
+What does not derive: a transcendental function, a real or complex
+power, a user function of the iterate, a branch on the iterate or the
+pixel, a loop inside the loop or in the init, state carried between
+iterations besides z -- unless it stands in an arm a parameter picks.
+Such a formula stays on the direct path, as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four
@@ -597,9 +643,11 @@ stops the rest: classes (`import`, 325 entries), arrays (296), the
 colouring state cap (335 colourings at 4 floats; it is 32 since, which
 admits 96% of the colourings that reach it), parameters past 64 floats
 (about 200), colour functions (46). Deep zoom: 2 of the formulas carry
-their own perturbation equations and 308 more get derived ones; the
-commonest blockers for the rest are a test that reads a variable the
-loop changes, a user function, and a branch in the init.
+their own perturbation equations and 501 more get derived ones that
+hold at their defaults (308 before branches in the init and excluded
+arms, phase 4 step 4). The commonest blockers for the rest are a test
+that reads a variable the loop changes, a user function, and a branch
+on the iterate.
 
 **Test files.** `tests/formulas/` holds entries in both dialects that
 between them use every construct (`language.ufm`, `language.ucl`,

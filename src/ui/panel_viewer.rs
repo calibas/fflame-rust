@@ -308,6 +308,9 @@ pub struct PanelContext<'a> {
     pub open_triangle_editor: &'a mut bool,
     pub open_preset_library: &'a mut bool,
     pub open_random_generator: &'a mut bool,
+    /// A panel put a formula in the Formula Editor (the Escape panel's
+    /// Edit as Formula): the app opens it.
+    pub open_formula_editor: &'a mut bool,
 
     // UI state
     pub paused: &'a mut bool,
@@ -792,6 +795,8 @@ impl<'a> PanelViewer<'a> {
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
                     self.context.terrain_range,
+                    self.context.formula_editor,
+                    self.context.open_formula_editor,
                 );
             }
             PanelType::Textures => {

@@ -196,6 +196,15 @@ pub fn perturb_holds(p: &Program, params: &ParamValues, env: &Env) -> bool {
     m.eval(e, &sh).as_bool()
 }
 
+/// A formula's declared degree at infinity ([`Program::degree`]) for
+/// these parameters, or `None` when it declares none.
+pub fn degree_of(p: &Program, params: &ParamValues, env: &Env) -> Option<f64> {
+    let e = p.degree.as_ref()?;
+    let m = Machine::new(p, params);
+    let sh = Shared::new(env);
+    Some(m.eval(e, &sh).as_f64())
+}
+
 /// A pixel as the perturbed path runs it, in f64: the formula's own
 /// orbit at `reference` (its init and loop, `#z` kept each iteration,
 /// until its test fails or `maxiter`), then the pixel as a deviation

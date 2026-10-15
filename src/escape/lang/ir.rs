@@ -312,6 +312,12 @@ pub struct Program {
     /// The `perturb` setting: when the equations hold (parameters and
     /// constants only; absent, always).
     pub perturb_when: Option<IExpr>,
+    /// The `degree` setting: the formula's degree at infinity (the `p` of
+    /// `|z_{n+1}| ~ |z_n|^p`), a float of parameters and constants, which
+    /// the smooth colourings divide by, as a built-in's `escape_degree`.
+    /// Absent, 2. Our own setting (a Rhai formula's `fn degree(p)`); UF
+    /// has none.
+    pub degree: Option<IExpr>,
     pub region: Region,
     pub view: ViewSettings,
     /// A colouring's variables that live from one section, or one
