@@ -1833,6 +1833,87 @@ mod tests {
         esc
     }
 
+    /// `esc` with a Rhai formula (`lang::rhai`) as its formula.
+    fn with_rhai(mut esc: crate::config::escape::EscapeConfig, source: &str) -> crate::config::escape::EscapeConfig {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let title = crate::escape::lang::rhai::title(source).unwrap_or_default();
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source: source.into() };
+        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+        esc.custom_formula = Some(src);
+        esc
+    }
+
+    /// Rhai formulas (phase 4) through the whole renderer: the Mandelbrot
+    /// and the Burning Ship (on both planes, by the panel's Julia toggle)
+    /// render as their built-ins; at the floatexp threshold the Rhai
+    /// Mandelbrot deep-zooms pixel for pixel as its UF twin.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn rhai_formulas_render_and_deep_zoom_as_their_twins() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const MANDELBROT: &str = include_str!("../../tests/formulas/rhai/mandelbrot.rhai");
+        const SHIP: &str = include_str!("../../tests/formulas/rhai/plane.rhai");
+        // (what, built-in, its params, centre, zoom, julia, source)
+        let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64, bool, &str)] = &[
+            ("mandelbrot", "mandelbrot", &[], ("-0.6", "0"), 0.4, false, MANDELBROT),
+            ("burning ship", "burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5, false, SHIP),
+            ("burning ship julia", "burning_ship", &[("variant", 0.0)], ("0", "0"), 0.0, true, SHIP),
+        ];
+        for &(what, formula, params, (cre, cim), zoom, julia, source) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 200;
+            esc.bailout = 4.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.julia = julia;
+            esc.julia_re = -1.6;
+            esc.julia_im = 0.02;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let rhai = with_rhai(esc.clone(), source);
+            let got = output_on(&device, &queue, &renderer, &rhai, w, h, false);
+            assert!(crate::escape::get_formula(&rhai.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            // A Julia view may escape everywhere; the colours still differ
+            // by pixel.
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && (julia || covered + 100 < (w * h) as usize), "{what}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{what}: the Rhai formula differs from {formula} on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.03, "{what}: {:.3}%", d * 100.0);
+        }
+
+        // At depth: the Rhai Mandelbrot against its UF twin, perturbed.
+        const UF_M: &str = "M {\ninit:\n z = 0\n c = #pixel\nloop:\n z = z * z + c\nbailout:\n |z| <= @bailout\n\
+                            default:\n float param bailout\n  default = 4\n endparam\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.74364388703715870475481082977993857803".into();
+        esc.center_im = "0.13182590420531251981651559677435626549".into();
+        esc.zoom_log2 = 48.5;
+        esc.max_iter = 4000;
+        esc.bailout = 4.0;
+        let rhai = with_rhai(esc.clone(), MANDELBROT);
+        let uf = with_custom(esc, Some((UF_M, "M")), None);
+        crate::escape::custom::ensure(&rhai);
+        crate::escape::custom::ensure(&uf);
+        let tier = crate::escape::EscapeRenderer::perturb_tier(&rhai);
+        assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, stride: 1, .. })), "{tier:?}");
+        let (a, b) = (records_on(&rhai, 64, 48, false, true, false), records_on(&uf, 64, 48, false, true, false));
+        let same = a.iter().zip(&b).filter(|(x, y)| x.n == y.n).count();
+        println!("zoom 48.5: the Rhai Mandelbrot counts as its UF twin on {same} of {} pixels", a.len());
+        assert_eq!(same, a.len(), "the same program");
+    }
+
     /// A one-group hybrid renders as the built-in it spells: the
     /// presets KF's "To Hybrid" would map, through the whole renderer.
     #[test]

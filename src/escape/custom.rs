@@ -77,7 +77,7 @@ pub fn coloring(name: &str) -> Option<&'static ColoringDef> {
 fn dialect(d: CustomDialect) -> Dialect {
     match d {
         // A hybrid's program is generated in UF's language.
-        CustomDialect::UltraFractal | CustomDialect::Hybrid => Dialect::UltraFractal,
+        CustomDialect::UltraFractal | CustomDialect::Hybrid | CustomDialect::Rhai => Dialect::UltraFractal,
         CustomDialect::Fractint => Dialect::Fractint,
     }
 }
@@ -104,6 +104,7 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         CustomDialect::UltraFractal => b"uf",
         CustomDialect::Fractint => b"frm",
         CustomDialect::Hybrid => b"hybrid",
+        CustomDialect::Rhai => b"rhai",
     });
     eat(src.entry.as_bytes());
     eat(src.source.as_bytes());
@@ -113,6 +114,12 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
 /// Parse and check the named entry of a source. The source may hold
 /// other entries; only this one is compiled.
 pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, Vec<Diag>> {
+    if src.dialect == CustomDialect::Rhai {
+        if kind != EntryKind::Formula {
+            return Err(vec![Diag::error(lang::Span::default(), "Rhai colourings come with phase 4's step 3")]);
+        }
+        return lang::rhai::program(&src.source);
+    }
     if src.dialect == CustomDialect::Hybrid {
         if kind != EntryKind::Formula {
             return Err(vec![Diag::error(lang::Span::default(), "a hybrid is a formula")]);
@@ -586,8 +593,17 @@ mod tests {
     /// holds, and validates.
     #[test]
     fn every_example_entry_compiles() {
-        use crate::storage::formula_store::{is_coloring_file, is_fractint, EXAMPLES};
+        use crate::storage::formula_store::{is_coloring_file, is_fractint, is_rhai, EXAMPLES};
         for (file, text) in EXAMPLES {
+            // A Rhai file is one formula.
+            if is_rhai(file) {
+                let src = CustomSource { dialect: CustomDialect::Rhai, entry: lang::rhai::title(text).unwrap_or_default(), source: text.to_string() };
+                let name = name_of(EntryKind::Formula, &src);
+                if let Err(d) = compile_formula(&src, &name) {
+                    panic!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
+                }
+                continue;
+            }
             let (parsed, d) = lang::parser::parse_file(text);
             assert!(d.is_empty(), "{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
             assert!(parsed.entries.len() >= 4, "{file}: too few examples");

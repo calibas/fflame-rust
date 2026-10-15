@@ -14,7 +14,8 @@ custom formulas; its plan and order of work below): steps 1 to 5 done
 decisions below): the formula language becomes Rhai, with explicit
 state; UF and Fractint files stay loadable and convert to Rhai when
 opened; the built-in formulas get Rhai twins. Phase 3's step 6 is
-folded into phase 4's order of work.
+folded into phase 4's order of work. Phase 4's steps 1 (the animation
+bug) and 2 (the Rhai front end) done 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -832,9 +833,10 @@ fn escaped(s, p) {
 
 **The compiler.** Rhai's own parser (`Engine::compile` with optimisation
 off, so the tree is the source's), its syntax tree read through the
-`internals` feature -- an unstable API, but the version is pinned
-(1.25.1, already for the PCG stream), so each Rhai upgrade re-checks the
-compiler. The GPU subset: int, float, bool and complex values (a
+`internals` feature -- an unstable API, so the version is pinned exactly
+(`=1.25.1`, since step 2: the requirement had been a minimum, and three
+gallery lock files held 1.26.x, whose script functions' bodies already
+differ), and each Rhai upgrade re-checks the compiler. The GPU subset: int, float, bool and complex values (a
 registered `Complex` type, `complex(re, im)`; `**` is the power, `^` is
 Rhai's XOR), maps only as the state, the parameters and the plane,
 bounded loops, `if`, `let`, `return`. Strings serve metadata alone;
@@ -866,6 +868,32 @@ keeps compiling as UF; the editor converts what it opens.
    and a pass-dependent hybrid render as their UF twins and built-ins,
    on the direct path and perturbed; a Rhai test file covering every
    construct runs on the GPU as the interpreter does.
+
+   Done 2026-10-14 (`lang/rhai.rs`). As built: the Rhai tree is lowered
+   to the UF PARSE tree, not to the IR, so the checker types it and every
+   rule after the parse serves both languages (`check_rhai`: Rhai's
+   `abs` of a complex is the modulus, and a bool and a number do not
+   mix). The state's fields and locals become variables under prefixed
+   names (`s_c`, `l3_t`), which the messages turn back into the script's
+   (`s.c`, `t`). An expression may leave statements pending before the
+   statement holding it, which gives `if` as a value anywhere in `start`
+   and `step`, helpers with statements, and a loop condition's
+   statements re-run each pass; `escaped` stays one test, its `let`s and
+   its helpers substituted. Measured: the Mandelbrot, the Burning Ship
+   (both planes) and a Phoenix-like formula with carried state, a
+   `for`, a `do ... until`, op-assignment, a function parameter and an
+   `if` value run as their UF twins in the interpreter; the hybrid
+   alternation as the hybrid preset; five test files
+   (`tests/formulas/rhai/`) on the GPU as the interpreter (166 pairs
+   with the UF files); the Rhai Mandelbrot and Burning Ship render as
+   their built-ins (0% and 1.94% of pixels, the latter the UF custom
+   Ship's own 1.95%; the Julia plane 0%), and at zoom 48.5 the Rhai
+   Mandelbrot counts as its UF twin on all 3,072 pixels. The editor
+   offers Rhai first, New starts a Rhai formula, and three examples ship
+   (`assets/formulas/*.rhai`). Not reached: Lambda's twin (it comes with
+   the built-in twins, step 4). Moved from step 6 to step 4: branches in
+   `start` on the plane or a parameter (every plane-aware formula has
+   one, the built-ins' twins among them), which deep zoom needs.
 3. **The IR to Rhai printer, and conversion on opening** (formulas,
    then colourings in the same shape); the UF corpus measurement above.
 4. **Built-in twins and "Edit as formula"**: the Escape panel opens the
@@ -873,7 +901,9 @@ keeps compiling as UF; the editor converts what it opens.
    current parameters and view. First the families the derivation
    covers now: Mandelbrot, Tricorn, Burning Ship (all six variants),
    Lambda, Cactus. Each held equal to its built-in by test, direct and
-   perturbed.
+   perturbed. With it, from step 6: the derivation takes branches in
+   `start` (the init) whose conditions are the same for every pixel --
+   the plane, a parameter -- since every built-in has a Julia plane.
 5. **Carried state in deep zoom** (the explicit state makes it
    tractable): the reference orbit stores each carried field per step,
    beside z (phase 3, 5b's interleaving, generalised), and the pixel

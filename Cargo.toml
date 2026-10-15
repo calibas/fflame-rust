@@ -57,7 +57,12 @@ ringbuf = "0.4"
 # ahash too, breaking the wasm32 build (getrandom 0.3 refuses
 # wasm32-unknown-unknown without a cfg flag). We only need `std`; rhai
 # still gets ahash's compile-time-rng, which it depends on directly.
-rhai = { version = "1.25.1", default-features = false, features = ["std"] }
+# `internals`: the formula language compiles Rhai formulas from rhai's own
+# syntax tree (escape::lang::rhai), an API rhai marks unstable (1.26 already
+# changed a script function's body), so the version is pinned EXACTLY -- in
+# the gallery crates' own lock files too. Upgrade deliberately, and re-check
+# that compiler.
+rhai = { version = "=1.25.1", default-features = false, features = ["std", "internals"] }
 # Pinned to rand 0.9's rand_core. NOTE: the PCG64-MCG stream and the
 # `Uniform` distributions built on it are what `script + seed` MEANS —
 # a shareable artifact. The wasm/script CLI-parity fixtures assert the

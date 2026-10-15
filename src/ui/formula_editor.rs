@@ -105,7 +105,13 @@ impl FormulaEditorPanel {
     }
 
     fn adopt(&mut self, file: Option<String>, name: String, text: String) {
-        self.dialect = if formula_store::is_fractint(&name) { CustomDialect::Fractint } else { CustomDialect::UltraFractal };
+        self.dialect = if formula_store::is_rhai(&name) {
+            CustomDialect::Rhai
+        } else if formula_store::is_fractint(&name) {
+            CustomDialect::Fractint
+        } else {
+            CustomDialect::UltraFractal
+        };
         self.file = file;
         self.name = name;
         self.saved = text.clone();
@@ -131,12 +137,36 @@ impl FormulaEditorPanel {
         formula_store::is_coloring_file(&self.name)
     }
 
+    /// A Rhai file: one formula, the whole text.
+    fn recheck_rhai(&mut self) {
+        let text = self.text.clone();
+        let (title, errors) = match lang::rhai::program(&text) {
+            Ok(p) => (p.name.clone(), Vec::new()),
+            Err(d) => (
+                lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
+                d.iter().map(|x| x.render(&text)).collect(),
+            ),
+        };
+        self.parse_errors = Vec::new();
+        self.entries = vec![EntryRow {
+            name: title,
+            source: text.clone(),
+            likely: EntryKind::Formula,
+            as_formula: errors,
+            as_coloring: vec![t!("formula_editor.rhai_colourings_later").to_string()],
+        }];
+        self.checked = Some(text);
+    }
+
     /// Parse the file and check every entry both ways.
     fn recheck(&mut self) {
+        if self.dialect == CustomDialect::Rhai {
+            return self.recheck_rhai();
+        }
         let dialect = match self.dialect {
             // The text editor offers UF and Fractint; a hybrid has its
             // own panel.
-            CustomDialect::UltraFractal | CustomDialect::Hybrid => lang::Dialect::UltraFractal,
+            CustomDialect::UltraFractal | CustomDialect::Hybrid | CustomDialect::Rhai => lang::Dialect::UltraFractal,
             CustomDialect::Fractint => lang::Dialect::Fractint,
         };
         let text = self.text.clone();
@@ -231,17 +261,13 @@ impl FormulaEditorPanel {
             // The entry's own view. UF's `magn` is not applied: what span
             // its magnification 1 shows is still to be verified (plan,
             // phase 2).
-            let (file, _) = lang::parser::parse_file(&src.source);
-            if let Some(e) = file.entries.first() {
-                let dialect = if self.dialect == CustomDialect::Fractint { lang::Dialect::Fractint } else { lang::Dialect::UltraFractal };
-                if let (Some(p), _) = lang::check::check(e, kind, dialect) {
-                    if let Some((re, im)) = p.view.center {
-                        changes.push((ConfigPath::EscapeCenterRe, ConfigValue::String(format!("{re}"))));
-                        changes.push((ConfigPath::EscapeCenterIm, ConfigValue::String(format!("{im}"))));
-                    }
-                    if let Some(m) = p.view.maxiter {
-                        changes.push((ConfigPath::EscapeMaxIter, ConfigValue::UInt(m)));
-                    }
+            if let Ok(p) = custom::check_entry(kind, &src) {
+                if let Some((re, im)) = p.view.center {
+                    changes.push((ConfigPath::EscapeCenterRe, ConfigValue::String(format!("{re}"))));
+                    changes.push((ConfigPath::EscapeCenterIm, ConfigValue::String(format!("{im}"))));
+                }
+                if let Some(m) = p.view.maxiter {
+                    changes.push((ConfigPath::EscapeMaxIter, ConfigValue::UInt(m)));
                 }
             }
         }
@@ -285,6 +311,11 @@ impl FormulaEditorPanel {
     }
 
     fn save(&mut self) {
+        // A Rhai file keeps its extension under any name it is given.
+        if self.dialect == CustomDialect::Rhai && !formula_store::is_rhai(&self.name) {
+            let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s).to_string();
+            self.name = format!("{stem}.rhai");
+        }
         match formula_store::save(&self.name, &self.text) {
             Ok(file) => {
                 self.saved = self.text.clone();
@@ -301,7 +332,10 @@ impl FormulaEditorPanel {
         // The browser's picker leaves the opened text in egui's temp store.
         #[cfg(target_arch = "wasm32")]
         if let Some(text) = ui.ctx().data_mut(|d| d.remove_temp::<String>(egui::Id::new(PENDING_FORMULA_LOAD))) {
-            self.adopt(None, "opened.ufm".to_string(), text);
+            // The picker gives the text alone: a Rhai formula declares
+            // its functions.
+            let name = if text.contains("fn step") { "opened.rhai" } else { "opened.ufm" };
+            self.adopt(None, name.to_string(), text);
         }
 
         // ---- Files ----
@@ -335,7 +369,7 @@ impl FormulaEditorPanel {
                 self.open_example(i);
             }
             if ui.button(t!("formula_editor.new")).on_hover_text(t!("formula_editor.new_tip")).clicked() {
-                self.adopt(None, "untitled.ufm".to_string(), NEW_FILE.to_string());
+                self.adopt(None, "untitled.rhai".to_string(), NEW_FILE.to_string());
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -390,7 +424,7 @@ impl FormulaEditorPanel {
             #[cfg(target_arch = "wasm32")]
             {
                 if ui.button(t!("formula_editor.open")).on_hover_text(t!("formula_editor.open_tip")).clicked() {
-                    crate::app::trigger_browser_file_picker(".ufm,.ucl,.frm", ui.ctx().clone(), PENDING_FORMULA_LOAD);
+                    crate::app::trigger_browser_file_picker(".rhai,.ufm,.ucl,.frm", ui.ctx().clone(), PENDING_FORMULA_LOAD);
                 }
                 if ui.button(t!("formula_editor.export")).on_hover_text(t!("formula_editor.export_tip")).clicked() {
                     self.status = Some(match crate::app::trigger_browser_download(self.text.as_bytes(), &self.name, "text/plain") {
@@ -403,6 +437,7 @@ impl FormulaEditorPanel {
         ui.horizontal_wrapped(|ui| {
             ui.label(t!("formula_editor.language"));
             let before = self.dialect;
+            ui.selectable_value(&mut self.dialect, CustomDialect::Rhai, t!("formula_editor.rhai"));
             ui.selectable_value(&mut self.dialect, CustomDialect::UltraFractal, t!("formula_editor.uf"));
             ui.selectable_value(&mut self.dialect, CustomDialect::Fractint, t!("formula_editor.fractint"));
             if self.dialect != before {
@@ -495,21 +530,27 @@ impl FormulaEditorPanel {
     }
 }
 
-/// What New starts from.
+/// What New starts from: a formula in Rhai, the language's own.
 const NEW_FILE: &str = "\
-; A new formula file, in Ultra Fractal's language.
+// A new formula. `start` gives each pixel its state, `step` moves it
+// one pass on, `escaped` says when it has left.
 
-MyFormula {
-init:
-  z = 0
-loop:
-  z = sqr(z) + #pixel
-bailout:
-  |z| < @bailout
-default:
-  title = \"My Formula\"
-  float param bailout
-    default = 10000
-  endparam
+const PARAMS = #{
+    bailout: #{ value: 10000.0, min: 1.0, caption: \"Bailout\" },
+};
+
+const INFO = #{ title: \"My Formula\" };
+
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+
+fn step(s, p) {
+    s.z = s.z.sqr() + s.c;
+    s
+}
+
+fn escaped(s, p) {
+    s.z.norm_sqr() > p.bailout
 }
 ";
