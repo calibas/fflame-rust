@@ -22,6 +22,7 @@ pub mod lexer;
 pub mod parser;
 pub mod perturb;
 pub mod rhai;
+pub mod to_rhai;
 pub mod switch;
 pub mod wgsl;
 

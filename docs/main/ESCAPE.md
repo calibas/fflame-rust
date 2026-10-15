@@ -298,7 +298,8 @@ is read as well. The plan, its phases and what is left are in
 [escape-formula-language.md](../projects/escape-formula-language.md).
 
 **Where it lives.** `src/escape/lang/`: `rhai.rs` (a Rhai formula
-lowered to the parse tree), `lexer.rs`, `parser.rs` (a UF file into
+lowered to the parse tree), `to_rhai.rs` (a checked UF or Fractint
+formula printed as Rhai), `lexer.rs`, `parser.rs` (a UF file into
 entries and sections), `check.rs` (names and types, UF's rules,
 into the typed `ir.rs`), `interp.rs` (the program in f64: the reference
 the WGSL is tested against), `wgsl.rs` (the shader), `derive.rs` (a
@@ -315,8 +316,8 @@ const PARAMS = #{
 };
 const INFO = #{ title: "Mandelbrot", center: complex(-0.5, 0.0), maxiter: 500 };
 
-fn start(pixel, p, plane) {
-    if plane.julia { #{ z: pixel, c: plane.c } } else { #{ z: complex(0.0, 0.0), c: pixel } }
+fn start(pixel, p, ctx) {
+    if ctx.julia { #{ z: pixel, c: ctx.c } } else { #{ z: complex(0.0, 0.0), c: pixel } }
 }
 
 fn step(s, p) {
@@ -335,23 +336,35 @@ fn escaped(s, p) {
   reads the state before any is set -- and `escaped` says when the pixel
   has left. What a step carries from pass to pass is then visible.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
-  `max`, `caption`, `hint`, `choices` (an int's names), or `function`
-  (a user function, called `p.f(z)`). They are the panel's controls,
-  animation targets and script parameters.
-- `start` may take the plane (`plane.julia`, `plane.c`: the panel's
-  Julia toggle and constant); `step` the pass, with `INFO.cycle` for
-  deep zoom (hybrids). `INFO` also gives `title`, `center`, `magn`,
-  `maxiter`, `angle`.
+  `max`, `caption`, `hint`, `choices` (an int's names), `exponential`,
+  or `function` (a user function, called `p.f(z)`). They are the
+  panel's controls, animation targets and script parameters.
+- **The context**, every function's optional third argument (`ctx`
+  here): `ctx.julia` and `ctx.c` (the panel's Julia toggle and
+  constant), `ctx.pass` (0 on the first pass; with `INFO.cycle`,
+  `#{ prefix, period }`, deep zoom keeps a reference per phase: the
+  hybrids), `ctx.maxiter`, `ctx.center`, `ctx.magn`, `ctx.angle` (the
+  view's rotation, degrees), `ctx.x`, `ctx.y`, `ctx.width`,
+  `ctx.height` (the pixel on the screen), `ctx.random`. `INFO` gives
+  `title`, `center`, `magn`, `maxiter`, `angle`.
+- **`prepare(p, ctx)`**, optional, runs once per image (UF's
+  `global:`): the map it returns is read as `p.name`.
+- **UF's own perturbation equations**, optional: `perturb_start(d, p)`
+  and `perturb_step(d, p)` set `d.dz` (the pixel's deviation) from
+  `d.z` (the reference's value) and `d.dpixel`, and return `d`;
+  `perturb_when(p)` says when they hold. Without them, deep zoom
+  derives the equations itself (phase 3).
 - Helpers (other functions) are inlined and read only their arguments.
   `if` is a value as well as a statement in `start`, `step` and
   helpers; `escaped` is one test, its `let`s substituted.
 - Values are int, float, bool and complex (`complex(re, im)`); a bool
-  and a number do not mix, and two ints divided is refused (Rhai would
-  truncate). `**` is the power (`^` is Rhai's XOR). Rhai's names where
-  they differ from UF's: `ln` the natural log and `log` base 10, `abs`
-  of a complex its modulus and `fold` each part's absolute value (the
-  Burning Ship), `norm_sqr` the squared modulus, `.re` / `.im`, `arg`,
-  `atan2(y, x)`, `ceiling`, `cot`, `coth`. Loops: `while`, `do ...
+  and a number do not mix but by `to_float` / `to_int` (1 for true),
+  and two ints divided is refused (Rhai would truncate). `**` is the
+  power (`^` is Rhai's XOR). Rhai's names where they differ from UF's:
+  `ln` the natural log and `log` base 10, `abs` of a complex its
+  modulus and `fold` each part's absolute value (the Burning Ship),
+  `norm_sqr` the squared modulus, `.re` / `.im`, `arg`, `atan2(y, x)`,
+  `ceiling`, `cot`, `coth`, `PI()`, `E()`. Loops: `while`, `do ...
   while/until`, `for i in a..b`; no `break`.
 - How: rhai's own parser (optimisation off) gives its syntax tree
   through the `internals` feature, pinned with the rhai version; the
@@ -367,8 +380,30 @@ fn escaped(s, p) {
   plane, a cycle), run on the GPU as the interpreter does; a Rhai
   formula runs as its UF twin, renders as its built-in, and deep-zooms
   pixel for pixel as its UF twin (`rhai_formulas_render_and_deep_zoom_as_their_twins`).
-- Not yet: Rhai colourings (phase 4, step 3, with converting UF on
-  opening).
+- **UF and Fractint formulas convert** (`lang/to_rhai.rs`; the
+  Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
+  checked program is printed in this shape, the file opened left as it
+  is.
+  - The state is `z`, what a pass reads before it writes it, and what
+    the bailout reads (`#pixel` too when the loop reads it); the other
+    variables are `let`s.
+  - `global:` becomes `prepare`, and UF's own perturbation equations
+    the `perturb_*` functions.
+  - The conversions the checker makes are written out where Rhai
+    needs them, and Fractint's conventions are explicit (real-part
+    tests and equality, `floor(x + 0.5)` for its `round`).
+  - The bailout is negated as written, `!(...)`, so a NaN leaves as it
+    does in UF.
+  - The entry's comments, and those just above it, come along.
+  - A `switch:` pair becomes one formula on both planes.
+  - Measured on UF's public library: all 9,250 compiling formulas
+    convert, compile back and iterate as the original (the interpreter,
+    seven points on both planes). Deep zoom is kept on all 310 that
+    have it.
+  - The test files' conversions run on the GPU as the interpreter
+    does.
+  - A config's UF source still compiles as UF.
+- Not yet: Rhai colourings (phase 4, step 3).
 
 **An entry** is `Name(setting) { ... }` in a `.ufm` (formulas), `.ucl`
 (colourings) or `.frm` (Fractint) file; `;` comments to the end of a

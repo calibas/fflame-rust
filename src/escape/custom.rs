@@ -166,6 +166,48 @@ pub fn carried_source(text: &str, file: &lang::ast::File, e: &lang::ast::Entry) 
     source
 }
 
+/// A formula entry of a UF or Fractint file (`text`) as a Rhai formula
+/// (plan, phase 4 step 3): what the Formula Editor opens it as to edit.
+/// The entry's comments, and those just above it, come along; `origin`
+/// names the file. The result compiles: a conversion that does not is
+/// refused, with why.
+pub fn convert_to_rhai(text: &str, entry: &str, from: CustomDialect, origin: &str) -> Result<String, String> {
+    let (file, _) = lang::parser::parse_file(text);
+    let e = file.entries.iter().find(|e| e.name.eq_ignore_ascii_case(entry)).ok_or_else(|| format!("no entry named `{entry}`"))?;
+    let d = dialect(from);
+    let (program, diags) = lang::switch::check_formula(&file, e, d);
+    let program = match program {
+        Some(p) if !lang::has_errors(&diags) => p,
+        _ => {
+            let first = diags.iter().find(|x| x.severity == lang::Severity::Error).map(|x| x.render(text));
+            return Err(first.unwrap_or_else(|| "it does not compile".into()));
+        }
+    };
+    let language = match d {
+        Dialect::Fractint => "Fractint",
+        Dialect::UltraFractal => "Ultra Fractal",
+    };
+    let mut header = vec![format!("{}, converted from {language} ({origin}).", e.name)];
+    // The comment lines just above the entry (its description, often its
+    // author), then those inside it.
+    let above: Vec<&str> = text[..e.span.start.min(text.len())].lines().rev().take_while(|l| l.trim().is_empty() || l.trim_start().starts_with(';')).collect();
+    let above: String = above.into_iter().rev().collect::<Vec<_>>().join("\n");
+    let mut notes = lang::to_rhai::comments(&above);
+    notes.extend(lang::to_rhai::comments(&carried_source(text, &file, e)));
+    while notes.first().is_some_and(|n| n.trim().is_empty()) {
+        notes.remove(0);
+    }
+    if !notes.is_empty() {
+        header.push(String::new());
+        header.extend(notes);
+    }
+    let rhai = lang::to_rhai::formula(&program, &header)?;
+    // What it printed must compile back: one that does not is the
+    // converter's bug, not the user's to fix.
+    lang::rhai::program(&rhai).map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
+    Ok(rhai)
+}
+
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
@@ -589,6 +631,31 @@ mod tests {
         CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string() }
     }
 
+    /// Edit as Rhai: a UF formula and its `switch:` Julia become one Rhai
+    /// formula on both planes, its comments carried, which compiles and
+    /// runs as the pair does; a colouring is not offered.
+    #[test]
+    fn a_uf_formula_converts_to_rhai_for_editing() {
+        let text = include_str!("../../tests/formulas/language.ufm");
+        let rhai = convert_to_rhai(text, "SwitchM", CustomDialect::UltraFractal, "language.ufm").expect("converts");
+        assert!(rhai.starts_with("// SwitchM, converted from Ultra Fractal (language.ufm).\n//\n// A Mandelbrot whose switch: names its Julia"), "{rhai}");
+        assert!(rhai.contains("if ctx.julia {") || rhai.contains("if !ctx.julia {"), "both planes:\n{rhai}");
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "SwitchM".into(), source: text.to_string() };
+        let uf = check_entry(EntryKind::Formula, &src).expect("the pair compiles");
+        let back = lang::rhai::program(&rhai).expect("compiles back");
+        assert_eq!(lang::to_rhai::parting(&uf, &back, 100), None, "{rhai}");
+        // The comment just above an entry comes along too.
+        let above = "; By A. Author, 2001.\n; A cubic.\nCubic {\ninit:\n z = 0\nloop:\n z = z^3 + #pixel\nbailout:\n |z| < 4\n}";
+        let rhai = convert_to_rhai(above, "Cubic", CustomDialect::UltraFractal, "cubic.ufm").expect("converts");
+        assert!(rhai.contains("//\n// By A. Author, 2001.\n// A cubic.\n"), "{rhai}");
+        // Fractint's conventions come out explicit.
+        let frm = "F { z = pixel: z = sqr(z) + p1, z }";
+        let rhai = convert_to_rhai(frm, "F", CustomDialect::Fractint, "f.frm").expect("converts");
+        assert!(rhai.contains("converted from Fractint") && rhai.contains("!(s.z.re != 0.0)"), "{rhai}");
+        let err = convert_to_rhai(text, "NoSuchEntry", CustomDialect::UltraFractal, "language.ufm").unwrap_err();
+        assert!(err.contains("NoSuchEntry"));
+    }
+
     /// Every entry of the example files compiles, as the kind its file
     /// holds, and validates.
     #[test]
@@ -811,6 +878,11 @@ mod tests {
         let mut with_derivative = 0usize;
         let (mut own_equations, mut derived_equations) = (0usize, 0usize);
         let mut blockers: BTreeMap<String, usize> = BTreeMap::new();
+        // Phase 4 step 3: each formula that compiles, converted to Rhai.
+        let (mut converted, mut compiled_back, mut alike) = (0usize, 0usize, 0usize);
+        let (mut zoomed, mut zoom_kept) = (0usize, 0usize);
+        let mut convert_fails: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let rhai_out = std::env::var("UF_RHAI_OUT").ok();
         for path in paths {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             let kind = match ext.as_str() {
@@ -837,6 +909,51 @@ mod tests {
                                 invalid.push(format!("{} / {}: {}", path.display(), e.name, err.lines().next().unwrap_or("")));
                             }
                         } else {
+                            // Converted, compiled back, run alike; deep zoom kept.
+                            let perturbs = |p: &ir::Program| {
+                                lang::perturb::perturbation(p).is_ok()
+                                    || lang::delta::with_derived_equations(p).is_some_and(|d| lang::perturb::perturbation(&d).is_ok())
+                            };
+                            let mut fail = |why: String, text: Option<&str>| {
+                                let key = shape(&why);
+                                let list = convert_fails.entry(key).or_default();
+                                if list.len() < 3 {
+                                    list.push(format!("{} / {}: {why}", path.file_name().unwrap().to_string_lossy(), e.name));
+                                }
+                                if let (Some(dir), Some(t)) = (&rhai_out, text) {
+                                    let _ = std::fs::write(format!("{dir}/FAILED-{}-{}.rhai", path.file_stem().unwrap().to_string_lossy(), e.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")), t);
+                                }
+                            };
+                            match lang::to_rhai::formula(&p, &[]) {
+                                Err(why) => fail(why, None),
+                                Ok(text) => {
+                                    converted += 1;
+                                    match lang::rhai::program(&text) {
+                                        Err(d) => fail(d.first().map(|x| x.render(&text)).unwrap_or_default(), Some(&text)),
+                                        Ok(back) => {
+                                            compiled_back += 1;
+                                            match lang::to_rhai::parting(&p, &back, 100) {
+                                                Some(why) => fail(format!("runs otherwise, {why}"), Some(&text)),
+                                                None => alike += 1,
+                                            }
+                                            if perturbs(&p) {
+                                                zoomed += 1;
+                                                if perturbs(&back) {
+                                                    zoom_kept += 1;
+                                                } else {
+                                                    fail("deep zoom lost".into(), Some(&text));
+                                                }
+                                            }
+                                            if let Some(dir) = &rhai_out {
+                                                let _ = std::fs::write(
+                                                    format!("{dir}/{}-{}.rhai", path.file_stem().unwrap().to_string_lossy(), e.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")),
+                                                    &text,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             if lang::perturb::perturbation(&p).is_ok() {
                                 own_equations += 1;
                             } else if let Some(d) = lang::delta::with_derived_equations(&p) {
@@ -917,6 +1034,18 @@ mod tests {
                 for s in samples.get(m).into_iter().flatten() {
                     println!("           {s}");
                 }
+            }
+        }
+        println!(
+            "converted to Rhai: {converted} of {} formulas; {compiled_back} compile back; {alike} run as the original; deep zoom kept {zoom_kept} of {zoomed}",
+            compiled[0]
+        );
+        let mut ranked: Vec<_> = convert_fails.iter().collect();
+        ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        for (why, samples) in ranked.iter().take(30) {
+            println!("  {why}");
+            for s in samples.iter() {
+                println!("      {s}");
             }
         }
         println!("invalid WGSL (compiler bugs): {}", invalid.len());
