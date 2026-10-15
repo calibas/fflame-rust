@@ -15,8 +15,9 @@ decisions below): the formula language becomes Rhai, with explicit
 state; UF and Fractint files stay loadable and convert to Rhai when
 opened; the built-in formulas get Rhai twins. Phase 3's step 6 is
 folded into phase 4's order of work. Phase 4's steps 1 (the animation
-bug) and 2 (the Rhai front end) done 2026-10-14; step 3's formulas (UF
-and Fractint converted to Rhai) 2026-10-15, its colourings next.
+bug) and 2 (the Rhai front end) done 2026-10-14; step 3 (UF and
+Fractint formulas and colourings converted to Rhai, Rhai colourings)
+2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -953,6 +954,36 @@ keeps compiling as UF; the editor converts what it opens.
      interpreter does (`test_files_run_on_the_gpu_as_the_interpreter_does`).
      The editor's path is covered by
      `a_uf_formula_converts_to_rhai_for_editing`.
+
+   Colourings done 2026-10-15. As built:
+   - **Rhai colourings** have `finish` where a formula has `escaped`
+     (`rhai::kind_of`).
+     - `start(z, p)` gives the state (optional), `step(s, z, p)` updates
+       it after each of the formula's passes (optional), and
+       `finish(s, z, p)` returns the index, or `#{ index, solid }`, or
+       an `if` whose arms give either.
+     - `z` is the formula's iterate. A state field may be named `z`: in
+       a colouring that name is the colouring's own.
+     - The context gained `pixel` (for formulas too, so a converted
+       formula reads `#pixel` in its loop without a state field) and
+       `numiter` (in `finish`, UF's rule). `ctx.pass` is refused in a
+       colouring.
+     - `INFO.region` is `"inside"`, `"outside"` or `"both"`.
+     - Two examples ship (`smooth.rhai`, `orbit-trap.rhai`). The editor
+       checks a `.rhai` file as whichever kind it is.
+   - **The conversion.** The state is what the checker packs. `final:`
+     becomes `finish`, `#index`/`#solid` its locals, returned. When
+     `final:` ends by setting `#index` and touches neither elsewhere,
+     that value is returned directly. `init:` and `loop:` are left out
+     when nothing they compute reaches the result.
+   - **Measured on the library:** all 726 compiling colourings convert,
+     compile back, colour as the original beside the Mandelbrot (index
+     and solid at the same points), and keep the same state size; the
+     formulas still 9,250 of 9,250.
+   - **Not carried, by choice.** A converted formula keeps UF's view as
+     its `INFO`, but a colouring has none (UF's colourings set no view).
+     Direct colouring (`#color`, 410 uses in the library) still waits,
+     as it does for UF source.
 4. **Built-in twins and "Edit as formula"**: the Escape panel opens the
    current built-in in the editor as the user's own formula, with the
    current parameters and view. First the families the derivation

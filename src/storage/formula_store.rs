@@ -24,6 +24,8 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("mandelbrot.rhai", include_str!("../../assets/formulas/mandelbrot.rhai")),
     ("burning-ship.rhai", include_str!("../../assets/formulas/burning-ship.rhai")),
     ("phoenix.rhai", include_str!("../../assets/formulas/phoenix.rhai")),
+    ("smooth.rhai", include_str!("../../assets/formulas/smooth.rhai")),
+    ("orbit-trap.rhai", include_str!("../../assets/formulas/orbit-trap.rhai")),
     ("examples.ufm", include_str!("../../assets/formulas/examples.ufm")),
     ("examples.ucl", include_str!("../../assets/formulas/examples.ucl")),
 ];

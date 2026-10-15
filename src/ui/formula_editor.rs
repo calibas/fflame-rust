@@ -9,7 +9,7 @@
 //! (`escape::custom`) and puts its source in the config, one undo step,
 //! so the file renders anywhere. With Live on, an entry in use is
 //! re-applied whenever an edit to it compiles again. A UF or Fractint
-//! formula is edited as Rhai: Edit as Rhai converts it
+//! formula or colouring is edited as Rhai: Edit as Rhai converts it
 //! (`custom::convert_to_rhai`) into a new file, the one opened left as
 //! it is.
 
@@ -140,24 +140,33 @@ impl FormulaEditorPanel {
         formula_store::is_coloring_file(&self.name)
     }
 
-    /// A Rhai file: one formula, the whole text.
+    /// A Rhai file: one formula or colouring, the whole text; which, its
+    /// functions say (`finish` a colouring's, `escaped` a formula's).
     fn recheck_rhai(&mut self) {
         let text = self.text.clone();
-        let (title, errors) = match lang::rhai::program(&text) {
-            Ok(p) => (p.name.clone(), Vec::new()),
-            Err(d) => (
-                lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
-                d.iter().map(|x| x.render(&text)).collect(),
-            ),
+        let kind = lang::rhai::kind_of(&text).unwrap_or(EntryKind::Formula);
+        let checked = match kind {
+            EntryKind::Formula => lang::rhai::program(&text),
+            EntryKind::Coloring => lang::rhai::coloring(&text),
+        };
+        let mut errors: Vec<String> = match &checked {
+            Ok(_) => Vec::new(),
+            Err(d) => d.iter().map(|x| x.render(&text)).collect(),
+        };
+        // A colouring that sets no index draws nothing: not offered.
+        if kind == EntryKind::Coloring && checked.as_ref().is_ok_and(|p| !lang::wgsl::colours_anything(p)) {
+            errors.push(t!("formula_editor.colours_nothing").to_string());
+        }
+        let title = match &checked {
+            Ok(p) => p.name.clone(),
+            Err(_) => lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
+        };
+        let (as_formula, as_coloring) = match kind {
+            EntryKind::Formula => (errors, vec![t!("formula_editor.rhai_is_formula").to_string()]),
+            EntryKind::Coloring => (vec![t!("formula_editor.rhai_is_coloring").to_string()], errors),
         };
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow {
-            name: title,
-            source: text.clone(),
-            likely: EntryKind::Formula,
-            as_formula: errors,
-            as_coloring: vec![t!("formula_editor.rhai_colourings_later").to_string()],
-        }];
+        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring }];
         self.checked = Some(text);
     }
 
@@ -316,8 +325,8 @@ impl FormulaEditorPanel {
     /// Open an entry of this UF or Fractint file as a new Rhai file,
     /// converted.
     fn edit_as_rhai(&mut self, row: usize) {
-        let Some(entry) = self.entries.get(row).map(|r| r.name.clone()) else { return };
-        match custom::convert_to_rhai(&self.text, &entry, self.dialect, &self.name) {
+        let Some((entry, kind)) = self.entries.get(row).map(|r| (r.name.clone(), r.likely)) else { return };
+        match custom::convert_to_rhai(&self.text, &entry, kind, self.dialect, &self.name) {
             Ok(text) => {
                 let name = formula_store::file_name_for(&format!("{entry}.rhai")).unwrap_or_else(|| "converted.rhai".into());
                 self.adopt(None, name, text);
@@ -506,8 +515,8 @@ impl FormulaEditorPanel {
                         clicked = Some((kind, i));
                     }
                 }
-                // A UF or Fractint formula is edited as Rhai.
-                if foreign && row.as_formula.is_empty() && ui.button(t!("formula_editor.edit_as_rhai")).on_hover_text(t!("formula_editor.edit_as_rhai_tip")).clicked() {
+                // A UF or Fractint entry is edited as Rhai.
+                if foreign && row.errors(row.likely).is_empty() && ui.button(t!("formula_editor.edit_as_rhai")).on_hover_text(t!("formula_editor.edit_as_rhai_tip")).clicked() {
                     convert = Some(i);
                 }
             });

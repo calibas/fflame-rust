@@ -115,10 +115,10 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
 /// other entries; only this one is compiled.
 pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, Vec<Diag>> {
     if src.dialect == CustomDialect::Rhai {
-        if kind != EntryKind::Formula {
-            return Err(vec![Diag::error(lang::Span::default(), "Rhai colourings come with phase 4's step 3")]);
-        }
-        return lang::rhai::program(&src.source);
+        return match kind {
+            EntryKind::Formula => lang::rhai::program(&src.source),
+            EntryKind::Coloring => lang::rhai::coloring(&src.source),
+        };
     }
     if src.dialect == CustomDialect::Hybrid {
         if kind != EntryKind::Formula {
@@ -166,16 +166,19 @@ pub fn carried_source(text: &str, file: &lang::ast::File, e: &lang::ast::Entry) 
     source
 }
 
-/// A formula entry of a UF or Fractint file (`text`) as a Rhai formula
-/// (plan, phase 4 step 3): what the Formula Editor opens it as to edit.
-/// The entry's comments, and those just above it, come along; `origin`
-/// names the file. The result compiles: a conversion that does not is
-/// refused, with why.
-pub fn convert_to_rhai(text: &str, entry: &str, from: CustomDialect, origin: &str) -> Result<String, String> {
+/// A formula or colouring entry of a UF or Fractint file (`text`) in
+/// Rhai (plan, phase 4 step 3): what the Formula Editor opens it as to
+/// edit. The entry's comments, and those just above it, come along;
+/// `origin` names the file. The result compiles: a conversion that does
+/// not is refused, with why.
+pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDialect, origin: &str) -> Result<String, String> {
     let (file, _) = lang::parser::parse_file(text);
     let e = file.entries.iter().find(|e| e.name.eq_ignore_ascii_case(entry)).ok_or_else(|| format!("no entry named `{entry}`"))?;
     let d = dialect(from);
-    let (program, diags) = lang::switch::check_formula(&file, e, d);
+    let (program, diags) = match kind {
+        EntryKind::Formula => lang::switch::check_formula(&file, e, d),
+        EntryKind::Coloring => lang::check::check(e, kind, d),
+    };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
         _ => {
@@ -201,10 +204,17 @@ pub fn convert_to_rhai(text: &str, entry: &str, from: CustomDialect, origin: &st
         header.push(String::new());
         header.extend(notes);
     }
-    let rhai = lang::to_rhai::formula(&program, &header)?;
+    let rhai = match kind {
+        EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
+        EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
+    };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
-    lang::rhai::program(&rhai).map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
+    let back = match kind {
+        EntryKind::Formula => lang::rhai::program(&rhai),
+        EntryKind::Coloring => lang::rhai::coloring(&rhai),
+    };
+    back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
 }
 
@@ -637,7 +647,7 @@ mod tests {
     #[test]
     fn a_uf_formula_converts_to_rhai_for_editing() {
         let text = include_str!("../../tests/formulas/language.ufm");
-        let rhai = convert_to_rhai(text, "SwitchM", CustomDialect::UltraFractal, "language.ufm").expect("converts");
+        let rhai = convert_to_rhai(text, "SwitchM", EntryKind::Formula, CustomDialect::UltraFractal, "language.ufm").expect("converts");
         assert!(rhai.starts_with("// SwitchM, converted from Ultra Fractal (language.ufm).\n//\n// A Mandelbrot whose switch: names its Julia"), "{rhai}");
         assert!(rhai.contains("if ctx.julia {") || rhai.contains("if !ctx.julia {"), "both planes:\n{rhai}");
         let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "SwitchM".into(), source: text.to_string() };
@@ -646,14 +656,22 @@ mod tests {
         assert_eq!(lang::to_rhai::parting(&uf, &back, 100), None, "{rhai}");
         // The comment just above an entry comes along too.
         let above = "; By A. Author, 2001.\n; A cubic.\nCubic {\ninit:\n z = 0\nloop:\n z = z^3 + #pixel\nbailout:\n |z| < 4\n}";
-        let rhai = convert_to_rhai(above, "Cubic", CustomDialect::UltraFractal, "cubic.ufm").expect("converts");
+        let rhai = convert_to_rhai(above, "Cubic", EntryKind::Formula, CustomDialect::UltraFractal, "cubic.ufm").expect("converts");
         assert!(rhai.contains("//\n// By A. Author, 2001.\n// A cubic.\n"), "{rhai}");
         // Fractint's conventions come out explicit.
         let frm = "F { z = pixel: z = sqr(z) + p1, z }";
-        let rhai = convert_to_rhai(frm, "F", CustomDialect::Fractint, "f.frm").expect("converts");
+        let rhai = convert_to_rhai(frm, "F", EntryKind::Formula, CustomDialect::Fractint, "f.frm").expect("converts");
         assert!(rhai.contains("converted from Fractint") && rhai.contains("!(s.z.re != 0.0)"), "{rhai}");
-        let err = convert_to_rhai(text, "NoSuchEntry", CustomDialect::UltraFractal, "language.ufm").unwrap_err();
+        let err = convert_to_rhai(text, "NoSuchEntry", EntryKind::Formula, CustomDialect::UltraFractal, "language.ufm").unwrap_err();
         assert!(err.contains("NoSuchEntry"));
+        // A colouring converts to a Rhai colouring, which compiles as one.
+        let ucl = include_str!("../../tests/formulas/language.ucl");
+        let (parsed, _) = lang::parser::parse_file(ucl);
+        let name = parsed.entries.iter().find(|e| lang::check::check(e, EntryKind::Coloring, Dialect::UltraFractal).0.is_some()).unwrap().name.clone();
+        let rhai = convert_to_rhai(ucl, &name, EntryKind::Coloring, CustomDialect::UltraFractal, "language.ucl").expect("converts");
+        assert!(rhai.contains("fn finish(s, z, p"), "{rhai}");
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: name, source: rhai };
+        assert!(check_entry(EntryKind::Coloring, &src).is_ok());
     }
 
     /// Every entry of the example files compiles, as the kind its file
@@ -662,11 +680,16 @@ mod tests {
     fn every_example_entry_compiles() {
         use crate::storage::formula_store::{is_coloring_file, is_fractint, is_rhai, EXAMPLES};
         for (file, text) in EXAMPLES {
-            // A Rhai file is one formula.
+            // A Rhai file is one formula or colouring, as its functions say.
             if is_rhai(file) {
                 let src = CustomSource { dialect: CustomDialect::Rhai, entry: lang::rhai::title(text).unwrap_or_default(), source: text.to_string() };
-                let name = name_of(EntryKind::Formula, &src);
-                if let Err(d) = compile_formula(&src, &name) {
+                let kind = lang::rhai::kind_of(text).unwrap_or_else(|| panic!("{file}: neither a formula nor a colouring"));
+                let name = name_of(kind, &src);
+                let compiled = match kind {
+                    EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
+                    EntryKind::Coloring => compile_coloring(&src, &name).map(|_| ()),
+                };
+                if let Err(d) = compiled {
                     panic!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
                 }
                 continue;
@@ -878,8 +901,18 @@ mod tests {
         let mut with_derivative = 0usize;
         let (mut own_equations, mut derived_equations) = (0usize, 0usize);
         let mut blockers: BTreeMap<String, usize> = BTreeMap::new();
-        // Phase 4 step 3: each formula that compiles, converted to Rhai.
+        // Phase 4 step 3: each formula and colouring that compiles,
+        // converted to Rhai; a colouring compared beside the Mandelbrot.
         let (mut converted, mut compiled_back, mut alike) = (0usize, 0usize, 0usize);
+        let (mut c_converted, mut c_compiled_back, mut c_alike, mut c_same_state) = (0usize, 0usize, 0usize, 0usize);
+        let mandelbrot = {
+            let src = CustomSource {
+                dialect: CustomDialect::UltraFractal,
+                entry: "M".into(),
+                source: "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}".into(),
+            };
+            check_entry(EntryKind::Formula, &src).expect("the Mandelbrot")
+        };
         let (mut zoomed, mut zoom_kept) = (0usize, 0usize);
         let mut convert_fails: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let rhai_out = std::env::var("UF_RHAI_OUT").ok();
@@ -903,6 +936,43 @@ mod tests {
                     Ok(p) => {
                         compiled[k] += 1;
                         if kind == EntryKind::Coloring {
+                            let mut fail = |why: String, text: Option<&str>| {
+                                let key = format!("colouring: {}", shape(&why));
+                                let list = convert_fails.entry(key).or_default();
+                                if list.len() < 3 {
+                                    list.push(format!("{} / {}: {why}", path.file_name().unwrap().to_string_lossy(), e.name));
+                                }
+                                if let (Some(dir), Some(t)) = (&rhai_out, text) {
+                                    let _ = std::fs::write(format!("{dir}/FAILED-{}-{}.rhai", path.file_stem().unwrap().to_string_lossy(), e.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")), t);
+                                }
+                            };
+                            match lang::to_rhai::coloring(&p, &[]) {
+                                Err(why) => fail(why, None),
+                                Ok(text) => {
+                                    c_converted += 1;
+                                    match lang::rhai::coloring(&text) {
+                                        Err(d) => fail(d.first().map(|x| x.render(&text)).unwrap_or_default(), Some(&text)),
+                                        Ok(back) => {
+                                            c_compiled_back += 1;
+                                            match lang::to_rhai::parting_coloring(&mandelbrot, &p, &back, 100) {
+                                                Some(why) => fail(format!("colours otherwise, {why}"), Some(&text)),
+                                                None => c_alike += 1,
+                                            }
+                                            if back.state_floats() == p.state_floats() {
+                                                c_same_state += 1;
+                                            } else {
+                                                fail(format!("keeps {} floats, the original {}", back.state_floats(), p.state_floats()), Some(&text));
+                                            }
+                                            if let Some(dir) = &rhai_out {
+                                                let _ = std::fs::write(
+                                                    format!("{dir}/{}-{}.rhai", path.file_stem().unwrap().to_string_lossy(), e.name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")),
+                                                    &text,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             *state.entry(p.state_floats()).or_default() += 1;
                             let c = lang::wgsl::coloring(&p);
                             if let Err(err) = lang::wgsl::validate_coloring(&c) {
@@ -1039,6 +1109,10 @@ mod tests {
         println!(
             "converted to Rhai: {converted} of {} formulas; {compiled_back} compile back; {alike} run as the original; deep zoom kept {zoom_kept} of {zoomed}",
             compiled[0]
+        );
+        println!(
+            "converted to Rhai: {c_converted} of {} colourings; {c_compiled_back} compile back; {c_alike} colour as the original; {c_same_state} keep the same state",
+            compiled[1]
         );
         let mut ranked: Vec<_> = convert_fails.iter().collect();
         ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()));

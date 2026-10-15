@@ -2539,6 +2539,7 @@ pub(crate) mod tests {
         ("rhai/plane.rhai", include_str!("../../../tests/formulas/rhai/plane.rhai")),
         ("rhai/cycle.rhai", include_str!("../../../tests/formulas/rhai/cycle.rhai")),
         ("rhai/functions.rhai", include_str!("../../../tests/formulas/rhai/functions.rhai")),
+        ("rhai/coloring.rhai", include_str!("../../../tests/formulas/rhai/coloring.rhai")),
     ];
 
     /// Every entry of the test files, checked as the registry checks it
@@ -2562,19 +2563,34 @@ pub(crate) mod tests {
             }
         }
         for &(file, text) in RHAI_TEST_FILES {
-            match super::super::rhai::program(text) {
+            let compiled = match super::super::rhai::kind_of(text) {
+                Some(EntryKind::Coloring) => super::super::rhai::coloring(text),
+                _ => super::super::rhai::program(text),
+            };
+            match compiled {
                 Ok(p) => out.push((file, p.name.clone(), p)),
                 Err(d) => failures.push(format!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>())),
             }
         }
-        // Every formula again, converted to Rhai and compiled back
+        // Every entry again, converted to Rhai and compiled back
         // (`lang::to_rhai`): what the editor's Edit as Rhai gives.
         let converted: Vec<_> = out
             .iter()
-            .filter(|(file, _, p)| p.kind == EntryKind::Formula && !file.ends_with(".rhai"))
+            .filter(|(file, _, _)| !file.ends_with(".rhai"))
             .map(|(file, name, p)| {
-                let text = super::super::to_rhai::formula(p, &[]).unwrap_or_else(|e| panic!("{file} / {name}: {e}"));
-                let back = super::super::rhai::program(&text).unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
+                let (text, back) = match p.kind {
+                    EntryKind::Formula => {
+                        let text = super::super::to_rhai::formula(p, &[]).unwrap_or_else(|e| panic!("{file} / {name}: {e}"));
+                        let back = super::super::rhai::program(&text);
+                        (text, back)
+                    }
+                    EntryKind::Coloring => {
+                        let text = super::super::to_rhai::coloring(p, &[]).unwrap_or_else(|e| panic!("{file} / {name}: {e}"));
+                        let back = super::super::rhai::coloring(&text);
+                        (text, back)
+                    }
+                };
+                let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
             })
             .collect();

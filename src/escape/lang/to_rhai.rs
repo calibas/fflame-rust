@@ -81,6 +81,17 @@ pub fn formula(p: &Program, header: &[String]) -> R<String> {
     Printer::new(p).file(header)
 }
 
+/// The Rhai colouring for a checked colouring: `start(z, p)` its
+/// `init:`, `step(s, z, p)` its `loop:` (both left out when it keeps no
+/// state, as nothing they compute would reach the result), `finish(s, z,
+/// p)` its `final:`, which returns `#index` (with `#solid`, a map).
+pub fn coloring(p: &Program, header: &[String]) -> R<String> {
+    if p.kind != EntryKind::Coloring {
+        return Err("a formula is not a colouring".into());
+    }
+    Printer::new(p).file(header)
+}
+
 /// The `;` comments of a UF or Fractint text, in order, without the
 /// `;` (a `;` inside a string is not one).
 pub fn comments(text: &str) -> Vec<String> {
@@ -104,7 +115,11 @@ pub fn comments(text: &str) -> Vec<String> {
 
 /// Names a converted formula's variables leave to its functions'
 /// arguments and the names Rhai's formulas give.
-const KEPT: &[&str] = &["s", "p", "d", "ctx", "pixel", "z", "start", "step", "escaped", "prepare", "PARAMS", "INFO", "PI", "E"];
+const KEPT: &[&str] = &["s", "p", "ctx", "pixel", "z", "start", "step", "escaped", "finish", "prepare", "PARAMS", "INFO", "PI", "E"];
+
+/// What the perturbation equations' variables leave besides: their
+/// deviation, `d`.
+const KEPT_IN_PERTURB: &[&str] = &["s", "p", "d", "ctx", "pixel", "z", "start", "step", "escaped", "finish", "prepare", "PARAMS", "INFO", "PI", "E"];
 
 /// A name Rhai takes as a variable or a field: not a keyword, nor a word
 /// it reserves.
@@ -135,8 +150,9 @@ fn unique(want: &str, used: &mut HashSet<String>) -> String {
     unique_among(want, used, KEPT)
 }
 
-/// A float as Rhai reads it back exactly (Rhai wants a `.` before an
-/// exponent).
+/// A float as Rhai reads it back exactly: the shorter of its plain and
+/// exponent forms (both the shortest that round-trip), with the `.` Rhai
+/// wants before an exponent.
 fn float(x: f64) -> R<String> {
     // An infinity: a literal past the largest float reads as one.
     if x.is_infinite() {
@@ -145,11 +161,12 @@ fn float(x: f64) -> R<String> {
     if x.is_nan() {
         return Err("a NaN constant has no Rhai literal".into());
     }
-    let s = format!("{x:?}");
-    Ok(match s.find('e') {
+    let dotted = |s: String| match s.find('e') {
         Some(i) if !s[..i].contains('.') => format!("{}.0{}", &s[..i], &s[i..]),
         _ => s,
-    })
+    };
+    let (plain, exp) = (dotted(format!("{x:?}")), dotted(format!("{x:e}")));
+    Ok(if exp.len() < plain.len() { exp } else { plain })
 }
 
 fn float_p(x: f64) -> R<P> {
@@ -220,12 +237,17 @@ enum Slot {
     Var(VarId),
     /// `#dz`, in the perturbation equations.
     DZ,
+    /// A colouring's `#index` and `#solid`, in `final:`.
+    Index,
+    Solid,
 }
 
 fn slots_of_expr(e: &IExpr, out: &mut Vec<Slot>) {
     match &e.kind {
         IExprKind::Var(v) => out.push(Slot::Var(*v)),
         IExprKind::Predef(Predef::Z) => out.push(Slot::Z),
+        IExprKind::Predef(Predef::Index) => out.push(Slot::Index),
+        IExprKind::Predef(Predef::Solid) => out.push(Slot::Solid),
         IExprKind::Convert(a)
         | IExprKind::Unary(_, a)
         | IExprKind::PowInt(a, _)
@@ -246,7 +268,8 @@ fn place_slot(p: Place) -> Option<Slot> {
         Place::Z => Some(Slot::Z),
         Place::Var(v) => Some(Slot::Var(v)),
         Place::DZ => Some(Slot::DZ),
-        _ => None,
+        Place::Index => Some(Slot::Index),
+        Place::Solid => Some(Slot::Solid),
     }
 }
 
@@ -271,29 +294,6 @@ fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
     }
 }
 
-fn expr_reads(e: &IExpr, q: Predef) -> bool {
-    match &e.kind {
-        IExprKind::Predef(x) => *x == q,
-        IExprKind::Convert(a)
-        | IExprKind::Unary(_, a)
-        | IExprKind::PowInt(a, _)
-        | IExprKind::Modulus(a)
-        | IExprKind::Call(_, a)
-        | IExprKind::UserCall(_, a)
-        | IExprKind::UserDeriv(_, a) => expr_reads(a, q),
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => expr_reads(a, q) || expr_reads(b, q),
-        _ => false,
-    }
-}
-
-fn stmts_read(st: &[IStmt], q: Predef) -> bool {
-    st.iter().any(|s| match s {
-        IStmt::Assign(_, e) => expr_reads(e, q),
-        IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| expr_reads(c, q) || stmts_read(b, q)) || stmts_read(otherwise, q),
-        IStmt::While { cond, body } | IStmt::Repeat { body, cond } => expr_reads(cond, q) || stmts_read(body, q),
-    })
-}
-
 /// Which of the formula's functions is being printed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fun {
@@ -305,6 +305,8 @@ enum Fun {
     Perturb,
     /// `perturb_when`.
     When,
+    /// A colouring's `finish`.
+    Finish,
 }
 
 struct Printer<'p> {
@@ -317,8 +319,10 @@ struct Printer<'p> {
     func: Vec<String>,
     /// Per variable: a field of the state.
     state: Vec<bool>,
-    /// The loop or the bailout reads `#pixel`: the state keeps it.
-    pixel_field: bool,
+    /// A colouring: its functions take the formula's `z`.
+    coloring: bool,
+    /// A colouring's `#index` and `#solid` as `finish`'s locals.
+    result: (String, String),
     fun: Fun,
     /// The function being printed reads the context.
     ctx: bool,
@@ -341,17 +345,22 @@ impl<'p> Printer<'p> {
             global[g] = Some(unique_among(&p.vars[g].name, &mut under_p, &[]));
         }
         let mut locals = HashSet::new();
-        let var = p.vars.iter().map(|v| unique(&v.name, &mut locals)).collect();
-        let mut in_loop = Flow::default();
-        flow(&p.loop_body, &mut in_loop);
-        let mut in_test = Flow::default();
-        if let Some(b) = &p.bailout {
-            reads(b, &mut in_test);
-        }
-        let state = (0..p.vars.len())
-            .map(|v| !p.vars[v].global && (in_loop.exposed.contains(&v) || in_test.exposed.contains(&v)))
-            .collect();
-        let pixel_field = stmts_read(&p.loop_body, Predef::Pixel) || p.bailout.as_ref().is_some_and(|b| expr_reads(b, Predef::Pixel));
+        let var = p.vars.iter().map(|v| unique_among(&v.name, &mut locals, if v.perturb { KEPT_IN_PERTURB } else { KEPT })).collect();
+        let result = (unique("index", &mut locals), unique("solid", &mut locals));
+        let coloring = p.kind == EntryKind::Coloring;
+        // A colouring's state is what the checker packs; a formula's,
+        // what a pass or the bailout reads before the pass writes it.
+        let state = if coloring {
+            (0..p.vars.len()).map(|v| p.state.contains(&v)).collect()
+        } else {
+            let mut in_loop = Flow::default();
+            flow(&p.loop_body, &mut in_loop);
+            let mut in_test = Flow::default();
+            if let Some(b) = &p.bailout {
+                reads(b, &mut in_test);
+            }
+            (0..p.vars.len()).map(|v| !p.vars[v].global && (in_loop.exposed.contains(&v) || in_test.exposed.contains(&v))).collect()
+        };
         Printer {
             p,
             var,
@@ -359,7 +368,8 @@ impl<'p> Printer<'p> {
             param,
             func,
             state,
-            pixel_field,
+            coloring,
+            result,
             fun: Fun::Start,
             ctx: false,
             declared: HashSet::new(),
@@ -370,7 +380,6 @@ impl<'p> Printer<'p> {
 
     fn file(&mut self, header: &[String]) -> R<String> {
         let p = self.p;
-        let bailout = p.bailout.as_ref().ok_or("the formula has no bailout test")?;
         let mut out = String::new();
         for h in header {
             if h.is_empty() {
@@ -406,6 +415,21 @@ impl<'p> Printer<'p> {
             out.push_str(&prep);
             out.push('\n');
         }
+        if self.coloring {
+            // Without state, nothing `init:` or `loop:` computes reaches
+            // the result.
+            if !p.state.is_empty() {
+                out.push_str(&self.start()?);
+                out.push('\n');
+                if !p.loop_body.is_empty() {
+                    out.push_str(&self.step()?);
+                    out.push('\n');
+                }
+            }
+            out.push_str(&self.finish()?);
+            return Ok(out);
+        }
+        let bailout = p.bailout.as_ref().ok_or("the formula has no bailout test")?;
         out.push_str(&self.start()?);
         out.push('\n');
         out.push_str(&self.step()?);
@@ -461,6 +485,14 @@ impl<'p> Printer<'p> {
         let v = &self.p.view;
         let title = v.title.clone().unwrap_or_else(|| self.p.name.clone());
         let mut parts = vec![format!("title: {}", string(&title))];
+        if self.coloring {
+            match self.p.region {
+                Region::Inside => parts.push("region: \"inside\"".into()),
+                Region::Outside => parts.push("region: \"outside\"".into()),
+                Region::Both => {}
+            }
+            return Ok(format!("const INFO = {};\n", map_literal(&parts, 0)));
+        }
         if let Some((re, im)) = v.center {
             parts.push(format!("center: complex({}, {})", float(re)?, float(im)?));
         }
@@ -531,19 +563,20 @@ impl<'p> Printer<'p> {
         let p = self.p;
         self.begin(Fun::Start);
         self.body(&p.init)?;
-        let mut fields = vec![field("z", if self.declared.contains(&Slot::Z) { "z".into() } else { zero(Ty::Complex).into() })];
+        let mut fields = Vec::new();
+        if !self.coloring {
+            fields.push(field("z", if self.declared.contains(&Slot::Z) { "z".into() } else { zero(Ty::Complex).into() }));
+        }
         for v in 0..p.vars.len() {
             if self.state[v] {
                 let value = if self.declared.contains(&Slot::Var(v)) { self.var[v].clone() } else { zero(p.vars[v].ty).to_string() };
                 fields.push(field(&self.var[v], value));
             }
         }
-        if self.pixel_field {
-            fields.push(field("pixel", "pixel".into()));
-        }
         let map = map_literal(&fields, self.depth);
         self.line(&map);
-        Ok(format!("fn start(pixel, p{}) {{\n{}}}\n", self.ctx_arg(), self.out))
+        let first = if self.coloring { "z" } else { "pixel" };
+        Ok(format!("fn start({first}, p{}) {{\n{}}}\n", self.ctx_arg(), self.out))
     }
 
     fn step(&mut self) -> R<String> {
@@ -551,7 +584,41 @@ impl<'p> Printer<'p> {
         self.begin(Fun::Step);
         self.body(&p.loop_body)?;
         self.line("s");
-        Ok(format!("fn step(s, p{}) {{\n{}}}\n", self.ctx_arg(), self.out))
+        let args = if self.coloring { "s, z" } else { "s" };
+        Ok(format!("fn step({args}, p{}) {{\n{}}}\n", self.ctx_arg(), self.out))
+    }
+
+    /// A colouring's `final:`: its result, `#index` (a map with `#solid`
+    /// when that is set), its own locals. When `final:` ends by setting
+    /// `#index` and touches neither elsewhere, that value is the result.
+    fn finish(&mut self) -> R<String> {
+        let p = self.p;
+        self.begin(Fun::Finish);
+        let last = match p.final_body.split_last() {
+            Some((IStmt::Assign(Place::Index, e), rest)) => {
+                let mut used = Vec::new();
+                rest.iter().for_each(|x| slots_of_stmt(x, &mut used));
+                slots_of_expr(e, &mut used);
+                (!used.iter().any(|x| matches!(x, Slot::Index | Slot::Solid))).then_some((rest, e))
+            }
+            _ => None,
+        };
+        if let Some((rest, e)) = last {
+            self.body(rest)?;
+            let v = self.loose(e)?;
+            self.line(&v);
+        } else {
+            self.body(&p.final_body)?;
+            let (index, solid) = self.result.clone();
+            let result = match (self.declared.contains(&Slot::Index), self.declared.contains(&Slot::Solid)) {
+                (true, false) => index,
+                (false, true) => format!("#{{ solid: {solid} }}"),
+                (true, true) => format!("#{{ index: {index}, solid: {solid} }}"),
+                (false, false) => "0.0".into(),
+            };
+            self.line(&result);
+        }
+        Ok(format!("fn finish(s, z, p{}) {{\n{}}}\n", self.ctx_arg(), self.out))
     }
 
     fn escaped(&mut self, test: &IExpr) -> R<String> {
@@ -573,9 +640,10 @@ impl<'p> Printer<'p> {
         let global = |v: VarId| self.p.vars[v].global;
         match (self.fun, slot) {
             (Fun::Perturb, Slot::Var(v)) => self.p.vars[v].perturb,
-            (Fun::Start, Slot::Z) => true,
+            (Fun::Start, Slot::Z) => !self.coloring,
             (Fun::Start, Slot::Var(v)) => !global(v),
-            (Fun::Step, Slot::Var(v)) => !global(v) && !self.state[v],
+            (Fun::Step | Fun::Finish, Slot::Var(v)) => !global(v) && !self.state[v],
+            (Fun::Finish, Slot::Index | Slot::Solid) => true,
             (Fun::Prepare, Slot::Var(v)) => global(v),
             _ => false,
         }
@@ -585,6 +653,8 @@ impl<'p> Printer<'p> {
         match s {
             Slot::Z => ("z".into(), Ty::Complex),
             Slot::DZ => ("dz".into(), Ty::Complex),
+            Slot::Index => (self.result.0.clone(), Ty::Float),
+            Slot::Solid => (self.result.1.clone(), Ty::Bool),
             Slot::Var(v) => (self.var[v].clone(), self.p.vars[v].ty),
         }
     }
@@ -688,8 +758,8 @@ impl<'p> Printer<'p> {
             (Fun::Start, Slot::Z) => Ok("z".into()),
             (Fun::Step, Slot::Z) => Ok("s.z".into()),
             (Fun::Perturb, Slot::DZ) => Ok("d.dz".into()),
-            (_, Slot::Var(v)) if self.is_local(slot) => Ok(self.var[v].clone()),
-            (Fun::Step, Slot::Var(v)) if self.state[v] => Ok(format!("s.{}", self.var[v])),
+            _ if self.is_local(slot) => Ok(self.slot_decl(slot).0),
+            (Fun::Step | Fun::Finish, Slot::Var(v)) if self.state[v] => Ok(format!("s.{}", self.var[v])),
             _ => Err(format!("`{}` is written where the converter keeps no place for it", self.slot_decl(slot).0)),
         }
     }
@@ -775,7 +845,8 @@ impl<'p> Printer<'p> {
         match self.fun {
             Fun::Start => Ok(self.var[v].clone()),
             Fun::Step if !self.state[v] => Ok(self.var[v].clone()),
-            Fun::Step | Fun::Escaped => Ok(format!("s.{}", self.var[v])),
+            Fun::Finish if !self.state[v] => Ok(self.var[v].clone()),
+            Fun::Step | Fun::Escaped | Fun::Finish => Ok(format!("s.{}", self.var[v])),
             Fun::Perturb if var.perturb => Ok(self.var[v].clone()),
             Fun::Prepare | Fun::Perturb | Fun::When => Err(format!("`{}` is read where the converter keeps no place for it", var.name)),
         }
@@ -788,10 +859,17 @@ impl<'p> Printer<'p> {
 
     fn predef(&mut self, q: Predef) -> R<P> {
         Ok(match q {
+            // A formula's `start` takes the pixel; elsewhere the context
+            // holds it.
             Predef::Pixel => match self.fun {
-                Fun::Start => P::atom("pixel"),
-                Fun::Step | Fun::Escaped => P::atom("s.pixel"),
-                _ => return Err("`#pixel` is read where it has no value".into()),
+                Fun::Start if !self.coloring => P::atom("pixel"),
+                Fun::Prepare | Fun::When => return Err("`#pixel` is read where it has no value".into()),
+                _ => self.ctx_field("pixel"),
+            },
+            // A colouring's functions take the formula's `z`.
+            Predef::Z if self.coloring => match self.fun {
+                Fun::Start | Fun::Step | Fun::Finish => P::atom("z"),
+                _ => return Err("`#z` is read where it has no value".into()),
             },
             Predef::Z => match self.fun {
                 Fun::Start => P::atom("z"),
@@ -799,6 +877,10 @@ impl<'p> Printer<'p> {
                 Fun::Perturb => P::atom("d.z"),
                 _ => return Err("`#z` is read where it has no value".into()),
             },
+            Predef::NumIter => self.ctx_field("numiter"),
+            Predef::Index | Predef::Solid if self.fun == Fun::Finish => {
+                P::atom(self.slot_decl(if q == Predef::Index { Slot::Index } else { Slot::Solid }).0)
+            }
             Predef::Pi => P::atom("PI()"),
             Predef::E => P::atom("E()"),
             Predef::MaxIter => self.ctx_field("maxiter"),
@@ -836,7 +918,7 @@ impl<'p> Printer<'p> {
                 self.ctx = true;
                 P::atom("complex(ctx.angle, 0.0)")
             }
-            Predef::NumIter | Predef::Index | Predef::Solid => return Err(format!("{q:?} is a colouring's")),
+            Predef::Index | Predef::Solid => return Err(format!("{q:?} is a colouring's, in `final:`")),
             Predef::DZ if self.fun == Fun::Perturb => P::atom("d.dz"),
             Predef::DPixel if self.fun == Fun::Perturb => P::atom("d.dpixel"),
             Predef::DZ | Predef::DPixel => return Err("`#dz` and `#dpixel` belong to the perturbation equations".into()),
@@ -956,6 +1038,9 @@ fn entry(name: &str, parts: Vec<String>) -> String {
 /// A map literal: on one line when it is short, else a field a line at
 /// `depth` (in four-space steps).
 fn map_literal(fields: &[String], depth: usize) -> String {
+    if fields.is_empty() {
+        return "#{}".into();
+    }
     let one = format!("#{{ {} }}", fields.join(", "));
     if one.len() + depth * 4 <= 96 {
         return one;
@@ -970,39 +1055,64 @@ fn map_literal(fields: &[String], depth: usize) -> String {
     out
 }
 
-/// Where two programs part: the first point, plane and iteration
-/// count at which they do not run alike.
+/// The points the comparisons run at, on both planes, with the screen
+/// and view set to something other than their defaults.
 #[cfg(test)]
-pub(crate) fn parting(a: &Program, b: &Program, maxiter: u32) -> Option<String> {
+fn sample_envs(maxiter: u32) -> Vec<(String, super::interp::Env)> {
+    use super::builtins::C64;
+    let mut out = Vec::new();
     for julia in [false, true] {
         for (x, y) in [(-0.75, 0.1), (0.3, 0.5), (-1.76, -0.02), (0.25, 0.0), (-0.1, 0.65), (0.4, -0.3), (1.2, 0.9)] {
-            let mut env = super::interp::Env::at(super::builtins::C64::new(x, y), maxiter);
+            let mut env = super::interp::Env::at(C64::new(x, y), maxiter);
             env.julia = julia;
-            env.julia_c = super::builtins::C64::new(-0.8, 0.156);
+            env.julia_c = C64::new(-0.8, 0.156);
             env.x = 7;
             env.y = 4;
             env.width = 640;
             env.height = 480;
             env.magn = 2.0;
-            env.center = super::builtins::C64::new(-0.5, 0.25);
-            env.random = super::builtins::C64::new(0.3, -0.6);
-            let (ra, rb) = (super::interp::run(a, &super::interp::ParamValues::defaults(a), None, &env), super::interp::run(b, &super::interp::ParamValues::defaults(b), None, &env));
-            // Alike part by part: equal (infinities too), both NaN, or
-            // within rounding.
-            let alike = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-9 * (1.0 + a.abs());
-            let same_z = alike(ra.z.re, rb.z.re) && alike(ra.z.im, rb.z.im);
-            if (ra.n, ra.escaped) != (rb.n, rb.escaped) || !same_z {
-                return Some(format!(
-                    "at ({x}, {y}){}: {} iterations, escaped {}, z {:?}; converted {} iterations, escaped {}, z {:?}",
-                    if julia { " on the Julia plane" } else { "" },
-                    ra.n,
-                    ra.escaped,
-                    ra.z,
-                    rb.n,
-                    rb.escaped,
-                    rb.z
-                ));
-            }
+            env.center = C64::new(-0.5, 0.25);
+            env.random = C64::new(0.3, -0.6);
+            out.push((format!("at ({x}, {y}){}", if julia { " on the Julia plane" } else { "" }), env));
+        }
+    }
+    out
+}
+
+/// Alike: equal (infinities too), both NaN, or within rounding.
+#[cfg(test)]
+fn alike(a: f64, b: f64) -> bool {
+    a == b || (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-9 * (1.0 + a.abs())
+}
+
+/// Where two formulas part: the first point at which they do not run
+/// alike (iterations, escape, the last z).
+#[cfg(test)]
+pub(crate) fn parting(a: &Program, b: &Program, maxiter: u32) -> Option<String> {
+    use super::interp::{run, ParamValues};
+    for (at, env) in sample_envs(maxiter) {
+        let (ra, rb) = (run(a, &ParamValues::defaults(a), None, &env), run(b, &ParamValues::defaults(b), None, &env));
+        if (ra.n, ra.escaped) != (rb.n, rb.escaped) || !alike(ra.z.re, rb.z.re) || !alike(ra.z.im, rb.z.im) {
+            return Some(format!(
+                "{at}: {} iterations, escaped {}, z {:?}; converted {} iterations, escaped {}, z {:?}",
+                ra.n, ra.escaped, ra.z, rb.n, rb.escaped, rb.z
+            ));
+        }
+    }
+    None
+}
+
+/// Where two colourings part, each run beside `formula`: the first point
+/// at which their index or solid differ.
+#[cfg(test)]
+pub(crate) fn parting_coloring(formula: &Program, a: &Program, b: &Program, maxiter: u32) -> Option<String> {
+    use super::interp::{run, ParamValues};
+    let fp = ParamValues::defaults(formula);
+    let (pa, pb) = (ParamValues::defaults(a), ParamValues::defaults(b));
+    for (at, env) in sample_envs(maxiter) {
+        let (ra, rb) = (run(formula, &fp, Some((a, &pa)), &env), run(formula, &fp, Some((b, &pb)), &env));
+        if !alike(ra.index, rb.index) || ra.solid != rb.solid {
+            return Some(format!("{at}: index {}, solid {}; converted index {}, solid {}", ra.index, ra.solid, rb.index, rb.solid));
         }
     }
     None
@@ -1054,6 +1164,66 @@ mod tests {
         assert!(n >= 10, "only {n} formulas");
     }
 
+    /// Every colouring of the test file converts, compiles back, keeps
+    /// its state's size, and colours as the original beside a formula.
+    #[test]
+    fn the_test_colourings_convert_and_colour_as_written() {
+        let formula = programs("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}", Dialect::UltraFractal).remove(0);
+        let text = include_str!("../../../tests/formulas/language.ucl");
+        let (file, _) = parse_file(text);
+        let mut n = 0;
+        for e in &file.entries {
+            let (p, d) = check(e, EntryKind::Coloring, Dialect::UltraFractal);
+            let Some(p) = p.filter(|_| !super::super::has_errors(&d)) else { continue };
+            let text = coloring(&p, &[]).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+            let back = super::super::rhai::coloring(&text)
+                .unwrap_or_else(|d| panic!("{} does not compile back:\n{}\n{text}", p.name, d.iter().map(|x| x.render(&text)).collect::<Vec<_>>().join("\n")));
+            assert_eq!(back.state_floats(), p.state_floats(), "{}: its state\n{text}", p.name);
+            assert_eq!(back.region, p.region, "{}", p.name);
+            if let Some(why) = parting_coloring(&formula, &p, &back, 100) {
+                panic!("{} colours otherwise once converted, {why}\n{text}", p.name);
+            }
+            n += 1;
+        }
+        assert!(n >= 5, "only {n} colourings");
+    }
+
+    /// A colouring's shape: the formula's `z` taken, the state from what
+    /// is carried, the result returned.
+    #[test]
+    fn a_colouring_converts_to_the_shape_a_person_writes() {
+        let (file, _) = parse_file(
+            "Trap(OUTSIDE) {\ninit:\n float closest = 1e10\nloop:\n float d = cabs(#z - @point)\n if d < closest\n  closest = d\n endif\n\
+             final:\n if closest < @width\n  #solid = true\n else\n  #index = closest * 0.5 + #numiter * 0.01\n endif\n\
+             default:\n param point\n  default = (0, 0)\n endparam\n float param width\n  default = 0.01\n endparam\n}",
+        );
+        let (p, d) = check(&file.entries[0], EntryKind::Coloring, Dialect::UltraFractal);
+        assert!(!super::super::has_errors(&d), "{d:?}");
+        let p = p.unwrap();
+        let text = coloring(&p, &[]).unwrap();
+        for line in [
+            "const INFO = #{ title: \"Trap\", region: \"outside\" };",
+            "fn start(z, p) {\n    let closest = 1.0e10;\n    #{ closest: closest }\n}",
+            "fn step(s, z, p) {\n    let d = abs(z - p.point);\n    if d < s.closest {\n        s.closest = d;\n    }\n    s\n}",
+            "fn finish(s, z, p, ctx) {",
+            "let index = 0.0;",
+            "solid = true;",
+            "index = s.closest * 0.5 + ctx.numiter * 0.01;",
+            "#{ index: index, solid: solid }",
+        ] {
+            assert!(text.contains(line), "no `{line}` in\n{text}");
+        }
+        let back = super::super::rhai::coloring(&text).unwrap();
+        let formula = programs("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}", Dialect::UltraFractal).remove(0);
+        assert_eq!(parting_coloring(&formula, &p, &back, 100), None, "{text}");
+        // A `final:` that ends by setting `#index` returns the value.
+        let (file, _) = parse_file("N {\nfinal:\n float t = #numiter\n #index = t * 0.1\n}");
+        let (p, _) = check(&file.entries[0], EntryKind::Coloring, Dialect::UltraFractal);
+        let text = coloring(&p.unwrap(), &[]).unwrap();
+        assert!(text.contains("fn finish(s, z, p, ctx) {\n    let t = to_float(ctx.numiter);\n    t * 0.1\n}"), "{text}");
+        assert!(!text.contains("fn start"), "no state, no start:\n{text}");
+    }
+
     /// The shape: the state from what is carried, `let`s for the rest,
     /// the parameters and view, the bailout negated.
     #[test]
@@ -1099,7 +1269,7 @@ mod tests {
         let (p, d) = check(&file.entries[0], EntryKind::Formula, Dialect::UltraFractal);
         assert!(!super::super::has_errors(&d), "{d:?}");
         let text = round_trip(&p.unwrap());
-        for line in ["fn prepare(p) {", "let k = cos(p.a * PI());", "#{ k: k, w: w }", "fn start(pixel, p, ctx) {", "if ctx.width > 100 {", "s.pixel * p.k"] {
+        for line in ["fn prepare(p) {", "let k = cos(p.a * PI());", "#{ k: k, w: w }", "fn start(pixel, p, ctx) {", "if ctx.width > 100 {", "ctx.pixel * p.k"] {
             assert!(text.contains(line), "no `{line}` in\n{text}");
         }
         // Fractint: real-part tests and comparisons, its round, the

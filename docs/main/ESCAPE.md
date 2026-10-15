@@ -339,14 +339,14 @@ fn escaped(s, p) {
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`,
   or `function` (a user function, called `p.f(z)`). They are the
   panel's controls, animation targets and script parameters.
-- **The context**, every function's optional third argument (`ctx`
+- **The context**, every function's optional last argument (`ctx`
   here): `ctx.julia` and `ctx.c` (the panel's Julia toggle and
   constant), `ctx.pass` (0 on the first pass; with `INFO.cycle`,
   `#{ prefix, period }`, deep zoom keeps a reference per phase: the
   hybrids), `ctx.maxiter`, `ctx.center`, `ctx.magn`, `ctx.angle` (the
   view's rotation, degrees), `ctx.x`, `ctx.y`, `ctx.width`,
-  `ctx.height` (the pixel on the screen), `ctx.random`. `INFO` gives
-  `title`, `center`, `magn`, `maxiter`, `angle`.
+  `ctx.height` (the pixel on the screen), `ctx.random`, `ctx.pixel`.
+  `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`.
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
 - **UF's own perturbation equations**, optional: `perturb_start(d, p)`
@@ -380,10 +380,38 @@ fn escaped(s, p) {
   plane, a cycle), run on the GPU as the interpreter does; a Rhai
   formula runs as its UF twin, renders as its built-in, and deep-zooms
   pixel for pixel as its UF twin (`rhai_formulas_render_and_deep_zoom_as_their_twins`).
-- **UF and Fractint formulas convert** (`lang/to_rhai.rs`; the
-  Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
-  checked program is printed in this shape, the file opened left as it
-  is.
+- **A Rhai colouring** has `finish` where a formula has `escaped`
+  (`rhai::kind_of` tells them apart). It runs beside the formula, each
+  function taking the formula's `z`:
+
+  ```rhai
+  const PARAMS = #{ point: #{ value: complex(0.0, 0.0) }, scale: 2.0 };
+  const INFO = #{ title: "Point Trap" };   // region: "inside" / "outside"
+
+  fn start(z, p) { #{ closest: (z - p.point).abs() } }
+  fn step(s, z, p) {
+      let d = (z - p.point).abs();
+      if d < s.closest { s.closest = d; }
+      s
+  }
+  fn finish(s, z, p) { s.closest.sqrt() * p.scale }
+  ```
+
+  - `start` (the state the pixel keeps) and `step` (after each of the
+    formula's passes) are optional, as UF's `init:` and `loop:` are.
+  - `finish` returns the palette position (the index; it wraps), or
+    `#{ index, solid }`, `solid` leaving the pixel to the solid colour.
+    It may end in an `if` whose arms give either.
+  - The context adds `ctx.numiter` (the passes run, in `finish`); a
+    colouring counts its own passes in its state.
+  - The state is packed under the same 32-float cap as UF's.
+  - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
+    test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
+    interpreter does.
+- **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
+  the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
+  checked program is printed in these shapes, the file opened left as
+  it is.
   - The state is `z`, what a pass reads before it writes it, and what
     the bailout reads (`#pixel` too when the loop reads it); the other
     variables are `let`s.
@@ -396,14 +424,19 @@ fn escaped(s, p) {
     does in UF.
   - The entry's comments, and those just above it, come along.
   - A `switch:` pair becomes one formula on both planes.
-  - Measured on UF's public library: all 9,250 compiling formulas
-    convert, compile back and iterate as the original (the interpreter,
-    seven points on both planes). Deep zoom is kept on all 310 that
-    have it.
+  - A colouring's state is what the checker packs. `final:` becomes
+    `finish`, with `#index` and `#solid` its locals, returned. When
+    `final:` ends by setting `#index`, that value is returned directly.
+    `init:` and `loop:` are left out when the colouring keeps no state.
+  - Measured on UF's public library:
+    - all 9,250 compiling formulas convert, compile back and iterate as
+      the original (the interpreter, seven points on both planes), and
+      deep zoom is kept on all 310 that have it;
+    - all 726 compiling colourings convert, compile back, colour as the
+      original beside the Mandelbrot, and keep the same state size.
   - The test files' conversions run on the GPU as the interpreter
     does.
   - A config's UF source still compiles as UF.
-- Not yet: Rhai colourings (phase 4, step 3).
 
 **An entry** is `Name(setting) { ... }` in a `.ufm` (formulas), `.ucl`
 (colourings) or `.frm` (Fractint) file; `;` comments to the end of a

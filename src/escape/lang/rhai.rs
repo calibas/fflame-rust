@@ -1,8 +1,8 @@
-//! Formulas written in Rhai (plan, phase 4): the GPU subset of a Rhai
-//! script lowered to the formula language's parse tree, which the
-//! checker types and the rest of the pipeline takes as it takes UF
-//! text -- the interpreter, the big-float reference, the WGSL back
-//! ends, the derivative and the derived perturbation equations.
+//! Formulas and colourings written in Rhai (plan, phase 4): the GPU
+//! subset of a Rhai script lowered to the formula language's parse tree,
+//! which the checker types and the rest of the pipeline takes as it
+//! takes UF text -- the interpreter, the big-float reference, the WGSL
+//! back ends, the derivative and the derived perturbation equations.
 //!
 //! A formula is three functions and its parameters' metadata:
 //!
@@ -34,14 +34,15 @@
 //!   map with `value` and any of `min`, `max`, `caption`, `hint`,
 //!   `choices` (an int's names), `function` (a user function's default,
 //!   called as `p.f(z)`), `exponential` (the slider's scale).
-//! - **The context**, every function's optional third argument (`ctx`
+//! - **The context**, every function's optional last argument (`ctx`
 //!   here; the name is the script's): `ctx.julia` (the panel's Julia
 //!   toggle), `ctx.c` (the Julia constant), `ctx.pass` (the pass, 0 on
 //!   the first; with `INFO.cycle`, `#{ prefix, period }`, when deep zoom
 //!   should follow it), `ctx.maxiter`, `ctx.center`, `ctx.magn`,
 //!   `ctx.angle` (the view's rotation, degrees), `ctx.x`, `ctx.y`,
-//!   `ctx.width`, `ctx.height` (the pixel on the screen) and
-//!   `ctx.random`.
+//!   `ctx.width`, `ctx.height` (the pixel on the screen),
+//!   `ctx.random` and `ctx.pixel` (in any function; `start` also takes
+//!   it).
 //! - **`prepare(p, ctx)`**, optional: values computed once per image (UF's
 //!   `global:`), returned as a map and read as `p.name`.
 //! - **UF's own perturbation equations**, optional: `perturb_start(d, p)`
@@ -74,7 +75,19 @@
 //! while/until`, `for i in a..b`; no `break`. What does not compile is
 //! refused with the script's own positions.
 //!
-//! UF and Fractint formulas convert to this shape ([`super::to_rhai`]).
+//! **A colouring** has `finish` where a formula has `escaped` (which a
+//! file is, [`kind_of`] says by that). It runs beside the formula, each
+//! function taking the formula's `z`: `start(z, p)` returns the state
+//! the pixel keeps (optional, as UF's `init:` is), `step(s, z, p)`
+//! updates it after each of the formula's passes (optional), and
+//! `finish(s, z, p)` returns the palette position -- the index -- or
+//! `#{ index, solid }` (solid: the pixel left to the solid colour). The
+//! context adds `ctx.numiter` (the passes run, in `finish`); `INFO.region`
+//! is `"inside"`, `"outside"` or `"both"`. A state field may be called
+//! `z`: in a colouring that name is the colouring's own.
+//!
+//! UF and Fractint formulas and colourings convert to these shapes
+//! ([`super::to_rhai`]).
 
 use super::ast::{self, BinOp, Entry, ExprKind, FuncBlock, ParamBlock, Section, SectionKind, Setting, SettingValue, Settings, TypeName, UnOp};
 use super::builtins::Builtin;
@@ -87,8 +100,17 @@ type R<T> = Result<T, Diag>;
 
 /// The program a Rhai formula compiles to.
 pub fn program(source: &str) -> Result<Program, Vec<Diag>> {
-    let lowered = lower(source)?;
-    let (program, diags) = super::check::check_rhai(&lowered.entry, EntryKind::Formula);
+    compile(source, EntryKind::Formula)
+}
+
+/// The program a Rhai colouring compiles to.
+pub fn coloring(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::Coloring)
+}
+
+fn compile(source: &str, kind: EntryKind) -> Result<Program, Vec<Diag>> {
+    let lowered = lower_as(source, kind)?;
+    let (program, diags) = super::check::check_rhai(&lowered.entry, kind);
     let diags: Vec<Diag> = diags.into_iter().map(|d| lowered.rename(d)).collect();
     match program {
         Some(mut p) if !super::has_errors(&diags) => {
@@ -101,9 +123,24 @@ pub fn program(source: &str) -> Result<Program, Vec<Diag>> {
     }
 }
 
-/// The title a Rhai formula gives itself (`INFO.title`), for the panel.
+/// What a Rhai file holds, by its functions: a colouring has `finish`,
+/// a formula `escaped`. `None` when it does not parse or has neither.
+pub fn kind_of(source: &str) -> Option<EntryKind> {
+    let (ast, _) = parse(source).ok()?;
+    let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
+    if has("finish") {
+        Some(EntryKind::Coloring)
+    } else if has("escaped") {
+        Some(EntryKind::Formula)
+    } else {
+        None
+    }
+}
+
+/// The title a Rhai formula or colouring gives itself (`INFO.title`),
+/// for the panel.
 pub fn title(source: &str) -> Option<String> {
-    lower(source).ok().map(|l| l.entry.name)
+    lower_as(source, kind_of(source).unwrap_or(EntryKind::Formula)).ok().map(|l| l.entry.name)
 }
 
 /// A formula lowered to the parse tree, with what the checker cannot
@@ -125,8 +162,9 @@ impl Lowered {
     }
 }
 
-/// Lower a Rhai formula to the parse tree.
-pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
+/// Rhai's own parse of a script, optimisation off so the tree is the
+/// source's.
+fn parse(source: &str) -> Result<(::rhai::AST, Positions), Vec<Diag>> {
     let mut engine = Engine::new_raw();
     engine.set_optimization_level(OptimizationLevel::None);
     // Rhai counts each link of a chain (`a + b + c`) as a level of depth,
@@ -134,7 +172,19 @@ pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
     engine.set_max_expr_depths(2048, 2048);
     let pos = Positions::new(source);
     let ast = engine.compile(source).map_err(|e| vec![Diag::error(pos.span(e.position()), format!("{}", e.err_type()))])?;
+    Ok((ast, pos))
+}
+
+/// Lower a Rhai formula to the parse tree.
+pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
+    lower_as(source, EntryKind::Formula)
+}
+
+/// Lower a Rhai formula or colouring to the parse tree.
+pub fn lower_as(source: &str, kind: EntryKind) -> Result<Lowered, Vec<Diag>> {
+    let (ast, pos) = parse(source)?;
     let mut l = Lowerer {
+        coloring: kind == EntryKind::Coloring,
         pos,
         source,
         fns: HashMap::new(),
@@ -147,7 +197,7 @@ pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
         names: Vec::new(),
         fresh: 0,
     };
-    let mut out = l.run(&ast).map_err(|d| vec![d])?;
+    let mut out = l.run(&ast, kind).map_err(|d| vec![d])?;
     out.names = l.names;
     // The checker's names for what the context reads.
     for (uf, rhai) in CTX_FIELDS {
@@ -171,6 +221,9 @@ const CTX_FIELDS: &[(&str, &str)] = &[
     ("width", "width"),
     ("height", "height"),
     ("random", "random"),
+    ("pixel", "pixel"),
+    // A colouring's, in `finish`.
+    ("numiter", "numiter"),
 ];
 
 // ---- positions --------------------------------------------------------
@@ -218,6 +271,8 @@ enum Binding {
     Params,
     /// `start`'s pixel.
     Pixel,
+    /// A colouring's `z`: the formula's iterate.
+    Z,
     /// The context: every function's optional last argument.
     Ctx,
     /// A local, by its lowered name.
@@ -238,6 +293,8 @@ enum Fn3 {
     /// `perturb_start` or `perturb_step`: UF's own perturbation
     /// equations, the deviation `d` their state.
     Perturb,
+    /// A colouring's `finish`.
+    Finish,
 }
 
 impl Fn3 {
@@ -248,6 +305,9 @@ impl Fn3 {
 }
 
 struct Lowerer<'s> {
+    /// A colouring: `z` is the formula's, and a state field of that name
+    /// is the colouring's own.
+    coloring: bool,
     pos: Positions,
     source: &'s str,
     fns: HashMap<String, ScriptFuncDef>,
@@ -342,10 +402,11 @@ impl<'s> Lowerer<'s> {
         Err(Diag::error(self.pos.span(p), msg))
     }
 
-    fn run(&mut self, ast: &::rhai::AST) -> R<Lowered> {
+    fn run(&mut self, ast: &::rhai::AST, kind: EntryKind) -> R<Lowered> {
         for f in ast.iter_fn_def() {
             self.fns.insert(f.name.to_string(), (**f).clone());
         }
+        let what = if self.coloring { "a colouring" } else { "a formula" };
         // The top level: PARAMS, INFO, nothing else.
         let mut params: Vec<(String, Expr, Position)> = Vec::new();
         let mut info: Vec<(String, Expr, Position)> = Vec::new();
@@ -356,7 +417,7 @@ impl<'s> Lowerer<'s> {
                     let list = match ident.name.as_str() {
                         "PARAMS" => &mut params,
                         "INFO" => &mut info,
-                        other => return self.err(*pos, format!("a formula's top level holds `PARAMS` and `INFO`, not `{other}`")),
+                        other => return self.err(*pos, format!("{what}'s top level holds `PARAMS` and `INFO`, not `{other}`")),
                     };
                     let Expr::Map(m, _) = value else {
                         return self.err(*pos, format!("`{}` is a map, `#{{ ... }}`", ident.name));
@@ -366,26 +427,27 @@ impl<'s> Lowerer<'s> {
                     }
                 }
                 Stmt::Noop(_) => {}
-                other => return self.err(other.position(), "a formula's top level holds `PARAMS`, `INFO` and functions"),
+                other => return self.err(other.position(), format!("{what}'s top level holds `PARAMS`, `INFO` and functions")),
             }
         }
         let mut default = Settings::default();
         for (name, v, p) in &params {
             self.param(name, v, *p, &mut default)?;
         }
-        let mut title = "Formula".to_string();
+        let mut title = if self.coloring { "Colouring" } else { "Formula" }.to_string();
         let mut cycle = None;
+        let mut region = None;
         for (name, v, p) in &info {
             match name.as_str() {
                 "title" => match v {
                     Expr::StringConstant(s, _) => title = s.to_string(),
                     _ => return self.err(*p, "`title` is a string"),
                 },
-                "center" | "magn" | "maxiter" | "angle" => {
+                "center" | "magn" | "maxiter" | "angle" if !self.coloring => {
                     let value = self.literal(v)?;
                     default.items.push(Setting { name: name.clone(), value: SettingValue::Expr(value), span: self.pos.span(*p) });
                 }
-                "cycle" => {
+                "cycle" if !self.coloring => {
                     let Expr::Map(m, _) = v else { return self.err(*p, "`cycle` is `#{ prefix, period }`") };
                     let mut c = Cycle { prefix: 0, period: 0 };
                     for (k, x) in &m.0 {
@@ -401,18 +463,19 @@ impl<'s> Lowerer<'s> {
                     }
                     cycle = Some(c);
                 }
+                // Which pixels a colouring colours: UF's `(INSIDE)`.
+                "region" if self.coloring => match v {
+                    Expr::StringConstant(r, _) if matches!(r.as_str(), "inside" | "outside" | "both") => region = Some(r.to_string()),
+                    _ => return self.err(*p, "`region` is \"inside\", \"outside\" or \"both\""),
+                },
+                o if self.coloring => return self.err(*p, format!("a colouring's `INFO` has `title` and `region`, not `{o}`")),
                 o => return self.err(*p, format!("`INFO` has `title`, `center`, `magn`, `maxiter`, `angle` and `cycle`, not `{o}`")),
             }
         }
-        let get = |name: &str| self.fns.get(name).cloned();
-        let (Some(start), Some(step), Some(escaped)) = (get("start"), get("step"), get("escaped")) else {
-            let missing: Vec<&str> = ["start", "step", "escaped"].into_iter().filter(|n| !self.fns.contains_key(*n)).collect();
-            return Err(Diag::error(Span::default(), format!("a formula needs `fn {}`", missing.join("`, `fn "))));
-        };
         let span = Span { start: 0, end: self.source.len() };
         let mut sections = Vec::new();
         // prepare: once per image, its map's fields read as `p.name`.
-        if let Some(prep) = get("prepare") {
+        if let Some(prep) = self.fns.get("prepare").cloned() {
             let mut scope = Scope::new(Fn3::Prepare, Vec::new());
             if prep.params.is_empty() || prep.params.len() > 2 {
                 return self.err(prep.body.position(), "`prepare(p)` or `prepare(p, ctx)`");
@@ -424,6 +487,25 @@ impl<'s> Lowerer<'s> {
             self.state_body(&prep.body, &mut scope, &mut body)?;
             sections.push(Section { kind: SectionKind::Global, span, body, last_is_bailout: false, labelled: true });
         }
+        match kind {
+            EntryKind::Formula => sections.extend(self.formula_sections(span, &mut default)?),
+            EntryKind::Coloring => sections.extend(self.coloring_sections(span)?),
+        }
+        default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
+        let setting = region.filter(|r| r != "both");
+        let entry = Entry { name: title, setting, span, body: span, sections, default, switch: Settings::default() };
+        Ok(Lowered { entry, cycle, names: Vec::new() })
+    }
+
+    /// A formula's functions as its sections: `start` the init, `step`
+    /// the loop, `escaped` the bailout negated, and UF's own
+    /// perturbation equations when it brings them.
+    fn formula_sections(&mut self, span: Span, default: &mut Settings) -> R<Vec<Section>> {
+        let get = |l: &Self, name: &str| l.fns.get(name).cloned();
+        let (Some(start), Some(step), Some(escaped)) = (get(self, "start"), get(self, "step"), get(self, "escaped")) else {
+            let missing: Vec<&str> = ["start", "step", "escaped"].into_iter().filter(|n| !self.fns.contains_key(*n)).collect();
+            return Err(Diag::error(Span::default(), format!("a formula needs `fn {}`", missing.join("`, `fn "))));
+        };
         // start: its map's fields become the state.
         let mut scope = Scope::new(Fn3::Start, Vec::new());
         if start.params.len() > 3 || start.params.len() < 2 {
@@ -461,15 +543,15 @@ impl<'s> Lowerer<'s> {
         self.pure = false;
         let tspan = test.span;
         let go = mk(ExprKind::Unary(UnOp::Not, Box::new(test)), tspan);
-        sections.extend([
+        let mut sections = vec![
             Section { kind: SectionKind::Init, span, body: init, last_is_bailout: false, labelled: true },
             Section { kind: SectionKind::Loop, span, body: lp, last_is_bailout: false, labelled: true },
             Section { kind: SectionKind::Bailout, span, body: vec![ast::Stmt::Expr(go)], last_is_bailout: false, labelled: true },
-        ]);
+        ];
         // UF's own perturbation equations, when the formula brings them:
         // the deviation's start and step, and when they hold.
         for (name, kind) in [("perturb_start", SectionKind::PerturbInit), ("perturb_step", SectionKind::PerturbLoop)] {
-            let Some(f) = self.fns.get(name).cloned() else { continue };
+            let Some(f) = get(self, name) else { continue };
             let mut scope = Scope::new(Fn3::Perturb, DEVIATION.iter().map(|f| f.to_string()).collect());
             if f.params.len() < 2 || f.params.len() > 3 {
                 return self.err(f.body.position(), format!("`{name}(d, p)` or `{name}(d, p, ctx)`"));
@@ -481,7 +563,7 @@ impl<'s> Lowerer<'s> {
             self.state_body(&f.body, &mut scope, &mut body)?;
             sections.push(Section { kind, span, body, last_is_bailout: false, labelled: true });
         }
-        if let Some(f) = self.fns.get("perturb_when").cloned() {
+        if let Some(f) = get(self, "perturb_when") {
             let mut scope = Scope::new(Fn3::Escaped, Vec::new());
             if f.params.is_empty() || f.params.len() > 2 {
                 return self.err(f.body.position(), "`perturb_when(p)` or `perturb_when(p, ctx)`");
@@ -494,9 +576,129 @@ impl<'s> Lowerer<'s> {
             self.pure = false;
             default.items.push(Setting { name: "perturb".into(), value: SettingValue::Expr(test?), span });
         }
-        default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
-        let entry = Entry { name: title, setting: None, span, body: span, sections, default, switch: Settings::default() };
-        Ok(Lowered { entry, cycle, names: Vec::new() })
+        Ok(sections)
+    }
+
+    /// A colouring's functions as its sections: `start(z, p)` the init,
+    /// `step(s, z, p)` the loop (both optional, as UF's are), `finish(s,
+    /// z, p)` the final, its result `#index` (and `#solid`).
+    fn coloring_sections(&mut self, span: Span) -> R<Vec<Section>> {
+        let get = |l: &Self, name: &str| l.fns.get(name).cloned();
+        let Some(finish) = get(self, "finish") else {
+            return Err(Diag::error(Span::default(), "a colouring needs `fn finish`"));
+        };
+        let mut sections = Vec::new();
+        let mut fields = Vec::new();
+        if let Some(start) = get(self, "start") {
+            let mut scope = Scope::new(Fn3::Start, Vec::new());
+            if start.params.len() < 2 || start.params.len() > 3 {
+                return self.err(start.body.position(), "a colouring's `start(z, p)` or `start(z, p, ctx)`");
+            }
+            for (name, role) in start.params.iter().zip([Binding::Z, Binding::Params, Binding::Ctx]) {
+                scope.bind(name, role);
+            }
+            let mut body = Vec::new();
+            self.state_body(&start.body, &mut scope, &mut body)?;
+            fields = scope.fields.clone();
+            sections.push(Section { kind: SectionKind::Init, span, body, last_is_bailout: false, labelled: true });
+        }
+        if let Some(step) = get(self, "step") {
+            let mut scope = Scope::new(Fn3::Step, fields.clone());
+            if step.params.len() < 3 || step.params.len() > 4 {
+                return self.err(step.body.position(), "a colouring's `step(s, z, p)` or `step(s, z, p, ctx)`");
+            }
+            for (name, role) in step.params.iter().zip([Binding::State, Binding::Z, Binding::Params, Binding::Ctx]) {
+                scope.bind(name, role);
+            }
+            let mut body = Vec::new();
+            self.state_body(&step.body, &mut scope, &mut body)?;
+            sections.push(Section { kind: SectionKind::Loop, span, body, last_is_bailout: false, labelled: true });
+        }
+        let mut scope = Scope::new(Fn3::Finish, fields);
+        if finish.params.len() < 3 || finish.params.len() > 4 {
+            return self.err(finish.body.position(), "`finish(s, z, p)` or `finish(s, z, p, ctx)`");
+        }
+        for (name, role) in finish.params.iter().zip([Binding::State, Binding::Z, Binding::Params, Binding::Ctx]) {
+            scope.bind(name, role);
+        }
+        let mut body = Vec::new();
+        self.result_body(&finish.body, &mut scope, &mut body)?;
+        sections.push(Section { kind: SectionKind::Final, span, body, last_is_bailout: false, labelled: true });
+        Ok(sections)
+    }
+
+    /// `finish`'s body: statements, then its result -- the index, or
+    /// `#{ index, solid }` -- or an `if` whose arms end in results.
+    fn result_body(&mut self, b: &StmtBlock, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        const RESULT: &str = "`finish` ends with the index, or `#{ index: ..., solid: ... }`";
+        let stmts = b.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(b.position(), RESULT) };
+        for st in rest {
+            self.stmt(st, scope, out)?;
+        }
+        match final_value(last) {
+            Some(Final::If(fc, p)) => self.result_if(fc, p, scope, out),
+            Some(Final::Expr(Expr::Map(m, _))) => {
+                let mut values = Vec::new();
+                for (k, x) in &m.0 {
+                    if !matches!(k.name.as_str(), "index" | "solid") {
+                        return self.err(k.pos, format!("`finish` gives `index` and `solid`, not `{}`", k.name));
+                    }
+                    let v = self.expr(x, scope)?;
+                    values.push((k.name.to_string(), v, self.pos.span(k.pos)));
+                }
+                self.flush(out);
+                for (place, v, span) in values {
+                    out.push(assign(mk(ExprKind::Predef(place), span), v, span));
+                }
+                Ok(())
+            }
+            Some(f) => {
+                let v = self.final_expr(f, scope)?;
+                self.flush(out);
+                let span = v.span;
+                out.push(assign(mk(ExprKind::Predef("index".into()), span), v, span));
+                Ok(())
+            }
+            None => self.err(last.position(), RESULT),
+        }
+    }
+
+    /// An `if` that ends `finish`, each arm ending in a result.
+    fn result_if(&mut self, fc: &FlowControl, p: Position, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        let span = self.pos.span(p);
+        let mut arms = Vec::new();
+        let mut cur = fc;
+        let otherwise;
+        loop {
+            let cond = self.expr(&cur.expr, scope)?;
+            if !arms.is_empty() && !self.pending.is_empty() {
+                return self.err(cur.expr.position(), "an `else if` condition holds no `if` value or helper with statements");
+            }
+            self.flush(out);
+            let body = self.result_arm(&cur.body, scope)?;
+            arms.push((cond, body));
+            match cur.branch.statements() {
+                [Stmt::If(inner, _)] => cur = &**inner,
+                [] => return self.err(p, "the `if` that ends `finish` needs its `else`"),
+                _ => {
+                    otherwise = Some(self.result_arm(&cur.branch, scope)?);
+                    break;
+                }
+            }
+        }
+        out.push(ast::Stmt::If { arms, otherwise, span });
+        Ok(())
+    }
+
+    fn result_arm(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<Vec<ast::Stmt>> {
+        let outer = std::mem::take(&mut self.pending);
+        scope.blocks.push(HashMap::new());
+        let mut body = Vec::new();
+        let r = self.result_body(b, scope, &mut body);
+        scope.blocks.pop();
+        self.pending = outer;
+        r.map(|_| body)
     }
 
     // ---- parameters ---------------------------------------------------
@@ -760,7 +962,7 @@ impl<'s> Lowerer<'s> {
             mk(ExprKind::Predef(f.into()), span)
         } else if which == Fn3::Prepare {
             mk(ExprKind::Name(prepared_name(f)), span)
-        } else if f == "z" {
+        } else if f == "z" && !self.coloring {
             mk(ExprKind::Predef("z".into()), span)
         } else {
             mk(ExprKind::Name(field_name(f)), span)
@@ -1098,6 +1300,7 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::Local(n)) => mk(ExprKind::Name(n), span),
                 Some(Binding::Value(x)) => x,
                 Some(Binding::Pixel) => mk(ExprKind::Predef("pixel".into()), span),
+                Some(Binding::Z) => mk(ExprKind::Predef("z".into()), span),
                 Some(Binding::State) => return self.err(*p, "the state is read by its fields, `s.z`"),
                 Some(Binding::Params) => return self.err(*p, "the parameters are read by name, `p.power`"),
                 Some(Binding::Ctx) => return self.err(*p, "the context is read by its fields, `ctx.julia`"),
@@ -1182,6 +1385,9 @@ impl<'s> Lowerer<'s> {
                         // The view's rotation in degrees: Fractint's
                         // `rotskew` holds it.
                         "angle" => Ok(mk(ExprKind::Call { name: "real".into(), args: vec![mk(ExprKind::Name("rotskew".into()), span)], user: false }, span)),
+                        // A colouring runs after the formula's pass and
+                        // counts its own.
+                        "pass" if self.coloring => self.err(*p, "a colouring counts its own passes, in its state"),
                         o => match CTX_FIELDS.iter().find(|(_, r)| *r == o) {
                             Some((uf, _)) => Ok(mk(ExprKind::Predef((*uf).into()), span)),
                             None => {
@@ -1249,7 +1455,7 @@ impl<'s> Lowerer<'s> {
                 // first parameter.
                 return self.err(p, format!("call a helper as a function, `{name}(x)`"));
             }
-            if matches!(name, "start" | "step" | "escaped" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when") {
+            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
             for a in f.args.iter() {
@@ -1358,7 +1564,7 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) if n == "ismand" => TypeName::Complex,
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
-                "pass" | "maxiter" | "x" | "y" | "width" | "height" => TypeName::Int,
+                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" => TypeName::Int,
                 "magn" | "pi" | "e" => TypeName::Float,
                 _ => TypeName::Complex,
             },
@@ -1646,9 +1852,60 @@ fn escaped(s, p) { s.z.re > 1e9 }
         assert!(program(bad).unwrap_err()[0].message.contains("same fields"));
     }
 
+    fn ucl(src: &str) -> Program {
+        let (file, d) = parse_file(src);
+        assert!(d.is_empty(), "{d:?}");
+        let (p, d) = check(&file.entries[0], EntryKind::Coloring, Dialect::UltraFractal);
+        assert!(!super::super::has_errors(&d), "{d:?}");
+        p.unwrap()
+    }
+
+    /// A Rhai colouring colours as its UF twin beside a formula: the
+    /// examples, with state, a solid result and the region.
+    #[test]
+    fn a_rhai_colouring_colours_as_its_uf_twin() {
+        use super::super::ir::Region;
+        use super::super::to_rhai::parting_coloring;
+        let m = uf("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}");
+        let text = include_str!("../../../assets/formulas/orbit-trap.rhai");
+        assert_eq!(kind_of(text), Some(EntryKind::Coloring));
+        let trap = coloring(text).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
+        let utrap = ucl(
+            "T {\ninit:\n float c = cabs(#z - @point)\nloop:\n float d = cabs(#z - @point)\n if d < c\n  c = d\n endif\n\
+             final:\n if c < @width\n  #solid = true\n else\n  #index = sqrt(c) * @scale\n endif\n\
+             default:\n param point\n  default = (0, 0)\n endparam\n float param width\n  default = 0\n endparam\n\
+             float param scale\n  default = 2\n endparam\n}",
+        );
+        assert_eq!(parting_coloring(&m, &utrap, &trap, 100), None);
+        assert_eq!(trap.state_floats(), 1, "the closest distance alone");
+        let text = include_str!("../../../assets/formulas/smooth.rhai");
+        let smooth = coloring(text).unwrap();
+        assert_eq!(smooth.region, Region::Outside);
+        let usmooth = ucl(
+            "S(OUTSIDE) {\nfinal:\n float r = cabs(#z)\n #index = (#numiter + 1 - log(log(r)) / log(2)) * @scale\n\
+             default:\n float param scale\n  default = 0.02\n endparam\n}",
+        );
+        assert_eq!(parting_coloring(&m, &usmooth, &smooth, 100), None);
+        assert_eq!(kind_of(MANDELBROT), Some(EntryKind::Formula));
+        // What a colouring refuses, and where.
+        for (src, says) in [
+            ("fn finish(s, z, p) { #{ hue: 1.0 } }", "`finish` gives `index` and `solid`"),
+            ("fn finish(s, z, p, ctx) { to_float(ctx.pass) }", "counts its own passes"),
+            ("fn step(s, z, p) { s }", "needs `fn finish`"),
+            ("fn finish(s, z, p) { z = complex(1.0, 0.0); 0.0 }", "not a variable to set"),
+            ("const INFO = #{ center: complex(0.0, 0.0) };\nfn finish(s, z, p) { 0.0 }", "`title` and `region`"),
+            ("const INFO = #{ region: \"left\" };\nfn finish(s, z, p) { 0.0 }", "`region` is"),
+            ("fn finish(s, z, p) { let t = 1.0; }", "ends with the index"),
+        ] {
+            let err = coloring(src).err().unwrap_or_else(|| panic!("{src}: compiled"));
+            let text: Vec<String> = err.iter().map(|d| d.message.clone()).collect();
+            assert!(text.iter().any(|m| m.contains(says)), "{src}: {text:?}");
+        }
+    }
+
     #[test]
     fn what_a_formula_refuses_and_where() {
-        let base = |step: &str| format!("fn start(pixel, p) {{ #{{ z: pixel }} }}\nfn step(s, p) {{\n{step}\n}}\nfn escaped(s, p) {{ s.z.norm_sqr() > 4.0 }}");
+        let base = |step: &str| format!("fn start(pixel, p) {{ #{{ z: pixel }} }}\nfn step(s, p, ctx) {{\n{step}\n}}\nfn escaped(s, p) {{ s.z.norm_sqr() > 4.0 }}");
         for (step, says) in [
             ("let q = 1 / 2; s.z = s.z * q; s", "two ints divided"),
             ("s.w = s.z; s", "`w` is not in the state"),
@@ -1659,6 +1916,7 @@ fn escaped(s, p) { s.z.re > 1e9 }
             ("s.z = \"x\"; s", "a string is metadata"),
             ("s.z = s.z + 1.0;", "ends with the state"),
             ("s.z = q; s", "`q` is not declared"),
+            ("s.z = s.z * to_float(ctx.numiter); s", "`ctx.numiter` is a colouring's"),
         ] {
             let src = base(step);
             let err = program(&src).err().unwrap_or_else(|| panic!("{step}: compiled"));
