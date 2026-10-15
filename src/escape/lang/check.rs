@@ -229,6 +229,7 @@ impl Checker {
             state: Vec::new(),
             dz_var: None,
             cycle: None,
+            carried: Vec::new(),
         };
         // The globals the other sections read are what the GPU needs.
         let mut f = Flow::default();

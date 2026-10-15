@@ -329,6 +329,22 @@ pub struct Program {
     /// How a program that reads the pass index ([`Predef::Pass`]) uses
     /// it: periodically after a prefix (a hybrid's groups).
     pub cycle: Option<Cycle>,
+    /// What the derived perturbation equations carry besides z, in the
+    /// order the reference records them ([`Carried`]). Empty: z alone.
+    pub carried: Vec<Carried>,
+}
+
+/// A variable the loop carries from one pass to the next besides z, as
+/// derived perturbation equations follow it (plan, phase 4 step 5): the
+/// reference orbit records `var` at the start of each pass, `reference`
+/// reads that record in the equations, and `deviation` is the pixel's
+/// deviation from it, kept from pass to pass as `#dz` is. A rebase onto
+/// the orbit's start moves it as it moves `#dz`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Carried {
+    pub var: VarId,
+    pub reference: VarId,
+    pub deviation: VarId,
 }
 
 /// A loop whose passes repeat: the first `prefix` passes run once,

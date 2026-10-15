@@ -761,9 +761,21 @@ struct PerturbParamsGpu {
 /// The entries a reference orbit needs for `max_iter` passes: one a
 /// pass, or with a hybrid's references one per reference a pass, all
 /// interleaved (`reference::ORBIT_PAD_E`).
+/// The tiers that perturb on the deep rung at every depth: Manowar (see
+/// the render path's note: its history carries the deviation forward
+/// with coefficient 1, and f32 error accumulates), and for the same
+/// reason a custom formula whose equations carry a value besides z
+/// (phase 4, step 5). Measured on the Manowar twin at zoom 26 against
+/// the big-float truth: 337 of 439 sampled pixels right on the scaled
+/// rung, 420 on this one.
+fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
+    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. })
+}
+
 fn orbit_depth(max_iter: u32, tier: assembler::PerturbTier) -> u32 {
     match tier {
-        assembler::PerturbTier::Custom { stride, .. } if stride > 1 => {
+        assembler::PerturbTier::Custom { stride, width, .. } if stride > 1 || width > 1 => {
+            let stride = u32::from(stride) * u32::from(width);
             ((u64::from(max_iter) + 1) * u64::from(stride) - 1).min(u64::from(u32::MAX)) as u32
         }
         _ => max_iter,
@@ -3410,13 +3422,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     /// Which rung a perturbed render of `escape` takes: floatexp past
-    /// [`PERTURB_FLOATEXP_ZOOM`], and always for Manowar.
+    /// [`PERTURB_FLOATEXP_ZOOM`], and always for Manowar and a custom
+    /// formula carrying a value besides z ([`deep_rung_always`]).
     fn floatexp_for(&self, escape: &EscapeConfig) -> bool {
         #[cfg(test)]
         let deep = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
         #[cfg(not(test))]
         let deep = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
-        deep || matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Manowar))
+        deep || Self::perturb_tier(escape).is_some_and(deep_rung_always)
     }
 
     /// Whether the iterate pass compiles a real derivative orbit. On the
@@ -8447,10 +8460,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // iterations. Measured against an exact orbit: 18.4%
                 // of pixels wrong at zoom 20 and 27.0% at zoom 26 on
                 // the scaled rung, against 1.6% and 2.1% on this one.
-                if matches!(
-                    Self::perturb_tier(escape),
-                    Some(assembler::PerturbTier::Manowar)
-                ) {
+                if Self::perturb_tier(escape).is_some_and(deep_rung_always) {
                     floatexp = true;
                 }
                 // Pixel spacing S = 2^(2 - zoom) / height. The scaled

@@ -71,6 +71,22 @@ impl BigMachine {
     }
 
     /// The iterate.
+    /// The values the derived equations carry besides z
+    /// (`Program::carried`), as they stand: what the reference orbit
+    /// records beside z each pass. A float is a complex with a zero
+    /// imaginary part.
+    pub fn carried(&self) -> Vec<BigComplex> {
+        self.prog
+            .carried
+            .iter()
+            .map(|c| match &self.vars[c.var] {
+                BigValue::Complex(z) => z.clone(),
+                BigValue::Float(x) => BigComplex { re: x.clone(), im: x.sub(x) },
+                _ => self.z.sub(&self.z),
+            })
+            .collect()
+    }
+
     pub fn z(&self) -> &BigComplex {
         &self.z
     }

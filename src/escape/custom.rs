@@ -403,7 +403,7 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
         return None;
     }
     let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
-    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride: how.references() as u8 })
+    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride: how.references() as u8, width: (1 + prog.carried.len()) as u8 })
 }
 
 /// The program and inputs a config's custom formula iterates with: its
@@ -795,9 +795,6 @@ mod tests {
     fn perturb_blocker(p: &ir::Program) -> String {
         use ir::*;
         use lang::builtins::Builtin;
-        if p.bailout.is_some() && lang::perturb::perturb_test(p).is_none() {
-            return "its test reads a variable the loop changes".into();
-        }
         let Some(cases) = lang::delta::init_cases(p) else {
             return "a loop in the init, or a branch it cannot follow".into();
         };
@@ -883,7 +880,13 @@ mod tests {
         }
         let mut found = None;
         walk(&p.loop_body, p, &inits, &mut found);
-        found.unwrap_or_else(|| "carried state, an int or bool written in the loop, or another shape".into())
+        // The loop has the forms; its test then (a carried value read by
+        // it derives, step 5, so this is what is left: an init constant
+        // poisoned, a variable never written).
+        if found.is_none() && p.bailout.is_some() && lang::perturb::perturb_test(p).is_none() {
+            return "its test reads a variable the loop changes, in a shape not followed".into();
+        }
+        found.unwrap_or_else(|| "an int or bool carried in the loop, or another shape".into())
     }
 
     /// INSPECTION: one formula of a UF file (`UF_INSPECT=path:entry`), as

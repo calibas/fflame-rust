@@ -3199,8 +3199,12 @@ pub enum PerturbTier {
     /// orbits interleaved in the orbit buffer: 1, or for a loop with a
     /// cycle (a hybrid) one more than its period -- the main reference
     /// and one per phase, which a pixel rebases onto at its own phase
-    /// (step 5b).
-    Custom { hash: u64, rebase: bool, stride: u8 },
+    /// (step 5b). `width` is the values each reference records a pass:
+    /// 1 (z), or 2 when the equations carry one value besides z (phase
+    /// 4, step 5: `Program::carried`), recorded after z, whose
+    /// deviation the pixel keeps in `w_prev` as Phoenix keeps its
+    /// history.
+    Custom { hash: u64, rebase: bool, stride: u8, width: u8 },
 }
 
 impl PerturbTier {
@@ -3734,6 +3738,7 @@ pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, width: AccumWidth, de
         // The scaled rung hides Phoenix's history in `w_lo`, which is
         // dead there, so only the deep rung actually grows.
         (PerturbTier::Phoenix, true) | (PerturbTier::Manowar, true) => ITER_STATE_BYTES_PHOENIX,
+        (PerturbTier::Custom { width, .. }, true) if width > 1 => ITER_STATE_BYTES_PHOENIX,
         _ => ITER_STATE_BYTES,
     };
     let d = match (deriv, floatexp) {
@@ -3755,6 +3760,8 @@ pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, width: AccumWidth, de
 fn state_tail(tier: PerturbTier) -> (String, String, String) {
     match tier {
         PerturbTier::Phoenix | PerturbTier::Manowar => state_tail_phoenix(),
+        // A carried deviation rides where Phoenix's history does.
+        PerturbTier::Custom { width, .. } if width > 1 => state_tail_phoenix(),
         _ => state_tail_default(),
     }
 }
@@ -3777,6 +3784,14 @@ fn w_init(tier: PerturbTier, floatexp: bool) -> String {
         // A custom formula's own start, `perturbinit:`, given the pixel's
         // offset as `#dpixel` on both planes (the formula decides which
         // it iterates), in units of S.
+        // A carried value's deviation starts in `carry_init`, which
+        // `w_prev` takes (`w_prev_init`).
+        (PerturbTier::Custom { width, .. }, false) if width > 1 => format!(
+            "    var carry_init = vec2<f32>(0.0, 0.0);\n    var w = formula_perturb_init_scaled(ref_z(0u), {CUSTOM_PIXEL}, d0, perturb.s, &carry_init);"
+        ),
+        (PerturbTier::Custom { width, .. }, true) if width > 1 => {
+            "    var carry_init = cfe2_zero();\n    w = formula_perturb_init_fe(ref_orbit[0], ref_orbit_lo[0], ref_orbit_e[0], params.center, d0, &carry_init);".to_string()
+        }
         (PerturbTier::Custom { .. }, false) => format!(
             "    var w = formula_perturb_init_scaled(ref_z(0u), {CUSTOM_PIXEL}, d0, perturb.s);"
         ),
@@ -3815,24 +3830,36 @@ const CUSTOM_PIXEL: &str = "(params.center + (d0 - perturb.ref_offset) * perturb
 /// `q`'s from pass `prefix + q`.
 fn custom_pass_wgsl(tier: PerturbTier, name: &str) -> String {
     let cycle = crate::escape::custom::cycle(name);
+    // `ORBIT_W` values a reference a pass (z, and what it carries), `R`
+    // references interleaved, `ORBIT_S` entries a pass in all: entry
+    // `(j R + r) W + k` is reference `r`'s value `k` after `j` passes.
+    let consts = |stride: u8, width: u8| {
+        format!(
+            "const ORBIT_W: u32 = {width}u;\nconst ORBIT_R: u32 = {stride}u;\nconst ORBIT_S: u32 = {}u;\nconst ORBIT_PAD_E: i32 = {};\n",
+            u32::from(stride) * u32::from(width),
+            crate::escape::reference::ORBIT_PAD_E
+        )
+    };
     match (tier, cycle) {
-        (PerturbTier::Custom { stride, .. }, Some(c)) if stride > 1 => format!(
-            "const ORBIT_R: u32 = {stride}u;\n\
-             const HYB_PREFIX: u32 = {}u;\n\
+        (PerturbTier::Custom { stride, width, .. }, Some(c)) if stride > 1 => format!(
+            "{}const HYB_PREFIX: u32 = {}u;\n\
              const HYB_PERIOD: u32 = {}u;\n\
-             const ORBIT_PAD_E: i32 = {};\n\
              fn custom_pass(m: u32) -> i32 {{\n\
-             \x20   let r = m % ORBIT_R;\n\
-             \x20   let j = m / ORBIT_R;\n\
+             \x20   let q = m / ORBIT_W;\n\
+             \x20   let r = q % ORBIT_R;\n\
+             \x20   let j = q / ORBIT_R;\n\
              \x20   if (r == 0u) {{\n\
              \x20       return i32(j);\n\
              \x20   }}\n\
              \x20   return i32(HYB_PREFIX + r - 1u + j);\n\
              }}",
+            consts(stride, width),
             c.prefix,
             c.period,
-            crate::escape::reference::ORBIT_PAD_E,
         ),
+        (PerturbTier::Custom { stride, width, .. }, _) if width > 1 => {
+            format!("{}fn custom_pass(m: u32) -> i32 {{\n    return i32(m / ORBIT_S);\n}}", consts(stride, width))
+        }
         _ => "fn custom_pass(m: u32) -> i32 {\n    return i32(m);\n}".to_string(),
     }
 }
@@ -3844,17 +3871,58 @@ fn custom_pass_wgsl(tier: PerturbTier, name: &str) -> String {
 /// a pad or past the orbit). During the prefix no other reference has
 /// the pixel's phase; the main one ending there leaves the pixel nothing
 /// to follow, and it counts as escaped.
-fn rebase_phased(floatexp: bool, rebase: bool) -> String {
-    let test = if rebase { " || dot(rebase_delta, rebase_delta) < dot(delta, delta)" } else { "" };
-    let set = if floatexp { "w = fe_rebase_delta(w, m);" } else { "w = rebase_delta * perturb.inv_s;" };
+fn rebase_phased(floatexp: bool, rebase: bool, width: u8, phased: bool) -> String {
+    // A carried deviation (phase 4, step 5) moves as z's -- its full
+    // value less the new start's record of it -- and the test weighs the
+    // pair, as the built-in two-term tiers do: a rebase that shrinks z's
+    // deviation but grows the carried one costs precision.
+    let test = match (rebase, width > 1) {
+        (false, _) => String::new(),
+        (true, false) => " || dot(rebase_delta, rebase_delta) < dot(delta, delta)".to_string(),
+        (true, true) => {
+            let dc = if floatexp { "cfe2_to_f32(w_prev)" } else { "perturb.s * w_prev" };
+            format!(
+                " || dot(rebase_delta, rebase_delta) + dot(ref_z(m + 1u) + {dc} - ref_z(r_to + 1u), ref_z(m + 1u) + {dc} - ref_z(r_to + 1u)) \
+                 < dot(delta, delta) + dot({dc}, {dc})"
+            )
+        }
+    };
+    // On the scaled rung the new deviation is the two records' difference
+    // in double-float plus the old one: the full value less the start's,
+    // without the cancellation of subtracting two f32 values near each
+    // other (a start away from zero: Manowar's, Spider's).
+    let set = match (floatexp, width > 1) {
+        (true, _) => "w = fe_rebase_delta(w, m);",
+        (false, false) => "w = rebase_delta * perturb.inv_s;",
+        (false, true) => "w = w + ((ref_z(m) - ref_z(r_to)) + (ref_z_lo(m) - ref_z_lo(r_to))) * perturb.inv_s;",
+    };
+    let carry = match (width > 1, floatexp) {
+        (false, _) => "",
+        (true, false) => "w_prev = w_prev + ((ref_z(m + 1u) - ref_z(r_to + 1u)) + (ref_z_lo(m + 1u) - ref_z_lo(r_to + 1u))) * perturb.inv_s;\n                ",
+        (true, true) => "w_prev = fe_rebase_between(w_prev, m + 1u, r_to + 1u);\n                ",
+    };
+    if !phased {
+        // One reference, carrying: onto its start when it ends or the
+        // deviation would be smaller there.
+        return format!(
+            "        // A custom formula carrying a value besides z (escape::lang).\n\
+             \x20       let next_gone = m + ORBIT_S >= perturb.orbit_len;\n\
+             \x20       let r_to = 0u;\n\
+             \x20       let rebase_delta = z_full - ref_z(r_to);\n\
+             \x20       if (next_gone{test}) {{\n\
+             \x20           {carry}{set}\n\
+             \x20           m = r_to;\n\
+             \x20       }}"
+        );
+    }
     format!(
         "        // A hybrid's phases (escape::lang::hybrid).\n\
-         \x20       let next_gone = m + ORBIT_R >= perturb.orbit_len || ref_orbit_e[m + ORBIT_R] == ORBIT_PAD_E;\n\
+         \x20       let next_gone = m + ORBIT_S >= perturb.orbit_len || ref_orbit_e[m + ORBIT_S] == ORBIT_PAD_E;\n\
          \x20       if (i >= HYB_PREFIX) {{\n\
-         \x20           let r_to = 1u + (i - HYB_PREFIX) % HYB_PERIOD;\n\
+         \x20           let r_to = (1u + (i - HYB_PREFIX) % HYB_PERIOD) * ORBIT_W;\n\
          \x20           let rebase_delta = z_full - ref_z(r_to);\n\
          \x20           if (next_gone{test}) {{\n\
-         \x20               {set}\n\
+         \x20               {carry}{set}\n\
          \x20               m = r_to;\n\
          \x20           }}\n\
          \x20       }} else if (next_gone) {{\n\
@@ -3865,21 +3933,36 @@ fn rebase_phased(floatexp: bool, rebase: bool) -> String {
     )
 }
 
-fn delta_step_custom() -> String {
+fn delta_step_custom(width: u8) -> String {
+    // A carried value's record follows z's in the orbit; its deviation
+    // is `w_prev`, which the equations update in place.
+    let carry = if width > 1 { ", ref_z(m + 1u), &w_prev" } else { "" };
     format!(
         "        // A custom formula's perturbation equations (escape::lang).\n\
-         \x20       var w_new = formula_perturb_loop_scaled(z_ref, w, {CUSTOM_PIXEL}, d0, perturb.s, custom_pass(m));"
+         \x20       var w_new = formula_perturb_loop_scaled(z_ref, w, {CUSTOM_PIXEL}, d0, perturb.s, custom_pass(m){carry});"
     )
+}
+
+fn delta_step_custom_fe(width: u8) -> String {
+    let carry = if width > 1 { ", ref_orbit[m + 1u], ref_orbit_lo[m + 1u], ref_orbit_e[m + 1u], &w_prev" } else { "" };
+    format!("        var w_new = formula_perturb_loop_fe(z_ref_m, z_ref_lo_m, z_ref_e, w, params.center, d0, custom_pass(m){carry});")
 }
 
 /// A custom formula's own test on the pixel's full z, in place of the
 /// squared-norm margin: true iterates again. On the deep rung the pixel
-/// is the view's centre, which it is to f32 there.
-fn escape_test_custom(floatexp: bool) -> String {
+/// is the view's centre, which it is to f32 there. A carried value's
+/// full value goes with it: its record at the pixel's new index, plus
+/// its deviation.
+fn escape_test_custom(floatexp: bool, width: u8) -> String {
     let pixel = if floatexp { "params.center" } else { CUSTOM_PIXEL };
+    let carried = match (width > 1, floatexp) {
+        (false, _) => String::new(),
+        (true, false) => ", ref_z(min(m, perturb.orbit_len - 2u) + 1u) + perturb.s * w_prev".to_string(),
+        (true, true) => ", ref_z(min(m, perturb.orbit_len - 2u) + 1u) + cfe2_to_f32(w_prev)".to_string(),
+    };
     format!(
         "        // A custom formula's own test (escape::lang).\n\
-         \x20       if (!formula_perturb_bailout(z_full, {pixel})) {{\n\
+         \x20       if (!formula_perturb_bailout(z_full, {pixel}{carried})) {{\n\
          \x20           escaped = true;\n\
          \x20           n = i;\n\
          \x20           break;\n\
@@ -3905,6 +3988,8 @@ fn fdata4(i: u32) -> vec4<f32> {
 /// every other tier starts with no history at all.
 fn w_prev_init(tier: PerturbTier, floatexp: bool) -> String {
     match (tier, floatexp) {
+        // A custom formula's carried deviation (phase 4, step 5).
+        (PerturbTier::Custom { width, .. }, _) if width > 1 => "    var w_prev = carry_init;".to_string(),
         (PerturbTier::Manowar, false) => "    var w_prev = d0;".to_string(),
         (PerturbTier::Manowar, true) => "    var w_prev = d0;".to_string(),
         (_, false) => "    var w_prev = vec2<f32>(0.0, 0.0);".to_string(),
@@ -5416,7 +5501,7 @@ pub fn assemble_perturbed_full(
                 PerturbTier::Nova(p) => delta_step_rootfinder(p.clamp(2, 12), 0, 0, true),
                 PerturbTier::Kaliset => delta_step_kaliset(),
                 PerturbTier::Ducks(v) => delta_step_ducks(v),
-                PerturbTier::Custom { .. } => delta_step_custom(),
+                PerturbTier::Custom { width, .. } => delta_step_custom(width),
             }),
             "//__DELTA_STEP_FE__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_floatexp(p.clamp(2, 12)),
@@ -5437,7 +5522,7 @@ pub fn assemble_perturbed_full(
                 PerturbTier::Kaliset => delta_step_kaliset_fe(),
                 PerturbTier::Ducks(v) => delta_step_ducks_fe(v),
                 // A custom formula's equations over CFe2 (escape::lang).
-                PerturbTier::Custom { .. } => "        var w_new = formula_perturb_loop_fe(z_ref_m, z_ref_lo_m, z_ref_e, w, params.center, d0, custom_pass(m));".to_string(),
+                PerturbTier::Custom { width, .. } => delta_step_custom_fe(width),
             }),
             "//__ESCAPE_MARGIN__" => {
                 // The delta-aware escape test. A NON-ESCAPING tier
@@ -5445,8 +5530,8 @@ pub fn assemble_perturbed_full(
                 // template does for the feature, and runs every pixel to
                 // max_iter for its orbit accumulators. A custom formula
                 // tests with its own test.
-                if matches!(tier, PerturbTier::Custom { .. }) {
-                    out.push(escape_test_custom(floatexp));
+                if let PerturbTier::Custom { width, .. } = tier {
+                    out.push(escape_test_custom(floatexp, width));
                 } else if !tier.is_non_escaping() {
                     out.push(if floatexp { escape_margin_fe() } else { escape_margin_scaled() });
                 }
@@ -5454,11 +5539,11 @@ pub fn assemble_perturbed_full(
             "//__M_STEP__" => out.push(match tier {
                 // A reference per phase, interleaved: the pixel's next
                 // entry is its reference's next.
-                PerturbTier::Custom { stride, .. } if stride > 1 => "            m = m + ORBIT_R;".to_string(),
+                PerturbTier::Custom { stride, width, .. } if stride > 1 || width > 1 => "            m = m + ORBIT_S;".to_string(),
                 _ => "            m = m + 1u;".to_string(),
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
-                (PerturbTier::Custom { stride, rebase, .. }, fe) if stride > 1 => rebase_phased(fe, rebase),
+                (PerturbTier::Custom { stride, width, rebase, .. }, fe) if stride > 1 || width > 1 => rebase_phased(fe, rebase, width, stride > 1),
                 (PerturbTier::Custom { rebase: false, .. }, false) => rebase_only_at_orbit_end(),
                 (PerturbTier::Custom { rebase: false, .. }, true) => rebase_only_at_orbit_end_fe(),
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -9420,7 +9505,7 @@ mod tests {
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase, stride: 1 };
+            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1 };
             for coloring in [crate::escape::get_coloring("smooth"), crate::escape::get_coloring("stripe_average")] {
                 for floatexp in [false, true] {
                     let what = format!("{} {} fe={floatexp}", &source[..2], coloring.name);
@@ -9457,15 +9542,56 @@ mod tests {
             let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
             assert_eq!(cycle, h.cycle(), "{name}");
             let hash = u64::from_str_radix(&formula[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8 };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1 };
             for floatexp in [false, true] {
                 let what = format!("{name} fe={floatexp}");
                 let wgsl = assemble_perturbed(crate::escape::get_coloring("smooth"), floatexp, tier);
                 validate(&wgsl, &what);
-                assert!(wgsl.contains("            m = m + ORBIT_R;"), "{what}: the step");
+                assert!(wgsl.contains("            m = m + ORBIT_S;"), "{what}: the step");
                 assert!(wgsl.contains(&format!("const ORBIT_R: u32 = {}u;", 1 + cycle.period)), "{what}: the references");
-                assert!(wgsl.contains("let r_to = 1u + (i - HYB_PREFIX) % HYB_PERIOD;"), "{what}: the rebase");
+                assert!(wgsl.contains("let r_to = (1u + (i - HYB_PREFIX) % HYB_PERIOD) * ORBIT_W;"), "{what}: the rebase");
                 assert!(wgsl.contains("custom_pass(m))"), "{what}: the pass");
+            }
+        }
+        // Derived equations carrying a value besides z (phase 4, step 5):
+        // a Phoenix (its previous z) and a convergent Newton (its test
+        // reads the previous z). The record follows z in the orbit, the
+        // deviation rides in `w_prev`, the rebase moves it, and the deep
+        // rung's state grows as Phoenix's.
+        for source in [
+            "PX {\ninit:\n z = 0\n y = 0\nloop:\n t = z\n z = sqr(z) + #pixel + y * (-0.5, 0)\n y = t\nbailout:\n |z| < 4\n}",
+            "NW {\ninit:\n z = #pixel\n zold = 0\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\nbailout:\n |z - zold| > 1e-8\n}",
+        ] {
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into() };
+            let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            crate::escape::custom::compile_formula(&src, &name).expect("compiles");
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, &src).unwrap();
+            let derived = crate::escape::lang::delta::with_derived_equations(&prog).expect("derived");
+            assert_eq!(derived.carried.len(), 1, "{}", &source[..2]);
+            let how = crate::escape::lang::perturb::perturbation(&derived).expect("perturbs");
+            assert!(how.rebase, "{}: what it carries rebases", &source[..2]);
+            let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2 };
+            for floatexp in [false, true] {
+                let what = format!("{} fe={floatexp}", &source[..2]);
+                let coloring = crate::escape::get_coloring("smooth");
+                let wgsl = assemble_perturbed(coloring, floatexp, tier);
+                let module = validate(&wgsl, &what);
+                assert!(wgsl.contains("            m = m + ORBIT_S;") && wgsl.contains("const ORBIT_W: u32 = 2u;"), "{what}: the step");
+                assert!(wgsl.contains("&w_prev);"), "{what}: the carried deviation");
+                assert!(wgsl.contains("var w_prev = carry_init;"), "{what}: its start");
+                if floatexp {
+                    assert!(wgsl.contains("w_prev = fe_rebase_between(w_prev, m + 1u, r_to + 1u);"), "{what}: its rebase");
+                } else {
+                    assert!(
+                        wgsl.contains("w_prev = w_prev + ((ref_z(m + 1u) - ref_z(r_to + 1u)) + (ref_z_lo(m + 1u) - ref_z_lo(r_to + 1u))) * perturb.inv_s;"),
+                        "{what}: its rebase"
+                    );
+                }
+                let mut layouter = naga::proc::Layouter::default();
+                layouter.update(module.to_ctx()).expect("layout");
+                let (handle, _) = module.types.iter().find(|(_, t)| t.name.as_deref() == Some("IterState")).expect("IterState");
+                assert_eq!(layouter[handle].size as u64, iter_state_bytes(tier, floatexp, crate::escape::accum_width(coloring), false), "{what}: the state");
             }
         }
     }

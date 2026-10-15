@@ -1000,11 +1000,15 @@ impl ReferenceOrbit {
             orbit.orbit.clear();
             orbit.orbit_lo.clear();
             orbit.orbit_e.clear();
+            // Each reference's start: z, then what its equations carry
+            // besides it (`Program::carried`), interleaved.
             for m in &machines {
-                let (hi, lo, ee, _) = split_entry_big(m.z());
-                orbit.orbit.push(hi);
-                orbit.orbit_lo.push(lo);
-                orbit.orbit_e.push(ee);
+                for v in std::iter::once(m.z().clone()).chain(m.carried()) {
+                    let (hi, lo, ee, _) = split_entry_big(&v);
+                    orbit.orbit.push(hi);
+                    orbit.orbit_lo.push(lo);
+                    orbit.orbit_e.push(ee);
+                }
             }
             orbit.zb = machines[0].z().clone();
             orbit.custom_live = vec![true; machines.len()];
@@ -1115,26 +1119,39 @@ impl ReferenceOrbit {
             let machine = self.custom.first_mut()?;
             let go = machine.step().ok()?;
             self.zb = machine.z().clone();
+            let carried = machine.carried();
             self.push_entry_big();
+            for v in &carried {
+                self.push_value_big(v);
+            }
             return Some(go);
         }
-        // A reference per phase: an entry each a pass, a pad for one
-        // that has ended (its escaping iterate is its last entry). The
-        // orbit ends when they all have.
+        // A reference per phase: an entry each a pass (z and what it
+        // carries), pads for one that has ended (its escaping iterate is
+        // its last entry). The orbit ends when they all have.
         for r in 0..self.custom.len() {
+            let width = 1 + self.custom[r].carried().len();
             if !self.custom_live[r] {
-                self.push_entry_pad();
+                for _ in 0..width {
+                    self.push_entry_pad();
+                }
                 continue;
             }
             match self.custom[r].step() {
                 Ok(go) => {
                     self.zb = self.custom[r].z().clone();
+                    let carried = self.custom[r].carried();
                     self.push_entry_big();
+                    for v in &carried {
+                        self.push_value_big(v);
+                    }
                     self.custom_live[r] = go;
                 }
                 Err(_) => {
                     self.custom_live[r] = false;
-                    self.push_entry_pad();
+                    for _ in 0..width {
+                        self.push_entry_pad();
+                    }
                 }
             }
         }
@@ -1238,7 +1255,14 @@ impl ReferenceOrbit {
     /// uncompressed; their orbits are short and never stored anyway
     /// (`orbit_store` refuses them).
     fn push_entry_big(&mut self) {
-        let (hi, lo, ee, dd) = split_entry_big(&self.zb);
+        let z = self.zb.clone();
+        self.push_value_big(&z);
+    }
+
+    /// Push a big-float value's storage triple: the iterate, or what a
+    /// custom formula carries beside it.
+    fn push_value_big(&mut self, v: &BigComplex) {
+        let (hi, lo, ee, dd) = split_entry_big(v);
         let idx = self.orbit.len() as u32;
         self.shadow = [f64::NAN; 4];
         self.corrections.push(Correction { idx, hi, lo, e: ee, dd });

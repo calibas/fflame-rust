@@ -1953,6 +1953,11 @@ mod tests {
             ("lambda", &[], ("0.5", "0"), 0.0, true, 0.0),
             ("cactus", &[], ("0", "0"), 0.5, false, 0.0),
             ("cactus", &[], ("0", "0"), 0.5, true, 0.0),
+            // Carrying a value besides z (step 5).
+            ("phoenix", &[("p_re", -0.5)], ("0", "0"), 0.0, false, 0.0),
+            ("phoenix", &[("p_re", -0.5)], ("0", "0"), -0.3, true, 0.0),
+            ("manowar", &[], ("-0.4", "0"), 1.0, false, 0.0),
+            ("spider", &[], ("-0.4", "0"), 0.0, false, 0.0),
         ];
         for &(formula, params, (cre, cim), zoom, julia, allowed) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -1967,8 +1972,11 @@ mod tests {
             esc.center_im = cim.into();
             esc.zoom_log2 = zoom;
             esc.julia = julia;
-            esc.julia_re = if formula == "lambda" { 1.5 } else { -0.8 };
-            esc.julia_im = if formula == "lambda" { 0.4 } else { 0.156 };
+            (esc.julia_re, esc.julia_im) = match formula {
+                "lambda" => (1.5, 0.4),
+                "phoenix" => (0.5667, 0.0),
+                _ => (-0.8, 0.156),
+            };
             let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
             let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
             let twin = twin_of(&esc);
@@ -1988,6 +1996,10 @@ mod tests {
             ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000),
             ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000),
             ("burning_ship", &[("variant", 0.0)], ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000),
+            // Carrying the previous z (step 5).
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-1.1543534481639833789918460777111", "0.6293282132782021964135047790493"), 22.436075, 256),
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256),
+            ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000),
         ];
         for &(formula, params, (cre, cim), zoom, max_iter) in deep {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -2004,7 +2016,9 @@ mod tests {
             crate::escape::custom::ensure(&twin);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&twin);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
-            let floatexp = zoom > 48.0;
+            // A carrying twin runs the deep rung at every depth, as the
+            // renderer has it (`deep_rung_always`); so does Manowar.
+            let floatexp = zoom > 48.0 || matches!(formula, "manowar" | "phoenix" | "spider");
             let (a, b) = (records_on(&esc, 64, 48, floatexp, true, false), records_on(&twin, 64, 48, floatexp, true, false));
             // The truth, in big floats, at every seventh pixel: the
             // twin's own program, its parameters as the GPU holds them.
@@ -2029,6 +2043,31 @@ mod tests {
             assert!(escaped > truth.len() / 4, "{formula}: the view escapes too little");
             assert!(twin_true + truth.len() / 50 >= built_in_true, "{formula}: the twin {twin_true}, the built-in {built_in_true}");
         }
+
+        // A convergent formula whose test reads its previous z (carried,
+        // step 5): Newton's method for z^3 = 1 at the suite's Newton deep
+        // view, against the truth.
+        const NEWTON: &str = "N {\ninit:\n z = #pixel\n zold = 0\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\n\
+                              bailout:\n |z - zold| > 1e-8\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.50000000000000000".into();
+        esc.center_im = "0.23019701107058421".into();
+        esc.zoom_log2 = 30.0;
+        esc.max_iter = 400;
+        let newton = with_custom(esc, Some((NEWTON, "N")), None);
+        crate::escape::custom::ensure(&newton);
+        let tier = crate::escape::EscapeRenderer::perturb_tier(&newton);
+        assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { width: 2, .. })), "newton: {tier:?}");
+        let got = records_on(&newton, 64, 48, true, true, false);
+        let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, newton.custom_formula.as_ref().unwrap()).unwrap();
+        let params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+        let truth = truth_counts_of(std::sync::Arc::new(prog), params, ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, (64, 48), 7, 6);
+        let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+        let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+        let settled = truth.iter().filter(|(_, n)| *n < 400).count();
+        println!("newton at zoom 30: of {} pixels in big floats ({settled} settle), the custom formula counts {right} right, {near} within one", truth.len());
+        assert!(settled > truth.len() / 2, "newton: the view settles too little");
+        assert!(near as f64 >= 0.95 * truth.len() as f64, "newton: {near} of {}", truth.len());
     }
 
     /// Rhai colourings (phase 4, step 3) through the whole renderer, beside
