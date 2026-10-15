@@ -226,6 +226,10 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
     // (`prefix + q`), each from the init's start.
     let cycle = formula.cycle.filter(|_| formula.reads(Predef::Pass));
     let starts: Vec<u32> = std::iter::once(0).chain(cycle.iter().flat_map(|c| (0..c.period).map(move |q| c.prefix + q))).collect();
+    // Each reference keeps z at every pass's start, and what the equations
+    // carry besides it (`Program::carried`), recorded beside it.
+    let record = |r: &Machine| -> Vec<Value> { formula.carried.iter().map(|c| r.vars[c.var]).collect() };
+    let mut records: Vec<Vec<Vec<Value>>> = Vec::new();
     let orbits: Vec<Vec<C64>> = starts
         .iter()
         .map(|&start| {
@@ -234,15 +238,18 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
             r.exec(&formula.global_body, &mut rsh);
             r.exec(&formula.init, &mut rsh);
             let mut orbit = vec![rsh.z];
+            let mut carried = vec![record(&r)];
             for i in start..start + env.maxiter {
                 rsh.pass = i;
                 r.exec(&formula.loop_body, &mut rsh);
                 rsh.pass = i + 1;
                 orbit.push(rsh.z);
+                carried.push(record(&r));
                 if !formula.bailout.as_ref().map_or(true, |t| r.eval(t, &rsh).as_bool()) {
                     break;
                 }
             }
+            records.push(carried);
             orbit
         })
         .collect();
@@ -262,10 +269,18 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
         let orbit = &orbits[r];
         sh.z = orbit[m];
         sh.pass = starts[r] + m as u32;
+        for (k, c) in formula.carried.iter().enumerate() {
+            p.vars[c.reference] = records[r][m][k];
+        }
         p.exec(&formula.perturb_loop, &mut sh);
         m += 1;
-        z_full = orbit[m.min(orbit.len() - 1)].add(sh.dz);
+        let at = m.min(orbit.len() - 1);
+        z_full = orbit[at].add(sh.dz);
         sh.z = z_full;
+        // The test reads the carried variables' full values.
+        for (k, c) in formula.carried.iter().enumerate() {
+            p.vars[c.var] = plus(records[r][at][k], p.vars[c.deviation]);
+        }
         if !test.as_ref().map_or(true, |t| p.eval(t, &sh).as_bool()) {
             escaped = true;
             n = i + 1;
@@ -285,8 +300,21 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
         match target {
             Some(t) => {
                 let rebased = z_full.sub(orbits[t][0]);
-                if ended || (rebase && rebased.norm_sqr() < sh.dz.norm_sqr()) {
+                // The test weighs what is carried with z, as the GPU's.
+                let (mut now, mut then) = (sh.dz.norm_sqr(), rebased.norm_sqr());
+                for (k, c) in formula.carried.iter().enumerate() {
+                    let dev = p.vars[c.deviation].as_c64();
+                    now += dev.norm_sqr();
+                    then += plus(records[r][at][k], p.vars[c.deviation]).as_c64().sub(records[t][0][k].as_c64()).norm_sqr();
+                }
+                if ended || (rebase && then < now) {
                     sh.dz = rebased;
+                    // Each carried deviation moves to the new start as
+                    // z's does: its full value less the start's record.
+                    for (k, c) in formula.carried.iter().enumerate() {
+                        let full = plus(records[r][at][k], p.vars[c.deviation]);
+                        p.vars[c.deviation] = minus(full, records[t][0][k]);
+                    }
                     r = t;
                     m = 0;
                 }
@@ -302,6 +330,22 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
         }
     }
     Some(Run { z: z_full, n, escaped, index: 0.0, solid: false, dz: C64::ZERO })
+}
+
+/// `a + b` of two floats or two complex values (a carried variable's
+/// record and its deviation).
+fn plus(a: Value, b: Value) -> Value {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
+        (a, b) => Value::Complex(a.as_c64().add(b.as_c64())),
+    }
+}
+
+fn minus(a: Value, b: Value) -> Value {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
+        (a, b) => Value::Complex(a.as_c64().sub(b.as_c64())),
+    }
 }
 
 /// Run a formula, and a colouring alongside it when given.

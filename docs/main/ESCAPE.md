@@ -415,8 +415,9 @@ fn escaped(s, p) {
   bailout. Without it, 2.
 - **The built-ins' twins** (`escape::twins`,
   `assets/formulas/twins/*.rhai`): Mandelbrot, Multibrot, Tricorn, the
-  Burning Ship family, Lambda, Cactus, each a Rhai formula that renders
-  as its built-in.
+  Burning Ship family, Lambda, Cactus, and (step 5, carrying a value
+  besides z) Phoenix, Manowar and Spider, each a Rhai formula that
+  renders as its built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
     through `ctx`, and declares its degree.
@@ -434,7 +435,10 @@ fn escaped(s, p) {
     big-float truth they count as well as the built-ins' native tiers:
     401 and 401 of 439 pixels for the Mandelbrot at zoom 42, 354 and
     354 for Lambda at 30, 189 and 190 for the Tricorn at 28, and 346
-    against 294 for the Ship at 60
+    against 294 for the Ship at 60. Phoenix (zoom 22.4 and 48)
+    counts right on all 439, as the built-in does; Manowar (zoom 26) on
+    420 against the built-in's 373; and a convergent Newton written in
+    the language on all 439 at zoom 30
     (`builtin_twins_render_and_deep_zoom_as_their_builtins`).
   - A Multibrot or multicorn power is a real power, which deep zoom
     does not follow yet. Mann damping and the biomorph test are the
@@ -584,12 +588,28 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
   without has none. So the Tricorn twin, which squares at power 2 and
   takes a real power otherwise, deep-zooms at 2.
 - z written in steps reads its own reference value after each.
+- **State carried besides z** (phase 4, step 5): a float or complex the
+  loop carries from one pass to the next (a Phoenix's previous z, a
+  Spider's moving c), or that the test reads (a convergent formula's
+  previous z).
+  - The reference records it each pass after z, interleaved in the
+    orbit (`Program::carried`; the tier's `width`, 2).
+  - The equations read that record and keep the pixel's deviation from
+    pass to pass, in `w_prev` where the built-in Phoenix keeps its
+    history.
+  - A rebase moves the deviation as it moves `#dz`, on the pair's
+    norm, as the built-in two-term tiers do.
+  - Such a formula perturbs on the floatexp rung at every depth, as
+    Manowar does: a carried deviation accumulates the scaled rung's
+    f32 error (the Manowar twin at zoom 26: 337 of 439 sampled pixels
+    right on the scaled rung, 420 on floatexp).
+  - One value is carried; more is refused for now.
 
 What does not derive: a transcendental function, a real or complex
 power, a user function of the iterate, a branch on the iterate or the
-pixel, a loop inside the loop or in the init, state carried between
-iterations besides z -- unless it stands in an arm a parameter picks.
-Such a formula stays on the direct path, as before.
+pixel, a loop inside the loop or in the init, an int or bool carried,
+more than one value carried -- unless it stands in an arm a parameter
+picks. Such a formula stays on the direct path, as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four

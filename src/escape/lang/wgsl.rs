@@ -156,32 +156,57 @@ pub fn formula(p: &Program) -> String {
     if !p.perturb_loop.is_empty() {
         g.ctx = Ctx::Perturb;
         g.small_vars = perturb_var_classes(p);
-        let locals: String = p
-            .vars
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.perturb)
-            .map(|(i, v)| format!("    var v{i}: {} = {};\n", wgsl_ty(v.ty), zero_of(v.ty)))
-            .collect();
+        // A carried value (phase 4, step 5): the reference's record of it
+        // given as `c_ref`, the pixel's deviation kept by the template
+        // (`carry`, in units of S like `w`).
+        let carried = p.carried.first().copied();
+        let local = |i: usize, v: &Var, in_loop: bool| -> String {
+            match carried {
+                Some(c) if in_loop && i == c.reference => {
+                    let r = if v.ty == Ty::Float { "c_ref.x" } else { "c_ref" };
+                    format!("    var v{i}: {} = {r};\n", wgsl_ty(v.ty))
+                }
+                Some(c) if i == c.deviation => {
+                    let r = if v.ty == Ty::Float { "(*carry).x" } else { "(*carry)" };
+                    let scale = if g.small_vars[i] { "" } else { " * s" };
+                    format!("    var v{i}: {} = {r}{scale};\n", wgsl_ty(v.ty))
+                }
+                _ => format!("    var v{i}: {} = {};\n", wgsl_ty(v.ty), zero_of(v.ty)),
+            }
+        };
+        let locals_of = |in_loop: bool| -> String { p.vars.iter().enumerate().filter(|(_, v)| v.perturb).map(|(i, v)| local(i, v, in_loop)).collect() };
+        let (init_locals, loop_locals) = (locals_of(false), locals_of(true));
+        // The deviation back to the template, in units of S.
+        let carry_out = match carried {
+            Some(c) => {
+                let v = if p.vars[c.deviation].ty == Ty::Float { format!("vec2<f32>(v{}, 0.0)", c.deviation) } else { format!("v{}", c.deviation) };
+                let scale = if g.small_vars[c.deviation] { "" } else { " / s" };
+                format!("    *carry = {v}{scale};\n")
+            }
+            None => String::new(),
+        };
+        let (carry_param, ref_param) = if carried.is_some() { (", carry: ptr<function, vec2<f32>>", ", c_ref: vec2<f32>") } else { ("", "") };
         // The start is pass 0's; the step reads the reference's pass
         // (`pass_index`, a hybrid's phase: step 5b).
         let start_pass = if p.reads(Predef::Pass) { "    let pass_index: i32 = 0;\n" } else { "" };
         let _ = write!(
             body,
-            "\nfn formula_perturb_init_scaled(z_ref: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32) -> vec2<f32> {{\n    var w = vec2<f32>(0.0, 0.0);\n{start_pass}{locals}"
+            "\nfn formula_perturb_init_scaled(z_ref: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32{carry_param}) -> vec2<f32> {{\n    var w = vec2<f32>(0.0, 0.0);\n{start_pass}{init_locals}"
         );
         g.sstmts(&p.perturb_init, 1, &mut body);
-        body.push_str("    return w;\n}\n");
+        let _ = write!(body, "{carry_out}    return w;\n}}\n");
         let _ = write!(
             body,
-            "\nfn formula_perturb_loop_scaled(z_ref: vec2<f32>, w_in: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32, pass_index: i32) -> vec2<f32> {{\n    var w = w_in;\n{locals}"
+            "\nfn formula_perturb_loop_scaled(z_ref: vec2<f32>, w_in: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32, pass_index: i32{ref_param}{carry_param}) -> vec2<f32> {{\n    var w = w_in;\n{loop_locals}"
         );
         g.sstmts(&p.perturb_loop, 1, &mut body);
-        body.push_str("    return w;\n}\n");
+        let _ = write!(body, "{carry_out}    return w;\n}}\n");
         if let Some(b) = super::perturb::perturb_test(p) {
             g.ctx = Ctx::PerturbBailout;
             let test = g.expr(&b);
-            let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>) -> bool {{\n    return {test};\n}}\n");
+            // The carried value's full value, which the test may read.
+            let cv = if carried.is_some() { ", cv: vec2<f32>" } else { "" };
+            let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>{cv}) -> bool {{\n    return {test};\n}}\n");
         }
     }
     g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
@@ -204,32 +229,66 @@ pub fn formula_perturb_fe(p: &Program) -> Option<String> {
     }
     let mut g = Gen::new(p, Ctx::PerturbFe, "ufe_");
     g.small_vars = p.vars.iter().map(|v| v.perturb && matches!(v.ty, Ty::Float | Ty::Complex)).collect();
-    let locals: String = p
-        .vars
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| v.perturb)
-        .map(|(i, v)| match v.ty {
-            Ty::Float | Ty::Complex => format!("    var v{i}: CFe2 = cfe2_zero();\n"),
-            t => format!("    var v{i}: {} = {};\n", wgsl_ty(t), zero_of(t)),
-        })
-        .collect();
+    // A carried value (phase 4, step 5): its record given as a stored
+    // entry (`cm`, `clo`, `ce`), its deviation kept by the template.
+    let carried = p.carried.first().copied();
+    let locals_of = |in_loop: bool| -> String {
+        p.vars
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.perturb)
+            .map(|(i, v)| match (v.ty, carried) {
+                (Ty::Float | Ty::Complex, Some(c)) if in_loop && i == c.reference => format!("    var v{i}: CFe2 = cfe2_ref(cm, clo, ce);\n"),
+                (Ty::Float | Ty::Complex, Some(c)) if i == c.deviation => format!("    var v{i}: CFe2 = *carry;\n"),
+                (Ty::Float | Ty::Complex, _) => format!("    var v{i}: CFe2 = cfe2_zero();\n"),
+                (t, _) => format!("    var v{i}: {} = {};\n", wgsl_ty(t), zero_of(t)),
+            })
+            .collect()
+    };
+    let (init_locals, loop_locals) = (locals_of(false), locals_of(true));
+    let carry_out = carried.map_or(String::new(), |c| format!("    *carry = v{};\n", c.deviation));
+    let (carry_param, ref_param) = if carried.is_some() { (", carry: ptr<function, CFe2>", ", cm: vec2<f32>, clo: vec2<f32>, ce: i32") } else { ("", "") };
     let start_pass = if p.reads(Predef::Pass) { "    let pass_index: i32 = 0;\n" } else { "" };
     let mut body = String::new();
     let _ = write!(
         body,
-        "fn formula_perturb_init_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, pixel: vec2<f32>, d0: CFe2) -> CFe2 {{\n    var w = cfe2_zero();\n{start_pass}{locals}"
+        "fn formula_perturb_init_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, pixel: vec2<f32>, d0: CFe2{carry_param}) -> CFe2 {{\n    var w = cfe2_zero();\n{start_pass}{init_locals}"
     );
     g.festmts(&p.perturb_init, 1, &mut body);
-    body.push_str("    return w;\n}\n\n");
+    let _ = write!(body, "{carry_out}    return w;\n}}\n\n");
     let _ = write!(
         body,
-        "fn formula_perturb_loop_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, w_in: CFe2, pixel: vec2<f32>, d0: CFe2, pass_index: i32) -> CFe2 {{\n    var w = w_in;\n{locals}"
+        "fn formula_perturb_loop_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, w_in: CFe2, pixel: vec2<f32>, d0: CFe2, pass_index: i32{ref_param}{carry_param}) -> CFe2 {{\n    var w = w_in;\n{loop_locals}"
     );
     g.festmts(&p.perturb_loop, 1, &mut body);
-    body.push_str("    return w;\n}\n");
+    let _ = write!(body, "{carry_out}    return w;\n}}\n");
+    if carried.is_some() {
+        body.push_str(CARRY_REBASE_FE);
+    }
     Some(g.finish(&format!("// custom formula's floatexp equations: {}\n", sanitize(&p.name)), body))
 }
+
+/// A carried deviation rebased on the deep rung: `(V_at - V_to) + w`
+/// in double-float, the stored records' difference, as the template's
+/// `fe_rebase_delta` does for z.
+const CARRY_REBASE_FE: &str = "
+fn fe_rebase_between(w: CFe2, at: u32, to: u32) -> CFe2 {
+    let zi = ref_z(at);
+    let z0 = ref_z(to);
+    let zi_lo = ref_z_lo(at);
+    let z0_lo = ref_z_lo(to);
+    var dxr = vec2<f32>(0.0, 0.0);
+    var dyr = vec2<f32>(0.0, 0.0);
+    if (w.e != CFE_ZERO_E && w.e >= -126 && w.e <= 127) {
+        let sc_w = exp2(f32(w.e));
+        dxr = vec2<f32>(w.hi.x, w.lo.x) * sc_w;
+        dyr = vec2<f32>(w.hi.y, w.lo.y) * sc_w;
+    }
+    let rx = df_add(df_add(vec2<f32>(zi.x, zi_lo.x), df_neg(vec2<f32>(z0.x, z0_lo.x))), dxr);
+    let ry = df_add(df_add(vec2<f32>(zi.y, zi_lo.y), df_neg(vec2<f32>(z0.y, z0_lo.y))), dyr);
+    return cfe2_norm(CFe2(vec2<f32>(rx.x, ry.x), vec2<f32>(rx.y, ry.y), 0));
+}
+";
 
 /// What [`formula_perturb_fe`] calls beyond the deep template's own
 /// `CFe2` helpers: spliced beside it.
@@ -558,6 +617,10 @@ impl<'p> Gen<'p> {
     fn var(&self, v: VarId) -> String {
         if let Some(k) = self.global_slots[v] {
             return self.global(v, k);
+        }
+        // The perturbed test reads a carried variable at its full value.
+        if self.ctx == Ctx::PerturbBailout && self.p.carried.iter().any(|c| c.var == v) {
+            return if self.p.vars[v].ty == Ty::Float { "cv.x".into() } else { "cv".into() };
         }
         if self.true_small && self.small_vars.get(v).copied().unwrap_or(false) {
             return format!("(s * v{v})");
@@ -1401,6 +1464,11 @@ fn convert_code(c: &str, from: Ty, to: Ty) -> String {
 /// rules.
 fn perturb_var_classes(p: &Program) -> Vec<bool> {
     let mut small: Vec<bool> = p.vars.iter().map(|v| v.perturb && v.ty != Ty::Bool && v.ty != Ty::Int).collect();
+    // A carried variable's record is the reference's value, never
+    // assigned in the equations.
+    for c in &p.carried {
+        small[c.reference] = false;
+    }
     fn class(e: &IExpr, small: &[bool]) -> Class {
         use Class::{Full, Small};
         fn has(e: &IExpr, small: &[bool]) -> bool {

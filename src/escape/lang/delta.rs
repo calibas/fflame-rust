@@ -29,11 +29,22 @@
 //! plane-aware formula branches on): each way through the init's
 //! branches is a case, with its own values for what the loop reads, and
 //! the equations branch on the cases' tests, one copy of the loop's
-//! each. What has no such form -- a transcendental function, a real or
+//! each.
+//!
+//! **State carried besides z** (phase 4, step 5): a float or complex
+//! the loop writes, and reads in a pass before that pass has certainly
+//! written it (a Phoenix's previous z, a Spider's moving c) or the test
+//! reads (a convergent formula's previous z), is followed as z is. The
+//! reference records it each pass (`Program::carried`), the equations
+//! read that record and keep the pixel's deviation from it from pass to
+//! pass, and a rebase moves the deviation as it moves `#dz`. The GPU
+//! carries one such value (`lang::perturb` refuses more).
+//!
+//! What has no such form -- a transcendental function, a real or
 //! complex power, a user function of the iterate, a branch on the
 //! iterate or the pixel, a loop inside the formula's loop or in its
-//! init, or state carried from one iteration to the next besides z --
-//! leaves the formula without equations, on the direct path as before.
+//! init, an int or bool carried -- leaves the formula without equations,
+//! on the direct path as before.
 //! Unless it stands in an arm (or an init's case) a parameter's choice
 //! picks: then the equations are derived without it, and hold when that
 //! arm is not taken, which the derived `perturb` setting says (a
@@ -60,7 +71,37 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
         uniforms: vec![None; p.vars.len()],
         path: Vec::new(),
         excluded: Vec::new(),
+        carried: vec![None; p.vars.len()],
     };
+    // What the loop carries besides z: a float or complex written in it
+    // and read in a pass before that pass has certainly written it, or
+    // read by the test (a convergent formula's previous z). The reference
+    // records it each pass; the pixel keeps its deviation.
+    let mut flow_of_loop = super::check::Flow::default();
+    super::check::flow(&p.loop_body, &mut flow_of_loop);
+    let mut flow_of_test = super::check::Flow::default();
+    if let Some(t) = &p.bailout {
+        super::check::reads(t, &mut flow_of_test);
+    }
+    let mut carried: Vec<VarId> = flow_of_loop
+        .exposed
+        .union(&flow_of_test.exposed)
+        .copied()
+        .filter(|v| flow_of_loop.any_write.contains(v) && !p.vars[*v].global)
+        .collect();
+    carried.sort_unstable();
+    for v in carried {
+        let ty = p.vars[v].ty;
+        if !matches!(ty, Ty::Float | Ty::Complex) {
+            return None;
+        }
+        let name = p.vars[v].name.clone();
+        let reference = d.new_var(format!("{name}_record"), ty);
+        let current = d.new_var(format!("{name}_cur"), ty);
+        let deviation = d.new_var(format!("{name}_carried"), ty);
+        d.carried[v] = Some((reference, current, deviation));
+        d.out.carried.push(Carried { var: v, reference, deviation });
+    }
     // Each way through the init: its variables' values (constant per
     // pixel, so the loop's reads of them are re-derived in each pass),
     // z's start, and the tests that pick it.
@@ -168,6 +209,10 @@ struct Deriver<'p> {
     /// The tests under which the equations do not hold: an arm, picked
     /// by the parameters, that went without.
     excluded: Vec<IExpr>,
+    /// Each carried variable's equation variables: the reference's
+    /// record of it at the pass's start, its current value at the
+    /// reference through the pass, and the pixel's deviation.
+    carried: Vec<Option<(VarId, VarId, VarId)>>,
 }
 
 /// `a && b`, `b` alone when there is no `a`.
@@ -460,14 +505,30 @@ impl Deriver<'_> {
         self.out.vars.len() - 1
     }
 
-    /// A case's init equations: the deviation z starts with.
+    /// A case's init equations: the deviation z starts with, and each
+    /// carried variable's.
     fn init_equations(&mut self, case: &InitCase) -> Option<Vec<IStmt>> {
         if case.z_poisoned {
             return None;
         }
-        let Some(z) = &case.z else { return Some(Vec::new()) };
-        let (_, dz) = self.pair(z, &[], false)?;
-        Some(vec![IStmt::Assign(Place::DZ, dz.map_or_else(|| zero_of(Ty::Complex), |d| widen(d, Ty::Complex)))])
+        let mut out = Vec::new();
+        if let Some(z) = &case.z {
+            let (_, dz) = self.pair(z, &[], false)?;
+            out.push(IStmt::Assign(Place::DZ, dz.map_or_else(|| zero_of(Ty::Complex), |d| widen(d, Ty::Complex))));
+        }
+        for v in 0..self.carried.len() {
+            let Some((_, _, dev)) = self.carried[v] else { continue };
+            let ty = self.p.vars[v].ty;
+            if case.poisoned[v] {
+                return None;
+            }
+            let d = match &case.values[v] {
+                Some(value) => self.pair(value, &[], false)?.1,
+                None => None,
+            };
+            out.push(IStmt::Assign(Place::Var(dev), d.map_or_else(|| zero_of(ty), |d| widen(d, ty))));
+        }
+        Some(out)
     }
 
     fn z_ref_var(&mut self) -> VarId {
@@ -497,6 +558,18 @@ impl Deriver<'_> {
                 out.insert(0, IStmt::Assign(Place::Var(zr), mk(IExprKind::Predef(Predef::Z), Ty::Complex)));
             } else {
                 strip_assigns(&mut out, zr);
+            }
+        }
+        if is_loop {
+            // Each carried variable's current value at the reference
+            // starts as the record of it, where anything reads it.
+            for v in (0..self.carried.len()).rev() {
+                let Some((record, current, _)) = self.carried[v] else { continue };
+                if out.iter().any(|s| stmt_reads_var(s, current)) {
+                    out.insert(0, IStmt::Assign(Place::Var(current), mk(IExprKind::Var(record), self.p.vars[v].ty)));
+                } else {
+                    strip_assigns(&mut out, current);
+                }
             }
         }
         Some(out)
@@ -566,6 +639,17 @@ impl Deriver<'_> {
                             }
                             if !matches!(ty, Ty::Float | Ty::Complex) {
                                 return None;
+                            }
+                            // A carried variable: its deviation, kept to the
+                            // next pass, and its current value at the
+                            // reference.
+                            if let Some((_, current, deviation)) = self.carried[*v] {
+                                out.push(IStmt::Assign(Place::Var(deviation), d.map_or_else(|| zero_of(ty), |d| widen(d, ty))));
+                                out.push(IStmt::Assign(Place::Var(current), widen(r, ty)));
+                                if !written.contains(v) {
+                                    written.push(*v);
+                                }
+                                continue;
                             }
                             // One pair per variable, whichever arm writes
                             // it. The deviation first: it reads the pair's
@@ -688,6 +772,9 @@ impl Deriver<'_> {
             IExprKind::Var(v) => {
                 if self.p.vars[*v].global {
                     (e.clone(), None)
+                } else if let Some((_, current, deviation)) = self.carried[*v].filter(|_| is_loop) {
+                    let t = self.p.vars[*v].ty;
+                    (mk(IExprKind::Var(current), t), Some(mk(IExprKind::Var(deviation), t)))
                 } else if let Some(u) = self.uniforms[*v].filter(|_| written.contains(v)) {
                     (mk(IExprKind::Var(u), self.p.vars[*v].ty), None)
                 } else if let Some((rv, dv)) = self.pairs[*v].filter(|_| written.contains(v)) {
@@ -1148,6 +1235,57 @@ mod tests {
         assert!(with_derived_equations(&b).is_some(), "the @k == 1 arm is excluded");
     }
 
+    /// State the loop carries besides z (phase 4, step 5): the reference
+    /// records it each pass, the pixel keeps its deviation, a rebase
+    /// moves it as it moves `#dz`. A Phoenix (its previous z), a carried
+    /// sum written in one arm, and a convergent Newton whose test reads
+    /// its previous z run perturbed as they run, in the f64 model.
+    #[test]
+    fn carried_state_runs_as_the_formula_does() {
+        let cases: &[(&str, (f64, f64), u32)] = &[
+            ("H {\ninit:\n z = 0\n zold = 0\nloop:\n t = z\n z = sqr(z) + #pixel + zold * (-0.5, 0)\n zold = t\nbailout:\n |z| < 4\n}", (0.56667, -0.1), 300),
+            (
+                "A {\ninit:\n z = 0\n float acc = 0\nloop:\n if @on\n  acc = acc * 0.5 + real(z)\n endif\n z = sqr(z) + #pixel + acc * 0.01\nbailout:\n |z| < 4\n\
+                 default:\n bool param on\n  default = true\n endparam\n}",
+                (-0.7436, 0.1318),
+                300,
+            ),
+            (
+                "N {\ninit:\n z = #pixel\n zold = 0\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\nbailout:\n |z - zold| > 1e-8\n}",
+                (0.21, 0.83),
+                100,
+            ),
+            // `t` written in one arm only, read after: in the other it
+            // holds last iteration's value, carried.
+            (
+                "V {\ninit:\n z = 0\nloop:\n if @m == 1\n  t = z * 0.5\n endif\n z = sqr(z) + t + #pixel\nbailout:\n |z| < 4\ndefault:\n int param m\n  default = 1\n endparam\n}",
+                (0.3, 0.55),
+                300,
+            ),
+        ];
+        for &(src, (rx, ry), maxiter) in cases {
+            let p = program(src, Dialect::UltraFractal);
+            let d = with_derived_equations(&p).unwrap_or_else(|| panic!("{}: no equations", p.name));
+            assert!(!d.carried.is_empty(), "{}: carries", p.name);
+            assert!(super::super::perturb::perturb_test(&d).is_some(), "{}: its test", p.name);
+            let params = ParamValues::defaults(&d);
+            let reference = C64::new(rx, ry);
+            let mut escaped = 0;
+            for k in 0..12 {
+                let t = k as f64 * 0.524;
+                let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-6 * (1.0 + k as f64)));
+                let env = Env::at(px, maxiter);
+                let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+                for rebase in [false, true] {
+                    let pert = run_perturbed(&d, &params, &env, reference, rebase).unwrap();
+                    assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "{} at {px:?}, rebase {rebase}", p.name);
+                }
+                escaped += direct.escaped as usize;
+            }
+            assert!(escaped > 0, "{}: nothing escapes at that reference", p.name);
+        }
+    }
+
     /// What has no cancellation-free form, or carries state, derives
     /// nothing; a formula with its own equations keeps them.
     #[test]
@@ -1156,11 +1294,9 @@ mod tests {
             "E {\ninit:\n z = 0\nloop:\n z = exp(z) + #pixel\nbailout:\n |z| < 4\n}",
             "P {\ninit:\n z = 0\nloop:\n z = z^2.5 + #pixel\nbailout:\n |z| < 4\n}",
             "B {\ninit:\n z = 0\nloop:\n if real(z) > 0\n  z = sqr(z) + #pixel\n else\n  z = z + #pixel\n endif\nbailout:\n |z| < 4\n}",
-            "H {\ninit:\n z = 0\n zold = 0\nloop:\n t = z\n z = sqr(z) + #pixel + zold\n zold = t\nbailout:\n |z| < 4\n}",
             "U {\ninit:\n z = 0\nloop:\n z = @f(z) + #pixel\nbailout:\n |z| < 4\n}",
-            // `t` written in one arm only, read after: in the other it
-            // holds last iteration's value.
-            "V {\ninit:\n z = 0\nloop:\n if @m == 1\n  t = z\n endif\n z = sqr(z) + t + #pixel\nbailout:\n |z| < 4\ndefault:\n int param m\n  default = 1\n endparam\n}",
+            // A carried int (a counter): no deviation to follow it by.
+            "I {\ninit:\n z = 0\n int k = 0\nloop:\n k = k + 1\n z = sqr(z) + #pixel * k\nbailout:\n |z| < 4\n}",
         ] {
             assert!(with_derived_equations(&program(src, Dialect::UltraFractal)).is_none(), "{src}");
         }

@@ -11,7 +11,9 @@
 //! test, its native deep-zoom tiers and their series approximation --
 //! the twin has not: it deep-zooms by derived equations
 //! (`lang::delta`), the families the derivation covers (all but a
-//! Multibrot's or a multicorn's real power).
+//! Multibrot's or a multicorn's real power). Phoenix, Manowar and Spider
+//! carry a value besides z (the previous z, the moving c), which the
+//! derived equations follow (phase 4, step 5).
 //!
 //! The sources are `assets/formulas/twins/*.rhai`; the GPU tests hold
 //! each to its built-in (`escape::app_repro_test`).
@@ -24,6 +26,10 @@ pub const TWINS: &[(&str, &str)] = &[
     ("burning_ship", include_str!("../../assets/formulas/twins/burning_ship.rhai")),
     ("lambda", include_str!("../../assets/formulas/twins/lambda.rhai")),
     ("cactus", include_str!("../../assets/formulas/twins/cactus.rhai")),
+    // Carrying a value besides z (step 5): the previous z, the moving c.
+    ("phoenix", include_str!("../../assets/formulas/twins/phoenix.rhai")),
+    ("manowar", include_str!("../../assets/formulas/twins/manowar.rhai")),
+    ("spider", include_str!("../../assets/formulas/twins/spider.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -81,7 +87,7 @@ mod tests {
             }
             assert!(custom_source(name).is_some_and(|s| s.entry == p.name));
         }
-        assert!(source("phoenix").is_none());
+        assert!(source("mcmullen").is_none());
     }
 
     /// The families the derivation covers deep-zoom by derived equations
@@ -114,6 +120,11 @@ mod tests {
                 assert!(holds("burning_ship", &[(0, v as f64)], julia), "variant {v}");
             }
             assert!(!holds("multibrot", &[], julia));
+            // Carrying the previous z, or the moving c (step 5).
+            assert!(holds("phoenix", &[], julia));
+            assert!(holds("manowar", &[], julia));
+            assert!(holds("spider", &[], julia));
         }
     }
 }
+

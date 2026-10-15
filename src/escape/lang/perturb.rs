@@ -55,6 +55,11 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
     if perturb_test(p).is_none() {
         return Err("its test reads more than `#z`".into());
     }
+    // Derived equations may carry one value besides z (phase 4, step
+    // 5): the GPU keeps its deviation where Phoenix keeps its history.
+    if p.carried.len() > 1 {
+        return Err(format!("its equations carry {} values besides z; deep zoom carries one", p.carried.len()));
+    }
     for place in [Predef::X, Predef::Y, Predef::ScreenPixel, Predef::Random, Predef::WhiteSq] {
         if p.reads(place) {
             return Err("it reads the pixel's place on the screen, which the reference point has none of".into());
@@ -82,7 +87,10 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
     } else {
         None
     };
-    Ok(Perturbable { rebase: carried.is_empty(), cycle })
+    // What the derived equations carry (`Program::carried`) rebases with
+    // z; anything else carried restarts wrong, so only at the orbit's end.
+    let rebase = carried.iter().all(|v| p.carried.iter().any(|c| c.var == *v));
+    Ok(Perturbable { rebase, cycle })
 }
 
 /// The formula's test as the perturbed path evaluates it, on the pixel's
@@ -96,11 +104,19 @@ pub fn perturb_test(p: &Program) -> Option<IExpr> {
     if !reads_a_variable(test, p) {
         return Some(test.clone());
     }
-    let values = super::delta::init_values(p)?;
+    // A carried variable (`Program::carried`) is read at its full value,
+    // which the perturbed path keeps; the init's constants by value.
+    let carried = |v: VarId| p.carried.iter().any(|c| c.var == v);
+    let mut values = super::delta::init_values(p).unwrap_or_else(|| vec![None; p.vars.len()]);
+    for c in &p.carried {
+        values[c.var] = Some(IExpr { kind: IExprKind::Var(c.var), ty: p.vars[c.var].ty });
+    }
     fn constants_only(e: &IExpr, p: &Program, values: &[Option<IExpr>]) -> bool {
         match &e.kind {
             IExprKind::Var(v) => {
-                p.vars[*v].global || (values[*v].is_some() && !super::delta::writes_var(&p.loop_body, *v))
+                p.vars[*v].global
+                    || p.carried.iter().any(|c| c.var == *v)
+                    || (values[*v].is_some() && !super::delta::writes_var(&p.loop_body, *v))
             }
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
                 constants_only(a, p, values)
@@ -115,7 +131,19 @@ pub fn perturb_test(p: &Program) -> Option<IExpr> {
     let mut ok = true;
     let poisoned = vec![false; p.vars.len()];
     let t = super::delta::subst(test, &values, &poisoned, p, &mut ok);
-    (ok && !reads_a_variable(&t, p)).then_some(t)
+    (ok && !reads_other_than(&t, p, &carried)).then_some(t)
+}
+
+/// Whether `e` reads a variable that is neither global nor `allowed`.
+fn reads_other_than(e: &IExpr, p: &Program, allowed: &dyn Fn(VarId) -> bool) -> bool {
+    match &e.kind {
+        IExprKind::Var(v) => !p.vars[*v].global && !allowed(*v),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+            reads_other_than(a, p, allowed)
+        }
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => reads_other_than(a, p, allowed) || reads_other_than(b, p, allowed),
+        _ => false,
+    }
 }
 
 /// Variables the loop reads before writing in an iteration and also

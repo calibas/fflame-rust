@@ -18,7 +18,8 @@ folded into phase 4's order of work. Phase 4's steps 1 (the animation
 bug) and 2 (the Rhai front end) done 2026-10-14; step 3 (UF and
 Fractint formulas and colourings converted to Rhai, Rhai colourings)
 2026-10-15; step 4 (the built-ins' twins, Edit as Formula, branches in
-the init derived) 2026-10-15.
+the init derived) 2026-10-15; step 5 (carried state in deep zoom, one
+value) 2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1051,6 +1052,55 @@ keeps compiling as UF; the editor converts what it opens.
    precedent. Unlocks the twins of Phoenix, Manowar and Spider, and the
    convergent formulas' tests (Newton, Nova, Novaretti, Magnet: the
    test reads the pixel's own previous z).
+
+   Done 2026-10-15 for one carried value. As built:
+   - **What is carried:** a float or complex the loop writes and either
+     reads in a pass before certainly writing it, or the test reads (so
+     a convergent test's previous z, written before it is read, counts
+     too).
+   - **The derivation** (`lang::delta`): each carried variable gets
+     three equation variables, listed in `Program::carried`:
+     - the reference's record at the pass's start;
+     - its current value at the reference through the pass (so a write
+       in one arm reads right after the branch);
+     - the pixel's deviation, kept from pass to pass.
+
+     The init sets the deviation's start (per init case).
+   - **The f64 model** (`interp::run_perturbed`): the references record
+     each carried value per pass, the equations read the record, the
+     test reads the full value, and a rebase moves the deviation as it
+     moves `#dz`, gated on the pair's norm. A Phoenix, a sum carried
+     through one arm, a convergent Newton and a carried temporary all
+     run perturbed as they run, with and without rebasing.
+   - **The GPU.**
+     - The reference records the value after z, each pass, per
+       reference (`BigMachine::carried`). The orbit's entries per pass
+       are `R * W` (the tier's `width` W = 2; hybrids' R as before), and
+       `custom_pass`, the step (`ORBIT_S`) and the phased rebase are
+       generalised.
+     - The equations take the record and a pointer to the deviation,
+       which the template keeps in `w_prev`, where Phoenix keeps its
+       history. On the deep rung it uses the Phoenix state tail.
+     - The test takes the full value. The rebase moves the deviation by
+       the records' difference (in double-float on the scaled rung;
+       `fe_rebase_between` on the deep), gated on the pair's norm.
+     - Such a formula perturbs on the floatexp rung at every depth
+       (`deep_rung_always`), as Manowar does, for the reason measured
+       there. The Manowar twin at zoom 26, against the big-float truth,
+       counts right on 337 of 439 sampled pixels on the scaled rung and
+       420 on floatexp, where the built-in Manowar counts 373.
+   - **More than one carried value is refused** (`perturbation`), a
+     limit of the GPU path alone: 79 library formulas carry two or
+     three.
+   - **The twins** of Phoenix, Manowar and Spider. Directly they render
+     as their built-ins on every pixel. At depth, Phoenix (zoom 22.4 and
+     48) counts right on 439 of 439 sampled pixels, as the built-in
+     does, and Manowar on 420 against 373. A convergent Newton written in
+     the language counts right on 439 of 439 at zoom 30.
+   - **The library:** derived equations for 608 formulas (501 after
+     step 4), every conversion keeping them. The leading blockers now:
+     a user function of the iterate (2,307), a branch on the iterate
+     (1,627), a real or complex power (1,255) -- step 6's ground.
 6. **Phase 3's step 6, and guards**: transcendental functions and real
    powers by their difference forms (Exponential, Trig, Lambda-sine,
    Collatz, Tetration, Ducks, Feather; Multibrot with a non-integer
