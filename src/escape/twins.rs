@@ -90,10 +90,9 @@ mod tests {
         assert!(source("mcmullen").is_none());
     }
 
-    /// The families the derivation covers deep-zoom by derived equations
-    /// on both planes: the Mandelbrot, the Tricorn at power 2, every
-    /// Burning Ship variant, Lambda, Cactus. A power given as a parameter
-    /// does not.
+    /// Every twin deep-zooms by derived equations on both planes: a power
+    /// given as a parameter by its difference form (step 6), the Tricorn
+    /// at power 2 by its exact square.
     #[test]
     fn the_twins_derive_their_deep_zoom() {
         let holds = |name: &str, set: &[(usize, f64)], julia: bool| -> bool {
@@ -115,11 +114,12 @@ mod tests {
             assert!(holds("lambda", &[], julia));
             assert!(holds("cactus", &[], julia));
             assert!(holds("tricorn", &[], julia), "power 2");
-            assert!(!holds("tricorn", &[(0, 3.0)], julia), "power 3: a real power");
+            assert!(holds("tricorn", &[(0, 3.0)], julia), "power 3: a real power");
             for v in 0..6 {
                 assert!(holds("burning_ship", &[(0, v as f64)], julia), "variant {v}");
             }
-            assert!(!holds("multibrot", &[], julia));
+            assert!(holds("multibrot", &[], julia));
+            assert!(holds("multibrot", &[(0, 2.5)], julia), "a power between");
             // Carrying the previous z, or the moving c (step 5).
             assert!(holds("phoenix", &[], julia));
             assert!(holds("manowar", &[], julia));

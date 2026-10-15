@@ -357,6 +357,8 @@ impl D<'_> {
                         bin(BinOp::Mul, call(Sqrt, bin(BinOp::Sub, a.clone(), one.clone())), call(Sqrt, bin(BinOp::Add, a, one))),
                     ),
                     Atanh => bin(BinOp::Div, one.clone(), bin(BinOp::Sub, one, sq(a))),
+                    Expm1 => call(Exp, a),
+                    Log1p => bin(BinOp::Div, one.clone(), bin(BinOp::Add, one, a)),
                     // Folds, parts, roundings: not complex-differentiable.
                     Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf | IsNan => {
                         return Err(())

@@ -1,7 +1,7 @@
 //! A checked program to WGSL.
 //!
 //! A FORMULA becomes a program the direct template drives:
-//! `struct FormulaState` (the iterate and every variable),
+//! `struct FormulaState` (the iterate and the program's variables),
 //! `formula_init(pixel)`, `formula_loop(s, pixel)`,
 //! `formula_bailout(s, pixel)` (true: iterate again) and
 //! `formula_same(a, b)` (interior detection's repeat). A COLOURING
@@ -84,10 +84,11 @@ pub struct ColoringWgsl {
 pub fn formula(p: &Program) -> String {
     let mut g = Gen::new(p, Ctx::Formula, "uff_");
     let mut body = String::new();
-    // The state: z and every variable but the globals.
+    // The state: z and every variable but the globals and the
+    // perturbation equations' own (the perturb functions' locals).
     body.push_str("struct FormulaState {\n    z: vec2<f32>,\n");
     for (i, v) in p.vars.iter().enumerate() {
-        if !v.global {
+        if !v.global && !v.perturb {
             let _ = writeln!(body, "    v{i}: {},", wgsl_ty(v.ty));
         }
     }
@@ -122,7 +123,7 @@ pub fn formula(p: &Program) -> String {
     // equal and can continue differently, and Metal's fast-math folds
     // float comparisons (CLAUDE.md).
     let mut same = vec!["all(bitcast<vec2<u32>>(a.z) == bitcast<vec2<u32>>(b.z))".to_string()];
-    for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global) {
+    for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global && !v.perturb) {
         same.push(match v.ty {
             Ty::Complex => format!("all(bitcast<vec2<u32>>(a.v{i}) == bitcast<vec2<u32>>(b.v{i}))"),
             Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
@@ -396,6 +397,83 @@ fn cfe2_powi(a: CFe2, n: i32) -> CFe2 {
         k = k >> 1u;
     }
     return acc;
+}
+
+// Exact near zero, where the built-ins cancel or lose their relative
+// precision (sinh as (e^x - e^-x)/2; exp(x) - 1; log(1 + x); a sin whose
+// absolute error the spec allows at 2^-11): series below a threshold,
+// the plain function above it.
+fn fe_sin(x: f32) -> f32 {
+    if (abs(x) < 0.5) {
+        let x2 = x * x;
+        return x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0 * (1.0 - x2 / 72.0))));
+    }
+    return sin(x);
+}
+fn fe_sinh(x: f32) -> f32 {
+    if (abs(x) < 0.5) {
+        let x2 = x * x;
+        return x * (1.0 + x2 / 6.0 * (1.0 + x2 / 20.0 * (1.0 + x2 / 42.0 * (1.0 + x2 / 72.0))));
+    }
+    return sinh(x);
+}
+fn fe_expm1(x: f32) -> f32 {
+    if (abs(x) < 0.5) {
+        return x * (1.0 + x / 2.0 * (1.0 + x / 3.0 * (1.0 + x / 4.0 * (1.0 + x / 5.0 * (1.0 + x / 6.0 * (1.0 + x / 7.0 * (1.0 + x / 8.0)))))));
+    }
+    return exp(x) - 1.0;
+}
+fn fe_log1p(x: f32) -> f32 {
+    if (abs(x) < 0.25) {
+        // 2 atanh(x / (2 + x)), by its series.
+        let u = x / (2.0 + x);
+        let u2 = u * u;
+        return 2.0 * u * (1.0 + u2 * (1.0 / 3.0 + u2 * (1.0 / 5.0 + u2 * (1.0 / 7.0 + u2 / 9.0))));
+    }
+    return log(1.0 + x);
+}
+fn fe_cexpm1(z: vec2<f32>) -> vec2<f32> {
+    let h = fe_sin(0.5 * z.y);
+    return vec2<f32>(fe_expm1(z.x) * cos(z.y) - 2.0 * h * h, exp(z.x) * fe_sin(z.y));
+}
+fn fe_clog1p(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(0.5 * fe_log1p(2.0 * z.x + z.x * z.x + z.y * z.y), atan2(z.y, 1.0 + z.x));
+}
+
+// Functions that are x + O(x^2) near zero, of an extended-range value:
+// below 2^-20 their series, whose next term f32 cannot see; above, the
+// f32 function of the value (it is then within f32's range).
+fn cfe2_expm1(d: CFe2) -> CFe2 {
+    if (d.e == CFE_ZERO_E) {
+        return d;
+    }
+    if (d.e < -20) {
+        return cfe2_add(d, cfe2_mul_c32(cfe2_sqr(d), vec2<f32>(0.5, 0.0)));
+    }
+    return cfe2_from_f32(fe_cexpm1(cfe2_to_f32(d)));
+}
+fn cfe2_log1p(d: CFe2) -> CFe2 {
+    if (d.e == CFE_ZERO_E) {
+        return d;
+    }
+    if (d.e < -20) {
+        return cfe2_sub(d, cfe2_mul_c32(cfe2_sqr(d), vec2<f32>(0.5, 0.0)));
+    }
+    return cfe2_from_f32(fe_clog1p(cfe2_to_f32(d)));
+}
+fn cfe2_sin_small(d: CFe2) -> CFe2 {
+    if (d.e == CFE_ZERO_E || d.e < -20) {
+        return d;
+    }
+    let v = cfe2_to_f32(d);
+    return cfe2_from_f32(vec2<f32>(fe_sin(v.x) * cosh(v.y), cos(v.x) * fe_sinh(v.y)));
+}
+fn cfe2_sinh_small(d: CFe2) -> CFe2 {
+    if (d.e == CFE_ZERO_E || d.e < -20) {
+        return d;
+    }
+    let v = cfe2_to_f32(d);
+    return cfe2_from_f32(vec2<f32>(fe_sinh(v.x) * cos(v.y), cosh(v.x) * fe_sin(v.y)));
 }
 ";
 
@@ -1103,6 +1181,21 @@ impl<'p> Gen<'p> {
                     (Builtin::Flip, Small) if complex => (format!("({ca}).yx"), Small),
                     (Builtin::Real, Small) if complex => (format!("({ca}).x"), Small),
                     (Builtin::Imag, Small) if complex => (format!("({ca}).y"), Small),
+                    // f(x) = x + O(x^2): f of the true value, back to
+                    // units of S (the difference forms, `lang::delta`).
+                    (Builtin::Expm1 | Builtin::Log1p | Builtin::Sin | Builtin::Sinh, Small) => {
+                        let h = match (f, complex) {
+                            (Builtin::Expm1, true) => Helper::CExpm1,
+                            (Builtin::Log1p, true) => Helper::CLog1p,
+                            (Builtin::Sin, true) => Helper::CSinSmall,
+                            (Builtin::Sinh, true) => Helper::CSinhSmall,
+                            (Builtin::Expm1, false) => Helper::FExpm1,
+                            (Builtin::Log1p, false) => Helper::FLog1p,
+                            (Builtin::Sin, false) => Helper::FSin,
+                            _ => Helper::FSinh,
+                        };
+                        (format!("({}(s * {ca}) / s)", self.use_(h)), Small)
+                    }
                     _ => (self.true_expr(e), Full),
                 }
             }
@@ -1243,6 +1336,11 @@ impl<'p> Gen<'p> {
                     Builtin::Flip if complex => format!("cfe2_flip({})", self.fegen(a)),
                     Builtin::Real if complex => format!("cfe2_re({})", self.fegen(a)),
                     Builtin::Imag if complex => format!("cfe2_im({})", self.fegen(a)),
+                    // x + O(x^2): a series in extended range when small.
+                    Builtin::Expm1 => format!("cfe2_expm1({})", self.fegen(a)),
+                    Builtin::Log1p => format!("cfe2_log1p({})", self.fegen(a)),
+                    Builtin::Sin => format!("cfe2_sin_small({})", self.fegen(a)),
+                    Builtin::Sinh => format!("cfe2_sinh_small({})", self.fegen(a)),
                     _ => plain(self, e),
                 }
             }
@@ -1382,6 +1480,8 @@ impl<'p> Gen<'p> {
             Floor => format!("floor({v})"),
             IsNan => return format!("{}({v})", self.use_(Helper::IsNan)),
             IsInf => return format!("{}({v})", self.use_(Helper::IsInf)),
+            Expm1 => format!("{}({v})", self.use_(Helper::FExpm1)),
+            Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
         };
         if ty == Ty::Int {
@@ -1428,6 +1528,8 @@ fn complex_helper(f: Builtin) -> Helper {
         Ident => Helper::CIdent,
         Zero => Helper::CZero,
         Atan2 => Helper::CArgC,
+        Expm1 => Helper::CExpm1,
+        Log1p => Helper::CLog1p,
         IsNan | IsInf => unreachable!("bool-valued"),
     }
 }
@@ -1520,7 +1622,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
             IExprKind::Modulus(a) => class(a, small),
             IExprKind::Call(f, a) if a.ty != Ty::Int => {
                 let complex = a.ty == Ty::Complex;
-                let kept = matches!(f, Builtin::Sqr | Builtin::Ident | Builtin::Zero)
+                let kept = matches!(f, Builtin::Sqr | Builtin::Ident | Builtin::Zero | Builtin::Expm1 | Builtin::Log1p | Builtin::Sin | Builtin::Sinh)
                     || (complex && matches!(f, Builtin::Conj | Builtin::Flip | Builtin::Real | Builtin::Imag));
                 if kept && class(a, small) == Small {
                     Small
@@ -1734,6 +1836,16 @@ enum Helper {
     User,
     UserD,
     Opaque,
+    // Exact near zero (`Builtin::Expm1`, `Log1p`, and the small sin and
+    // sinh of the derived perturbation equations' difference forms).
+    FSin,
+    FSinh,
+    FExpm1,
+    FLog1p,
+    CExpm1,
+    CLog1p,
+    CSinSmall,
+    CSinhSmall,
 }
 
 impl Helper {
@@ -1741,6 +1853,14 @@ impl Helper {
         use Helper::*;
         match self {
             Reduce => "uf_reduce",
+            FSin => "uf_sin",
+            FSinh => "uf_sinh",
+            FExpm1 => "uf_expm1",
+            FLog1p => "uf_log1p",
+            CExpm1 => "uf_cexpm1",
+            CLog1p => "uf_clog1p",
+            CSinSmall => "uf_csin_small",
+            CSinhSmall => "uf_csinh_small",
             Atan2 => "uf_atan2",
             Round => "uf_round",
             IsNan => "uf_isnan",
@@ -1816,6 +1936,9 @@ impl Helper {
             CAsinh | CAcosh => &[CMul, CSqrt, CLog],
             CRound => &[Round],
             CCosxx => &[CCos],
+            CExpm1 => &[Reduce, FExpm1, FSin],
+            CLog1p => &[Atan2, FLog1p],
+            CSinSmall | CSinhSmall => &[FSin, FSinh],
             CIsNan => &[IsNan],
             CIsInf => &[IsInf],
             User => &[
@@ -1865,6 +1988,50 @@ impl Helper {
 }",
             FSq => "fn uf_fsq(x: f32) -> f32 {
     return x * x;
+}",
+            FSin => "fn uf_sin(x: f32) -> f32 {
+    if (abs(x) < 0.5) {
+        let x2 = x * x;
+        return x * (1.0 - x2 / 6.0 * (1.0 - x2 / 20.0 * (1.0 - x2 / 42.0 * (1.0 - x2 / 72.0))));
+    }
+    return sin(x);
+}",
+            FSinh => "fn uf_sinh(x: f32) -> f32 {
+    if (abs(x) < 0.5) {
+        let x2 = x * x;
+        return x * (1.0 + x2 / 6.0 * (1.0 + x2 / 20.0 * (1.0 + x2 / 42.0 * (1.0 + x2 / 72.0))));
+    }
+    return sinh(x);
+}",
+            FExpm1 => "fn uf_expm1(x: f32) -> f32 {
+    if (abs(x) < 0.5) {
+        return x * (1.0 + x / 2.0 * (1.0 + x / 3.0 * (1.0 + x / 4.0 * (1.0 + x / 5.0 * (1.0 + x / 6.0 * (1.0 + x / 7.0 * (1.0 + x / 8.0)))))));
+    }
+    return exp(x) - 1.0;
+}",
+            FLog1p => "fn uf_log1p(x: f32) -> f32 {
+    if (abs(x) < 0.25) {
+        let u = x / (2.0 + x);
+        let u2 = u * u;
+        return 2.0 * u * (1.0 + u2 * (1.0 / 3.0 + u2 * (1.0 / 5.0 + u2 * (1.0 / 7.0 + u2 / 9.0))));
+    }
+    return log(1.0 + x);
+}",
+            // exp(z) - 1 and log(1 + z), neither part cancelling.
+            CExpm1 => "fn uf_cexpm1(z: vec2<f32>) -> vec2<f32> {
+    let y = uf_reduce(z.y);
+    let h = uf_sin(0.5 * y);
+    return vec2<f32>(uf_expm1(z.x) * cos(y) - 2.0 * h * h, exp(z.x) * uf_sin(y));
+}",
+            CLog1p => "fn uf_clog1p(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(0.5 * uf_log1p(2.0 * z.x + z.x * z.x + z.y * z.y), uf_atan2(z.y, 1.0 + z.x));
+}",
+            // sin and sinh of a small complex: each part exact near zero.
+            CSinSmall => "fn uf_csin_small(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(uf_sin(z.x) * cosh(z.y), cos(z.x) * uf_sinh(z.y));
+}",
+            CSinhSmall => "fn uf_csinh_small(z: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(uf_sinh(z.x) * cos(z.y), cosh(z.x) * uf_sin(z.y));
 }",
             // |c + d| - |c| by sign case: exact where the difference
             // cancels (derived perturbation equations, `lang::delta`).
@@ -2401,6 +2568,60 @@ pub(crate) mod tests {
     fn close(gpu: (f32, f32), cpu: super::super::builtins::C64) -> bool {
         let scale = cpu.abs().max(1.0);
         ((gpu.0 as f64 - cpu.re).abs() / scale) < 2e-5 && ((gpu.1 as f64 - cpu.im).abs() / scale) < 2e-5
+    }
+
+    /// The difference forms' functions (`expm1`, `log1p`; `lang::delta`)
+    /// keep their relative precision at the deviations' sizes, down to
+    /// 1e-9, on both rungs' helpers: the spec lets the hardware `sin`
+    /// err by 2^-11 absolutely, which once left every deep Multibrot
+    /// pixel of a parameter power unescaped.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_difference_functions_keep_their_precision_on_the_gpu() {
+        use super::super::builtins::C64;
+        let mut points = Vec::new();
+        for m in [1e-9, 1e-7, 1e-5, 1e-3, 0.1, 0.3] {
+            for t in [0.0f64, 0.7, 1.5707963267948966, 2.4, -1.1] {
+                points.push((m * t.cos(), m * t.sin()));
+            }
+        }
+        // (what, its f64 definition, the formula's or the deep rung's WGSL)
+        let uf = program(
+            "S {\ninit:\n z = #pixel\nloop:\n if @k == 0\n  z = expm1(z)\n elseif @k == 1\n  z = log1p(z)\n elseif @k == 2\n  \
+             z = expm1(real(z))\n else\n  z = log1p(real(z))\n endif\nbailout:\n false\ndefault:\n float param k\n  default = 0\n endparam\n}",
+            EntryKind::Formula,
+        );
+        let fe = PERTURB_FE_HELPERS;
+        let fe = &fe[fe.find("fn fe_sin").unwrap()..fe.find("// Functions that are x + O(x^2)").unwrap()];
+        let fe = format!(
+            "{fe}\nstruct FormulaState {{\n    z: vec2<f32>,\n}}\nfn formula_init(p: vec2<f32>) -> FormulaState {{\n    var s: FormulaState;\n    s.z = p;\n    return s;\n}}\n\
+             fn formula_loop(s: FormulaState, p: vec2<f32>) -> FormulaState {{\n    var t = s;\n    t.z = select(fe_clog1p(s.z), fe_cexpm1(s.z), sel == 0.0);\n    return t;\n}}\n"
+        );
+        let real = |f: fn(f64) -> f64| move |z: C64| C64::new(f(z.re), 0.0);
+        let cases: [(&str, String, f32, Box<dyn Fn(C64) -> C64>); 6] = [
+            ("expm1", formula(&uf), 0.0, Box::new(C64::expm1)),
+            ("log1p", formula(&uf), 1.0, Box::new(C64::ln1p)),
+            ("real expm1", formula(&uf), 2.0, Box::new(real(f64::exp_m1))),
+            ("real log1p", formula(&uf), 3.0, Box::new(real(f64::ln_1p))),
+            ("fe_cexpm1", fe.clone(), 0.0, Box::new(C64::expm1)),
+            ("fe_clog1p", fe.clone(), 1.0, Box::new(C64::ln1p)),
+        ];
+        let mut bad = Vec::new();
+        for (what, wgsl, k, f) in &cases {
+            let inputs: Vec<(f32, f32, f32)> = points.iter().map(|&(x, y)| (x as f32, y as f32, *k)).collect();
+            let Some(out) = gpu_run(wgsl, "vec4<f32>(s.z, 0.0, 0.0)", &inputs) else {
+                eprintln!("no GPU");
+                return;
+            };
+            for ((x, y, _), got) in inputs.iter().zip(&out) {
+                let want = f(C64::new(*x as f64, *y as f64));
+                let err = (got[0] as f64 - want.re).hypot(got[1] as f64 - want.im) / want.abs();
+                if !(err < 1e-5) {
+                    bad.push(format!("{what}({x:e}, {y:e}): gpu ({:e}, {:e}), f64 ({:e}, {:e})", got[0], got[1], want.re, want.im));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 
     /// Every user-selectable function's WGSL against its f64 definition.
