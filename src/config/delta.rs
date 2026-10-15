@@ -3941,6 +3941,20 @@ impl ConfigPath {
 
         // Escape-time paths: Escape.{field} and Escape.{kind}Param.{param}
         if let Some(rest) = s.strip_prefix("Escape.") {
+            // A parameter's name is all that follows its kind: a custom
+            // formula's complex parameter is two, `seed.re` and
+            // `seed.im`, so the name may hold dots of its own.
+            let named: [(&str, fn(String) -> ConfigPath); 4] = [
+                ("FormulaParam.", |param| ConfigPath::EscapeFormulaParam { param }),
+                ("ColoringParam.", |param| ConfigPath::EscapeColoringParam { param }),
+                ("Layer.Param.", |param| ConfigPath::EscapeLayerParam { param }),
+                ("LensParam.", |param| ConfigPath::EscapeLensParam { param }),
+            ];
+            for (kind, path) in named {
+                if let Some(param) = rest.strip_prefix(kind).filter(|p| !p.is_empty()) {
+                    return Some(path(param.to_string()));
+                }
+            }
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Formula"] => return Some(ConfigPath::EscapeFormula),
@@ -4049,29 +4063,27 @@ impl ConfigPath {
                 ["TextureOverlay", "Fit"] => return Some(ConfigPath::EscapeTextureOverlayFit),
                 ["TextureOverlay", "TileScale"] => return Some(ConfigPath::EscapeTextureOverlayTile),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
-                ["FormulaParam", param] => {
-                    return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
-                }
-                ["ColoringParam", param] => {
-                    return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
-                }
                 ["Layer", "Coloring"] => return Some(ConfigPath::EscapeLayerColoring),
-                ["Layer", "Param", param] => {
-                    return Some(ConfigPath::EscapeLayerParam { param: param.to_string() })
-                }
                 ["Layer", "Blend"] => return Some(ConfigPath::EscapeLayerBlend),
                 ["Layer", "Weight"] => return Some(ConfigPath::EscapeLayerWeight),
                 ["Lens"] => return Some(ConfigPath::EscapeLens),
                 ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
-                ["LensParam", param] => {
-                    return Some(ConfigPath::EscapeLensParam { param: param.to_string() })
-                }
                 _ => return None,
             }
         }
 
         // Simulation paths: Sim.{field} and Sim.{kind}Param.{param}
         if let Some(rest) = s.strip_prefix("Sim.") {
+            // As the escape parameters: the name is all that follows.
+            let named: [(&str, fn(String) -> ConfigPath); 2] = [
+                ("ModelParam.", |param| ConfigPath::SimModelParam { param }),
+                ("ColoringParam.", |param| ConfigPath::SimColoringParam { param }),
+            ];
+            for (kind, path) in named {
+                if let Some(param) = rest.strip_prefix(kind).filter(|p| !p.is_empty()) {
+                    return Some(path(param.to_string()));
+                }
+            }
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Model"] => return Some(ConfigPath::SimModel),
@@ -4142,9 +4154,6 @@ impl ConfigPath {
                 ["Upscale"] => return Some(ConfigPath::SimUpscale),
                 ["Downscale"] => return Some(ConfigPath::SimDownscale),
                 ["Fit"] => return Some(ConfigPath::SimFit),
-                ["ModelParam", param] => {
-                    return Some(ConfigPath::SimModelParam { param: param.to_string() })
-                }
                 ["Layer", layer, "Model"] => {
                     return Some(ConfigPath::SimLayerModel { layer: layer.parse().ok()? })
                 }
@@ -4183,9 +4192,6 @@ impl ConfigPath {
                         "Channels" => Some(ConfigPath::SimCouplingChannels { index }),
                         _ => None,
                     };
-                }
-                ["ColoringParam", param] => {
-                    return Some(ConfigPath::SimColoringParam { param: param.to_string() })
                 }
                 _ => return None,
             }
@@ -5373,6 +5379,29 @@ mod tests {
             let parsed = ConfigPath::from_string_key(&key);
             assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for {:?}", path);
         }
+    }
+
+    /// A parameter's name may hold dots -- a custom formula's complex
+    /// parameter is `seed.re` and `seed.im` -- and its key must still
+    /// parse back, or an animation track on it never plays nor exports.
+    #[test]
+    fn a_dotted_parameter_name_roundtrips() {
+        let paths = [
+            ConfigPath::EscapeFormulaParam { param: "seed.re".into() },
+            ConfigPath::EscapeFormulaParam { param: "a1_1_1.im".into() },
+            ConfigPath::EscapeFormulaParam { param: "power".into() },
+            ConfigPath::EscapeColoringParam { param: "center.im".into() },
+            ConfigPath::EscapeLayerParam { param: "offset.re".into() },
+            ConfigPath::EscapeLensParam { param: "c1".into() },
+            ConfigPath::SimModelParam { param: "feed".into() },
+            ConfigPath::SimColoringParam { param: "tint.re".into() },
+        ];
+        for path in paths {
+            let key = path.to_string_key();
+            assert_eq!(ConfigPath::from_string_key(&key), Some(path.clone()), "{key}");
+        }
+        // The kind alone names nothing.
+        assert_eq!(ConfigPath::from_string_key("Escape.FormulaParam."), None);
     }
 
     #[test]
