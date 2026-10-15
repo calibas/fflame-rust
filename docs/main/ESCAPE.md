@@ -290,18 +290,85 @@ is [escape-coloring-survey.md](../projects/escape-coloring-survey.md).
 
 ## The formula language
 
-Formulas and colourings can also be written as text, in **Ultra Fractal's
-formula language**, which accepts Fractint's shape too; `escape::lang`
-compiles them to WGSL. The plan, its phases and what is left are in
+Formulas and colourings can also be written as text; `escape::lang`
+compiles them to WGSL. The language's own form is **Rhai** (the
+scripting language the program embeds; since phase 4), and **Ultra
+Fractal's formula language** -- which accepts Fractint's shape too --
+is read as well. The plan, its phases and what is left are in
 [escape-formula-language.md](../projects/escape-formula-language.md).
 
-**Where it lives.** `src/escape/lang/`: `lexer.rs`, `parser.rs` (a file
-into entries and sections), `check.rs` (names and types, UF's rules,
+**Where it lives.** `src/escape/lang/`: `rhai.rs` (a Rhai formula
+lowered to the parse tree), `lexer.rs`, `parser.rs` (a UF file into
+entries and sections), `check.rs` (names and types, UF's rules,
 into the typed `ir.rs`), `interp.rs` (the program in f64: the reference
 the WGSL is tested against), `wgsl.rs` (the shader), `derive.rs` (a
 formula's derivative), `switch.rs` (a `switch:` pair as one program),
 `builtins.rs` (the function table).
 `src/escape/custom.rs` registers a compiled entry.
+
+**A Rhai formula** (`lang/rhai.rs`, a `.rhai` file, one formula; the
+dialect `rhai`) is three functions and its parameters' metadata:
+
+```rhai
+const PARAMS = #{
+    bailout: #{ value: 4.0, min: 1.0, caption: "Bailout" },
+};
+const INFO = #{ title: "Mandelbrot", center: complex(-0.5, 0.0), maxiter: 500 };
+
+fn start(pixel, p, plane) {
+    if plane.julia { #{ z: pixel, c: plane.c } } else { #{ z: complex(0.0, 0.0), c: pixel } }
+}
+
+fn step(s, p) {
+    s.z = s.z * s.z + s.c;
+    s
+}
+
+fn escaped(s, p) {
+    s.z.norm_sqr() > p.bailout
+}
+```
+
+- **Explicit state**: `start` returns the map each pixel begins with
+  (its fields the per-pixel state, `z` the iterate), `step` returns it
+  one pass on -- the same variable, or a new map, every value of which
+  reads the state before any is set -- and `escaped` says when the pixel
+  has left. What a step carries from pass to pass is then visible.
+- **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
+  `max`, `caption`, `hint`, `choices` (an int's names), or `function`
+  (a user function, called `p.f(z)`). They are the panel's controls,
+  animation targets and script parameters.
+- `start` may take the plane (`plane.julia`, `plane.c`: the panel's
+  Julia toggle and constant); `step` the pass, with `INFO.cycle` for
+  deep zoom (hybrids). `INFO` also gives `title`, `center`, `magn`,
+  `maxiter`, `angle`.
+- Helpers (other functions) are inlined and read only their arguments.
+  `if` is a value as well as a statement in `start`, `step` and
+  helpers; `escaped` is one test, its `let`s substituted.
+- Values are int, float, bool and complex (`complex(re, im)`); a bool
+  and a number do not mix, and two ints divided is refused (Rhai would
+  truncate). `**` is the power (`^` is Rhai's XOR). Rhai's names where
+  they differ from UF's: `ln` the natural log and `log` base 10, `abs`
+  of a complex its modulus and `fold` each part's absolute value (the
+  Burning Ship), `norm_sqr` the squared modulus, `.re` / `.im`, `arg`,
+  `atan2(y, x)`, `ceiling`, `cot`, `coth`. Loops: `while`, `do ...
+  while/until`, `for i in a..b`; no `break`.
+- How: rhai's own parser (optimisation off) gives its syntax tree
+  through the `internals` feature, pinned with the rhai version; the
+  tree is lowered to the UF parse tree -- the state's fields and the
+  locals as variables, `p.name` as `@name`, `start`/`step`/`escaped` as
+  `init:`/`loop:`/`bailout:` -- which the checker types (`check_rhai`:
+  Rhai's meanings for `abs` and bools). So everything after the parse
+  serves both languages unchanged; messages carry the script's names
+  and positions.
+- Examples: `assets/formulas/mandelbrot.rhai`, `burning-ship.rhai`,
+  `phoenix.rhai` (the editor's New starts a Rhai formula). Tests:
+  `tests/formulas/rhai/` (every construct, the function names, the
+  plane, a cycle), run on the GPU as the interpreter does; a Rhai
+  formula runs as its UF twin, renders as its built-in, and deep-zooms
+  pixel for pixel as its UF twin (`rhai_formulas_render_and_deep_zoom_as_their_twins`).
+- Not yet: Rhai colourings (phase 4, step 3, with converting UF on
+  opening).
 
 **An entry** is `Name(setting) { ... }` in a `.ufm` (formulas), `.ucl`
 (colourings) or `.frm` (Fractint) file; `;` comments to the end of a

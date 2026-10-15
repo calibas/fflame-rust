@@ -2532,6 +2532,15 @@ pub(crate) mod tests {
         ("fractint.frm", include_str!("../../../tests/formulas/fractint.frm"), EntryKind::Formula, Dialect::Fractint),
     ];
 
+    /// The Rhai test formulas, one to a file (`lang::rhai`).
+    const RHAI_TEST_FILES: &[(&str, &str)] = &[
+        ("rhai/mandelbrot.rhai", include_str!("../../../tests/formulas/rhai/mandelbrot.rhai")),
+        ("rhai/constructs.rhai", include_str!("../../../tests/formulas/rhai/constructs.rhai")),
+        ("rhai/plane.rhai", include_str!("../../../tests/formulas/rhai/plane.rhai")),
+        ("rhai/cycle.rhai", include_str!("../../../tests/formulas/rhai/cycle.rhai")),
+        ("rhai/functions.rhai", include_str!("../../../tests/formulas/rhai/functions.rhai")),
+    ];
+
     /// Every entry of the test files, checked as the registry checks it
     /// (a formula with its `switch:` target): (file, entry, program).
     fn test_file_entries() -> Vec<(&'static str, String, Program)> {
@@ -2550,6 +2559,12 @@ pub(crate) mod tests {
                     Some(p) if errors.is_empty() => out.push((file, e.name.clone(), p)),
                     _ => failures.push(format!("{file} / {}: {errors:?}", e.name)),
                 }
+            }
+        }
+        for &(file, text) in RHAI_TEST_FILES {
+            match super::super::rhai::program(text) {
+                Ok(p) => out.push((file, p.name.clone(), p)),
+                Err(d) => failures.push(format!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>())),
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));

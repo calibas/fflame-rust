@@ -1805,7 +1805,8 @@ fn register_escape(engine: &mut Engine) {
         let dialect = match dialect {
             "uf" | "ultra_fractal" | "ufm" | "ucl" => CustomDialect::UltraFractal,
             "fractint" | "frm" => CustomDialect::Fractint,
-            other => return Err(err(format!("unknown formula language `{other}` - use \"uf\" or \"fractint\""))),
+            "rhai" => CustomDialect::Rhai,
+            other => return Err(err(format!("unknown formula language `{other}` - use \"rhai\", \"uf\" or \"fractint\""))),
         };
         Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string() })
     }

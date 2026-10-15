@@ -1,6 +1,7 @@
-//! The user's formula files: Ultra Fractal (`.ufm` formulas, `.ucl`
-//! colourings) and Fractint (`.frm`) files, edited in the Formula Editor
-//! (`docs/projects/escape-formula-language.md`).
+//! The user's formula files: Rhai formulas (`.rhai`, one formula a
+//! file: the language's own), and the Ultra Fractal (`.ufm` formulas,
+//! `.ucl` colourings) and Fractint (`.frm`) files it imports, edited in
+//! the Formula Editor (`docs/projects/escape-formula-language.md`).
 //!
 //! One store on both platforms, through [`crate::storage::backend`]: a
 //! `formulas/` folder in the app's data directory on desktop, keys under
@@ -15,11 +16,14 @@ use crate::storage::backend;
 const PREFIX: &str = "formulas";
 
 /// The extensions a formula file may have.
-pub const EXTENSIONS: &[&str] = &["ufm", "ucl", "frm"];
+pub const EXTENSIONS: &[&str] = &["rhai", "ufm", "ucl", "frm"];
 
 /// The example files the editor offers, written for this project (no
 /// third-party formulas ship until their terms are checked).
 pub const EXAMPLES: &[(&str, &str)] = &[
+    ("mandelbrot.rhai", include_str!("../../assets/formulas/mandelbrot.rhai")),
+    ("burning-ship.rhai", include_str!("../../assets/formulas/burning-ship.rhai")),
+    ("phoenix.rhai", include_str!("../../assets/formulas/phoenix.rhai")),
     ("examples.ufm", include_str!("../../assets/formulas/examples.ufm")),
     ("examples.ucl", include_str!("../../assets/formulas/examples.ucl")),
 ];
@@ -83,6 +87,11 @@ pub fn is_fractint(file: &str) -> bool {
     file.to_ascii_lowercase().ends_with(".frm")
 }
 
+/// A Rhai formula (`.rhai`): one formula, the whole file.
+pub fn is_rhai(file: &str) -> bool {
+    file.to_ascii_lowercase().ends_with(".rhai")
+}
+
 /// A colouring file (`.ucl`): its entries are colourings.
 pub fn is_coloring_file(file: &str) -> bool {
     file.to_ascii_lowercase().ends_with(".ucl")
@@ -101,5 +110,7 @@ mod tests {
         assert_eq!(file_name_for("a.txt").as_deref(), Some("a_txt.ufm"));
         assert_eq!(file_name_for("..."), None);
         assert!(is_fractint("FRACTINT.FRM") && is_coloring_file("x.ucl"));
+        assert_eq!(file_name_for("Spiral.RHAI").as_deref(), Some("Spiral.rhai"));
+        assert!(is_rhai("a.rhai") && !is_rhai("a.ufm"));
     }
 }

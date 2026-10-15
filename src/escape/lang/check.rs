@@ -37,19 +37,27 @@ const FRACTINT_NAMES: &[&str] = &["lastsqr", "whitesq", "scrnpix", "scrnmax", "i
 
 /// Check one entry as a formula or a colouring.
 pub fn check(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Program>, Vec<Diag>) {
-    check_with(entry, kind, dialect, false)
+    check_with(entry, kind, dialect, false, false)
 }
 
 /// [`check`], reading the names only generated text may use: `#pass`
 /// ([`Predef::Pass`]) and `#juliac` ([`Predef::JuliaC`]), for a hybrid's
 /// program ([`super::hybrid`]).
 pub(crate) fn check_internal(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Program>, Vec<Diag>) {
-    check_with(entry, kind, dialect, true)
+    check_with(entry, kind, dialect, true, false)
 }
 
-fn check_with(entry: &Entry, kind: EntryKind, dialect: Dialect, internal: bool) -> (Option<Program>, Vec<Diag>) {
+/// [`check_internal`] for an entry lowered from a Rhai formula
+/// ([`super::rhai`]), with the few names whose meaning follows Rhai's
+/// rather than UF's: `abs` of a complex is its modulus.
+pub(crate) fn check_rhai(entry: &Entry, kind: EntryKind) -> (Option<Program>, Vec<Diag>) {
+    check_with(entry, kind, Dialect::UltraFractal, true, true)
+}
+
+fn check_with(entry: &Entry, kind: EntryKind, dialect: Dialect, internal: bool, rhai: bool) -> (Option<Program>, Vec<Diag>) {
     let mut c = Checker {
         internal,
+        rhai,
         kind,
         dialect,
         diags: Vec::new(),
@@ -72,6 +80,8 @@ fn check_with(entry: &Entry, kind: EntryKind, dialect: Dialect, internal: bool) 
 struct Checker {
     /// Generated text: the internal names are readable.
     internal: bool,
+    /// Lowered from Rhai: `abs` of a complex is its modulus.
+    rhai: bool,
     kind: EntryKind,
     dialect: Dialect,
     diags: Vec<Diag>,
@@ -1101,6 +1111,9 @@ impl Checker {
             return None;
         };
         let arg = self.expr(&args[0])?;
+        // Rhai's `abs` of a complex is its modulus (UF's folds each
+        // part; Rhai formulas spell that `fold`).
+        let b = if self.rhai && b == Builtin::Abs && arg.ty == Ty::Complex { Builtin::Cabs } else { b };
         let ty = match b.result_ty(arg.ty) {
             Ok(t) => t,
             Err(msg) => {
@@ -1194,7 +1207,9 @@ impl Checker {
     /// A bool used as a number becomes 1 or 0, with a warning.
     fn numeric(&mut self, v: IExpr, span: Span) -> Option<IExpr> {
         if v.ty == Ty::Bool {
-            self.bool_warning(span);
+            if !self.bool_mix(span) {
+                return None;
+            }
             return Some(IExpr { kind: IExprKind::Convert(Box::new(v)), ty: Ty::Int });
         }
         Some(v)
@@ -1204,8 +1219,22 @@ impl Checker {
         if v.ty == Ty::Bool {
             return Some(v);
         }
-        self.bool_warning(span);
+        if !self.bool_mix(span) {
+            return None;
+        }
         Some(IExpr { kind: IExprKind::Convert(Box::new(v)), ty: Ty::Bool })
+    }
+
+    /// A bool used as a number or the reverse: UF's and Fractint's
+    /// numbers are their booleans (a warning in UF files); Rhai's are
+    /// not (an error).
+    fn bool_mix(&mut self, span: Span) -> bool {
+        if self.rhai {
+            self.error(span, "a bool and a number do not mix: compare (`x != 0`) or choose (`if`)");
+            return false;
+        }
+        self.bool_warning(span);
+        true
     }
 
     fn bool_warning(&mut self, span: Span) {
@@ -1223,7 +1252,9 @@ impl Checker {
             return Some(v);
         }
         if v.ty == Ty::Bool || to == Ty::Bool {
-            self.bool_warning(span);
+            if !self.bool_mix(span) {
+                return None;
+            }
             return Some(IExpr { kind: IExprKind::Convert(Box::new(v)), ty: to });
         }
         if v.ty.rank() > to.rank() {
