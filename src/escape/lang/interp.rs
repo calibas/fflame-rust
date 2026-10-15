@@ -212,33 +212,47 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
     }
     let test = super::perturb::perturb_test(formula);
     let renv = Env { pixel: reference, ..*env };
-    let mut r = Machine::new(formula, params);
-    let mut rsh = Shared::new(&renv);
-    r.exec(&formula.global_body, &mut rsh);
-    r.exec(&formula.init, &mut rsh);
-    let mut orbit = vec![rsh.z];
-    for i in 0..env.maxiter {
-        rsh.pass = i;
-        r.exec(&formula.loop_body, &mut rsh);
-        rsh.pass = i + 1;
-        orbit.push(rsh.z);
-        if !formula.bailout.as_ref().map_or(true, |t| r.eval(t, &rsh).as_bool()) {
-            break;
-        }
-    }
+    // The references: the main one from pass 0, and for a loop with a
+    // cycle one per phase, from the pass that phase first runs
+    // (`prefix + q`), each from the init's start.
+    let cycle = formula.cycle.filter(|_| formula.reads(Predef::Pass));
+    let starts: Vec<u32> = std::iter::once(0).chain(cycle.iter().flat_map(|c| (0..c.period).map(move |q| c.prefix + q))).collect();
+    let orbits: Vec<Vec<C64>> = starts
+        .iter()
+        .map(|&start| {
+            let mut r = Machine::new(formula, params);
+            let mut rsh = Shared::new(&renv);
+            r.exec(&formula.global_body, &mut rsh);
+            r.exec(&formula.init, &mut rsh);
+            let mut orbit = vec![rsh.z];
+            for i in start..start + env.maxiter {
+                rsh.pass = i;
+                r.exec(&formula.loop_body, &mut rsh);
+                rsh.pass = i + 1;
+                orbit.push(rsh.z);
+                if !formula.bailout.as_ref().map_or(true, |t| r.eval(t, &rsh).as_bool()) {
+                    break;
+                }
+            }
+            orbit
+        })
+        .collect();
     // The pixel: the equations' own temporaries, the test on z alone.
     let mut p = Machine::new(formula, params);
     let mut sh = Shared::new(env);
     p.exec(&formula.global_body, &mut sh);
     sh.dpixel = env.pixel.sub(reference);
-    sh.z = orbit[0];
+    sh.z = orbits[0][0];
     p.exec(&formula.perturb_init, &mut sh);
-    let mut m = 0usize;
+    // Following reference `r` at its index `m`.
+    let (mut r, mut m) = (0usize, 0usize);
     let mut escaped = false;
     let mut n = env.maxiter;
-    let mut z_full = orbit[0].add(sh.dz);
+    let mut z_full = orbits[0][0].add(sh.dz);
     for i in 0..env.maxiter {
+        let orbit = &orbits[r];
         sh.z = orbit[m];
+        sh.pass = starts[r] + m as u32;
         p.exec(&formula.perturb_loop, &mut sh);
         m += 1;
         z_full = orbit[m.min(orbit.len() - 1)].add(sh.dz);
@@ -248,11 +262,34 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
             n = i + 1;
             break;
         }
-        // Past the orbit's end there is nothing to follow but its
-        // start; `rebase` adds the smaller-deviation test.
-        if m + 1 >= orbit.len() || (rebase && z_full.norm_sqr() < sh.dz.norm_sqr()) {
-            sh.dz = z_full.sub(orbit[0]);
-            m = 0;
+        // Past the orbit's end there is nothing to follow but a start;
+        // `rebase` adds the smaller-deviation test. The start is the
+        // reference's at the pixel's next phase: the main one's without
+        // a cycle, none during the prefix.
+        let ended = m + 1 >= orbit.len();
+        let next = i + 1;
+        let target = match cycle {
+            None => Some(0),
+            Some(c) if next >= c.prefix => Some(1 + ((next - c.prefix) % c.period) as usize),
+            Some(_) => None,
+        };
+        match target {
+            Some(t) => {
+                let rebased = z_full.sub(orbits[t][0]);
+                if ended || (rebase && rebased.norm_sqr() < sh.dz.norm_sqr()) {
+                    sh.dz = rebased;
+                    r = t;
+                    m = 0;
+                }
+            }
+            // The main reference ended within the prefix: none other
+            // has the pixel's phase.
+            None if ended => {
+                escaped = true;
+                n = i + 1;
+                break;
+            }
+            None => {}
         }
     }
     Some(Run { z: z_full, n, escaped, index: 0.0, solid: false, dz: C64::ZERO })

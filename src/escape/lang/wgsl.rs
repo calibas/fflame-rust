@@ -163,15 +163,18 @@ pub fn formula(p: &Program) -> String {
             .filter(|(_, v)| v.perturb)
             .map(|(i, v)| format!("    var v{i}: {} = {};\n", wgsl_ty(v.ty), zero_of(v.ty)))
             .collect();
+        // The start is pass 0's; the step reads the reference's pass
+        // (`pass_index`, a hybrid's phase: step 5b).
+        let start_pass = if p.reads(Predef::Pass) { "    let pass_index: i32 = 0;\n" } else { "" };
         let _ = write!(
             body,
-            "\nfn formula_perturb_init_scaled(z_ref: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32) -> vec2<f32> {{\n    var w = vec2<f32>(0.0, 0.0);\n{locals}"
+            "\nfn formula_perturb_init_scaled(z_ref: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32) -> vec2<f32> {{\n    var w = vec2<f32>(0.0, 0.0);\n{start_pass}{locals}"
         );
         g.sstmts(&p.perturb_init, 1, &mut body);
         body.push_str("    return w;\n}\n");
         let _ = write!(
             body,
-            "\nfn formula_perturb_loop_scaled(z_ref: vec2<f32>, w_in: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32) -> vec2<f32> {{\n    var w = w_in;\n{locals}"
+            "\nfn formula_perturb_loop_scaled(z_ref: vec2<f32>, w_in: vec2<f32>, pixel: vec2<f32>, d0: vec2<f32>, s: f32, pass_index: i32) -> vec2<f32> {{\n    var w = w_in;\n{locals}"
         );
         g.sstmts(&p.perturb_loop, 1, &mut body);
         body.push_str("    return w;\n}\n");
@@ -211,16 +214,17 @@ pub fn formula_perturb_fe(p: &Program) -> Option<String> {
             t => format!("    var v{i}: {} = {};\n", wgsl_ty(t), zero_of(t)),
         })
         .collect();
+    let start_pass = if p.reads(Predef::Pass) { "    let pass_index: i32 = 0;\n" } else { "" };
     let mut body = String::new();
     let _ = write!(
         body,
-        "fn formula_perturb_init_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, pixel: vec2<f32>, d0: CFe2) -> CFe2 {{\n    var w = cfe2_zero();\n{locals}"
+        "fn formula_perturb_init_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, pixel: vec2<f32>, d0: CFe2) -> CFe2 {{\n    var w = cfe2_zero();\n{start_pass}{locals}"
     );
     g.festmts(&p.perturb_init, 1, &mut body);
     body.push_str("    return w;\n}\n\n");
     let _ = write!(
         body,
-        "fn formula_perturb_loop_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, w_in: CFe2, pixel: vec2<f32>, d0: CFe2) -> CFe2 {{\n    var w = w_in;\n{locals}"
+        "fn formula_perturb_loop_fe(zm: vec2<f32>, zlo: vec2<f32>, ze: i32, w_in: CFe2, pixel: vec2<f32>, d0: CFe2, pass_index: i32) -> CFe2 {{\n    var w = w_in;\n{locals}"
     );
     g.festmts(&p.perturb_loop, 1, &mut body);
     body.push_str("    return w;\n}\n");

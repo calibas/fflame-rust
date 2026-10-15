@@ -1963,7 +1963,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let z_ref = ref_z(m);
             //__DELTA_STEP__
             w = w_new;
-            m = m + 1u;
+            //__M_STEP__
             i = i + 1u;
         }
         let z_before = z;
@@ -2899,7 +2899,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let z_ref_e = ref_orbit_e[m];
             //__DELTA_STEP_FE__
             w = w_new;
-            m = m + 1u;
+            //__M_STEP__
             i = i + 1u;
         }
         let z_before = z;
@@ -3195,8 +3195,12 @@ pub enum PerturbTier {
     /// loop carries nothing but z (`lang::perturb`), else the pixel
     /// rebases only at the orbit's end. Both rungs: the equations hold
     /// the deviation in units of S on the scaled one and as `CFe2` on
-    /// the floatexp one (`lang::wgsl`).
-    Custom { hash: u64, rebase: bool },
+    /// the floatexp one (`lang::wgsl`). `stride` is the reference
+    /// orbits interleaved in the orbit buffer: 1, or for a loop with a
+    /// cycle (a hybrid) one more than its period -- the main reference
+    /// and one per phase, which a pixel rebases onto at its own phase
+    /// (step 5b).
+    Custom { hash: u64, rebase: bool, stride: u8 },
 }
 
 impl PerturbTier {
@@ -3804,10 +3808,67 @@ const CUSTOM_PIXEL: &str = "(params.center + (d0 - perturb.ref_offset) * perturb
 /// `perturbloop:`, compiled to hold the deviation in units of S as the
 /// built-in tiers' steps do (`lang::wgsl`, the Small/Full classes), so
 /// S is never multiplied in and divided out.
+/// The pass the reference at flat orbit index `m` is on, which a custom
+/// formula's equations read as `#pass`. With a reference per phase (a
+/// hybrid's cycle, `stride` of them interleaved) entry `m` is reference
+/// `m % R` at its index `m / R`: the main one runs from pass 0, phase
+/// `q`'s from pass `prefix + q`.
+fn custom_pass_wgsl(tier: PerturbTier, name: &str) -> String {
+    let cycle = crate::escape::custom::cycle(name);
+    match (tier, cycle) {
+        (PerturbTier::Custom { stride, .. }, Some(c)) if stride > 1 => format!(
+            "const ORBIT_R: u32 = {stride}u;\n\
+             const HYB_PREFIX: u32 = {}u;\n\
+             const HYB_PERIOD: u32 = {}u;\n\
+             const ORBIT_PAD_E: i32 = {};\n\
+             fn custom_pass(m: u32) -> i32 {{\n\
+             \x20   let r = m % ORBIT_R;\n\
+             \x20   let j = m / ORBIT_R;\n\
+             \x20   if (r == 0u) {{\n\
+             \x20       return i32(j);\n\
+             \x20   }}\n\
+             \x20   return i32(HYB_PREFIX + r - 1u + j);\n\
+             }}",
+            c.prefix,
+            c.period,
+            crate::escape::reference::ORBIT_PAD_E,
+        ),
+        _ => "fn custom_pass(m: u32) -> i32 {\n    return i32(m);\n}".to_string(),
+    }
+}
+
+/// A hybrid's rebase (step 5b): onto the reference at the pixel's
+/// phase, index 0 -- its own start, which every reference shares, so
+/// the new deviation is `z_full - Z_0` -- on Zhuoran's test when
+/// `rebase`, and whenever the reference it follows ends (its next slot
+/// a pad or past the orbit). During the prefix no other reference has
+/// the pixel's phase; the main one ending there leaves the pixel nothing
+/// to follow, and it counts as escaped.
+fn rebase_phased(floatexp: bool, rebase: bool) -> String {
+    let test = if rebase { " || dot(rebase_delta, rebase_delta) < dot(delta, delta)" } else { "" };
+    let set = if floatexp { "w = fe_rebase_delta(w, m);" } else { "w = rebase_delta * perturb.inv_s;" };
+    format!(
+        "        // A hybrid's phases (escape::lang::hybrid).\n\
+         \x20       let next_gone = m + ORBIT_R >= perturb.orbit_len || ref_orbit_e[m + ORBIT_R] == ORBIT_PAD_E;\n\
+         \x20       if (i >= HYB_PREFIX) {{\n\
+         \x20           let r_to = 1u + (i - HYB_PREFIX) % HYB_PERIOD;\n\
+         \x20           let rebase_delta = z_full - ref_z(r_to);\n\
+         \x20           if (next_gone{test}) {{\n\
+         \x20               {set}\n\
+         \x20               m = r_to;\n\
+         \x20           }}\n\
+         \x20       }} else if (next_gone) {{\n\
+         \x20           escaped = true;\n\
+         \x20           n = i;\n\
+         \x20           break;\n\
+         \x20       }}"
+    )
+}
+
 fn delta_step_custom() -> String {
     format!(
         "        // A custom formula's perturbation equations (escape::lang).\n\
-         \x20       var w_new = formula_perturb_loop_scaled(z_ref, w, {CUSTOM_PIXEL}, d0, perturb.s);"
+         \x20       var w_new = formula_perturb_loop_scaled(z_ref, w, {CUSTOM_PIXEL}, d0, perturb.s, custom_pass(m));"
     )
 }
 
@@ -5376,7 +5437,7 @@ pub fn assemble_perturbed_full(
                 PerturbTier::Kaliset => delta_step_kaliset_fe(),
                 PerturbTier::Ducks(v) => delta_step_ducks_fe(v),
                 // A custom formula's equations over CFe2 (escape::lang).
-                PerturbTier::Custom { .. } => "        var w_new = formula_perturb_loop_fe(z_ref_m, z_ref_lo_m, z_ref_e, w, params.center, d0);".to_string(),
+                PerturbTier::Custom { .. } => "        var w_new = formula_perturb_loop_fe(z_ref_m, z_ref_lo_m, z_ref_e, w, params.center, d0, custom_pass(m));".to_string(),
             }),
             "//__ESCAPE_MARGIN__" => {
                 // The delta-aware escape test. A NON-ESCAPING tier
@@ -5390,7 +5451,14 @@ pub fn assemble_perturbed_full(
                     out.push(if floatexp { escape_margin_fe() } else { escape_margin_scaled() });
                 }
             }
+            "//__M_STEP__" => out.push(match tier {
+                // A reference per phase, interleaved: the pixel's next
+                // entry is its reference's next.
+                PerturbTier::Custom { stride, .. } if stride > 1 => "            m = m + ORBIT_R;".to_string(),
+                _ => "            m = m + 1u;".to_string(),
+            }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
+                (PerturbTier::Custom { stride, rebase, .. }, fe) if stride > 1 => rebase_phased(fe, rebase),
                 (PerturbTier::Custom { rebase: false, .. }, false) => rebase_only_at_orbit_end(),
                 (PerturbTier::Custom { rebase: false, .. }, true) => rebase_only_at_orbit_end_fe(),
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -5419,6 +5487,7 @@ pub fn assemble_perturbed_full(
                     out.push(format!("// formula: {}", f.name));
                     out.push(CUSTOM_FORMULA_READERS_WGSL.trim().to_string());
                     out.push(f.wgsl.to_string());
+                    out.push(custom_pass_wgsl(tier, f.name));
                     // The deep rung's own form of its equations.
                     if floatexp {
                         out.push(crate::escape::lang::wgsl::PERTURB_FE_HELPERS.trim().to_string());
@@ -9351,7 +9420,7 @@ mod tests {
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase };
+            let tier = PerturbTier::Custom { hash, rebase, stride: 1 };
             for coloring in [crate::escape::get_coloring("smooth"), crate::escape::get_coloring("stripe_average")] {
                 for floatexp in [false, true] {
                     let what = format!("{} {} fe={floatexp}", &source[..2], coloring.name);
@@ -9374,7 +9443,29 @@ mod tests {
                         iter_state_bytes(tier, floatexp, crate::escape::accum_width(coloring), false),
                         "{what}: the state"
                     );
+                    // One reference: one entry a step.
+                    assert!(wgsl.contains("            m = m + 1u;") && !wgsl.contains("ORBIT_R"), "{what}: the step");
                 }
+            }
+        }
+        // A hybrid: a reference per phase, interleaved; the pixel steps
+        // along its reference and rebases at its own phase.
+        for (name, h) in crate::escape::lang::hybrid::presets().into_iter().filter(|(_, h)| h.groups.len() > 1) {
+            let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() };
+            let formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            crate::escape::custom::compile_formula(&src, &formula).expect("compiles");
+            let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
+            assert_eq!(cycle, h.cycle(), "{name}");
+            let hash = u64::from_str_radix(&formula[crate::escape::custom::PREFIX.len()..], 16).unwrap();
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8 };
+            for floatexp in [false, true] {
+                let what = format!("{name} fe={floatexp}");
+                let wgsl = assemble_perturbed(crate::escape::get_coloring("smooth"), floatexp, tier);
+                validate(&wgsl, &what);
+                assert!(wgsl.contains("            m = m + ORBIT_R;"), "{what}: the step");
+                assert!(wgsl.contains(&format!("const ORBIT_R: u32 = {}u;", 1 + cycle.period)), "{what}: the references");
+                assert!(wgsl.contains("let r_to = 1u + (i - HYB_PREFIX) % HYB_PERIOD;"), "{what}: the rebase");
+                assert!(wgsl.contains("custom_pass(m))"), "{what}: the pass");
             }
         }
     }

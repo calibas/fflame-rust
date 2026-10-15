@@ -64,6 +64,12 @@ impl BigMachine {
         Ok(m)
     }
 
+    /// Start the passes at `pass` (a hybrid's reference for one phase
+    /// of its cycle, step 5b): the init has run, the loop has not.
+    pub fn set_pass(&mut self, pass: u32) {
+        self.pass = pass;
+    }
+
     /// The iterate.
     pub fn z(&self) -> &BigComplex {
         &self.z

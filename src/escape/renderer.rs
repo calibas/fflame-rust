@@ -758,6 +758,18 @@ struct PerturbParamsGpu {
 /// change, and cache-loaded orbits get it for free. 2^-48 relative is
 /// the perturbation pipeline's own reference precision, so nothing
 /// downstream can tell the difference from an exact channel.
+/// The entries a reference orbit needs for `max_iter` passes: one a
+/// pass, or with a hybrid's references one per reference a pass, all
+/// interleaved (`reference::ORBIT_PAD_E`).
+fn orbit_depth(max_iter: u32, tier: assembler::PerturbTier) -> u32 {
+    match tier {
+        assembler::PerturbTier::Custom { stride, .. } if stride > 1 => {
+            ((u64::from(max_iter) + 1) * u64::from(stride) - 1).min(u64::from(u32::MAX)) as u32
+        }
+        _ => max_iter,
+    }
+}
+
 fn r2_channel(hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]) -> Vec<[f32; 2]> {
     hi.iter()
         .zip(lo)
@@ -5414,7 +5426,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &escape.center_im,
                 escape.zoom_log2,
             ),
-            max_iter: escape.max_iter,
+            max_iter: orbit_depth(escape.max_iter, tier),
             julia_c,
             power,
             ship,
@@ -5789,7 +5801,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     &escape.center_re,
                     &escape.center_im,
                     escape.zoom_log2,
-                    escape.max_iter,
+                    orbit_depth(escape.max_iter, tier),
                     julia_c,
                     power,
                     ship,
@@ -5803,7 +5815,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     &escape.center_re,
                     &escape.center_im,
                     escape.zoom_log2,
-                    escape.max_iter,
+                    orbit_depth(escape.max_iter, tier),
                     julia_c,
                     power,
                     ship,
