@@ -134,7 +134,9 @@ impl FormulaEditorPanel {
     /// Parse the file and check every entry both ways.
     fn recheck(&mut self) {
         let dialect = match self.dialect {
-            CustomDialect::UltraFractal => lang::Dialect::UltraFractal,
+            // The text editor offers UF and Fractint; a hybrid has its
+            // own panel.
+            CustomDialect::UltraFractal | CustomDialect::Hybrid => lang::Dialect::UltraFractal,
             CustomDialect::Fractint => lang::Dialect::Fractint,
         };
         let text = self.text.clone();

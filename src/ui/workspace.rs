@@ -76,6 +76,8 @@ pub enum PanelType {
     /// Escape-time formulas and colourings written in Ultra Fractal's or
     /// Fractint's language (docs/projects/escape-formula-language.md)
     FormulaEditor,
+    /// Kalles Fraktaler-style hybrid formulas (escape::lang::hybrid)
+    HybridDesigner,
 }
 
 impl std::fmt::Display for PanelType {
@@ -112,6 +114,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Simulation => t!("panels.simulation"),
             PanelType::Textures => t!("panels.textures"),
             PanelType::FormulaEditor => t!("panels.formula_editor"),
+            PanelType::HybridDesigner => t!("panels.hybrid_designer"),
         };
         write!(f, "{}", title)
     }
@@ -260,6 +263,7 @@ impl Workspace {
             PanelType::Simulation => egui::vec2(350.0, 560.0),
             PanelType::Textures => egui::vec2(300.0, 480.0),
             PanelType::FormulaEditor => egui::vec2(440.0, 600.0),
+            PanelType::HybridDesigner => egui::vec2(520.0, 420.0),
         }
     }
 

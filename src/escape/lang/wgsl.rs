@@ -91,12 +91,25 @@ pub fn formula(p: &Program) -> String {
             let _ = writeln!(body, "    v{i}: {},", wgsl_ty(v.ty));
         }
     }
+    // The pass index (`npass`: `pass` is a WGSL keyword), for a program
+    // that reads it (a hybrid's groups): zero from `formula_init`, one
+    // more after each `formula_loop`.
+    let pass = p.reads(Predef::Pass);
+    if pass {
+        body.push_str("    npass: i32,\n");
+    }
     body.push_str("}\n\n");
     body.push_str("fn formula_init(pixel: vec2<f32>) -> FormulaState {\n    var s: FormulaState;\n");
     g.stmts(&p.init, 1, &mut body);
+    if pass {
+        body.push_str("    s.npass = 0;\n");
+    }
     body.push_str("    return s;\n}\n\n");
     body.push_str("fn formula_loop(s_in: FormulaState, pixel: vec2<f32>) -> FormulaState {\n    var s = s_in;\n");
     g.stmts(&p.loop_body, 1, &mut body);
+    if pass {
+        body.push_str("    s.npass = s.npass + 1;\n");
+    }
     body.push_str("    return s;\n}\n\n");
     let test = p.bailout.as_ref().map_or_else(|| "true".to_string(), |b| g.expr(b));
     let _ = write!(
@@ -115,6 +128,20 @@ pub fn formula(p: &Program) -> String {
             Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
             Ty::Int | Ty::Bool => format!("a.v{i} == b.v{i}"),
         });
+    }
+    // ...at the same place in the cycle: two passes that behave alike.
+    if pass {
+        let phase = |x: &str| match p.cycle {
+            Some(c) => format!(
+                "select({x}.npass, {} + ({x}.npass - {}) % {}, {x}.npass >= {})",
+                c.prefix,
+                c.prefix,
+                c.period.max(1),
+                c.prefix
+            ),
+            None => format!("{x}.npass"),
+        };
+        same.push(format!("{} == {}", phase("a"), phase("b")));
     }
     let _ = write!(
         body,
@@ -747,6 +774,9 @@ impl<'p> Gen<'p> {
             // A colouring's init runs before the first iterate.
             (Predef::Z, Ctx::ColoringInit) => "vec2<f32>(0.0, 0.0)".into(),
             (Predef::NumIter, _) => "i32(sum.n)".into(),
+            (Predef::Pass, Ctx::Formula) => "s.npass".into(),
+            // The perturbation equations read the reference's pass.
+            (Predef::Pass, _) => "pass_index".into(),
             (Predef::MaxIter, _) => "i32(params.max_iter)".into(),
             (Predef::Pi, _) => "3.14159265358979".into(),
             (Predef::E, _) => "2.71828182845905".into(),
@@ -2652,6 +2682,52 @@ pub(crate) mod tests {
     /// Close enough for f32 against f64 over a few iterations.
     fn near(gpu: f32, cpu: f64, tol: f64) -> bool {
         (gpu as f64 - cpu).abs() <= tol * cpu.abs().max(1.0)
+    }
+
+    /// Every hybrid preset compiles to valid WGSL, its pass index and
+    /// its phase comparison included.
+    #[test]
+    fn hybrids_compile_to_valid_wgsl() {
+        for (name, h) in super::super::hybrid::presets() {
+            let p = h.program().unwrap_or_else(|d| panic!("{name}: {d:?}"));
+            let w = formula(&p);
+            validate_formula(&w).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(w.contains("npass: i32"), h.groups.len() > 1, "{name}");
+        }
+    }
+
+    /// The hybrid presets on the GPU iterate as the interpreter does:
+    /// past the prefix and through several rounds of their groups.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn hybrids_run_on_the_gpu_as_the_interpreter_does() {
+        use super::super::builtins::C64;
+        use super::super::interp::{run, Env, ParamValues};
+        const STEPS: u32 = 7;
+        let points = [(0.3, -0.2), (-0.4, 0.1), (0.1, 0.45), (-0.25, -0.3), (0.05, 0.02), (-0.6, 0.3)];
+        let mut compared = 0;
+        for (name, h) in super::super::hybrid::presets() {
+            let p = h.program().unwrap();
+            let blocks = default_slots(&p);
+            let body = format!(
+                "    var s = formula_init(px);\n    for (var i = 0u; i < {STEPS}u; i = i + 1u) {{\n        s = formula_loop(s, px);\n    }}\n\
+                 \x20   io[2u * g.x] = vec4<f32>(s.z, 0.0, 0.0);"
+            );
+            let Some(out) = gpu_program_probe(&body, &[&formula(&p)], &points, &blocks, STEPS) else {
+                eprintln!("no GPU");
+                return;
+            };
+            for (&(x, y), got) in points.iter().zip(&out) {
+                let px = C64::new(x as f32 as f64, y as f32 as f64);
+                let want = run(&p, &ParamValues::defaults(&p), None, &Env::at(px, STEPS));
+                if want.escaped && want.n < STEPS {
+                    continue;
+                }
+                compared += 1;
+                assert!(near(got[0], want.z.re, 1e-4) && near(got[1], want.z.im, 1e-4), "{name} at ({x}, {y}): gpu ({}, {}), f64 {:?}", got[0], got[1], want.z);
+            }
+        }
+        assert!(compared > 30, "{compared}");
     }
 
     /// Every test file entry runs on the GPU as the f64 interpreter runs

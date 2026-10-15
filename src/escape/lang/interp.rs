@@ -156,6 +156,8 @@ struct Shared<'e> {
     env: &'e Env,
     z: C64,
     numiter: u32,
+    /// The formula's pass index ([`Predef::Pass`]).
+    pass: u32,
     index: f64,
     solid: bool,
     /// The perturbation equations' `#dz` and `#dpixel`.
@@ -165,7 +167,7 @@ struct Shared<'e> {
 
 impl<'e> Shared<'e> {
     fn new(env: &'e Env) -> Self {
-        Shared { env, z: C64::ZERO, numiter: 0, index: 0.0, solid: false, dz: C64::ZERO, dpixel: C64::ZERO }
+        Shared { env, z: C64::ZERO, numiter: 0, pass: 0, index: 0.0, solid: false, dz: C64::ZERO, dpixel: C64::ZERO }
     }
 }
 
@@ -215,8 +217,10 @@ pub fn run_perturbed(formula: &Program, params: &ParamValues, env: &Env, referen
     r.exec(&formula.global_body, &mut rsh);
     r.exec(&formula.init, &mut rsh);
     let mut orbit = vec![rsh.z];
-    for _ in 0..env.maxiter {
+    for i in 0..env.maxiter {
+        rsh.pass = i;
         r.exec(&formula.loop_body, &mut rsh);
+        rsh.pass = i + 1;
         orbit.push(rsh.z);
         if !formula.bailout.as_ref().map_or(true, |t| r.eval(t, &rsh).as_bool()) {
             break;
@@ -277,7 +281,9 @@ pub fn run(
     }
     let mut escaped = false;
     for i in 0..env.maxiter {
+        sh.pass = i;
         f.exec(&formula.loop_body, &mut sh);
+        sh.pass = i + 1;
         sh.numiter = i + 1;
         if let Some(c) = c.as_mut() {
             let prog = c.prog;
@@ -429,6 +435,7 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Pixel => Value::Complex(env.pixel),
         Predef::Z => Value::Complex(sh.z),
         Predef::NumIter => Value::Int(sh.numiter as i32),
+        Predef::Pass => Value::Int(sh.pass as i32),
         Predef::MaxIter => Value::Int(env.maxiter as i32),
         Predef::Pi => Value::Float(std::f64::consts::PI),
         Predef::E => Value::Float(std::f64::consts::E),

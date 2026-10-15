@@ -435,6 +435,7 @@ pub struct PanelContext<'a> {
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
     pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
     pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
+    pub hybrid_designer: &'a mut Option<super::hybrid_designer::HybridDesignerPanel>,
 
     // Histogram for density visualization (levels now in ConfigManager)
     pub density_histogram: &'a crate::renderer::DensityHistogram,
@@ -804,6 +805,12 @@ impl<'a> PanelViewer<'a> {
                     .formula_editor
                     .get_or_insert_with(super::formula_editor::FormulaEditorPanel::new)
                     .render(ui, self.context.config_manager, self.context.window);
+            }
+            PanelType::HybridDesigner => {
+                self.context
+                    .hybrid_designer
+                    .get_or_insert_with(super::hybrid_designer::HybridDesignerPanel::new)
+                    .render(ui, self.context.config_manager);
             }
             PanelType::Simulation => {
                 super::sim_panel::render_sim_content(

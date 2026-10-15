@@ -15,6 +15,7 @@ pub mod builtins;
 pub mod check;
 pub mod delta;
 pub mod derive;
+pub mod hybrid;
 pub mod interp;
 pub mod ir;
 pub mod lexer;

@@ -242,7 +242,7 @@ Detail: [UI.md](main/UI.md).
 ### UI organisation
 
 - All UI is dockable panels (egui_dock). `PanelType` in
-  `src/ui/workspace.rs` defines 31 panels; `WorkspaceLayout` holds the
+  `src/ui/workspace.rs` defines 32 panels; `WorkspaceLayout` holds the
   presets (Standard, Animation, Scripting, Escape Time, Simulation,
   Compact). Layouts are session-only: switching layout keeps the one
   left in memory, and nothing about the dock tree is written to disk.

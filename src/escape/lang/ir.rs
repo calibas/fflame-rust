@@ -116,13 +116,18 @@ pub enum Predef {
     DZ,
     /// `#dpixel`: the pixel's offset from the reference point.
     DPixel,
+    /// The loop pass being run, 0 on the first (in the test, the passes
+    /// run): what a hybrid's groups branch on ([`super::hybrid`]). No
+    /// name in either language: UF reads `#numiter` only in a
+    /// colouring's `final:`.
+    Pass,
 }
 
 impl Predef {
     pub fn ty(self) -> Ty {
         match self {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel => Ty::Complex,
-            Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height => Ty::Int,
+            Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index => Ty::Float,
             Predef::Solid => Ty::Bool,
             Predef::WhiteSq
@@ -315,6 +320,29 @@ pub struct Program {
     /// The variable holding the iterate's derivative with respect to
     /// the pixel, in a program the derivative pass extended.
     pub dz_var: Option<VarId>,
+    /// How a program that reads the pass index ([`Predef::Pass`]) uses
+    /// it: periodically after a prefix (a hybrid's groups).
+    pub cycle: Option<Cycle>,
+}
+
+/// A loop whose passes repeat: the first `prefix` passes run once,
+/// then every pass `n` behaves as pass `prefix + (n - prefix) % period`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cycle {
+    pub prefix: u32,
+    pub period: u32,
+}
+
+impl Cycle {
+    /// The pass that pass `n` behaves as: itself in the prefix, else
+    /// its place in the first round of the loop.
+    pub fn phase(self, n: u32) -> u32 {
+        if n < self.prefix {
+            n
+        } else {
+            self.prefix + (n - self.prefix) % self.period.max(1)
+        }
+    }
 }
 
 impl Program {
