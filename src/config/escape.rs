@@ -2520,13 +2520,16 @@ pub struct CustomSource {
 }
 
 /// The language of a [`CustomSource`]: Ultra Fractal's (`.ufm`, `.ucl`),
-/// or Fractint's (`.frm`), which differs in its numeric conventions.
+/// or Fractint's (`.frm`), which differs in its numeric conventions; or
+/// a Kalles Fraktaler-style hybrid, its `source` the hybrid's JSON
+/// (`escape::lang::hybrid`), a formula only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CustomDialect {
     #[default]
     UltraFractal,
     Fractint,
+    Hybrid,
 }
 
 impl Default for EscapeConfig {

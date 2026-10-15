@@ -55,6 +55,8 @@ const OTHER_ENGINE: &str = "visibility.other_engine";
 const ESCAPE_TEXTURES: &str = "visibility.escape_textures";
 /// The Formula Editor writes escape-time formulas and colourings.
 const ESCAPE_FORMULAS: &str = "visibility.escape_formulas";
+/// The Hybrid Designer writes escape-time formulas.
+const ESCAPE_HYBRIDS: &str = "visibility.escape_hybrids";
 /// Produces a flame, so using it would leave this mode.
 const MAKES_A_FLAME: &str = "visibility.makes_a_flame";
 /// Only the logarithmic tone mapping reads it.
@@ -213,6 +215,13 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
             M::Escape => Vis::Show,
             M::Simulation => Vis::Grey(OTHER_ENGINE),
             M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_FORMULAS),
+        },
+
+        // So are its hybrids.
+        P::HybridDesigner => match m {
+            M::Escape => Vis::Show,
+            M::Simulation => Vis::Grey(OTHER_ENGINE),
+            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_HYBRIDS),
         },
     }
 }
@@ -420,6 +429,7 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Simulation, "menu.window_simulation"),
     row(PanelType::Textures, "menu.window_textures"),
     row(PanelType::FormulaEditor, "menu.window_formula_editor"),
+    row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
     // No Solid Lighting row: its controls are the View panel's Lighting
     // & Material section (camera-unification C5). The panel type stays
     // so a saved layout that docks it still loads, and draws that section.
@@ -520,6 +530,7 @@ mod tests {
         PanelType::Simulation,
         PanelType::Textures,
         PanelType::FormulaEditor,
+        PanelType::HybridDesigner,
     ];
 
     /// The list above is the whole enum. `PanelType` has no iterator,
@@ -579,7 +590,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 31, "a panel was added; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 32, "a panel was added; decide what it means per mode");
     }
 
     /// Every control this build knows about.
@@ -731,7 +742,7 @@ mod tests {
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
         for p in ALL_PANELS {
-            let escape_only = matches!(*p, PanelType::Textures | PanelType::FormulaEditor);
+            let escape_only = matches!(*p, PanelType::Textures | PanelType::FormulaEditor | PanelType::HybridDesigner);
             assert_eq!(
                 panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
                 !escape_only,
@@ -769,7 +780,7 @@ mod tests {
 
         let mut want_sim = vec![
             "XaosEditor", "Subflames", "Paths", "SolidLighting",
-            "RandomGenerator", "Escape", "FormulaEditor",
+            "RandomGenerator", "Escape", "FormulaEditor", "HybridDesigner",
         ];
         want_sim.sort();
         assert_eq!(greyed(RenderMode::Simulation), want_sim, "Simulation");

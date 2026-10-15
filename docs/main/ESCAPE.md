@@ -410,6 +410,32 @@ the iterate, a branch on it, a loop inside the loop, a branch in the
 init, state carried between iterations besides z. Such a formula stays
 on the direct path, as before.
 
+**Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
+Fraktaler's hybrid designer, as its manual describes it. Up to four
+groups, each run its repeat count of passes, in order, looping back to
+the group marked as the loop's start (those before it a prefix, run
+once); a group's lines (up to two) run in sequence, each combining two
+operators of the current z by `+`, `-`, `*` or `/`; an operator is
+`(±|x| ± |y| i)^p · a` (a fold and a negation per part, an integer
+power 1 to 12, a complex multiplier); the pixel is added once a pass,
+after the lines. A hybrid is a custom source of the dialect `hybrid`,
+its source the hybrid's JSON, so it travels in configs and PNGs as UF
+text does. It compiles through generated UF text, checked with two
+names only generated text may read: `#pass`, the loop pass being run
+(`Predef::Pass`; on the GPU the `npass` field of `FormulaState`, which
+`formula_loop` advances), and `#juliac`; each group is a branch on the
+pass, and the program records its cycle (`Program::cycle`: the prefix's
+passes, a round's passes). The Julia plane comes by `ismand`
+arithmetic. The multipliers are the program's parameters
+(`a<group>_<line>_<operator>`), so dragging one recompiles nothing; a
+structural edit is a new source and a recompile, one undo step. A
+one-group preset renders as the built-in it spells (Mandelbrot, the
+cubic, Burning Ship, Tricorn, the two Perpendiculars:
+`a_hybrid_renders_as_its_built_in`). Hybrids render on the direct path
+for now (deep zoom for them is the plan's step 5b), and distance
+estimation does not reach those that fold: the derivative pass is
+complex-analytic.
+
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
 and direct colouring.
 

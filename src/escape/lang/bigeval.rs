@@ -42,6 +42,8 @@ pub struct BigMachine {
     params: ParamValues,
     env: Env,
     n: usize,
+    /// The pass index ([`Predef::Pass`]): passes run.
+    pass: u32,
     pixel: BigComplex,
     vars: Vec<BigValue>,
     z: BigComplex,
@@ -55,7 +57,7 @@ impl BigMachine {
         let n = n_limbs.max(1);
         let pi = BigFloat::atan2(&BigFloat::zero(n), &BigFloat::from_f64(-1.0, n));
         let vars = prog.vars.iter().map(|v| zero_of(v.ty, n)).collect();
-        let mut m = BigMachine { params, env, n, pixel, vars, z: BigComplex::zero(n), pi, prog };
+        let mut m = BigMachine { params, env, n, pass: 0, pixel, vars, z: BigComplex::zero(n), pi, prog };
         let prog = m.prog.clone();
         m.exec(&prog.global_body)?;
         m.exec(&prog.init)?;
@@ -71,6 +73,7 @@ impl BigMachine {
     pub fn step(&mut self) -> R<bool> {
         let prog = self.prog.clone();
         self.exec(&prog.loop_body)?;
+        self.pass += 1;
         match &prog.bailout {
             Some(t) => Ok(self.eval(t)?.truth(prog.dialect)),
             None => Ok(true),
@@ -232,6 +235,7 @@ impl BigMachine {
             Predef::Pixel => BigValue::Complex(self.pixel.clone()),
             Predef::Z => BigValue::Complex(self.z.clone()),
             Predef::MaxIter => BigValue::Int(env.maxiter as i32),
+            Predef::Pass => BigValue::Int(self.pass as i32),
             Predef::Pi => BigValue::Float(self.pi.clone()),
             Predef::E => BigValue::Float(self.f(1.0).exp()),
             Predef::Center => BigValue::Complex(self.c(env.center.re, env.center.im)),

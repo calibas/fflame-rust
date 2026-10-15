@@ -76,7 +76,8 @@ pub fn coloring(name: &str) -> Option<&'static ColoringDef> {
 
 fn dialect(d: CustomDialect) -> Dialect {
     match d {
-        CustomDialect::UltraFractal => Dialect::UltraFractal,
+        // A hybrid's program is generated in UF's language.
+        CustomDialect::UltraFractal | CustomDialect::Hybrid => Dialect::UltraFractal,
         CustomDialect::Fractint => Dialect::Fractint,
     }
 }
@@ -102,6 +103,7 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
         CustomDialect::Fractint => b"frm",
+        CustomDialect::Hybrid => b"hybrid",
     });
     eat(src.entry.as_bytes());
     eat(src.source.as_bytes());
@@ -111,6 +113,13 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
 /// Parse and check the named entry of a source. The source may hold
 /// other entries; only this one is compiled.
 pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, Vec<Diag>> {
+    if src.dialect == CustomDialect::Hybrid {
+        if kind != EntryKind::Formula {
+            return Err(vec![Diag::error(lang::Span::default(), "a hybrid is a formula")]);
+        }
+        let hybrid = lang::hybrid::Hybrid::from_json(&src.source).map_err(|e| vec![Diag::error(lang::Span::default(), e)])?;
+        return hybrid.program();
+    }
     let (file, mut diags) = lang::parser::parse_file(&src.source);
     let entry = file.entries.iter().find(|e| e.name.eq_ignore_ascii_case(&src.entry));
     let Some(entry) = entry else {

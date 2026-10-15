@@ -37,7 +37,19 @@ const FRACTINT_NAMES: &[&str] = &["lastsqr", "whitesq", "scrnpix", "scrnmax", "i
 
 /// Check one entry as a formula or a colouring.
 pub fn check(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Program>, Vec<Diag>) {
+    check_with(entry, kind, dialect, false)
+}
+
+/// [`check`], reading the names only generated text may use: `#pass`
+/// ([`Predef::Pass`]) and `#juliac` ([`Predef::JuliaC`]), for a hybrid's
+/// program ([`super::hybrid`]).
+pub(crate) fn check_internal(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Program>, Vec<Diag>) {
+    check_with(entry, kind, dialect, true)
+}
+
+fn check_with(entry: &Entry, kind: EntryKind, dialect: Dialect, internal: bool) -> (Option<Program>, Vec<Diag>) {
     let mut c = Checker {
+        internal,
         kind,
         dialect,
         diags: Vec::new(),
@@ -58,6 +70,8 @@ pub fn check(entry: &Entry, kind: EntryKind, dialect: Dialect) -> (Option<Progra
 }
 
 struct Checker {
+    /// Generated text: the internal names are readable.
+    internal: bool,
     kind: EntryKind,
     dialect: Dialect,
     diags: Vec<Diag>,
@@ -202,6 +216,7 @@ impl Checker {
             view,
             state: Vec::new(),
             dz_var: None,
+            cycle: None,
         };
         // The globals the other sections read are what the GPU needs.
         let mut f = Flow::default();
@@ -635,6 +650,8 @@ impl Checker {
             "screenpixel" => Predef::ScreenPixel,
             "index" => Predef::Index,
             "solid" => Predef::Solid,
+            "pass" if self.internal => Predef::Pass,
+            "juliac" if self.internal => Predef::JuliaC,
             "dz" | "dpixel" if self.in_perturb() => {
                 if name == "dz" {
                     Predef::DZ
@@ -710,6 +727,7 @@ impl Checker {
                 | Predef::Index
                 | Predef::Solid
                 | Predef::NumIter
+                | Predef::Pass
         );
         if self.section == SectionKind::Global && per_pixel {
             self.error(span, format!("`{name}` belongs to a pixel; `global:` runs once per image"));

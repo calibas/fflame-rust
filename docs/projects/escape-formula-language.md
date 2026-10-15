@@ -10,7 +10,8 @@ the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
 measurement under phase 2). **Phase 3 in progress** (deep zoom for
 custom formulas; its plan and order of work below): steps 1 to 4 done
-2026-10-14.
+2026-10-14; step 5 (hybrids) next, then step 6 (extending step 4), the
+user's order of 2026-10-14.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -594,7 +595,111 @@ Order of work (2026-10-14):
    transcendental functions by their difference forms (`sin(A + d) -
    sin(A) = 2 cos(A + d/2) sin(d/2)` and kin, which a user function's
    choice would need too).
-5. Kalles Fraktaler-style hybrids.
+5. **Kalles Fraktaler-style hybrids** (planned 2026-10-14). KF 2.15's
+   hybrid designer, as its manual describes it (`mathr.co.uk/kf/manual.html`,
+   "Hybrid Formula dialog"; nothing taken from its source): up to four
+   groups, each run `repeats` times (one iteration a repeat), in order,
+   looping back to the group marked "start loop" (the groups before it
+   a prefix, run once); a group's lines (up to two) run in sequence,
+   each combining two operators of the current z by `+`, `-` or `*`
+   (`/` since 2.15.5, "incomplete" there); an operator is
+   `(±|x| ± |y| i)^p · a` -- abs and negation per part, a positive
+   integer power, a complex multiplier; `+ c` once, after the lines.
+   Its manual's own limitation is the one that shapes step 5b: "Hybrids
+   are broken when using single reference method ... a proper fix would
+   need multiple reference orbits at different phases of the hybrid
+   (pre)periodic loop."
+
+   **5a. The model, the direct path, the designer** (done
+   2026-10-14, as planned; the grey reason and `on_release` drags
+   below are the only additions).
+   As built: the presets iterate on the CPU exactly as their
+   definition by hand (`hybrids_iterate_as_written`), on the GPU as
+   the interpreter (`hybrids_run_on_the_gpu_as_the_interpreter_does`),
+   and each one-group preset renders as its built-in through the whole
+   renderer: 0.03% of pixels differ for the Mandelbrot, 0.06% the
+   cubic, 0.008% the Tricorn, none for the three folds
+   (`a_hybrid_renders_as_its_built_in`). The CLI renders a saved hybrid
+   config. The power and repeat drags commit on release
+   (`slow_controls::on_release`: each value is a recompile); the panel
+   greys outside Escape mode with its own reason.
+   - A hybrid is data, `Hybrid { groups, loop_start }` (`lang/hybrid.rs`),
+     saved as a custom source of a third dialect, `CustomDialect::Hybrid`,
+     its `source` the hybrid's JSON: the registry's `custom-<hash>`
+     name, the config, PNG metadata, the CLI and the gallery carry it as
+     they carry UF text. The multipliers are the program's parameters
+     (`a<group>_<line>_<operator>`, complex), so dragging one recompiles
+     nothing; the JSON keeps their starting values, and any structural
+     edit (a flag, a power, a repeat count, a group, a line) is a new
+     source and a recompile.
+   - It compiles to the IR directly, not through text: UF has no way to
+     say "the iteration count" in a formula (`#numiter` is read only in
+     a colouring's `final:`), and a counter variable is state carried
+     from pass to pass, which step 4 refuses. So the IR gains the pass
+     index, `Predef::Pass` (0 on the first pass; no name in either
+     dialect), and the program records its cycle, `Program::cycle =
+     (prefix, period)`: the passes the groups before the loop start
+     take, and the passes one round of the loop takes. Each group is a
+     branch on the pass index; the init is `z = 0` (or the pixel on the
+     Julia plane, by `#ismand` arithmetic, not a branch); the test
+     `|z| < @bailout`.
+   - The pass index: the interpreter's and the big-float machine's
+     count; on the GPU a field of `FormulaState` that `formula_loop`
+     advances (only in a program that reads it), so the direct template
+     needs nothing new. The derivative pass gives it none.
+   - The designer: a new panel, Escape mode only (`visibility.rs`):
+     groups as rows (repeats, start-loop), each line two operators
+     (abs x, abs y, neg x, neg y, power 1-12, the multiplier) and the
+     combining operator; presets for the built-ins KF's "To Hybrid"
+     would map (Mandelbrot, the multibrots, Burning Ship, Tricorn, the
+     two Perpendiculars) and an alternating one or two.
+   - Measured: a one-group hybrid renders as its built-in does, and an
+     alternating one on the GPU as the interpreter iterates it.
+
+   **5b. Deep zoom for hybrids.** The derivation (step 4) takes the
+   pass index as the same for every pixel; the equations read it as the
+   REFERENCE's global index, so the pixel and the reference take the
+   same group as long as their phases agree. Rebasing to the orbit's
+   start would break that whenever the pixel is not at phase 0, which
+   is exactly when a pixel passing near the critical point must rebase.
+   So one reference orbit per phase of the loop: reference `q` (`0 <=
+   q < period`) is the formula run from its start with its pass index
+   starting at `prefix + q`, and the main one starts at 0 and covers
+   the prefix. A pixel at pass `n >= prefix` rebases (on Zhuoran's test,
+   or at an orbit's end) to reference `(n - prefix) mod period`, index
+   0, which has its phase; during the prefix only the main reference
+   serves. The GPU keeps the orbits in the one orbit buffer with a small
+   table (offset, length, starting pass), and the pixel's state gains
+   its reference's number. Measured against the truth (big floats) as
+   steps 2 to 4 were, on an alternating Mandelbrot / Burning Ship at
+   both rungs, beside a single-reference build to show what the phases
+   buy.
+
+   Not in step 5: distance estimation for hybrids that fold (abs): the
+   derivative pass is complex-analytic, and a fold needs the Jacobian
+   (later, with the built-in Ship's DE as the model); KF's `.kfr` hybrid
+   import (its manual does not give the keys); script functions for
+   hybrids (phase 4, with the library).
+6. **Extending step 4** (planned 2026-10-14, after step 5), in the
+   order of the measurement's blockers:
+   - Branches in the init on parameters and constants (1,400 formulas
+     stop there first): the init's values as a selection.
+   - Transcendental functions by their difference forms, free of
+     cancellation: `sin(A + d) - sin(A) = 2 cos(A + d/2) sin(d/2)`,
+     `cos` likewise, `exp(A) expm1(d)`, `log1p(d / A)`,
+     `d / (sqrt(A + d) + sqrt(A))`, the hyperbolics, `tan` by
+     `sin(d) / (cos A cos(A + d))`, a real power by
+     `A^p expm1(p log1p(d / A))`; small-argument helpers (`expm1`,
+     `log1p`, `sin` near 0) on both rungs, since the GPU's own are not
+     accurate there.
+   - A user function (1,425): a branch on its choice over the functions
+     that have a form; a render whose choice has none stays direct
+     (`perturb_tier` reads the parameters).
+   - Int and bool temporaries assigned values the same for every pixel,
+     and counters (a variable stepped each pass) by step 5's phases when
+     the CPU can find their cycle.
+   - A test that reads a temporary computed from z after its last
+     write, by substitution.
 
 ### Phase 4: distribution
 

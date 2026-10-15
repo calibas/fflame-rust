@@ -1824,6 +1824,62 @@ mod tests {
         esc
     }
 
+    /// `esc` with a hybrid as its formula.
+    fn with_hybrid(mut esc: crate::config::escape::EscapeConfig, h: &crate::escape::lang::hybrid::Hybrid) -> crate::config::escape::EscapeConfig {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() };
+        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+        esc.custom_formula = Some(src);
+        esc
+    }
+
+    /// A one-group hybrid renders as the built-in it spells: the
+    /// presets KF's "To Hybrid" would map, through the whole renderer.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_hybrid_renders_as_its_built_in() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let presets = crate::escape::lang::hybrid::presets();
+        let preset = |name: &str| presets.iter().find(|(n, _)| *n == name).unwrap().1.clone();
+        // (preset, built-in formula, its params, centre, zoom)
+        let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64)] = &[
+            ("Mandelbrot", "mandelbrot", &[], ("-0.6", "0"), 0.4),
+            ("Cubic Mandelbrot", "multibrot", &[("power", 3.0)], ("0", "0"), 0.2),
+            ("Burning Ship", "burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5),
+            ("Perpendicular Mandelbrot", "burning_ship", &[("variant", 1.0)], ("-0.5", "0"), 0.4),
+            ("Perpendicular Burning Ship", "burning_ship", &[("variant", 2.0)], ("-0.5", "0"), 0.4),
+            ("Tricorn", "tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2),
+        ];
+        for &(name, formula, params, (cre, cim), zoom) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let hybrid = with_hybrid(esc.clone(), &preset(name));
+            let got = output_on(&device, &queue, &renderer, &hybrid, w, h, false);
+            assert!(crate::escape::get_formula(&hybrid.formula).has_feature(crate::escape::FormulaFeature::Program), "{name} did not compile");
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "{name}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{name}: the hybrid differs from {formula} on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.03, "{name}: {:.3}%", d * 100.0);
+        }
+    }
+
     /// The share of pixels two renders disagree on, by colour or by
     /// coverage.
     fn differing(a: &[f32], b: &[f32]) -> f64 {
