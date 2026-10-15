@@ -2000,6 +2000,8 @@ mod tests {
             ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-1.1543534481639833789918460777111", "0.6293282132782021964135047790493"), 22.436075, 256),
             ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256),
             ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000),
+            // A power given as a parameter, by its difference form (step 6).
+            ("multibrot", &[("power", 4.0)], ("-0.9641787397769701302601128871474335232", "0.20113415795567669775171048165243266489"), 30.0, 2660),
         ];
         for &(formula, params, (cre, cim), zoom, max_iter) in deep {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -2068,6 +2070,36 @@ mod tests {
         println!("newton at zoom 30: of {} pixels in big floats ({settled} settle), the custom formula counts {right} right, {near} within one", truth.len());
         assert!(settled > truth.len() / 2, "newton: the view settles too little");
         assert!(near as f64 >= 0.95 * truth.len() as f64, "newton: {near} of {}", truth.len());
+
+        // Transcendental functions by their difference forms (step 6):
+        // the sine map, and a map taking sqrt, log, tan, cabs, expm1 and
+        // log1p at once, just outside boundary points found by bisection.
+        // (On the boundary, escaping after thousands of chaotic steps,
+        // f32 deviations lose the count as f64 ones do, only sooner.)
+        const SINE: &str = "S {\ninit:\n z = #pixel\nloop:\n z = sin(z) * #pixel\nbailout:\n abs(imag(z)) < 40\n}";
+        const MANY: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.01 * (sqrt(z + 2) + log(z + 3) + tan(z * 0.1) + cabs(z) + expm1(z * 0.1) + log1p(z * 0.1))\n\
+                            bailout:\n |z| < 4\n}";
+        for (src, name, (cre, cim)) in [(SINE, "S", ("2.5", "0.16980302245877532")), (MANY, "M", ("-0.75", "0.21462864355418923"))] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = 3000;
+            let custom = with_custom(esc, Some((src, name)), None);
+            crate::escape::custom::ensure(&custom);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{name}: {tier:?}");
+            let got = records_on(&custom, 64, 48, false, true, false);
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, custom.custom_formula.as_ref().unwrap()).unwrap();
+            let params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            let truth = truth_counts_of(std::sync::Arc::new(prog), params, (cre, cim), 30.0, 3000, (64, 48), 7, 6);
+            let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+            let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+            let escaped = truth.iter().filter(|(_, n)| *n < 3000).count();
+            println!("{name} at zoom 30: of {} pixels in big floats ({escaped} escape), the custom formula counts {right} right, {near} within one", truth.len());
+            assert!(escaped > truth.len() / 4, "{name}: the view escapes too little");
+            assert!(right as f64 >= 0.95 * truth.len() as f64, "{name}: {right} of {}", truth.len());
+        }
     }
 
     /// Rhai colourings (phase 4, step 3) through the whole renderer, beside

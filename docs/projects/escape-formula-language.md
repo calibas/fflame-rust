@@ -19,7 +19,8 @@ bug) and 2 (the Rhai front end) done 2026-10-14; step 3 (UF and
 Fractint formulas and colourings converted to Rhai, Rhai colourings)
 2026-10-15; step 4 (the built-ins' twins, Edit as Formula, branches in
 the init derived) 2026-10-15; step 5 (carried state in deep zoom, one
-value) 2026-10-15.
+value) 2026-10-15; step 6a (transcendental functions and powers by
+difference forms) 2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1108,6 +1109,56 @@ keeps compiling as UF; the editor converts what it opens.
    **guards**, a formula's checks at a pole or zero (McMullen, Kaliset,
    Lattes) or a branch on the iterate (Barnsley), declared so the
    derivation tests them on the pixel's full value rather than failing.
+   In three parts:
+   - **6a, done 2026-10-15: the difference forms.**
+     - `exp`, `log`, `sqrt`, `sin`, `cos`, `sinh`, `cosh`, `tan`,
+       `cotan`, `tanh`, `cotanh`, `cabs`, and a real or complex power
+       whose exponent has no deviation, each by its form
+       (`delta::difference_form`, the module docs list them).
+     - `expm1` and `log1p` are new built-ins of the language (both
+       dialects, Rhai too), exact near zero: the forms are written over
+       them. On the GPU each takes a series near zero (`uf_expm1`,
+       `fe_cexpm1` ...), and so does `sin` there: Vulkan lets `sin` err
+       by 2^-11 absolutely, and the GTX 1660's returns exactly 0 below
+       about 1e-7, which left every deep pixel of the Multibrot twin
+       unescaped until `uf_cexpm1` took `uf_sin`
+       (`the_difference_functions_keep_their_precision_on_the_gpu`).
+     - **Guards at zero** (`Deriver::guarded`): a form that divides by
+       something zero where the reference value A is (the power's
+       `log1p(d / A)`, sqrt's and cabs's sums) is chosen per pixel --
+       the plain difference where `|d| >= |A|`, which has nothing to
+       cancel there, the form otherwise. Each guard is a statement
+       before the one holding it; their temporaries are reused from
+       statement to statement, and the equations' variables are kept
+       out of the direct path's state (a formula of 250 parameter arms
+       made 1.7 MB of WGSL and overflowed the stack before; 535 KB
+       now, of which 426 KB is its own loop).
+     - **Else-if chains**: a test that varies after tests that do not
+       makes the rest of the chain their otherwise, so it can be left
+       out whole, as UF's `else` + `if` already could (a Rhai `else if`
+       lowers to one chain; one library formula lost its deep zoom in
+       conversion over it).
+     - The Multibrot and multicorn twins deep-zoom at any power: the
+       Multibrot at power 4, zoom 30, counts right on 396 of 439
+       sampled pixels against the built-in's 399. The sine map and a
+       map taking sqrt, log, tan, cabs, expm1 and log1p at zoom 30:
+       429 and 439 of 439. On the boundary itself, where pixels escape
+       after thousands of chaotic steps, f32 deviations lose the count
+       as f64 ones do, only sooner (198 and 343, the f64 model 352
+       and 406): views for such tests sit just outside it.
+     - The library: derived equations for 1,434 formulas (608 after
+       step 5), every conversion keeping them (1,435 of 1,435). The
+       leading blockers now: a user function of the iterate (2,713), a
+       branch on the iterate (1,802), a branch in the init on the pixel
+       (731), an int or bool carried (592), a power of a varying
+       exponent (523).
+   - **6b: function choices.** A user function of the iterate (2,713
+     formulas stop there first): a branch on its choice over the
+     functions that have a form, the choices without one excluded by
+     the derived `perturb` setting; the IR gets the choice of a
+     function as an expression the conditions can read.
+   - **6c: guards** as above, and the rest of the measurement's
+     blockers in order.
 7. **Hybrids of any formulas**: a hybrid is a schedule (groups, repeats,
    loop start) of formulas' steps, z shared, each member's other state
    and parameters under its own name; KF's operators become one small

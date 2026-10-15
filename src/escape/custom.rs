@@ -810,27 +810,59 @@ mod tests {
             return "a branch in the init on the pixel".into();
         }
         let inits = cases[0].values.clone();
-        fn first(e: &IExpr, out: &mut Option<String>) {
+        fn first(e: &IExpr, p: &Program, inits: &[Option<IExpr>], out: &mut Option<String>) {
             if out.is_some() {
                 return;
             }
             match &e.kind {
                 IExprKind::Call(f, a) => {
+                    // What derives: the exact forms, and the difference
+                    // forms (step 6).
                     if !matches!(
                         f,
-                        Builtin::Sqr | Builtin::Ident | Builtin::Zero | Builtin::Conj | Builtin::Flip | Builtin::Real | Builtin::Imag | Builtin::Recip | Builtin::Abs
+                        Builtin::Sqr
+                            | Builtin::Ident
+                            | Builtin::Zero
+                            | Builtin::Conj
+                            | Builtin::Flip
+                            | Builtin::Real
+                            | Builtin::Imag
+                            | Builtin::Recip
+                            | Builtin::Abs
+                            | Builtin::Cabs
+                            | Builtin::Sqrt
+                            | Builtin::Exp
+                            | Builtin::Expm1
+                            | Builtin::Log
+                            | Builtin::Log1p
+                            | Builtin::Sin
+                            | Builtin::Cos
+                            | Builtin::Sinh
+                            | Builtin::Cosh
+                            | Builtin::Tan
+                            | Builtin::Cotan
+                            | Builtin::Tanh
+                            | Builtin::Cotanh
                     ) {
                         *out = Some(format!("function {}", f.name()));
                         return;
                     }
-                    first(a, out);
+                    first(a, p, inits, out);
                 }
                 IExprKind::UserCall(..) => *out = Some("a user function".into()),
-                IExprKind::Binary(lang::ast::BinOp::Pow, ..) => *out = Some("a real or complex power".into()),
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::UserDeriv(_, a) => first(a, out),
+                // A power derives by its difference form unless its
+                // exponent varies.
+                IExprKind::Binary(lang::ast::BinOp::Pow, a, b) => {
+                    if varies(b, p, inits).is_some() {
+                        *out = Some("a power of a varying exponent".into());
+                        return;
+                    }
+                    first(a, p, inits, out);
+                }
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::UserDeriv(_, a) => first(a, p, inits, out),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
-                    first(a, out);
-                    first(b, out);
+                    first(a, p, inits, out);
+                    first(b, p, inits, out);
                 }
                 _ => {}
             }
@@ -863,7 +895,7 @@ mod tests {
                     return;
                 }
                 match s {
-                    IStmt::Assign(_, e) => first(e, found),
+                    IStmt::Assign(_, e) => first(e, p, inits, found),
                     IStmt::If { arms, otherwise } => {
                         for (c, b) in arms {
                             if let Some(why) = varies(c, p, inits) {
@@ -912,7 +944,7 @@ mod tests {
         match lang::delta::with_derived_equations(&p) {
             None => println!("---- no equations derived"),
             Some(d) => {
-                println!("---- perturb_when: {:?}", d.perturb_when.is_some());
+                println!("---- perturb_when: {:?}; perturbs: {:?}", d.perturb_when.is_some(), lang::perturb::perturbation(&d));
                 let w = lang::wgsl::formula(&d);
                 println!("---- WGSL
 {w}");
@@ -1221,3 +1253,4 @@ mod tests {
         }
     }
 }
+

@@ -18,6 +18,14 @@
 //! - `conj`, `flip`, `real`, `imag`: the same of the deviation.
 //! - `d|a| = diffabs(A, da)`, `|A + da| - |A|` by sign case (laser
 //!   blaster's, the built-in Ship tiers'), per part for a complex.
+//! - The transcendental functions by their difference forms (phase 4,
+//!   step 6), over `expm1` and `log1p`, which are exact near zero:
+//!   `d exp a = exp A expm1 da`, `d log a = log1p(da / A)`,
+//!   `d sqrt a = da / (sqrt(A + da) + sqrt A)`, `d sin a = 2 cos(A +
+//!   da/2) sin(da/2)` (cos, sinh, cosh alike), `d tan a = sin da / (cos A
+//!   cos(A + da))` (cotan, tanh, cotanh alike), `d cabs a = (2 Re(conj A
+//!   da) + |da|^2) / (|A + da| + |A|)`, and a power the same for every
+//!   pixel `d a^p = A^p expm1(p log1p(da / A))`.
 //!
 //! The result is ordinary perturbation sections over new variables of
 //! the equations (a pair per loop temporary, and one for z once a pass
@@ -40,16 +48,21 @@
 //! pass, and a rebase moves the deviation as it moves `#dz`. The GPU
 //! carries one such value (`lang::perturb` refuses more).
 //!
-//! What has no such form -- a transcendental function, a real or
-//! complex power, a user function of the iterate, a branch on the
-//! iterate or the pixel, a loop inside the formula's loop or in its
-//! init, an int or bool carried -- leaves the formula without equations,
-//! on the direct path as before.
+//! A form that divides by something zero where the reference value is
+//! (the power's `log1p(da / A)`, sqrt's and cabs's sums) is **guarded**:
+//! the plain difference where `|da| >= |A|`, which has nothing to cancel
+//! there, the form otherwise, chosen per pixel ([`Deriver::guarded`]).
+//!
+//! What has no such form -- an inverse function, a power of a varying
+//! exponent, a user function of the iterate, a branch on the iterate or
+//! the pixel, a loop inside the formula's loop or in its init, an int or
+//! bool carried -- leaves the formula without equations, on the direct
+//! path as before.
 //! Unless it stands in an arm (or an init's case) a parameter's choice
 //! picks: then the equations are derived without it, and hold when that
-//! arm is not taken, which the derived `perturb` setting says (a
-//! Tricorn whose power 2 is squared and any other a real power deep
-//! zooms at 2).
+//! arm is not taken, which the derived `perturb` setting says. In a
+//! chain of tests, one that varies after tests that do not makes the
+//! rest of the chain such an arm, as `else` + `if` writes it.
 
 use super::ast::{BinOp, UnOp};
 use super::builtins::Builtin;
@@ -72,6 +85,8 @@ pub fn with_derived_equations(p: &Program) -> Option<Program> {
         path: Vec::new(),
         excluded: Vec::new(),
         carried: vec![None; p.vars.len()],
+        pending: Vec::new(),
+        guard_vars: Vec::new(),
     };
     // What the loop carries besides z: a float or complex written in it
     // and read in a pass before that pass has certainly written it, or
@@ -213,6 +228,13 @@ struct Deriver<'p> {
     /// record of it at the pass's start, its current value at the
     /// reference through the pass, and the pixel's deviation.
     carried: Vec<Option<(VarId, VarId, VarId)>>,
+    /// Statements an expression's deviation needs before the statement
+    /// holding it ([`Deriver::guarded`]).
+    pending: Vec<IStmt>,
+    /// The guards' temporaries by type, and how many of each the
+    /// statement being derived has taken: a statement's guards are
+    /// spent by it, so the next reuses them.
+    guard_vars: Vec<(Ty, Vec<VarId>, usize)>,
 }
 
 /// `a && b`, `b` alone when there is no `a`.
@@ -505,6 +527,53 @@ impl Deriver<'_> {
         self.out.vars.len() - 1
     }
 
+    /// A deviation by `form` where the reference value `a` is large
+    /// against the deviation `d`, else the plain difference `plain`,
+    /// chosen per pixel: for a form that divides by something zero where
+    /// `a` is (a real power's `log1p(d / A)`, sqrt's sum), where the plain
+    /// difference has nothing to cancel. Left pending, before the
+    /// statement holding it.
+    fn guarded(&mut self, a: &IExpr, d: &IExpr, plain: IExpr, form: IExpr, ty: Ty) -> IExpr {
+        let t = self.guard_var(ty);
+        let big = mk(
+            IExprKind::Binary(BinOp::Ge, Box::new(mk(IExprKind::Modulus(Box::new(d.clone())), Ty::Float)), Box::new(mk(IExprKind::Modulus(Box::new(a.clone())), Ty::Float))),
+            Ty::Bool,
+        );
+        self.pending.push(IStmt::If { arms: vec![(big, vec![IStmt::Assign(Place::Var(t), plain)])], otherwise: vec![IStmt::Assign(Place::Var(t), form)] });
+        mk(IExprKind::Var(t), ty)
+    }
+
+    /// A temporary for a guard of the statement being derived.
+    fn guard_var(&mut self, ty: Ty) -> VarId {
+        let k = match self.guard_vars.iter().position(|(t, ..)| *t == ty) {
+            Some(k) => k,
+            None => {
+                self.guard_vars.push((ty, Vec::new(), 0));
+                self.guard_vars.len() - 1
+            }
+        };
+        let used = self.guard_vars[k].2;
+        let v = match self.guard_vars[k].1.get(used) {
+            Some(&v) => v,
+            None => {
+                let v = self.new_var("diff".into(), ty);
+                self.guard_vars[k].1.push(v);
+                v
+            }
+        };
+        self.guard_vars[k].2 += 1;
+        v
+    }
+
+    /// A statement's derivation starts: no guards pending, every
+    /// temporary free.
+    fn begin_statement(&mut self) {
+        self.pending.clear();
+        for g in &mut self.guard_vars {
+            g.2 = 0;
+        }
+    }
+
     /// A case's init equations: the deviation z starts with, and each
     /// carried variable's.
     fn init_equations(&mut self, case: &InitCase) -> Option<Vec<IStmt>> {
@@ -513,7 +582,9 @@ impl Deriver<'_> {
         }
         let mut out = Vec::new();
         if let Some(z) = &case.z {
+            self.begin_statement();
             let (_, dz) = self.pair(z, &[], false)?;
+            out.append(&mut self.pending);
             out.push(IStmt::Assign(Place::DZ, dz.map_or_else(|| zero_of(Ty::Complex), |d| widen(d, Ty::Complex))));
         }
         for v in 0..self.carried.len() {
@@ -522,10 +593,12 @@ impl Deriver<'_> {
             if case.poisoned[v] {
                 return None;
             }
+            self.begin_statement();
             let d = match &case.values[v] {
                 Some(value) => self.pair(value, &[], false)?.1,
                 None => None,
             };
+            out.append(&mut self.pending);
             out.push(IStmt::Assign(Place::Var(dev), d.map_or_else(|| zero_of(ty), |d| widen(d, ty))));
         }
         Some(out)
@@ -591,12 +664,14 @@ impl Deriver<'_> {
                         return None;
                     }
                     self.z_written = is_loop && *wrote_z;
+                    self.begin_statement();
                     match place {
                         Place::Z => {
                             if !is_loop && *wrote_z {
                                 return None;
                             }
                             let (r, dz) = self.pair(e, written, is_loop)?;
+                            out.append(&mut self.pending);
                             out.push(IStmt::Assign(Place::DZ, dz.map_or_else(|| zero_of(Ty::Complex), |d| widen(d, Ty::Complex))));
                             if is_loop {
                                 // Its reference value, for what reads z after
@@ -615,6 +690,7 @@ impl Deriver<'_> {
                                 continue;
                             }
                             let (r, d) = self.pair(e, written, is_loop)?;
+                            out.append(&mut self.pending);
                             let ty = self.p.vars[*v].ty;
                             if matches!(ty, Ty::Int | Ty::Bool) {
                                 // The same for every pixel (a pass's phase,
@@ -707,18 +783,31 @@ impl Deriver<'_> {
                         Some(code)
                     };
                     let mut earlier: Option<IExpr> = None;
-                    for (c, b) in arms {
+                    let mut rest: Option<IStmt> = None;
+                    for (k, (c, b)) in arms.iter().enumerate() {
                         self.z_written = *wrote_z;
-                        let (rc, dc) = self.pair(c, written, is_loop)?;
-                        if dc.is_some() || rc.ty != Ty::Bool {
-                            return None;
-                        }
+                        let paired = self.pair(c, written, is_loop).filter(|(rc, dc)| dc.is_none() && rc.ty == Ty::Bool);
+                        let Some((rc, _)) = paired else {
+                            if k == 0 {
+                                return None;
+                            }
+                            // A test that varies from pixel to pixel after
+                            // tests that do not: the rest of the chain is
+                            // their otherwise, as `else { if .. }` writes
+                            // it, to be left out whole (a Rhai `else if`
+                            // lowers to one chain).
+                            rest = Some(IStmt::If { arms: arms[k..].to_vec(), otherwise: otherwise.clone() });
+                            break;
+                        };
                         let taken = and(earlier.clone(), rc.clone());
                         derived.push((rc.clone(), arm(self, b, taken)?));
                         earlier = Some(and(earlier, mk(IExprKind::Unary(UnOp::Not, Box::new(rc)), Ty::Bool)));
                     }
                     let taken = earlier.unwrap_or_else(|| mk(IExprKind::Bool(true), Ty::Bool));
-                    let otherwise = arm(self, otherwise, taken)?;
+                    let otherwise = match &rest {
+                        Some(r) => arm(self, std::slice::from_ref(r), taken)?,
+                        None => arm(self, otherwise, taken)?,
+                    };
                     if kept == 0 {
                         self.excluded.truncate(mark);
                         return None;
@@ -887,7 +976,21 @@ impl Deriver<'_> {
                         };
                         (q, d)
                     }
-                    // A power, a remainder: no cancellation-free form.
+                    // A power whose exponent is the same for every pixel:
+                    // A^p expm1(p log1p(da / A)).
+                    BinOp::Pow if db.is_none() && matches!(ty, Ty::Float | Ty::Complex) => {
+                        let r = mk(IExprKind::Binary(BinOp::Pow, Box::new(widen(ra.clone(), ty)), Box::new(widen(rb.clone(), ty))), ty);
+                        let Some(x) = da else { return Some((r, None)) };
+                        let ratio = bin(BinOp::Div, widen(x.clone(), ty), widen(ra.clone(), ty));
+                        let exponent = bin(BinOp::Mul, widen(rb.clone(), ty), call(Builtin::Log1p, ratio, ty));
+                        let form = bin(BinOp::Mul, r.clone(), call(Builtin::Expm1, exponent, ty));
+                        let end = mk(IExprKind::Binary(BinOp::Pow, Box::new(bin(BinOp::Add, widen(ra.clone(), ty), widen(x.clone(), ty))), Box::new(widen(rb, ty))), ty);
+                        let plain = bin(BinOp::Sub, end, r.clone());
+                        let d = self.guarded(&ra, &x, plain, form, ty);
+                        (r, Some(d))
+                    }
+                    // A remainder, a power of a varying exponent: no
+                    // cancellation-free form.
                     _ => {
                         if da.is_some() || db.is_some() {
                             return None;
@@ -977,6 +1080,30 @@ impl Deriver<'_> {
                         let t = bin(BinOp::Div, widen(x.clone(), ty), widen(ra.clone(), ty));
                         neg(bin(BinOp::Div, t, bin(BinOp::Add, widen(ra, ty), widen(x, ty))))
                     }
+                    // sqrt's form divides by sqrt A + sqrt(A + d), zero where
+                    // both are.
+                    Builtin::Sqrt if ty == a.ty => {
+                        let form = difference_form(Builtin::Sqrt, ra.clone(), x.clone(), ty)?;
+                        let plain = bin(BinOp::Sub, call(Builtin::Sqrt, bin(BinOp::Add, widen(ra.clone(), ty), widen(x.clone(), ty)), ty), call(Builtin::Sqrt, widen(ra.clone(), ty), ty));
+                        self.guarded(&ra, &x, plain, form, ty)
+                    }
+                    f if ty == a.ty && matches!(ty, Ty::Float | Ty::Complex) => match difference_form(*f, ra, x, ty) {
+                        Some(d) => d,
+                        None => return None,
+                    },
+                    // |a| of a complex, a float: (2 Re(conj A da) + |da|^2)
+                    // / (|A + da| + |A|).
+                    Builtin::Cabs if complex => {
+                        let re = |v: IExpr| call(Builtin::Real, v, Ty::Float);
+                        let im = |v: IExpr| call(Builtin::Imag, v, Ty::Float);
+                        let cross = bin(BinOp::Add, bin(BinOp::Mul, re(ra.clone()), re(x.clone())), bin(BinOp::Mul, im(ra.clone()), im(x.clone())));
+                        let top = bin(BinOp::Add, bin(BinOp::Mul, konst(2.0, Ty::Float), cross), mk(IExprKind::Modulus(Box::new(x.clone())), Ty::Float));
+                        let full = call(Builtin::Cabs, bin(BinOp::Add, ra.clone(), x.clone()), Ty::Float);
+                        let form = bin(BinOp::Div, top, bin(BinOp::Add, full.clone(), call(Builtin::Cabs, ra.clone(), Ty::Float)));
+                        // Zero over zero where A and da are: guarded.
+                        let plain = bin(BinOp::Sub, full, call(Builtin::Cabs, ra.clone(), Ty::Float));
+                        self.guarded(&ra, &x, plain, form, Ty::Float)
+                    }
                     _ => return None,
                 };
                 (r, Some(d))
@@ -991,6 +1118,39 @@ impl Deriver<'_> {
             _ => return None,
         })
     }
+}
+
+/// The deviation of `f(A + d) - f(A)` for a function with a
+/// cancellation-free difference form, its argument and value of type
+/// `ty`; `None` for one without.
+fn difference_form(f: Builtin, a: IExpr, d: IExpr, ty: Ty) -> Option<IExpr> {
+    use Builtin::*;
+    let (a, d) = (widen(a, ty), widen(d, ty));
+    let half = || bin(BinOp::Mul, konst(0.5, ty), d.clone());
+    let mid = || bin(BinOp::Add, a.clone(), half());
+    let end = || bin(BinOp::Add, a.clone(), d.clone());
+    let two = || konst(2.0, ty);
+    let c = |f: Builtin, x: IExpr| call(f, x, ty);
+    Some(match f {
+        // exp A (exp d - 1); expm1's difference is exp's.
+        Exp | Expm1 => bin(BinOp::Mul, c(Exp, a.clone()), c(Expm1, d.clone())),
+        // log(1 + d / A); log1p's over 1 + A.
+        Log => c(Log1p, bin(BinOp::Div, d.clone(), a.clone())),
+        Log1p => c(Log1p, bin(BinOp::Div, d.clone(), bin(BinOp::Add, konst(1.0, ty), a.clone()))),
+        // d / (sqrt(A + d) + sqrt A)
+        Sqrt => bin(BinOp::Div, d.clone(), bin(BinOp::Add, c(Sqrt, end()), c(Sqrt, a.clone()))),
+        // Sums to products, the half-difference small.
+        Sin => bin(BinOp::Mul, bin(BinOp::Mul, two(), c(Cos, mid())), c(Sin, half())),
+        Cos => neg(bin(BinOp::Mul, bin(BinOp::Mul, two(), c(Sin, mid())), c(Sin, half()))),
+        Sinh => bin(BinOp::Mul, bin(BinOp::Mul, two(), c(Cosh, mid())), c(Sinh, half())),
+        Cosh => bin(BinOp::Mul, bin(BinOp::Mul, two(), c(Sinh, mid())), c(Sinh, half())),
+        // tan x - tan y = sin(x - y) / (cos x cos y), and alike.
+        Tan => bin(BinOp::Div, c(Sin, d.clone()), bin(BinOp::Mul, c(Cos, a.clone()), c(Cos, end()))),
+        Cotan => neg(bin(BinOp::Div, c(Sin, d.clone()), bin(BinOp::Mul, c(Sin, a.clone()), c(Sin, end())))),
+        Tanh => bin(BinOp::Div, c(Sinh, d.clone()), bin(BinOp::Mul, c(Cosh, a.clone()), c(Cosh, end()))),
+        Cotanh => neg(bin(BinOp::Div, c(Sinh, d.clone()), bin(BinOp::Mul, c(Sinh, a.clone()), c(Sinh, end())))),
+        _ => return None,
+    })
 }
 
 fn stmt_reads_var(s: &IStmt, v: VarId) -> bool {
@@ -1203,11 +1363,11 @@ mod tests {
 
     /// An arm a parameter picks that has no equations is left out, and the
     /// derived `perturb` setting says when the rest hold: a Tricorn whose
-    /// power 2 squares and any other is a real power deep-zooms at 2.
+    /// power 2 squares and any other takes an asin deep-zooms at 2.
     #[test]
     fn an_arm_without_equations_is_excluded_by_the_parameters() {
         let p = program(
-            "T {\ninit:\n z = 0\nloop:\n if @power == 2\n  z = sqr(conj(z)) + #pixel\n else\n  z = conj(z)^@power + #pixel\n endif\nbailout:\n |z| < 4\n\
+            "T {\ninit:\n z = 0\nloop:\n if @power == 2\n  z = sqr(conj(z)) + #pixel\n else\n  z = asin(conj(z)^@power) + #pixel\n endif\nbailout:\n |z| < 4\n\
              default:\n float param power\n  default = 2\n endparam\n}",
             Dialect::UltraFractal,
         );
@@ -1233,6 +1393,18 @@ mod tests {
             Dialect::UltraFractal,
         );
         assert!(with_derived_equations(&b).is_some(), "the @k == 1 arm is excluded");
+        // A test on the iterate after a parameter's, in one chain (as a
+        // Rhai `else if` lowers): the rest of the chain is left out whole.
+        let c = program(
+            "C {\ninit:\n z = 0\nloop:\n if @k == 0\n  z = sqr(z) + #pixel\n elseif real(z) > 0\n  z = exp(z)\n else\n  z = sqr(z) - #pixel\n endif\n\
+             bailout:\n |z| < 4\ndefault:\n int param k\n  default = 0\n endparam\n}",
+            Dialect::UltraFractal,
+        );
+        let d = with_derived_equations(&c).expect("the @k == 0 arm derives");
+        let mut params = ParamValues::defaults(&d);
+        assert!(super::super::interp::perturb_holds(&d, &params, &env), "k = 0");
+        params.values[0].0 = 1.0;
+        assert!(!super::super::interp::perturb_holds(&d, &params, &env), "k = 1 has none");
     }
 
     /// State the loop carries besides z (phase 4, step 5): the reference
@@ -1286,13 +1458,56 @@ mod tests {
         }
     }
 
+    /// The transcendental functions and real powers by their difference
+    /// forms (phase 4, step 6): perturbed as they run, in the f64 model.
+    #[test]
+    fn transcendental_functions_derive_by_difference_forms() {
+        let cases: &[(&str, (f64, f64), u32)] = &[
+            // A real power, the Multibrot at 2.5.
+            ("P {\ninit:\n z = 0\nloop:\n z = z^2.5 + #pixel\nbailout:\n |z| < 4\n}", (-0.9, 0.3), 300),
+            // A power given as a parameter.
+            ("Q {\ninit:\n z = 0\nloop:\n z = z^@p + #pixel\nbailout:\n |z| < 4\ndefault:\n float param p\n  default = 3.3\n endparam\n}", (-0.6, 0.6), 300),
+            // exp: the exponential map, its test on the real part.
+            ("E {\ninit:\n z = 0\nloop:\n z = exp(z) + #pixel\nbailout:\n real(z) < 40\n}", (0.29, 0.05), 200),
+            // sin and cos: the classic sine fractal.
+            ("S {\ninit:\n z = #pixel\nloop:\n z = sin(z) * #pixel\nbailout:\n abs(imag(z)) < 40\n}", (1.0, 0.5), 200),
+            ("C {\ninit:\n z = #pixel\nloop:\n z = cos(z) * #pixel + 0.1 * cosh(z * 0.2)\nbailout:\n abs(imag(z)) < 40\n}", (1.3, 0.2), 200),
+            // sqrt, log, tan, cabs, expm1 and log1p in one map.
+            (
+                "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.01 * (sqrt(z + 2) + log(z + 3) + tan(z * 0.1) + cabs(z) + expm1(z * 0.1) + log1p(z * 0.1))\n\
+                 bailout:\n |z| < 4\n}",
+                (0.3, 0.5),
+                300,
+            ),
+        ];
+        for &(src, (rx, ry), maxiter) in cases {
+            let p = program(src, Dialect::UltraFractal);
+            let d = with_derived_equations(&p).unwrap_or_else(|| panic!("{}: no equations", p.name));
+            assert!(super::super::perturb::perturbation(&d).is_ok(), "{}", p.name);
+            let params = ParamValues::defaults(&d);
+            let reference = C64::new(rx, ry);
+            let mut escaped = 0;
+            for k in 0..12 {
+                let t = k as f64 * 0.524;
+                let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-7 * (1.0 + k as f64)));
+                let env = Env::at(px, maxiter);
+                let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+                let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
+                assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "{} at {px:?}", p.name);
+                escaped += direct.escaped as usize;
+            }
+            assert!(escaped > 0, "{}: nothing escapes there", p.name);
+        }
+    }
+
     /// What has no cancellation-free form, or carries state, derives
     /// nothing; a formula with its own equations keeps them.
     #[test]
     fn what_derives_nothing() {
         for src in [
-            "E {\ninit:\n z = 0\nloop:\n z = exp(z) + #pixel\nbailout:\n |z| < 4\n}",
-            "P {\ninit:\n z = 0\nloop:\n z = z^2.5 + #pixel\nbailout:\n |z| < 4\n}",
+            // A power of a varying exponent, an inverse function.
+            "Z {\ninit:\n z = 0\nloop:\n z = z^z + #pixel\nbailout:\n |z| < 4\n}",
+            "A {\ninit:\n z = 0\nloop:\n z = asin(z) + #pixel\nbailout:\n |z| < 4\n}",
             "B {\ninit:\n z = 0\nloop:\n if real(z) > 0\n  z = sqr(z) + #pixel\n else\n  z = z + #pixel\n endif\nbailout:\n |z| < 4\n}",
             "U {\ninit:\n z = 0\nloop:\n z = @f(z) + #pixel\nbailout:\n |z| < 4\n}",
             // A carried int (a counter): no deviation to follow it by.

@@ -1,6 +1,5 @@
 // The built-in Multibrot, z^p + c, as a formula of your own (the Escape
-// panel's Edit as Formula). Any power renders; deep zoom does not follow
-// a power given as a parameter yet.
+// panel's Edit as Formula). Any power renders and deep-zooms.
 
 const PARAMS = #{
     power: #{ value: 3.0, min: 2.0, max: 12.0, caption: "Power", hint: "Exponent p in z^p + c. 2 is the Mandelbrot set; higher powers grow more lobes." },

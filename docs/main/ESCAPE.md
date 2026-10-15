@@ -430,19 +430,17 @@ fn escaped(s, p) {
     The exceptions are Multibrot and the multicorns (under 0.4%),
     where the built-in raises to a power by polar form and the twin
     multiplies.
-  - At depth the twins deep-zoom by derived equations: Mandelbrot,
-    Tricorn at power 2, every Ship variant, Lambda, Cactus. Against the
-    big-float truth they count as well as the built-ins' native tiers:
-    401 and 401 of 439 pixels for the Mandelbrot at zoom 42, 354 and
-    354 for Lambda at 30, 189 and 190 for the Tricorn at 28, and 346
-    against 294 for the Ship at 60. Phoenix (zoom 22.4 and 48)
-    counts right on all 439, as the built-in does; Manowar (zoom 26) on
-    420 against the built-in's 373; and a convergent Newton written in
-    the language on all 439 at zoom 30
+  - At depth every twin deep-zooms by derived equations, a Multibrot or
+    multicorn power by its difference form. Against the big-float truth
+    they count as well as the built-ins' native tiers: 401 and 401 of
+    439 pixels for the Mandelbrot at zoom 42, 354 and 354 for Lambda at
+    30, 189 and 190 for the Tricorn at 28, 346 against 294 for the Ship
+    at 60, and 396 against 399 for the Multibrot at power 4, zoom 30.
+    Phoenix (zoom 22.4 and 48) counts right on all 439, as the built-in
+    does; Manowar (zoom 26) on 420 against the built-in's 373; and a
+    convergent Newton written in the language on all 439 at zoom 30
     (`builtin_twins_render_and_deep_zoom_as_their_builtins`).
-  - A Multibrot or multicorn power is a real power, which deep zoom
-    does not follow yet. Mann damping and the biomorph test are the
-    built-ins' alone.
+  - Mann damping and the biomorph test are the built-ins' alone.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
@@ -575,18 +573,19 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
   substituted in order, z's too).
 - A branch derives when its conditions are the same for every pixel (a
   parameter's choice, a constant, the plane), so the reference and the
-  pixel take the same arm.
+  pixel take the same arm. In a chain, a test that varies after tests
+  that do not makes the rest of the chain their otherwise, as UF's
+  `else` + `if` writes it (a Rhai `else if` lowers to one chain).
 - **A branch in the init** (phase 4, step 4: every plane-aware formula
   has one): each way through the init's branches is a case
   (`delta::init_cases`, at most 16), with its own values and its own
   start for z. The equations branch on the cases' tests, one copy of
   the loop's each, or one copy when they come out alike.
 - **An arm a parameter picks may go without:** when it has no
-  equations (a real power, a user function of the iterate), the rest
-  are derived, and the derived `perturb` setting (`perturb_when`) says
-  they hold when that arm is not taken. A branch whose arms all go
-  without has none. So the Tricorn twin, which squares at power 2 and
-  takes a real power otherwise, deep-zooms at 2.
+  equations (an inverse function, a user function of the iterate), the
+  rest are derived, and the derived `perturb` setting (`perturb_when`)
+  says they hold when that arm is not taken. A branch whose arms all go
+  without has none.
 - z written in steps reads its own reference value after each.
 - **State carried besides z** (phase 4, step 5): a float or complex the
   loop carries from one pass to the next (a Phoenix's previous z, a
@@ -604,12 +603,40 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
     f32 error (the Manowar twin at zoom 26: 337 of 439 sampled pixels
     right on the scaled rung, 420 on floatexp).
   - One value is carried; more is refused for now.
+- **Transcendental functions and powers** (phase 4, step 6) derive by
+  difference forms, each free of the cancellation:
+  - `exp(A + d) - exp(A) = exp(A) expm1(d)`; `log` as `log1p(d / A)`;
+    a real or complex power whose exponent has no deviation as
+    `A^b expm1(b log1p(d / A))`; `sqrt` as `d / (sqrt(A + d) + sqrt A)`;
+    `cabs` as `(2 Re(conj(A) d) + |d|^2) / (|A + d| + |A|)`;
+  - `sin`, `cos`, `sinh`, `cosh` by the half difference (`sin(A + d) -
+    sin A = 2 cos(A + d/2) sin(d/2)`), `tan` and the rest as
+    `sin(d) / (cos A cos(A + d))` and its kin.
+  - `expm1` and `log1p` are built-ins of the language too. Their WGSL
+    takes a series near zero: the spec lets the GPU's `sin` err by
+    2^-11 absolutely, and a GTX 1660's returns 0 below about 1e-7
+    (`the_difference_functions_keep_their_precision_on_the_gpu`). On
+    the scaled rung a function that is `x + O(x^2)` keeps a small
+    value's units (`f(s x) / s`); on the floatexp rung `cfe2_expm1`
+    and its kin take their series below 2^-20.
+  - **Guards**: a form that divides by something zero where `A` is
+    (the power's `log1p(d / A)`, sqrt's and cabs's sums) is chosen per
+    pixel: the plain difference where `|d| >= |A|`, which has nothing
+    to cancel there, the form otherwise (`Deriver::guarded`; the
+    temporaries reused from statement to statement).
+  - The sine map and a map taking sqrt, log, tan, cabs, expm1 and
+    log1p at once count right, at zoom 30, on 429 and 439 of 439
+    sampled pixels. On the boundary itself, where pixels escape after
+    thousands of chaotic steps, f32 deviations lose the count as f64
+    ones do, only sooner (198 and 343, the f64 model 352 and 406).
+- The equations' variables are the perturb functions' locals: the
+  direct path's state holds the program's own alone.
 
-What does not derive: a transcendental function, a real or complex
-power, a user function of the iterate, a branch on the iterate or the
-pixel, a loop inside the loop or in the init, an int or bool carried,
-more than one value carried -- unless it stands in an arm a parameter
-picks. Such a formula stays on the direct path, as before.
+What does not derive: an inverse function, a power of a varying
+exponent, a user function of the iterate, a branch on the iterate or
+the pixel, a loop inside the loop or in the init, an int or bool
+carried, more than one value carried -- unless it stands in an arm a
+parameter picks. Such a formula stays on the direct path, as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four

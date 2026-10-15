@@ -1,7 +1,6 @@
 // The built-in Tricorn, conj(z)^p + c, as a formula of your own (the
-// Escape panel's Edit as Formula). At power 2 the step squares exactly,
-// which deep zoom follows; any other power takes its polar form, which
-// deep zoom does not follow yet.
+// Escape panel's Edit as Formula). At power 2 the step squares exactly;
+// any other power takes its polar form. Deep zoom follows both.
 
 const PARAMS = #{
     power: #{ value: 2.0, min: 2.0, max: 12.0, caption: "Power", hint: "Exponent p in conj(z)^p + c. 2 is the Tricorn; higher powers are the multicorns." },

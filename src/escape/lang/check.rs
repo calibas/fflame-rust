@@ -1641,7 +1641,7 @@ fn real_valued(e: &IExpr, real: &HashSet<VarId>) -> bool {
             use Builtin::*;
             match f {
                 Zero | Real | Imag | Cabs | Atan2 => true,
-                Sqr | Exp | Sin | Cos | Tan | Cotan | Sinh | Cosh | Tanh | Cotanh | Atan | Asinh | Abs | Ident | Recip | Conj | Round | Trunc | Ceil | Floor | Cosxx => {
+                Sqr | Exp | Expm1 | Sin | Cos | Tan | Cotan | Sinh | Cosh | Tanh | Cotanh | Atan | Asinh | Abs | Ident | Recip | Conj | Round | Trunc | Ceil | Floor | Cosxx => {
                     real_valued(a, real)
                 }
                 _ => false,

@@ -111,6 +111,20 @@ impl C64 {
         acc
     }
 
+    /// `exp(z) - 1`, exact near zero: `(expm1(x) cos y - 2 sin^2(y/2),
+    /// e^x sin y)`, neither part cancelling.
+    pub fn expm1(self) -> C64 {
+        let h = (self.im * 0.5).sin();
+        C64::new(self.re.exp_m1() * self.im.cos() - 2.0 * h * h, self.re.exp() * self.im.sin())
+    }
+
+    /// `log(1 + z)`, exact near zero: `(log1p(2u + u^2 + v^2) / 2,
+    /// atan2(v, 1 + u))`.
+    pub fn ln1p(self) -> C64 {
+        let (u, v) = (self.re, self.im);
+        C64::new(0.5 * (2.0 * u + u * u + v * v).ln_1p(), v.atan2(1.0 + u))
+    }
+
     /// `z^w`, principal: `exp(w log z)`, and 0 at the origin.
     pub fn powc(self, w: C64) -> C64 {
         if self.re == 0.0 && self.im == 0.0 {
@@ -157,6 +171,11 @@ pub enum Builtin {
     IsInf,
     IsNan,
     Cosxx,
+    /// `exp(z) - 1` and `log(1 + z)`, exact near zero: what the derived
+    /// perturbation equations' difference forms are made of (`lang::delta`),
+    /// and a formula's to call.
+    Expm1,
+    Log1p,
 }
 
 /// Every built-in by name (lowered).
@@ -196,6 +215,8 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("isinf", Builtin::IsInf),
     ("isnan", Builtin::IsNan),
     ("cosxx", Builtin::Cosxx),
+    ("expm1", Builtin::Expm1),
+    ("log1p", Builtin::Log1p),
 ];
 
 /// What a user function (`@fn(z)`, Fractint's `fn1`..`fn4`) may be set
@@ -325,6 +346,8 @@ impl Builtin {
             // Fractint's: cos with the imaginary part negated, the bug
             // in its cos before v16, kept so old pictures reproduce.
             Cosxx => Cos.eval_c(z).conj(),
+            Expm1 => z.expm1(),
+            Log1p => z.ln1p(),
         }
     }
 
@@ -356,6 +379,8 @@ impl Builtin {
             Asinh => one.div(z.mul(z).add(one).sqrt()),
             Acosh => one.div(z.sub(one).sqrt().mul(z.add(one).sqrt())),
             Atanh => one.div(one.sub(z.mul(z))),
+            Expm1 => z.exp(),
+            Log1p => one.div(one.add(z)),
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -400,6 +425,8 @@ impl Builtin {
             Imag => 0.0,
             IsInf => f64::from(u8::from(x.is_infinite())),
             IsNan => f64::from(u8::from(x.is_nan())),
+            Expm1 => x.exp_m1(),
+            Log1p => x.ln_1p(),
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
         }
     }

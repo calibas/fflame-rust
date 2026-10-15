@@ -502,6 +502,9 @@ impl BigMachine {
                 BigComplex { re: c.re, im: c.im.neg() }
             }
             IsInf | IsNan => BigComplex::zero(n),
+            // Exact enough in big floats as the plain forms.
+            Expm1 => self.cexp(z).sub(&one),
+            Log1p => clog(&one.add(z)),
         })
     }
 
