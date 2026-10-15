@@ -1,4 +1,4 @@
-# Escape-time formula language: Ultra Fractal and Fractint formulas and colourings
+# Escape-time formula language: formulas and colourings in Rhai, Ultra Fractal and Fractint imported
 
 Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
 (`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
@@ -10,8 +10,11 @@ the measurement against UF's public library, and the test files. The
 state cap is 32 floats (the user's decision, 2026-10-14, from the
 measurement under phase 2). **Phase 3 in progress** (deep zoom for
 custom formulas; its plan and order of work below): steps 1 to 5 done
-2026-10-14; step 6 (extending step 4) next, the user's order of
-2026-10-14.
+2026-10-14. **Phase 4 decided 2026-10-14** (formulas in Rhai, the user's
+decisions below): the formula language becomes Rhai, with explicit
+state; UF and Fractint files stay loadable and convert to Rhai when
+opened; the built-in formulas get Rhai twins. Phase 3's step 6 is
+folded into phase 4's order of work.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -41,6 +44,37 @@ API. This is the plan being followed; it is updated as the work lands.
    records keep per pixel (`IterState`, `IterResult`). Phase 1 capped
    custom colourings at those 4 floats; phase 2 measured UF's public
    colourings and the cap became 32 (below, "the state cap").
+
+## Decisions (2026-10-14): Rhai
+
+The user's, after phase 3: reproduce the systems, not Ultra Fractal --
+in a way that complements this program, and not bound by UF, Fractint
+or Kalles Fraktaler where newer ways are better. Wanted: open a
+built-in (the Mandelbrot) as a formula and change it; convert whole
+families of the built-ins; hybrids of any formulas, not only KF's
+operators; parameters that animation and scripts can target; scripts
+that can change the formulas themselves.
+
+1. **The formula language is Rhai**, the scripting language this
+   program already embeds: one language for scripts and formulas. A
+   formula is a Rhai script whose GPU subset compiles to the existing
+   IR (`lang::ir`), so everything below the IR stays: the interpreter,
+   the big-float reference, the WGSL back ends, the derivative, the
+   derived perturbation equations, hybrids' phases.
+2. **UF and Fractint stay loadable, and convert on opening.** A config
+   carrying UF or Fractint source still compiles as it does now; the
+   Formula Editor converts an entry to Rhai when it opens it, and what
+   it saves is Rhai.
+3. **Explicit-state step functions**: a formula is `start`, `step` and
+   `escaped`, its state a map passed in and returned -- not UF's
+   variables shared across sections. What a step carries from pass to
+   pass is then visible, which deep zoom (carried state), hybrids
+   (composition) and scripts (calling and composing steps) all need.
+4. **Source twins for now.** Each built-in that can be written in the
+   language gets its Rhai source beside its native code, held equal by
+   tests; native speed for the compiled ones (BLA, nucleus references,
+   the Jacobian DE) comes later, and then the native code retires
+   family by family.
 
 ## Why compile, not paste shader code
 
@@ -87,7 +121,7 @@ variable is created by its first assignment and is **complex**),
 Fractint's `if(...)` with parentheses and commas between statements on
 one line parse too.
 
-**Types.** `bool`, `int`, `float`, `complex`; `color` is phase 4 (direct
+**Types.** `bool`, `int`, `float`, `complex`; `color` is phase 5 (direct
 colouring). Implicit conversion widens only (int to float to complex); a
 narrowing assignment is an error; `/` always yields a float or complex.
 Bool converts to and from numbers only in Fractint files (UF warns).
@@ -118,7 +152,7 @@ cotanh`; conversion `round trunc ceil floor real imag`; miscellaneous
 `conj flip isInf isNaN`. Fractint adds `cosxx` (cos with the imaginary
 part negated: Fractint's pre-v16 bug, kept on purpose) and `srand`.
 `abs` is component-wise, `cabs` the true modulus. Not supported: the
-colour functions (phase 4), `length` / `setLength` (dynamic arrays),
+colour functions (phase 5), `length` / `setLength` (dynamic arrays),
 `oldz`, `print`, `random`.
 
 **Parameters.** `@name` reads a parameter (read-only). Without a
@@ -728,9 +762,11 @@ Order of work (2026-10-14):
    derivative pass is complex-analytic, and a fold needs the Jacobian
    (later, with the built-in Ship's DE as the model); KF's `.kfr` hybrid
    import (its manual does not give the keys); script functions for
-   hybrids (phase 4, with the library).
-6. **Extending step 4** (planned 2026-10-14, after step 5), in the
-   order of the measurement's blockers:
+   hybrids (phase 4, step 8).
+6. **Extending step 4** (planned 2026-10-14, after step 5; since the
+   Rhai decision, folded into phase 4's order of work: carried state
+   becomes its step 5, the rest its step 6), in the order of the
+   measurement's blockers:
    - Branches in the init on parameters and constants (1,400 formulas
      stop there first): the init's values as a selection.
    - Transcendental functions by their difference forms, free of
@@ -750,7 +786,132 @@ Order of work (2026-10-14):
    - A test that reads a temporary computed from z after its last
      write, by substitution.
 
-### Phase 4: distribution
+### Phase 4: formulas in Rhai (decided 2026-10-14)
+
+**The shape of a formula.** A Rhai script with three entry functions
+and its parameters' metadata; a sketch (the details settle in step 2):
+
+```rhai
+const PARAMS = #{
+    bailout: #{ value: 4.0, min: 1.0, caption: "Bailout" },
+};
+
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+
+fn step(s, p) {
+    s.z = s.z * s.z + s.c;
+    s
+}
+
+fn escaped(s, p) {
+    s.z.norm() > p.bailout
+}
+```
+
+- The state is the map `start` returns: its fields are the per-pixel
+  state (`FormulaState`), `z` among them (the iterate the engine
+  colours and tests). `step` returns it with the same fields; locals
+  (`let`) are temporaries. Fields `step` reads before it writes them
+  and also writes are the carried state.
+- `p` is the parameters, declared with their metadata in `PARAMS`
+  (value, range, step, caption, hint, kind: float, int, bool, complex,
+  a choice, a function), which the panel, animation and scripts read.
+- The plane: `start` may take a third argument, the plane (`julia`, the
+  Julia constant), for formulas that offer both.
+- A pass-dependent step (a hybrid) takes the pass as a third argument
+  and declares `CYCLE` (prefix, period) for deep zoom (phase 3, 5b).
+- Helper functions in the script are inlined; no recursion.
+- Optional `perturb_start` / `perturb_step` keep UF's hand-written
+  perturbation equations for formulas that bring them; otherwise they
+  are derived (phase 3, step 4).
+- Colourings take the same shape: `start`, `step` (per iteration, with
+  the formula's z) and `finish` (the orbit's summary to an index or a
+  colour).
+
+**The compiler.** Rhai's own parser (`Engine::compile` with optimisation
+off, so the tree is the source's), its syntax tree read through the
+`internals` feature -- an unstable API, but the version is pinned
+(1.25.1, already for the PCG stream), so each Rhai upgrade re-checks the
+compiler. The GPU subset: int, float, bool and complex values (a
+registered `Complex` type, `complex(re, im)`; `**` is the power, `^` is
+Rhai's XOR), maps only as the state, the parameters and the plane,
+bounded loops, `if`, `let`, `return`. Strings serve metadata alone;
+arrays, closures, recursion and dynamic types are refused with the
+script's own positions. Types are inferred (Rhai declares none) and the
+map's fields unify across `start` and `step`. The result is a
+`lang::ir::Program`, so the existing back ends take it unchanged.
+
+**UF and Fractint, converted.** The existing parser and checker remain
+as importers: a UF or Fractint entry checks to the IR as now, and a
+printer turns the IR into a Rhai formula -- the variables that live
+across sections or passes become the state map, the rest `let`s,
+`default:` the metadata, `global:` a per-image function, Fractint's
+numeric conventions (real-part comparisons, its `round`, `LastSqr`)
+written out explicitly. Measured on UF's public library: every entry
+that compiles now should convert, compile from Rhai, and iterate as the
+original does (the interpreter on sample points). A config's UF source
+keeps compiling as UF; the editor converts what it opens.
+
+**Order of work.**
+
+1. **The animation bug the user found**: a complex parameter's key
+   (`Escape.FormulaParam.seed.re`) does not parse back, so its track
+   never plays, nor exports (`ConfigPath::from_string_key` splits on
+   every dot). Rejoin the parameter's name; a round-trip test.
+2. **The Rhai front end** for formulas: the GPU subset to the IR, the
+   metadata, the plane, the errors; `CustomDialect::Rhai`; the Formula
+   Editor edits Rhai. Measured: Rhai Mandelbrot, Burning Ship, Lambda
+   and a pass-dependent hybrid render as their UF twins and built-ins,
+   on the direct path and perturbed; a Rhai test file covering every
+   construct runs on the GPU as the interpreter does.
+3. **The IR to Rhai printer, and conversion on opening** (formulas,
+   then colourings in the same shape); the UF corpus measurement above.
+4. **Built-in twins and "Edit as formula"**: the Escape panel opens the
+   current built-in in the editor as the user's own formula, with the
+   current parameters and view. First the families the derivation
+   covers now: Mandelbrot, Tricorn, Burning Ship (all six variants),
+   Lambda, Cactus. Each held equal to its built-in by test, direct and
+   perturbed.
+5. **Carried state in deep zoom** (the explicit state makes it
+   tractable): the reference orbit stores each carried field per step,
+   beside z (phase 3, 5b's interleaving, generalised), and the pixel
+   carries each field's deviation; Phoenix's two-term rebase is the
+   precedent. Unlocks the twins of Phoenix, Manowar and Spider, and the
+   convergent formulas' tests (Newton, Nova, Novaretti, Magnet: the
+   test reads the pixel's own previous z).
+6. **Phase 3's step 6, and guards**: transcendental functions and real
+   powers by their difference forms (Exponential, Trig, Lambda-sine,
+   Collatz, Tetration, Ducks, Feather; Multibrot with a non-integer
+   power), function choices, branches in the start on parameters; and
+   **guards**, a formula's checks at a pole or zero (McMullen, Kaliset,
+   Lattes) or a branch on the iterate (Barnsley), declared so the
+   derivation tests them on the pixel's full value rather than failing.
+7. **Hybrids of any formulas**: a hybrid is a schedule (groups, repeats,
+   loop start) of formulas' steps, z shared, each member's other state
+   and parameters under its own name; KF's operators become one small
+   library formula among the members. The designer composes; the
+   result is one generated Rhai formula with a `CYCLE`.
+8. **Parameters and scripting**: the metadata drives sliders and
+   animation targets; a complex parameter animates as a point (x/y, or
+   radius and angle); `mix(a, b, t)` and a weighted blend of two
+   members give continuous morphs between formulas (linear, so they
+   still derive); structural changes are held keyframes. Scripts:
+   `formula(source)` with Rhai source, the parameters with their
+   metadata, hybrids composed, and -- if Rhai's internals give a script
+   function's definition (to verify) -- a formula from a script's own
+   function. Later: a formula randomiser over the operations that
+   derive.
+9. **Later: native speed** -- BLA from the IR's Jacobian (2x2 real for
+   folds), nucleus references through the IR's derivative, the Jacobian
+   DE for folds; then the native code retires, family by family, and
+   the twins become the definitions.
+
+Probably native for good: Origami (fold lines computed on the CPU),
+Littlewood, Digit Set.
+
+### Phase 5: distribution
 
 - The library in the Fractal Browser; an API formula corpus (a contract
   change: tell the API repository).
