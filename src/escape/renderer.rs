@@ -2052,11 +2052,11 @@ impl EscapeRenderer {
         }
         let power = match tier {
             assembler::PerturbTier::Power(p) => p.clamp(2, 12),
-            assembler::PerturbTier::Ship(_) => return false,
-            // Anti-holomorphic: `conj` is not complex-linear, so the
-            // A*delta + B*delta_c model BLA is built on does not hold.
-            // Per-step iteration carries the Tricorn family.
-            assembler::PerturbTier::Tricorn(_) => return false,
+            // Folds and the conjugate are real-linear: their tables carry
+            // P·δ + Q·conj(δ), from the twins' equations (phase 4, step
+            // 9b). `power` is then only the table's cache key.
+            assembler::PerturbTier::Ship(v) => 100 + u32::from(v),
+            assembler::PerturbTier::Tricorn(p) => 200 + u32::from(p),
             // A skip advances the reference index without running the
             // steps in between, but Phoenix's step also ADVANCES ITS
             // HISTORY -- w_prev would be left measured against the
@@ -2268,13 +2268,23 @@ impl EscapeRenderer {
             let e = dc_built.floor();
             super::bla::MagFe { m: 2f64.powf(dc_built - e), e: e as i64 }
         };
-        let table = if let assembler::PerturbTier::Custom { .. } = tier {
-            // Each step from Z_n, n below the last entry. The reference's
-            // pixel is the view's centre: the nucleus offset is pixels at
-            // depth, far below the f64 the coefficients are taken in.
+        let table = if assembler::real_linear_bla(tier) {
+            // Each step from Z_n, n below the last entry, read from the
+            // formula's equations (the built-ins' from their twins'). The
+            // reference's pixel is the view's centre: the nucleus offset
+            // is pixels at depth, far below the f64 the coefficients are
+            // taken in.
             let (cx, cy) = escape.center_f64();
             let reference = super::lang::builtins::C64::new(cx, cy);
-            match super::custom::bla_steps(escape, &orbit_data[..prefix - 1], reference) {
+            let dc_max = if dc.m == 0.0 { 0.0 } else { dc.m * (dc.e as f64).exp2() };
+            let orbit = &orbit_data[..prefix - 1];
+            let steps = match tier {
+                assembler::PerturbTier::Custom { .. } => super::custom::bla_steps(escape, orbit, reference, dc_max),
+                assembler::PerturbTier::Ship(v) => super::custom::twin_bla_steps(escape, "burning_ship", &[("variant", v as f32)], orbit, reference, dc_max),
+                assembler::PerturbTier::Tricorn(p) => super::custom::twin_bla_steps(escape, "tricorn", &[("power", p as f32)], orbit, reference, dc_max),
+                _ => None,
+            };
+            match steps {
                 Some(steps) => super::bla::BlaTable::build_from_steps(steps, dc, dc_built),
                 None => {
                     self.bla_built = None;
@@ -2284,13 +2294,17 @@ impl EscapeRenderer {
         } else {
             super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built)
         };
+        // A real-linear table's entries carry Q's for A and B too.
+        let entry_bytes = if assembler::real_linear_bla(tier) { 56 } else { 32 };
         let n_levels = table.levels.len().min(30);
         let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
         if total == 0 {
             self.bla_built = None;
             return false;
         }
-        let mut bytes = vec![0u8; 144 + total * 32];
+        // At least one entry of the larger layout, in 16-byte steps: what
+        // the shader's binding minimum is for either.
+        let mut bytes = vec![0u8; (144 + total * entry_bytes).max(256).next_multiple_of(16)];
         let mut offsets = [0u32; 32];
         let mut acc = 0u32;
         for (l, lev) in table.levels[..n_levels].iter().enumerate() {
@@ -2318,26 +2332,35 @@ impl EscapeRenderer {
             };
             dst[24..28].copy_from_slice(&rm.to_le_bytes());
             dst[28..32].copy_from_slice(&re.to_le_bytes());
+            if dst.len() >= 56 {
+                dst[32..36].copy_from_slice(&(ent.aq.re as f32).to_le_bytes());
+                dst[36..40].copy_from_slice(&(ent.aq.im as f32).to_le_bytes());
+                dst[40..44].copy_from_slice(&(ent.bq.re as f32).to_le_bytes());
+                dst[44..48].copy_from_slice(&(ent.bq.im as f32).to_le_bytes());
+                dst[48..52].copy_from_slice(&clamp_e(ent.aq.e).to_le_bytes());
+                dst[52..56].copy_from_slice(&clamp_e(ent.bq.e).to_le_bytes());
+            }
         };
-        // Entries pack into fixed 32-byte slots — independent, so the
-        // ~320 MB table for a 10M orbit packs across threads instead
-        // of stalling the render thread (identical bytes either way).
+        // Entries pack into fixed slots (32 bytes; 56 real-linear) —
+        // independent, so the ~320 MB table for a 10M orbit packs across
+        // threads instead of stalling the render thread (identical bytes
+        // either way).
         let mut base = 144usize;
         for lev in &table.levels[..n_levels] {
-            let region = &mut bytes[base..base + lev.len() * 32];
+            let region = &mut bytes[base..base + lev.len() * entry_bytes];
             #[cfg(not(target_arch = "wasm32"))]
             {
                 use rayon::prelude::*;
                 region
-                    .par_chunks_exact_mut(32)
+                    .par_chunks_exact_mut(entry_bytes)
                     .zip(lev.par_iter())
                     .for_each(|(dst, ent)| pack_one(ent, dst));
             }
             #[cfg(target_arch = "wasm32")]
-            for (dst, ent) in region.chunks_exact_mut(32).zip(lev.iter()) {
+            for (dst, ent) in region.chunks_exact_mut(entry_bytes).zip(lev.iter()) {
                 pack_one(ent, dst);
             }
-            base += lev.len() * 32;
+            base += lev.len() * entry_bytes;
         }
         let size = bytes.len() as u64;
         let recreate = match &self.bla_buffer {
@@ -8551,7 +8574,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 if self.bla_dummy.is_none() {
                     self.bla_dummy = Some(device.create_buffer(&BufferDescriptor {
                         label: Some("Escape BLA Dummy"),
-                        size: 176,
+                        size: 256,
                         usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     }));

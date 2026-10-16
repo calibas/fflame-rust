@@ -1224,31 +1224,64 @@ passes need no wider storage.
 construction, as described by Claude Heiland-Allen): where the delta step
 is locally linear, a run of 2^ℓ steps becomes one affine application.
 Entries carry `f64` mantissas with a shared exponent. It applies to the
-holomorphic `zᵖ + c` tier (Mandelbrot, integer Multibrot) and to custom
-formulas where skipping is sound, and not when the base or layer
-colouring accumulates or detects periods, since skipped steps never run
-those updates. `ESCAPE_BLA=0` disables it for bisection.
+holomorphic `zᵖ + c` tier (Mandelbrot, integer Multibrot), to the Ship
+family and the Tricorn, and to custom formulas where skipping is sound,
+and not when the base or layer colouring accumulates or detects periods,
+since skipped steps never run those updates. `ESCAPE_BLA=0` disables it
+for bisection.
+
+**Real-linear tables** (phase 4, step 9b): a fold or a conjugate makes
+a step real-linear, not complex-linear -- any real 2x2 map is `P·δ +
+Q·conj(δ)`, holomorphic where Q = 0. Such a table's entries carry Q's
+for A and B (`BlaEntry::aq`, `bq`; 56 bytes on the GPU against 32), merge
+as the maps compose (`A ← (Py·Px + Qy·conj(Qx), Py·Qx + Qy·conj(Px))`,
+the operator norm `|P| + |Q|` in the radius), and the skip adds
+`Q·conj(w) + Qb·conj(d0)` (`assembler::real_linear_bla`: the custom,
+Ship and Tricorn tiers; the power tier's shader is as before).
 
 **Custom formulas** (phase 4, step 9: `custom::bla_steps`,
-`BlaTable::build_from_steps`): each reference step's single entry comes
-from the formula's own derivative program (`lang::derive`), run one pass
-from the reference's state at `Z_n` (`interp::step_coefficients`): with
-the iterate's derivative 0 it gives `B`, with 1 `A + B`. The radius keeps
-the dropped second-order term under `BLA_EPS` of the linear one, `r = 2
-eps |A| / |f''|`, `f''` from `A`'s difference across `Z_n ± 2^-20 |Z_n|`
-(for `z² + c` exactly the power table's `2 eps |Z|`). The merges and
-the shader's skips are the power tier's: one reference, nothing carried,
-so the orbit's entry is the step. Skipping is refused where it is not
-sound: a step that is not holomorphic (a fold, `conj`, a part), a branch
-on the iterate, a value carried besides z or a hybrid's phases, a user
-function set to a choice with no complex derivative, a test other than
-z's modulus under a bound (a skip could cross a convergent formula's
-settle). Measured on the deep seahorse view at zoom 60 with 30,000
-iterations (512x384, floatexp): the Mandelbrot's twin in 0.12 s with its
-table, 1.12 s per step, the built-in 0.17 s; the table's coefficients
-for a million-step orbit take 0.24 s on the CPU. At the hybrid test's
-walked edges the twin with its table counts right on 374 and 393 of 439
-sampled pixels (zoom 24 and 51).
+`BlaTable::build_from_steps`): each reference step's single entry is
+read from the formula's own perturbation equations, stepped in f64 from
+`Z_n` (`interp::PerturbStepper`). They are free of cancellation, so a
+deviation of `2^-60 |Z|` gives the linear part exactly, folds
+(`diffabs`) included: `P` and `Q` from the steps along 1 and i, `Pb` and
+`Qb` likewise from the pixel's offset. The radius: the residual at a
+small deviation along the axes sizes the quadratic term (for `z² + c`
+the power table's `2 eps |Z|`); the candidate is checked on a ring of
+eight directions, with and without the view's largest pixel offset,
+halving until the residual stays under `BLA_EPS` of the linear part --
+which finds a fold's kink or a branch cut as well as curvature -- and
+halved once more for the directions between. The built-in Ship and
+Tricorn tiers take their twins' (`custom::twin_bla_steps`: the same
+map). Skipping is refused where it is not sound: a branch on the
+iterate, a value carried besides z or a hybrid's phases, a test other
+than z's modulus under a bound (a skip could cross a convergent
+formula's settle). The coefficients for a million-step orbit of the
+Mandelbrot's twin take 0.53 s on the CPU.
+
+Measured (512x384; `measure_the_custom_tier_against_the_native_one`,
+`measure_real_linear_bla`):
+
+| view | built-in per step → with BLA | twin per step → with BLA |
+| --- | --- | --- |
+| Mandelbrot seahorse, zoom 60, 30,000 (floatexp) | 0.80 → 0.17 s | 1.12 → 0.12 s |
+| Burning Ship interior, zoom 60, 20,000 (floatexp) | 0.81 → 0.08 s | 3.44 → 0.19 s |
+| Burning Ship interior, zoom 30, 20,000 | 0.15 → 0.08 s | 0.25 → 0.19 s |
+| Tricorn interior, zoom 30, 20,000 | 0.14 → 0.05 s | 0.18 → 0.09 s |
+| Tricorn suite view (`tricorn-deep`), escaping early | 0.13 → 0.19 s | 0.14 → 0.25 s |
+
+A view whose pixels escape early pays the table's build, once per orbit,
+and the skip search without gaining skips. Against the big-float truth
+(439 sampled pixels) the deep views count as per step: the Tricorn at
+zoom 28 191 built-in and 188 twin with BLA, 190 and 189 per step; the
+Burning Ship at zoom 60 314 and 336 with BLA, 294 and 346 per step; the
+Mandelbrot's twin 402. Both suite views cross chaotic regions, where a
+skip's error (2^-24 of the linear part, the f32 coefficients' too)
+decides which pixels come out right, not how many: their pictures'
+speckle changed with BLA, and their baselines were regenerated
+(`escape-ship-deep-floatexp`, `escape-tricorn-deep`). At the hybrid
+test's walked edges the Mandelbrot's twin alone counts 374 and 393 (zoom
+24 and 51).
 
 ### Nucleus finding
 
@@ -1326,8 +1359,8 @@ Common conditions: past the view's [direct limit](#where-the-direct-path-ends), 
 | --- | --- | --- | --- |
 | `mandelbrot` | `Power(2)` | — | yes |
 | `multibrot` | `Power(p)` | integer `p` 2–12 | yes |
-| `tricorn` | `Tricorn(p)` | integer `p` 2–12 | no |
-| `burning_ship` | `Ship(v)` | all six variants | no |
+| `tricorn` | `Tricorn(p)` | integer `p` 2–12 | yes, real-linear (the twin's) |
+| `burning_ship` | `Ship(v)` | all six variants | yes, real-linear (the twin's) |
 | `phoenix` | `Phoenix` | — | no |
 | `manowar` | `Manowar` | floatexp rung at every depth | no |
 | `lambda` | `Lambda` | — | no |

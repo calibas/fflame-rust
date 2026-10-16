@@ -463,17 +463,31 @@ fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<Re
 }
 
 /// A custom formula's BLA steps (phase 4, step 9): each reference step's
-/// linear part, `A` (in z) and `B` (in the pixel), with the radius below
-/// which its dropped second-order term stays under `bla::BLA_EPS` of the
-/// linear one -- the single-step entries `bla::BlaTable::build_from_steps`
-/// merges. `reference` is the reference's pixel (its point on the
-/// parameter plane, its start on the Julia plane). `None` where skipping
-/// is not sound: a step that is not holomorphic, a branch on the iterate
-/// (a skip could cross it), state carried besides z or phases (a skip
-/// advances neither), a user function set to a choice with no complex
-/// derivative, or a test other than z's modulus exceeding a bound (a
-/// skip could cross a convergent formula's settle).
-pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::builtins::C64) -> Option<Vec<super::bla::BlaEntry>> {
+/// linear part, real-linear in general -- `A = P·δ + Q·conj(δ)` in the
+/// deviation, `B` likewise in the pixel's offset, Q zero where the step
+/// is holomorphic, a fold or a conjugate making it otherwise -- with the
+/// radius below which the step's dropped nonlinear part stays under
+/// `bla::BLA_EPS` of its linear one: the single-step entries
+/// `bla::BlaTable::build_from_steps` merges.
+///
+/// All of it is read from the formula's own perturbation equations
+/// (derived or its own), stepped in f64 from `Z_n`
+/// (`interp::PerturbStepper`): they are free of cancellation, so a
+/// deviation of 2^-60 |Z| gives the linear part exactly, folds
+/// (`diffabs`) included. The radius: the residual at a small deviation
+/// along the axes sizes the quadratic term; the candidate is then
+/// checked on a ring of eight directions, with and without the view's
+/// largest pixel offset `dc_max`, halving until the residual holds --
+/// which finds a fold's kink or a branch cut as well as curvature --
+/// and halved once more for directions between the eight.
+///
+/// `reference` is the reference's pixel (its point on the parameter
+/// plane, its start on the Julia plane). `None` where skipping is not
+/// sound: a branch on the iterate (a skip could cross it), state carried
+/// besides z or phases (a skip advances neither), or a test other than
+/// z's modulus exceeding a bound (a skip could cross a convergent
+/// formula's settle).
+pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::builtins::C64, dc_max: f64) -> Option<Vec<super::bla::BlaEntry>> {
     use ir::{IExpr, IExprKind, IStmt, Predef};
     use lang::ast::{BinOp, UnOp};
     let (prog, how, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
@@ -522,39 +536,77 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
         return None;
     }
     let inputs = reference_inputs(escape, &prog)?;
-    // A user function's choice with no complex derivative differentiates
-    // as zero (`lang::derive`): no linear part to skip by.
-    use lang::builtins::{Builtin as B, USER_FUNCTIONS};
-    if inputs.params.funcs.iter().any(|&k| {
-        matches!(
-            USER_FUNCTIONS.get(k),
-            None | Some(B::Abs | B::Cabs | B::Conj | B::Flip | B::Real | B::Imag | B::Cosxx | B::Round | B::Trunc | B::Ceil | B::Floor)
-        )
-    }) {
-        return None;
-    }
-    let dp = lang::derive::with_derivative(&prog)?;
     let env = lang::interp::Env { pixel: reference, ..inputs.env };
-    let coeffs = lang::interp::step_coefficients(&dp, &inputs.params, &env, orbit)?;
+    let stepper = lang::interp::PerturbStepper::new(&prog, &inputs.params, &env)?;
     use super::bla::{BlaEntry, Cfe64, MagFe, BLA_EPS};
-    Some(
-        coeffs
-            .into_iter()
-            .map(|(a, b, f2)| {
-                // |f''| delta^2 / 2 below eps |A delta|: delta < 2 eps |A| / |f''|.
-                let a_mag = a.abs();
-                let r = if !(a_mag.is_finite() && f2.is_finite()) || a_mag == 0.0 {
-                    MagFe::zero()
-                } else if f2 == 0.0 {
-                    // Linear in z: the term dropped is none.
-                    MagFe { m: 1.0, e: 1 << 20 }
-                } else {
-                    MagFe::from_f64(2.0 * BLA_EPS * a_mag / f2)
-                };
-                BlaEntry { a: Cfe64::from_f64(a.re, a.im), b: Cfe64::from_f64(b.re, b.im), r }
-            })
-            .collect(),
-    )
+    use lang::builtins::C64;
+    let i = C64::new(0.0, 1.0);
+    let dc_max = if dc_max.is_finite() { dc_max } else { 0.0 };
+    let one = |n: usize| -> BlaEntry {
+        let z = C64::new(orbit[n][0], orbit[n][1]);
+        let scale = z.abs().max(1e-100);
+        // The linear parts, from deviations far below any nonlinearity.
+        let h = scale * 2f64.powi(-60);
+        let (j1, ji) = (stepper.step(z, C64::new(h, 0.0), C64::ZERO).scale(1.0 / h), stepper.step(z, C64::new(0.0, h), C64::ZERO).scale(1.0 / h));
+        let (p, q) = (j1.sub(i.mul(ji)).scale(0.5), j1.add(i.mul(ji)).scale(0.5));
+        let hc = reference.abs().max(1.0) * 2f64.powi(-60);
+        let (b1, bi) = (stepper.step(z, C64::ZERO, C64::new(hc, 0.0)).scale(1.0 / hc), stepper.step(z, C64::ZERO, C64::new(0.0, hc)).scale(1.0 / hc));
+        let (pb, qb) = (b1.sub(i.mul(bi)).scale(0.5), b1.add(i.mul(bi)).scale(0.5));
+        let linear = |d: C64, dc: C64| p.mul(d).add(q.mul(d.conj())).add(pb.mul(dc)).add(qb.mul(dc.conj()));
+        let residual = |d: C64, dc: C64| stepper.step(z, d, dc).sub(linear(d, dc)).abs();
+        // The smallest stretch of the linear part: what the residual is
+        // weighed against.
+        let sigma = (p.abs() - q.abs()).abs();
+        let mut r = 0.0;
+        if sigma > 0.0 && sigma.is_finite() {
+            let rho = scale * 2f64.powi(-16);
+            let axes = [C64::ONE, i, C64::new(-1.0, 0.0), C64::new(0.0, -1.0)];
+            let r0 = axes.iter().map(|&e| residual(e.scale(rho), C64::ZERO)).fold(0.0f64, f64::max);
+            // c rho^2 = r0: the residual c r^2 under eps sigma r -- from
+            // just inside the bound, which rounding would otherwise fail.
+            r = if r0 > 0.0 { 0.9 * BLA_EPS * sigma * rho * rho / r0 } else { scale };
+            r = r.min(scale);
+            let ring: Vec<C64> = (0..8).map(|k| C64::new((k as f64 * std::f64::consts::FRAC_PI_4).cos(), (k as f64 * std::f64::consts::FRAC_PI_4).sin())).collect();
+            let holds = |r: f64| {
+                ring.iter().enumerate().all(|(k, &e)| {
+                    let d = e.scale(r);
+                    let bound = BLA_EPS * sigma * r;
+                    residual(d, C64::ZERO) <= bound && (dc_max == 0.0 || residual(d, ring[(k + 3) % 8].scale(dc_max)) <= bound)
+                })
+            };
+            let mut tries = 0;
+            while r > 0.0 && !holds(r) {
+                r *= 0.5;
+                tries += 1;
+                if tries > 40 {
+                    r = 0.0;
+                }
+            }
+            r *= 0.5;
+        }
+        let c = |v: C64| Cfe64::from_f64(v.re, v.im);
+        BlaEntry { a: c(p), b: c(pb), r: MagFe::from_f64(r), aq: c(q), bq: c(qb) }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        Some((0..orbit.len()).into_par_iter().map(one).collect())
+    }
+    #[cfg(target_arch = "wasm32")]
+    Some((0..orbit.len()).map(one).collect())
+}
+
+/// A built-in tier's BLA steps from its Rhai twin (phase 4, step 9b): the
+/// same map, so its equations give the built-in's single steps too (the
+/// Ship family, the Tricorn).
+pub fn twin_bla_steps(escape: &EscapeConfig, twin: &str, params: &[(&str, f32)], orbit: &[[f64; 2]], reference: lang::builtins::C64, dc_max: f64) -> Option<Vec<super::bla::BlaEntry>> {
+    let src = super::twins::custom_source(twin)?;
+    let mut t = escape.clone();
+    t.formula = name_of(EntryKind::Formula, &src);
+    t.custom_formula = Some(src);
+    t.formula_params = params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+    ensure(&t);
+    bla_steps(&t, orbit, reference, dc_max)
 }
 
 /// A compiled formula's perturbation equations for the floatexp rung
@@ -779,9 +831,11 @@ mod tests {
     }
 
     /// BLA for custom formulas (phase 4, step 9): the Mandelbrot's twin
-    /// builds the power table's single steps (A = 2Z, B = 1, r = 2 eps
-    /// |Z|) from its own derivative; what skipping is not sound for gets
-    /// none.
+    /// reads the power table's single steps (A = 2Z, B = 1, Q zero; the
+    /// radius 0.45 of the power table's 2 eps |Z|, the probe's margins) from
+    /// its own equations; the Burning Ship's twin its real-linear
+    /// Jacobian, its radius inside the folds' distance to their axes;
+    /// what skipping is not sound for gets none.
     #[test]
     fn custom_bla_steps_match_the_power_tables() {
         use lang::builtins::C64;
@@ -808,7 +862,7 @@ mod tests {
             }
         }
         assert!(orbit.len() > 50, "the orbit is too short to test: {}", orbit.len());
-        let ours = bla_steps(&config(twin("mandelbrot"), &[]), &orbit, c).expect("the Mandelbrot skips");
+        let ours = bla_steps(&config(twin("mandelbrot"), &[]), &orbit, c, 0.0).expect("the Mandelbrot skips");
         let power = super::super::bla::BlaTable::build(&orbit, 2, 0.0);
         assert_eq!(ours.len(), orbit.len());
         for (n, e) in ours.iter().enumerate().take(orbit.len() - 1) {
@@ -817,22 +871,51 @@ mod tests {
             let (br, bi) = e.b.to_f64();
             assert!((ar - 2.0 * z.re).abs() <= 1e-12 * z.abs().max(1.0) && (ai - 2.0 * z.im).abs() <= 1e-12 * z.abs().max(1.0), "A at {n}: ({ar}, {ai})");
             assert!((br - 1.0).abs() < 1e-12 && bi.abs() < 1e-12, "B at {n}: ({br}, {bi})");
-            let want = 2.0 * super::super::bla::BLA_EPS * z.abs();
+            let (qa, qb) = (e.aq.to_f64(), e.bq.to_f64());
+            assert!(qa.0.hypot(qa.1) <= 1e-12 * z.abs().max(1.0) && qb.0.hypot(qb.1) < 1e-12, "Q at {n}: {qa:?} {qb:?}");
+            let want = 0.9 * super::super::bla::BLA_EPS * z.abs();
             let got = e.r.m * (e.r.e as f64).exp2();
-            assert!(z.abs() < 1e-300 || (got / want - 1.0).abs() < 1e-3, "r at {n}: {got} against {want}");
+            assert!(n == 0 || (got / want - 1.0).abs() < 1e-3, "r at {n}: {got} against {want}");
         }
         // The merged table skips as the power table does.
         assert!(!power.levels.is_empty());
-        // Where skipping is not sound: a fold, a carried value, a test
-        // that is not z's modulus, a user function set to `abs`.
-        assert!(bla_steps(&config(twin("burning_ship"), &[]), &orbit, c).is_none(), "a fold");
-        assert!(bla_steps(&config(twin("phoenix"), &[]), &orbit, c).is_none(), "a carried value");
+        // The Burning Ship (phase 4, step 9b): its Jacobian at Z, where
+        // neither part changes sign, is real-linear, P d + Q conj(d) for
+        // [[2X, -2Y], [2|Y| sgn X, 2|X| sgn Y]]; and no skip may cross a
+        // fold: the radius stays inside min(|X|, |Y|).
+        let c = C64::new(-1.75, -0.02);
+        let mut orbit = vec![[0.0f64; 2]];
+        let mut z = C64::ZERO;
+        for _ in 0..200 {
+            z = C64::new(z.re.abs(), z.im.abs());
+            z = z.mul(z).add(c);
+            orbit.push([z.re, z.im]);
+            if z.re * z.re + z.im * z.im > 4.0 {
+                break;
+            }
+        }
+        assert!(orbit.len() > 50, "the Ship's orbit is too short to test: {}", orbit.len());
+        let ship = bla_steps(&config(twin("burning_ship"), &[]), &orbit, c, 0.0).expect("the Ship skips, real-linear");
+        for (n, e) in ship.iter().enumerate().skip(1).take(orbit.len() - 2) {
+            let (x, y) = (orbit[n][0], orbit[n][1]);
+            let (a, b, cc, d) = (2.0 * x, -2.0 * y, 2.0 * y.abs() * x.signum(), 2.0 * x.abs() * y.signum());
+            let (p, q) = (C64::new((a + d) / 2.0, (cc - b) / 2.0), C64::new((a - d) / 2.0, (cc + b) / 2.0));
+            let (pa, qa) = (e.a.to_f64(), e.aq.to_f64());
+            let tol = 1e-12 * x.hypot(y).max(1.0);
+            assert!((pa.0 - p.re).abs() <= tol && (pa.1 - p.im).abs() <= tol, "P at {n}: {pa:?} against {p:?}");
+            assert!((qa.0 - q.re).abs() <= tol && (qa.1 - q.im).abs() <= tol, "Q at {n}: {qa:?} against {q:?}");
+            let r = e.r.m * (e.r.e as f64).exp2();
+            assert!(r <= x.abs().min(y.abs()), "r at {n}: {r} past a fold ({x}, {y})");
+        }
+        // Where skipping is not sound: a carried value, a test that is not
+        // z's modulus. A user function set to `abs` folds: real-linear.
+        assert!(bla_steps(&config(twin("phoenix"), &[]), &orbit, c, 0.0).is_none(), "a carried value");
         let sine = src("S {\ninit:\n z = #pixel\nloop:\n z = sin(z) * #pixel\nbailout:\n abs(imag(z)) < 40\n}", "S");
-        assert!(bla_steps(&config(sine, &[]), &orbit, c).is_none(), "a test on Im z");
+        assert!(bla_steps(&config(sine, &[]), &orbit, c, 0.0).is_none(), "a test on Im z");
         let user = src("U {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.01 * @fn1(z)\nbailout:\n |z| < 4\ndefault:\n func fn1\n  default = sin()\n endfunc\n}", "U");
-        assert!(bla_steps(&config(user.clone(), &[]), &orbit, c).is_some(), "sin is analytic");
+        assert!(bla_steps(&config(user.clone(), &[]), &orbit, c, 0.0).is_some(), "sin");
         let abs = lang::builtins::USER_FUNCTIONS.iter().position(|f| *f == lang::builtins::Builtin::Abs).unwrap() as f32;
-        assert!(bla_steps(&config(user, &[("fn1", abs)]), &orbit, c).is_none(), "abs is not");
+        assert!(bla_steps(&config(user, &[("fn1", abs)]), &orbit, c, 0.0).is_some(), "abs");
     }
 
     /// Edit as Rhai: a UF formula and its `switch:` Julia become one Rhai
@@ -1477,7 +1560,16 @@ mod bla_cost {
             orbit.push([z.re, z.im]);
         }
         let t = std::time::Instant::now();
-        let steps = bla_steps(&esc, &orbit, c).unwrap();
+        let steps = bla_steps(&esc, &orbit, c, 0.0).unwrap();
         println!("{} steps in {:.2} s", steps.len(), t.elapsed().as_secs_f64());
+        // The Tricorn's twin, by the built-in's path, on a 20,000-step
+        // orbit (the deep Tricorn view's).
+        let tricorn = EscapeConfig { formula: "tricorn".into(), bailout: 4.0, ..EscapeConfig::default() };
+        let t = std::time::Instant::now();
+        let steps = twin_bla_steps(&tricorn, "tricorn", &[("power", 2.0)], &orbit[..20_000], c, 1e-9).unwrap();
+        println!("the Tricorn's twin: {} steps in {:.3} s", steps.len(), t.elapsed().as_secs_f64());
+        let t = std::time::Instant::now();
+        let steps = twin_bla_steps(&tricorn, "tricorn", &[("power", 2.0)], &orbit[..20_000], c, 1e-9).unwrap();
+        println!("again (compiled): {} steps in {:.3} s", steps.len(), t.elapsed().as_secs_f64());
     }
 }
