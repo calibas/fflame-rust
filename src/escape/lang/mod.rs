@@ -20,6 +20,7 @@ pub mod interp;
 pub mod ir;
 pub mod lexer;
 pub mod parser;
+pub mod periodic;
 pub mod perturb;
 pub mod rhai;
 pub mod to_rhai;

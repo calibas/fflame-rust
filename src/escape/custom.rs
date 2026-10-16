@@ -46,6 +46,8 @@ struct Registry {
     references: HashMap<u64, ReferenceInputs>,
     /// The formulas declaring their degree at infinity ([`escape_degree`]).
     degrees: HashMap<String, Arc<ir::Program>>,
+    /// Whether each formula has a nucleus search ([`offers_nucleus`]).
+    nucleus: HashMap<String, bool>,
 }
 
 /// Everything a custom formula's reference orbit is a function of
@@ -673,8 +675,7 @@ pub fn reference_identity(escape: &EscapeConfig) -> Option<[f32; 2]> {
 /// reference orbit. `None` for an identity this session did not hand
 /// out, or a start the big floats cannot make.
 pub fn reference_machines(map_params: [f32; 2], center: &crate::escape::bigfloat::BigComplex, n_limbs: usize) -> Option<Vec<lang::bigeval::BigMachine>> {
-    let id = u64::from(map_params[0].to_bits() & 0x7F_FFFF) | (u64::from(map_params[1].to_bits() & 0x7F_FFFF) << 23);
-    let inputs = registry().read().ok()?.references.get(&id).cloned()?;
+    let inputs = identified(map_params)?;
     // A loop with a cycle (a hybrid): besides the main reference, one
     // per phase, its passes starting where that phase first runs
     // (plan, phase 3, step 5b). Every one starts from the init's z.
@@ -688,6 +689,103 @@ pub fn reference_machines(map_params: [f32; 2], center: &crate::escape::bigfloat
             Some(m)
         })
         .collect()
+}
+
+/// The inputs a reference identity names (`reference_identity`).
+fn identified(map_params: [f32; 2]) -> Option<ReferenceInputs> {
+    let id = u64::from(map_params[0].to_bits() & 0x7F_FFFF) | (u64::from(map_params[1].to_bits() & 0x7F_FFFF) << 23);
+    registry().read().ok()?.references.get(&id).cloned()
+}
+
+/// Whether the reference an identity names returns exactly to its
+/// start when its iterate does (`lang::periodic::wraps_exactly`): what
+/// lets a closing orbit become periodic.
+pub fn reference_wraps(map_params: [f32; 2]) -> bool {
+    identified(map_params).is_some_and(|i| lang::periodic::wraps_exactly(&i.prog))
+}
+
+/// The nucleus search for a reference identity (phase 4, step 9c): the
+/// program `reference_machines` starts, through its derivative. `None`
+/// for an identity this session did not hand out, or a formula with no
+/// exact wrap or no derivative.
+pub fn nucleus_search(map_params: [f32; 2]) -> Option<lang::periodic::NucleusSearch> {
+    let i = identified(map_params)?;
+    lang::periodic::NucleusSearch::new(&i.prog, i.params, i.env)
+}
+
+/// The nucleus search for a config's custom formula, as its reference
+/// would run it (the panel's Center on minibrot).
+pub fn nucleus_search_for(escape: &EscapeConfig) -> Option<lang::periodic::NucleusSearch> {
+    if !escape.formula.starts_with(PREFIX) {
+        return None;
+    }
+    ensure(escape);
+    let (prog, _, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
+    let i = reference_inputs(escape, &prog)?;
+    lang::periodic::NucleusSearch::new(&i.prog, i.params, i.env)
+}
+
+/// Center on minibrot for a config's custom formula (plan, phase 4, step
+/// 9c): the nucleus governing its view, through the formula's
+/// derivative (`lang::periodic`), its digits those the built-ins' give
+/// at this depth (`escape::nucleus::find_nucleus`, zoom + 16 bits): the
+/// view's reference closes there or relocates to the nucleus. `None` on
+/// the Julia plane, for a formula with no search, or none found.
+pub fn locate_nucleus(escape: &EscapeConfig, max_period: u32, newton_periods: u32) -> Option<super::nucleus::Nucleus> {
+    if escape.julia {
+        return None;
+    }
+    let mut hit = nucleus_search_for(escape)?.locate(&escape.center_re, &escape.center_im, escape.zoom_log2, max_period, newton_periods)?;
+    let n = super::fixedpoint::limbs_for_zoom(escape.zoom_log2 + 16.0) + 1;
+    let digits = ((64 * n as i64 - 8) as f64 * 0.301).ceil() as usize;
+    let trim = |s: &mut String| {
+        if let Some(dot) = s.find('.') {
+            s.truncate((dot + 1 + digits).min(s.len()));
+        }
+    };
+    trim(&mut hit.re);
+    trim(&mut hit.im);
+    Some(hit)
+}
+
+/// Detect period for a config's custom formula (plan, phase 4, step 9c):
+/// the period its centre's orbit closes at below the view's limit, with
+/// its octave, as `escape::nucleus::detect_period_for_zoom` finds the
+/// built-ins' -- the hint its reference then takes. `None` on the Julia
+/// plane, for a formula whose reference does not wrap exactly, or none
+/// within `max_period`.
+pub fn detect_period(escape: &EscapeConfig, max_period: u32) -> Option<(u32, i64)> {
+    if escape.julia || !escape.formula.starts_with(PREFIX) {
+        return None;
+    }
+    ensure(escape);
+    let (prog, _, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
+    let i = reference_inputs(escape, &prog)?;
+    if !lang::periodic::wraps_exactly(&i.prog) {
+        return None;
+    }
+    let n = super::fixedpoint::limbs_for_view(&escape.center_re, &escape.center_im, escape.zoom_log2);
+    let at = |s: &str| super::fixedpoint::FixedPoint::from_decimal(s, n).map(|f| super::bigfloat::BigFloat::from_fixed(&f));
+    let c = super::bigfloat::BigComplex { re: at(&escape.center_re)?, im: at(&escape.center_im)? };
+    let limit = super::reference::closure_limit_for_zoom(escape.zoom_log2);
+    lang::periodic::closing_period(i.prog, i.params, i.env, &c, n, limit, max_period)
+}
+
+/// Whether the panel offers Center on minibrot for a config's custom
+/// formula: it has a nucleus search (`nucleus_search_for`), on the
+/// parameter plane. Remembered per formula.
+pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
+    if escape.julia || !escape.formula.starts_with(PREFIX) {
+        return false;
+    }
+    if let Some(&known) = registry().read().ok().and_then(|r| r.nucleus.get(&escape.formula).copied()).as_ref() {
+        return known;
+    }
+    let found = nucleus_search_for(escape).is_some();
+    if let Ok(mut r) = registry().write() {
+        r.nucleus.insert(escape.formula.clone(), found);
+    }
+    found
 }
 
 /// The cycle a registered custom formula's references follow, when its
@@ -828,6 +926,58 @@ mod tests {
 
     fn src(text: &str, entry: &str) -> CustomSource {
         CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string() }
+    }
+
+    /// Center on minibrot for custom formulas (phase 4, step 9c): the
+    /// Mandelbrot's twin and the cubic Multibrot's find the nuclei the
+    /// built-ins' Newton finds at their periods, to the digits the view
+    /// needs; the panel offers it where there is a search, not on a fold
+    /// or the Julia plane.
+    #[test]
+    fn a_custom_formula_centres_on_its_minibrot() {
+        let config = |name: &str, params: &[(&str, f32)], (cre, cim, zoom): (&str, &str, f64)| {
+            let src = crate::escape::twins::custom_source(name).unwrap();
+            let mut esc = EscapeConfig { bailout: 4.0, zoom_log2: zoom, ..EscapeConfig::default() };
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.formula = name_of(EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            ensure(&esc);
+            esc
+        };
+        // (The seahorse view's period is 998: the built-ins' ball method
+        // there says 850, where Newton finds nothing.)
+        for (name, params, power, view, period) in [
+            ("mandelbrot", &[][..], 2, ("-1.754", "0.0005", 9.0), 3),
+            ("mandelbrot", &[], 2, ("-0.7436438870371587", "0.1318259042053120", 30.0), 998),
+            ("multibrot", &[("power", 3.0)], 3, ("0.0", "1.0", 8.0), 2),
+        ] {
+            let esc = config(name, params, view);
+            assert!(offers_nucleus(&esc), "{name}");
+            let ours = locate_nucleus(&esc, 100_000, 100_000).unwrap_or_else(|| panic!("{name} at {view:?}"));
+            assert_eq!(ours.period, period, "{name} at {view:?}");
+            // The built-ins' Newton at that period lands there too.
+            let theirs = crate::escape::nucleus::find_nucleus(view.0, view.1, period, view.2 + 16.0, power).unwrap();
+            let same = |a: &str, b: &str| a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+            let digits = (view.2 * 0.301) as usize + 6;
+            assert!(same(&ours.re, &theirs.re) >= digits && same(&ours.im, &theirs.im) >= digits, "{name}: ({}, {}) against ({}, {})", ours.re, ours.im, theirs.re, theirs.im);
+        }
+        // Detect period: at the nucleus to 60 octaves, the period the
+        // built-ins' detection gives, at the octave it closes.
+        let nucleus = crate::escape::nucleus::find_nucleus("-1.754", "0.0005", 3, 60.0, 2).unwrap();
+        let esc = config("mandelbrot", &[], (&nucleus.re, &nucleus.im, 20.0));
+        let found = detect_period(&esc, 1000).expect("closes");
+        let theirs = crate::escape::nucleus::detect_period_for_zoom(&nucleus.re, &nucleus.im, 2, 1000, 20.0).unwrap();
+        assert_eq!(found.0, theirs.0);
+        assert!((found.1 - theirs.1).abs() <= 1, "{found:?} against {theirs:?}");
+        let ship = config("burning_ship", &[], ("-1.754", "0.0005", 9.0));
+        assert!(!offers_nucleus(&ship));
+        assert!(detect_period(&ship, 1000).is_none());
+        let julia = EscapeConfig { julia: true, ..config("mandelbrot", &[], ("-1.754", "0.0005", 9.0)) };
+        assert!(!offers_nucleus(&julia) && locate_nucleus(&julia, 1000, 1000).is_none());
     }
 
     /// BLA for custom formulas (phase 4, step 9): the Mandelbrot's twin

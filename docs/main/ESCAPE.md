@@ -304,7 +304,8 @@ entries and sections), `check.rs` (names and types, UF's rules,
 into the typed `ir.rs`), `interp.rs` (the program in f64: the reference
 the WGSL is tested against), `wgsl.rs` (the shader), `derive.rs` (a
 formula's derivative), `switch.rs` (a `switch:` pair as one program),
-`builtins.rs` (the function table).
+`builtins.rs` (the function table), `bigeval.rs` (the program in big
+floats: the reference orbit), `periodic.rs` (its nucleus search).
 `src/escape/custom.rs` registers a compiled entry.
 
 **A Rhai formula** (`lang/rhai.rs`, a `.rhai` file, one formula; the
@@ -559,8 +560,15 @@ or Small (the deviation's, held in units of S as the built-in tiers'
 is a `CFe2`, `#z` read from the reference's double-float entry
 (`lang::wgsl::formula_perturb_fe`, with `PERTURB_FE_HELPERS` beside the
 template's own). A formula whose loop carries more than z (a `zold`)
-rebases only where the orbit ends. No derivative on this tier; BLA
-where skipping is sound ([BLA](#bla), phase 4, step 9).
+rebases only where the orbit ends. On the scaled rung the rebase's new
+deviation is the two orbit records' difference plus the old one
+(`assembler::rebase_custom_scaled`), never `z_full - Z_0` in f32: a
+formula that starts at its pixel (`z = #pixel`, so `Z_0` is the
+reference's c) lost the deviation to f32's 2^-24 of |c| that way --
+58 of 439 sampled pixels right at the deep seahorse view (zoom 42),
+now 401. No derivative on this tier; BLA where skipping is sound
+([BLA](#bla), phase 4, step 9); nucleus references where the reference
+wraps exactly ([Nucleus finding](#nucleus-finding), step 9c).
 `interp::run_perturbed` is the f64 model of the path.
 
 **Derived equations.** A formula without `perturbloop:` -- most of
@@ -1291,7 +1299,57 @@ method (iterate a disc until it contains 0), then Newton on
 the rebase is exact and the stored orbit is `p` entries long. The
 panel's **Center on minibrot** button (`locate_minibrot`) recentres on it
 with as many digits as the depth needs; it is offered for Mandelbrot and
-integer Multibrot on the parameter plane.
+integer Multibrot on the parameter plane, and for custom formulas with a
+nucleus search (below).
+
+**Custom formulas** (phase 4, step 9c: `lang/periodic.rs`,
+`ReferenceOrbit::compute_custom_nucleus_aware`). A reference whose
+iterate returns to its start after `p` passes wraps exactly: the
+rebase at the orbit's end changes nothing where `Z_p = Z_0`. So a
+formula's nucleus is a root of `G(c) = z_p(c) - z_0(c)` -- for
+`z^2 + c` from zero the built-ins' `f_c^p(0) = 0`, for a formula
+starting at its pixel `f^p(c) = c`, the same points -- found through
+the formula's own derivative (`lang::derive`, `G' = dz_p - dz_0`) run
+in big floats:
+
+- **Where**: the parameter plane, a formula whose state from pass to
+  pass is z alone (nothing carried, no cycle, `#pass` unread:
+  `periodic::wraps_exactly`) and which has a derivative (no folds).
+- **The period**: the first pass whose Newton step from the view's
+  centre, `|G_n / G'_n|`, falls inside the view's radius -- a ball of
+  the first order. At the deep seahorse view (zoom 30) it gives 998,
+  where the built-ins' ball method says 850 and its Newton finds
+  nothing.
+- **Newton** at twice the zoom's bits (the closure asked is absolute,
+  and `G = h' d` with `h'` up to 2^zoom), 64 octaves past the view's
+  closure limit or to the precision's floor. The root can be double: a
+  formula that starts at its pixel has `G = h^2`, where Newton halves
+  its distance per step; the multiplicity is read from the steps'
+  ratio and the step taken `m G / G'`.
+- **The reference** at the nucleus is the formula's own, one period
+  long, and is kept only if its own closure detection fires there:
+  like the plain map's, a new minimum of `|Z_n - Z_0|` below the view's
+  limit makes any custom reference periodic on the spot, and a hinted
+  period (`reference_period`) is measured the same way.
+
+Detection looks no further than the orbit a plain reference needs, or
+Newton's budget (20,000 periods); a search that finds nothing costs its
+depth in passes of the formula and its derivative, about twice a plain
+pass. Measured on the Mandelbrot's twin, references for 100,000
+iterations (`measure_custom_nucleus_references`):
+
+| view | plain | nucleus-aware | built-in |
+| --- | --- | --- | --- |
+| seahorse, zoom 30 (escapes at 8,057) | 0.024 s | 0.034 s, period 998 | 0.013 s, plain |
+| seahorse, zoom 42 | 0.30 s | 0.034 s, period 998 | 0.017 s, period 998 |
+| the Misiurewicz point i, zoom 30 | 0.27 s | 0.001 s, period 25 | 0.001 s, period 23 |
+| no nucleus in view (zoom 100; inside an atom off its nucleus) | 0.32 s | 0.43-0.47 s | 0.21 s |
+
+Against the big-float truth the nucleus references count as the plain
+ones (`a_custom_formula_renders_from_its_nucleus`: 402 of 439 for both
+at the seahorse view, zoom 42). **Detect period** finds a custom
+formula's closing period along its centre's own orbit
+(`custom::detect_period`).
 
 ### The orbit store
 

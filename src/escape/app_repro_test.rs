@@ -1914,6 +1914,66 @@ mod tests {
         assert_eq!(same, a.len(), "the same program");
     }
 
+    /// A custom formula's nucleus reference renders (plan, phase 4, step
+    /// 9c): the Mandelbrot's twin and UF's Mandelbrot that starts at its
+    /// pixel, their references relocated to the nucleus governing the
+    /// view -- period 3 a few pixels off a zoom-6 view, period 998 at
+    /// the deep seahorse view (zoom 42) -- count against the truth as
+    /// their plain references do (`ESCAPE_DISABLE_NUCLEUS`).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_renders_from_its_nucleus() {
+        const P: &str = "P {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}";
+        let twin = crate::escape::twins::custom_source("mandelbrot").unwrap();
+        let near3 = ("-1.76", "0.005");
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        let (w, h) = (64u32, 48u32);
+        for (text, entry, (cre, cim), zoom, iters, period) in [
+            (twin.source.as_str(), "", near3, 6.0, 1000u32, 3u32),
+            (P, "P", near3, 6.0, 1000, 3),
+            (twin.source.as_str(), "", seahorse, 42.0, 8000, 998),
+            (P, "P", seahorse, 42.0, 8000, 998),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let esc = if entry.is_empty() {
+                let mut t = esc;
+                t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &twin);
+                t.custom_formula = Some(twin.clone());
+                t
+            } else {
+                with_custom(esc, Some((text, entry)), None)
+            };
+            crate::escape::custom::ensure(&esc);
+            let what = format!("{} at zoom {zoom}", if entry.is_empty() { "the twin" } else { entry });
+            crate::escape::reference::set_live_reference_period(None);
+            let relocated = records_on(&esc, w, h, false, true, false);
+            assert_eq!(crate::escape::reference::live_reference_period(), Some(period), "{what}: no nucleus reference");
+            std::env::set_var("ESCAPE_DISABLE_NUCLEUS", "1");
+            let plain = records_on(&esc, w, h, false, true, false);
+            std::env::remove_var("ESCAPE_DISABLE_NUCLEUS");
+            let src = esc.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 4.0;
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, iters, (w, h), 7, 4);
+            let right = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, n)| r[*i].n == *n).count();
+            let (a, b) = (right(&relocated), right(&plain));
+            let escaped = truth.iter().filter(|(_, n)| *n < iters).count();
+            println!("{what}: of {} pixels in big floats ({escaped} escape), the nucleus reference counts {a} right, the plain one {b}", truth.len());
+            assert!(escaped > truth.len() / 4, "{what}: the view escapes too little");
+            assert!(a + truth.len() / 50 >= b && a * 10 >= truth.len() * 9, "{what}: {a} against {b}");
+        }
+    }
+
     /// The built-ins' twins (phase 4, step 4: `escape::twins`) render as
     /// their built-ins: directly, with the smooth colouring (which reads
     /// the twin's declared degree), on both planes and every Burning Ship
@@ -3029,6 +3089,13 @@ final:
         // The Burning Ship: abs by diffabs.
         const SH: &str = "SH {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n\
                           default:\n float param bailout\n  default = 4\n endparam\n}";
+        // The Mandelbrot from its pixel, as many UF formulas start: Z_0 is
+        // the reference's c, and the scaled rung's rebase must not subtract
+        // it from the full value in f32 (step 9c: 58 of 439 right at the
+        // seahorse view at zoom 42 before).
+        const MP: &str = "MP {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
         // The visual suite's deep Ship views (ship-deep-perturbed,
         // ship-deep-floatexp).
         let ship_shallow = ("-1.5716", "0.0");
@@ -3080,6 +3147,8 @@ final:
             (MB, "MB", &mb_params, "mandelbrot", None, threshold, 48.5, 4000, 13, 6, 80),
             (SH, "SH", &params, "burning_ship", None, ship_shallow, 16.0, 2000, 7, 4, 80),
             (SH, "SH", &params, "burning_ship", None, ship_deep, 60.0, 25000, 29, 6, 75),
+            (MP, "MP", &params, "mandelbrot", None, shallow, 20.0, 600, 7, 4, 80),
+            (MP, "MP", &params, "mandelbrot", None, seahorse, 42.0, 8000, 7, 4, 80),
         ] {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = built_in_formula.into();
