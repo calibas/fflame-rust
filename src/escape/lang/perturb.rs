@@ -149,58 +149,15 @@ fn reads_other_than(e: &IExpr, p: &Program, allowed: &dyn Fn(VarId) -> bool) -> 
 /// Variables the loop reads before writing in an iteration and also
 /// writes: state that changes from one iteration to the next.
 fn carried_vars(body: &[IStmt]) -> Vec<VarId> {
-    fn reads(e: &IExpr, written: &[VarId], exposed: &mut Vec<VarId>) {
-        match &e.kind {
-            IExprKind::Var(v) => {
-                if !written.contains(v) && !exposed.contains(v) {
-                    exposed.push(*v);
-                }
-            }
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
-                reads(a, written, exposed)
-            }
-            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
-                reads(a, written, exposed);
-                reads(b, written, exposed);
-            }
-            _ => {}
-        }
-    }
-    // Conservative: a branch's writes count as made, a read anywhere
-    // as exposed when nothing before it wrote the variable.
-    fn walk(stmts: &[IStmt], written: &mut Vec<VarId>, exposed: &mut Vec<VarId>, all_writes: &mut Vec<VarId>) {
-        for s in stmts {
-            match s {
-                IStmt::Assign(place, e) => {
-                    reads(e, written, exposed);
-                    if let Place::Var(v) = place {
-                        written.push(*v);
-                        all_writes.push(*v);
-                    }
-                }
-                IStmt::If { arms, otherwise } => {
-                    let before = written.clone();
-                    for (c, b) in arms {
-                        reads(c, written, exposed);
-                        let mut w = before.clone();
-                        walk(b, &mut w, exposed, all_writes);
-                    }
-                    let mut w = before.clone();
-                    walk(otherwise, &mut w, exposed, all_writes);
-                    *written = before;
-                }
-                IStmt::While { cond, body } | IStmt::Repeat { body, cond } => {
-                    reads(cond, written, exposed);
-                    let mut w = written.clone();
-                    walk(body, &mut w, exposed, all_writes);
-                    reads(cond, &w, exposed);
-                }
-            }
-        }
-    }
-    let (mut written, mut exposed, mut all_writes) = (Vec::new(), Vec::new(), Vec::new());
-    walk(body, &mut written, &mut exposed, &mut all_writes);
-    exposed.into_iter().filter(|v| all_writes.contains(v)).collect()
+    // A variable read where a write before it in the pass is not
+    // certain -- a branch's writes count when every arm makes them, as
+    // the checker and the derivation (`lang::delta`) take them -- and
+    // written in the pass.
+    let mut f = super::check::Flow::default();
+    super::check::flow(body, &mut f);
+    let mut out: Vec<VarId> = f.exposed.into_iter().filter(|v| f.any_write.contains(v)).collect();
+    out.sort_unstable();
+    out
 }
 
 #[cfg(test)]

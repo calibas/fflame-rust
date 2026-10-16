@@ -2903,14 +2903,28 @@ final:
         use crate::escape::lang::hybrid::{Combine, Group, Hybrid, Line, Operator};
         let (w, h) = (64u32, 48u32);
         let op = |power: u32, mul: [f64; 2]| Operator { power, mul, ..Default::default() };
-        let group = |repeats: u32, o: Operator| Group { repeats, lines: vec![Line { one: o, two: None, combine: Combine::Add }] };
+        let group = |repeats: u32, o: Operator| Group::of_lines(repeats, vec![Line { one: o, two: None, combine: Combine::Add }]);
         // 2^-7: the same number in f32, where the GPU holds parameters,
         // as in the truth's big floats.
         let turned = op(2, [1.0, 0.0078125]);
+        // Formulas as groups (phase 4, step 7): the Mandelbrot's and the
+        // Burning Ship's twins taking turns, composed.
+        let twin = |name: &str| {
+            let src = crate::escape::twins::source(name).unwrap();
+            Group::of_formula(1, &crate::escape::lang::rhai::title(src).unwrap(), src)
+        };
         let hybrids = [
             ("alternating", Hybrid { groups: vec![group(1, op(2, [1.0, 0.0])), group(1, turned.clone())], loop_start: 0 }),
             ("with a prefix", Hybrid { groups: vec![group(1, op(3, [1.0, 0.0])), group(1, op(2, [1.0, 0.0])), group(2, turned)], loop_start: 1 }),
+            ("twins taking turns", Hybrid { groups: vec![twin("mandelbrot"), twin("burning_ship")], loop_start: 0 }),
         ];
+        // The twins' hybrid has a fold, which at these walked edges KF's
+        // lines of the same hybrid count far less well on too (80 and
+        // 62 of 439): composed, it must count as well as they do there.
+        let lines_of = |name: &str| {
+            (name == "twins taking turns")
+                .then(|| crate::escape::lang::hybrid::presets().into_iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1)
+        };
         let view = |hybrid: &Hybrid, cx: &str, cy: &str, zoom: f64, iters: u32| {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.center_re = cx.into();
@@ -2948,7 +2962,16 @@ final:
                     // 381 of 439 at its own walked edge); the floatexp rung's
                     // double float at depth.
                     let floor = if zoom < 48.0 { 75 } else { 80 };
-                    assert!(exact * 100 >= truth.len() * floor, "{name} zoom {zoom}: {exact} of {}", truth.len());
+                    match lines_of(name) {
+                        Some(lines) => {
+                            let esc = view(&lines, &esc.center_re, &esc.center_im, zoom, iters);
+                            let theirs = records_on(&esc, w, h, false, true, false);
+                            let theirs = truth.iter().filter(|(i, c)| theirs[*i].n == *c).count();
+                            println!("{name} zoom {zoom}: KF's lines of it count {theirs}");
+                            assert!(exact + truth.len() / 50 >= theirs, "{name} zoom {zoom}: {exact}, the lines {theirs}");
+                        }
+                        None => assert!(exact * 100 >= truth.len() * floor, "{name} zoom {zoom}: {exact} of {}", truth.len()),
+                    }
                     tested += 1;
                 }
                 let recs = records_on(&esc, w, h, false, deep, !deep);

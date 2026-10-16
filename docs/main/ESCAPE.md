@@ -721,6 +721,35 @@ by `R`, the equations reading `custom_pass(m)`, and `rebase_phased`
 rebases a pixel at pass `i >= prefix` onto entry `1 + (i - prefix) %
 period`. At most 31 phases (`perturb::MAX_PHASES`).
 
+**Any formula as a group** (phase 4, step 7): in the designer a group
+runs either KF's lines or a formula's step -- a built-in's Rhai twin, or
+a Rhai formula from the library (`hybrid::Member`, its Rhai source in
+the hybrid's JSON). Such a hybrid is composed from its members' programs
+(`hybrid::compose`) rather than written as UF text:
+- z is shared; each member's other variables, parameters, user
+  functions and globals are its own, under its group's name (`g2_power`,
+  captioned "Group 2: Power"), so a member keeps its state from its own
+  last turn (a Phoenix's previous z).
+- Every member's start runs, in order; only the first sets z, and its
+  test is the hybrid's (its `bailout` stays the panel's). A group of KF
+  lines becomes a member of its own, its multipliers keeping their
+  `a<group>_<line>_<operator>` names.
+- The loop runs the step of the group whose turn it is, a branch on the
+  pass, with the cycle. A member's own perturbation equations, perturb
+  setting and degree are dropped (the hybrid's are derived whole); one
+  that reads the pass itself is refused.
+- The result prints as one Rhai formula with its `INFO.cycle`
+  (`lang::to_rhai`), and deep-zooms as any hybrid does.
+- In the designer, a group whose formula changes starts at that
+  formula's defaults; one that keeps its formula keeps its values.
+
+The Mandelbrot's and the Burning Ship's twins taking turns run as KF's
+lines taking the same turns, on both planes, and at depth count as
+those lines do (103 and 105 of 439 sampled pixels at zoom 24, 83 and 84
+at 51, at the walked edges of `a_hybrid_perturbs_with_a_reference_per_phase`).
+Those counts are low for both: a hybrid with a fold counts far worse at
+such edges than one without (343 to 439); not yet understood.
+
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
 and direct colouring.
 

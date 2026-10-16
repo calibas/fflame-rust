@@ -2892,3 +2892,7 @@ hybrid_designer:
   multiplier_tip: "The complex multiplier (real, imaginary): a parameter, so changing it recompiles nothing"
   cycle: "A prefix of %{prefix} passes, then rounds of %{period}."
   formula_text: "Each pass, by group:"
+  step: "Runs"
+  step_lines: "Lines of operators"
+  step_tip: "What the group runs each pass: KF's lines of operators, or a formula's step (a built-in's twin, or a Rhai formula from the library), its other state kept from its own last turn"
+  formula_params: "Its parameters are in the Escape panel, as \"Group %{n}: ...\""
