@@ -121,7 +121,7 @@ pub fn perturb_test(p: &Program) -> Option<IExpr> {
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
                 constants_only(a, p, values)
             }
-            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => constants_only(a, p, values) && constants_only(b, p, values),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => constants_only(a, p, values) && constants_only(b, p, values),
             _ => true,
         }
     }
@@ -141,7 +141,7 @@ fn reads_other_than(e: &IExpr, p: &Program, allowed: &dyn Fn(VarId) -> bool) -> 
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
             reads_other_than(a, p, allowed)
         }
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => reads_other_than(a, p, allowed) || reads_other_than(b, p, allowed),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_other_than(a, p, allowed) || reads_other_than(b, p, allowed),
         _ => false,
     }
 }
@@ -159,7 +159,7 @@ fn carried_vars(body: &[IStmt]) -> Vec<VarId> {
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
                 reads(a, written, exposed)
             }
-            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
                 reads(a, written, exposed);
                 reads(b, written, exposed);
             }

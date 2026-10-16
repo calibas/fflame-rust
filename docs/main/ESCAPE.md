@@ -624,6 +624,12 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
     pixel: the plain difference where `|d| >= |A|`, which has nothing
     to cancel there, the form otherwise (`Deriver::guarded`; the
     temporaries reused from statement to statement).
+  - **The cut**: where A and A + d lie either side of the negative real
+    axis, log, sqrt and a power not a whole real jump, which their
+    continuous forms do not (`delta::cut_turns` counts the turns): log
+    adds them back, sqrt and the power take the plain difference,
+    large there. Without it a deep view misdraws the pixels whose
+    orbits straddle a preimage of the cut.
   - The sine map and a map taking sqrt, log, tan, cabs, expm1 and
     log1p at once count right, at zoom 30, on 429 and 439 of 439
     sampled pixels. On the boundary itself, where pixels escape after
@@ -631,12 +637,33 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
     ones do, only sooner (198 and 343, the f64 model 352 and 406).
 - The equations' variables are the perturb functions' locals: the
   direct path's state holds the program's own alone.
+- **User functions** (phase 4, step 6b): a user call's deviation is
+  `IExprKind::UserDiff(f, A, d)`, `f(A + d) - f(A)` for the function
+  the parameter picks. Each choice's form is derived once
+  (`delta::user_diff_forms`, a small program of its own) and emitted
+  once per shader as a helper switching on the choice, on true values
+  (`uff_user_diff`, sin and sinh there by the helpers exact near zero)
+  and over CFe2 (`ufe_user_diff_fe`); the f64 model runs the same
+  program (`interp::user_diff`). A choice without a form (an inverse
+  function, `cosxx`, round, trunc, ceil, floor) is left out by the
+  derived `perturb` setting (`IExprKind::FuncChoice`, the parameter's
+  slot), so picking it renders on the direct path. At zoom 30 a map
+  adding `0.1 fn1(z)` counts right on all 439 sampled pixels with sin
+  and with log, on both rungs.
+- **Size.** A form that reads a reference value or a deviation more
+  than once reads a temporary computed once (`Deriver::bound`), so
+  nesting does not multiply copies. Within an init case, a loop branch
+  the case decides (the plane of a converted switch pair) takes its arm
+  alone, and cases whose equations come out alike share them. The
+  derived equations may take at most 20,000 expression nodes
+  (`delta::MAX_EQUATION_NODES`); past that the formula keeps the direct
+  path.
 
 What does not derive: an inverse function, a power of a varying
-exponent, a user function of the iterate, a branch on the iterate or
-the pixel, a loop inside the loop or in the init, an int or bool
-carried, more than one value carried -- unless it stands in an arm a
-parameter picks. Such a formula stays on the direct path, as before.
+exponent, a branch on the iterate or the pixel, a loop inside the loop
+or in the init, an int or bool carried, more than one value carried --
+unless it stands in an arm a parameter picks (or a user function's
+choice). Such a formula stays on the direct path, as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four

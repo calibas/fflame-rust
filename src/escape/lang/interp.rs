@@ -187,6 +187,24 @@ pub struct Run {
     pub dz: C64,
 }
 
+/// `f(a + d) - f(a)` for the user function choice `k`, by the form the
+/// derived equations use (`delta::user_diff_forms`); NaN for a choice
+/// without one.
+pub(crate) fn user_diff(k: usize, a: C64, d: C64) -> C64 {
+    let forms = super::delta::user_diff_forms();
+    let Some(code) = forms.choices.get(k).and_then(|c| c.as_ref()) else {
+        return C64::new(f64::NAN, f64::NAN);
+    };
+    let params = ParamValues { values: Vec::new(), funcs: Vec::new() };
+    let mut m = Machine::new(&forms.prog, &params);
+    m.vars[forms.a] = Value::Complex(a);
+    m.vars[forms.d] = Value::Complex(d);
+    let env = Env::at(C64::ZERO, 1);
+    let mut sh = Shared::new(&env);
+    m.exec(code, &mut sh);
+    m.vars[forms.r].as_c64()
+}
+
 /// The `perturb` setting's answer for these parameters and this image
 /// (absent: the equations always hold).
 pub fn perturb_holds(p: &Program, params: &ParamValues, env: &Env) -> bool {
@@ -511,6 +529,8 @@ impl<'p> Machine<'p> {
                 let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
                 Value::Complex(f.eval_c(self.eval(a, sh).as_c64()))
             }
+            IExprKind::FuncChoice(id) => Value::Int(self.params.funcs[*id] as i32),
+            IExprKind::UserDiff(id, a, d) => Value::Complex(user_diff(self.params.funcs[*id], self.eval(a, sh).as_c64(), self.eval(d, sh).as_c64())),
             IExprKind::UserDeriv(id, a) => {
                 let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
                 Value::Complex(f.deriv_c(self.eval(a, sh).as_c64()))

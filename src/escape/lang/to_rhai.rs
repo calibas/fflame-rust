@@ -255,7 +255,7 @@ fn slots_of_expr(e: &IExpr, out: &mut Vec<Slot>) {
         | IExprKind::Call(_, a)
         | IExprKind::UserCall(_, a)
         | IExprKind::UserDeriv(_, a) => slots_of_expr(a, out),
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
             slots_of_expr(a, out);
             slots_of_expr(b, out);
         }
@@ -835,6 +835,7 @@ impl<'p> Printer<'p> {
                 P::atom(format!("p.{}({a})", self.func[*f]))
             }
             K::UserDeriv(..) => return Err("a derivative is the compiler's own".into()),
+            K::FuncChoice(..) | K::UserDiff(..) => return Err("a function's choice is the compiler's own".into()),
         })
     }
 

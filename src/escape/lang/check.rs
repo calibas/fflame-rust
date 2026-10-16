@@ -1597,11 +1597,11 @@ pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
             }
         }
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => reads(a, f),
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
             reads(a, f);
             reads(b, f);
         }
-        IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) | IExprKind::Param(_) | IExprKind::Predef(_) => {}
+        IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::FuncChoice(_) => {}
     }
 }
 

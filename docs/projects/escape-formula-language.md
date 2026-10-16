@@ -1152,11 +1152,43 @@ keeps compiling as UF; the editor converts what it opens.
        branch on the iterate (1,802), a branch in the init on the pixel
        (731), an int or bool carried (592), a power of a varying
        exponent (523).
-   - **6b: function choices.** A user function of the iterate (2,713
-     formulas stop there first): a branch on its choice over the
-     functions that have a form, the choices without one excluded by
-     the derived `perturb` setting; the IR gets the choice of a
-     function as an expression the conditions can read.
+   - **6b, done 2026-10-15: function choices.** A user function of
+     the iterate (2,713 formulas stopped there first).
+     - A user call's deviation is `IExprKind::UserDiff(f, A, d)`. Each
+       choice's form is derived once, from the same rules
+       (`delta::user_diff_forms`, a small program of its own), and
+       emitted once per shader as a helper switching on the choice: on
+       true values for the scaled rung (sin and sinh there by the
+       helpers exact near zero), over CFe2 for the floatexp rung; the
+       f64 model runs the same program. A choice without a form (the
+       inverse functions, `cosxx`, the steps) is left out by the derived
+       `perturb` setting, which reads the choice as an expression
+       (`IExprKind::FuncChoice`, the parameter's slot on the GPU), so
+       picking it renders on the direct path. (First built as an arm
+       per choice inline: a library formula with four user calls in
+       each of nine arms made 29,000 expression nodes; 2,100 now.)
+     - **The cut**, found on the way: log, sqrt and a power not a whole
+       real jump where A and A + d lie either side of the negative real
+       axis, and their continuous forms did not. `delta::cut_turns`
+       counts the turns; log adds them back, sqrt and the power take
+       the plain difference, large there. Without it every deep pixel
+       whose orbit straddles a preimage of the cut went wrong (a log
+       pixel near 0.3 + 0.5i never escaped).
+     - **Size**: a form that reads a value more than once reads a
+       temporary (`Deriver::bound`); within an init case, a loop branch
+       the case decides (a converted switch pair's plane) takes its arm
+       alone, and cases whose equations come out alike share them; and
+       the equations may take at most 20,000 expression nodes, past
+       which the formula keeps the direct path. A library formula of
+       hundreds of switchable arms with user functions in each had made
+       147 MB of WGSL and overflowed the stack.
+     - At zoom 30 a map adding `0.1 fn1(z)` counts right on all 439
+       sampled pixels with sin and with log.
+     - The library: derived equations for 3,064 formulas (1,434 after
+       6a), every conversion keeping them (3,065 of 3,065); 29 past the
+       size budget. The leading blockers now: a branch on the iterate
+       (1,974), a power of a varying exponent (789), a branch in the
+       init on the pixel (731), an int or bool carried (592).
    - **6c: guards** as above, and the rest of the measurement's
      blockers in order.
 7. **Hybrids of any formulas**: a hybrid is a schedule (groups, repeats,

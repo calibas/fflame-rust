@@ -9500,6 +9500,11 @@ mod tests {
             // reading the init's constant, abs (diffabs).
             ("DB {\ninit:\n z = 0\n b = @bail\nloop:\n t = sqr(abs(z)) + abs(real(z)) * 0.1\n if @mode == 1\n  t = t * z\n endif\n z = t\n z = z + #pixel\n\
               bailout:\n |z| < b\ndefault:\n int param mode\n  default = 1\n endparam\n float param bail\n  default = 4\n endparam\n}", true),
+            // ...and the difference forms (phase 4, step 6): a user
+            // function's helper on each rung, sqrt's and log's guards and
+            // cut.
+            ("DU {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.1 * @fn1(z) + 0.01 * sqrt(z) + 0.01 * log(z + 2)\nbailout:\n |z| < 4\n\
+              default:\n func fn1\n  default = sin()\n endfunc\n}", true),
         ] {
             let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into() };
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
