@@ -566,7 +566,9 @@ deviation is the two orbit records' difference plus the old one
 formula that starts at its pixel (`z = #pixel`, so `Z_0` is the
 reference's c) lost the deviation to f32's 2^-24 of |c| that way --
 58 of 439 sampled pixels right at the deep seahorse view (zoom 42),
-now 401. No derivative on this tier; BLA where skipping is sound
+now 401. Its derivative under perturbation where it follows one
+reference and carries nothing besides z ([The derivative under
+perturbation](#the-derivative-under-perturbation), step 9d); BLA where skipping is sound
 ([BLA](#bla), phase 4, step 9); nucleus references where the reference
 wraps exactly ([Nucleus finding](#nucleus-finding), step 9c).
 `interp::run_perturbed` is the f64 model of the path.
@@ -717,8 +719,9 @@ arithmetic. The multipliers are the program's parameters
 structural edit is a new source and a recompile, one undo step. A
 one-group preset renders as the built-in it spells (Mandelbrot, the
 cubic, Burning Ship, Tricorn, the two Perpendiculars:
-`a_hybrid_renders_as_its_built_in`). Distance estimation does not reach
-those that fold: the derivative pass is complex-analytic.
+`a_hybrid_renders_as_its_built_in`). Distance estimation reaches those
+that fold too, through the Jacobian (phase 4, step 9d), on the direct
+path; a hybrid carries no derivative under perturbation.
 
 Deep zoom for hybrids (the plan's step 5b): their equations are
 derived as any formula's (the pass and the phase are the same for
@@ -828,11 +831,33 @@ name, so a saved file, a PNG or an upload renders anywhere.
   the result is an ordinary program, compiled in place of the plain one
   when a colouring reads the derivative (`formula_dz`). So distance
   estimation and the analytic relief work for a custom formula, on
-  either plane. A user function's derivative is chosen with it (zero for
-  a choice with none: `abs`, `conj`, `real` ...). A formula whose
-  iterate passes through a fold (`abs`, `conj`, `real`, `imag`, `|x|`, a
-  real variable that follows the pixel) has none, and the panel reports
-  the gap as it does for Burning Ship.
+  either plane.
+- **The Jacobian** (phase 4, step 9d: `derive::with_jacobian`). A
+  formula whose iterate passes through a fold (`abs`, `conj`, `real`,
+  `imag`, `flip`, `cabs`, `|x|`, an argument, a real variable that
+  follows the pixel) has no complex derivative, but it has a real one,
+  a 2x2 matrix written as the real-linear map `d -> P d + Q conj(d)`
+  (Q zero where the map is holomorphic), as the real-linear BLA tables
+  are. Every variable the iterate depends on, real ones included (their
+  pair has `Q = conj(P)`), gets two companions, and each rule is the
+  real-linear one: `conj` swaps and conjugates the pair, `abs` takes
+  each part's by its sign, `cabs` and `|x|` through `a conj(a)`, `arg`
+  through `da / a`. A user function on the pixel's path is chosen at run
+  time and may be a fold, so it always takes the Jacobian, its rule
+  picked by the choice (a fold's had derivative zero before, and
+  distance estimation went flat). What a colouring reads is one complex
+  number: the escape potential's gradient is `J^T u = conj(P) u + Q
+  conj(u)` for `u = z/|z|`, and `dz = P + conj(Q) u^2` reports it as a
+  complex derivative does (`|dz|` its length, `z / dz` its direction;
+  `derive::effective_dz`, `formula_dz_of`). So distance estimation, the
+  normal map and analytic relief run unchanged on the Burning Ship's
+  twin, a Tricorn, a hybrid that folds, a UF formula with `@fn1 = abs`.
+  Checked against central differences of `|z_n|` (`lang::derive`
+  tests) and, on the GPU, against the interpreter
+  (`derivatives_match_the_interpreter_on_the_gpu`,
+  `a_custom_formulas_derivative_drives_distance_estimation`: 98% of
+  escaping pixels to a part in a thousand). The built-in Burning Ship has
+  no derivative; its twin does.
 - A **colouring** compiles to the built-in colouring interface, so it
   runs on every path, perturbed and recoloured included. Its variables
   that live from one iteration to the next keep up to 32 floats, and
@@ -1314,7 +1339,11 @@ in big floats:
 
 - **Where**: the parameter plane, a formula whose state from pass to
   pass is z alone (nothing carried, no cycle, `#pass` unread:
-  `periodic::wraps_exactly`) and which has a derivative (no folds).
+  `periodic::wraps_exactly`) and which has a derivative -- a Jacobian
+  included (step 9d): Newton then inverts the real-linear map, `d =
+  (conj(P) G - Q conj(G)) / (|P|^2 - |Q|^2)`, so the Burning Ship's and
+  the Tricorn's twins find their nuclei (a period-96 one off the axis
+  beside the visual suite's deep Ship view).
 - **The period**: the first pass whose Newton step from the view's
   centre, `|G_n / G'_n|`, falls inside the view's radius -- a ball of
   the first order. At the deep seahorse view (zoom 30) it gives 998,
@@ -1402,6 +1431,30 @@ The panel's notes about the path read the viewport's render height
 viewport; a thumbnail or an export decides at its own size.
 
 ### The derivative under perturbation
+
+**Custom formulas** (phase 4, step 9d) carry theirs where they follow
+one reference and carry nothing besides z: the derivative program
+replaces the plain one in the perturbed shader (the same equations, and
+the derivative's variables), and each step sets its state's z to the
+full pre-step iterate and runs one pass, its init having made the state
+at the pixel (`assembler::custom_deriv_splices`). The pair `(P, Q)` (Q
+zero for a complex derivative) lives in that state. A BLA skip composes
+it with the real-linear entry, `A (P, Q) + B`. The scaled rung holds the
+derivatives absolute. The floatexp rung holds every one the state keeps
+-- the pair, the init's constants' (`d_c` for `c = #pixel`), the
+pixel's own (`d_pixel`, a variable for this) -- in units of `2^e`,
+rescaling them together as `e` moves (`formula_deriv_scale`); scaling
+the pixel's alone left the constants' unscaled, and the derivative grew
+`2^e` too fast a step. Against the derivative in f64 at a shallow view
+(`a_custom_formula_carries_its_derivative_at_depth`), the perturbed
+rungs count more pixels right than the direct path: the Mandelbrot's
+twin 91% and 94% to the direct path's 80%, the Burning Ship's 78% and
+81% to its 51% (a fold multiplies a small difference in the orbit into
+a flipped sign); at depth, against big floats, the twin as the built-in
+(293 and 294 of 439 at zoom 30; 343 and 333 at zoom 42 on the floatexp
+rung). The cost: the formula's own pass in f32 each step beside the
+perturbation equations -- the Burning Ship's twin at zoom 60 (640x480,
+25,000 iterations) 1.1 s with distance estimation, 0.45 s smooth.
 
 Both rungs carry the derivative for every single-term tier, stored per
 **render pixel** (`dz/dc` times the pixel size) so it stays a moderate

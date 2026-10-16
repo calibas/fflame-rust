@@ -228,6 +228,8 @@ impl Checker {
             view,
             state: Vec::new(),
             dz_var: None,
+            dzq_var: None,
+            dpixel_var: None,
             cycle: None,
             carried: Vec::new(),
         };

@@ -25,7 +25,8 @@ step 7 (hybrids of any formulas) 2026-10-15; step 8 (parameters and
 scripting; not held structural keyframes) 2026-10-15; step 9a (BLA for
 holomorphic custom formulas) 2026-10-16; step 9b (real-linear BLA, for
 folds and the conjugate) 2026-10-16; step 9c (nucleus references for
-custom formulas) 2026-10-16.
+custom formulas) 2026-10-16; step 9d (the Jacobian DE; custom
+derivatives under perturbation) 2026-10-16.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1351,8 +1352,22 @@ keeps compiling as UF; the editor converts what it opens.
      fixed: the scaled rung's rebase subtracted `Z_0` from the full
      value in f32, which broke formulas that start at their pixel (58
      of 439 right at the seahorse view at zoom 42, now 401).
-   - Next, in order: the Jacobian DE (distance estimation for folds);
-     then retiring native code, family by family, where the twin
+   - **9d, done 2026-10-16: the Jacobian DE.** A formula that folds has
+     a real derivative, `P d + Q conj(d)`, carried by a second
+     companion per variable (`derive::with_jacobian`), and read by the
+     colourings as `P + conj(Q) u^2`, the escape potential's gradient
+     as a complex derivative reports it: distance estimation, the normal
+     map and analytic relief for the Burning Ship's twin, Tricorns,
+     folding hybrids and UF formulas with `@fn1 = abs` (whose derivative
+     was zero before). Custom formulas also carry their derivative under
+     perturbation now (one reference, nothing carried): the derivative
+     program run at the full iterate, composed through BLA skips, held in
+     extended range on the floatexp rung -- the twins' distance
+     estimation at depth, which the built-ins had and they lacked. The
+     nucleus search takes the Jacobian too: the Ship's and Tricorn's
+     twins find their nuclei. Cost at depth: the formula's own pass each
+     step, ~2.4x (the Ship's twin at zoom 60).
+   - Next: retiring native code, family by family, where the twin
      matches it in speed and accuracy -- a decision for the user, since
      the twins lack Mann damping and the biomorph test. Open: the deep
      rung's BLA at 2^-24 costs the floatexp rung's double float a

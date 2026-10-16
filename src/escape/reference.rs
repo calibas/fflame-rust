@@ -5480,8 +5480,8 @@ mod tests {
     /// relocate as the built-in does -- the same period, the same
     /// offset -- and arrive complete at period length, their iterate
     /// back at its start; a hinted period at the nucleus serves; a view
-    /// whose centre escapes takes the plain reference; and a fold, with
-    /// no derivative, too.
+    /// whose centre escapes takes the plain reference; and a fold
+    /// relocates through its Jacobian (step 9d).
     #[test]
     fn a_custom_formula_relocates_to_its_nucleus() {
         use crate::config::escape::{CustomDialect, CustomSource, EscapeConfig};
@@ -5523,11 +5523,13 @@ mod tests {
         let n = crate::escape::nucleus::find_nucleus(cre, cim, 3, 60.0, 2).unwrap();
         let hinted = ReferenceOrbit::compute_custom_nucleus_aware(&n.re, &n.im, zoom, 5000, 320.0, id, Some(3), 5000).unwrap();
         assert_eq!((hinted.periodic, hinted.ref_offset), (Some(3), [0.0, 0.0]));
-        // A fold has no derivative: the plain reference, as long as asked.
+        // A fold relocates through its Jacobian (step 9d): on the real axis
+        // the Burning Ship is the Mandelbrot, its nucleus the same.
         let ship = identity(crate::escape::twins::custom_source("burning_ship").unwrap());
-        let plain = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, 500, 320.0, ship, None, 500).unwrap();
-        assert_eq!(plain.periodic, None);
-        assert!(plain.len() > 3);
+        let orbit = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, 500, 320.0, ship, None, 500).unwrap();
+        assert_eq!(orbit.periodic, Some(3));
+        let b = built_in.ref_offset;
+        assert!((orbit.ref_offset[0] - b[0]).abs() < 1e-3 && (orbit.ref_offset[1] - b[1]).abs() < 1e-3, "{:?} against {b:?}", orbit.ref_offset);
     }
 
     /// What a custom formula's nucleus reference costs and saves (plan,

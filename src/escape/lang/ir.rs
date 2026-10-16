@@ -334,6 +334,12 @@ pub struct Program {
     /// The variable holding the iterate's derivative with respect to
     /// the pixel, in a program the derivative pass extended.
     pub dz_var: Option<VarId>,
+    /// Beside it, where the derivative is a Jacobian (`derive::with_jacobian`):
+    /// the iterate's `Q`, `dz_var` its `P` (plan, phase 4, step 9d).
+    pub dzq_var: Option<VarId>,
+    /// And the pixel's own derivative, 1 unless the perturbed floatexp
+    /// rung rescales it (`derive::with_derivative`).
+    pub dpixel_var: Option<VarId>,
     /// How a program that reads the pass index ([`Predef::Pass`]) uses
     /// it: periodically after a prefix (a hybrid's groups).
     pub cycle: Option<Cycle>,

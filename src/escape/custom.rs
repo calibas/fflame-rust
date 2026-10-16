@@ -973,9 +973,11 @@ mod tests {
         let theirs = crate::escape::nucleus::detect_period_for_zoom(&nucleus.re, &nucleus.im, 2, 1000, 20.0).unwrap();
         assert_eq!(found.0, theirs.0);
         assert!((found.1 - theirs.1).abs() <= 1, "{found:?} against {theirs:?}");
+        // A fold searches through its Jacobian (step 9d): on the real axis
+        // the Burning Ship is the Mandelbrot, and finds its nucleus.
         let ship = config("burning_ship", &[], ("-1.754", "0.0005", 9.0));
-        assert!(!offers_nucleus(&ship));
-        assert!(detect_period(&ship, 1000).is_none());
+        assert!(offers_nucleus(&ship));
+        assert_eq!(locate_nucleus(&ship, 1000, 1000).map(|n| n.period), Some(3));
         let julia = EscapeConfig { julia: true, ..config("mandelbrot", &[], ("-1.754", "0.0005", 9.0)) };
         assert!(!offers_nucleus(&julia) && locate_nucleus(&julia, 1000, 1000).is_none());
     }

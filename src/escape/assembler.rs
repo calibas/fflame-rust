@@ -1438,58 +1438,240 @@ fn dzfe_to_f32(d: DzFe) -> vec2<f32> {
 /// derivative: the declaration keeps the constant seed and the rest
 /// splice nothing, so those shaders are byte-identical.
 struct DerivSplices {
-    state: &'static str,
-    decl: &'static str,
-    resume: &'static str,
-    step: &'static str,
-    bla: &'static str,
-    save: &'static str,
-    fin: &'static str,
+    state: String,
+    decl: String,
+    resume: String,
+    step: String,
+    bla: String,
+    save: String,
+    fin: String,
 }
 
 fn deriv_splices(floatexp: bool) -> DerivSplices {
+    let o = |x: &str| x.to_string();
     if floatexp {
         return DerivSplices {
-            state: "    dz_m: vec2<f32>,    // the derivative dz/dc (P11): mantissa
+            state: o("    dz_m: vec2<f32>,    // the derivative dz/dc (P11): mantissa
     dz_e: i32,          // ... and exponent
-    dz_pad: u32,        // keeps the struct 8-byte aligned",
-            decl: "    // The derivative dz/dc in extended range (DzFe): it grows like 1/S,
+    dz_pad: u32,        // keeps the struct 8-byte aligned"),
+            decl: o("    // The derivative dz/dc in extended range (DzFe): it grows like 1/S,
     // past f32 on this rung. Stepped at the PRE-step iterate, so z starts
     // at the pixel's z0, which at these depths is the reference's start
     // to f32.
     var dz_d = DzFe(select(DZ0_PARAM, vec2<f32>(1.0, 0.0), is_julia_perturb), 0);
-    z = ref_z(0u);",
-            resume: "        dz_d = DzFe(st.dz_m, st.dz_e);",
-            step: "            dz_d = dzfe_step(z, c_f32, dz_d, is_julia_perturb);",
-            bla: "                // The derivative through the skip: D' = A D + B.
-                dz_d = dzfe_bla(dz_d, pick_a, pick_ae, pick_b, pick_be, is_julia_perturb);",
-            save: "            dz_d.m, dz_d.e, 0u,",
-            fin: "    // Per render pixel, as every path reports it: D S, with S = s_m 2^s_e.
+    z = ref_z(0u);"),
+            resume: o("        dz_d = DzFe(st.dz_m, st.dz_e);"),
+            step: o("            dz_d = dzfe_step(z, c_f32, dz_d, is_julia_perturb);"),
+            bla: o("                // The derivative through the skip: D' = A D + B.
+                dz_d = dzfe_bla(dz_d, pick_a, pick_ae, pick_b, pick_be, is_julia_perturb);"),
+            save: o("            dz_d.m, dz_d.e, 0u,"),
+            fin: o("    // Per render pixel, as every path reports it: D S, with S = s_m 2^s_e.
     // Moderate at escape, so f32 holds it.
-    let dz = dzfe_to_f32(DzFe(dz_d.m * perturb.s_m, dz_d.e + perturb.s_e));",
+    let dz = dzfe_to_f32(DzFe(dz_d.m * perturb.s_m, dz_d.e + perturb.s_e));"),
         };
     }
     DerivSplices {
-        state: "    dz: vec2<f32>,      // the derivative dz/dc (P11), when compiled in",
-        decl: "    // The derivative dz/dc: dw/dd0 on this rung, where w and d0 share
+        state: o("    dz: vec2<f32>,      // the derivative dz/dc (P11), when compiled in"),
+        decl: o("    // The derivative dz/dc: dw/dd0 on this rung, where w and d0 share
     // the scale S. Stepped at the PRE-step iterate, so z starts at the
     // pixel's own z0 (the reference's start plus its delta).
     var dz_abs = select(DZ0_PARAM, vec2<f32>(1.0, 0.0), is_julia_perturb);
-    z = ref_z(0u) + perturb.s * w;",
-        resume: "        dz_abs = st.dz;",
-        step: "            dz_abs = formula_derivative(z, c_f32, dz_abs, is_julia_perturb);",
-        bla: "                // The derivative through the skip: D' = A D + B, the same
+    z = ref_z(0u) + perturb.s * w;"),
+        resume: o("        dz_abs = st.dz;"),
+        step: o("            dz_abs = formula_derivative(z, c_f32, dz_abs, is_julia_perturb);"),
+        bla: o("                // The derivative through the skip: D' = A D + B, the same
                 // coefficients (B drops on the Julia plane, as d0's term does).
                 dz_abs = vec2<f32>(
                     pick_a.x * dz_abs.x - pick_a.y * dz_abs.y,
                     pick_a.x * dz_abs.y + pick_a.y * dz_abs.x,
                 ) * exp2(f32(clamp(pick_ae, -126, 126)))
-                    + select(pick_b * exp2(f32(clamp(pick_be, -126, 126))), vec2<f32>(0.0), is_julia_perturb);",
-        save: "            dz_abs,",
-        fin: "    // Per render pixel, as every path reports it.
-    let dz = dz_abs * perturb.s;",
+                    + select(pick_b * exp2(f32(clamp(pick_be, -126, 126))), vec2<f32>(0.0), is_julia_perturb);"),
+        save: o("            dz_abs,"),
+        fin: o("    // Per render pixel, as every path reports it.
+    let dz = dz_abs * perturb.s;"),
     }
 }
+
+/// A custom formula's derivative under perturbation (plan, phase 4,
+/// step 9d): its derivative program (`lang::derive`; complex, or a
+/// Jacobian for a fold) run one pass at the full pre-step iterate, from a
+/// state its init made at the pixel, which holds the iterate's pair `(P,
+/// Q)` (Q zero where the derivative is complex). A BLA skip composes the
+/// pair with the real-linear entry, `A (P, Q) + B`. The scaled rung holds
+/// the derivatives absolute; the floatexp rung holds every one the state
+/// keeps -- the pair, the init's constants', the pixel's own -- in units
+/// of `2^e`, rescaling them together as `e` moves (`formula_deriv_scale`),
+/// so a pass comes out in those units. What a colouring reads is
+/// `formula_dz_of(z, P S, Q S)`, per render pixel.
+fn custom_deriv_splices(floatexp: bool) -> DerivSplices {
+    let o = |x: &str| x.to_string();
+    if floatexp {
+        return DerivSplices {
+            state: o("    dz_p: vec2<f32>,    // a custom formula's derivative pair (P, Q): mantissas
+    dz_q: vec2<f32>,
+    dz_e: i32,          // ... and their exponent
+    dz_pad: u32,        // keeps the struct 8-byte aligned"),
+            decl: o("    // A custom formula's derivative (step 9d): its program's state at the
+    // pixel, which at these depths is the view's centre to f32, in units
+    // of 2^dz_e; stepped at the PRE-step iterate, so z starts at the
+    // reference's start.
+    var dfs = formula_init(params.center);
+    var dz_e = 0;
+    z = ref_z(0u);"),
+            resume: o("        formula_deriv_scale(&dfs, -st.dz_e);
+        formula_deriv_set(&dfs, st.dz_p, st.dz_q);
+        dz_e = st.dz_e;"),
+            step: o("            dfs.z = z;
+            dfs = formula_loop(dfs, params.center);
+            dz_e = cdz_renorm(&dfs, dz_e);"),
+            bla: o("                // The derivative through the skip: A (P, Q) + B.
+                let dz_v = formula_deriv_get(dfs);
+                let dz_b = cdz_bla(CDz(dz_v.xy, dz_v.zw, dz_e), pick_a, pick_ae, pick_aq, pick_aqe, pick_b, pick_be, pick_bq, pick_bqe);
+                formula_deriv_scale(&dfs, dz_e - dz_b.e);
+                formula_deriv_set(&dfs, dz_b.p, dz_b.q);
+                dz_e = dz_b.e;"),
+            save: o("            formula_deriv_get(dfs).xy, formula_deriv_get(dfs).zw, dz_e, 0u,"),
+            fin: o("    // Per render pixel, as every path reports it: (P, Q) S, S = s_m 2^s_e,
+    // moderate at escape; read as a colouring reads a pair.
+    let dz_v = formula_deriv_get(dfs);
+    let dz = formula_dz_of(z, cdz_to_f32(dz_v.xy * perturb.s_m, dz_e + perturb.s_e), cdz_to_f32(dz_v.zw * perturb.s_m, dz_e + perturb.s_e));"),
+        };
+    }
+    DerivSplices {
+        state: o("    dz_p: vec2<f32>,    // a custom formula's derivative pair (P, Q)
+    dz_q: vec2<f32>,"),
+        decl: o(&format!("    // A custom formula's derivative (step 9d): its program's state at the
+    // pixel; stepped at the PRE-step iterate, so z starts at the pixel's
+    // own z0 (the reference's start plus its delta).
+    var dfs = formula_init({CUSTOM_PIXEL});
+    z = ref_z(0u) + perturb.s * w;")),
+        resume: o("        formula_deriv_set(&dfs, st.dz_p, st.dz_q);"),
+        step: o(&format!("            dfs.z = z;
+            dfs = formula_loop(dfs, {CUSTOM_PIXEL});")),
+        bla: o("                // The derivative through the skip: A (P, Q) + B.
+                let dz_b = cdz_bla_scaled(formula_deriv_get(dfs), pick_a, pick_ae, pick_aq, pick_aqe, pick_b, pick_be, pick_bq, pick_bqe);
+                formula_deriv_set(&dfs, dz_b.xy, dz_b.zw);"),
+        save: o("            formula_deriv_get(dfs).xy, formula_deriv_get(dfs).zw,"),
+        fin: o("    // Per render pixel, as every path reports it; read as a colouring
+    // reads a pair.
+    let dz_v = formula_deriv_get(dfs);
+    let dz = formula_dz_of(z, dz_v.xy * perturb.s, dz_v.zw * perturb.s);"),
+    }
+}
+
+/// A custom formula's derivative arithmetic under perturbation (step
+/// 9d): the BLA skip's composition on the scaled rung, and on the
+/// floatexp rung the extended pair.
+const CUSTOM_DERIVATIVE_WGSL: &str = r#"
+fn cdz_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+fn cdz_conj(a: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(a.x, -a.y);
+}
+
+// (P, Q) <- A (P, Q) + B for real-linear A and B, as the table holds them
+// (mantissa, exponent): P' = Pa P + Qa conj(Q) + Pb, Q' = Pa Q + Qa conj(P) + Qb.
+fn cdz_bla_scaled(d: vec4<f32>, a: vec2<f32>, ae: i32, aq: vec2<f32>, aqe: i32, b: vec2<f32>, be: i32, bq: vec2<f32>, bqe: i32) -> vec4<f32> {
+    let sa = exp2(f32(clamp(ae, -126, 126)));
+    let saq = exp2(f32(clamp(aqe, -126, 126)));
+    let p = cdz_cmul(a, d.xy) * sa + cdz_cmul(aq, cdz_conj(d.zw)) * saq + b * exp2(f32(clamp(be, -126, 126)));
+    let q = cdz_cmul(a, d.zw) * sa + cdz_cmul(aq, cdz_conj(d.xy)) * saq + bq * exp2(f32(clamp(bqe, -126, 126)));
+    return vec4<f32>(p, q);
+}
+"#;
+
+const CUSTOM_DERIVATIVE_FE_WGSL: &str = r#"
+// A pair's mantissas and their exponent (a BLA skip's terms).
+struct CDz {
+    p: vec2<f32>,
+    q: vec2<f32>,
+    e: i32,
+}
+
+// The larger part into [0.5, 1), the exponent kept at zero or above: a
+// derivative under one is held as it is, so the pixel's own derivative in
+// these units, 2^-e, is at most 1. Anything not finite becomes zero
+// (negated comparisons, so a NaN fails them under fast-math too).
+fn cdz_norm(d: CDz) -> CDz {
+    let a = max(max(abs(d.p.x), abs(d.p.y)), max(abs(d.q.x), abs(d.q.y)));
+    if (!(a <= 3.0e38)) {
+        return CDz(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), d.e);
+    }
+    if (!(a > 0.0)) {
+        return CDz(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), d.e);
+    }
+    let k = max(frexp(a).exp, -d.e);
+    return CDz(ldexp(d.p, vec2<i32>(-k, -k)), ldexp(d.q, vec2<i32>(-k, -k)), d.e + k);
+}
+
+// The same on a program's state: every derivative it holds rescaled
+// with the pair; the new exponent.
+fn cdz_renorm(s: ptr<function, FormulaState>, e: i32) -> i32 {
+    let d = formula_deriv_get(*s);
+    let a = max(max(abs(d.x), abs(d.y)), max(abs(d.z), abs(d.w)));
+    if (!(a <= 3.0e38)) {
+        formula_deriv_set(s, vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0));
+        return e;
+    }
+    if (!(a > 0.0)) {
+        return e;
+    }
+    let k = max(frexp(a).exp, -e);
+    if (k != 0) {
+        formula_deriv_scale(s, -k);
+    }
+    return e + k;
+}
+
+// 2^k for k at or below zero; nothing below 2^-126.
+fn cdz_down(k: i32) -> f32 {
+    if (k < -126) {
+        return 0.0;
+    }
+    return exp2(f32(min(k, 0)));
+}
+
+fn cdz_is_zero(v: vec2<f32>) -> bool {
+    return max(abs(v.x), abs(v.y)) == 0.0;
+}
+
+// The skip, exponents aligned to the largest term's: a zero term has no
+// exponent of its own (an entry's empty Q could otherwise scale the rest
+// away).
+fn cdz_bla(d: CDz, a: vec2<f32>, ae: i32, aq: vec2<f32>, aqe: i32, b: vec2<f32>, be: i32, bq: vec2<f32>, bqe: i32) -> CDz {
+    let none = -1000000;
+    let dz0 = cdz_is_zero(d.p) && cdz_is_zero(d.q);
+    let e1 = select(d.e + ae, none, dz0 || cdz_is_zero(a));
+    let e2 = select(d.e + aqe, none, dz0 || cdz_is_zero(aq));
+    let e3 = select(be, none, cdz_is_zero(b));
+    let e4 = select(bqe, none, cdz_is_zero(bq));
+    let top = max(max(e1, e2), max(e3, e4));
+    if (top == none) {
+        return CDz(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0), d.e);
+    }
+    let s1 = cdz_down(e1 - top);
+    let s2 = cdz_down(e2 - top);
+    let s3 = cdz_down(e3 - top);
+    let s4 = cdz_down(e4 - top);
+    let p = cdz_cmul(a, d.p) * s1 + cdz_cmul(aq, cdz_conj(d.q)) * s2 + b * s3;
+    let q = cdz_cmul(a, d.q) * s1 + cdz_cmul(aq, cdz_conj(d.p)) * s2 + bq * s4;
+    return cdz_norm(CDz(p, q, top));
+}
+
+// m 2^e in f32, saturating.
+fn cdz_to_f32(m: vec2<f32>, e: i32) -> vec2<f32> {
+    let a = max(abs(m.x), abs(m.y));
+    if (!(a > 0.0 && a <= 3.0e38)) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    let k = frexp(a).exp;
+    let n = ldexp(m, vec2<i32>(-k, -k));
+    let t = clamp(e + k, -126, 127);
+    return ldexp(n, vec2<i32>(t, t));
+}
+"#;
 
 /// Bytes of one terminal record (`IterResult`): z, dz, the
 /// accumulator's `.xy`, n and the tags -- and `.zw` for a wide one.
@@ -3736,6 +3918,11 @@ pub const ITER_STATE_BYTES_MAX: u64 = ITER_STATE_BYTES_PHOENIX + ITER_STATE_BYTE
 pub const ITER_STATE_BYTES_DERIV: u64 = 8;
 pub const ITER_STATE_BYTES_DERIV_FE: u64 = 16;
 
+/// A custom formula's derivative pair (step 9d): `(P, Q)` on the scaled
+/// rung; their mantissas, the exponent and a pad on the deep one.
+pub const ITER_STATE_BYTES_DERIV_PAIR: u64 = 16;
+pub const ITER_STATE_BYTES_DERIV_PAIR_FE: u64 = 24;
+
 /// Per-pixel state a given tier needs, at an accumulator width, with or
 /// without the derivative. The tiers that carry one are single-term, so
 /// even wide and with it they stay under [`ITER_STATE_BYTES_MAX`].
@@ -3747,10 +3934,12 @@ pub fn iter_state_bytes(tier: PerturbTier, floatexp: bool, width: AccumWidth, de
         (PerturbTier::Custom { width, .. }, true) if width > 1 => ITER_STATE_BYTES_PHOENIX,
         _ => ITER_STATE_BYTES,
     };
-    let d = match (deriv, floatexp) {
-        (false, _) => 0,
-        (true, false) => ITER_STATE_BYTES_DERIV,
-        (true, true) => ITER_STATE_BYTES_DERIV_FE,
+    let d = match (deriv, floatexp, matches!(tier, PerturbTier::Custom { .. })) {
+        (false, ..) => 0,
+        (true, false, false) => ITER_STATE_BYTES_DERIV,
+        (true, true, false) => ITER_STATE_BYTES_DERIV_FE,
+        (true, false, true) => ITER_STATE_BYTES_DERIV_PAIR,
+        (true, true, true) => ITER_STATE_BYTES_DERIV_PAIR_FE,
     };
     let bytes = base + if width.is_wide() { ITER_STATE_BYTES_WIDE_EXTRA } else { 0 } + d;
     match width.ext() {
@@ -5509,8 +5698,13 @@ pub fn assemble_perturbed_full(
         PerturbTier::Custom { hash, .. } => crate::escape::custom::formula(&format!("{}{hash:016x}", crate::escape::custom::PREFIX)),
         _ => None,
     };
+    // A custom formula carries its own derivative program (step 9d): one
+    // reference, nothing carried besides z.
+    let custom_derivative = custom_formula.is_some()
+        && derivative.is_some_and(|f| !f.wgsl_derivative.is_empty())
+        && matches!(tier, PerturbTier::Custom { stride: 1, width: 1, .. });
     let derivative = derivative.filter(|f| !f.wgsl_derivative.is_empty() && custom_formula.is_none());
-    let splices = derivative.map(|_| deriv_splices(floatexp));
+    let splices = if custom_derivative { Some(custom_deriv_splices(floatexp)) } else { derivative.map(|_| deriv_splices(floatexp)) };
     let layer = layer.filter(|l| crate::escape::layer_fits(coloring, l));
     let owner = accum_owner(coloring, layer);
     let needs_accum = owner.is_some();
@@ -5548,7 +5742,7 @@ pub fn assemble_perturbed_full(
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__DZ_DECL__" => out.push(match &splices {
-                Some(d) => d.decl.to_string(),
+                Some(d) => d.decl.clone(),
                 None => "    let dz = vec2<f32>(1.0, 0.0);".to_string(),
             }),
             "//__DZ_STATE__" | "//__DZ_RESUME__" | "//__DZ_STEP__" | "//__DZ_BLA__" | "//__DZ_SAVE__"
@@ -5556,14 +5750,14 @@ pub fn assemble_perturbed_full(
                 if let Some(d) = &splices {
                     out.push(
                         match line.trim() {
-                            "//__DZ_STATE__" => d.state,
-                            "//__DZ_RESUME__" => d.resume,
-                            "//__DZ_STEP__" => d.step,
-                            "//__DZ_BLA__" => d.bla,
-                            "//__DZ_SAVE__" => d.save,
-                            _ => d.fin,
+                            "//__DZ_STATE__" => &d.state,
+                            "//__DZ_RESUME__" => &d.resume,
+                            "//__DZ_STEP__" => &d.step,
+                            "//__DZ_BLA__" => &d.bla,
+                            "//__DZ_SAVE__" => &d.save,
+                            _ => &d.fin,
                         }
-                        .to_string(),
+                        .clone(),
                     );
                 }
             }
@@ -5683,7 +5877,15 @@ pub fn assemble_perturbed_full(
                 if let Some(f) = custom_formula {
                     out.push(format!("// formula: {}", f.name));
                     out.push(CUSTOM_FORMULA_READERS_WGSL.trim().to_string());
-                    out.push(f.wgsl.to_string());
+                    // Carrying its derivative, the program with it (the
+                    // same equations, and the derivative's variables).
+                    out.push(if custom_derivative { f.wgsl_derivative } else { f.wgsl }.to_string());
+                    if custom_derivative {
+                        out.push(CUSTOM_DERIVATIVE_WGSL.trim().to_string());
+                        if floatexp {
+                            out.push(CUSTOM_DERIVATIVE_FE_WGSL.trim().to_string());
+                        }
+                    }
                     out.push(custom_pass_wgsl(tier, f.name));
                     // The deep rung's own form of its equations.
                     if floatexp {
@@ -5698,7 +5900,7 @@ pub fn assemble_perturbed_full(
                 // coloring built on dz has to KNOW that, or it renders
                 // something plausible from a derivative that is really
                 // the number 1.
-                out.push(format!("const HAS_DERIVATIVE: bool = {};", derivative.is_some()));
+                out.push(format!("const HAS_DERIVATIVE: bool = {};", derivative.is_some() || custom_derivative));
                 if let Some(f) = derivative {
                     // As the direct template seeds it: z0 = pixel means
                     // z0 = c, hence dz0/dc = 1; any other seed is 0.
@@ -9647,6 +9849,27 @@ mod tests {
                     );
                     // One reference: one entry a step.
                     assert!(wgsl.contains("            m = m + 1u;") && !wgsl.contains("ORBIT_R"), "{what}: the step");
+                }
+            }
+            // Carrying its derivative program (phase 4, step 9d), complex
+            // or a Jacobian (DB's abs), through the steps, the skips and
+            // the chunks, on both rungs.
+            let def = crate::escape::get_formula(&name);
+            if rebase {
+                assert!(!def.wgsl_derivative.is_empty(), "{}: a derivative", &source[..2]);
+                let de = crate::escape::get_coloring("distance_estimate");
+                for floatexp in [false, true] {
+                    let what = format!("{} derivative fe={floatexp}", &source[..2]);
+                    let wgsl = assemble_perturbed_full(de, None, floatexp, tier, None, Some(def));
+                    let module = validate(&wgsl, &what);
+                    assert!(wgsl.contains("const HAS_DERIVATIVE: bool = true;"), "{what}");
+                    assert!(wgsl.contains("formula_deriv_set(&dfs,") && wgsl.contains("dfs = formula_loop(dfs,"), "{what}: the step");
+                    assert!(wgsl.contains(if floatexp { "let dz_b = cdz_bla(" } else { "let dz_b = cdz_bla_scaled(" }), "{what}: the skip");
+                    let mut layouter = naga::proc::Layouter::default();
+                    layouter.update(module.to_ctx()).expect("layout");
+                    let (handle, _) = module.types.iter().find(|(_, t)| t.name.as_deref() == Some("IterState")).expect("IterState");
+                    assert_eq!(layouter[handle].size as u64, iter_state_bytes(tier, floatexp, crate::escape::accum_width(de), true), "{what}: the state");
+                    assert!(iter_state_bytes(tier, floatexp, crate::escape::accum_width(de), true) <= ITER_STATE_BYTES_MAX, "{what}");
                 }
             }
         }
