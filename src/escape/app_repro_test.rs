@@ -3065,9 +3065,13 @@ final:
             (format!("{cx:.17}"), format!("{cy:.17}"))
         };
         // The last field: the share of pixels counted exactly that the
-        // equations must reach, in percent. The deep Ship's 25000
-        // iterations cross a chaotic region the built-in tier counts 60%
-        // of exactly.
+        // equations must reach, in percent, per step. The deep Ship's
+        // 25000 iterations cross a chaotic region the built-in tier counts
+        // 60% of exactly per step. With their BLA tables (step 9b), both
+        // count within a few pixels of each other: a skip's error, 2^-24
+        // of the linear part, decides there which pixels come out right
+        // (per step the built-in 64 of 106, the equations 84; with BLA 74
+        // and 78).
         for (src, entry, params, built_in_formula, power, centre, zoom, iters, stride, n, floor) in [
             (M, "M", &params, "mandelbrot", None, shallow, 20.0f64, 600u32, 7usize, 4usize, 80usize),
             (M, "M", &params, "mandelbrot", None, threshold, 48.5, 4000, 13, 6, 80),
@@ -3091,15 +3095,18 @@ final:
             crate::escape::custom::ensure(&custom);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, .. })), "{entry}: {tier:?}");
-            let built_in = records_on(&esc, w, h, false, true, false);
-            let got = records_on(&custom, w, h, false, true, false);
             let truth = truth_counts(src, params.clone(), centre, zoom, iters, (w, h), stride, n);
             let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
             let exact = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, c)| r[*i].n == *c).count();
-            let (eb, ec) = (exact(&built_in), exact(&got));
-            println!("{entry} zoom {zoom}: of {} pixels ({} distinct counts), the built-in tier counts {eb} exactly, the derived equations {ec}", truth.len(), distinct.len());
             assert!(distinct.len() > 10, "{entry} zoom {zoom}: the view tests little");
-            assert!(ec * 100 >= truth.len() * floor && ec + truth.len() * 3 / 100 >= eb, "{entry} zoom {zoom}: {ec} against {eb}");
+            for bla in [false, true] {
+                let built_in = records_with(&esc, w, h, false, true, false, bla);
+                let got = records_with(&custom, w, h, false, true, false, bla);
+                let (eb, ec) = (exact(&built_in), exact(&got));
+                let how = if bla { "with BLA" } else { "per step" };
+                println!("{entry} zoom {zoom} {how}: of {} pixels ({} distinct counts), the built-in tier counts {eb} exactly, the derived equations {ec}", truth.len(), distinct.len());
+                assert!((bla || ec * 100 >= truth.len() * floor) && ec + truth.len() * 3 / 100 >= eb, "{entry} zoom {zoom} {how}: {ec} against {eb}");
+            }
         }
     }
 
@@ -4569,6 +4576,19 @@ final:
         perturbed: bool,
         direct: bool,
     ) -> Vec<crate::escape::renderer::IterRecord> {
+        records_with(esc, w, h, deep, perturbed, direct, true)
+    }
+
+    /// `records_on`, with BLA or per step.
+    fn records_with(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        deep: bool,
+        perturbed: bool,
+        direct: bool,
+        bla: bool,
+    ) -> Vec<crate::escape::renderer::IterRecord> {
         let (device, queue) = repro_device();
         let config = crate::config::FractalConfig::default();
         let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
@@ -4584,6 +4604,7 @@ final:
         escape.force_perturbed = perturbed;
         escape.force_direct = direct;
         escape.force_floatexp = deep && perturbed;
+        escape.disable_bla = !bla;
         let mut guard = 0u32;
         loop {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -15504,6 +15525,74 @@ fn main() {
                     if floatexp { "floatexp rung" } else { "scaled rung" }
                 );
             }
+        }
+    }
+
+    /// MEASUREMENT (plan, phase 4, step 9b): the fold and conjugate
+    /// tiers with their real-linear BLA tables and per step, the built-in
+    /// and its twin, at the visual suite's deep Ship and Tricorn views.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_real_linear_bla() {
+        let (device, queue) = repro_device();
+        let (w, h) = (512u32, 384u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let time = |esc: &crate::config::escape::EscapeConfig, bla: bool, floatexp: bool| -> f64 {
+            let mut best = f64::INFINITY;
+            for _ in 0..2 {
+                let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+                r.force_perturbed = true;
+                r.force_floatexp = floatexp;
+                r.disable_bla = !bla;
+                let start = std::time::Instant::now();
+                loop {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                    let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if settled {
+                        break;
+                    }
+                }
+                best = best.min(start.elapsed().as_secs_f64());
+                r.destroy();
+            }
+            best
+        };
+        // The suite's deep views (escaping early), and interiors, where
+        // every pixel runs to the cap: BLA's best case.
+        let views: [(&str, &str, f32, (&str, &str), f64, u32, bool); 5] = [
+            ("burning_ship", "variant", 0.0, ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000, true),
+            ("tricorn", "power", 2.0, ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000, false),
+            ("burning_ship", "variant", 0.0, ("-0.5", "-0.5"), 30.0, 20000, false),
+            ("burning_ship", "variant", 0.0, ("-0.5", "-0.5"), 60.0, 20000, true),
+            ("tricorn", "power", 2.0, ("-0.2", "0.0"), 30.0, 20000, false),
+        ];
+        for (formula, param, value, (cx, cy), zoom, iters, floatexp) in views {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.into();
+            esc.formula_params.insert(param.into(), value);
+            esc.center_re = cx.into();
+            esc.center_im = cy.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let twin = {
+                let src = crate::escape::twins::custom_source(formula).unwrap();
+                let mut t = esc.clone();
+                t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                t.custom_formula = Some(src);
+                crate::escape::custom::ensure(&t);
+                t
+            };
+            println!(
+                "{formula} at zoom {zoom}, {iters} iterations, {w}x{h}: built-in with BLA {:.2} s, per step {:.2} s; twin with BLA {:.2} s, per step {:.2} s",
+                time(&esc, true, floatexp),
+                time(&esc, false, floatexp),
+                time(&twin, true, floatexp),
+                time(&twin, false, floatexp)
+            );
         }
     }
 }

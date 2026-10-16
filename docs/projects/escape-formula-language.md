@@ -23,7 +23,8 @@ value) 2026-10-15; step 6 (transcendental functions and powers by
 difference forms, user functions, branches on the iterate) 2026-10-15;
 step 7 (hybrids of any formulas) 2026-10-15; step 8 (parameters and
 scripting; not held structural keyframes) 2026-10-15; step 9a (BLA for
-holomorphic custom formulas) 2026-10-16.
+holomorphic custom formulas) 2026-10-16; step 9b (real-linear BLA, for
+folds and the conjugate) 2026-10-16.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1313,15 +1314,31 @@ keeps compiling as UF; the editor converts what it opens.
      z's modulus). The deep twins count as before against the truth
      (Mandelbrot 400 of 439 at zoom 42, Lambda 361, the Multibrot at
      power 4 400); the twin alone at the walked edges 374 and 393.
-   - Next, in order: the 2x2 real Jacobian for folds (the Ship family
-     and the fold hybrids: a real-linear map is `P d + Q conj(d)`, so a
-     table entry is two complex coefficients for A and two for B, with a
-     radius bounded by each fold's distance to its axis; a new entry
-     layout and skip in both shader rungs); then nucleus references
-     through the IR's derivative; then the Jacobian DE; then retiring
-     native code, family by family, where the twin matches it in speed
-     and accuracy -- a decision for the user, since the twins lack Mann
-     damping and the biomorph test.
+   - **9b, done 2026-10-16: real-linear BLA**, for folds and the
+     conjugate (ESCAPE.md, BLA). A real-linear map is `P d + Q conj(d)`:
+     table entries carry Q's for A and B (56 bytes on the GPU), merge as
+     the maps compose, and the skip adds the Q terms in both shader
+     rungs, through markers that leave the power tier's shader as it
+     was. The single steps are now read from the formula's own
+     perturbation equations, stepped in f64 at tiny deviations
+     (`interp::PerturbStepper`; exact, folds included), not from 9a's
+     derivative program; the radius is probed on a ring of directions,
+     which finds folds' kinks and branch cuts -- a gap 9a had for log,
+     sqrt and non-integer powers near their cuts. The built-in Ship and
+     Tricorn tiers take their twins' steps. Interior views: the Ship at
+     zoom 60, 0.81 s per step to 0.08 s, its twin 3.44 s to 0.19 s; the
+     Tricorn at zoom 30, 0.14 s to 0.05 s. Early-escaping views pay the
+     table's build once per orbit, up to ~60 ms (the Tricorn suite view,
+     0.13 s to 0.19 s). Against the truth the deep views count as many
+     pixels right as per step (the Ship at zoom 60: built-in 314 and
+     twin 336 of 439, per step 294 and 346); in the suite views' chaotic
+     regions a skip's 2^-24 changes which, so two baselines were
+     regenerated.
+   - Next, in order: nucleus references through the IR's derivative;
+     then the Jacobian DE (distance estimation for folds); then
+     retiring native code, family by family, where the twin matches it
+     in speed and accuracy -- a decision for the user, since the twins
+     lack Mann damping and the biomorph test.
 
 Probably native for good: Origami (fold lines computed on the CPU),
 Littlewood, Digit Set.

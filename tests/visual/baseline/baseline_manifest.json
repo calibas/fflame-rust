@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "30338885",
+  "git_hash": "99036143",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -523,8 +523,8 @@
       "sha256": "d97ec26312b50362c154706e80fb523bdbda41e6df7f49887d74b2a437fe5e50"
     },
     "escape-ship-deep-floatexp.png": {
-      "bytes": 40199,
-      "sha256": "de04c243a47095f00cdf6210a84e552674e3d0d54c4654b2eeb022c54685e77a"
+      "bytes": 40135,
+      "sha256": "82f80a93ddaa2160bd7639eb6a34ab1873afa53edcc636b78695d2c1d5028b6f"
     },
     "escape-ship-deep-perturbed.png": {
       "bytes": 14679,
@@ -575,8 +575,8 @@
       "sha256": "2c824a2a8ffcdbd854ea68f78bee2577314b66b12e903bf41083998ea900a27b"
     },
     "escape-tricorn-deep.png": {
-      "bytes": 46881,
-      "sha256": "e5b37f57fcfd8cb94439cdd35ca61b2f70622fca31deb309a81b1824bedeecb9"
+      "bytes": 46868,
+      "sha256": "25d28a48bd11305c1892418575bc2ed68ae4183ba0f2a12a5aff69966cbfae2c"
     },
     "escape-tricorn.png": {
       "bytes": 3765,

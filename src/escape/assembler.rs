@@ -1682,6 +1682,7 @@ struct BlaEntry {
     b_e: i32,
     r_m: f32,
     r_e: i32,
+    //__BLA_ENTRY_Q__
 }
 struct BlaBuf {
     // Start index of each level's entries, 32 levels max (a 2^33-step
@@ -1913,6 +1914,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var pick_ae = 0;
             var pick_be = 0;
             var pick_span = 0u;
+            //__BLA_PICK_DECL__
             let m_left = perturb.orbit_len - 1u - m;
             // Bounded by the RENDER's end, not the chunk's: a skip
             // that crosses a chunk boundary is fine (i_at carries the
@@ -1936,6 +1938,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 pick_ae = ent.a_e;
                 pick_b = ent.b_m;
                 pick_be = ent.b_e;
+                //__BLA_PICK_Q__
                 pick_span = span;
             }
             if (pick_span > 0u) {
@@ -1951,7 +1954,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     pick_b.x * d0_term.x - pick_b.y * d0_term.y,
                     pick_b.x * d0_term.y + pick_b.y * d0_term.x,
                 ) * exp2(f32(clamp(pick_be, -126, 126)));
-                w = ta + tb;
+                //__BLA_W__
                 //__DZ_BLA__
                 m = m + pick_span;
                 i = i + pick_span;
@@ -2194,6 +2197,7 @@ struct BlaEntry {
     b_e: i32,
     r_m: f32,
     r_e: i32,
+    //__BLA_ENTRY_Q__
 }
 struct BlaBuf {
     // Start index of each level's entries, 32 levels max (a 2^33-step
@@ -2850,6 +2854,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var pick_ae = 0;
             var pick_be = 0;
             var pick_span = 0u;
+            //__BLA_PICK_DECL__
             let w_zero = aw == 0.0 || w.e == CFE_ZERO_E;
             let m_left = perturb.orbit_len - 1u - m;
             // Bounded by the RENDER's end, not the chunk's: a skip
@@ -2875,12 +2880,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 pick_ae = ent.a_e;
                 pick_b = ent.b_m;
                 pick_be = ent.b_e;
+                //__BLA_PICK_Q__
                 pick_span = span;
             }
             if (pick_span > 0u) {
                 let ta = cfe2_mul_cfe32(w, pick_a, pick_ae);
                 let tb = cfe2_mul_cfe32(d0, pick_b, pick_be);
-                w = cfe2_add(ta, tb);
+                //__BLA_W__
                 //__DZ_BLA__
                 m = m + pick_span;
                 i = i + pick_span;
@@ -5376,6 +5382,56 @@ fn delta_step_ducks_fe(variant: u32) -> String {
 /// coloring axis is fully preserved - the loop reconstructs the full
 /// orbit value every iteration for the rebase test, which is exactly
 /// the summary the colorings consume. `floatexp` picks the deep rung.
+/// A real-linear BLA entry's Q fields (`BlaEntry` in both templates):
+/// 56 bytes in all, as the renderer packs them.
+const BLA_ENTRY_Q: &str = "    aq_m: vec2<f32>,
+    bq_m: vec2<f32>,
+    aq_e: i32,
+    bq_e: i32,
+";
+
+const BLA_PICK_DECL: &str = "            var pick_aq = vec2<f32>(0.0, 0.0);
+            var pick_bq = vec2<f32>(0.0, 0.0);
+            var pick_aqe = 0;
+            var pick_bqe = 0;
+";
+
+const BLA_PICK_Q: &str = "                pick_aq = ent.aq_m;
+                pick_aqe = ent.aq_e;
+                pick_bq = ent.bq_m;
+                pick_bqe = ent.bq_e;
+";
+
+/// The scaled rung's real-linear skip: `w' = P w + Q conj(w) + Pb d0 +
+/// Qb conj(d0)`, Q·conj(v) = (qx vx + qy vy, qy vx - qx vy).
+const BLA_W_Q: &str = "                let taq = vec2<f32>(
+                    pick_aq.x * w.x + pick_aq.y * w.y,
+                    pick_aq.y * w.x - pick_aq.x * w.y,
+                ) * exp2(f32(clamp(pick_aqe, -126, 126)));
+                let tbq = vec2<f32>(
+                    pick_bq.x * d0_term.x + pick_bq.y * d0_term.y,
+                    pick_bq.y * d0_term.x - pick_bq.x * d0_term.y,
+                ) * exp2(f32(clamp(pick_bqe, -126, 126)));
+                w = ta + tb + taq + tbq;
+";
+
+/// The floatexp rung's: the conjugates as CFe2, the Q terms in full
+/// extended range.
+const BLA_W_Q_FE: &str = "                let w_conj = CFe2(vec2<f32>(w.hi.x, -w.hi.y), vec2<f32>(w.lo.x, -w.lo.y), w.e);
+                let d0_conj = CFe2(vec2<f32>(d0.hi.x, -d0.hi.y), vec2<f32>(d0.lo.x, -d0.lo.y), d0.e);
+                let taq = cfe2_mul_cfe32(w_conj, pick_aq, pick_aqe);
+                let tbq = cfe2_mul_cfe32(d0_conj, pick_bq, pick_bqe);
+                w = cfe2_add(cfe2_add(ta, taq), cfe2_add(tb, tbq));
+";
+
+/// Whether a tier's BLA table is real-linear (phase 4, step 9b): its
+/// entries carry `P·δ + Q·conj(δ)` and the shader adds the Q terms -- a
+/// fold or a conjugate (the Ship family, the Tricorn), or a custom
+/// formula, which may hold either. The power tier's stays complex.
+pub fn real_linear_bla(tier: PerturbTier) -> bool {
+    matches!(tier, PerturbTier::Custom { .. } | PerturbTier::Ship(_) | PerturbTier::Tricorn(_))
+}
+
 pub fn assemble_perturbed(coloring: &ColoringDef, floatexp: bool, tier: PerturbTier) -> String {
     assemble_perturbed_with_lens(coloring, floatexp, tier, None)
 }
@@ -5483,6 +5539,33 @@ pub fn assemble_perturbed_full(
                 }
             }
             "//__LENS_APPLY_PX__" => lens_apply_pixels(&mut out, lens),
+            // A real-linear BLA table (phase 4, step 9b): Q's for A and B
+            // beside P's, the skip adding Q·conj(w) + Qb·conj(d0). The
+            // power tier's shader is as before.
+            "//__BLA_ENTRY_Q__" => {
+                if real_linear_bla(tier) {
+                    out.push(BLA_ENTRY_Q.trim_end().to_string());
+                }
+            }
+            "//__BLA_PICK_DECL__" => {
+                if real_linear_bla(tier) {
+                    out.push(BLA_PICK_DECL.trim_end().to_string());
+                }
+            }
+            "//__BLA_PICK_Q__" => {
+                if real_linear_bla(tier) {
+                    out.push(BLA_PICK_Q.trim_end().to_string());
+                }
+            }
+            "//__BLA_W__" => out.push(
+                match (real_linear_bla(tier), floatexp) {
+                    (false, false) => "                w = ta + tb;",
+                    (false, true) => "                w = cfe2_add(ta, tb);",
+                    (true, false) => BLA_W_Q.trim_end(),
+                    (true, true) => BLA_W_Q_FE.trim_end(),
+                }
+                .to_string(),
+            ),
             "//__DELTA_STEP__" => out.push(match tier {
                 PerturbTier::Power(p) => delta_step_scaled(p.clamp(2, 12)),
                 PerturbTier::Ship(v) => delta_step_ship(v.min(5)),
