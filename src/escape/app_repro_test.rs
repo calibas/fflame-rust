@@ -15879,6 +15879,92 @@ fn main() {
         }
     }
 
+    /// MEASUREMENT (the speed work after phase 4, step 9e): each twin
+    /// against its built-in at deep views, BLA as users get it, from cold:
+    /// the whole render, the reference orbit's build, the BLA table's,
+    /// and the rest, which is the GPU's.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_twins_against_their_builtins() {
+        let (device, queue) = repro_device();
+        let (w, h) = (512u32, 384u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        // One render from cold (no stored orbit): its time, and the
+        // reference's and the table's builds as the diagnostics hold them.
+        let run = |esc: &crate::config::escape::EscapeConfig, floatexp: bool| -> (f64, f32, f32, u32) {
+            if let Some(dir) = crate::escape::orbit_store::test_store_dir() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            crate::escape::diag::reset();
+            let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+            r.force_perturbed = true;
+            r.force_floatexp = floatexp;
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            let t = start.elapsed().as_secs_f64();
+            r.destroy();
+            let d = crate::escape::diag::snapshot();
+            (t, d.orbit_ms, d.bla_build_ms, d.orbit_len)
+        };
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        let ship_deep = ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851");
+        let views: &[(&str, &[(&str, f32)], (&str, &str), f64, u32, bool)] = &[
+            ("mandelbrot", &[], seahorse, 42.0, 8000, false),
+            ("mandelbrot", &[], seahorse, 60.0, 30000, true),
+            ("mandelbrot", &[], ("-1.75487766624669276", "0.00000000000001"), 30.0, 20000, false),
+            ("multibrot", &[("power", 4.0)], ("-0.9641787397769701302601128871474335232", "0.20113415795567669775171048165243266489"), 30.0, 2660, false),
+            ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000, false),
+            ("tricorn", &[("power", 2.0)], ("-0.2", "0.0"), 30.0, 20000, false),
+            ("burning_ship", &[("variant", 0.0)], ship_deep, 60.0, 25000, true),
+            ("burning_ship", &[("variant", 0.0)], ("-0.5", "-0.5"), 30.0, 20000, false),
+            ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000, false),
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256, true),
+            ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000, true),
+        ];
+        println!("{w}x{h}, with BLA where the tier has it; times in ms: whole render, reference build, BLA table build, the rest (GPU)");
+        for &(formula, params, (cx, cy), zoom, iters, floatexp) in views {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cx.into();
+            esc.center_im = cy.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut twin = esc.clone();
+            twin.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            twin.custom_formula = Some(src);
+            crate::escape::custom::ensure(&twin);
+            // Warm the shaders' compiles, which neither should pay here.
+            let _ = run(&esc, floatexp);
+            let _ = run(&twin, floatexp);
+            for (who, cfg) in [("built-in", &esc), ("twin", &twin)] {
+                let (t, orbit, bla, len) = run(cfg, floatexp);
+                let rest = t * 1000.0 - f64::from(orbit) - f64::from(bla);
+                println!(
+                    "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.0} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.0}",
+                    if floatexp { "floatexp" } else { "scaled" },
+                    t * 1000.0,
+                    orbit,
+                    bla,
+                    rest
+                );
+            }
+        }
+    }
+
     /// MEASUREMENT (plan, phase 4, step 9b): the fold and conjugate
     /// tiers with their real-linear BLA tables and per step, the built-in
     /// and its twin, at the visual suite's deep Ship and Tricorn views.

@@ -36,12 +36,67 @@ use std::sync::Arc;
 /// the plane.
 pub struct NucleusSearch {
     prog: Arc<Program>,
+    /// The program itself, whose orbit the period search follows in big
+    /// floats, its slope beside it in f64 ([`SlopeWatch`]).
+    plain: Arc<Program>,
     params: ParamValues,
     env: Env,
     dz: VarId,
     /// The iterate's `Q` where the derivative is a Jacobian (a fold:
     /// `derive::with_jacobian`, phase 4, step 9d).
     dzq: Option<VarId>,
+}
+
+/// The period search's test, watched along an orbit computed elsewhere
+/// in big floats: the orbit's closure `G_n = z_n - z_0` from it, the
+/// slope `G'_n` from the derivative program stepped in f64 at its
+/// iterates (`interp::DerivStepper`, its range kept by an exponent), the
+/// Newton step `G'^-1 G` against the view's radius. A pass costs the
+/// derivative program in f64, beside the orbit's big-float pass: the
+/// search rides on a reference's build instead of being a second one.
+pub struct SlopeWatch {
+    stepper: super::interp::DerivStepper,
+    z0: BigComplex,
+    /// The start's pair, in units of 1.
+    d0: (C64, C64),
+    radius_log2: f64,
+    passes: u32,
+}
+
+use super::builtins::C64;
+
+impl SlopeWatch {
+    /// After the orbit's pass from `z_prev` to `z` (its big-float value):
+    /// whether the Newton step from the centre lands inside the view.
+    pub fn observe(&mut self, z_prev: C64, z: &BigComplex) -> bool {
+        self.stepper.step(z_prev);
+        self.passes += 1;
+        let g = z.sub(&self.z0);
+        let Some(lg) = log2_abs(&g) else {
+            return true;
+        };
+        // G's direction, in f64.
+        let k = lg.floor() as i64;
+        let u = g.mul_pow2(-k);
+        let u = C64::new(u.re.to_f64(), u.im.to_f64());
+        let u = u.scale(1.0 / u.abs());
+        // The slope less the start's, in units of 2^e.
+        let e = self.stepper.exponent();
+        let unit = (-f64::from(e)).exp2();
+        let (p, q) = self.stepper.pair();
+        let (p, q) = (p.sub(self.d0.0.scale(unit)), q.sub(self.d0.1.scale(unit)));
+        // |G'^-1 G| = |G| |conj(P) u - Q conj(u)| / (|P|^2 - |Q|^2) / 2^e.
+        let num = p.conj().mul(u).sub(q.mul(u.conj())).abs();
+        let den = p.abs() * p.abs() - q.abs() * q.abs();
+        if !(den.abs() > 0.0) || !(num > 0.0) {
+            return false;
+        }
+        lg + num.log2() - den.abs().log2() - f64::from(e) <= self.radius_log2
+    }
+
+    pub fn passes(&self) -> u32 {
+        self.passes
+    }
 }
 
 /// The derivative at a pass: `(P, Q)`, Q zero where it is complex.
@@ -116,7 +171,16 @@ impl NucleusSearch {
         }
         let d = super::derive::with_derivative(prog)?;
         let (dz, dzq) = (d.dz_var?, d.dzq_var);
-        Some(NucleusSearch { prog: Arc::new(d), params, env, dz, dzq })
+        Some(NucleusSearch { prog: Arc::new(d), plain: Arc::new(prog.clone()), params, env, dz, dzq })
+    }
+
+    /// The period search's test for an orbit from `c` with the start `z0`
+    /// (its big-float value), against a view of radius `2^radius_log2`.
+    pub fn watch(&self, c: C64, z0: BigComplex, radius_log2: f64) -> Option<SlopeWatch> {
+        let env = Env { pixel: c, ..self.env };
+        let stepper = super::interp::DerivStepper::new(self.prog.clone(), self.plain.vars.len(), self.params.clone(), env)?;
+        let d0 = stepper.pair();
+        Some(SlopeWatch { stepper, z0, d0, radius_log2, passes: 0 })
     }
 
     /// The derivative the machine holds.
@@ -132,21 +196,26 @@ impl NucleusSearch {
         Some((m, z0, d0))
     }
 
-    /// The machine's closure `G = z_n - z_0` and the Newton step solving
-    /// `G'(step) = G`: `G / G'` where the derivative is complex; where it
-    /// is a Jacobian, the real-linear map `d -> P d + Q conj(d)` inverted,
-    /// `(conj(P) G - Q conj(G)) / (|P|^2 - |Q|^2)`; no step past solving
-    /// (a singular derivative, as at a double root's centre).
-    fn step(&self, m: &BigMachine, z0: &BigComplex, d0: &Slope) -> (BigComplex, Option<BigComplex>) {
-        let g = m.z().sub(z0);
-        let (p, q) = self.slope(m);
+    /// [`Self::closure_and_step`] with the derivative program in big floats:
+    /// exact where the f64 slope cancels -- a formula that starts at its
+    /// pixel has `G' = dz_p - dz_0` with both near 1 at its (double) root.
+    fn exact_closure_and_step(&self, c: &BigComplex, n: usize, period: u32) -> Option<(BigComplex, Option<BigComplex>)> {
+        let (mut m, z0, d0) = self.start(c, n)?;
+        for _ in 0..period {
+            m.step().ok()?;
+            if log2_abs(m.z()).is_some_and(|l| l > 4096.0) {
+                return None;
+            }
+        }
+        let g = m.z().sub(&z0);
+        let (p, q) = self.slope(&m);
         let p = p.sub(&d0.0);
         let step = match (q, &d0.1) {
             (Some(q), Some(q0)) => {
                 let q = q.sub(q0);
                 let den = p.norm_sqr().sub(&q.norm_sqr());
                 if den.is_zero() {
-                    return (g, None);
+                    return Some((g, None));
                 }
                 let num = conj(&p).mul(&g).sub(&q.mul(&conj(&g)));
                 let inv = den.recip();
@@ -154,12 +223,58 @@ impl NucleusSearch {
             }
             _ => {
                 if p.is_zero() {
-                    return (g, None);
+                    return Some((g, None));
                 }
                 g.div(&p)
             }
         };
-        (g, Some(step))
+        Some((g, Some(step)))
+    }
+
+    /// The orbit from `c` over `period` passes: its closure `G = z_p - z_0`
+    /// in big floats `n` limbs wide, and the Newton step solving `G'(step)
+    /// = G` with the slope stepped in f64 beside it (`interp::DerivStepper`):
+    /// `G / G'` where the derivative is complex, the real-linear map's
+    /// inverse `(conj(P) G - Q conj(G)) / (|P|^2 - |Q|^2)` where it is a
+    /// Jacobian; no step past solving (a singular derivative, as at a
+    /// double root's centre). Newton needs the slope to f64's digits only
+    /// (each step then gains ~50 bits once near the root), and the
+    /// derivative program in big floats cost a pass several times the
+    /// formula's own (a Burning Ship's failed Newton, 20 ms a step).
+    /// `None` when the orbit goes past any sense (the test is not asked:
+    /// an iterate past the bailout far from the nucleus can still come
+    /// back under Newton).
+    fn closure_and_step(&self, c: &BigComplex, n: usize, period: u32) -> Option<(BigComplex, Option<BigComplex>)> {
+        let mut m = BigMachine::new(self.plain.clone(), self.params.clone(), self.env, c.clone(), n).ok()?;
+        let cf = C64::new(c.re.to_f64(), c.im.to_f64());
+        let mut d = super::interp::DerivStepper::new(self.prog.clone(), self.plain.vars.len(), self.params.clone(), Env { pixel: cf, ..self.env })?;
+        let (p0, q0) = d.pair();
+        let z0 = m.z().clone();
+        for _ in 0..period {
+            let zp = C64::new(m.z().re.to_f64(), m.z().im.to_f64());
+            m.step().ok()?;
+            d.step(zp);
+            if log2_abs(m.z()).is_some_and(|l| l > 4096.0) {
+                return None;
+            }
+        }
+        let g = m.z().sub(&z0);
+        let e = d.exponent();
+        let unit = (-f64::from(e)).exp2();
+        let (p, q) = d.pair();
+        let (p, q) = (p.sub(p0.scale(unit)), q.sub(q0.scale(unit)));
+        let den = p.abs() * p.abs() - q.abs() * q.abs();
+        if !(den.abs() > 0.0) || !den.is_finite() {
+            return Some((g, None));
+        }
+        let cp = BigComplex::from_f64(p.re / den, -p.im / den, n);
+        let step = if q == C64::ZERO {
+            cp.mul(&g)
+        } else {
+            let cq = BigComplex::from_f64(q.re / den, q.im / den, n);
+            cp.mul(&g).sub(&cq.mul(&conj(&g)))
+        };
+        Some((g, Some(step.mul_pow2(-i64::from(e)))))
     }
 
     /// The period of the nucleus governing a view (centre `c`, radius
@@ -168,13 +283,15 @@ impl NucleusSearch {
     /// first, its orbit cannot go on, or no pass within `max_period`
     /// does.
     pub fn period(&self, c: &BigComplex, n: usize, radius_log2: f64, max_period: u32) -> Option<u32> {
-        let (mut m, z0, d0) = self.start(c, n)?;
+        // The orbit in big floats, its slope in f64 beside it.
+        let mut m = BigMachine::new(self.plain.clone(), self.params.clone(), self.env, c.clone(), n).ok()?;
+        let mut watch = self.watch(C64::new(c.re.to_f64(), c.im.to_f64()), m.z().clone(), radius_log2)?;
         for p in 1..=max_period {
+            let z_prev = C64::new(m.z().re.to_f64(), m.z().im.to_f64());
             if !m.step().ok()? {
                 return None;
             }
-            let (g, step) = self.step(&m, &z0, &d0);
-            if g.is_zero() || step.is_some_and(|s| log2_abs(&s).is_none_or(|l| l <= radius_log2)) {
+            if watch.observe(z_prev, m.z()) {
                 return Some(p);
             }
         }
@@ -204,6 +321,18 @@ impl NucleusSearch {
         if period > newton_periods {
             return None;
         }
+        self.nucleus_at(center_re, center_im, zoom_log2, period)
+    }
+
+    /// Newton's half of [`Self::locate`], for a period found elsewhere (a
+    /// reference's build watching its slope, [`SlopeWatch`]).
+    pub fn nucleus_at(&self, center_re: &str, center_im: &str, zoom_log2: f64, period: u32) -> Option<crate::escape::nucleus::Nucleus> {
+        let at = |n: usize| -> Option<BigComplex> {
+            Some(BigComplex {
+                re: BigFloat::from_fixed(&FixedPoint::from_decimal(center_re, n)?),
+                im: BigFloat::from_fixed(&FixedPoint::from_decimal(center_im, n)?),
+            })
+        };
         let n = limbs_for_zoom(2.0 * zoom_log2 + 16.0) + 1;
         let limit = crate::escape::reference::closure_limit_for_zoom(zoom_log2) as f64;
         let c = self.nucleus(&at(n)?, period, n, limit - 64.0)?;
@@ -234,18 +363,11 @@ impl NucleusSearch {
         let mut mult = 1.0;
         let mut best: Option<(f64, BigComplex)> = None;
         let mut stalled = 0;
+        // The slope in f64 until that stalls on an orbit that closes; then
+        // in big floats, from the best point.
+        let mut exact = false;
         for _ in 0..64 {
-            let (mut m, z0, d0) = self.start(&c, n)?;
-            for _ in 0..period {
-                // The test is not asked: an iterate past the bailout far
-                // from the nucleus can still come back under Newton. One
-                // past any sense ends the search.
-                m.step().ok()?;
-                if log2_abs(m.z()).is_some_and(|l| l > 4096.0) {
-                    return None;
-                }
-            }
-            let (g, step) = self.step(&m, &z0, &d0);
+            let (g, step) = if exact { self.exact_closure_and_step(&c, n, period)? } else { self.closure_and_step(&c, n, period)? };
             let Some(lg) = log2_abs(&g).filter(|&l| l > closure_log2) else {
                 return Some(c);
             };
@@ -254,7 +376,17 @@ impl NucleusSearch {
                 Some((b, _)) if lg > b - 1.0 => {
                     stalled += 1;
                     if stalled >= 3 {
-                        return closed(best);
+                        match best {
+                            Some((b, bc)) if !exact && b <= -24.0 => {
+                                exact = true;
+                                stalled = 0;
+                                last = None;
+                                c = bc.clone();
+                                best = Some((b, bc));
+                                continue;
+                            }
+                            _ => return closed(best),
+                        }
                     }
                 }
                 _ => stalled = 0,
@@ -394,7 +526,8 @@ mod tests {
             m.step().unwrap();
         }
         let left = log2_abs(&m.z().sub(&z0)).unwrap_or(f64::NEG_INFINITY);
-        assert!(left < -170.0, "|z_p - z_0| ~ 2^{left}");
+        let asked = crate::escape::reference::closure_limit_for_zoom(SHIP.2) as f64 - 64.0;
+        assert!(left < asked, "|z_p - z_0| ~ 2^{left}, asked 2^{asked}");
     }
 
     /// Escaping centres and bad guesses fail cleanly.

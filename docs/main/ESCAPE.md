@@ -1352,13 +1352,27 @@ in big floats:
   centre, `|G_n / G'_n|`, falls inside the view's radius -- a ball of
   the first order. At the deep seahorse view (zoom 30) it gives 998,
   where the built-ins' ball method says 850 and its Newton finds
-  nothing.
+  nothing. The test rides on the reference's own build
+  (`periodic::SlopeWatch`, `ReferenceOrbit::custom_watch`): `G_n` from
+  the big-float orbit being computed anyway, `G'_n` from the derivative
+  program stepped in f64 at its iterates (`interp::DerivStepper`, every
+  derivative it holds kept in units of `2^e`, as the GPU's floatexp rung
+  keeps them). A period found stops the build there for Newton; none
+  costs a pass of the derivative in f64 beside each big-float one. (It
+  was a second orbit first, the derivative program's in big floats: at
+  a Burning Ship's interior, 2 s before a 0.19 s reference.)
 - **Newton** at twice the zoom's bits (the closure asked is absolute,
   and `G = h' d` with `h'` up to 2^zoom), 64 octaves past the view's
   closure limit or to the precision's floor. The root can be double: a
   formula that starts at its pixel has `G = h^2`, where Newton halves
   its distance per step; the multiplicity is read from the steps'
-  ratio and the step taken `m G / G'`.
+  ratio and the step taken `m G / G'`. The orbit in big floats, its
+  slope in f64 beside it -- Newton needs the slope to f64's digits only,
+  each step then gaining ~50 bits near the root -- until that stalls on
+  an orbit that closes, where the derivative program runs in big floats
+  for the last steps: at a double root `G' = dz_p - dz_0` cancels in
+  f64. A Burning Ship's Newton that finds no root gives up in 15 ms,
+  not 100.
 - **The reference** at the nucleus is the formula's own, one period
   long, and is kept only if its own closure detection fires there:
   like the plain map's, a new minimum of `|Z_n - Z_0|` below the view's
@@ -1377,6 +1391,9 @@ iterations (`measure_custom_nucleus_references`):
 | seahorse, zoom 42 | 0.30 s | 0.034 s, period 998 | 0.017 s, period 998 |
 | the Misiurewicz point i, zoom 30 | 0.27 s | 0.001 s, period 25 | 0.001 s, period 23 |
 | no nucleus in view (zoom 100; inside an atom off its nucleus) | 0.32 s | 0.43-0.47 s | 0.21 s |
+
+(Measured before the search rode on the reference's build and big
+floats kept their limbs inline; see "How fast the twins are", below.)
 
 Against the big-float truth the nucleus references count as the plain
 ones (`a_custom_formula_renders_from_its_nucleus`: 402 of 439 for both
@@ -1433,6 +1450,35 @@ scaled rung's seed (`w_init`).
 The panel's notes about the path read the viewport's render height
 (`viewport_render_lines`), which the app publishes when it sizes the
 viewport; a thumbnail or an export decides at its own size.
+
+### How fast the twins are
+
+A twin against its built-in, each render from cold at 512x384 with BLA
+where the tier has it (`measure_twins_against_their_builtins`), in ms --
+the whole render (the reference's build):
+
+| view | built-in | twin |
+| --- | --- | --- |
+| Mandelbrot, seahorse zoom 42, 8,000 | 35 (8) | 46 (11) |
+| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 194 (159) | 116 (51) |
+| Multibrot power 4, zoom 30 | 9 (3) | 13 (3) |
+| Tricorn, suite view zoom 28 | 228 (27) | 242 (20) |
+| Tricorn interior, zoom 30 | 49 (18) | 68 (37) |
+| Burning Ship, suite view zoom 60, floatexp | 41 (1) | 139 (12) |
+| Burning Ship interior, zoom 30 | 85 (28) | 155 (97) |
+| Lambda, zoom 30 | 21 (5) | 39 (5) |
+| Manowar, zoom 26, floatexp | 114 (8) | 162 (5) |
+
+What made the references this cheap: big floats keep up to eight limbs
+inline (`bigfloat::Limbs`, a `SmallVec`: an operation or a variable's
+read was a heap allocation, and a pass of the Mandelbrot's twin took 2.4
+us, now 0.94); a whole real power (the Multibrot's `z ** p.power`) is
+taken by repeated squaring, not `exp(w log z)` (79 us a pass, now 1.6);
+and the nucleus search rides on the reference's build (above). What
+remains is mostly the GPU's: the derived equations against the
+built-ins' hand-written ones -- the Ship's at floatexp ~3x, Lambda's
+and Phoenix's ~2x -- and a custom BLA table read from the equations
+(28 ms against the power table's 6 for the Mandelbrot at zoom 60).
 
 ### Damping and the biomorph on custom formulas
 

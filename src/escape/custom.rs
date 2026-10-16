@@ -1084,9 +1084,15 @@ mod tests {
             assert_eq!(ours.period, period, "{name} at {view:?}");
             // The built-ins' Newton at that period lands there too.
             let theirs = crate::escape::nucleus::find_nucleus(view.0, view.1, period, view.2 + 16.0, power).unwrap();
-            let same = |a: &str, b: &str| a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
-            let digits = (view.2 * 0.301) as usize + 6;
-            assert!(same(&ours.re, &theirs.re) >= digits && same(&ours.im, &theirs.im) >= digits, "{name}: ({}, {}) against ({}, {})", ours.re, ours.im, theirs.re, theirs.im);
+            // To the view's resolution (a zero part's sign aside).
+            let n = crate::escape::fixedpoint::limbs_for_zoom(view.2 + 40.0);
+            let gap = |a: &str, b: &str| {
+                let (a, b) = (crate::escape::fixedpoint::FixedPoint::from_decimal(a, n).unwrap(), crate::escape::fixedpoint::FixedPoint::from_decimal(b, n).unwrap());
+                let d = a.sub(&b).to_floatexp();
+                if d.m == 0.0 { f64::NEG_INFINITY } else { d.e as f64 + d.m.abs().log2() }
+            };
+            let (gr, gi) = (gap(&ours.re, &theirs.re), gap(&ours.im, &theirs.im));
+            assert!(gr < -(view.2 + 16.0) && gi < -(view.2 + 16.0), "{name}: ({}, {}) against ({}, {}): 2^{gr}, 2^{gi}", ours.re, ours.im, theirs.re, theirs.im);
         }
         // Detect period: at the nucleus to 60 octaves, the period the
         // built-ins' detection gives, at the octave it closes.

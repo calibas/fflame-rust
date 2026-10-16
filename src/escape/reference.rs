@@ -44,24 +44,19 @@ fn nucleus_for_view(
     Some((hit.re, hit.im, hit.period, off))
 }
 
-/// A custom formula's nucleus for the view (plan, phase 4, step 9c):
-/// [`nucleus_for_view`] through the formula's own derivative
-/// (`lang::periodic`). The period is searched no further than the orbit
-/// a plain reference would need (`max_iter`) or Newton's budget.
-fn custom_nucleus_for_view(
+/// A custom formula's nucleus for the view at a period its reference's
+/// build found (plan, phase 4, step 9c; `lang::periodic::SlopeWatch`):
+/// [`nucleus_for_view`]'s Newton through the formula's own derivative,
+/// and the offset.
+fn custom_nucleus_at(
+    search: &crate::escape::lang::periodic::NucleusSearch,
     center_re: &str,
     center_im: &str,
     zoom_log2: f64,
     height_px: f64,
-    map_params: [f32; 2],
-    max_iter: u32,
+    period: u32,
 ) -> Option<(String, String, u32, [f32; 2])> {
-    let search = crate::escape::custom::nucleus_search(map_params)?;
-    // No period Newton would not run for is looked for: a search that
-    // finds none costs its depth in passes of the formula and its
-    // derivative, twice a plain pass.
-    let depth = CUSTOM_NEWTON_PERIODS.min(max_iter.max(1));
-    let hit = search.locate(center_re, center_im, zoom_log2, depth, CUSTOM_NEWTON_PERIODS)?;
+    let hit = search.nucleus_at(center_re, center_im, zoom_log2, period)?;
     let off = nucleus_offset(center_re, center_im, &hit.re, &hit.im, zoom_log2, height_px)?;
     Some((hit.re, hit.im, hit.period, off))
 }
@@ -677,6 +672,11 @@ pub struct ReferenceOrbit {
     /// plane, one machine): what a closing iterate is measured against
     /// (plan, phase 4, step 9c). `None` otherwise, and on a store load.
     custom_start: Option<BigComplex>,
+    /// The nucleus search's test riding on the custom family's build
+    /// (`lang::periodic::SlopeWatch`), no further than its cap; and the
+    /// period it found, which stops the build there.
+    custom_watch: Option<(crate::escape::lang::periodic::SlopeWatch, u32)>,
+    custom_found: Option<u32>,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -1015,6 +1015,8 @@ impl ReferenceOrbit {
             custom: Vec::new(),
             custom_live: Vec::new(),
             custom_start: None,
+            custom_watch: None,
+            custom_found: None,
             store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
@@ -1223,6 +1225,23 @@ impl ReferenceOrbit {
         false
     }
 
+    /// The nucleus search's test after a pass (`custom_watch`): true when
+    /// it found the period, which stops the build for the caller's Newton.
+    fn custom_watched(&mut self, z_prev: Option<crate::escape::lang::builtins::C64>) -> bool {
+        let (Some(z_prev), Some((watch, cap))) = (z_prev, self.custom_watch.as_mut()) else {
+            return false;
+        };
+        if watch.observe(z_prev, &self.zb) {
+            self.custom_found = Some(watch.passes());
+            self.custom_watch = None;
+            return true;
+        }
+        if watch.passes() >= *cap {
+            self.custom_watch = None;
+        }
+        false
+    }
+
     /// Newton / Halley / Chebyshev over the polynomial functions, with
     /// complex relaxation; Nova adds c. The big-float twin of the
     /// formula's `newton_delta`.
@@ -1357,9 +1376,10 @@ impl ReferenceOrbit {
         }
         while (self.orbit.len() as u32) <= max_iter {
             if !self.custom.is_empty() {
+                let z_prev = self.custom_watch.as_ref().map(|_| crate::escape::lang::builtins::C64::new(self.zb.re.to_f64(), self.zb.im.to_f64()));
                 match self.step_custom() {
                     Some(true) => {
-                        if self.custom_closes() {
+                        if self.custom_closes() || self.custom_watched(z_prev) {
                             return;
                         }
                         continue;
@@ -2030,6 +2050,8 @@ impl ReferenceOrbit {
                     custom: Vec::new(),
                     custom_live: Vec::new(),
                     custom_start: None,
+                    custom_watch: None,
+                    custom_found: None,
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -2198,6 +2220,8 @@ impl ReferenceOrbit {
             custom: Vec::new(),
             custom_live: Vec::new(),
             custom_start: None,
+            custom_watch: None,
+            custom_found: None,
             corrections,
             shadow,
             c_dd,
@@ -3158,7 +3182,22 @@ impl ReferenceOrbit {
                 _ => log::warn!("custom reference period {p} rejected: the centre's orbit does not close at it"),
             }
         }
-        if let Some((nre, nim, period, off)) = custom_nucleus_for_view(center_re, center_im, zoom_log2, height_px, map_params, horizon) {
+        // The plain reference first, the nucleus search's test riding on its
+        // build (no further than Newton would run, or the orbit is needed):
+        // a search that finds nothing costs a pass of the derivative in f64
+        // beside each big-float one. A period found stops the build there,
+        // for Newton.
+        let mut plain = Self::compute(center_re, center_im, zoom_log2, Some(n), 0, None, 2, false, MAP_CUSTOM, map_params)?;
+        let search = crate::escape::custom::nucleus_search(map_params);
+        let depth = CUSTOM_NEWTON_PERIODS.min(horizon.max(1));
+        if let (Some(search), Some(z0)) = (&search, plain.custom_start.clone()) {
+            let c = crate::escape::lang::builtins::C64::new(plain.c.re.to_f64(), plain.c.im.to_f64());
+            plain.custom_watch = search.watch(c, z0, 1.0 - zoom_log2).map(|w| (w, depth));
+        }
+        plain.extend(depth);
+        plain.custom_watch = None;
+        let found = plain.custom_found.take();
+        if let Some((nre, nim, period, off)) = found.zip(search.as_ref()).and_then(|(p, s)| custom_nucleus_at(s, center_re, center_im, zoom_log2, height_px, p)) {
             let nn = super::fixedpoint::limbs_for_view(&nre, &nim, zoom_log2);
             if let Some(mut orbit) = Self::compute(&nre, &nim, zoom_log2, Some(nn), period, None, 2, false, MAP_CUSTOM, map_params) {
                 // Its own closure detection is the check: the orbit
@@ -3181,7 +3220,8 @@ impl ReferenceOrbit {
                 log::warn!("custom nucleus of period {period} does not close below the limit of zoom {zoom_log2:.0}");
             }
         }
-        plain()
+        plain.extend(max_iter);
+        Some(plain)
     }
 
     /// `|Z - Z_0|`'s octave for the custom family's live iterate, where
