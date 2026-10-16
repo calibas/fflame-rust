@@ -2088,8 +2088,12 @@ impl EscapeRenderer {
             }
             // Abs-folds (and a log): not holomorphic, no linear model.
             assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
-            // A custom formula's step is its own; no table models it
-            // (plan, phase 3).
+            // A custom formula's step is its own: its table is built from
+            // its own derivative where skipping is sound (phase 4, step
+            // 9: `custom::bla_steps`), with one reference and nothing
+            // carried, so the orbit's entry is the step. `power` is
+            // then only the table's cache key.
+            assembler::PerturbTier::Custom { stride: 1, width: 1, .. } => 0,
             assembler::PerturbTier::Custom { .. } => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
@@ -2264,8 +2268,22 @@ impl EscapeRenderer {
             let e = dc_built.floor();
             super::bla::MagFe { m: 2f64.powf(dc_built - e), e: e as i64 }
         };
-        let table =
-            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built);
+        let table = if let assembler::PerturbTier::Custom { .. } = tier {
+            // Each step from Z_n, n below the last entry. The reference's
+            // pixel is the view's centre: the nucleus offset is pixels at
+            // depth, far below the f64 the coefficients are taken in.
+            let (cx, cy) = escape.center_f64();
+            let reference = super::lang::builtins::C64::new(cx, cy);
+            match super::custom::bla_steps(escape, &orbit_data[..prefix - 1], reference) {
+                Some(steps) => super::bla::BlaTable::build_from_steps(steps, dc, dc_built),
+                None => {
+                    self.bla_built = None;
+                    return false;
+                }
+            }
+        } else {
+            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built)
+        };
         let n_levels = table.levels.len().min(30);
         let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
         if total == 0 {

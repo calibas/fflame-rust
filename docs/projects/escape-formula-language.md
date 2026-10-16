@@ -22,7 +22,8 @@ the init derived) 2026-10-15; step 5 (carried state in deep zoom, one
 value) 2026-10-15; step 6 (transcendental functions and powers by
 difference forms, user functions, branches on the iterate) 2026-10-15;
 step 7 (hybrids of any formulas) 2026-10-15; step 8 (parameters and
-scripting; not held structural keyframes) 2026-10-15.
+scripting; not held structural keyframes) 2026-10-15; step 9a (BLA for
+holomorphic custom formulas) 2026-10-16.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1298,6 +1299,23 @@ keeps compiling as UF; the editor converts what it opens.
    folds), nucleus references through the IR's derivative, the Jacobian
    DE for folds; then the native code retires, family by family, and
    the twins become the definitions.
+   - **9a, done 2026-10-16: BLA for holomorphic custom formulas.**
+     Measured first (`measure_the_custom_tier_against_the_native_one`):
+     at zoom 42 with 8,000 iterations the built-in and the twin take
+     the same 0.04-0.16 s, BLA or not; at zoom 60 with 30,000 (floatexp)
+     the built-in takes 0.17 s with BLA and 0.80 s per step, the twin
+     1.11 s. The twin's table now comes from its own derivative
+     (`custom::bla_steps`; ESCAPE.md, BLA): 0.12 s. Refused where
+     skipping is not sound (folds, branches on the iterate, carried
+     state, phases, non-analytic user-function choices, tests other than
+     z's modulus). The deep twins count as before against the truth
+     (Mandelbrot 400 of 439 at zoom 42, Lambda 361, the Multibrot at
+     power 4 400); the twin alone at the walked edges 374 and 393.
+   - Next, in order: the 2x2 real Jacobian for folds (the Ship family
+     and the fold hybrids, whose deep counts at busy edges are also the
+     open question from step 7); then nucleus references through the
+     IR's derivative; then the Jacobian DE; then retiring native code,
+     family by family, where the twin matches it in speed and accuracy.
 
 Probably native for good: Origami (fold lines computed on the CPU),
 Littlewood, Digit Set.

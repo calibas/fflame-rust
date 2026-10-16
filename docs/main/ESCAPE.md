@@ -559,8 +559,8 @@ or Small (the deviation's, held in units of S as the built-in tiers'
 is a `CFe2`, `#z` read from the reference's double-float entry
 (`lang::wgsl::formula_perturb_fe`, with `PERTURB_FE_HELPERS` beside the
 template's own). A formula whose loop carries more than z (a `zold`)
-rebases only where the orbit ends. No BLA and no derivative on this
-tier, so a deep custom view iterates every step.
+rebases only where the orbit ends. No derivative on this tier; BLA
+where skipping is sound ([BLA](#bla), phase 4, step 9).
 `interp::run_perturbed` is the f64 model of the path.
 
 **Derived equations.** A formula without `perturbloop:` -- most of
@@ -1216,11 +1216,32 @@ passes need no wider storage.
 `bla.rs` builds a bivariate linear approximation table (Zhuoran's
 construction, as described by Claude Heiland-Allen): where the delta step
 is locally linear, a run of 2^ℓ steps becomes one affine application.
-Entries carry `f64` mantissas with a shared exponent. It applies only to
-the holomorphic `zᵖ + c` tier (Mandelbrot, integer Multibrot), and not
-when the base or layer colouring accumulates or detects periods, since
-skipped steps never run those updates. `ESCAPE_BLA=0` disables it for
-bisection.
+Entries carry `f64` mantissas with a shared exponent. It applies to the
+holomorphic `zᵖ + c` tier (Mandelbrot, integer Multibrot) and to custom
+formulas where skipping is sound, and not when the base or layer
+colouring accumulates or detects periods, since skipped steps never run
+those updates. `ESCAPE_BLA=0` disables it for bisection.
+
+**Custom formulas** (phase 4, step 9: `custom::bla_steps`,
+`BlaTable::build_from_steps`): each reference step's single entry comes
+from the formula's own derivative program (`lang::derive`), run one pass
+from the reference's state at `Z_n` (`interp::step_coefficients`): with
+the iterate's derivative 0 it gives `B`, with 1 `A + B`. The radius keeps
+the dropped second-order term under `BLA_EPS` of the linear one, `r = 2
+eps |A| / |f''|`, `f''` from `A`'s difference across `Z_n ± 2^-20 |Z_n|`
+(for `z² + c` exactly the power table's `2 eps |Z|`). The merges and
+the shader's skips are the power tier's: one reference, nothing carried,
+so the orbit's entry is the step. Skipping is refused where it is not
+sound: a step that is not holomorphic (a fold, `conj`, a part), a branch
+on the iterate, a value carried besides z or a hybrid's phases, a user
+function set to a choice with no complex derivative, a test other than
+z's modulus under a bound (a skip could cross a convergent formula's
+settle). Measured on the deep seahorse view at zoom 60 with 30,000
+iterations (512x384, floatexp): the Mandelbrot's twin in 0.12 s with its
+table, 1.12 s per step, the built-in 0.17 s; the table's coefficients
+for a million-step orbit take 0.24 s on the CPU. At the hybrid test's
+walked edges the twin with its table counts right on 374 and 393 of 439
+sampled pixels (zoom 24 and 51).
 
 ### Nucleus finding
 
@@ -1310,6 +1331,7 @@ Common conditions: past the view's [direct limit](#where-the-direct-path-ends), 
 | `nova` | `Nova(p)` | integer `p` 2–12 | no |
 | `kaliset` | `Kaliset` | both sign branches | no |
 | `ducks` | `Ducks(v)` | variants 0 and 4 | no |
+| custom | `Custom` | derived or own equations | where sound (`custom::bla_steps`) |
 
 `EscapeRenderer::perturb_tier` is the authority. Everything else —
 the transcendental formulas, Spider, Barnsley, Cactus, Collatz,

@@ -2703,11 +2703,15 @@ final:
         let shallow = ("-0.743643887037158704752191506114774", "0.131825904205311970493132056385139");
         let threshold = ("-0.74364388703715870475481082977993857803", "0.13182590420531251981651559677435626549");
         let edge = ("-0.74364388703715870475481082977993857803", "0.13182590420531291981651559677435626549");
+        // The deep views skip by BLA (phase 4, step 9: the custom
+        // formula's table from its own derivative, the same as the
+        // built-in's for z^2 + c), which trades accuracy for speed as the
+        // built-in does: both count the same pixels exactly there.
         for (centre, zoom, iters, need, stride) in [
             (shallow, 20.0f64, 300u32, 0.99, 7usize),
             (shallow, 20.0, 2000, 0.0, 7),
-            (threshold, 48.5, 8000, 0.9, 13),
-            (edge, 60.0, 30000, 0.9, 29),
+            (threshold, 48.5, 8000, 0.8, 13),
+            (edge, 60.0, 30000, 0.8, 29),
         ] {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.center_re = centre.0.into();
@@ -2917,6 +2921,9 @@ final:
             ("alternating", Hybrid { groups: vec![group(1, op(2, [1.0, 0.0])), group(1, turned.clone())], loop_start: 0 }),
             ("with a prefix", Hybrid { groups: vec![group(1, op(3, [1.0, 0.0])), group(1, op(2, [1.0, 0.0])), group(2, turned)], loop_start: 1 }),
             ("twins taking turns", Hybrid { groups: vec![twin("mandelbrot"), twin("burning_ship")], loop_start: 0 }),
+            // One group, no cycle: the Mandelbrot's twin, skipping by its
+            // own BLA table (phase 4, step 9) at the walked edges.
+            ("the Mandelbrot's twin alone", Hybrid { groups: vec![twin("mandelbrot")], loop_start: 0 }),
         ];
         // The twins' hybrid has a fold, which at these walked edges KF's
         // lines of the same hybrid count far less well on too (80 and
@@ -2950,7 +2957,7 @@ final:
                 let esc = view(hybrid, &format!("{cx:.20}"), &format!("{cy:.20}"), zoom, iters);
                 if zoom == 24.0 || zoom == 51.0 {
                     let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
-                    let stride = 1 + hybrid.cycle().period as u8;
+                    let stride = if hybrid.groups.len() > 1 { 1 + hybrid.cycle().period as u8 } else { 1 };
                     assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, stride: s, .. }) if s == stride), "{name}: {tier:?}");
                     let got = records_on(&esc, w, h, false, true, false);
                     let truth = truth_counts_of(prog.clone(), params.clone(), (&esc.center_re, &esc.center_im), zoom, iters, (w, h), 7, 6);
@@ -15430,12 +15437,73 @@ fn main() {
         escape.destroy();
         renderer.destroy();
     }
+
+    /// MEASUREMENT (plan, phase 4, step 9): a deep view rendered whole by
+    /// the built-in Mandelbrot -- with its BLA skips and without -- and by
+    /// its Rhai twin on the custom tier, warm, wall-clock to settled.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_the_custom_tier_against_the_native_one() {
+        let (device, queue) = repro_device();
+        let (w, h) = (512u32, 384u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.center_re = "-0.7436438870371587047548108297799385780".into();
+        esc.center_im = "0.13182590420531251981651559677435626549".into();
+        esc.zoom_log2 = 42.0;
+        esc.max_iter = 8000;
+        esc.bailout = 4.0;
+        let twin = {
+            let src = crate::escape::twins::custom_source("mandelbrot").unwrap();
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            crate::escape::custom::ensure(&t);
+            t
+        };
+        let time = |esc: &crate::config::escape::EscapeConfig, bla: bool, floatexp: bool| -> f64 {
+            let mut best = f64::INFINITY;
+            for _ in 0..2 {
+                let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+                r.force_perturbed = true;
+                r.force_floatexp = floatexp;
+                r.disable_bla = !bla;
+                let start = std::time::Instant::now();
+                loop {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                    let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if settled {
+                        break;
+                    }
+                }
+                best = best.min(start.elapsed().as_secs_f64());
+                r.destroy();
+            }
+            best
+        };
+        for (zoom, iters) in [(42.0, 8000), (60.0, 30000)] {
+            let (mut esc, mut twin) = (esc.clone(), twin.clone());
+            for e in [&mut esc, &mut twin] {
+                e.zoom_log2 = zoom;
+                e.max_iter = iters;
+            }
+            for floatexp in [false, true] {
+                if zoom > 48.0 && !floatexp {
+                    continue;
+                }
+                let native = time(&esc, true, floatexp);
+                let native_per_step = time(&esc, false, floatexp);
+                let custom = time(&twin, false, floatexp);
+                let custom_bla = time(&twin, true, floatexp);
+                println!(
+                    "zoom {zoom}, {w}x{h}, {iters} iterations, {}: built-in with BLA {native:.2} s, per step {native_per_step:.2} s; twin with BLA {custom_bla:.2} s, per step {custom:.2} s",
+                    if floatexp { "floatexp rung" } else { "scaled rung" }
+                );
+            }
+        }
+    }
 }
-
-
-
-
-
-
-
-

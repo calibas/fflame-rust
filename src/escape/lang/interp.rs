@@ -187,6 +187,50 @@ pub struct Run {
     pub dz: C64,
 }
 
+/// Each reference step's linear part (phase 4, step 9: BLA for custom
+/// formulas). For the step from the orbit's entry `Z_n`: `A`, its
+/// derivative in z, and `B`, in the pixel -- from the program extended
+/// with its derivative (`derive::with_derivative`, `dp`), run one pass
+/// from the reference's state with the iterate's derivative 0 (giving
+/// B) and 1 (A + B) -- and the size of its second derivative in z, by
+/// A's difference across a small step either side of `Z_n`. The
+/// reference's state is its init's, run at `env`: a formula whose loop
+/// carries nothing but z, as BLA needs, reads nothing else from pass to
+/// pass.
+pub(crate) fn step_coefficients(dp: &Program, params: &ParamValues, env: &Env, orbit: &[[f64; 2]]) -> Option<Vec<(C64, C64, f64)>> {
+    let dz = dp.dz_var?;
+    let mut base = Machine::new(dp, params);
+    let mut sh = Shared::new(env);
+    base.exec(&dp.global_body, &mut sh);
+    base.exec(&dp.init, &mut sh);
+    let state = base.vars;
+    // z' and its derivative after one pass from z with derivative d.
+    let pass = |z: C64, d: C64| -> C64 {
+        let mut m = Machine { prog: dp, params, vars: state.clone() };
+        let mut sh = Shared::new(env);
+        sh.z = z;
+        m.vars[dz] = Value::Complex(d);
+        m.exec(&dp.loop_body, &mut sh);
+        m.vars[dz].as_c64()
+    };
+    let one = |n: usize| -> (C64, C64, f64) {
+        let z = C64::new(orbit[n][0], orbit[n][1]);
+        let a_at = |z: C64| pass(z, C64::ONE).sub(pass(z, C64::ZERO));
+        let b = pass(z, C64::ZERO);
+        let a = pass(z, C64::ONE).sub(b);
+        let h = (z.abs() * 2f64.powi(-20)).max(1e-280);
+        let f2 = a_at(z.add(C64::new(h, 0.0))).sub(a_at(z.sub(C64::new(h, 0.0)))).abs() / (2.0 * h);
+        (a, b, f2)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        Some((0..orbit.len()).into_par_iter().map(one).collect())
+    }
+    #[cfg(target_arch = "wasm32")]
+    Some((0..orbit.len()).map(one).collect())
+}
+
 /// `f(a + d) - f(a)` for the user function choice `k`, by the form the
 /// derived equations use (`delta::user_diff_forms`); NaN for a choice
 /// without one.
