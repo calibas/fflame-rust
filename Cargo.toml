@@ -25,6 +25,9 @@ ron = "0.8"
 log = "0.4"
 anyhow = "1.0"
 bytemuck = { version = "1.14", features = ["derive"] }
+# The escape engine's big floats keep their limbs inline (already in the
+# tree through wgpu).
+smallvec = "1.15"
 half = "2.4"
 rand = { version = "0.9", features = ["os_rng"] }
 web-time = "1.1"

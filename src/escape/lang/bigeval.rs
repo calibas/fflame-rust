@@ -21,6 +21,19 @@ use super::ir::*;
 use super::Dialect;
 use crate::escape::bigfloat::{BigComplex, BigFloat};
 
+/// A real, whole `w` of modest size, as an integer.
+fn whole(w: &BigComplex) -> Option<i64> {
+    if !w.im.is_zero() {
+        return None;
+    }
+    let x = w.re.to_f64();
+    if !(x.abs() <= 65_536.0) || x != x.round() {
+        return None;
+    }
+    let n = x as i64;
+    w.re.sub(&BigFloat::from_f64(x, w.re.n_limbs())).is_zero().then_some(n)
+}
+
 /// Why the orbit cannot go on: a value a big float has no answer for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stop;
@@ -382,6 +395,11 @@ impl BigMachine {
         if b.is_zero() {
             return Ok(self.f(1.0));
         }
+        // A whole exponent by repeated squaring, as `cpow`.
+        if let Some(n) = whole(&BigComplex { re: b.clone(), im: BigFloat::zero(self.n) }) {
+            let z = self.cpowi(&BigComplex { re: a.clone(), im: BigFloat::zero(self.n) }, n)?;
+            return Ok(z.re);
+        }
         if a.is_zero() {
             return Ok(BigFloat::zero(self.n));
         }
@@ -413,8 +431,14 @@ impl BigMachine {
         Ok(acc)
     }
 
-    /// `z^w = exp(w log z)`, and 0 at the origin.
+    /// `z^w = exp(w log z)`, and 0 at the origin; a whole real `w` (a
+    /// power given as a parameter, the Multibrot's) by repeated squaring,
+    /// the same value without the exponential's cost -- a pass of the
+    /// Multibrot's twin took 79 us through `exp` and `log`.
     fn cpow(&self, z: &BigComplex, w: &BigComplex) -> R<BigComplex> {
+        if let Some(n) = whole(w) {
+            return self.cpowi(z, n);
+        }
         if z.is_zero() {
             return Ok(BigComplex::zero(self.n));
         }
@@ -706,5 +730,45 @@ mod tests {
         let d = a.z().sub(b.z());
         assert!(!d.is_zero(), "the two orbits are one: the digits were lost");
         assert!(d.norm_sqr().to_f64() < 1e-30, "and they stay close");
+    }
+}
+
+#[cfg(test)]
+mod speed {
+    use super::*;
+    use super::super::builtins::C64;
+
+    /// MEASUREMENT: a pass of each twin in big floats, 3 limbs.
+    #[test]
+    #[ignore = "measurement"]
+    fn measure_a_pass_of_each_twin() {
+        for (name, params) in [("mandelbrot", vec![]), ("multibrot", vec![("power", 4.0)]), ("tricorn", vec![("power", 2.0)]), ("burning_ship", vec![("variant", 0.0)]), ("lambda", vec![]), ("phoenix", vec![]), ("manowar", vec![])] {
+            let src = crate::escape::twins::custom_source(name).unwrap();
+            let p = std::sync::Arc::new(crate::escape::custom::check_entry(super::super::EntryKind::Formula, &src).unwrap());
+            let mut pv = ParamValues::defaults(&p);
+            for (k, v) in &params {
+                if let Some(i) = p.params.iter().position(|x| x.name == *k) {
+                    pv.values[i].0 = *v;
+                }
+            }
+            let n = 3;
+            let c = BigComplex::from_f64(-0.5, -0.5, n);
+            let mut m = BigMachine::new(p.clone(), pv, Env::at(C64::new(-0.5, -0.5), 20000), c, n).unwrap();
+            let steps = 2000;
+            let t = std::time::Instant::now();
+            for _ in 0..steps {
+                let _ = m.step();
+            }
+            println!("{name}: {:.2} us a pass", t.elapsed().as_secs_f64() * 1e6 / steps as f64);
+        }
+        let n = 3;
+        let a = BigFloat::from_f64(0.7, n);
+        let b = BigFloat::from_f64(-0.3, n);
+        let t = std::time::Instant::now();
+        let mut x = a.clone();
+        for _ in 0..100_000 {
+            x = x.mul(&b).add(&a);
+        }
+        println!("BigFloat mul+add: {:.1} ns ({})", t.elapsed().as_secs_f64() * 1e9 / 100_000.0, x.to_f64());
     }
 }

@@ -1377,6 +1377,18 @@ keeps compiling as UF; the editor converts what it opens.
      points, so every derived form follows, and damped or biomorph
      custom formulas deep-zoom, which the built-ins cannot. The twins
      render as their built-ins with either on.
+   - **Speed (2026-10-16)**, measured twin against built-in
+     (`measure_twins_against_their_builtins`; ESCAPE.md, How fast the
+     twins are). The custom references were the gap: the nucleus
+     search, a second orbit in big floats with the derivative program,
+     cost 2 s before a 0.19 s reference at a Ship's interior; it now
+     rides on the reference's build with the slope in f64, and Newton
+     takes the slope in f64 too, in big floats only to finish a double
+     root. Big floats keep their limbs inline (2.5x a pass); whole real
+     powers by squaring (the Multibrot's twin 79 us a pass to 1.6). The
+     Mandelbrot's twin is now faster than the built-in at depth. Left:
+     the derived equations on the GPU (the Ship's at floatexp ~3x), the
+     custom BLA table's build, and the orbit store for custom formulas.
    - Next: retiring native code, family by family, where the twin
      matches it in speed and accuracy -- a decision for the user. Open: the deep
      rung's BLA at 2^-24 costs the floatexp rung's double float a

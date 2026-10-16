@@ -227,6 +227,80 @@ impl<'p> PerturbStepper<'p> {
     }
 }
 
+/// A derivative program (`derive::with_derivative`) stepped in f64 at
+/// iterates given from outside: the nucleus search's slope beside a
+/// big-float orbit (plan, phase 4, step 9c, made cheap). Every derivative
+/// the state holds -- the iterate's, the init's constants', the pixel's
+/// own -- is kept in units of `2^e`, rescaled together as `e` moves, as
+/// the GPU's floatexp rung keeps them, so it does not overflow however
+/// deep the view: the iterate's pair is `(P, Q) 2^e`.
+pub(crate) struct DerivStepper {
+    prog: std::sync::Arc<Program>,
+    params: ParamValues,
+    env: Env,
+    vars: Vec<Value>,
+    /// The first variable the derivative pass added: it and every one
+    /// after are derivatives (or a temporary of one).
+    first: usize,
+    p: VarId,
+    q: Option<VarId>,
+    e: i32,
+}
+
+impl DerivStepper {
+    /// The derivative program `d` of a program with `first` variables,
+    /// started at `env.pixel`: its `global:` and `init:` run.
+    pub(crate) fn new(d: std::sync::Arc<Program>, first: usize, params: ParamValues, env: Env) -> Option<Self> {
+        let (p, q) = (d.dz_var?, d.dzq_var);
+        let (vars, _) = {
+            let mut m = Machine::new(&d, &params);
+            let mut sh = Shared::new(&env);
+            m.exec(&d.global_body, &mut sh);
+            m.exec(&d.init, &mut sh);
+            (m.vars, sh.z)
+        };
+        Some(DerivStepper { prog: d, params, env, vars, first, p, q, e: 0 })
+    }
+
+    /// One pass from the iterate `z`.
+    pub(crate) fn step(&mut self, z: C64) {
+        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars) };
+        let mut sh = Shared::new(&self.env);
+        sh.z = z;
+        m.exec(&self.prog.loop_body, &mut sh);
+        self.vars = m.vars;
+        // The larger part near one, the exponent at zero or above.
+        let (p, q) = self.pair();
+        let a = p.re.abs().max(p.im.abs()).max(q.re.abs()).max(q.im.abs());
+        if !(a <= f64::MAX) {
+            return;
+        }
+        if a > 0.0 {
+            let k = (a.log2().floor() as i32).max(-self.e);
+            if k != 0 {
+                let s = (-f64::from(k)).exp2();
+                for v in &mut self.vars[self.first..] {
+                    if let Value::Complex(c) = v {
+                        *c = c.scale(s);
+                    } else if let Value::Float(x) = v {
+                        *x *= s;
+                    }
+                }
+                self.e += k;
+            }
+        }
+    }
+
+    /// The iterate's pair in units of `2^e`, and `e`.
+    pub(crate) fn pair(&self) -> (C64, C64) {
+        (self.vars[self.p].as_c64(), self.q.map_or(C64::ZERO, |q| self.vars[q].as_c64()))
+    }
+
+    pub(crate) fn exponent(&self) -> i32 {
+        self.e
+    }
+}
+
 /// `f(a + d) - f(a)` for the user function choice `k`, by the form the
 /// derived equations use (`delta::user_diff_forms`); NaN for a choice
 /// without one.
