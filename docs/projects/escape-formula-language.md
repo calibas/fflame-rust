@@ -1250,10 +1250,12 @@ keeps compiling as UF; the editor converts what it opens.
      Phoenix member keeps its previous z across the Mandelbrot's turns;
      the composed program round-trips through its Rhai. At depth it
      counts as the lines do (103 / 105 of 439 at zoom 24, 83 / 84 at
-     51). **Open**: those counts are low for both. A hybrid with a fold
-     counts far worse at the walked edges than one without (343 to
-     439); the fold alone (the Ship twin at zoom 60) does well. Not
-     yet understood: the phases with diffabs, or the edges' chaos.
+     51). Those counts are low for both, which was open until
+     2026-10-16: the walked edges of a fold map are chaotic. The Ship
+     twin alone at its walked edge, zoom 12: the direct render counts
+     93 of 439 as the big-float reference does, the built-in tier 105,
+     the twin 104, and the paths agree with one another no better
+     (built-in and twin on 109). Not a perturbation fault.
 8. **Parameters and scripting** (done 2026-10-15, but for held
    structural keyframes): the metadata drives sliders and animation
    targets; a complex parameter animates as a point (x/y, or radius and
@@ -1312,10 +1314,14 @@ keeps compiling as UF; the editor converts what it opens.
      (Mandelbrot 400 of 439 at zoom 42, Lambda 361, the Multibrot at
      power 4 400); the twin alone at the walked edges 374 and 393.
    - Next, in order: the 2x2 real Jacobian for folds (the Ship family
-     and the fold hybrids, whose deep counts at busy edges are also the
-     open question from step 7); then nucleus references through the
-     IR's derivative; then the Jacobian DE; then retiring native code,
-     family by family, where the twin matches it in speed and accuracy.
+     and the fold hybrids: a real-linear map is `P d + Q conj(d)`, so a
+     table entry is two complex coefficients for A and two for B, with a
+     radius bounded by each fold's distance to its axis; a new entry
+     layout and skip in both shader rungs); then nucleus references
+     through the IR's derivative; then the Jacobian DE; then retiring
+     native code, family by family, where the twin matches it in speed
+     and accuracy -- a decision for the user, since the twins lack Mann
+     damping and the biomorph test.
 
 Probably native for good: Origami (fold lines computed on the CPU),
 Littlewood, Digit Set.

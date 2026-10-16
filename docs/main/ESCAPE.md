@@ -761,8 +761,15 @@ The Mandelbrot's and the Burning Ship's twins taking turns run as KF's
 lines taking the same turns, on both planes, and at depth count as
 those lines do (103 and 105 of 439 sampled pixels at zoom 24, 83 and 84
 at 51, at the walked edges of `a_hybrid_perturbs_with_a_reference_per_phase`).
-Those counts are low for both: a hybrid with a fold counts far worse at
-such edges than one without (343 to 439); not yet understood.
+Those counts are low for both, and not a fault of either: the walked
+edges of a map with a fold are chaotic. Measured on the Burning Ship's
+twin alone, walked to an edge: at zoom 12, where f32 resolves the
+pixels easily, the plain direct render counts 93 of 439 sampled pixels
+as the big-float reference does, the built-in's hand-derived tier 105,
+the twin 104, and the paths agree with one another no better (the
+built-in and the twin on 109; each with its own floatexp rung on about
+as few). The counts there spread from the first steps to the cap and
+follow rounding, the reference's included.
 
 **Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
 and direct colouring.
