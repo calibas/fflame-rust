@@ -316,6 +316,13 @@ impl BlaTable {
                 .mul(MagFe::from_f64(BLA_EPS * 2.0 / (p as f64 - 1.0)));
             BlaEntry { a, b: Cfe64::from_f64(1.0, 0.0), r }
         });
+        Self::build_from_steps(level0, dc, dc_max_hint)
+    }
+
+    /// A table from its single-step entries, computed elsewhere: a
+    /// custom formula's from its own derivative (phase 4, step 9,
+    /// `lang::interp::step_coefficients`).
+    pub fn build_from_steps(level0: Vec<BlaEntry>, dc: MagFe, dc_max_hint: f64) -> Self {
         let mut levels = Vec::new();
         if level0.len() >= 2 {
             levels.push(Self::merge_level(&level0, dc));

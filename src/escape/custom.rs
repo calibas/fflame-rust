@@ -462,6 +462,101 @@ fn reference_inputs(escape: &EscapeConfig, prog: &Arc<ir::Program>) -> Option<Re
     Some(ReferenceInputs { prog: prog.clone(), params, env })
 }
 
+/// A custom formula's BLA steps (phase 4, step 9): each reference step's
+/// linear part, `A` (in z) and `B` (in the pixel), with the radius below
+/// which its dropped second-order term stays under `bla::BLA_EPS` of the
+/// linear one -- the single-step entries `bla::BlaTable::build_from_steps`
+/// merges. `reference` is the reference's pixel (its point on the
+/// parameter plane, its start on the Julia plane). `None` where skipping
+/// is not sound: a step that is not holomorphic, a branch on the iterate
+/// (a skip could cross it), state carried besides z or phases (a skip
+/// advances neither), a user function set to a choice with no complex
+/// derivative, or a test other than z's modulus exceeding a bound (a
+/// skip could cross a convergent formula's settle).
+pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::builtins::C64) -> Option<Vec<super::bla::BlaEntry>> {
+    use ir::{IExpr, IExprKind, IStmt, Predef};
+    use lang::ast::{BinOp, UnOp};
+    let (prog, how, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
+    if how.cycle.is_some() || !how.rebase || !prog.carried.is_empty() {
+        return None;
+    }
+    // Reads the iterate or anything that follows it.
+    fn varies(e: &IExpr, p: &ir::Program) -> bool {
+        match &e.kind {
+            IExprKind::Predef(Predef::Z | Predef::Pixel | Predef::NumIter | Predef::Pass) => true,
+            IExprKind::Var(v) => !p.vars[*v].global,
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => varies(a, p),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => varies(a, p) || varies(b, p),
+            _ => false,
+        }
+    }
+    fn branches_on_the_iterate(stmts: &[IStmt], p: &ir::Program) -> bool {
+        stmts.iter().any(|s| match s {
+            IStmt::Assign(..) => false,
+            IStmt::If { arms, otherwise } => {
+                arms.iter().any(|(c, b)| varies(c, p) || branches_on_the_iterate(b, p)) || branches_on_the_iterate(otherwise, p)
+            }
+            IStmt::While { .. } | IStmt::Repeat { .. } => true,
+        })
+    }
+    if branches_on_the_iterate(&prog.loop_body, &prog) {
+        return None;
+    }
+    // The test: z's modulus (or its square) below a bound the same for
+    // every pixel, or the same negated.
+    fn escapes_on_the_modulus(e: &IExpr, p: &ir::Program) -> bool {
+        let modulus = |x: &IExpr| match &x.kind {
+            IExprKind::Modulus(a) | IExprKind::Call(lang::builtins::Builtin::Cabs, a) => matches!(a.kind, IExprKind::Predef(Predef::Z)),
+            _ => false,
+        };
+        match &e.kind {
+            IExprKind::Binary(BinOp::Lt | BinOp::Le, a, b) => modulus(a) && !varies(b, p),
+            IExprKind::Unary(UnOp::Not, x) => match &x.kind {
+                IExprKind::Binary(BinOp::Gt | BinOp::Ge, a, b) => modulus(a) && !varies(b, p),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    if !prog.bailout.as_ref().is_some_and(|b| escapes_on_the_modulus(b, &prog)) {
+        return None;
+    }
+    let inputs = reference_inputs(escape, &prog)?;
+    // A user function's choice with no complex derivative differentiates
+    // as zero (`lang::derive`): no linear part to skip by.
+    use lang::builtins::{Builtin as B, USER_FUNCTIONS};
+    if inputs.params.funcs.iter().any(|&k| {
+        matches!(
+            USER_FUNCTIONS.get(k),
+            None | Some(B::Abs | B::Cabs | B::Conj | B::Flip | B::Real | B::Imag | B::Cosxx | B::Round | B::Trunc | B::Ceil | B::Floor)
+        )
+    }) {
+        return None;
+    }
+    let dp = lang::derive::with_derivative(&prog)?;
+    let env = lang::interp::Env { pixel: reference, ..inputs.env };
+    let coeffs = lang::interp::step_coefficients(&dp, &inputs.params, &env, orbit)?;
+    use super::bla::{BlaEntry, Cfe64, MagFe, BLA_EPS};
+    Some(
+        coeffs
+            .into_iter()
+            .map(|(a, b, f2)| {
+                // |f''| delta^2 / 2 below eps |A delta|: delta < 2 eps |A| / |f''|.
+                let a_mag = a.abs();
+                let r = if !(a_mag.is_finite() && f2.is_finite()) || a_mag == 0.0 {
+                    MagFe::zero()
+                } else if f2 == 0.0 {
+                    // Linear in z: the term dropped is none.
+                    MagFe { m: 1.0, e: 1 << 20 }
+                } else {
+                    MagFe::from_f64(2.0 * BLA_EPS * a_mag / f2)
+                };
+                BlaEntry { a: Cfe64::from_f64(a.re, a.im), b: Cfe64::from_f64(b.re, b.im), r }
+            })
+            .collect(),
+    )
+}
+
 /// A compiled formula's perturbation equations for the floatexp rung
 /// (`lang::wgsl::formula_perturb_fe`), by its name.
 pub fn perturb_fe_wgsl(name: &str) -> Option<&'static str> {
@@ -681,6 +776,63 @@ mod tests {
 
     fn src(text: &str, entry: &str) -> CustomSource {
         CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string() }
+    }
+
+    /// BLA for custom formulas (phase 4, step 9): the Mandelbrot's twin
+    /// builds the power table's single steps (A = 2Z, B = 1, r = 2 eps
+    /// |Z|) from its own derivative; what skipping is not sound for gets
+    /// none.
+    #[test]
+    fn custom_bla_steps_match_the_power_tables() {
+        use lang::builtins::C64;
+        let config = |src: CustomSource, params: &[(&str, f32)]| {
+            let mut esc = EscapeConfig { bailout: 4.0, ..EscapeConfig::default() };
+            esc.formula = name_of(EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            ensure(&esc);
+            esc
+        };
+        let twin = |name: &str| crate::escape::twins::custom_source(name).unwrap();
+        let c = C64::new(-0.7436, 0.1318);
+        let mut orbit = vec![[0.0f64; 2]];
+        let mut z = C64::ZERO;
+        // To the reference's escape, as the renderer cuts its orbit.
+        for _ in 0..200 {
+            z = z.mul(z).add(c);
+            orbit.push([z.re, z.im]);
+            if z.re * z.re + z.im * z.im > 4.0 {
+                break;
+            }
+        }
+        assert!(orbit.len() > 50, "the orbit is too short to test: {}", orbit.len());
+        let ours = bla_steps(&config(twin("mandelbrot"), &[]), &orbit, c).expect("the Mandelbrot skips");
+        let power = super::super::bla::BlaTable::build(&orbit, 2, 0.0);
+        assert_eq!(ours.len(), orbit.len());
+        for (n, e) in ours.iter().enumerate().take(orbit.len() - 1) {
+            let z = C64::new(orbit[n][0], orbit[n][1]);
+            let (ar, ai) = e.a.to_f64();
+            let (br, bi) = e.b.to_f64();
+            assert!((ar - 2.0 * z.re).abs() <= 1e-12 * z.abs().max(1.0) && (ai - 2.0 * z.im).abs() <= 1e-12 * z.abs().max(1.0), "A at {n}: ({ar}, {ai})");
+            assert!((br - 1.0).abs() < 1e-12 && bi.abs() < 1e-12, "B at {n}: ({br}, {bi})");
+            let want = 2.0 * super::super::bla::BLA_EPS * z.abs();
+            let got = e.r.m * (e.r.e as f64).exp2();
+            assert!(z.abs() < 1e-300 || (got / want - 1.0).abs() < 1e-3, "r at {n}: {got} against {want}");
+        }
+        // The merged table skips as the power table does.
+        assert!(!power.levels.is_empty());
+        // Where skipping is not sound: a fold, a carried value, a test
+        // that is not z's modulus, a user function set to `abs`.
+        assert!(bla_steps(&config(twin("burning_ship"), &[]), &orbit, c).is_none(), "a fold");
+        assert!(bla_steps(&config(twin("phoenix"), &[]), &orbit, c).is_none(), "a carried value");
+        let sine = src("S {\ninit:\n z = #pixel\nloop:\n z = sin(z) * #pixel\nbailout:\n abs(imag(z)) < 40\n}", "S");
+        assert!(bla_steps(&config(sine, &[]), &orbit, c).is_none(), "a test on Im z");
+        let user = src("U {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.01 * @fn1(z)\nbailout:\n |z| < 4\ndefault:\n func fn1\n  default = sin()\n endfunc\n}", "U");
+        assert!(bla_steps(&config(user.clone(), &[]), &orbit, c).is_some(), "sin is analytic");
+        let abs = lang::builtins::USER_FUNCTIONS.iter().position(|f| *f == lang::builtins::Builtin::Abs).unwrap() as f32;
+        assert!(bla_steps(&config(user, &[("fn1", abs)]), &orbit, c).is_none(), "abs is not");
     }
 
     /// Edit as Rhai: a UF formula and its `switch:` Julia become one Rhai
@@ -1300,3 +1452,32 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod bla_cost {
+    use super::*;
+
+    /// MEASUREMENT (phase 4, step 9): what a custom formula's BLA steps
+    /// cost on the CPU for a million-step orbit (an interior point's).
+    #[test]
+    #[ignore = "measurement"]
+    fn measure_custom_bla_steps() {
+        use lang::builtins::C64;
+        let src = crate::escape::twins::custom_source("mandelbrot").unwrap();
+        let mut esc = EscapeConfig { bailout: 4.0, ..EscapeConfig::default() };
+        esc.formula = name_of(EntryKind::Formula, &src);
+        esc.custom_formula = Some(src);
+        ensure(&esc);
+        let c = C64::new(-0.1, 0.1);
+        let mut orbit = Vec::with_capacity(1_000_001);
+        let mut z = C64::ZERO;
+        orbit.push([0.0, 0.0]);
+        for _ in 0..1_000_000 {
+            z = z.mul(z).add(c);
+            orbit.push([z.re, z.im]);
+        }
+        let t = std::time::Instant::now();
+        let steps = bla_steps(&esc, &orbit, c).unwrap();
+        println!("{} steps in {:.2} s", steps.len(), t.elapsed().as_secs_f64());
+    }
+}
