@@ -3451,11 +3451,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
         let tier = Self::perturb_tier(escape)?;
-        // A custom formula's tier carries no derivative (plan, phase 3).
+        // A custom formula carries its own derivative program where it
+        // follows one reference and carries nothing besides z (plan, phase
+        // 4, step 9d).
         let single = !matches!(
             tier,
             assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { .. }
-        );
+        ) || matches!(tier, assembler::PerturbTier::Custom { stride: 1, width: 1, .. });
         // Both rungs carry it; the argument stays for the callers that
         // size the state per rung.
         let _ = floatexp;
@@ -3956,7 +3958,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         | assembler::PerturbTier::Manowar
                         | assembler::PerturbTier::Custom { .. }
                 ) | None
-            );
+            ) || matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Custom { stride: 1, width: 1, .. }));
             if !single {
                 return Some(DerivativeGap::Perturbed);
             }

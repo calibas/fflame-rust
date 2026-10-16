@@ -39,6 +39,16 @@ pub struct NucleusSearch {
     params: ParamValues,
     env: Env,
     dz: VarId,
+    /// The iterate's `Q` where the derivative is a Jacobian (a fold:
+    /// `derive::with_jacobian`, phase 4, step 9d).
+    dzq: Option<VarId>,
+}
+
+/// The derivative at a pass: `(P, Q)`, Q zero where it is complex.
+type Slope = (BigComplex, Option<BigComplex>);
+
+fn conj(z: &BigComplex) -> BigComplex {
+    BigComplex { re: z.re.clone(), im: z.im.neg() }
 }
 
 /// log2 |x|, `None` for zero.
@@ -105,16 +115,51 @@ impl NucleusSearch {
             return None;
         }
         let d = super::derive::with_derivative(prog)?;
-        let dz = d.dz_var?;
-        Some(NucleusSearch { prog: Arc::new(d), params, env, dz })
+        let (dz, dzq) = (d.dz_var?, d.dzq_var);
+        Some(NucleusSearch { prog: Arc::new(d), params, env, dz, dzq })
+    }
+
+    /// The derivative the machine holds.
+    fn slope(&self, m: &BigMachine) -> Slope {
+        (m.complex_var(self.dz), self.dzq.map(|q| m.complex_var(q)))
     }
 
     /// The program at `c`, `n` limbs wide: the machine after its init,
     /// with the start's z and derivative.
-    fn start(&self, c: &BigComplex, n: usize) -> Option<(BigMachine, BigComplex, BigComplex)> {
+    fn start(&self, c: &BigComplex, n: usize) -> Option<(BigMachine, BigComplex, Slope)> {
         let m = BigMachine::new(self.prog.clone(), self.params.clone(), self.env, c.clone(), n).ok()?;
-        let (z0, dz0) = (m.z().clone(), m.complex_var(self.dz));
-        Some((m, z0, dz0))
+        let (z0, d0) = (m.z().clone(), self.slope(&m));
+        Some((m, z0, d0))
+    }
+
+    /// The machine's closure `G = z_n - z_0` and the Newton step solving
+    /// `G'(step) = G`: `G / G'` where the derivative is complex; where it
+    /// is a Jacobian, the real-linear map `d -> P d + Q conj(d)` inverted,
+    /// `(conj(P) G - Q conj(G)) / (|P|^2 - |Q|^2)`; no step past solving
+    /// (a singular derivative, as at a double root's centre).
+    fn step(&self, m: &BigMachine, z0: &BigComplex, d0: &Slope) -> (BigComplex, Option<BigComplex>) {
+        let g = m.z().sub(z0);
+        let (p, q) = self.slope(m);
+        let p = p.sub(&d0.0);
+        let step = match (q, &d0.1) {
+            (Some(q), Some(q0)) => {
+                let q = q.sub(q0);
+                let den = p.norm_sqr().sub(&q.norm_sqr());
+                if den.is_zero() {
+                    return (g, None);
+                }
+                let num = conj(&p).mul(&g).sub(&q.mul(&conj(&g)));
+                let inv = den.recip();
+                BigComplex { re: num.re.mul(&inv), im: num.im.mul(&inv) }
+            }
+            _ => {
+                if p.is_zero() {
+                    return (g, None);
+                }
+                g.div(&p)
+            }
+        };
+        (g, Some(step))
     }
 
     /// The period of the nucleus governing a view (centre `c`, radius
@@ -123,20 +168,14 @@ impl NucleusSearch {
     /// first, its orbit cannot go on, or no pass within `max_period`
     /// does.
     pub fn period(&self, c: &BigComplex, n: usize, radius_log2: f64, max_period: u32) -> Option<u32> {
-        let (mut m, z0, dz0) = self.start(c, n)?;
+        let (mut m, z0, d0) = self.start(c, n)?;
         for p in 1..=max_period {
             if !m.step().ok()? {
                 return None;
             }
-            let g = m.z().sub(&z0);
-            let dg = m.complex_var(self.dz).sub(&dz0);
-            let Some(lg) = log2_abs(&g) else {
+            let (g, step) = self.step(&m, &z0, &d0);
+            if g.is_zero() || step.is_some_and(|s| log2_abs(&s).is_none_or(|l| l <= radius_log2)) {
                 return Some(p);
-            };
-            if let Some(ld) = log2_abs(&dg) {
-                if lg - ld <= radius_log2 {
-                    return Some(p);
-                }
             }
         }
         None
@@ -196,7 +235,7 @@ impl NucleusSearch {
         let mut best: Option<(f64, BigComplex)> = None;
         let mut stalled = 0;
         for _ in 0..64 {
-            let (mut m, z0, dz0) = self.start(&c, n)?;
+            let (mut m, z0, d0) = self.start(&c, n)?;
             for _ in 0..period {
                 // The test is not asked: an iterate past the bailout far
                 // from the nucleus can still come back under Newton. One
@@ -206,10 +245,11 @@ impl NucleusSearch {
                     return None;
                 }
             }
-            let g = m.z().sub(&z0);
+            let (g, step) = self.step(&m, &z0, &d0);
             let Some(lg) = log2_abs(&g).filter(|&l| l > closure_log2) else {
                 return Some(c);
             };
+            let step = step?;
             match &best {
                 Some((b, _)) if lg > b - 1.0 => {
                     stalled += 1;
@@ -222,11 +262,6 @@ impl NucleusSearch {
             if best.as_ref().is_none_or(|(b, _)| lg < *b) {
                 best = Some((lg, c.clone()));
             }
-            let dg = m.complex_var(self.dz).sub(&dz0);
-            if dg.is_zero() {
-                return None;
-            }
-            let step = g.div(&dg);
             let size = log2_abs(&step)?;
             if !size.is_finite() || size > 0.0 {
                 return None;
@@ -327,12 +362,39 @@ mod tests {
     }
 
     /// Where a periodic reference would not wrap exactly, there is no
-    /// search: a value carried besides z, the pass index read, no
-    /// derivative (a fold).
+    /// search: a value carried besides z.
     #[test]
     fn no_search_where_the_wrap_would_not_be_exact() {
         assert!(search("Ph {\ninit:\n z = 0\n y = 0\nloop:\n t = z\n z = sqr(z) + #pixel - 0.5 * y\n y = t\nbailout:\n |z| < 4\n}").is_none(), "carried");
-        assert!(search("S {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < 4\n}").is_none(), "a fold");
+    }
+
+    /// A fold or a conjugate finds its nuclei through the Jacobian (step
+    /// 9d): the Tricorn's period-2 nucleus off the axis, `conj(c)^2 + c =
+    /// 0` at `e^(i pi/3)`, its derivative wholly anti-holomorphic; and the
+    /// Burning Ship's, its orbit closing to the working precision.
+    #[test]
+    fn a_fold_finds_its_nuclei_through_the_jacobian() {
+        // Off the axis, beside the visual suite's deep Ship view.
+        const SHIP: (&str, &str, f64, u32) = ("-1.5715785406521575", "-0.0000077722235157803", 24.0, 96);
+        let n = 3;
+        let t = search("T {\ninit:\n z = 0\nloop:\n z = sqr(conj(z)) + #pixel\nbailout:\n |z| < 4\n}").expect("the Tricorn searches");
+        let c = t.nucleus(&BigComplex::from_f64(0.52, 0.85, n), 2, n, -170.0).expect("converges");
+        let (re, im) = re_im(&c);
+        assert!((re - 0.5).abs() < 1e-15 && (im - 0.75f64.sqrt()).abs() < 1e-15, "({re}, {im})");
+        assert_eq!(t.period(&BigComplex::from_f64(0.5, 0.86, n), n, -6.0, 100), Some(2));
+        let s = search("S {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < 4\n}").expect("the Ship searches");
+        let hit = s.locate(SHIP.0, SHIP.1, SHIP.2, 10_000, 10_000).expect("the Ship's minibrot");
+        assert_eq!(hit.period, SHIP.3);
+        let c = BigComplex {
+            re: BigFloat::from_fixed(&FixedPoint::from_decimal(&hit.re, 4).unwrap()),
+            im: BigFloat::from_fixed(&FixedPoint::from_decimal(&hit.im, 4).unwrap()),
+        };
+        let (mut m, z0, _) = s.start(&c, 4).unwrap();
+        for _ in 0..hit.period {
+            m.step().unwrap();
+        }
+        let left = log2_abs(&m.z().sub(&z0)).unwrap_or(f64::NEG_INFINITY);
+        assert!(left < -170.0, "|z_p - z_0| ~ 2^{left}");
     }
 
     /// Escaping centres and bad guesses fail cleanly.

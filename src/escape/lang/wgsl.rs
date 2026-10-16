@@ -490,11 +490,59 @@ fn cfe2_sinh_small(d: CFe2) -> CFe2 {
 /// colouring reads the derivative: the same functions, a state with the
 /// derivative variables, and `formula_dz(s)`. `None` when the iterate
 /// has no derivative.
+///
+/// For the perturbed path, which steps the derivative program at the
+/// full iterate (phase 4, step 9d): `formula_deriv_get` and
+/// `formula_deriv_set` read and write the iterate's pair `(P, Q)` (Q
+/// zero where the derivative is complex); `formula_deriv_scale(s, k)`
+/// scales every derivative the state holds -- the iterate's, the init's
+/// constants', the pixel's own -- by `2^k`, which the floatexp rung does
+/// to keep them all in one exponent's units; and `formula_dz_of(z, P, Q)`
+/// is what a colouring reads from a pair.
 pub fn formula_with_derivative(p: &Program) -> Option<String> {
     let d = super::derive::with_derivative(p)?;
     let dz = d.dz_var?;
     let mut out = formula(&d);
-    let _ = write!(out, "\nfn formula_dz(s: FormulaState) -> vec2<f32> {{\n    return s.v{dz};\n}}\n");
+    let q_get = d.dzq_var.map_or("vec2<f32>(0.0, 0.0)".to_string(), |q| format!("s.v{q}"));
+    let q_set = d.dzq_var.map_or(String::new(), |q| format!("    (*s).v{q} = q;\n"));
+    // Every variable the derivative pass added is a complex derivative
+    // (or a temporary of one).
+    let scale: String = (p.vars.len()..d.vars.len()).map(|i| format!("    (*s).v{i} = ldexp((*s).v{i}, kk);\n")).collect();
+    let _ = write!(
+        out,
+        "\nfn formula_deriv_get(s: FormulaState) -> vec4<f32> {{\n    return vec4<f32>(s.v{dz}, {q_get});\n}}\n\
+         \nfn formula_deriv_set(s: ptr<function, FormulaState>, p: vec2<f32>, q: vec2<f32>) {{\n    (*s).v{dz} = p;\n{q_set}}}\n\
+         \nfn formula_deriv_scale(s: ptr<function, FormulaState>, k: i32) {{\n    let kk = vec2<i32>(k, k);\n{scale}}}\n"
+    );
+    match d.dzq_var {
+        None => {
+            let _ = write!(
+                out,
+                "\nfn formula_dz_of(z: vec2<f32>, p: vec2<f32>, q: vec2<f32>) -> vec2<f32> {{\n    return p;\n}}\n\
+                 \nfn formula_dz(s: FormulaState) -> vec2<f32> {{\n    return s.v{dz};\n}}\n"
+            );
+        }
+        // A Jacobian (P, Q) read as the escape potential's gradient asks:
+        // P + conj(Q) u^2, u = z/|z| (`derive::effective_dz`). The unit
+        // vector by the larger part first, so a large z does not
+        // overflow its length.
+        Some(dq) => {
+            let _ = write!(
+                out,
+                "\nfn formula_dz_of(z: vec2<f32>, p: vec2<f32>, q: vec2<f32>) -> vec2<f32> {{\n\
+                 \x20   let m = max(abs(z.x), abs(z.y));\n\
+                 \x20   if (!(m > 0.0) || !(m <= 3.0e38)) {{\n\
+                 \x20       return p;\n\
+                 \x20   }}\n\
+                 \x20   let u = normalize(z / m);\n\
+                 \x20   let u2 = vec2<f32>(u.x * u.x - u.y * u.y, 2.0 * u.x * u.y);\n\
+                 \x20   let qc = vec2<f32>(q.x, -q.y);\n\
+                 \x20   return p + vec2<f32>(qc.x * u2.x - qc.y * u2.y, qc.x * u2.y + qc.y * u2.x);\n\
+                 }}\n\
+                 \nfn formula_dz(s: FormulaState) -> vec2<f32> {{\n    return formula_dz_of(s.z, s.v{dz}, s.v{dq});\n}}\n"
+            );
+        }
+    }
     Some(out)
 }
 
@@ -2772,7 +2820,9 @@ pub(crate) mod tests {
     }
 
     /// Every user function's derivative (`uf_user_d`) against its f64
-    /// one: `z = @f(#pixel)` carries `dz = f'(pixel)`.
+    /// one: `z = @f(#pixel)` carries `dz = f'(pixel)`; a fold or a part,
+    /// with none, its Jacobian (phase 4, step 9d), as the interpreter
+    /// reads it.
     #[test]
     #[ignore = "needs a GPU"]
     fn every_user_derivative_matches_f64_on_the_gpu() {
@@ -2787,10 +2837,18 @@ pub(crate) mod tests {
             eprintln!("no GPU");
             return;
         };
+        let d = super::super::derive::with_derivative(&p).unwrap();
         let mut bad = Vec::new();
         for ((x, y, k), (_, got)) in inputs.iter().zip(&out) {
             let f = USER_FUNCTIONS[*k as usize];
-            let want = f.deriv_c(super::super::builtins::C64::new(*x as f64, *y as f64));
+            let pixel = super::super::builtins::C64::new(*x as f64, *y as f64);
+            let mut params = super::super::interp::ParamValues::defaults(&d);
+            params.funcs = vec![*k as usize];
+            let want = super::super::interp::run(&d, &params, None, &super::super::interp::Env::at(pixel, 1)).dz;
+            if !matches!(f, Builtin::Abs | Builtin::Cabs | Builtin::Real | Builtin::Imag | Builtin::Conj | Builtin::Flip | Builtin::Cosxx | Builtin::Round | Builtin::Trunc | Builtin::Ceil | Builtin::Floor) {
+                let holo = f.deriv_c(pixel);
+                assert!(want.sub(holo).abs() <= 1e-9 * holo.abs().max(1.0), "{f:?}: the interpreter {want:?}, f' {holo:?}");
+            }
             if !close(*got, want) {
                 bad.push(format!("{f:?}'({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im));
             }
@@ -2821,6 +2879,29 @@ pub(crate) mod tests {
             let want = super::super::interp::run(&d, &params, None, &super::super::interp::Env::at(pixel, 1));
             assert!(close(*z, want.z), "({x}, {y}): gpu z {z:?}, f64 {:?}", want.z);
             assert!(close(*dz, want.dz), "({x}, {y}): gpu dz {dz:?}, f64 {:?}", want.dz);
+        }
+        // A Jacobian (phase 4, step 9d): folds, parts, a real variable and
+        // a user function set to `abs` (every parameter slot reads the
+        // probe's `sel`, the user function's choice among them), read as
+        // `formula_dz` gives it.
+        let j = program(
+            "J {\ninit:\n z = #pixel\nloop:\n float r = cabs(z)\n\
+             z = sqr(abs(z)) * 0.6 + conj(z) * 0.2 + flip(z) * real(z) * 0.1 + (0, 0.1) * imag(z) + @fn1(z) * 0.1 + #pixel * (1 + 0.05 * r)\n\
+             bailout:\n false\ndefault:\n func fn1\n  default = abs()\n endfunc\n}",
+            EntryKind::Formula,
+        );
+        let abs = super::super::builtins::USER_FUNCTIONS.iter().position(|f| *f == super::super::builtins::Builtin::Abs).unwrap();
+        let inputs: Vec<(f32, f32, f32)> = POINTS.iter().map(|&(x, y)| (x as f32, y as f32, abs as f32)).collect();
+        let out = gpu_one_step_dz(&j, &inputs).expect("the GPU answered above");
+        let d = super::super::derive::with_derivative(&j).unwrap();
+        assert!(d.dzq_var.is_some(), "a Jacobian");
+        let mut params = super::super::interp::ParamValues::defaults(&d);
+        params.funcs = vec![abs];
+        for (&(x, y), (z, dz)) in POINTS.iter().zip(&out) {
+            let pixel = super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64);
+            let want = super::super::interp::run(&d, &params, None, &super::super::interp::Env::at(pixel, 1));
+            assert!(close(*z, want.z), "J ({x}, {y}): gpu z {z:?}, f64 {:?}", want.z);
+            assert!(close(*dz, want.dz), "J ({x}, {y}): gpu dz {dz:?}, f64 {:?}", want.dz);
         }
     }
 
@@ -3010,7 +3091,8 @@ pub(crate) mod tests {
         assert!(!find("Globals").globals.is_empty() && !find("GlobalScale").globals.is_empty());
         assert!(formula_with_derivative(find("Control")).is_some());
         assert!(coloring(find("Extended")).ext_vec4s > 0, "state past the accumulator's four floats");
-        assert!(formula_with_derivative(find("Functions")).is_none(), "it reads abs and real");
+        // It reads abs and real: a Jacobian (phase 4, step 9d).
+        assert!(formula_with_derivative(find("Functions")).is_some_and(|w| w.contains("fn formula_dz")));
     }
 
     /// A parameter block as the GPU holds it: the defaults, in slot

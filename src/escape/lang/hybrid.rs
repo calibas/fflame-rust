@@ -420,6 +420,8 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
     out.bailout = None;
     out.state.clear();
     out.dz_var = None;
+    out.dzq_var = None;
+    out.dpixel_var = None;
     out.cycle = None;
     out.carried.clear();
     out.name = "Hybrid".into();

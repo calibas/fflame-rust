@@ -1914,6 +1914,127 @@ mod tests {
         assert_eq!(same, a.len(), "the same program");
     }
 
+    /// A custom formula carries its derivative under perturbation (plan,
+    /// phase 4, step 9d). At a shallow view, against the interpreter's
+    /// derivative in f64 at each pixel: the perturbed rungs (with BLA and
+    /// without) count as many right as the direct path, for the
+    /// Mandelbrot's twin and the Burning Ship's (a Jacobian). At depth,
+    /// the twin's is the built-in's. Compared where the counts agree, to a
+    /// part in a hundred, per render pixel as the records hold it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_carries_its_derivative_at_depth() {
+        use crate::escape::lang::builtins::C64;
+        type Records = [crate::escape::renderer::IterRecord];
+        let (w, h) = (64u32, 48u32);
+        let twin = |name: &str, (cre, cim): (&str, &str), zoom: f64, iters: u32| {
+            let src = crate::escape::twins::custom_source(name).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "distance_estimate".into();
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 1e4;
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            crate::escape::custom::ensure(&t);
+            (esc, t)
+        };
+        let close = |a: [f32; 2], b: C64| {
+            let d = (a[0] as f64 - b.re).hypot(a[1] as f64 - b.im);
+            b.abs() > 0.0 && d <= 0.01 * b.abs()
+        };
+        // The interpreter's count and derivative at each pixel, per render
+        // pixel, where it escapes.
+        let truth = |esc: &crate::config::escape::EscapeConfig, (cx, cy): (f64, f64)| -> Vec<Option<(u32, C64)>> {
+            let src = esc.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let d = crate::escape::lang::derive::with_derivative(&prog).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            for (i, x) in d.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = f64::from(esc.bailout);
+                }
+            }
+            let params = as_on_the_gpu(params);
+            let span_y = 4.0 / esc.zoom_log2.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            (0..(w * h))
+                .map(|idx| {
+                    let (px, py) = (idx % w, idx / w);
+                    let c = C64::new(cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x, cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                    let r = crate::escape::lang::interp::run(&d, &params, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter));
+                    (r.escaped && r.n > 2).then(|| (r.n, r.dz.scale(span_y / h as f64)))
+                })
+                .collect()
+        };
+        let right = |r: &Records, t: &[Option<(u32, C64)>]| -> (usize, usize) {
+            let same: Vec<_> = r.iter().zip(t).filter_map(|(x, t)| t.filter(|(n, _)| *n == x.n).map(|(_, dz)| (x.dz, dz))).collect();
+            (same.iter().filter(|(a, b)| close(*a, *b)).count(), same.len())
+        };
+        for (name, view, at) in [("mandelbrot", ("-0.7436", "0.1318"), (-0.7436, 0.1318)), ("burning_ship", ("-1.762", "-0.028"), (-1.762, -0.028))] {
+            let (_, esc) = twin(name, view, 10.0, 500);
+            assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 4000).is_none(), "{name}: a gap");
+            let t = truth(&esc, at);
+            let (direct, n) = right(&records_with(&esc, w, h, false, false, true, true), &t);
+            println!("{name} zoom 10: the direct path's derivative is the truth's on {direct} of {n} pixels");
+            for (deep, bla) in [(false, true), (false, false), (true, true), (true, false)] {
+                let (got, m) = right(&records_with(&esc, w, h, deep, true, false, bla), &t);
+                println!("{name} zoom 10, floatexp {deep}, BLA {bla}: {got} of {m}");
+                assert!(m > 1000 && got * 100 >= m * 70 && got + n / 50 >= direct, "{name} fe={deep} bla={bla}: {got} of {m}, direct {direct}");
+            }
+        }
+        // At depth, on both rungs, against the derivative in big floats at
+        // every seventh pixel: the twin's counts as many right as the
+        // built-in's.
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        for (zoom, iters, deep, stride) in [(30.0, 4000u32, false, 7usize), (42.0, 8000, true, 7)] {
+            let (built_in, esc) = twin("mandelbrot", seahorse, zoom, iters);
+            let src = esc.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let d = std::sync::Arc::new(crate::escape::lang::derive::with_derivative(&prog).unwrap());
+            let dzv = d.dz_var.unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            for (i, x) in d.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 1e4;
+                }
+            }
+            let params = as_on_the_gpu(params);
+            let n_limbs = 6;
+            let c = crate::escape::bigfloat::BigComplex::from_fixed(&crate::escape::fixedpoint::FixedComplex {
+                re: crate::escape::fixedpoint::FixedPoint::from_decimal(seahorse.0, n_limbs).unwrap(),
+                im: crate::escape::fixedpoint::FixedPoint::from_decimal(seahorse.1, n_limbs).unwrap(),
+            });
+            let span_y = 4.0 / zoom.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let truth: Vec<(usize, u32, C64)> = (0..(w * h) as usize)
+                .step_by(stride)
+                .filter_map(|idx| {
+                    let (px, py) = (idx as u32 % w, idx as u32 / w);
+                    let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                    let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                    let env = crate::escape::lang::interp::Env::at(C64::ZERO, iters);
+                    let mut m = crate::escape::lang::bigeval::BigMachine::new(d.clone(), params.clone(), env, c.add(&crate::escape::bigfloat::BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
+                    for i in 0..iters {
+                        if !m.step().unwrap() {
+                            let dz = m.complex_var(dzv);
+                            return Some((idx, i + 1, C64::new(dz.re.to_f64(), dz.im.to_f64()).scale(span_y / h as f64)));
+                        }
+                    }
+                    None
+                })
+                .collect();
+            let score = |r: &Records| truth.iter().filter(|(i, n, dz)| r[*i].n == *n && close(r[*i].dz, *dz)).count();
+            let theirs = score(&records_with(&built_in, w, h, deep, true, false, true));
+            let ours = score(&records_with(&esc, w, h, deep, true, false, true));
+            println!("the twin at zoom {zoom}: of {} escaping pixels in big floats, its derivative right on {ours}, the built-in's on {theirs}", truth.len());
+            assert!(truth.len() > 50 && ours + truth.len() / 50 >= theirs, "zoom {zoom}: {ours} against {theirs}");
+        }
+    }
+
     /// A custom formula's nucleus reference renders (plan, phase 4, step
     /// 9c): the Mandelbrot's twin and UF's Mandelbrot that starts at its
     /// pixel, their references relocated to the nucleus governing the
@@ -2591,18 +2712,62 @@ final:
             println!("{} julia {julia}: distance estimate differs on {:.3}%", src.entry, d * 100.0);
             assert!(d == 0.0, "{} julia {julia}: differs on {:.3}% of pixels", src.entry, d * 100.0);
         }
-        // A formula iterating through a fold has none, and says so.
-        let ship = CustomSource {
+        // A formula iterating through a fold has a Jacobian (phase 4, step
+        // 9d): the Burning Ship's twin, and a formula with a user function
+        // set to `abs`. No gap, and each pixel's derivative as the records
+        // hold it (per render pixel) is the interpreter's.
+        let user = CustomSource {
             dialect: CustomDialect::UltraFractal,
             entry: "B".into(),
-            source: "B {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n}".into(),
+            source: "B {\ninit:\n z = 0\nloop:\n z = sqr(@fn1(z)) + #pixel\nbailout:\n |z| < @bailout\ndefault:\n func fn1\n  default = abs()\n endfunc\n}".into(),
         };
-        let mut esc = crate::config::escape::EscapeConfig::default();
-        esc.coloring = "distance_estimate".into();
-        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &ship);
-        esc.custom_formula = Some(ship);
-        crate::escape::custom::ensure(&esc);
-        assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_some());
+        let (rw, rh) = (64u32, 48u32);
+        for src in [crate::escape::twins::custom_source("burning_ship").unwrap(), user] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "distance_estimate".into();
+            esc.max_iter = 200;
+            esc.bailout = 4.0;
+            esc.center_re = "-0.5".into();
+            esc.center_im = "-0.5".into();
+            esc.zoom_log2 = 0.5;
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            crate::escape::custom::ensure(&esc);
+            assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_none(), "{}", src.entry);
+            let recs = records_on(&esc, rw, rh, false, false, true);
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, &src).unwrap();
+            let d = crate::escape::lang::derive::with_derivative(&prog).unwrap();
+            assert!(d.dzq_var.is_some(), "{}: a Jacobian", src.entry);
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            for (i, x) in d.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 4.0;
+                }
+            }
+            let span_y = 4.0 / esc.zoom_log2.exp2();
+            let span_x = span_y * rw as f64 / rh as f64;
+            let (mut tested, mut agree) = (0, 0);
+            for (idx, r) in recs.iter().enumerate() {
+                if r.n == 0 || r.n > 40 || r.n >= esc.max_iter {
+                    continue;
+                }
+                let (px, py) = (idx as u32 % rw, idx as u32 / rw);
+                let c = crate::escape::lang::builtins::C64::new(
+                    -0.5 + ((px as f64 + 0.5) / rw as f64 - 0.5) * span_x,
+                    -0.5 - ((py as f64 + 0.5) / rh as f64 - 0.5) * span_y,
+                );
+                let want = crate::escape::lang::interp::run(&d, &params, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter));
+                // Per render pixel, as every path reports it.
+                let want = want.dz.scale(span_y / rh as f64);
+                let got = crate::escape::lang::builtins::C64::new(r.dz[0] as f64, r.dz[1] as f64);
+                tested += 1;
+                if got.sub(want).abs() <= 1e-3 * want.abs() {
+                    agree += 1;
+                }
+            }
+            println!("{}: the GPU's derivative is the interpreter's on {agree} of {tested} escaping pixels", src.entry);
+            assert!(tested > 200 && agree * 100 >= tested * 95, "{}: {agree} of {tested}", src.entry);
+        }
     }
 
     /// `global:` values reach the GPU: a formula's in `fdata`, a

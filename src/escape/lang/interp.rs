@@ -456,6 +456,11 @@ pub fn run(
         }
     }
     let dz = formula.dz_var.map_or(C64::ZERO, |v| f.vars[v].as_c64());
+    // A Jacobian's, as a colouring reads it (`derive::effective_dz`).
+    let dz = match formula.dzq_var {
+        Some(q) => super::derive::effective_dz(sh.z, dz, f.vars[q].as_c64()),
+        None => dz,
+    };
     Run { z: sh.z, n: sh.numiter, escaped, index: sh.index, solid: sh.solid, dz }
 }
 
