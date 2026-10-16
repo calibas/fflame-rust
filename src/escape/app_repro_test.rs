@@ -1914,6 +1914,123 @@ mod tests {
         assert_eq!(same, a.len(), "the same program");
     }
 
+    /// The panel's damping and biomorph on custom formulas (plan, phase 4,
+    /// step 9e), compiled into a variant of the program: the twins render
+    /// as their built-ins with them, on the direct path; and at depth,
+    /// which the built-ins cannot reach with either on, a damped and a
+    /// biomorph Mandelbrot count against their own programs in big
+    /// floats.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_formulas_take_damping_and_the_biomorph() {
+        use crate::config::escape::BiomorphMode;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let twin_of = |esc: &crate::config::escape::EscapeConfig| {
+            let src = crate::escape::twins::custom_source(&esc.formula).expect("a twin");
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            crate::escape::custom::ensure(&t);
+            t
+        };
+        // (built-in, params, centre, zoom, damping, biomorph)
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f64, (f32, f32), BiomorphMode)] = &[
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, (0.8, 0.15), BiomorphMode::Off),
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, (1.0, 0.0), BiomorphMode::Re),
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, (1.2, -0.1), BiomorphMode::Im),
+            ("multibrot", &[("power", 3.0)], ("0", "0"), 0.2, (1.0, 0.0), BiomorphMode::Re),
+            ("multibrot", &[("power", 3.0)], ("0", "0"), 0.2, (0.9, 0.0), BiomorphMode::Off),
+            ("burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5, (0.85, 0.1), BiomorphMode::Im),
+            ("tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2, (0.9, -0.1), BiomorphMode::Off),
+        ];
+        for &(formula, params, (cre, cim), zoom, (dr, di), bio) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.damping_re = dr;
+            esc.damping_im = di;
+            esc.biomorph = bio;
+            let what = format!("{formula} {params:?} damping ({dr}, {di}) {bio:?}");
+            let twin = twin_of(&esc);
+            let resolved = crate::escape::custom::resolve(&twin);
+            assert_ne!(resolved.formula, twin.formula, "{what}: no variant");
+            assert!(!crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::NonEscaping));
+            assert!(crate::escape::iteration_controls(crate::escape::get_formula(&twin.formula)).damping, "{what}");
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.005, "{what}: {:.3}%", d * 100.0);
+        }
+
+        // Perturbed, the variant's own equations: forced at the views above,
+        // on both rungs, with BLA and without, against its program in big
+        // floats; and past the direct path the twins take the perturbed
+        // path, where the built-ins with either on stay direct.
+        for (damping, bio) in [((0.8f32, 0.15f32), BiomorphMode::Off), ((1.0, 0.0), BiomorphMode::Re), ((1.2, -0.1), BiomorphMode::Im), ((0.9, 0.05), BiomorphMode::Re)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".into();
+            esc.center_re = "-0.6".into();
+            esc.center_im = "0".into();
+            esc.zoom_log2 = 0.4;
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.damping_re = damping.0;
+            esc.damping_im = damping.1;
+            esc.biomorph = bio;
+            let twin = twin_of(&esc);
+            let what = format!("damping {damping:?} {bio:?}");
+            let src = twin.custom_formula.as_ref().unwrap();
+            let mut prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            if bio != BiomorphMode::Off {
+                let axis = if bio == BiomorphMode::Re { crate::escape::lang::modifiers::Axis::Re } else { crate::escape::lang::modifiers::Axis::Im };
+                prog = crate::escape::lang::modifiers::biomorph(&prog, axis).unwrap();
+            }
+            if damping != (1.0, 0.0) {
+                prog = crate::escape::lang::modifiers::damped(&prog);
+            }
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 16.0;
+                }
+                if x.name == "alpha" {
+                    params.values[i] = (f64::from(damping.0), f64::from(damping.1));
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), ("-0.6", "0"), 0.4, 200, (64, 48), 7, 2);
+            let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+            assert!(distinct.len() > 10, "{what}: the view tests little");
+            for (deep, bla) in [(false, true), (false, false), (true, true), (true, false)] {
+                let got = records_with(&twin, 64, 48, deep, true, false, bla);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                println!("{what} perturbed, floatexp {deep}, BLA {bla}: {right} of {} right ({} distinct counts)", truth.len(), distinct.len());
+                assert!(right * 100 >= truth.len() * 97, "{what} fe={deep} bla={bla}: {right} of {}", truth.len());
+            }
+            let mut deep = esc.clone();
+            deep.center_re = "-0.7436438870371587047548108297799385780".into();
+            deep.center_im = "0.13182590420531251981651559677435626549".into();
+            deep.zoom_log2 = 30.0;
+            assert!(!crate::escape::EscapeRenderer::wants_perturbation(&deep, 1080), "{what}: the built-in stays direct");
+            assert!(crate::escape::EscapeRenderer::wants_perturbation(&twin_of(&deep), 1080), "{what}: the twin perturbs");
+        }
+    }
+
     /// A custom formula carries its derivative under perturbation (plan,
     /// phase 4, step 9d). At a shallow view, against the interpreter's
     /// derivative in f64 at each pixel: the perturbed rungs (with BLA and
