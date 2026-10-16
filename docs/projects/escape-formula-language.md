@@ -20,7 +20,8 @@ Fractint formulas and colourings converted to Rhai, Rhai colourings)
 2026-10-15; step 4 (the built-ins' twins, Edit as Formula, branches in
 the init derived) 2026-10-15; step 5 (carried state in deep zoom, one
 value) 2026-10-15; step 6 (transcendental functions and powers by
-difference forms, user functions, branches on the iterate) 2026-10-15.
+difference forms, user functions, branches on the iterate) 2026-10-15;
+step 7 (hybrids of any formulas) 2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1219,11 +1220,38 @@ keeps compiling as UF; the editor converts what it opens.
        exponent (846); a branch in the init on the pixel (731); a test
        reading a variable the loop changes (645); a loop inside the
        loop (455).
-7. **Hybrids of any formulas**: a hybrid is a schedule (groups, repeats,
-   loop start) of formulas' steps, z shared, each member's other state
-   and parameters under its own name; KF's operators become one small
-   library formula among the members. The designer composes; the
-   result is one generated Rhai formula with a `CYCLE`.
+7. **Hybrids of any formulas** (done 2026-10-15): a hybrid is a
+   schedule (groups, repeats, loop start) of formulas' steps, z shared,
+   each member's other state and parameters under its own name; KF's
+   operators become one small library formula among the members. The
+   designer composes; the result is one generated Rhai formula with a
+   `CYCLE`.
+   - As built: a group runs KF's lines or a formula (`hybrid::Member`,
+     its Rhai source; the designer lists the built-ins' twins and the
+     library's Rhai formulas). A hybrid with a formula is composed at
+     the IR (`hybrid::compose`), not through UF text: each member's
+     variables, parameters (`g<group>_<name>`, captioned "Group N:
+     ..."), user functions and globals at their own offsets; every
+     member's start in order, only the first's z kept; the first's
+     test; the loop a branch on the pass. A group of KF lines is a
+     member of its own (its program from the lines alone), its
+     multipliers keeping their names. A member reading the pass is
+     refused. The composed program prints as one Rhai formula with
+     `INFO.cycle`.
+   - Found on the way: the test of what a loop carries
+     (`perturb::carried_vars`) counted a variable every arm of a branch
+     writes as carried, so the Burning Ship twin -- alone, and in a
+     hybrid -- rebased only at the orbit's end; it now takes the
+     checker's flow (`check::flow`), as the derivation does.
+   - Measured: the Mandelbrot's and Burning Ship's twins taking turns
+     run as KF's lines taking the same turns, on both planes; a
+     Phoenix member keeps its previous z across the Mandelbrot's turns;
+     the composed program round-trips through its Rhai. At depth it
+     counts as the lines do (103 / 105 of 439 at zoom 24, 83 / 84 at
+     51). **Open**: those counts are low for both. A hybrid with a fold
+     counts far worse at the walked edges than one without (343 to
+     439); the fold alone (the Ship twin at zoom 60) does well. Not
+     yet understood: the phases with diffabs, or the edges' chaos.
 8. **Parameters and scripting**: the metadata drives sliders and
    animation targets; a complex parameter animates as a point (x/y, or
    radius and angle); `mix(a, b, t)` and a weighted blend of two

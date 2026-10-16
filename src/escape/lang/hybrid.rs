@@ -18,8 +18,17 @@
 //! perturbed path's references follow. The multipliers are the
 //! program's parameters, so changing one recompiles nothing; this
 //! value keeps their starting values.
+//!
+//! **Any formula as a group** (phase 4, step 7): a group may run a
+//! formula's step instead of KF's lines ([`Member`], its Rhai source).
+//! Such a hybrid is composed from its members' programs ([`compose`]):
+//! z shared, each member's other state and parameters under its group's
+//! name, the loop a branch on the pass; a group of KF lines becomes a
+//! member of its own. The result is one program, which prints as one
+//! Rhai formula with its `cycle` (`lang::to_rhai`).
 
-use super::ir::{Cycle, Program};
+use super::ast::BinOp;
+use super::ir::{Cycle, IExpr, IExprKind, IStmt, Place, Predef, Program, Ty, Var, VarId};
 use super::{Diag, Dialect, EntryKind, Span};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
@@ -40,11 +49,36 @@ pub struct Hybrid {
     pub loop_start: usize,
 }
 
-/// A group: its lines, run `repeats` passes in a row.
+/// A group: its lines, or a formula's step, run `repeats` passes in a
+/// row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub repeats: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<Line>,
+    /// A formula whose step the group runs instead of lines (step 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<Member>,
+}
+
+/// A formula as a hybrid's group: its Rhai source (a UF or Fractint
+/// entry is converted when added) and the name it was added as.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Member {
+    pub title: String,
+    pub rhai: String,
+}
+
+impl Group {
+    /// A group of KF lines.
+    pub fn of_lines(repeats: u32, lines: Vec<Line>) -> Self {
+        Group { repeats, lines, formula: None }
+    }
+
+    /// A group running a formula's step.
+    pub fn of_formula(repeats: u32, title: &str, rhai: &str) -> Self {
+        Group { repeats, lines: Vec::new(), formula: Some(Member { title: title.into(), rhai: rhai.into() }) }
+    }
 }
 
 /// A line: `z = one <combine> two`, or `z = one` alone.
@@ -127,7 +161,7 @@ fn is_unit(m: &[f64; 2]) -> bool {
 impl Hybrid {
     /// One group of one line: `z = op + c`.
     pub fn single(op: Operator) -> Self {
-        Hybrid { groups: vec![Group { repeats: 1, lines: vec![Line { one: op, two: None, combine: Combine::Add }] }], loop_start: 0 }
+        Hybrid { groups: vec![Group::of_lines(1, vec![Line { one: op, two: None, combine: Combine::Add }])], loop_start: 0 }
     }
 
     pub fn from_json(text: &str) -> Result<Self, String> {
@@ -153,6 +187,12 @@ impl Hybrid {
         for (g, group) in self.groups.iter().enumerate() {
             if group.repeats == 0 || group.repeats > MAX_REPEATS {
                 return Err(format!("group {}: repeats run from 1 to {MAX_REPEATS}", g + 1));
+            }
+            if group.formula.is_some() {
+                if !group.lines.is_empty() {
+                    return Err(format!("group {}: a formula or lines, not both", g + 1));
+                }
+                continue;
             }
             if group.lines.is_empty() || group.lines.len() > MAX_LINES {
                 return Err(format!("group {}: a group has 1 to {MAX_LINES} lines", g + 1));
@@ -188,9 +228,19 @@ impl Hybrid {
         format!("a{}_{}_{}", group + 1, line + 1, if second { 2 } else { 1 })
     }
 
-    /// The program's text, in UF's language with the internal names.
+    /// Whether a group runs a formula's step (step 7): the hybrid is
+    /// then composed ([`compose`]) rather than written as UF text.
+    pub fn has_formulas(&self) -> bool {
+        self.groups.iter().any(|g| g.formula.is_some())
+    }
+
+    /// The program's text, in UF's language with the internal names: a
+    /// hybrid of KF lines alone.
     pub fn source(&self) -> Result<String, String> {
         self.validate()?;
+        if self.has_formulas() {
+            return Err("a hybrid with formulas is composed, not written".into());
+        }
         let mut t = String::new();
         t.push_str("Hybrid {\n");
         // The Julia toggle sets `ismand` (1 on the parameter plane):
@@ -265,6 +315,9 @@ impl Hybrid {
     /// The program: the source checked with the internal names, its
     /// cycle recorded when its groups branch on the pass.
     pub fn program(&self) -> Result<Program, Vec<Diag>> {
+        if self.has_formulas() {
+            return self.composed();
+        }
         let text = self.source().map_err(|e| vec![Diag::error(Span::default(), e)])?;
         let (file, mut diags) = super::parser::parse_file(&text);
         let Some(entry) = file.entries.first() else {
@@ -281,6 +334,207 @@ impl Hybrid {
             }
             _ => Err(diags),
         }
+    }
+}
+
+impl Hybrid {
+    /// A hybrid with a formula among its groups: each group's program
+    /// (a formula's, or its KF lines' alone), composed.
+    fn composed(&self) -> Result<Program, Vec<Diag>> {
+        let error = |e: String| vec![Diag::error(Span::default(), e)];
+        self.validate().map_err(error)?;
+        let mut members = Vec::new();
+        for (g, group) in self.groups.iter().enumerate() {
+            let p = match &group.formula {
+                Some(m) => super::rhai::program(&m.rhai)
+                    .map_err(|d| error(format!("group {} ({}): {}", g + 1, m.title, d.first().map(|x| x.message.clone()).unwrap_or_default())))?,
+                None => Hybrid { groups: vec![Group::of_lines(1, group.lines.clone())], loop_start: 0 }.program()?,
+            };
+            members.push(p);
+        }
+        // KF lines keep their multipliers' names (`a<group>_<line>_<n>`)
+        // as a hybrid of lines alone has them; everything else is under
+        // its group's name. The first group's `bailout` stays the
+        // panel's bailout.
+        let rename = |g: usize, name: &str| -> String {
+            if self.groups[g].formula.is_none() {
+                if let Some(rest) = name.strip_prefix("a1_") {
+                    return format!("a{}_{rest}", g + 1);
+                }
+            }
+            if g == 0 && name == "bailout" {
+                return name.into();
+            }
+            format!("g{}_{name}", g + 1)
+        };
+        let repeats: Vec<u32> = self.groups.iter().map(|g| g.repeats).collect();
+        let mut p = compose(&members, &rename, &repeats, self.cycle()).map_err(error)?;
+        p.view.title = Some("Hybrid".into());
+        if self.branches() {
+            p.cycle = Some(self.cycle());
+        }
+        Ok(p)
+    }
+}
+
+/// One program from a hybrid's members (phase 4, step 7): z shared, each
+/// member's variables, parameters, user functions and globals under its
+/// group's name (`rename`), the first member's start and test. Every
+/// member's start runs, in order, for its own state; only the first
+/// sets z (the others' writes to z go to a variable of their own). The
+/// loop runs, each pass, the step of the group whose turn it is
+/// (`repeats` passes each, the cycle's prefix once). A member's own
+/// perturbation equations, perturb setting and degree are dropped: the
+/// hybrid's equations are derived whole (`lang::delta`). A member that
+/// reads the pass itself has no place in a schedule.
+pub fn compose(members: &[Program], rename: &dyn Fn(usize, &str) -> String, repeats: &[u32], cycle: Cycle) -> Result<Program, String> {
+    let first = members.first().ok_or("a hybrid needs a group")?;
+    let mut out = first.clone();
+    out.vars.clear();
+    out.params.clear();
+    out.funcs.clear();
+    out.init.clear();
+    out.loop_body.clear();
+    out.global_body.clear();
+    out.globals.clear();
+    out.final_body.clear();
+    out.perturb_init.clear();
+    out.perturb_loop.clear();
+    out.perturb_when = None;
+    out.degree = None;
+    out.bailout = None;
+    out.state.clear();
+    out.dz_var = None;
+    out.cycle = None;
+    out.carried.clear();
+    out.name = "Hybrid".into();
+    let mut loops = Vec::new();
+    for (g, m) in members.iter().enumerate() {
+        if m.dialect != first.dialect {
+            return Err(format!("group {}: another dialect", g + 1));
+        }
+        if m.reads(Predef::Pass) {
+            return Err(format!("group {}: a formula that reads the pass cannot take turns", g + 1));
+        }
+        let (vo, po, fo) = (out.vars.len(), out.params.len(), out.funcs.len());
+        for v in &m.vars {
+            out.vars.push(Var { name: rename(g, &v.name), ..v.clone() });
+        }
+        for p in &m.params {
+            let mut p = p.clone();
+            p.name = rename(g, &p.name);
+            if members.len() > 1 {
+                p.caption = format!("Group {}: {}", g + 1, p.caption);
+            }
+            out.params.push(p);
+        }
+        for f in &m.funcs {
+            let mut f = f.clone();
+            f.name = rename(g, &f.name);
+            if members.len() > 1 {
+                f.caption = format!("Group {}: {}", g + 1, f.caption);
+            }
+            out.funcs.push(f);
+        }
+        // The members after the first keep their start's z to themselves.
+        let own_z = (g > 0).then(|| {
+            out.vars.push(Var { name: format!("g{}_z", g + 1), ty: Ty::Complex, span: Span::default(), stored_real: false, global: false, perturb: false });
+            out.vars.len() - 1
+        });
+        let map = Remap { vo, po, fo, z: None };
+        out.globals.extend(m.globals.iter().map(|v| v + vo));
+        out.global_body.extend(map.stmts(&m.global_body));
+        out.init.extend(Remap { z: own_z, ..map }.stmts(&m.init));
+        loops.push(map.stmts(&m.loop_body));
+        if g == 0 {
+            out.bailout = m.bailout.as_ref().map(|b| map.expr(b));
+        }
+    }
+    if members.len() == 1 {
+        out.loop_body = loops.pop().unwrap_or_default();
+        return Ok(out);
+    }
+    // The pass this one behaves as -- past the prefix, its place in the
+    // first round -- and the group whose turn that is.
+    let k = out.vars.len();
+    out.vars.push(Var { name: "turn".into(), ty: Ty::Int, span: Span::default(), stored_real: false, global: false, perturb: false });
+    let int = |v: i64| IExpr { kind: IExprKind::Int(v), ty: Ty::Int };
+    let kv = || IExpr { kind: IExprKind::Var(k), ty: Ty::Int };
+    let bin = |op: BinOp, a: IExpr, b: IExpr, ty: Ty| IExpr { kind: IExprKind::Binary(op, Box::new(a), Box::new(b)), ty };
+    out.loop_body.push(IStmt::Assign(Place::Var(k), IExpr { kind: IExprKind::Predef(Predef::Pass), ty: Ty::Int }));
+    let (prefix, period) = (i64::from(cycle.prefix), i64::from(cycle.period.max(1)));
+    let wrapped = bin(BinOp::Add, int(prefix), bin(BinOp::Mod, bin(BinOp::Sub, kv(), int(prefix), Ty::Int), int(period), Ty::Int), Ty::Int);
+    if prefix > 0 {
+        out.loop_body.push(IStmt::If { arms: vec![(bin(BinOp::Ge, kv(), int(prefix), Ty::Bool), vec![IStmt::Assign(Place::Var(k), wrapped)])], otherwise: Vec::new() });
+    } else {
+        out.loop_body.push(IStmt::Assign(Place::Var(k), wrapped));
+    }
+    let mut arms = Vec::new();
+    let mut end = 0i64;
+    let last = loops.pop().unwrap_or_default();
+    for (g, body) in loops.into_iter().enumerate() {
+        end += i64::from(repeats[g]);
+        arms.push((bin(BinOp::Lt, kv(), int(end), Ty::Bool), body));
+    }
+    out.loop_body.push(IStmt::If { arms, otherwise: last });
+    Ok(out)
+}
+
+/// A member's code in the composed program: its variables, parameters
+/// and user functions at their offsets, and z, where `z` is set, as that
+/// variable.
+#[derive(Clone, Copy)]
+struct Remap {
+    vo: VarId,
+    po: usize,
+    fo: usize,
+    z: Option<VarId>,
+}
+
+impl Remap {
+    fn stmts(&self, stmts: &[IStmt]) -> Vec<IStmt> {
+        stmts.iter().map(|s| self.stmt(s)).collect()
+    }
+
+    fn stmt(&self, s: &IStmt) -> IStmt {
+        match s {
+            IStmt::Assign(place, e) => {
+                let place = match place {
+                    Place::Var(v) => Place::Var(v + self.vo),
+                    Place::Z => match self.z {
+                        Some(z) => Place::Var(z),
+                        None => Place::Z,
+                    },
+                    other => other.clone(),
+                };
+                IStmt::Assign(place, self.expr(e))
+            }
+            IStmt::If { arms, otherwise } => IStmt::If { arms: arms.iter().map(|(c, b)| (self.expr(c), self.stmts(b))).collect(), otherwise: self.stmts(otherwise) },
+            IStmt::While { cond, body } => IStmt::While { cond: self.expr(cond), body: self.stmts(body) },
+            IStmt::Repeat { body, cond } => IStmt::Repeat { body: self.stmts(body), cond: self.expr(cond) },
+        }
+    }
+
+    fn expr(&self, e: &IExpr) -> IExpr {
+        let b = |a: &IExpr| Box::new(self.expr(a));
+        let kind = match &e.kind {
+            IExprKind::Var(v) => IExprKind::Var(v + self.vo),
+            IExprKind::Param(p) => IExprKind::Param(p + self.po),
+            IExprKind::Predef(Predef::Z) if self.z.is_some() => IExprKind::Var(self.z.unwrap_or_default()),
+            IExprKind::UserCall(f, a) => IExprKind::UserCall(f + self.fo, b(a)),
+            IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(f + self.fo, b(a)),
+            IExprKind::FuncChoice(f) => IExprKind::FuncChoice(f + self.fo),
+            IExprKind::UserDiff(f, a, d) => IExprKind::UserDiff(f + self.fo, b(a), b(d)),
+            IExprKind::Convert(a) => IExprKind::Convert(b(a)),
+            IExprKind::Unary(op, a) => IExprKind::Unary(*op, b(a)),
+            IExprKind::PowInt(a, n) => IExprKind::PowInt(b(a), *n),
+            IExprKind::Modulus(a) => IExprKind::Modulus(b(a)),
+            IExprKind::Call(f, a) => IExprKind::Call(*f, b(a)),
+            IExprKind::MakeComplex(x, y) => IExprKind::MakeComplex(b(x), b(y)),
+            IExprKind::Binary(op, x, y) => IExprKind::Binary(*op, b(x), b(y)),
+            other => other.clone(),
+        };
+        IExpr { kind, ty: e.ty }
     }
 }
 
@@ -318,7 +572,7 @@ fn operator_text(op: &Operator, param: &str) -> String {
 pub fn presets() -> Vec<(&'static str, Hybrid)> {
     let op = |abs_x: bool, abs_y: bool, neg_x: bool, neg_y: bool, power: u32| Operator { abs_x, abs_y, neg_x, neg_y, power, mul: unit() };
     let line = |o: Operator| Line { one: o, two: None, combine: Combine::Add };
-    let group = |repeats: u32, o: Operator| Group { repeats, lines: vec![line(o)] };
+    let group = |repeats: u32, o: Operator| Group::of_lines(repeats, vec![line(o)]);
     let mandelbrot = op(false, false, false, false, 2);
     let ship = op(true, true, false, false, 2);
     vec![
@@ -445,3 +699,131 @@ mod tests {
         }
     }
 }
+
+/// Formulas as groups (phase 4, step 7).
+#[cfg(test)]
+mod formula_members {
+    use super::super::builtins::C64;
+    use super::super::interp::{perturb_holds, run, run_perturbed, Env, ParamValues};
+    use super::*;
+
+    fn twin(name: &str) -> (String, String) {
+        let src = crate::escape::twins::source(name).unwrap();
+        (super::super::rhai::title(src).unwrap(), src.to_string())
+    }
+
+    /// Points on both planes, outside and in, with the Julia constant.
+    fn envs() -> Vec<Env> {
+        let mut out = Vec::new();
+        for julia in [false, true] {
+            for c in [C64::new(-0.3, 0.6), C64::new(0.25, -0.1), C64::new(-1.6, 0.02), C64::new(-0.75, 0.12), C64::new(0.4, 0.4)] {
+                let mut env = Env::at(c, 80);
+                env.julia = julia;
+                env.julia_c = C64::new(-0.8, 0.156);
+                out.push(env);
+            }
+        }
+        out
+    }
+
+    /// The Mandelbrot's and the Burning Ship's twins taking turns run as
+    /// KF's lines taking the same turns, on both planes.
+    #[test]
+    fn formulas_take_turns_as_kf_lines_do() {
+        let ((mt, ms), (bt, bs)) = (twin("mandelbrot"), twin("burning_ship"));
+        let mandelbrot = Operator::default();
+        let ship = Operator { abs_x: true, abs_y: true, ..Operator::default() };
+        let line = |o: Operator| vec![Line { one: o, two: None, combine: Combine::Add }];
+        for (repeats, loop_start) in [([1, 1], 0), ([1, 2], 0), ([2, 1], 1)] {
+            let formulas = Hybrid { groups: vec![Group::of_formula(repeats[0], &mt, &ms), Group::of_formula(repeats[1], &bt, &bs)], loop_start };
+            let lines = Hybrid { groups: vec![Group::of_lines(repeats[0], line(mandelbrot.clone())), Group::of_lines(repeats[1], line(ship.clone()))], loop_start };
+            let (a, b) = (formulas.program().unwrap(), lines.program().unwrap());
+            assert_eq!(a.cycle, b.cycle);
+            for env in envs() {
+                let (ra, rb) = (run(&a, &ParamValues::defaults(&a), None, &env), run(&b, &ParamValues::defaults(&b), None, &env));
+                assert_eq!((ra.n, ra.escaped), (rb.n, rb.escaped), "{repeats:?} from {loop_start} at {:?} julia {}", env.pixel, env.julia);
+                assert!(ra.z.sub(rb.z).abs() <= 1e-9 * rb.z.abs().max(1.0), "{repeats:?}: {:?} against {:?}", ra.z, rb.z);
+            }
+        }
+        // A group of lines among formulas keeps its multipliers' names.
+        let mixed = Hybrid { groups: vec![Group::of_formula(1, &mt, &ms), Group::of_lines(1, line(ship))], loop_start: 0 };
+        let p = mixed.program().unwrap();
+        let names: Vec<&str> = p.params.iter().map(|x| x.name.as_str()).collect();
+        assert!(names.contains(&"bailout") && names.contains(&"a2_1_1") && names.contains(&"g2_bailout"), "{names:?}");
+    }
+
+    /// A member keeps its own state across the others' turns: the
+    /// Phoenix's previous z is the z it saw on its own last turn.
+    #[test]
+    fn a_member_keeps_its_state_across_turns() {
+        let ((pt, ps), (mt, ms)) = (twin("phoenix"), twin("mandelbrot"));
+        let h = Hybrid { groups: vec![Group::of_formula(1, &pt, &ps), Group::of_formula(1, &mt, &ms)], loop_start: 0 };
+        let p = h.program().unwrap();
+        let params = ParamValues::defaults(&p);
+        let k = C64::new(-0.5, 0.0);
+        for c in [C64::new(-0.3, 0.6), C64::new(0.25, -0.1), C64::new(-0.6, 0.4)] {
+            let got = run(&p, &params, None, &Env::at(c, 60));
+            let (mut z, mut prev) = (C64::ZERO, C64::ZERO);
+            let mut n = 0;
+            while n < 60 && z.re * z.re + z.im * z.im <= 4.0 {
+                if n % 2 == 0 {
+                    let next = z.mul(z).add(c).add(k.mul(prev));
+                    prev = z;
+                    z = next;
+                } else {
+                    z = z.mul(z).add(c);
+                }
+                n += 1;
+            }
+            assert_eq!(got.n, n, "at {c:?}");
+            assert!(got.z.sub(z).abs() <= 1e-9 * z.abs().max(1.0), "at {c:?}: {:?} against {z:?}", got.z);
+        }
+    }
+
+    /// The composed program prints as one Rhai formula, its cycle with
+    /// it, which runs as the hybrid; and its deep zoom derives, running
+    /// perturbed as it runs.
+    #[test]
+    fn a_composed_hybrid_is_one_rhai_formula_and_deep_zooms() {
+        let ((mt, ms), (bt, bs)) = (twin("mandelbrot"), twin("burning_ship"));
+        let h = Hybrid { groups: vec![Group::of_formula(1, &mt, &ms), Group::of_formula(2, &bt, &bs)], loop_start: 0 };
+        let p = h.program().unwrap();
+        let text = super::super::to_rhai::formula(&p, &[]).unwrap();
+        assert!(text.contains("cycle: #{ prefix: 0, period: 3 }"), "{text}");
+        let back = super::super::rhai::program(&text).unwrap();
+        assert_eq!(super::super::to_rhai::parting(&p, &back, 100), None);
+        let d = super::super::delta::with_derived_equations(&p).expect("equations");
+        assert!(super::super::perturb::perturbation(&d).is_ok());
+        let params = ParamValues::defaults(&d);
+        let reference = C64::new(-0.7436, 0.1318);
+        assert!(perturb_holds(&d, &params, &Env::at(reference, 200)));
+        for j in 0..8 {
+            let t = j as f64 * 0.785;
+            let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-5 * (1.0 + j as f64)));
+            let env = Env::at(px, 200);
+            let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+            let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
+            assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "at {px:?}");
+        }
+    }
+
+    /// What a hybrid of formulas refuses, and its JSON.
+    #[test]
+    fn what_takes_no_turns() {
+        let (mt, ms) = twin("mandelbrot");
+        let h = Hybrid { groups: vec![Group::of_formula(1, &mt, &ms), Group::of_lines(1, vec![Line { one: Operator::default(), two: None, combine: Combine::Add }])], loop_start: 1 };
+        assert_eq!(Hybrid::from_json(&h.to_json()).unwrap(), h);
+        // A formula and lines in one group.
+        let mut both = h.clone();
+        both.groups[0].lines = both.groups[1].lines.clone();
+        assert!(both.validate().is_err());
+        // A member that reads the pass.
+        let pass = "const PARAMS = #{};\nfn start(pixel, p, ctx) { #{ z: pixel } }\nfn step(s, p, ctx) { if ctx.pass % 2 == 0 { s.z = s.z * s.z + ctx.pixel; } s }\nfn escaped(s, p) { s.z.norm_sqr() > 4.0 }\n";
+        let bad = Hybrid { groups: vec![Group::of_formula(1, "P", pass), Group::of_formula(1, &mt, &ms)], loop_start: 0 };
+        assert!(bad.program().is_err());
+        // A member that does not compile.
+        let broken = Hybrid { groups: vec![Group::of_formula(1, "B", "fn start(") ], loop_start: 0 };
+        assert!(broken.program().is_err());
+    }
+}
+

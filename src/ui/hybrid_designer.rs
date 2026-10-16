@@ -9,6 +9,10 @@
 //! and applies at once, one undo step. A multiplier is the program's
 //! parameter, written as any formula parameter is, so dragging one
 //! recompiles nothing.
+//!
+//! A group may run a formula's step instead of lines (phase 4, step 7):
+//! a built-in's Rhai twin or a Rhai formula from the library. Its
+//! parameters are the Escape panel's, as "Group N: ...".
 
 use crate::config::escape::{CustomDialect, CustomSource};
 use crate::config::manager::custom_source_json;
@@ -59,10 +63,11 @@ impl HybridDesignerPanel {
             self.status = Some(t!("hybrid_designer.did_not_compile", error = first).to_string());
             return;
         }
-        let first_use = in_use(cm).is_none();
+        let before = in_use(cm);
+        let first_use = before.is_none();
         let mut changes = vec![
             (ConfigPath::EscapeCustomFormula, ConfigValue::String(custom_source_json(&Some(src)))),
-            (ConfigPath::EscapeFormula, ConfigValue::String(name)),
+            (ConfigPath::EscapeFormula, ConfigValue::String(name.clone())),
         ];
         for (g, group) in h.groups.iter().enumerate() {
             for (l, line) in group.lines.iter().enumerate() {
@@ -70,6 +75,21 @@ impl HybridDesignerPanel {
                     let p = Hybrid::param_name(g, l, second);
                     changes.push((ConfigPath::EscapeFormulaParam { param: format!("{p}.re") }, (op.mul[0] as f32).into()));
                     changes.push((ConfigPath::EscapeFormulaParam { param: format!("{p}.im") }, (op.mul[1] as f32).into()));
+                }
+            }
+        }
+        // A group whose formula is new starts at its parameters' defaults:
+        // a value left under the same name by another formula must not
+        // carry over.
+        if let Some(def) = custom::formula(&name) {
+            for (g, group) in h.groups.iter().enumerate() {
+                let same = before.as_ref().and_then(|b| b.groups.get(g)).is_some_and(|b| b.formula == group.formula);
+                if group.formula.is_none() || same {
+                    continue;
+                }
+                let prefix = format!("g{}_", g + 1);
+                for p in def.parameters.iter().filter(|p| p.name.starts_with(&prefix)) {
+                    changes.push((ConfigPath::EscapeFormulaParam { param: p.name.to_string() }, p.default.into()));
                 }
             }
         }
@@ -188,6 +208,33 @@ impl HybridDesignerPanel {
                             remove_group = Some(g);
                         }
                     });
+                    // What the group runs: lines, or a formula's step.
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(t!("hybrid_designer.step"));
+                        let selected = next.groups[g].formula.as_ref().map_or_else(|| t!("hybrid_designer.step_lines").to_string(), |m| m.title.clone());
+                        egui::ComboBox::from_id_salt(("hybrid_step", g))
+                            .selected_text(selected)
+                            .width(220.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(next.groups[g].formula.is_none(), t!("hybrid_designer.step_lines")).clicked() && next.groups[g].formula.is_some() {
+                                    next.groups[g] = Group::of_lines(next.groups[g].repeats, vec![Line { one: Operator::default(), two: None, combine: Combine::Add }]);
+                                    structural = true;
+                                }
+                                for (title, rhai) in member_choices() {
+                                    let picked = next.groups[g].formula.as_ref().is_some_and(|m| m.rhai == rhai);
+                                    if ui.selectable_label(picked, &title).clicked() && !picked {
+                                        next.groups[g] = Group::of_formula(next.groups[g].repeats, &title, &rhai);
+                                        structural = true;
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text(t!("hybrid_designer.step_tip"));
+                    });
+                    if next.groups[g].formula.is_some() {
+                        ui.weak(t!("hybrid_designer.formula_params", n = g + 1));
+                        return;
+                    }
                     let n_lines = next.groups[g].lines.len();
                     let mut remove_line: Option<usize> = None;
                     for l in 0..n_lines {
@@ -243,7 +290,7 @@ impl HybridDesignerPanel {
                 structural = true;
             }
             if next.groups.len() < hybrid::MAX_GROUPS && ui.button(t!("hybrid_designer.add_group")).clicked() {
-                next.groups.push(Group { repeats: 1, lines: vec![Line { one: Operator::default(), two: None, combine: Combine::Add }] });
+                next.groups.push(Group::of_lines(1, vec![Line { one: Operator::default(), two: None, combine: Combine::Add }]));
                 structural = true;
             }
             ui.add_space(4.0);
@@ -269,6 +316,24 @@ impl HybridDesignerPanel {
             }
         }
     }
+}
+
+/// The formulas a group can run: the built-ins' Rhai twins, and the
+/// library's Rhai formulas (read when the list opens).
+fn member_choices() -> Vec<(String, String)> {
+    use crate::escape::lang::rhai;
+    let mut out: Vec<(String, String)> =
+        crate::escape::twins::TWINS.iter().map(|(name, src)| (rhai::title(src).unwrap_or_else(|| name.to_string()), src.to_string())).collect();
+    for file in crate::storage::formula_store::list() {
+        if !crate::storage::formula_store::is_rhai(&file) {
+            continue;
+        }
+        let Some(text) = crate::storage::formula_store::load(&file) else { continue };
+        if rhai::kind_of(&text) == Some(EntryKind::Formula) {
+            out.push((rhai::title(&text).unwrap_or(file), text));
+        }
+    }
+    out
 }
 
 /// An operator's controls: the folds and negations, the power, the
@@ -322,6 +387,9 @@ fn formula_line(h: &Hybrid) -> String {
         .iter()
         .enumerate()
         .map(|(g, group)| {
+            if let Some(m) = &group.formula {
+                return format!("{}{}×[{}]", if g == h.loop_start { "⟳ " } else { "" }, group.repeats, m.title);
+            }
             let lines: Vec<String> = group
                 .lines
                 .iter()
@@ -384,5 +452,45 @@ mod tests {
         // Undone, the hybrid before the edit.
         cm.undo().unwrap();
         assert_eq!(in_use(&cm).unwrap().groups[1].repeats, 1);
+    }
+
+    /// A formula as a group (phase 4, step 7): it goes into the config
+    /// with its parameters under its group's name; a group given another
+    /// formula starts at that one's defaults, while one that keeps its
+    /// formula keeps its values.
+    #[test]
+    fn a_formula_group_goes_into_the_config() {
+        let ctx = egui::Context::default();
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        let mut panel = HybridDesignerPanel::new();
+        let twin = |name: &str| {
+            let src = crate::escape::twins::source(name).unwrap();
+            Group::of_formula(1, &crate::escape::lang::rhai::title(src).unwrap(), src)
+        };
+        let lines = Group::of_lines(1, vec![Line { one: Operator::default(), two: None, combine: Combine::Add }]);
+        let h = Hybrid { groups: vec![lines.clone(), twin("burning_ship")], loop_start: 0 };
+        panel.apply(&mut cm, h.clone());
+        assert_eq!(in_use(&cm), Some(h.clone()), "{:?}", panel.status);
+        let escape = &cm.config().escape;
+        let def = custom::formula(&escape.formula).expect("compiled and registered");
+        assert!(def.parameters.iter().any(|p| p.name == "g2_variant"), "{:?}", def.parameters.iter().map(|p| p.name).collect::<Vec<_>>());
+        frame(&ctx, &mut panel, &mut cm);
+        let get = |cm: &ConfigManager, p: &str| f32::try_from(cm.get_value(&ConfigPath::EscapeFormulaParam { param: p.into() }).unwrap()).unwrap();
+
+        // A value set, then the repeats changed: the formula stays, so
+        // does the value.
+        cm.update_param(ConfigPath::EscapeFormulaParam { param: "g2_variant".into() }, 3.0f32.into()).unwrap();
+        let mut more = h.clone();
+        more.groups[1].repeats = 2;
+        panel.apply(&mut cm, more.clone());
+        assert_eq!(get(&cm, "g2_variant"), 3.0);
+
+        // The group given another formula: the Tricorn's power starts at
+        // its default, and the Ship's variant is gone.
+        more.groups[1] = Group { repeats: 2, ..twin("tricorn") };
+        panel.apply(&mut cm, more);
+        assert_eq!(get(&cm, "g2_power"), 2.0);
+        assert!(formula_line(in_use(&cm).as_ref().unwrap()).contains("×[Tricorn]"));
+        frame(&ctx, &mut panel, &mut cm);
     }
 }
