@@ -26,7 +26,8 @@ scripting; not held structural keyframes) 2026-10-15; step 9a (BLA for
 holomorphic custom formulas) 2026-10-16; step 9b (real-linear BLA, for
 folds and the conjugate) 2026-10-16; step 9c (nucleus references for
 custom formulas) 2026-10-16; step 9d (the Jacobian DE; custom
-derivatives under perturbation) 2026-10-16.
+derivatives under perturbation) 2026-10-16; step 9e (damping and the
+biomorph on custom formulas) 2026-10-16.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1367,9 +1368,17 @@ keeps compiling as UF; the editor converts what it opens.
      nucleus search takes the Jacobian too: the Ship's and Tricorn's
      twins find their nuclei. Cost at depth: the formula's own pass each
      step, ~2.4x (the Ship's twin at zoom 60).
+   - **9e, done 2026-10-16: damping and the biomorph on custom
+     formulas** (ESCAPE.md), the two switches the twins lacked, as
+     rewrites of the program (`lang::modifiers`): Mann damping blends
+     each pass with z before it, alpha a parameter the panel drives; the
+     biomorph rewrites `|z|` in the test as one part's square. A config
+     resolves to the variant (`custom::resolve`) at the renderer's entry
+     points, so every derived form follows, and damped or biomorph
+     custom formulas deep-zoom, which the built-ins cannot. The twins
+     render as their built-ins with either on.
    - Next: retiring native code, family by family, where the twin
-     matches it in speed and accuracy -- a decision for the user, since
-     the twins lack Mann damping and the biomorph test. Open: the deep
+     matches it in speed and accuracy -- a decision for the user. Open: the deep
      rung's BLA at 2^-24 costs the floatexp rung's double float a
      little in chaotic views (the twin from zero at the seahorse view,
      zoom 42: 419 right per step, 405 with BLA).

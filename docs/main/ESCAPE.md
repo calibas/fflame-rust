@@ -448,7 +448,9 @@ fn escaped(s, p) {
     does; Manowar (zoom 26) on 420 against the built-in's 373; and a
     convergent Newton written in the language on all 439 at zoom 30
     (`builtin_twins_render_and_deep_zoom_as_their_builtins`).
-  - Mann damping and the biomorph test are the built-ins' alone.
+  - Mann damping and the biomorph test reach them as rewrites of the
+    program (below, step 9e): the twins render as their built-ins with
+    either on, and deep-zoom with them, which the built-ins cannot.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
@@ -1078,7 +1080,9 @@ records the next piece of work and returns whether the image is final.
 | recolour | the iteration is unchanged since the last settled render | one dispatch |
 
 The perturbed path is taken only when the formula has a tier, damping is
-off, biomorph is off and the view is past the direct path's limit at the
+off, biomorph is off (a custom formula takes both into its program, and
+perturbs with them: [Damping and the biomorph](#damping-and-the-biomorph-on-custom-formulas))
+and the view is past the direct path's limit at the
 render's size (`wants_perturbation(escape, render_lines)`); otherwise a
 deep view renders the direct path's honest f32 mush. `usable_depth` reports which
 case the panel is in (`UsableDepth::Perturbed` or
@@ -1430,6 +1434,45 @@ The panel's notes about the path read the viewport's render height
 (`viewport_render_lines`), which the app publishes when it sizes the
 viewport; a thumbnail or an export decides at its own size.
 
+### Damping and the biomorph on custom formulas
+
+A program owns its step and its escape test, so the built-ins' template
+switches (`assembler::step_lines`' damping, `escape_metric`'s biomorph)
+cannot reach it. Instead the formula compiles again with them in it,
+as rewrites of the program (`lang/modifiers.rs`; plan, phase 4, step
+9e):
+
+- **Damping**: the loop keeps z before the pass and blends after it,
+  `z = z_before + alpha (z - z_before)`, alpha a complex parameter the
+  panel's Damping drives. A formula carrying the previous z keeps the
+  damped one, as the built-ins' history does. Equations a formula wrote
+  for itself describe the undamped map, so they go, and the loop's are
+  derived.
+- **Biomorph**: the escape test reads `real(z)^2` or `imag(z)^2` where
+  it read `|z|` -- the built-ins' metric replaced. A test without `|z|`
+  has no biomorph, and the panel offers none (`custom::biomorph_ok`).
+
+`custom::resolve` gives the renderer the config to render: the variant's
+name (a hash of the base's and the switches), the damping bound to its
+parameter, the panel's switches off -- the program carries them, so
+nothing downstream applies them twice. The renderer resolves at its
+entry points (`render`, `perturb_tier`, `wants_perturbation`,
+`usable_depth`, `derivative_gap`). Everything derived from a program
+then comes from the variant: the derivative (a damped built-in's is
+stepped undamped, so its distance estimate is off; the variant's is
+right), the perturbation equations, BLA, the nucleus search. So a
+damped or biomorph custom formula deep-zooms. Moving alpha recompiles
+nothing; switching damping or the biomorph on compiles the variant once.
+The twins render as their built-ins with either on (0 to 0.16% of pixels
+differ), and their variants perturbed count 438 or 439 of 439 sampled
+pixels right against big floats on both rungs, with BLA and without
+(`custom_formulas_take_damping_and_the_biomorph`). Center on minibrot is
+not offered damped: the nucleus search finds where the orbit returns to
+its start, a minibrot's centre only where the start is the map's
+critical point, and damping moves that (to `(alpha - 1) / 2 alpha` for
+`z^2 + c`). The reference still relocates there, where it wraps
+exactly.
+
 ### The derivative under perturbation
 
 **Custom formulas** (phase 4, step 9d) carry theirs where they follow
@@ -1464,7 +1507,7 @@ Design record: [derivative-under-perturbation.md](../archive/escape-time/derivat
 
 ### Which formulas perturb
 
-Common conditions: past the view's [direct limit](#where-the-direct-path-ends), no damping, biomorph off.
+Common conditions: past the view's [direct limit](#where-the-direct-path-ends), no damping, biomorph off (custom formulas excepted: they take both into their programs).
 
 | formula | tier | condition | BLA |
 | --- | --- | --- | --- |
@@ -1505,8 +1548,8 @@ re-render, unless noted.
 | **Texture Layer** | `layer` | a second mode-A colouring blended into the first before the palette lookup (`Screen`, `Multiply`, `Add`, `Overlay`, `Mix`, at a weight), subject to `layer_refusal`. Its needs combine with the base's: either can compile in the accumulator, period detection or the derivative |
 | **Relief Shading** | `shading` | a lit surface composited over the finished colour (below) |
 | **Antialiasing**, **Downsample** | `supersample`, `downsample` | see [Antialiasing](#antialiasing) |
-| **Biomorph** | `biomorph` | the escape test reads `(Re z)²` or `(Im z)²`; re-iterates; turns perturbation off |
-| **Damping α** | `damping_re`, `damping_im` | Mann iteration `z ← (1−α)z + α·f(z)` with complex α, compiled in only when α ≠ 1; re-iterates; turns perturbation off |
+| **Biomorph** | `biomorph` | the escape test reads `(Re z)²` or `(Im z)²`; re-iterates; turns perturbation off for a built-in (a custom formula's test is rewritten, and perturbs) |
+| **Damping α** | `damping_re`, `damping_im` | Mann iteration `z ← (1−α)z + α·f(z)` with complex α, compiled in only when α ≠ 1; re-iterates; turns perturbation off for a built-in (a custom formula's loop is rewritten, and perturbs) |
 | **Texture** | `texture`, `texture_overlay` | a simulation texture (below) |
 
 **Relief shading** is deliberately not a colouring: a colouring returns

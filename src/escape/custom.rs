@@ -48,6 +48,11 @@ struct Registry {
     degrees: HashMap<String, Arc<ir::Program>>,
     /// Whether each formula has a nucleus search ([`offers_nucleus`]).
     nucleus: HashMap<String, bool>,
+    /// A damped variant's damping parameter, by the variant's name
+    /// ([`resolve`]).
+    alphas: HashMap<String, String>,
+    /// Whether each formula's test has a biomorph ([`biomorph_ok`]).
+    biomorph: HashMap<String, bool>,
 }
 
 /// Everything a custom formula's reference orbit is a function of
@@ -343,7 +348,34 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
     if let Some(def) = formula(name) {
         return Ok(def);
     }
-    let p = check_entry(EntryKind::Formula, src)?;
+    compile_program(check_entry(EntryKind::Formula, src)?, name)
+}
+
+/// Compile a formula entry as the panel's damping and biomorph modify it
+/// (`lang::modifiers`; plan, phase 4, step 9e) and register it under
+/// `name`, the variant's: the damping parameter's name with it when
+/// damped.
+fn compile_variant(src: &CustomSource, name: &str, damped: bool, axis: Option<lang::modifiers::Axis>) -> Result<&'static FormulaDef, Vec<Diag>> {
+    if let Some(def) = formula(name) {
+        return Ok(def);
+    }
+    let mut p = check_entry(EntryKind::Formula, src)?;
+    if damped {
+        let alpha = lang::modifiers::alpha_name(&p);
+        p = lang::modifiers::damped(&p);
+        if let Ok(mut r) = registry().write() {
+            r.alphas.insert(name.to_string(), alpha);
+        }
+    }
+    if let Some(axis) = axis {
+        p = lang::modifiers::biomorph(&p, axis).unwrap_or(p);
+    }
+    compile_program(p, name)
+}
+
+/// Register a checked program under `name`: its WGSL, its derivative's,
+/// its perturbation equations.
+fn compile_program(p: ir::Program, name: &str) -> Result<&'static FormulaDef, Vec<Diag>> {
     // Without equations of its own, a formula gets them from its loop
     // when the rules cover it (lang::delta): the perturbed path at depth.
     // Derived equations whose WGSL does not validate (a bug) leave the
@@ -391,8 +423,10 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         presets: &[],
     }));
     let perturbs = lang::perturb::perturbation(&p).ok();
+    let biomorph = lang::modifiers::biomorph(&p, lang::modifiers::Axis::Re).is_some();
     if let Ok(mut r) = registry().write() {
         r.formulas.insert(name.to_string(), def);
+        r.biomorph.insert(name.to_string(), biomorph);
         let p = Arc::new(p);
         if p.degree.is_some() {
             r.degrees.insert(name.to_string(), p.clone());
@@ -720,6 +754,9 @@ pub fn nucleus_search_for(escape: &EscapeConfig) -> Option<lang::periodic::Nucle
         return None;
     }
     ensure(escape);
+    // The map the view renders: damped, its nuclei are the damped map's.
+    let resolved = resolve(escape);
+    let escape = resolved.as_ref();
     let (prog, _, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
     let i = reference_inputs(escape, &prog)?;
     lang::periodic::NucleusSearch::new(&i.prog, i.params, i.env)
@@ -759,6 +796,8 @@ pub fn detect_period(escape: &EscapeConfig, max_period: u32) -> Option<(u32, i64
         return None;
     }
     ensure(escape);
+    let resolved = resolve(escape);
+    let escape = resolved.as_ref();
     let (prog, _, _) = registry().read().ok()?.perturbable.get(&escape.formula).cloned()?;
     let i = reference_inputs(escape, &prog)?;
     if !lang::periodic::wraps_exactly(&i.prog) {
@@ -773,9 +812,16 @@ pub fn detect_period(escape: &EscapeConfig, max_period: u32) -> Option<(u32, i64
 
 /// Whether the panel offers Center on minibrot for a config's custom
 /// formula: it has a nucleus search (`nucleus_search_for`), on the
-/// parameter plane. Remembered per formula.
+/// parameter plane, undamped. Remembered per formula.
+///
+/// The search finds where the orbit returns to its start, which is a
+/// minibrot's centre where the start is the map's critical point. Damping
+/// moves the critical point (to `(alpha - 1) / 2 alpha` for `z^2 + c`), so
+/// a damped map's periodic points lie beside its minibrots, not at their
+/// centres: a reference wraps exactly there (the renderer still relocates
+/// to them), but recentring on one would mislead.
 pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
-    if escape.julia || !escape.formula.starts_with(PREFIX) {
+    if escape.julia || !escape.formula.starts_with(PREFIX) || escape.is_damped() {
         return false;
     }
     if let Some(&known) = registry().read().ok().and_then(|r| r.nucleus.get(&escape.formula).copied()).as_ref() {
@@ -786,6 +832,83 @@ pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
         r.nucleus.insert(escape.formula.clone(), found);
     }
     found
+}
+
+/// The config a render takes for the panel's damping and biomorph on a
+/// custom formula (plan, phase 4, step 9e). A program owns its step and
+/// its test, so the built-ins' template switches cannot reach it; here
+/// the formula is compiled again with them in it (`lang::modifiers`), and
+/// the config names that variant, binds the damping to its parameter and
+/// turns the switches off -- the program carries them now, so nothing
+/// downstream applies them twice, and the perturbed path, which refuses
+/// them for the built-ins, takes the variant as any custom formula.
+/// The config itself for a built-in, or when neither is on, or a
+/// variant that does not compile (which renders as the formula did).
+pub fn resolve(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
+    use std::borrow::Cow;
+    use crate::config::escape::BiomorphMode;
+    let damped = escape.is_damped();
+    let axis = match escape.biomorph {
+        BiomorphMode::Off => None,
+        BiomorphMode::Re => Some(lang::modifiers::Axis::Re),
+        BiomorphMode::Im => Some(lang::modifiers::Axis::Im),
+    };
+    if !escape.formula.starts_with(PREFIX) || (!damped && axis.is_none()) {
+        return Cow::Borrowed(escape);
+    }
+    let Some(src) = escape.custom_formula.as_ref() else {
+        return Cow::Borrowed(escape);
+    };
+    ensure(escape);
+    // A test with no |z| has no biomorph: the variant leaves it.
+    let axis = axis.filter(|_| biomorph_ok(escape));
+    let mut out = escape.clone();
+    out.damping_re = 1.0;
+    out.damping_im = 0.0;
+    out.biomorph = BiomorphMode::Off;
+    if !damped && axis.is_none() {
+        return Cow::Owned(out);
+    }
+    let tag = u64::from(damped) | axis.map_or(0, |a| if a == lang::modifiers::Axis::Re { 2 } else { 4 });
+    let base = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).unwrap_or(0);
+    let name = format!("{PREFIX}{:016x}", base.rotate_left(17) ^ tag.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    if formula(&name).is_none() && !registry().read().is_ok_and(|r| r.failed.contains(&name)) {
+        if let Err(diags) = compile_variant(src, &name, damped, axis) {
+            let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
+            log::warn!("Custom formula `{}` with damping or biomorph ({name}) did not compile: {}", src.entry, msgs.join("; "));
+            if let Ok(mut r) = registry().write() {
+                r.failed.insert(name.clone());
+            }
+        }
+    }
+    if formula(&name).is_none() {
+        return Cow::Borrowed(escape);
+    }
+    if let Some(alpha) = registry().read().ok().and_then(|r| r.alphas.get(&name).cloned()) {
+        out.formula_params.insert(format!("{alpha}.re"), escape.damping_re);
+        out.formula_params.insert(format!("{alpha}.im"), escape.damping_im);
+    }
+    out.formula = name;
+    // The variant's source names the base's: a config that saves this
+    // one is not the point (`resolve` is the renderer's).
+    Cow::Owned(out)
+}
+
+/// Whether a config's custom formula's escape test reads `|z|`, which the
+/// biomorph replaces (`lang::modifiers::biomorph`): the panel offers the
+/// biomorph where it does.
+pub fn biomorph_ok(escape: &EscapeConfig) -> bool {
+    ensure(escape);
+    biomorph_ok_named(&escape.formula)
+}
+
+/// The same for a registered formula by name: false for one this session
+/// has not compiled.
+pub fn biomorph_ok_named(name: &str) -> bool {
+    if !name.starts_with(PREFIX) {
+        return false;
+    }
+    registry().read().is_ok_and(|r| r.biomorph.get(name).copied().unwrap_or(false))
 }
 
 /// The cycle a registered custom formula's references follow, when its

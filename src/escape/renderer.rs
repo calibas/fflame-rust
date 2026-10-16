@@ -3916,6 +3916,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// which case the user is in rather than letting them zoom into a
     /// wash and wonder what broke.
     pub fn usable_depth(escape: &EscapeConfig) -> UsableDepth {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         if Self::perturb_tier(escape).is_some()
             && !escape.is_damped()
             && escape.biomorph == crate::config::escape::BiomorphMode::Off
@@ -3938,6 +3940,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// cannot drift. `render_lines` as [`Self::wants_perturbation`]
     /// takes it: whether the view perturbs depends on its size.
     pub fn derivative_gap(escape: &EscapeConfig, render_lines: u32) -> Option<DerivativeGap> {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         if super::fields::get_field(&escape.formula).is_some()
             || super::ifs::get_ifs(&escape.formula).is_some()
         {
@@ -3983,6 +3987,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// combinations render the direct path's f32 mush honestly rather
     /// than wrong perturbation math).
     pub(crate) fn wants_perturbation(escape: &EscapeConfig, render_lines: u32) -> bool {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         Self::perturb_tier(escape).is_some()
             && escape.zoom_log2 > Self::direct_limit_zoom(escape, render_lines)
             && !escape.is_damped()
@@ -5075,6 +5081,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// path's f32 mush at the threshold, which is how Phoenix came to
     /// render one flat colour past zoom 48.
     pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         // A custom formula with UF's perturbation equations, on both
         // rungs (escape::lang, plan phase 3).
         if escape.formula.starts_with(super::custom::PREFIX) {
@@ -8273,6 +8281,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // A config carrying a formula or colouring as source: compile
         // and register it under its name before anything resolves it.
         super::custom::ensure(escape);
+        // A custom formula takes the panel's damping and biomorph into its
+        // program (plan, phase 4, step 9e).
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         self.palette_generation = palette_generation;
         // Whatever made this frame render changed the solid's picture:
         // its path-traced samples are of something else now.
