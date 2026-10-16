@@ -110,7 +110,7 @@ fn needed(p: &Program) -> Vec<bool> {
                 }
             }
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => mark(a, need, changed),
-            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
                 mark(a, need, changed);
                 mark(b, need, changed);
             }
@@ -150,7 +150,7 @@ fn follows(e: &IExpr, t: &[bool]) -> bool {
         IExprKind::Var(v) => t[*v],
         IExprKind::Predef(Predef::Pixel | Predef::Z) => true,
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => follows(a, t),
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => follows(a, t) || follows(b, t),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => follows(a, t) || follows(b, t),
         _ => false,
     }
 }
@@ -241,7 +241,9 @@ impl D<'_> {
         }
         let f = |x: &IExpr| follows(x, self.taint);
         Ok(match &e.kind {
-            IExprKind::Complex(..) | IExprKind::Param(_) => None,
+            IExprKind::Complex(..) | IExprKind::Param(_) | IExprKind::FuncChoice(_) => None,
+            // The perturbation equations', which are not differentiated.
+            IExprKind::UserDiff(..) => return Err(()),
             IExprKind::Predef(Predef::Pixel) => Some(konst(1.0, 0.0)),
             IExprKind::Predef(Predef::Z) => Some(cx(IExprKind::Var(self.dz))),
             IExprKind::Predef(_) => None,

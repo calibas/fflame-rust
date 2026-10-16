@@ -242,6 +242,14 @@ pub enum IExprKind {
     /// (zero for a choice with no complex derivative): the derivative
     /// pass's, never the checker's.
     UserDeriv(FuncId, Box<IExpr>),
+    /// Which function a user function's parameter picks, an int, its
+    /// index into `USER_FUNCTIONS`: the derived perturbation equations',
+    /// which branch on it, never the checker's.
+    FuncChoice(FuncId),
+    /// `f(a + d) - f(a)` for the function a user function's parameter
+    /// picks, by its cancellation-free form (`delta::user_diff_forms`):
+    /// the derived perturbation equations', never the checker's.
+    UserDiff(FuncId, Box<IExpr>, Box<IExpr>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -387,7 +395,7 @@ impl Program {
             match &x.kind {
                 IExprKind::Predef(q) => *q == p,
                 IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => e(a, p),
-                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => e(a, p) || e(b, p),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
                 _ => false,
             }
         }

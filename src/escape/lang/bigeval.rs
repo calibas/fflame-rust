@@ -246,6 +246,9 @@ impl BigMachine {
                 let z = self.to_c(self.eval(a)?);
                 BigValue::Complex(self.ccall(f, &z)?)
             }
+            IExprKind::FuncChoice(id) => BigValue::Int(self.params.funcs[*id] as i32),
+            // The derived equations', never in a reference program.
+            IExprKind::UserDiff(..) => return Err(Stop),
             // The derivative pass's, never in a reference program.
             IExprKind::UserDeriv(..) => return Err(Stop),
         })

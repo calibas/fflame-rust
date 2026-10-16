@@ -2072,33 +2072,58 @@ mod tests {
         assert!(near as f64 >= 0.95 * truth.len() as f64, "newton: {near} of {}", truth.len());
 
         // Transcendental functions by their difference forms (step 6):
-        // the sine map, and a map taking sqrt, log, tan, cabs, expm1 and
-        // log1p at once, just outside boundary points found by bisection.
-        // (On the boundary, escaping after thousands of chaotic steps,
-        // f32 deviations lose the count as f64 ones do, only sooner.)
+        // the sine map, a map taking sqrt, log, tan, cabs, expm1 and log1p
+        // at once, and a user function by its choice (sin, log), just
+        // outside boundary points found by bisection. (On the boundary,
+        // escaping after thousands of chaotic steps, f32 deviations lose
+        // the count as f64 ones do, only sooner.)
         const SINE: &str = "S {\ninit:\n z = #pixel\nloop:\n z = sin(z) * #pixel\nbailout:\n abs(imag(z)) < 40\n}";
         const MANY: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.01 * (sqrt(z + 2) + log(z + 3) + tan(z * 0.1) + cabs(z) + expm1(z * 0.1) + log1p(z * 0.1))\n\
                             bailout:\n |z| < 4\n}";
-        for (src, name, (cre, cim)) in [(SINE, "S", ("2.5", "0.16980302245877532")), (MANY, "M", ("-0.75", "0.21462864355418923"))] {
+        const USER: &str = "U {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.1 * @fn1(z)\nbailout:\n |z| < 4\n\
+                            default:\n func fn1\n  default = sin()\n endfunc\n}";
+        let choice = |name: &str| crate::escape::lang::builtins::USER_FUNCTIONS.iter().position(|f| f.name() == name).unwrap();
+        let cases: [(&str, &str, (&str, &str), u32, Option<usize>); 4] = [
+            (SINE, "S", ("2.5", "0.16980302245877532"), 3000, None),
+            (MANY, "M", ("-0.75", "0.21462864355418923"), 3000, None),
+            (USER, "U", ("-0.6843621955053129", "0.41170997894266725"), 1000, Some(choice("sin"))),
+            (USER, "U", ("0.20587744975930583", "0.5295480163576282"), 1000, Some(choice("log"))),
+        ];
+        for (src, name, (cre, cim), max_iter, func) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.center_re = cre.into();
             esc.center_im = cim.into();
             esc.zoom_log2 = 30.0;
-            esc.max_iter = 3000;
+            esc.max_iter = max_iter;
+            if let Some(k) = func {
+                esc.formula_params.insert("fn1".into(), k as f32);
+            }
             let custom = with_custom(esc, Some((src, name)), None);
             crate::escape::custom::ensure(&custom);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
             assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{name}: {tier:?}");
             let got = records_on(&custom, 64, 48, false, true, false);
             let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, custom.custom_formula.as_ref().unwrap()).unwrap();
-            let params = crate::escape::lang::interp::ParamValues::defaults(&prog);
-            let truth = truth_counts_of(std::sync::Arc::new(prog), params, (cre, cim), 30.0, 3000, (64, 48), 7, 6);
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            if let Some(k) = func {
+                params.funcs[0] = k;
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), params, (cre, cim), 30.0, max_iter, (64, 48), 7, 6);
             let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
             let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
-            let escaped = truth.iter().filter(|(_, n)| *n < 3000).count();
+            let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            let name = format!("{name}{}", func.map_or(String::new(), |k| format!(" ({})", crate::escape::lang::builtins::USER_FUNCTIONS[k].name())));
             println!("{name} at zoom 30: of {} pixels in big floats ({escaped} escape), the custom formula counts {right} right, {near} within one", truth.len());
             assert!(escaped > truth.len() / 4, "{name}: the view escapes too little");
             assert!(right as f64 >= 0.95 * truth.len() as f64, "{name}: {right} of {}", truth.len());
+            // A user function's forms on the floatexp rung too (its own
+            // helper, over CFe2).
+            if func.is_some() {
+                let got = records_on(&custom, 64, 48, true, true, false);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                println!("{name} on the floatexp rung: {right} right");
+                assert!(right as f64 >= 0.95 * truth.len() as f64, "{name} floatexp: {right} of {}", truth.len());
+            }
         }
     }
 

@@ -202,6 +202,10 @@ pub fn formula(p: &Program) -> String {
         );
         g.sstmts(&p.perturb_loop, 1, &mut body);
         let _ = write!(body, "{carry_out}    return w;\n}}\n");
+        if g.user_diff.0 {
+            let f = g.user_diff_fn(false);
+            body.push_str(&f);
+        }
         if let Some(b) = super::perturb::perturb_test(p) {
             g.ctx = Ctx::PerturbBailout;
             let test = g.expr(&b);
@@ -265,6 +269,10 @@ pub fn formula_perturb_fe(p: &Program) -> Option<String> {
     let _ = write!(body, "{carry_out}    return w;\n}}\n");
     if carried.is_some() {
         body.push_str(CARRY_REBASE_FE);
+    }
+    if g.user_diff.1 {
+        let f = g.user_diff_fn(true);
+        body.push_str(&f);
     }
     Some(g.finish(&format!("// custom formula's floatexp equations: {}\n", sanitize(&p.name)), body))
 }
@@ -640,6 +648,13 @@ struct Gen<'p> {
     /// Emitting a deviation at its true size (`S` times its held value):
     /// inside an operation the scaled form has no rule for.
     true_small: bool,
+    /// A user function's difference called, on true values and on the
+    /// floatexp rung: its helper is emitted ([`Gen::user_diff_fn`]).
+    user_diff: (bool, bool),
+    /// sin and sinh by the helpers exact near zero (the difference forms
+    /// on true values take them of a deviation; the GPU's own sin may
+    /// err by 2^-11 absolutely).
+    exact_near_zero: bool,
 }
 
 impl<'p> Gen<'p> {
@@ -657,7 +672,66 @@ impl<'p> Gen<'p> {
             global_slots[v] = Some(g);
             g += p.vars[v].ty.floats();
         }
-        Gen { p, ctx, prefix, used: BTreeSet::new(), slots, func_slots, global_slots, loops: 0, opaque: false, small_vars: Vec::new(), true_small: false }
+        Gen {
+            p,
+            ctx,
+            prefix,
+            used: BTreeSet::new(),
+            slots,
+            func_slots,
+            global_slots,
+            loops: 0,
+            opaque: false,
+            small_vars: Vec::new(),
+            true_small: false,
+            user_diff: (false, false),
+            exact_near_zero: false,
+        }
+    }
+
+    /// The helper a user function's difference calls
+    /// (`IExprKind::UserDiff`): each choice's form
+    /// (`delta::user_diff_forms`), on true f32 values or, on the floatexp
+    /// rung (`fe`), on CFe2 values; zero for a choice without one, which
+    /// the derived `perturb` setting keeps from rendering.
+    fn user_diff_fn(&mut self, fe: bool) -> String {
+        let forms = super::delta::user_diff_forms();
+        let n = forms.prog.vars.len();
+        let numeric = |v: &Var| matches!(v.ty, Ty::Float | Ty::Complex);
+        let small = if fe { forms.prog.vars.iter().map(numeric).collect() } else { vec![false; n] };
+        let saved_small = std::mem::replace(&mut self.small_vars, small);
+        let saved_globals = std::mem::replace(&mut self.global_slots, vec![None; n]);
+        let (saved_p, saved_ctx, saved_true) = (self.p, self.ctx, self.true_small);
+        self.p = &forms.prog;
+        self.ctx = if fe { Ctx::PerturbFe } else { Ctx::Perturb };
+        self.true_small = false;
+        self.exact_near_zero = true;
+        let (t, name, zero) = if fe { ("CFe2", "uf_user_diff_fe", "cfe2_zero()") } else { ("vec2<f32>", "uf_user_diff", "vec2<f32>(0.0, 0.0)") };
+        let mut out = format!("\nfn {name}(k: i32, a: {t}, d: {t}) -> {t} {{\n");
+        for (i, v) in forms.prog.vars.iter().enumerate() {
+            let ty = if fe && numeric(v) { "CFe2".to_string() } else { wgsl_ty(v.ty).to_string() };
+            let z = if fe && numeric(v) { "cfe2_zero()".to_string() } else { zero_of(v.ty).to_string() };
+            let _ = writeln!(out, "    var v{i}: {ty} = {z};");
+        }
+        let _ = writeln!(out, "    v{} = a;\n    v{} = d;", forms.a, forms.d);
+        for (k, code) in forms.choices.iter().enumerate() {
+            let Some(code) = code else { continue };
+            let _ = writeln!(out, "    if (k == {k}) {{");
+            if fe {
+                self.festmts(code, 2, &mut out);
+            } else {
+                self.sstmts(code, 2, &mut out);
+            }
+            let _ = writeln!(out, "        return v{};\n    }}", forms.r);
+        }
+        let _ = writeln!(out, "    return {zero};\n}}");
+        self.p = saved_p;
+        self.ctx = saved_ctx;
+        self.true_small = saved_true;
+        self.small_vars = saved_small;
+        self.global_slots = saved_globals;
+        self.exact_near_zero = false;
+        out
     }
 
     /// Helpers, then the body; `uf_` becomes the program's prefix.
@@ -896,6 +970,18 @@ impl<'p> Gen<'p> {
                 let f = self.param_fn();
                 format!("{}(i32(round({f}({k}u))), {v})", self.use_(Helper::UserD))
             }
+            IExprKind::FuncChoice(id) => {
+                let k = self.func_slots[*id];
+                let f = self.param_fn();
+                format!("i32(round({f}({k}u)))")
+            }
+            IExprKind::UserDiff(id, a, d) => {
+                self.user_diff.0 = true;
+                let (a, d) = (self.expr(a), self.expr(d));
+                let k = self.func_slots[*id];
+                let f = self.param_fn();
+                format!("uf_user_diff(i32(round({f}({k}u))), {a}, {d})")
+            }
         }
     }
 
@@ -1058,7 +1144,7 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
                 self.has_small(a)
             }
-            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => self.has_small(a) || self.has_small(b),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => self.has_small(a) || self.has_small(b),
             _ => false,
         }
     }
@@ -1269,7 +1355,7 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
                 self.reads_cfe(a)
             }
-            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => self.reads_cfe(a) || self.reads_cfe(b),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => self.reads_cfe(a) || self.reads_cfe(b),
             _ => false,
         }
     }
@@ -1295,6 +1381,13 @@ impl<'p> Gen<'p> {
             IExprKind::Predef(Predef::DPixel) => "d0".into(),
             IExprKind::Predef(Predef::Z) => "cfe2_ref(zm, zlo, ze)".into(),
             IExprKind::Var(v) => format!("v{v}"),
+            IExprKind::UserDiff(id, a, d) => {
+                self.user_diff.1 = true;
+                let (a, d) = (self.fegen(a), self.fegen(d));
+                let k = self.func_slots[*id];
+                let f = self.param_fn();
+                format!("uf_user_diff_fe(i32(round({f}({k}u))), {a}, {d})")
+            }
             IExprKind::Convert(a) if numeric(a.ty) && numeric(e.ty) => self.fegen(a),
             IExprKind::MakeComplex(a, b) => {
                 let (ca, cb) = (self.fegen(a), self.fegen(b));
@@ -1430,6 +1523,8 @@ impl<'p> Gen<'p> {
                 Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
                 IsNan => format!("{}({v})", self.use_(Helper::CIsNan)),
                 IsInf => format!("{}({v})", self.use_(Helper::CIsInf)),
+                Sin if self.exact_near_zero => format!("{}({v})", self.use_(Helper::CSinSmall)),
+                Sinh if self.exact_near_zero => format!("{}({v})", self.use_(Helper::CSinhSmall)),
                 _ => {
                     let h = complex_helper(f);
                     format!("{}({v})", self.use_(h))
@@ -1451,6 +1546,8 @@ impl<'p> Gen<'p> {
             };
         }
         let real = match f {
+            Sin if self.exact_near_zero => format!("{}({}({v}))", self.use_(Helper::FSin), self.use_(Helper::Reduce)),
+            Sinh if self.exact_near_zero => format!("{}({v})", self.use_(Helper::FSinh)),
             Sqr => format!("{}({v})", self.use_(Helper::FSq)),
             Sqrt => format!("sqrt({v})"),
             Log => format!("log({v})"),
@@ -1578,7 +1675,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
                 IExprKind::Predef(Predef::DZ | Predef::DPixel) => true,
                 IExprKind::Var(v) => small[*v],
                 IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => has(a, small),
-                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => has(a, small) || has(b, small),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => has(a, small) || has(b, small),
                 _ => false,
             }
         }
@@ -1681,7 +1778,7 @@ pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
             reads_a_variable(a, p)
         }
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => reads_a_variable(a, p) || reads_a_variable(b, p),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_a_variable(a, p) || reads_a_variable(b, p),
         _ => false,
     }
 }
@@ -1691,11 +1788,11 @@ pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
 fn constant(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
-        IExprKind::Var(_) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) => false,
+        IExprKind::Var(_) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) | IExprKind::FuncChoice(_) => false,
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => {
             constant(a)
         }
-        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => constant(a) && constant(b),
+        IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => constant(a) && constant(b),
     }
 }
 

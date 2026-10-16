@@ -795,6 +795,9 @@ mod tests {
     fn perturb_blocker(p: &ir::Program) -> String {
         use ir::*;
         use lang::builtins::Builtin;
+        if lang::delta::last_was_too_large() {
+            return "equations past the size budget".into();
+        }
         let Some(cases) = lang::delta::init_cases(p) else {
             return "a loop in the init, or a branch it cannot follow".into();
         };
@@ -802,7 +805,7 @@ mod tests {
             match &e.kind {
                 IExprKind::Predef(Predef::Pixel | Predef::Z | Predef::X | Predef::Y | Predef::ScreenPixel | Predef::Random | Predef::WhiteSq) => true,
                 IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => on_pixel(a),
-                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => on_pixel(a) || on_pixel(b),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => on_pixel(a) || on_pixel(b),
                 _ => false,
             }
         }
@@ -849,7 +852,8 @@ mod tests {
                     }
                     first(a, p, inits, out);
                 }
-                IExprKind::UserCall(..) => *out = Some("a user function".into()),
+                // A user function derives by its choice (step 6b).
+                IExprKind::UserCall(_, a) => first(a, p, inits, out),
                 // A power derives by its difference form unless its
                 // exponent varies.
                 IExprKind::Binary(lang::ast::BinOp::Pow, a, b) => {
@@ -860,7 +864,7 @@ mod tests {
                     first(a, p, inits, out);
                 }
                 IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::UserDeriv(_, a) => first(a, p, inits, out),
-                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
                     first(a, p, inits, out);
                     first(b, p, inits, out);
                 }
@@ -873,7 +877,7 @@ mod tests {
                 match &e.kind {
                     IExprKind::Predef(Predef::Pixel | Predef::Z) => true,
                     IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => pixel(a),
-                    IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => pixel(a) || pixel(b),
+                    IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => pixel(a) || pixel(b),
                     _ => false,
                 }
             }
@@ -885,7 +889,7 @@ mod tests {
                     by_pixel.then_some("a branch on the iterate")
                 }
                 IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => varies(a, p, inits),
-                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => varies(a, p, inits).or_else(|| varies(b, p, inits)),
+                IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => varies(a, p, inits).or_else(|| varies(b, p, inits)),
                 _ => None,
             }
         }
@@ -942,7 +946,7 @@ mod tests {
         println!("---- as Rhai
 {rhai}");
         match lang::delta::with_derived_equations(&p) {
-            None => println!("---- no equations derived"),
+            None => println!("---- no equations derived{}", if lang::delta::last_was_too_large() { " (past the size budget)" } else { "" }),
             Some(d) => {
                 println!("---- perturb_when: {:?}; perturbs: {:?}", d.perturb_when.is_some(), lang::perturb::perturbation(&d));
                 let w = lang::wgsl::formula(&d);
@@ -1033,6 +1037,11 @@ mod tests {
             }
             for e in &parsed.entries {
                 entries[k] += 1;
+                // UF_TRACE: each entry named as it is measured, to find
+                // one that stops the measurement.
+                if std::env::var("UF_TRACE").is_ok() {
+                    eprintln!("TRACE {} / {}", path.display(), e.name);
+                }
                 let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e) };
                 match check_entry(kind, &src) {
                     Ok(p) => {
