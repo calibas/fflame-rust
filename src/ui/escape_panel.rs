@@ -464,10 +464,16 @@ pub fn render_escape_content(
                     // smallest closing period is the wrong answer at depth,
                     // because a shallow atom's wrap is not exact there.
                     let zoom = esc.zoom_log2;
+                    // A custom formula's closure is its own (plan, phase
+                    // 4, step 9c).
+                    let custom = esc.formula.starts_with(crate::escape::custom::PREFIX).then(|| esc.clone());
                     std::thread::spawn(move || {
-                        let found = crate::escape::nucleus::detect_period_for_zoom(
-                            &re, &im, power, 8_000_000, zoom,
-                        );
+                        let found = match custom {
+                            Some(view) => crate::escape::custom::detect_period(&view, 8_000_000),
+                            None => crate::escape::nucleus::detect_period_for_zoom(
+                                &re, &im, power, 8_000_000, zoom,
+                            ),
+                        };
                         *out.lock().unwrap() = PeriodSearch::Done(found);
                     });
                 }
@@ -559,7 +565,10 @@ pub fn render_escape_content(
                 _ => None,
             }
         };
-        if let Some(power) = nav_power {
+        // A custom formula's nucleus comes through its own derivative
+        // (plan, phase 4, step 9c).
+        let custom_nav = nav_power.is_none() && crate::escape::custom::offers_nucleus(&esc);
+        if nav_power.is_some() || custom_nav {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let pending = minibrot_search_slot();
@@ -578,15 +587,21 @@ pub fn render_escape_content(
                     .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
                     .clicked()
                 {
-                    let re = esc.center_re.clone();
-                    let im = esc.center_im.clone();
-                    let zoom = esc.zoom_log2;
+                    let view = esc.clone();
                     *pending.lock().unwrap() = MinibrotSearch::Running;
                     let slot = pending.clone();
                     std::thread::spawn(move || {
-                        let hit = crate::escape::nucleus::locate_minibrot(
-                            &re, &im, zoom, 100_000, power, 100_000,
-                        );
+                        let hit = match nav_power {
+                            Some(power) => crate::escape::nucleus::locate_minibrot(
+                                &view.center_re,
+                                &view.center_im,
+                                view.zoom_log2,
+                                100_000,
+                                power,
+                                100_000,
+                            ),
+                            None => crate::escape::custom::locate_nucleus(&view, 100_000, 100_000),
+                        };
                         *slot.lock().unwrap() = MinibrotSearch::Done(hit);
                     });
                 }
@@ -629,14 +644,18 @@ pub fn render_escape_content(
                     .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
                     .clicked()
                 {
-                    if let Some(hit) = crate::escape::nucleus::locate_minibrot(
-                        &esc.center_re,
-                        &esc.center_im,
-                        esc.zoom_log2,
-                        20_000,
-                        power,
-                        5_000,
-                    ) {
+                    let hit = match nav_power {
+                        Some(power) => crate::escape::nucleus::locate_minibrot(
+                            &esc.center_re,
+                            &esc.center_im,
+                            esc.zoom_log2,
+                            20_000,
+                            power,
+                            5_000,
+                        ),
+                        None => crate::escape::custom::locate_nucleus(&esc, 20_000, 5_000),
+                    };
+                    if let Some(hit) = hit {
                         let _ = config_manager.update_batch(
                             vec![
                                 (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),

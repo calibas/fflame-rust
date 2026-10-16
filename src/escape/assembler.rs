@@ -3902,6 +3902,13 @@ fn rebase_phased(floatexp: bool, rebase: bool, width: u8, phased: bool) -> Strin
         (false, false) => "w = rebase_delta * perturb.inv_s;",
         (false, true) => "w = w + ((ref_z(m) - ref_z(r_to)) + (ref_z_lo(m) - ref_z_lo(r_to))) * perturb.inv_s;",
     };
+    // The test's deviation likewise, on the scaled rung (step 9c; see
+    // `rebase_custom_scaled`).
+    let rebase_delta = if floatexp {
+        "z_full - ref_z(r_to)"
+    } else {
+        "((ref_z(min(m, perturb.orbit_len - 1u)) - ref_z(r_to)) + (ref_z_lo(min(m, perturb.orbit_len - 1u)) - ref_z_lo(r_to))) + delta"
+    };
     let carry = match (width > 1, floatexp) {
         (false, _) => "",
         (true, false) => "w_prev = w_prev + ((ref_z(m + 1u) - ref_z(r_to + 1u)) + (ref_z_lo(m + 1u) - ref_z_lo(r_to + 1u))) * perturb.inv_s;\n                ",
@@ -3914,7 +3921,7 @@ fn rebase_phased(floatexp: bool, rebase: bool, width: u8, phased: bool) -> Strin
             "        // A custom formula carrying a value besides z (escape::lang).\n\
              \x20       let next_gone = m + ORBIT_S >= perturb.orbit_len;\n\
              \x20       let r_to = 0u;\n\
-             \x20       let rebase_delta = z_full - ref_z(r_to);\n\
+             \x20       let rebase_delta = {rebase_delta};\n\
              \x20       if (next_gone{test}) {{\n\
              \x20           {carry}{set}\n\
              \x20           m = r_to;\n\
@@ -3926,7 +3933,7 @@ fn rebase_phased(floatexp: bool, rebase: bool, width: u8, phased: bool) -> Strin
          \x20       let next_gone = m + ORBIT_S >= perturb.orbit_len || ref_orbit_e[m + ORBIT_S] == ORBIT_PAD_E;\n\
          \x20       if (i >= HYB_PREFIX) {{\n\
          \x20           let r_to = (1u + (i - HYB_PREFIX) % HYB_PERIOD) * ORBIT_W;\n\
-         \x20           let rebase_delta = z_full - ref_z(r_to);\n\
+         \x20           let rebase_delta = {rebase_delta};\n\
          \x20           if (next_gone{test}) {{\n\
          \x20               {carry}{set}\n\
          \x20               m = r_to;\n\
@@ -4354,6 +4361,28 @@ fn rebase_only_at_orbit_end() -> String {
      \x20           m = 0u;\n\
      \x20       }"
         .to_string()
+}
+
+/// A custom formula's rebase on the scaled rung (plan, phase 4, step 9c):
+/// onto the orbit's start when the reference ends, or on Zhuoran's test
+/// when `rebase`. The new deviation is the two records' difference --
+/// exact in f32 where they are close, which is where a pixel back near
+/// the start rebases -- plus the old one: f32's precision relative to
+/// the deviation, as `z_full` alone gives it for a start at zero. A
+/// start at the pixel (`z = #pixel`, `Z_0 = c`) subtracting it from
+/// `z_full` kept f32's 2^-24 of |c| instead, and counted 58 of 439
+/// sampled pixels right at the deep seahorse view (zoom 42), 418 on the
+/// deep rung.
+fn rebase_custom_scaled(rebase: bool) -> String {
+    let test = if rebase { "\n         \x20           || dot(rebase_delta, rebase_delta) < dot(delta, delta)" } else { "" };
+    format!(
+        "        let mc = min(m, perturb.orbit_len - 1u);\n\
+         \x20       let rebase_delta = ((ref_z(mc) - ref_z(0u)) + (ref_z_lo(mc) - ref_z_lo(0u))) + delta;\n\
+         \x20       if (m >= perturb.orbit_len - 1u{test}) {{\n\
+         \x20           w = rebase_delta * perturb.inv_s;\n\
+         \x20           m = 0u;\n\
+         \x20       }}"
+    )
 }
 
 /// The same on the deep rung, rebuilding the delta in double float.
@@ -5627,7 +5656,7 @@ pub fn assemble_perturbed_full(
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
                 (PerturbTier::Custom { stride, width, rebase, .. }, fe) if stride > 1 || width > 1 => rebase_phased(fe, rebase, width, stride > 1),
-                (PerturbTier::Custom { rebase: false, .. }, false) => rebase_only_at_orbit_end(),
+                (PerturbTier::Custom { rebase, .. }, false) => rebase_custom_scaled(rebase),
                 (PerturbTier::Custom { rebase: false, .. }, true) => rebase_only_at_orbit_end_fe(),
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
                 (PerturbTier::Phoenix, true) => rebase_phoenix_fe(),

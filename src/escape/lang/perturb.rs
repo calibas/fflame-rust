@@ -148,7 +148,7 @@ fn reads_other_than(e: &IExpr, p: &Program, allowed: &dyn Fn(VarId) -> bool) -> 
 
 /// Variables the loop reads before writing in an iteration and also
 /// writes: state that changes from one iteration to the next.
-fn carried_vars(body: &[IStmt]) -> Vec<VarId> {
+pub(crate) fn carried_vars(body: &[IStmt]) -> Vec<VarId> {
     // A variable read where a write before it in the pass is not
     // certain -- a branch's writes count when every arm makes them, as
     // the checker and the derivation (`lang::delta`) take them -- and

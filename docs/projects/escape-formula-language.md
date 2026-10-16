@@ -24,7 +24,8 @@ difference forms, user functions, branches on the iterate) 2026-10-15;
 step 7 (hybrids of any formulas) 2026-10-15; step 8 (parameters and
 scripting; not held structural keyframes) 2026-10-15; step 9a (BLA for
 holomorphic custom formulas) 2026-10-16; step 9b (real-linear BLA, for
-folds and the conjugate) 2026-10-16.
+folds and the conjugate) 2026-10-16; step 9c (nucleus references for
+custom formulas) 2026-10-16.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -553,8 +554,8 @@ Order of work (2026-10-14):
    step's arithmetic: 402 of 439 against 404, 439 of 439 at 300
    iterations, and 439 of 439 on a deep Julia view
    (`a_custom_formula_perturbs_by_its_own_equations`; 410 for the
-   built-in with its nucleus reference, which the custom family has
-   not). The reference identity rides in `map_params` as two normal
+   built-in with its nucleus reference, which the custom family had
+   not until phase 4, step 9c). The reference identity rides in `map_params` as two normal
    f32s (46 bits of a hash over the program, its packed parameters,
    the plane and the image values it reads); `custom::reference_machine`
    starts the program for the orbit. Found on the way and fixed: the
@@ -1334,11 +1335,29 @@ keeps compiling as UF; the editor converts what it opens.
      twin 336 of 439, per step 294 and 346); in the suite views' chaotic
      regions a skip's 2^-24 changes which, so two baselines were
      regenerated.
-   - Next, in order: nucleus references through the IR's derivative;
-     then the Jacobian DE (distance estimation for folds); then
-     retiring native code, family by family, where the twin matches it
-     in speed and accuracy -- a decision for the user, since the twins
-     lack Mann damping and the biomorph test.
+   - **9c, done 2026-10-16: nucleus references** for custom formulas
+     whose state is z alone (ESCAPE.md, Nucleus finding;
+     `lang/periodic.rs`). The nucleus is a root of `z_p(c) - z_0(c)`,
+     which the wrap needs; the period by a first-order ball, Newton
+     through the formula's derivative in big floats, a double root (a
+     formula that starts at its pixel: `G = h^2`) by its multiplicity.
+     The reference at the nucleus is verified by its own closure
+     detection, which any custom reference now has, as the plain map's;
+     period hints and the panel's Detect period and Center on minibrot
+     work for custom formulas. At the seahorse view (zoom 42, 100,000
+     iterations) the twin's reference takes 0.034 s against 0.30 s
+     plain; a search finding nothing adds up to ~0.15 s (detection is
+     capped at Newton's budget, 20,000 periods). Found on the way and
+     fixed: the scaled rung's rebase subtracted `Z_0` from the full
+     value in f32, which broke formulas that start at their pixel (58
+     of 439 right at the seahorse view at zoom 42, now 401).
+   - Next, in order: the Jacobian DE (distance estimation for folds);
+     then retiring native code, family by family, where the twin
+     matches it in speed and accuracy -- a decision for the user, since
+     the twins lack Mann damping and the biomorph test. Open: the deep
+     rung's BLA at 2^-24 costs the floatexp rung's double float a
+     little in chaotic views (the twin from zero at the seahorse view,
+     zoom 42: 419 right per step, 405 with BLA).
 
 Probably native for good: Origami (fold lines computed on the CPU),
 Littlewood, Digit Set.

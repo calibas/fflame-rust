@@ -91,6 +91,17 @@ impl BigMachine {
         &self.z
     }
 
+    /// A variable's value as a complex (a float's with a zero imaginary
+    /// part): a derivative program's `d_z` for the nucleus search
+    /// (`lang::periodic`).
+    pub fn complex_var(&self, v: VarId) -> BigComplex {
+        match &self.vars[v] {
+            BigValue::Complex(z) => z.clone(),
+            BigValue::Float(x) => BigComplex { re: x.clone(), im: BigFloat::zero(self.n) },
+            _ => BigComplex::zero(self.n),
+        }
+    }
+
     /// One loop pass; then whether the test holds (iterate again).
     pub fn step(&mut self) -> R<bool> {
         let prog = self.prog.clone();
