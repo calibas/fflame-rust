@@ -1411,6 +1411,23 @@ eviction is newest-first under a byte cap — **Orbit Cache (MB)** in
 Settings (`SystemSettings::orbit_cache_mb`, default 1024) — and a cap of
 50 files. Any parse failure or version mismatch is a miss.
 
+A custom formula's references are stored too (the speed work after
+phase 4, step 9e). The key carries the reference identity
+(`custom::reference_identity`: a hash of the program, its packed
+parameters, the plane and the image values it reads), and the file
+carries, after the fixed-point state, each big-float machine's pass,
+iterate and variables (`BigMachine::save_state`), always in the raw
+array form (the compressed form replays the plain map's shadow). On load
+the machines are rebuilt from the identity, which this session's compile
+of the formula names, and their state restored
+(`ReferenceOrbit::restore_custom`); a formula not compiled, or state
+that does not fit its program, is a miss. A restored orbit deepens to
+the orbit a build straight to that depth gives, entry for entry
+(`a_custom_formulas_reference_goes_through_the_store`). The other
+big-float families (Newton, Nova, Kaliset, Ducks) are still not stored.
+Big-float entries no longer keep compression corrections, which held 52
+bytes an entry of nothing.
+
 ### Where the direct path ends
 
 The direct path's f32 error is fixed in the plane -- each step rounds at

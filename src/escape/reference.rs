@@ -677,6 +677,9 @@ pub struct ReferenceOrbit {
     /// period it found, which stops the build there.
     custom_watch: Option<(crate::escape::lang::periodic::SlopeWatch, u32)>,
     custom_found: Option<u32>,
+    /// A stored custom orbit's machine state, read with it and restored
+    /// once the formula is known ([`Self::restore_custom`]).
+    custom_saved: Option<Vec<u8>>,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -1017,6 +1020,7 @@ impl ReferenceOrbit {
             custom_start: None,
             custom_watch: None,
             custom_found: None,
+            custom_saved: None,
             store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
@@ -1346,10 +1350,11 @@ impl ReferenceOrbit {
     /// Push a big-float value's storage triple: the iterate, or what a
     /// custom formula carries beside it.
     fn push_value_big(&mut self, v: &BigComplex) {
-        let (hi, lo, ee, dd) = split_entry_big(v);
-        let idx = self.orbit.len() as u32;
+        let (hi, lo, ee, _) = split_entry_big(v);
+        // No compression correction: an orbit of big-float values is
+        // stored raw (the shadow replays the plain map), and a correction
+        // an entry held 52 B of nothing for each.
         self.shadow = [f64::NAN; 4];
-        self.corrections.push(Correction { idx, hi, lo, e: ee, dd });
         self.orbit.push(hi);
         self.orbit_lo.push(lo);
         self.orbit_e.push(ee);
@@ -1903,7 +1908,9 @@ impl ReferenceOrbit {
         }
         let compressed_bytes = 4 + self.corrections.len() * 52 + 4 + runs.len() * 8;
         let raw_bytes = self.orbit.len() * 20;
-        if compressed_bytes < raw_bytes {
+        // The shadow replays the plain map: a big-float family's orbit
+        // (a custom formula's) is stored raw.
+        if compressed_bytes < raw_bytes && !map_is_big(self.ship, self.ship_variant) {
             out.push(1);
             out.extend_from_slice(&(self.corrections.len() as u32).to_le_bytes());
             for c in &self.corrections {
@@ -1948,7 +1955,60 @@ impl ReferenceOrbit {
         ] {
             put_fixed(&mut out, f);
         }
+        // A custom formula's machines (plan, phase 4, the speed work):
+        // each one's pass, iterate and variables, so the stored orbit
+        // deepens as the saved one would.
+        if !self.ship && self.ship_variant == MAP_CUSTOM {
+            out.extend_from_slice(&(self.custom.len() as u32).to_le_bytes());
+            for (m, live) in self.custom.iter().zip(&self.custom_live) {
+                out.push(u8::from(*live));
+                m.save_state(&mut out);
+            }
+        }
         out
+    }
+
+    /// Rebuild a stored custom orbit's machines from its reference
+    /// identity, which this session's compile of the formula names, and
+    /// restore their saved state: true where there is nothing to restore,
+    /// false where it cannot be (a miss for the store).
+    pub fn restore_custom(&mut self) -> bool {
+        let Some(saved) = self.custom_saved.take() else {
+            return true;
+        };
+        let at = BigComplex::from_fixed(&self.c);
+        let Some(mut machines) = crate::escape::custom::reference_machines(self.map_params, &at, self.n_limbs) else {
+            return false;
+        };
+        let start = machines.first().map(|m| m.z().clone());
+        let mut bytes: &[u8] = &saved;
+        let Some(count) = crate::escape::lang::bigeval::take_u32(&mut bytes) else {
+            return false;
+        };
+        if count as usize != machines.len() {
+            return false;
+        }
+        let mut live = Vec::with_capacity(machines.len());
+        for m in &mut machines {
+            let Some((&flag, rest)) = bytes.split_first() else {
+                return false;
+            };
+            bytes = rest;
+            live.push(flag != 0);
+            if m.load_state(&mut bytes).is_none() {
+                return false;
+            }
+        }
+        self.zb = machines[0].z().clone();
+        if machines.len() == 1 && self.julia_c.is_none() && crate::escape::custom::reference_wraps(self.map_params) {
+            self.custom_start = start;
+        }
+        self.custom_live = live;
+        self.custom = machines;
+        // The closure test's minimum is of |Z - Z_0| here, not the |Z| a
+        // load rescans: it starts again (a closure past it still wraps).
+        self.min_octave = i64::MAX;
+        true
     }
 
     /// Inverse of [`to_bytes`](Self::to_bytes); None on any
@@ -1976,8 +2036,9 @@ impl ReferenceOrbit {
             escaped_at,
         } = read_header(&mut r)?;
         // The big-float families are never written (see orbit_store)
-        // and could not deepen from a fixed-point live state anyway.
-        if map_is_big(ship, ship_variant) {
+        // and could not deepen from a fixed-point live state anyway --
+        // but for a custom formula, whose machines have their own section.
+        if map_is_big(ship, ship_variant) && (ship || ship_variant != MAP_CUSTOM) {
             return None;
         }
         let mode = r.u8()?;
@@ -1997,6 +2058,14 @@ impl ReferenceOrbit {
             }
             let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
             let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+            // A custom formula's machines follow the history, kept for
+            // `restore_custom`, which needs the formula compiled.
+            let custom_saved = if !ship && ship_variant == MAP_CUSTOM {
+                let _z_prev = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+                Some(r.0.to_vec())
+            } else {
+                None
+            };
             let c_dd = {
                 let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
                 let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
@@ -2052,6 +2121,7 @@ impl ReferenceOrbit {
                     custom_start: None,
                     custom_watch: None,
                     custom_found: None,
+                    custom_saved,
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -2222,6 +2292,7 @@ impl ReferenceOrbit {
             custom_start: None,
             custom_watch: None,
             custom_found: None,
+            custom_saved: None,
             corrections,
             shadow,
             c_dd,
@@ -5513,6 +5584,39 @@ mod tests {
             .expect("computes");
         assert_eq!(plain.periodic, None);
         assert_eq!(plain.ref_offset, [0.0, 0.0]);
+    }
+
+    /// A custom formula's reference goes through the orbit store (the
+    /// speed work after phase 4, step 9e): saved with its machines' state,
+    /// loaded and restored from its identity, it deepens to the very
+    /// orbit a build straight to that depth gives, entry for entry.
+    #[test]
+    fn a_custom_formulas_reference_goes_through_the_store() {
+        use crate::config::escape::EscapeConfig;
+        let dir = std::env::temp_dir().join(format!("fflame-custom-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (re, im, zoom) = ("-0.5", "0.1", 30.0);
+        for name in ["mandelbrot", "burning_ship", "phoenix"] {
+            let src = crate::escape::twins::custom_source(name).unwrap();
+            let mut esc = EscapeConfig { bailout: 4.0, max_iter: 4000, zoom_log2: zoom, ..EscapeConfig::default() };
+            esc.center_re = re.into();
+            esc.center_im = im.into();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            crate::escape::custom::ensure(&esc);
+            let id = crate::escape::custom::reference_identity(&esc).unwrap();
+            let n = crate::escape::fixedpoint::limbs_for_view(re, im, zoom);
+            let short = ReferenceOrbit::compute(re, im, zoom, Some(n), 2000, None, 2, false, MAP_CUSTOM, id).unwrap();
+            assert!(super::super::orbit_store::save_to(&dir, &short), "{name}: not stored");
+            let mut loaded = super::super::orbit_store::load_from(&dir, re, im, n, None, 2, false, MAP_CUSTOM, id, zoom, 1080.0).unwrap_or_else(|| panic!("{name}: not loaded"));
+            assert_eq!(loaded.len(), short.len(), "{name}");
+            loaded.extend(4000);
+            let full = ReferenceOrbit::compute(re, im, zoom, Some(n), 4000, None, 2, false, MAP_CUSTOM, id).unwrap();
+            assert_eq!(loaded.len(), full.len(), "{name}");
+            assert!(loaded.orbit == full.orbit && loaded.orbit_lo == full.orbit_lo && loaded.orbit_e == full.orbit_e, "{name}: the deepened orbit differs");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A custom formula's nucleus (plan, phase 4, step 9c): the
