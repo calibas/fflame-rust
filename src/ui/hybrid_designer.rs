@@ -83,12 +83,12 @@ impl HybridDesignerPanel {
         // carry over.
         if let Some(def) = custom::formula(&name) {
             for (g, group) in h.groups.iter().enumerate() {
-                let same = before.as_ref().and_then(|b| b.groups.get(g)).is_some_and(|b| b.formula == group.formula);
+                let same = before.as_ref().and_then(|b| b.groups.get(g)).is_some_and(|b| b.formula == group.formula && b.blend == group.blend);
                 if group.formula.is_none() || same {
                     continue;
                 }
-                let prefix = format!("g{}_", g + 1);
-                for p in def.parameters.iter().filter(|p| p.name.starts_with(&prefix)) {
+                let (own, blended) = (format!("g{}_", g + 1), format!("g{}b_", g + 1));
+                for p in def.parameters.iter().filter(|p| p.name.starts_with(&own) || p.name.starts_with(&blended)) {
                     changes.push((ConfigPath::EscapeFormulaParam { param: p.name.to_string() }, p.default.into()));
                 }
             }
@@ -232,6 +232,31 @@ impl HybridDesignerPanel {
                             .on_hover_text(t!("hybrid_designer.step_tip"));
                     });
                     if next.groups[g].formula.is_some() {
+                        // A second formula to blend with (step 8): the
+                        // group's `Blend` parameter morphs between them.
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(t!("hybrid_designer.blend"));
+                            let none = t!("hybrid_designer.blend_none").to_string();
+                            let selected = next.groups[g].blend.as_ref().map_or_else(|| none.clone(), |m| m.title.clone());
+                            egui::ComboBox::from_id_salt(("hybrid_blend", g))
+                                .selected_text(selected)
+                                .width(220.0)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(next.groups[g].blend.is_none(), none.as_str()).clicked() && next.groups[g].blend.is_some() {
+                                        next.groups[g].blend = None;
+                                        structural = true;
+                                    }
+                                    for (title, rhai) in member_choices() {
+                                        let picked = next.groups[g].blend.as_ref().is_some_and(|m| m.rhai == rhai);
+                                        if ui.selectable_label(picked, &title).clicked() && !picked {
+                                            next.groups[g].blend = Some(hybrid::Member { title, rhai });
+                                            structural = true;
+                                        }
+                                    }
+                                })
+                                .response
+                                .on_hover_text(t!("hybrid_designer.blend_tip"));
+                        });
                         ui.weak(t!("hybrid_designer.formula_params", n = g + 1));
                         return;
                     }
@@ -388,7 +413,11 @@ fn formula_line(h: &Hybrid) -> String {
         .enumerate()
         .map(|(g, group)| {
             if let Some(m) = &group.formula {
-                return format!("{}{}×[{}]", if g == h.loop_start { "⟳ " } else { "" }, group.repeats, m.title);
+                let step = match &group.blend {
+                    Some(b) => format!("{} ⇄ {}", m.title, b.title),
+                    None => m.title.clone(),
+                };
+                return format!("{}{}×[{step}]", if g == h.loop_start { "⟳ " } else { "" }, group.repeats);
             }
             let lines: Vec<String> = group
                 .lines

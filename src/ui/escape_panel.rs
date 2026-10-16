@@ -332,6 +332,30 @@ pub fn render_escape_content(
                 v.into(),
             );
         }
+        // A complex parameter, after its two parts: the same point in
+        // polar form (radius, angle), what animating it around the origin
+        // keys (`EscapeConfig::formula_param`).
+        if let Some(base) = p.name.strip_suffix(".im") {
+            if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
+                let get = |part: &str| {
+                    f32::try_from(config_manager.get_value(&ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }).unwrap_or(ConfigValue::Float(0.0))).unwrap_or(0.0)
+                };
+                let (mut r, mut angle) = (get("r"), get("angle"));
+                let mut changed = None;
+                ui.horizontal(|ui| {
+                    ui.weak(t!("escape_panel.as_a_point"));
+                    if ui.add(egui::DragValue::new(&mut r).speed(0.005).max_decimals(4).prefix("r ")).on_hover_text(t!("escape_panel.radius_tip")).changed() {
+                        changed = Some(("r", r));
+                    }
+                    if ui.add(egui::DragValue::new(&mut angle).speed(0.5).max_decimals(2).suffix("°")).on_hover_text(t!("escape_panel.angle_tip")).changed() {
+                        changed = Some(("angle", angle));
+                    }
+                });
+                if let Some((part, v)) = changed {
+                    let _ = config_manager.update_param(ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }, v.into());
+                }
+            }
+        }
     }
 
     // ---- Julia toggle ----
@@ -1178,9 +1202,15 @@ fn param_slider<'a>(
     p: &'static crate::escape::EscapeParamDef,
 ) -> egui::Slider<'a> {
     let decades = p.min > 0.0 && p.max / p.min >= 1e5;
+    // A custom formula's parameter declared `exponential` (phase 4,
+    // step 8).
+    #[cfg(feature = "engine-escape")]
+    let declared = p.min > 0.0 && crate::escape::custom::is_exponential(p);
+    #[cfg(not(feature = "engine-escape"))]
+    let declared = false;
     egui::Slider::new(v, p.min..=p.max)
         .text(p.display_name)
-        .logarithmic(decades)
+        .logarithmic(decades || declared)
 }
 
 /// One escape parameter's control: a DROPDOWN when the definition

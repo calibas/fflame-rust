@@ -2286,10 +2286,7 @@ impl ConfigManager {
             // mirroring how effect params behave here.
             ConfigPath::EscapeFormulaParam { param } => Ok(config
                 .escape
-                .formula_params
-                .get(param)
-                .copied()
-                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Formula, param))
+                .formula_param(param, |p| Self::escape_param_default(config, EscapeParamOf::Formula, p))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeColoringParam { param } => Ok(config
@@ -4053,7 +4050,11 @@ impl ConfigManager {
             }
             ConfigPath::EscapeFormulaParam { param } => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.formula_params.insert(param.clone(), v);
+                // `name.r` / `name.angle` write a complex parameter's parts.
+                let writes = self.current.escape.formula_param_writes(param, v, |p| Self::escape_param_default(&self.current, EscapeParamOf::Formula, p));
+                for (k, x) in writes {
+                    self.current.escape.formula_params.insert(k, x);
+                }
             }
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;

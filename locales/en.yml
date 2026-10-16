@@ -2455,6 +2455,9 @@ sim_panel:
   matte_edge_tip: "What Softness measures. Both settings put the edge in the same place — a distance field built from cells knows no more about where the boundary is than the cells do, and that was measured. Threshold feathers in the channel's own units, so the same Softness is a different width on every model. Distance builds a distance field every coloured frame, so Softness is a width in cells, the same on every model, and a wide feather stays a feather rather than a smear. It costs a few grid-sized passes per frame."
 
 escape_panel:
+  as_a_point: "As a point:"
+  radius_tip: "The parameter's distance from 0: animate it (or the angle) to move the point around the origin"
+  angle_tip: "The parameter's angle about 0, in degrees"
   edit_as_formula: "Edit as Formula"
   edit_as_formula_tip: "Put this formula's Rhai twin in its place -- the same picture -- and open it in the Formula Editor to change as your own. Mann damping and the biomorph test are the built-in's alone."
   contrast: "Auto Contrast"
@@ -2894,5 +2897,8 @@ hybrid_designer:
   formula_text: "Each pass, by group:"
   step: "Runs"
   step_lines: "Lines of operators"
+  blend: "Blended with"
+  blend_none: "Nothing"
+  blend_tip: "A second formula: both steps run from the same z, and the group's Blend parameter mixes them, 0 the first, 1 the second -- a continuous morph between two formulas, which animates and deep-zooms"
   step_tip: "What the group runs each pass: KF's lines of operators, or a formula's step (a built-in's twin, or a Rhai formula from the library), its other state kept from its own last turn"
   formula_params: "Its parameters are in the Escape panel, as \"Group %{n}: ...\""

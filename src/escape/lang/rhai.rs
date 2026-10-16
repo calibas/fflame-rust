@@ -111,8 +111,29 @@ pub fn coloring(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Coloring)
 }
 
+/// A formula from a script's own function `f(z, c)` (phase 4, step 8):
+/// the Mandelbrot's shape on both planes, `f` its step, the panel's
+/// bailout its test. `fns` are the script's functions, by name, which `f`
+/// may call as helpers; each reads only its arguments, as a formula's
+/// helper does.
+pub fn program_from_fn(name: &str, fns: &[(String, ScriptFuncDef)]) -> Result<Program, Vec<Diag>> {
+    let source = format!(
+        "const PARAMS = #{{ bailout: #{{ value: 4.0, min: 1.0, caption: \"Bailout\", hint: \"The squared radius past which a pixel has escaped\" }} }};\n\
+         const INFO = #{{ title: \"{name}\" }};\n\
+         fn start(pixel, p, ctx) {{ if ctx.julia {{ #{{ z: pixel, c: ctx.c }} }} else {{ #{{ z: complex(0.0, 0.0), c: pixel }} }} }}\n\
+         fn step(s, p) {{ s.z = {name}(s.z, s.c); s }}\n\
+         fn escaped(s, p) {{ s.z.norm_sqr() > p.bailout }}\n"
+    );
+    let lowered = lower_with(&source, EntryKind::Formula, fns)?;
+    checked(lowered, EntryKind::Formula)
+}
+
 fn compile(source: &str, kind: EntryKind) -> Result<Program, Vec<Diag>> {
     let lowered = lower_as(source, kind)?;
+    checked(lowered, kind)
+}
+
+fn checked(lowered: Lowered, kind: EntryKind) -> Result<Program, Vec<Diag>> {
     let (program, diags) = super::check::check_rhai(&lowered.entry, kind);
     let diags: Vec<Diag> = diags.into_iter().map(|d| lowered.rename(d)).collect();
     match program {
@@ -185,6 +206,12 @@ pub fn lower(source: &str) -> Result<Lowered, Vec<Diag>> {
 
 /// Lower a Rhai formula or colouring to the parse tree.
 pub fn lower_as(source: &str, kind: EntryKind) -> Result<Lowered, Vec<Diag>> {
+    lower_with(source, kind, &[])
+}
+
+/// [`lower_as`], with functions besides the source's own to call as
+/// helpers (a script's, `program_from_fn`).
+fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) -> Result<Lowered, Vec<Diag>> {
     let (ast, pos) = parse(source)?;
     let mut l = Lowerer {
         coloring: kind == EntryKind::Coloring,
@@ -200,6 +227,9 @@ pub fn lower_as(source: &str, kind: EntryKind) -> Result<Lowered, Vec<Diag>> {
         names: Vec::new(),
         fresh: 0,
     };
+    for (name, def) in extra {
+        l.fns.insert(name.clone(), def.clone());
+    }
     let mut out = l.run(&ast, kind).map_err(|d| vec![d])?;
     out.names = l.names;
     // The checker's names for what the context reads.
@@ -1534,6 +1564,19 @@ impl<'s> Lowerer<'s> {
                 let x = args.pop().unwrap();
                 let y = args.pop().unwrap();
                 call("atan2", mk(ExprKind::Complex(Box::new(x), Box::new(y)), span))
+            }
+            // a + (b - a) t: linear, so deep zoom derives through it (a
+            // continuous morph between two expressions, phase 4, step 8).
+            "mix" => {
+                if args.len() != 3 {
+                    return self.err(p, "`mix(a, b, t)`");
+                }
+                let t = args.pop().unwrap();
+                let b = args.pop().unwrap();
+                let a = args.pop().unwrap();
+                let d = self.binary(BinOp::Sub, b, a.clone(), p)?;
+                let m = self.binary(BinOp::Mul, d, t, p)?;
+                self.binary(BinOp::Add, a, m, p)?
             }
             "norm_sqr" => mk(ExprKind::Modulus(Box::new(one(&mut args, self)?)), span),
             "fold" => {

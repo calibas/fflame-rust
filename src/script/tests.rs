@@ -4554,3 +4554,95 @@ bailout:
     let msg = format!("{e:?}");
     assert!(msg.contains("3:7") && msg.contains("nope"), "{msg}");
 }
+
+/// Phase 4, step 8: a Rhai formula by its source alone, its parameters
+/// read back with their metadata, a hybrid composed in the script (twins
+/// taking turns, a blend), and a complex parameter set as a point in
+/// polar form.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn a_script_writes_rhai_formulas_and_composes_hybrids() {
+    let out = run(
+        r#"
+        script("Rhai", "generator");
+        escape.custom_formula(`const PARAMS = #{ power: #{ value: 3.0, min: 1.0, max: 100.0, exponential: true, caption: "Power" }, seed: #{ value: complex(0.5, 0.0) } };
+const INFO = #{ title: "Powered" };
+fn start(pixel, p) { #{ z: pixel, c: pixel + p.seed } }
+fn step(s, p) { s.z = s.z ** p.power + s.c; s }
+fn escaped(s, p) { s.z.norm_sqr() > 16.0 }`);
+        let ps = escape.formula_params();
+        let names = ps.map(|p| p.name);
+        if !names.contains("power") || !names.contains("seed.re") { throw `params: ${names}`; }
+        let power = ps.filter(|p| p.name == "power")[0];
+        if !power.exponential || power.max != 100.0 { throw `power: ${power}`; }
+        escape.param("seed.re", 0.0);
+        escape.param("seed.im", 2.0);
+        escape.param("seed.r", 3.0);
+        "#,
+        3,
+    )
+    .expect("script ran");
+    let esc = out.config.escape;
+    assert_eq!(esc.custom_formula.as_ref().map(|s| s.entry.as_str()), Some("Powered"));
+    assert_eq!(esc.formula_param("seed.r", |_| None), Some(3.0));
+    assert!((esc.formula_params["seed.im"] - 3.0).abs() < 1e-5, "the angle kept");
+    assert_eq!(esc.formula_param("seed.angle", |_| None).map(|a| a.round()), Some(90.0));
+    let writes = esc.formula_param_writes("seed.angle", 180.0, |_| None);
+    assert!(writes.iter().any(|(k, v)| k == "seed.re" && (*v + 3.0).abs() < 1e-5), "{writes:?}");
+
+    let out = run(
+        r#"
+        escape.hybrid([
+            #{ twin: "mandelbrot" },
+            #{ twin: "burning_ship", repeats: 2, blend_twin: "tricorn" },
+        ], 0);
+        "#,
+        3,
+    )
+    .expect("script ran");
+    let esc = out.config.escape;
+    assert_eq!(esc.custom_formula.as_ref().map(|s| s.dialect), Some(crate::config::escape::CustomDialect::Hybrid));
+    let h = crate::escape::lang::hybrid::Hybrid::from_json(&esc.custom_formula.unwrap().source).unwrap();
+    assert_eq!(h.groups.len(), 2);
+    assert_eq!(h.groups[1].repeats, 2);
+    assert!(h.groups[1].blend.as_ref().is_some_and(|b| b.title == "Tricorn"));
+    let def = crate::escape::get_formula(&esc.formula);
+    assert!(def.parameters.iter().any(|p| p.name == "g2_mix"));
+
+    let e = run(r#"escape.hybrid([#{ twin: "nothing" }]);"#, 3).err().expect("an unknown twin throws");
+    assert!(format!("{e:?}").contains("no built-in twin"), "{e:?}");
+}
+
+/// A formula from the script's own function (phase 4, step 8): the
+/// Burning Ship written as `f(z, c)` runs as the Ship's twin does, and
+/// the config carries it as Rhai source.
+#[cfg(feature = "engine-escape")]
+#[test]
+fn a_script_function_becomes_a_formula() {
+    let out = run(
+        r#"
+        fn fold(z) { complex(z.re.abs(), z.im.abs()) }
+        fn ship(z, c) { let a = fold(z); a * a + c }
+        escape.formula_fn("ship");
+        "#,
+        3,
+    )
+    .expect("script ran");
+    let esc = out.config.escape;
+    let src = esc.custom_formula.as_ref().expect("a custom formula");
+    assert_eq!((src.dialect, src.entry.as_str()), (crate::config::escape::CustomDialect::Rhai, "ship"));
+    let ours = crate::escape::lang::rhai::program(&src.source).unwrap();
+    let twin = crate::escape::lang::rhai::program(crate::escape::twins::source("burning_ship").unwrap()).unwrap();
+    use crate::escape::lang::interp::{run as run_formula, Env, ParamValues};
+    for julia in [false, true] {
+        for c in [(-0.5, -0.5), (-1.7, -0.02), (0.3, 0.2), (-1.0, -1.0)] {
+            let mut env = Env::at(crate::escape::lang::builtins::C64::new(c.0, c.1), 100);
+            env.julia = julia;
+            env.julia_c = crate::escape::lang::builtins::C64::new(-0.8, 0.156);
+            let (a, b) = (run_formula(&ours, &ParamValues::defaults(&ours), None, &env), run_formula(&twin, &ParamValues::defaults(&twin), None, &env));
+            assert_eq!((a.n, a.escaped), (b.n, b.escaped), "at {c:?} julia {julia}");
+        }
+    }
+    let e = run(r#"escape.formula_fn("nothing");"#, 3).err().expect("no such function throws");
+    assert!(format!("{e:?}").contains("no function `nothing(z, c)`"), "{e:?}");
+}
