@@ -66,10 +66,18 @@
 //! `perturb` setting (`IExprKind::FuncChoice`), as an arm a parameter
 //! picks is.
 //!
+//! A **branch on the iterate** (phase 4, step 6c) takes each test at the
+//! reference's values and at the pixel's full values, giving each an
+//! arm. Where they agree, that arm's equations hold; where not, the
+//! pixel's arm run from the entry state gives its full values, the
+//! reference's arm from the same state the reference's, and each
+//! deviation is their plain difference ([`Deriver::iterate_branch`]).
+//!
 //! What has no such form -- an inverse function, a power of a varying
-//! exponent, a branch on the iterate or the pixel, a loop inside the
-//! formula's loop or in its init, an int or bool carried -- leaves the
-//! formula without equations, on the direct path as before.
+//! exponent, a branch in the init on the pixel, a loop inside the
+//! formula's loop or in its init, an int or bool carried or set in a
+//! branch on the iterate -- leaves the formula without equations, on the
+//! direct path as before.
 //! Unless it stands in an arm (or an init's case) a parameter's choice
 //! picks: then the equations are derived without it, and hold when that
 //! arm is not taken, which the derived `perturb` setting says. In a
@@ -84,6 +92,7 @@ use super::ir::*;
 /// `None` when it has its own or they cannot be derived.
 pub fn with_derived_equations(p: &Program) -> Option<Program> {
     TOO_LARGE.with(|c| c.set(false));
+    BRANCH_REFUSAL.with(|c| c.set(None));
     if !p.perturb_loop.is_empty() || !p.perturb_init.is_empty() {
         return None;
     }
@@ -563,6 +572,26 @@ const MAX_EQUATION_NODES: usize = 20_000;
 thread_local! {
     /// Whether this thread's last derivation stopped at the budget.
     static TOO_LARGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// What stopped a branch on the iterate in this thread's last
+    /// derivation, when that was it (the library measurement's blocker
+    /// count).
+    static BRANCH_REFUSAL: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Notes what stopped a branch on the iterate, the first time.
+fn refuse_branch(why: &'static str) {
+    BRANCH_REFUSAL.with(|c| {
+        if c.get().is_none() {
+            c.set(Some(why));
+        }
+    });
+}
+
+/// What stopped a branch on the iterate in this thread's last
+/// [`with_derived_equations`], when that was it.
+#[cfg(test)]
+pub(crate) fn last_branch_refusal() -> Option<&'static str> {
+    BRANCH_REFUSAL.with(|c| c.get())
 }
 
 /// Whether this thread's last [`with_derived_equations`] gave up at
@@ -570,6 +599,28 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn last_was_too_large() -> bool {
     TOO_LARGE.with(|c| c.get())
+}
+
+/// The equation variables a block assigns, and whether it writes `#dz`.
+fn assigned_in(stmts: &[IStmt], out: &mut Vec<VarId>, dz: &mut bool) {
+    for s in stmts {
+        match s {
+            IStmt::Assign(Place::Var(v), _) => {
+                if !out.contains(v) {
+                    out.push(*v);
+                }
+            }
+            IStmt::Assign(Place::DZ, _) => *dz = true,
+            IStmt::Assign(..) => {}
+            IStmt::If { arms, otherwise } => {
+                for (_, b) in arms {
+                    assigned_in(b, out, dz);
+                }
+                assigned_in(otherwise, out, dz);
+            }
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => assigned_in(body, out, dz),
+        }
+    }
 }
 
 fn stmt_nodes(s: &IStmt) -> usize {
@@ -1059,6 +1110,15 @@ impl<'p> Deriver<'p> {
                     }
                 }
                 IStmt::If { arms, otherwise } if is_loop => {
+                    // A branch on the iterate (step 6c): a first test
+                    // that varies from pixel to pixel.
+                    self.z_written = *wrote_z;
+                    let varies = arms.first().is_some_and(|(c, _)| self.pair(c, written, is_loop).filter(|(rc, dc)| dc.is_none() && rc.ty == Ty::Bool).is_none());
+                    if varies {
+                        let code = self.iterate_branch(arms, otherwise, written, wrote_z)?;
+                        out.extend(code);
+                        continue;
+                    }
                     let mut derived = Vec::new();
                     let mut after: Option<Vec<VarId>> = None;
                     let mut any_z = *wrote_z;
@@ -1158,6 +1218,170 @@ impl<'p> Deriver<'p> {
         }
         self.charge(&out[counted..], branch)?;
         Some(out)
+    }
+
+    /// A branch whose tests vary from pixel to pixel (phase 4, step 6c):
+    /// the reference and the pixel may take different arms. Each test is
+    /// taken at the reference's values and at the pixel's full values,
+    /// giving each an arm. Where they agree, that arm's equations hold.
+    /// Where they do not, the pixel's arm, run from the entry state,
+    /// gives its full values; the reference's arm, run from the same
+    /// state, gives the reference's; and each deviation is their plain
+    /// difference, large there, with nothing to cancel.
+    fn iterate_branch(&mut self, arms: &[(IExpr, Vec<IStmt>)], otherwise: &[IStmt], written: &mut Vec<VarId>, wrote_z: &mut bool) -> Option<Vec<IStmt>> {
+        let mut out = Vec::new();
+        // The tests, at the reference and at the pixel.
+        self.begin_statement();
+        self.z_written = *wrote_z;
+        let mut tests = Vec::new();
+        for (c, _) in arms {
+            let Some(t) = self.test_pair(c, written) else {
+                refuse_branch("a branch on the iterate whose test it cannot follow (an int, a bool, the count)");
+                return None;
+            };
+            tests.push(t);
+        }
+        out.append(&mut self.pending);
+        let n = arms.len();
+        let int = |k: usize| mk(IExprKind::Int(k as i64), Ty::Int);
+        let (ri, pi) = (self.new_var("arm_ref".into(), Ty::Int), self.new_var("arm_pix".into(), Ty::Int));
+        for (v, at_pixel) in [(ri, false), (pi, true)] {
+            let arms = tests.iter().enumerate().map(|(k, t)| (if at_pixel { t.1.clone() } else { t.0.clone() }, vec![IStmt::Assign(Place::Var(v), int(k))])).collect();
+            out.push(IStmt::If { arms, otherwise: vec![IStmt::Assign(Place::Var(v), int(n))] });
+        }
+        // Each arm's equations, from the entry state.
+        let (entry, entry_z) = (written.clone(), *wrote_z);
+        let (mut codes, mut after, mut any_z) = (Vec::new(), None::<Vec<VarId>>, entry_z);
+        for body in arms.iter().map(|(_, b)| b.as_slice()).chain([otherwise]) {
+            let (mut w, mut z) = (entry.clone(), entry_z);
+            let code = self.stmts(body, true, &mut w, &mut z)?;
+            any_z |= z;
+            after = Some(match after {
+                None => w,
+                Some(a) => a.into_iter().filter(|v| w.contains(v)).collect(),
+            });
+            codes.push(code);
+        }
+        let after = after.unwrap_or_default();
+        // What the arms write: the variables a mismatch fixes, by their
+        // full values; an int or bool (the same for every pixel) would no
+        // longer be.
+        let mut assigned = Vec::new();
+        let mut dz = false;
+        for c in &codes {
+            assigned_in(c, &mut assigned, &mut dz);
+        }
+        let mut fixes: Vec<(VarId, VarId, Ty)> = Vec::new();
+        for v in 0..self.p.vars.len() {
+            if self.uniforms[v].is_some_and(|u| assigned.contains(&u)) {
+                refuse_branch("an int or bool set in a branch on the iterate");
+                return None;
+            }
+            let ty = self.p.vars[v].ty;
+            if let Some((_, cur, dev)) = self.carried[v] {
+                if assigned.contains(&cur) || assigned.contains(&dev) {
+                    fixes.push((cur, dev, ty));
+                }
+            } else if let Some((rv, dv)) = self.pairs[v] {
+                if after.contains(&v) && (assigned.contains(&rv) || assigned.contains(&dv)) {
+                    fixes.push((rv, dv, ty));
+                }
+            }
+        }
+        let zr = any_z.then(|| self.z_ref_var());
+        let chain = |v: VarId, codes: &[Vec<IStmt>]| -> IStmt {
+            let arms = codes[..n].iter().enumerate().map(|(k, c)| (test(BinOp::Eq, mk(IExprKind::Var(v), Ty::Int), int(k)), c.clone())).collect();
+            IStmt::If { arms, otherwise: codes[n].clone() }
+        };
+        let var = |v: VarId, ty: Ty| mk(IExprKind::Var(v), ty);
+        let dz_e = mk(IExprKind::Predef(Predef::DZ), Ty::Complex);
+        let mut mismatch = Vec::new();
+        // The entry state, kept.
+        let mut kept = Vec::new();
+        for &(r, d, ty) in &fixes {
+            for e in [r, d] {
+                let k = self.new_var("kept".into(), ty);
+                mismatch.push(IStmt::Assign(Place::Var(k), var(e, ty)));
+                kept.push((e, k, ty));
+            }
+        }
+        let kept_z = zr.map(|zr| {
+            let (kr, kd) = (self.new_var("kept_zr".into(), Ty::Complex), self.new_var("kept_dz".into(), Ty::Complex));
+            mismatch.push(IStmt::Assign(Place::Var(kr), var(zr, Ty::Complex)));
+            mismatch.push(IStmt::Assign(Place::Var(kd), dz_e.clone()));
+            (zr, kr, kd)
+        });
+        // The pixel's arm: its full values.
+        mismatch.push(chain(pi, &codes));
+        let mut fulls = Vec::new();
+        for &(r, d, ty) in &fixes {
+            let f = self.new_var("full".into(), ty);
+            mismatch.push(IStmt::Assign(Place::Var(f), bin(BinOp::Add, var(r, ty), var(d, ty))));
+            fulls.push(f);
+        }
+        let full_z = kept_z.map(|(zr, _, _)| {
+            let f = self.new_var("full_z".into(), Ty::Complex);
+            mismatch.push(IStmt::Assign(Place::Var(f), bin(BinOp::Add, var(zr, Ty::Complex), dz_e.clone())));
+            f
+        });
+        // Back to the entry state; the reference's arm.
+        for &(e, k, ty) in &kept {
+            mismatch.push(IStmt::Assign(Place::Var(e), var(k, ty)));
+        }
+        if let Some((zr, kr, kd)) = kept_z {
+            mismatch.push(IStmt::Assign(Place::Var(zr), var(kr, Ty::Complex)));
+            mismatch.push(IStmt::Assign(Place::DZ, var(kd, Ty::Complex)));
+        }
+        mismatch.push(chain(ri, &codes));
+        // The deviations: the pixel's full values less the reference's.
+        for (&(r, d, ty), &f) in fixes.iter().zip(&fulls) {
+            mismatch.push(IStmt::Assign(Place::Var(d), bin(BinOp::Sub, var(f, ty), var(r, ty))));
+        }
+        if let (Some((zr, _, _)), Some(f)) = (kept_z, full_z) {
+            mismatch.push(IStmt::Assign(Place::DZ, bin(BinOp::Sub, var(f, Ty::Complex), var(zr, Ty::Complex))));
+        }
+        out.push(IStmt::If { arms: vec![(test(BinOp::Eq, var(ri, Ty::Int), var(pi, Ty::Int)), vec![chain(ri, &codes)])], otherwise: mismatch });
+        *written = after;
+        *wrote_z = any_z;
+        Some(out)
+    }
+
+    /// A test at the reference's values and at the pixel's full values:
+    /// comparisons of numbers, and `&&`, `||`, `!` of tests; a test the
+    /// same for every pixel is both.
+    fn test_pair(&mut self, c: &IExpr, written: &[VarId]) -> Option<(IExpr, IExpr)> {
+        let numeric = |t: Ty| matches!(t, Ty::Float | Ty::Complex);
+        Some(match &c.kind {
+            IExprKind::Binary(op @ (BinOp::And | BinOp::Or), a, b) => {
+                let ((ra, pa), (rb, pb)) = (self.test_pair(a, written)?, self.test_pair(b, written)?);
+                (test(*op, ra, rb), test(*op, pa, pb))
+            }
+            IExprKind::Unary(UnOp::Not, a) => {
+                let (r, p) = self.test_pair(a, written)?;
+                let not = |e: IExpr| mk(IExprKind::Unary(UnOp::Not, Box::new(e)), Ty::Bool);
+                (not(r), not(p))
+            }
+            IExprKind::Binary(op @ (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge), a, b) if numeric(a.ty) || numeric(b.ty) => {
+                let (ra, da) = self.pair(a, written, true)?;
+                let (rb, db) = self.pair(b, written, true)?;
+                let full = |r: &IExpr, d: Option<IExpr>| match d {
+                    Some(d) => {
+                        let ty = r.ty.join(d.ty);
+                        bin(BinOp::Add, widen(r.clone(), ty), widen(d, ty))
+                    }
+                    None => r.clone(),
+                };
+                let (fa, fb) = (full(&ra, da), full(&rb, db));
+                (test(*op, ra, rb), test(*op, fa, fb))
+            }
+            _ => {
+                let (r, d) = self.pair(c, written, true)?;
+                if d.is_some() || r.ty != Ty::Bool {
+                    return None;
+                }
+                (r.clone(), r)
+            }
+        })
     }
 
     /// What the init's case says of a test: true where it is one of the
@@ -1743,7 +1967,7 @@ mod tests {
         // A test on the iterate after a parameter's, in one chain (as a
         // Rhai `else if` lowers): the rest of the chain is left out whole.
         let c = program(
-            "C {\ninit:\n z = 0\nloop:\n if @k == 0\n  z = sqr(z) + #pixel\n elseif real(z) > 0\n  z = exp(z)\n else\n  z = sqr(z) - #pixel\n endif\n\
+            "C {\ninit:\n z = 0\nloop:\n if @k == 0\n  z = sqr(z) + #pixel\n elseif real(z) > 0\n  z = asin(z)\n else\n  z = sqr(z) - #pixel\n endif\n\
              bailout:\n |z| < 4\ndefault:\n int param k\n  default = 0\n endparam\n}",
             Dialect::UltraFractal,
         );
@@ -1897,6 +2121,48 @@ mod tests {
         );
     }
 
+    /// A branch on the iterate (phase 4, step 6c): the reference and the
+    /// pixel may take different arms, and the equations follow the
+    /// pixel's. Barnsley's test on Re z; a test on |z| choosing a
+    /// temporary; a chain of tests on both parts' signs; a value
+    /// carried and written in one arm. Each runs perturbed as it runs, at
+    /// points near the boundary, in the f64 model.
+    #[test]
+    fn branches_on_the_iterate_run_as_the_formula_does() {
+        let cases: &[(&str, (f64, f64))] = &[
+            ("B {\ninit:\n z = #pixel\nloop:\n if real(z) >= 0\n  z = (z - 1) * #pixel\n else\n  z = (z + 1) * #pixel\n endif\nbailout:\n |z| < 4\n}", (-0.9865997557628862, 0.9988140478833802)),
+            ("M {\ninit:\n z = 0\nloop:\n if |z| < 0.25\n  t = z * z * z\n else\n  t = sqr(z)\n endif\n z = t + #pixel\nbailout:\n |z| < 4\n}", (-1.177650022782207, 0.3084396528402683)),
+            (
+                "Q {\ninit:\n z = 0\nloop:\n if real(z) > 0 && imag(z) > 0\n  z = sqr(z) + #pixel\n elseif real(z) > 0\n  z = sqr(z) * 1.1 + #pixel\n else\n  z = sqr(z) - 0.1 * z + #pixel\n endif\n\
+                 bailout:\n |z| < 4\n}",
+                (-0.14349415614741678, 0.8146816284437264),
+            ),
+            (
+                "C {\ninit:\n z = 0\n acc = 0\nloop:\n if imag(z) > 0\n  acc = acc * 0.5 + z\n endif\n z = sqr(z) + #pixel + 0.05 * acc\nbailout:\n |z| < 4\n}",
+                (-1.0602798860067626, 0.2890408860028159),
+            ),
+        ];
+        for &(src, (rx, ry)) in cases {
+            let p = program(src, Dialect::UltraFractal);
+            let d = with_derived_equations(&p).unwrap_or_else(|| panic!("{}: no equations", p.name));
+            assert!(super::super::perturb::perturbation(&d).is_ok(), "{}", p.name);
+            let reference = C64::new(rx, ry);
+            let mut escaped = 0;
+            for k in 0..12 {
+                let t = k as f64 * 0.524;
+                let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-4 * (1.0 + k as f64)));
+                let env = Env::at(px, 300);
+                let direct = run(&p, &ParamValues::defaults(&p), None, &env);
+                for rebase in [false, true] {
+                    let pert = run_perturbed(&d, &ParamValues::defaults(&d), &env, reference, rebase).unwrap();
+                    assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "{} at {px:?}, rebase {rebase}", p.name);
+                }
+                escaped += direct.escaped as usize;
+            }
+            assert!(escaped > 0, "{}: nothing escapes there", p.name);
+        }
+    }
+
     /// A user function called in many arms: its formless choices are
     /// excluded by one test each, as a balanced tree. (A test per call
     /// and choice, chained, nested as deep as there were calls, and
@@ -1958,7 +2224,6 @@ mod tests {
             // A power of a varying exponent, an inverse function.
             "Z {\ninit:\n z = 0\nloop:\n z = z^z + #pixel\nbailout:\n |z| < 4\n}",
             "A {\ninit:\n z = 0\nloop:\n z = asin(z) + #pixel\nbailout:\n |z| < 4\n}",
-            "B {\ninit:\n z = 0\nloop:\n if real(z) > 0\n  z = sqr(z) + #pixel\n else\n  z = z + #pixel\n endif\nbailout:\n |z| < 4\n}",
             // A carried int (a counter): no deviation to follow it by.
             "I {\ninit:\n z = 0\n int k = 0\nloop:\n k = k + 1\n z = sqr(z) + #pixel * k\nbailout:\n |z| < 4\n}",
         ] {
@@ -1969,5 +2234,31 @@ mod tests {
             Dialect::UltraFractal,
         );
         assert!(with_derived_equations(&own).is_none());
+    }
+}
+
+#[cfg(test)]
+mod diag_tmp {
+    use super::super::builtins::C64;
+    use super::super::interp::{run, run_perturbed, Env, ParamValues};
+    #[test]
+    #[ignore = "diagnostic"]
+    fn barnsley_divergence() {
+        let (file, _) = super::super::parser::parse_file("B {\ninit:\n z = #pixel\nloop:\n if real(z) >= 0\n  z = (z - 1) * #pixel\n else\n  z = (z + 1) * #pixel\n endif\nbailout:\n |z| < 4\n}");
+        let (p, _) = super::super::check::check(&file.entries[0], super::super::EntryKind::Formula, super::super::Dialect::UltraFractal);
+        let p = p.unwrap();
+        let d = super::with_derived_equations(&p).unwrap();
+        let reference = C64::new(0.21939449458901822, 1.2720237674442672);
+        let px = C64::new(0.21939459458901822, 1.2720237674442672);
+        for m in 1..150u32 {
+            let env = Env::at(px, m);
+            let a = run(&p, &ParamValues::defaults(&p), None, &env).z;
+            let b = run_perturbed(&d, &ParamValues::defaults(&d), &env, reference, false).unwrap().z;
+            let r = run(&p, &ParamValues::defaults(&p), None, &Env::at(reference, m)).z;
+            if b.sub(a).abs() > 1e-9 * a.abs().max(1.0) || m % 20 == 0 {
+                println!("m {m}: direct {a:?}, perturbed {b:?}, reference {r:?}");
+                if b.sub(a).abs() > 1e-6 { break; }
+            }
+        }
     }
 }

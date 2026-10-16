@@ -2083,11 +2083,19 @@ mod tests {
         const USER: &str = "U {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.1 * @fn1(z)\nbailout:\n |z| < 4\n\
                             default:\n func fn1\n  default = sin()\n endfunc\n}";
         let choice = |name: &str| crate::escape::lang::builtins::USER_FUNCTIONS.iter().position(|f| f.name() == name).unwrap();
-        let cases: [(&str, &str, (&str, &str), u32, Option<usize>); 4] = [
+        // Branches on the iterate (step 6c): Barnsley's on Re z, and a
+        // chain on both parts' signs.
+        const BARNSLEY: &str = "B {\ninit:\n z = #pixel\nloop:\n if real(z) >= 0\n  z = (z - 1) * #pixel\n else\n  z = (z + 1) * #pixel\n endif\n\
+                                bailout:\n |z| < 4\n}";
+        const QUADRANT: &str = "Q {\ninit:\n z = 0\nloop:\n if real(z) > 0 && imag(z) > 0\n  z = sqr(z) + #pixel\n elseif real(z) > 0\n  z = sqr(z) * 1.1 + #pixel\n\
+                                else\n  z = sqr(z) - 0.1 * z + #pixel\n endif\nbailout:\n |z| < 4\n}";
+        let cases: [(&str, &str, (&str, &str), u32, Option<usize>); 6] = [
             (SINE, "S", ("2.5", "0.16980302245877532"), 3000, None),
             (MANY, "M", ("-0.75", "0.21462864355418923"), 3000, None),
             (USER, "U", ("-0.6843621955053129", "0.41170997894266725"), 1000, Some(choice("sin"))),
             (USER, "U", ("0.20587744975930583", "0.5295480163576282"), 1000, Some(choice("log"))),
+            (BARNSLEY, "B", ("-0.22631372474281347", "1.2433485650826654"), 1000, None),
+            (QUADRANT, "Q", ("0.29662119681736226", "0.4226893135391632"), 1000, None),
         ];
         for (src, name, (cre, cim), max_iter, func) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -2116,9 +2124,9 @@ mod tests {
             println!("{name} at zoom 30: of {} pixels in big floats ({escaped} escape), the custom formula counts {right} right, {near} within one", truth.len());
             assert!(escaped > truth.len() / 4, "{name}: the view escapes too little");
             assert!(right as f64 >= 0.95 * truth.len() as f64, "{name}: {right} of {}", truth.len());
-            // A user function's forms on the floatexp rung too (its own
-            // helper, over CFe2).
-            if func.is_some() {
+            // The floatexp rung too: its own forms over CFe2, a user
+            // function's helper, a branch's tests.
+            {
                 let got = records_on(&custom, 64, 48, true, true, false);
                 let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
                 println!("{name} on the floatexp rung: {right} right");

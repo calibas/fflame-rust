@@ -659,11 +659,27 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
   (`delta::MAX_EQUATION_NODES`); past that the formula keeps the direct
   path.
 
+- **A branch on the iterate** (phase 4, step 6c): the reference and
+  the pixel may take different arms. Each test is taken at the
+  reference's values and at the pixel's full values (reference plus
+  deviation), giving each an arm. Where they agree, that arm's
+  equations hold. Where they do not, the pixel's arm, run from the
+  entry state, gives its full values; the reference's arm, run from
+  the same state, the reference's; and each deviation is their plain
+  difference, large there (`Deriver::iterate_branch`). Each arm's
+  equations appear three times (shared, the pixel's, the reference's).
+  Barnsley's test on Re z and a chain on both parts' signs count right
+  on all 439 sampled pixels at zoom 30, on both rungs. Like the
+  difference forms, it cannot outlast chaos: near Barnsley's boundary
+  pixels escape after hundreds of steps of an expanding map, past what
+  f32 deviations can follow.
+
 What does not derive: an inverse function, a power of a varying
-exponent, a branch on the iterate or the pixel, a loop inside the loop
-or in the init, an int or bool carried, more than one value carried --
-unless it stands in an arm a parameter picks (or a user function's
-choice). Such a formula stays on the direct path, as before.
+exponent, a branch in the init on the pixel, a loop inside the loop or
+in the init, an int or bool carried or set in a branch on the iterate,
+more than one value carried -- unless it stands in an arm a parameter
+picks (or a user function's choice). Such a formula stays on the
+direct path, as before.
 
 **Hybrids** (`lang/hybrid.rs`, the Hybrid Designer panel): Kalles
 Fraktaler's hybrid designer, as its manual describes it. Up to four
