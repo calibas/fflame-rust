@@ -19,8 +19,8 @@ bug) and 2 (the Rhai front end) done 2026-10-14; step 3 (UF and
 Fractint formulas and colourings converted to Rhai, Rhai colourings)
 2026-10-15; step 4 (the built-ins' twins, Edit as Formula, branches in
 the init derived) 2026-10-15; step 5 (carried state in deep zoom, one
-value) 2026-10-15; step 6a (transcendental functions and powers by
-difference forms) 2026-10-15.
+value) 2026-10-15; step 6 (transcendental functions and powers by
+difference forms, user functions, branches on the iterate) 2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1189,8 +1189,36 @@ keeps compiling as UF; the editor converts what it opens.
        size budget. The leading blockers now: a branch on the iterate
        (1,974), a power of a varying exponent (789), a branch in the
        init on the pixel (731), an int or bool carried (592).
-   - **6c: guards** as above, and the rest of the measurement's
-     blockers in order.
+   - **6c, done 2026-10-15: branches on the iterate**, which also
+     covers the guards planned above (a check at a pole or zero is a
+     branch on the iterate), with no declaration: the derivation takes
+     every test at the pixel's full value as well as the reference's.
+     - Each test at the reference's values and at the pixel's full
+       values (reference plus deviation: comparisons of numbers, and
+       `&&`, `||`, `!` of tests) gives each an arm. Where they agree,
+       that arm's equations hold. Where not, the pixel's arm run from
+       the entry state gives its full values, the reference's arm run
+       from the same state the reference's, and each deviation is their
+       plain difference, large there (`Deriver::iterate_branch`). An int
+       or bool set in such a branch is refused (it would no longer be
+       the same for every pixel).
+     - Each arm's equations appear three times (shared, the pixel's, the
+       reference's); the size budget counts them.
+     - At zoom 30, Barnsley's test on Re z and a chain on both parts'
+       signs count right on all 439 sampled pixels, on both rungs. Near
+       Barnsley's boundary pixels escape after hundreds of steps of an
+       expanding map, past what f32 (or, far enough, f64) deviations can
+       follow; the f64 model test uses orbits under 45 steps for that
+       reason.
+     - The library: derived equations for 3,418 formulas (3,064 after
+       6b), every conversion keeping them (3,419 of 3,419); 48 past the
+       size budget. The measurement names what stops a branch on the
+       iterate (its test on an int, a bool or the count: 40). The
+       leading blockers now: the measurement's catch-all, an int or bool
+       carried or a shape it cannot name (1,494); a power of a varying
+       exponent (846); a branch in the init on the pixel (731); a test
+       reading a variable the loop changes (645); a loop inside the
+       loop (455).
 7. **Hybrids of any formulas**: a hybrid is a schedule (groups, repeats,
    loop start) of formulas' steps, z shared, each member's other state
    and parameters under its own name; KF's operators become one small

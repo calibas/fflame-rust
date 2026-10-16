@@ -798,6 +798,9 @@ mod tests {
         if lang::delta::last_was_too_large() {
             return "equations past the size budget".into();
         }
+        if let Some(why) = lang::delta::last_branch_refusal() {
+            return why.into();
+        }
         let Some(cases) = lang::delta::init_cases(p) else {
             return "a loop in the init, or a branch it cannot follow".into();
         };
@@ -902,9 +905,16 @@ mod tests {
                     IStmt::Assign(_, e) => first(e, p, inits, found),
                     IStmt::If { arms, otherwise } => {
                         for (c, b) in arms {
-                            if let Some(why) = varies(c, p, inits) {
-                                *found = Some(why.into());
-                                return;
+                            // A branch on the iterate derives (step 6c),
+                            // what its test reads as any expression; on
+                            // the iteration count it does not.
+                            match varies(c, p, inits) {
+                                Some(why @ "a branch on the iteration count") => {
+                                    *found = Some(why.into());
+                                    return;
+                                }
+                                Some(_) => first(c, p, inits, found),
+                                None => {}
                             }
                             walk(b, p, inits, found);
                         }
