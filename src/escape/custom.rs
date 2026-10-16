@@ -228,6 +228,33 @@ fn leak(s: String) -> &'static str {
 /// in slot order, as `pack_params` packs them. A complex parameter is
 /// two (`name.re`, `name.im`); a user function an enum over the
 /// functions it may be.
+/// The custom parameters declared `exponential`, by their definitions'
+/// addresses (leaked, so fixed for the run): their sliders run
+/// logarithmically (`is_exponential`).
+static EXPONENTIAL: std::sync::Mutex<std::collections::BTreeSet<usize>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// A program's parameter definitions, leaked for the registry, its
+/// `exponential` ones noted.
+fn leak_params(p: &ir::Program) -> &'static [EscapeParamDef] {
+    let defs: &'static [EscapeParamDef] = Box::leak(param_defs(p).into_boxed_slice());
+    if let Ok(mut set) = EXPONENTIAL.lock() {
+        for d in defs {
+            let base = d.name.strip_suffix(".re").or_else(|| d.name.strip_suffix(".im")).unwrap_or(d.name);
+            if p.params.iter().any(|q| q.name == base && q.exponential) {
+                set.insert(d as *const EscapeParamDef as usize);
+            }
+        }
+    }
+    defs
+}
+
+/// Whether a parameter was declared `exponential` (UF's `exponential =
+/// true`, a Rhai `PARAMS` entry's `exponential: true`): its slider runs
+/// logarithmically.
+pub fn is_exponential(d: &EscapeParamDef) -> bool {
+    EXPONENTIAL.lock().is_ok_and(|set| set.contains(&(d as *const EscapeParamDef as usize)))
+}
+
 fn param_defs(p: &ir::Program) -> Vec<EscapeParamDef> {
     let mut out = Vec::new();
     let range = |min: Option<f64>, max: Option<f64>, default: f64| -> (f32, f32) {
@@ -351,7 +378,7 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         } else {
             &[FormulaFeature::Program, FormulaFeature::DynamicalOnly]
         },
-        parameters: Box::leak(param_defs(&p).into_boxed_slice()),
+        parameters: leak_params(&p),
         wgsl: leak(wgsl),
         wgsl_param_seed: "",
         wgsl_prev_init: "",
@@ -545,7 +572,7 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
         name: leak(name.to_string()),
         display_name: display_name(&p),
         features: Box::leak(features.into_boxed_slice()),
-        parameters: Box::leak(param_defs(&p).into_boxed_slice()),
+        parameters: leak_params(&p),
         wgsl: leak(c.wgsl),
         accum_init: leak(c.accum_init),
         wgsl_accum: leak(c.wgsl_accum),

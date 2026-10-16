@@ -336,9 +336,15 @@ fn escaped(s, p) {
   reads the state before any is set -- and `escaped` says when the pixel
   has left. What a step carries from pass to pass is then visible.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
-  `max`, `caption`, `hint`, `choices` (an int's names), `exponential`,
-  or `function` (a user function, called `p.f(z)`). They are the
-  panel's controls, animation targets and script parameters.
+  `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
+  (the slider runs logarithmically, `custom::is_exponential`), or
+  `function` (a user function, called `p.f(z)`). They are the panel's
+  controls, animation targets and script parameters
+  (`escape.formula_params()`). A complex parameter is two, `name.re` and
+  `name.im`, and also reads and sets as a point in polar form,
+  `name.r` and `name.angle` (degrees; `EscapeConfig::formula_param`):
+  the panel shows both, and animating `name.angle` moves the point
+  around the origin.
 - **The context**, every function's optional last argument (`ctx`
   here): `ctx.julia` and `ctx.c` (the panel's Julia toggle and
   constant), `ctx.pass` (0 on the first pass; with `INFO.cycle`,
@@ -364,7 +370,8 @@ fn escaped(s, p) {
   `ln` the natural log and `log` base 10, `abs` of a complex its
   modulus and `fold` each part's absolute value (the Burning Ship),
   `norm_sqr` the squared modulus, `.re` / `.im`, `arg`, `atan2(y, x)`,
-  `ceiling`, `cot`, `coth`, `PI()`, `E()`. Loops: `while`, `do ...
+  `ceiling`, `cot`, `coth`, `PI()`, `E()`, `mix(a, b, t)` (`a + (b -
+  a) t`: a morph between two expressions that deep zoom derives through). Loops: `while`, `do ...
   while/until`, `for i in a..b`; no `break`.
 - How: rhai's own parser (optimisation off) gives its syntax tree
   through the `internals` feature, pinned with the rhai version; the
@@ -720,6 +727,13 @@ each from the init's z with its pass starting at `prefix + q`
 by `R`, the equations reading `custom_pass(m)`, and `rebase_phased`
 rebases a pixel at pass `i >= prefix` onto entry `1 + (i - prefix) %
 period`. At most 31 phases (`perturb::MAX_PHASES`).
+
+**Blends** (phase 4, step 8): a formula group may name a second formula
+(`Group::blend`). Both steps run from the same z, and z becomes `mix(a's,
+b's, t)` by the group's own parameter `g<N>_mix` (0 the first formula,
+1 the second): a continuous morph between two formulas, which animates
+as any parameter and deep-zooms (the mix is linear). The second
+formula's parameters are under `g<N>b_`, captioned "Group N (blended)".
 
 **Any formula as a group** (phase 4, step 7): in the designer a group
 runs either KF's lines or a formula's step -- a built-in's Rhai twin, or

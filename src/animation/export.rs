@@ -905,7 +905,14 @@ fn apply_config_value(
             config.escape.lens_params.insert(param.clone(), *v);
         }
         (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
-            config.escape.formula_params.insert(param.clone(), *v);
+            // `name.r` / `name.angle` write a complex parameter's parts.
+            #[cfg(feature = "engine-escape")]
+            let writes = config.escape.formula_param_writes(param, *v, |p| crate::escape::param_default(&config.escape, crate::escape::ParamOf::Formula, p));
+            #[cfg(not(feature = "engine-escape"))]
+            let writes = config.escape.formula_param_writes(param, *v, |_| None);
+            for (k, x) in writes {
+                config.escape.formula_params.insert(k, x);
+            }
         }
         (ConfigPath::EscapeColoringParam { param }, ConfigValue::Float(v)) => {
             config.escape.coloring_params.insert(param.clone(), *v);

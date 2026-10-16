@@ -378,7 +378,60 @@ impl TextureOverlay {
     }
 }
 
+/// Which polar part of a complex formula parameter `name.r` or
+/// `name.angle` reads.
+#[derive(Clone, Copy)]
+enum Polar {
+    Radius,
+    Angle,
+}
+
+/// `name.r` / `name.angle`: the complex parameter `name` as a point in
+/// polar form.
+fn polar_part(name: &str) -> Option<(&str, Polar)> {
+    if let Some(base) = name.strip_suffix(".r") {
+        return Some((base, Polar::Radius));
+    }
+    name.strip_suffix(".angle").map(|base| (base, Polar::Angle))
+}
+
 impl EscapeConfig {
+    /// A formula parameter's value, `default` giving an unset one's.
+    /// `name.r` and `name.angle` read a complex parameter `name` (held
+    /// as `name.re` and `name.im`) as a point in polar form, its radius
+    /// and its angle in degrees, so it can animate around the origin as
+    /// well as along x and y (phase 4, step 8).
+    pub fn formula_param(&self, name: &str, default: impl Fn(&str) -> Option<f32>) -> Option<f32> {
+        let get = |p: &str| self.formula_params.get(p).copied().or_else(|| default(p));
+        match polar_part(name) {
+            Some((base, part)) => {
+                let (re, im) = (get(&format!("{base}.re"))?, get(&format!("{base}.im"))?);
+                Some(match part {
+                    Polar::Radius => re.hypot(im),
+                    Polar::Angle => im.atan2(re).to_degrees(),
+                })
+            }
+            None => get(name),
+        }
+    }
+
+    /// What setting a formula parameter writes: the parameter itself,
+    /// or for `name.r` / `name.angle` the complex parameter's two parts,
+    /// its other polar part kept.
+    pub fn formula_param_writes(&self, name: &str, v: f32, default: impl Fn(&str) -> Option<f32>) -> Vec<(String, f32)> {
+        let Some((base, part)) = polar_part(name) else {
+            return vec![(name.to_string(), v)];
+        };
+        let (re_k, im_k) = (format!("{base}.re"), format!("{base}.im"));
+        let get = |p: &str| self.formula_params.get(p).copied().or_else(|| default(p)).unwrap_or(0.0);
+        let (re, im) = (get(&re_k), get(&im_k));
+        let (r, a) = match part {
+            Polar::Radius => (v, im.atan2(re)),
+            Polar::Angle => (re.hypot(im), v.to_radians()),
+        };
+        vec![(re_k, r * a.cos()), (im_k, r * a.sin())]
+    }
+
     /// Whether anything draws with the texture, so it has to be on the
     /// GPU: the overlay, the relief's bump, or a colouring that reads it
     /// (the image trap).
@@ -2931,6 +2984,27 @@ mod tests {
             }
             assert_eq!(PaletteCurve::from_name(curve.as_str()), curve);
         }
+    }
+
+    /// A complex formula parameter as a point in polar form (phase 4,
+    /// step 8): `seed.r` and `seed.angle` read and set `seed.re` and
+    /// `seed.im` through the manager, and undo as any edit.
+    #[test]
+    fn a_complex_parameter_reads_and_sets_as_a_point() {
+        use crate::config::{ConfigManager, ConfigPath};
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.formula_params.insert("seed.re".into(), 1.0);
+        config.escape.formula_params.insert("seed.im".into(), 0.0);
+        let mut mgr = ConfigManager::new(config);
+        let get = |mgr: &ConfigManager, p: &str| f32::try_from(mgr.get_value(&ConfigPath::EscapeFormulaParam { param: p.into() }).unwrap()).unwrap();
+        assert_eq!((get(&mgr, "seed.r"), get(&mgr, "seed.angle")), (1.0, 0.0));
+        mgr.update_param(ConfigPath::EscapeFormulaParam { param: "seed.angle".into() }, 90.0f32.into()).unwrap();
+        assert!(get(&mgr, "seed.re").abs() < 1e-6 && (get(&mgr, "seed.im") - 1.0).abs() < 1e-6);
+        mgr.update_param(ConfigPath::EscapeFormulaParam { param: "seed.r".into() }, 2.0f32.into()).unwrap();
+        assert!((get(&mgr, "seed.im") - 2.0).abs() < 1e-5 && (get(&mgr, "seed.angle") - 90.0).abs() < 1e-3);
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        assert!((get(&mgr, "seed.re") - 1.0).abs() < 1e-6 && get(&mgr, "seed.im").abs() < 1e-6, "undone");
     }
 
     #[test]

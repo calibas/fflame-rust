@@ -1871,7 +1871,118 @@ fn register_escape(engine: &mut Engine) {
                 set_custom_coloring(e, custom_source(source, entry, "uf")?)
             },
         );
+        // A Rhai formula: its source alone, one formula to a source
+        // (phase 4, step 8).
+        engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
+            let entry = crate::escape::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
+            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string() })
+        });
+        // A formula from the script's own function `f(z, c)`, its step:
+        // the Mandelbrot's shape on both planes. The config carries it as
+        // Rhai source, so the saved file renders anywhere.
+        engine.register_fn("formula_fn", |ctx: rhai::NativeCallContext, e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            let mut fns: Vec<(String, rhai::ScriptFuncDef)> = Vec::new();
+            let mut found = false;
+            for m in ctx.iter_namespaces() {
+                for (_, _, n, params, def) in m.iter_script_fn_info() {
+                    found |= n == name && params == 2;
+                    fns.push((n.to_string(), (**def).clone()));
+                }
+            }
+            if !found {
+                return Err(err(format!("no function `{name}(z, c)` in the script")));
+            }
+            let p = crate::escape::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
+                err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
+            })?;
+            let source = crate::escape::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
+            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source })
+        });
+        // A hybrid composed in the script: the Hybrid Designer's groups.
+        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, hybrid_source(&groups, 0)?)
+        });
+        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array, loop_start: i64| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, hybrid_source(&groups, loop_start)?)
+        });
     }
+
+    // A hybrid's groups from a script's maps: `repeats`, and what the
+    // group runs -- `formula` (Rhai source) or `twin` (a built-in's
+    // name), optionally `blend` / `blend_twin` to mix with, or KF's
+    // `lines` as the hybrid's JSON has them.
+    #[cfg(feature = "engine-escape")]
+    fn hybrid_source(groups: &Array, loop_start: i64) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
+        use crate::escape::lang::hybrid::{Hybrid, Member};
+        let member = |source: Option<String>, twin: Option<String>| -> Result<Option<serde_json::Value>, Box<EvalAltResult>> {
+            let rhai = match (source, twin) {
+                (Some(s), _) => s,
+                (None, Some(t)) => crate::escape::twins::source(&t)
+                    .ok_or_else(|| err(format!("no built-in twin `{t}` - the twins are {}", crate::escape::twins::TWINS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))))?
+                    .to_string(),
+                (None, None) => return Ok(None),
+            };
+            let title = crate::escape::lang::rhai::title(&rhai).unwrap_or_else(|| "Formula".into());
+            Ok(Some(serde_json::to_value(Member { title, rhai }).expect("a member serialises")))
+        };
+        // Maps too, which a config value never is.
+        fn to_json(d: &Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {
+            if let Some(m) = d.clone().try_cast::<rhai::Map>() {
+                let mut out = serde_json::Map::new();
+                for (k, v) in m {
+                    out.insert(k.to_string(), to_json(&v)?);
+                }
+                return Ok(serde_json::Value::Object(out));
+            }
+            if let Some(a) = d.clone().try_cast::<Array>() {
+                return a.iter().map(to_json).collect::<Result<Vec<_>, _>>().map(serde_json::Value::Array);
+            }
+            dynamic_to_json(d)
+        }
+        let mut out = Vec::new();
+        for (k, g) in groups.iter().enumerate() {
+            let serde_json::Value::Object(mut map) = to_json(g)? else {
+                return Err(err(format!("group {}: a map, `#{{ twin: \"mandelbrot\", repeats: 1 }}`", k + 1)));
+            };
+            let mut take = |key: &str| map.remove(key).and_then(|v| v.as_str().map(str::to_string));
+            let (formula, twin, blend, blend_twin) = (take("formula"), take("twin"), take("blend"), take("blend_twin"));
+            if let Some(m) = member(formula, twin)? {
+                map.insert("formula".into(), m);
+            }
+            if let Some(m) = member(blend, blend_twin)? {
+                map.insert("blend".into(), m);
+            }
+            map.entry("repeats").or_insert(serde_json::Value::from(1));
+            out.push(serde_json::Value::Object(map));
+        }
+        let json = serde_json::json!({ "groups": out, "loop_start": loop_start.max(0) });
+        let h = Hybrid::from_json(&json.to_string()).map_err(err)?;
+        h.validate().map_err(err)?;
+        Ok(crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() })
+    }
+
+    // The formula's parameters, each a map of its metadata and value:
+    // what a script needs to sweep or animate them (phase 4, step 8).
+    engine.register_fn("formula_params", |e: &mut EscapeHandle| -> Array {
+        let cfg = e.cfg.borrow();
+        let Some(def) = crate::escape::find_formula(&cfg.escape.formula) else { return Array::new() };
+        def.parameters
+            .iter()
+            .map(|p| {
+                let mut m = rhai::Map::new();
+                m.insert("name".into(), Dynamic::from(p.name.to_string()));
+                m.insert("caption".into(), Dynamic::from(p.display_name.to_string()));
+                m.insert("min".into(), Dynamic::from(f64::from(p.min)));
+                m.insert("max".into(), Dynamic::from(f64::from(p.max)));
+                m.insert("default".into(), Dynamic::from(f64::from(p.default)));
+                m.insert("value".into(), Dynamic::from(f64::from(cfg.escape.formula_params.get(p.name).copied().unwrap_or(p.default))));
+                m.insert("choices".into(), Dynamic::from(p.choices.iter().map(|c| Dynamic::from(c.to_string())).collect::<Array>()));
+                #[cfg(feature = "engine-escape")]
+                m.insert("exponential".into(), Dynamic::from(crate::escape::custom::is_exponential(p)));
+                Dynamic::from(m)
+            })
+            .collect()
+    });
 
     engine.register_fn("formulas", |_e: &mut EscapeHandle| -> Array {
         crate::escape::FORMULAS
@@ -2216,7 +2327,11 @@ fn register_escape(engine: &mut Engine) {
             let mut cfg = e.cfg.borrow_mut();
             let def = crate::escape::find_formula(&cfg.escape.formula)
                 .ok_or_else(|| err(format!("no such formula `{}`", cfg.escape.formula)))?;
-            if !def.parameters.iter().any(|p| p.name == name) {
+            // `name.r` / `name.angle`: a complex parameter as a point in
+            // polar form (`EscapeConfig::formula_param`).
+            let polar = name.strip_suffix(".r").or_else(|| name.strip_suffix(".angle"));
+            let complex = polar.is_some_and(|base| def.parameters.iter().any(|p| p.name.strip_suffix(".re") == Some(base)));
+            if !complex && !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
                 return Err(err(format!(
                     "`{}` has no parameter `{name}` (it has: {})",
@@ -2225,7 +2340,10 @@ fn register_escape(engine: &mut Engine) {
                 )));
             }
             enter(&mut cfg);
-            cfg.escape.formula_params.insert(name.to_string(), value as f32);
+            let defaults = |p: &str| def.parameters.iter().find(|q| q.name == p).map(|q| q.default);
+            for (k, v) in cfg.escape.formula_param_writes(name, value as f32, defaults) {
+                cfg.escape.formula_params.insert(k, v);
+            }
             Ok(())
         },
     );

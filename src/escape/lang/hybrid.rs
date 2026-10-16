@@ -59,6 +59,11 @@ pub struct Group {
     /// A formula whose step the group runs instead of lines (step 7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<Member>,
+    /// A second formula the group blends with the first (step 8): both
+    /// steps from the same z, the new z `mix(a, b, t)` by the group's
+    /// own parameter `g<group>_mix`, a continuous morph between them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<Member>,
 }
 
 /// A formula as a hybrid's group: its Rhai source (a UF or Fractint
@@ -72,12 +77,12 @@ pub struct Member {
 impl Group {
     /// A group of KF lines.
     pub fn of_lines(repeats: u32, lines: Vec<Line>) -> Self {
-        Group { repeats, lines, formula: None }
+        Group { repeats, lines, formula: None, blend: None }
     }
 
     /// A group running a formula's step.
     pub fn of_formula(repeats: u32, title: &str, rhai: &str) -> Self {
-        Group { repeats, lines: Vec::new(), formula: Some(Member { title: title.into(), rhai: rhai.into() }) }
+        Group { repeats, lines: Vec::new(), formula: Some(Member { title: title.into(), rhai: rhai.into() }), blend: None }
     }
 }
 
@@ -187,6 +192,9 @@ impl Hybrid {
         for (g, group) in self.groups.iter().enumerate() {
             if group.repeats == 0 || group.repeats > MAX_REPEATS {
                 return Err(format!("group {}: repeats run from 1 to {MAX_REPEATS}", g + 1));
+            }
+            if group.blend.is_some() && group.formula.is_none() {
+                return Err(format!("group {}: a blend needs a formula to blend with", g + 1));
             }
             if group.formula.is_some() {
                 if !group.lines.is_empty() {
@@ -345,18 +353,25 @@ impl Hybrid {
         self.validate().map_err(error)?;
         let mut members = Vec::new();
         for (g, group) in self.groups.iter().enumerate() {
+            let member = |m: &Member| {
+                super::rhai::program(&m.rhai).map_err(|d| error(format!("group {} ({}): {}", g + 1, m.title, d.first().map(|x| x.message.clone()).unwrap_or_default())))
+            };
             let p = match &group.formula {
-                Some(m) => super::rhai::program(&m.rhai)
-                    .map_err(|d| error(format!("group {} ({}): {}", g + 1, m.title, d.first().map(|x| x.message.clone()).unwrap_or_default())))?,
+                Some(m) => member(m)?,
                 None => Hybrid { groups: vec![Group::of_lines(1, group.lines.clone())], loop_start: 0 }.program()?,
             };
-            members.push(p);
+            let b = group.blend.as_ref().map(member).transpose()?;
+            members.push((p, b));
         }
         // KF lines keep their multipliers' names (`a<group>_<line>_<n>`)
         // as a hybrid of lines alone has them; everything else is under
         // its group's name. The first group's `bailout` stays the
         // panel's bailout.
-        let rename = |g: usize, name: &str| -> String {
+        // A blend's second formula is under `g<group>b_`.
+        let rename = |g: usize, second: bool, name: &str| -> String {
+            if second {
+                return format!("g{}b_{name}", g + 1);
+            }
             if self.groups[g].formula.is_none() {
                 if let Some(rest) = name.strip_prefix("a1_") {
                     return format!("a{}_{rest}", g + 1);
@@ -387,8 +402,8 @@ impl Hybrid {
 /// perturbation equations, perturb setting and degree are dropped: the
 /// hybrid's equations are derived whole (`lang::delta`). A member that
 /// reads the pass itself has no place in a schedule.
-pub fn compose(members: &[Program], rename: &dyn Fn(usize, &str) -> String, repeats: &[u32], cycle: Cycle) -> Result<Program, String> {
-    let first = members.first().ok_or("a hybrid needs a group")?;
+pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bool, &str) -> String, repeats: &[u32], cycle: Cycle) -> Result<Program, String> {
+    let (first, _) = members.first().ok_or("a hybrid needs a group")?;
     let mut out = first.clone();
     out.vars.clear();
     out.params.clear();
@@ -408,47 +423,85 @@ pub fn compose(members: &[Program], rename: &dyn Fn(usize, &str) -> String, repe
     out.cycle = None;
     out.carried.clear();
     out.name = "Hybrid".into();
+    let var = |out: &mut Program, name: String, ty: Ty| {
+        out.vars.push(Var { name, ty, span: Span::default(), stored_real: false, global: false, perturb: false });
+        out.vars.len() - 1
+    };
+    let z = || IExpr { kind: IExprKind::Predef(Predef::Z), ty: Ty::Complex };
+    let cv = |v: VarId| IExpr { kind: IExprKind::Var(v), ty: Ty::Complex };
+    let several = members.len() > 1 || members.iter().any(|(_, b)| b.is_some());
     let mut loops = Vec::new();
-    for (g, m) in members.iter().enumerate() {
-        if m.dialect != first.dialect {
-            return Err(format!("group {}: another dialect", g + 1));
-        }
-        if m.reads(Predef::Pass) {
-            return Err(format!("group {}: a formula that reads the pass cannot take turns", g + 1));
-        }
-        let (vo, po, fo) = (out.vars.len(), out.params.len(), out.funcs.len());
-        for v in &m.vars {
-            out.vars.push(Var { name: rename(g, &v.name), ..v.clone() });
-        }
-        for p in &m.params {
-            let mut p = p.clone();
-            p.name = rename(g, &p.name);
-            if members.len() > 1 {
-                p.caption = format!("Group {}: {}", g + 1, p.caption);
+    for (g, (a, b)) in members.iter().enumerate() {
+        // Each formula of the group: its declarations under its name,
+        // its start (z its own unless the hybrid's first), its step.
+        let mut steps = Vec::new();
+        for (second, m) in std::iter::once((false, a)).chain(b.iter().map(|b| (true, b))) {
+            if m.dialect != first.dialect {
+                return Err(format!("group {}: another dialect", g + 1));
             }
-            out.params.push(p);
-        }
-        for f in &m.funcs {
-            let mut f = f.clone();
-            f.name = rename(g, &f.name);
-            if members.len() > 1 {
-                f.caption = format!("Group {}: {}", g + 1, f.caption);
+            if m.reads(Predef::Pass) {
+                return Err(format!("group {}: a formula that reads the pass cannot take turns", g + 1));
             }
-            out.funcs.push(f);
+            let (vo, po, fo) = (out.vars.len(), out.params.len(), out.funcs.len());
+            for v in &m.vars {
+                out.vars.push(Var { name: rename(g, second, &v.name), ..v.clone() });
+            }
+            let label = if second { format!("Group {} (blended)", g + 1) } else { format!("Group {}", g + 1) };
+            for p in &m.params {
+                let mut p = p.clone();
+                p.name = rename(g, second, &p.name);
+                if several {
+                    p.caption = format!("{label}: {}", p.caption);
+                }
+                out.params.push(p);
+            }
+            for f in &m.funcs {
+                let mut f = f.clone();
+                f.name = rename(g, second, &f.name);
+                if several {
+                    f.caption = format!("{label}: {}", f.caption);
+                }
+                out.funcs.push(f);
+            }
+            // The formulas after the hybrid's first keep their start's z
+            // to themselves.
+            let own_z = (g > 0 || second).then(|| var(&mut out, format!("g{}{}_z", g + 1, if second { "b" } else { "" }), Ty::Complex));
+            let map = Remap { vo, po, fo, z: None };
+            out.globals.extend(m.globals.iter().map(|v| v + vo));
+            out.global_body.extend(map.stmts(&m.global_body));
+            out.init.extend(Remap { z: own_z, ..map }.stmts(&m.init));
+            steps.push(map.stmts(&m.loop_body));
+            if g == 0 && !second {
+                out.bailout = m.bailout.as_ref().map(|b| map.expr(b));
+            }
         }
-        // The members after the first keep their start's z to themselves.
-        let own_z = (g > 0).then(|| {
-            out.vars.push(Var { name: format!("g{}_z", g + 1), ty: Ty::Complex, span: Span::default(), stored_real: false, global: false, perturb: false });
-            out.vars.len() - 1
-        });
-        let map = Remap { vo, po, fo, z: None };
-        out.globals.extend(m.globals.iter().map(|v| v + vo));
-        out.global_body.extend(map.stmts(&m.global_body));
-        out.init.extend(Remap { z: own_z, ..map }.stmts(&m.init));
-        loops.push(map.stmts(&m.loop_body));
-        if g == 0 {
-            out.bailout = m.bailout.as_ref().map(|b| map.expr(b));
+        let mut step = steps.remove(0);
+        if let Some(other) = steps.pop() {
+            // Both from the same z; z = mix(a's, b's, t).
+            let (zin, za) = (var(&mut out, format!("g{}_zin", g + 1), Ty::Complex), var(&mut out, format!("g{}_za", g + 1), Ty::Complex));
+            out.params.push(super::ir::Param {
+                name: format!("g{}_mix", g + 1),
+                caption: format!("Group {}: Blend", g + 1),
+                kind: super::ir::ParamKind::Float,
+                default: (0.5, 0.0),
+                min: Some(0.0),
+                max: Some(1.0),
+                hint: "0 runs the group's first formula, 1 its second, between them a mix of the two steps".into(),
+                choices: Vec::new(),
+                exponential: false,
+                span: Span::default(),
+            });
+            let t = IExpr { kind: IExprKind::Convert(Box::new(IExpr { kind: IExprKind::Param(out.params.len() - 1), ty: Ty::Float })), ty: Ty::Complex };
+            let bin = |op: BinOp, a: IExpr, b: IExpr| IExpr { kind: IExprKind::Binary(op, Box::new(a), Box::new(b)), ty: Ty::Complex };
+            let mut blended = vec![IStmt::Assign(Place::Var(zin), z())];
+            blended.extend(step);
+            blended.push(IStmt::Assign(Place::Var(za), z()));
+            blended.push(IStmt::Assign(Place::Z, cv(zin)));
+            blended.extend(other);
+            blended.push(IStmt::Assign(Place::Z, bin(BinOp::Add, cv(za), bin(BinOp::Mul, bin(BinOp::Sub, z(), cv(za)), t))));
+            step = blended;
         }
+        loops.push(step);
     }
     if members.len() == 1 {
         out.loop_body = loops.pop().unwrap_or_default();
@@ -805,6 +858,58 @@ mod formula_members {
             let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
             assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "at {px:?}");
         }
+    }
+
+    /// A blend of two formulas (phase 4, step 8): at 0 the group's first
+    /// formula, at 1 its second, between them the mix of the two steps by
+    /// hand; deep zoom derives through it.
+    #[test]
+    fn a_blend_morphs_between_two_formulas() {
+        let ((mt, ms), (bt, bs)) = (twin("mandelbrot"), twin("burning_ship"));
+        let h = Hybrid { groups: vec![Group { blend: Some(Member { title: bt, rhai: bs.clone() }), ..Group::of_formula(1, &mt, &ms) }], loop_start: 0 };
+        assert_eq!(Hybrid::from_json(&h.to_json()).unwrap(), h);
+        let p = h.program().unwrap();
+        let mix = p.params.iter().position(|x| x.name == "g1_mix").expect("the blend's parameter");
+        let with = |t: f64| {
+            let mut params = ParamValues::defaults(&p);
+            params.values[mix].0 = t;
+            params
+        };
+        for (t, alone) in [(0.0, &ms), (1.0, &bs)] {
+            let alone = super::super::rhai::program(alone).unwrap();
+            for env in envs() {
+                let (ra, rb) = (run(&p, &with(t), None, &env), run(&alone, &ParamValues::defaults(&alone), None, &env));
+                assert_eq!((ra.n, ra.escaped), (rb.n, rb.escaped), "t = {t} at {:?} julia {}", env.pixel, env.julia);
+            }
+        }
+        for c in [C64::new(-0.3, 0.6), C64::new(0.25, -0.1), C64::new(-1.6, 0.02)] {
+            let got = run(&p, &with(0.3), None, &Env::at(c, 60));
+            let mut z = C64::ZERO;
+            let mut n = 0;
+            while n < 60 && z.re * z.re + z.im * z.im <= 4.0 {
+                let a = z.mul(z).add(c);
+                let (ax, ay) = (z.re.abs(), z.im.abs());
+                let b = C64::new(ax * ax - ay * ay, 2.0 * ax * ay).add(c);
+                z = a.add(b.sub(a).scale(0.3));
+                n += 1;
+            }
+            assert_eq!(got.n, n, "at {c:?}");
+        }
+        let d = super::super::delta::with_derived_equations(&p).expect("equations");
+        assert!(super::super::perturb::perturbation(&d).is_ok());
+        let reference = C64::new(-0.3, 0.6);
+        for j in 0..8 {
+            let t = j as f64 * 0.785;
+            let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-5 * (1.0 + j as f64)));
+            let env = Env::at(px, 200);
+            let direct = run(&p, &with(0.3), None, &env);
+            let pert = run_perturbed(&d, &with(0.3), &env, reference, true).unwrap();
+            assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "at {px:?}");
+        }
+        // A blend needs a formula to blend with.
+        let mut bad = h.clone();
+        bad.groups[0].formula = None;
+        assert!(bad.validate().is_err());
     }
 
     /// What a hybrid of formulas refuses, and its JSON.

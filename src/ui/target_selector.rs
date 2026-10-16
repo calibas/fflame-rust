@@ -417,6 +417,19 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
             &format!("{}: {}", formula_label, p.display_name),
         ));
+        // A complex parameter also as a point in polar form, to animate
+        // around the origin (`EscapeConfig::formula_param`).
+        if let Some(base) = p.name.strip_suffix(".im") {
+            if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
+                let caption = p.display_name.strip_suffix(" (im)").unwrap_or(p.display_name);
+                for (part, label) in [("r", "radius"), ("angle", "angle, degrees")] {
+                    items.push(TargetItem::new(
+                        ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") },
+                        &format!("{formula_label}: {caption} ({label})"),
+                    ));
+                }
+            }
+        }
     }
     let coloring_params: &[crate::escape::EscapeParamDef] =
         match (ifs, crate::escape::fields::get_field(&esc.formula)) {

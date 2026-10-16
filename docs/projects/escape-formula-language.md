@@ -21,7 +21,8 @@ Fractint formulas and colourings converted to Rhai, Rhai colourings)
 the init derived) 2026-10-15; step 5 (carried state in deep zoom, one
 value) 2026-10-15; step 6 (transcendental functions and powers by
 difference forms, user functions, branches on the iterate) 2026-10-15;
-step 7 (hybrids of any formulas) 2026-10-15.
+step 7 (hybrids of any formulas) 2026-10-15; step 8 (parameters and
+scripting; not held structural keyframes) 2026-10-15.
 
 Escape-time formulas and colourings written as text, compiled in Rust to
 WGSL, so their number is unbounded: typed in by the user, read from
@@ -1252,16 +1253,47 @@ keeps compiling as UF; the editor converts what it opens.
      counts far worse at the walked edges than one without (343 to
      439); the fold alone (the Ship twin at zoom 60) does well. Not
      yet understood: the phases with diffabs, or the edges' chaos.
-8. **Parameters and scripting**: the metadata drives sliders and
-   animation targets; a complex parameter animates as a point (x/y, or
-   radius and angle); `mix(a, b, t)` and a weighted blend of two
-   members give continuous morphs between formulas (linear, so they
-   still derive); structural changes are held keyframes. Scripts:
-   `formula(source)` with Rhai source, the parameters with their
-   metadata, hybrids composed, and -- if Rhai's internals give a script
-   function's definition (to verify) -- a formula from a script's own
-   function. Later: a formula randomiser over the operations that
-   derive.
+8. **Parameters and scripting** (done 2026-10-15, but for held
+   structural keyframes): the metadata drives sliders and animation
+   targets; a complex parameter animates as a point (x/y, or radius and
+   angle); `mix(a, b, t)` and a weighted blend of two members give
+   continuous morphs between formulas (linear, so they still derive);
+   structural changes are held keyframes. Scripts: `formula(source)`
+   with Rhai source, the parameters with their metadata, hybrids
+   composed, and -- if Rhai's internals give a script function's
+   definition (to verify) -- a formula from a script's own function.
+   Later: a formula randomiser over the operations that derive.
+   - As built:
+     - `exponential` drives a logarithmic slider (the registry notes the
+       leaked parameter definitions declared so:
+       `custom::is_exponential`; no field on every built-in's
+       definition).
+     - A complex parameter `name` also reads and sets as `name.r` and
+       `name.angle` (degrees), through the manager, the animation's
+       apply and the script's `param` (`EscapeConfig::formula_param`,
+       `formula_param_writes`); the target selector offers both, and the
+       panel shows the point under the two parts. Two scalar tracks, so
+       no change to the track model.
+     - `mix(a, b, t)` in Rhai, lowered to `a + (b - a) t`.
+     - A blend group (`Group::blend`): both formulas' steps from the
+       same z, then `mix` by `g<N>_mix`; the designer's "Blended with".
+     - Scripts: `escape.custom_formula(source)` (Rhai alone),
+       `escape.formula_params()` (each parameter's metadata and value),
+       `escape.hybrid(groups[, loop_start])` (maps with `twin` /
+       `formula`, `blend_twin` / `blend`, `repeats`, or KF's `lines`),
+       `escape.formula_fn(name)` -- a formula from the script's own
+       function `f(z, c)`: rhai's `internals` expose the script's
+       function definitions (`Module::iter_script_fn_info`), which the
+       Rhai front end lowers as helpers inside a Mandelbrot-shaped
+       wrapper; the result prints back as Rhai source for the config.
+   - **Not done: held structural keyframes.** Keyframe values are JSON
+     and a string already steps (halfway between keys, as every Step
+     track does), but a formula's structure is two paths that must move
+     together -- the source and the name compiled from it -- and the
+     target selector offers neither. Needs a coupled target (the
+     source, the name derived on apply) and hold-until-the-key
+     semantics.
+   - The randomiser stays later.
 9. **Later: native speed** -- BLA from the IR's Jacobian (2x2 real for
    folds), nucleus references through the IR's derivative, the Jacobian
    DE for folds; then the native code retires, family by family, and
