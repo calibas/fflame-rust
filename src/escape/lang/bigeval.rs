@@ -21,6 +21,52 @@ use super::ir::*;
 use super::Dialect;
 use crate::escape::bigfloat::{BigComplex, BigFloat};
 
+/// The orbit store's encoding of a big float: sign, exponent, limbs.
+pub(crate) fn put_float(out: &mut Vec<u8>, x: &BigFloat) {
+    out.push(u8::from(x.neg));
+    out.extend_from_slice(&x.exp.to_le_bytes());
+    out.extend_from_slice(&(x.limbs.len() as u32).to_le_bytes());
+    for l in &x.limbs {
+        out.extend_from_slice(&l.to_le_bytes());
+    }
+}
+
+pub(crate) fn put_complex(out: &mut Vec<u8>, z: &BigComplex) {
+    put_float(out, &z.re);
+    put_float(out, &z.im);
+}
+
+fn take<'a>(bytes: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+    if bytes.len() < n {
+        return None;
+    }
+    let (head, tail) = bytes.split_at(n);
+    *bytes = tail;
+    Some(head)
+}
+
+pub(crate) fn take_u32(bytes: &mut &[u8]) -> Option<u32> {
+    Some(u32::from_le_bytes(take(bytes, 4)?.try_into().ok()?))
+}
+
+pub(crate) fn take_float(bytes: &mut &[u8]) -> Option<BigFloat> {
+    let neg = take(bytes, 1)?[0] != 0;
+    let exp = i64::from_le_bytes(take(bytes, 8)?.try_into().ok()?);
+    let n = take_u32(bytes)? as usize;
+    if n == 0 || n > 4096 {
+        return None;
+    }
+    let mut limbs = crate::escape::bigfloat::Limbs::with_capacity(n);
+    for _ in 0..n {
+        limbs.push(u64::from_le_bytes(take(bytes, 8)?.try_into().ok()?));
+    }
+    Some(BigFloat { neg, exp, limbs })
+}
+
+pub(crate) fn take_complex(bytes: &mut &[u8]) -> Option<BigComplex> {
+    Some(BigComplex { re: take_float(bytes)?, im: take_float(bytes)? })
+}
+
 /// A real, whole `w` of modest size, as an integer.
 fn whole(w: &BigComplex) -> Option<i64> {
     if !w.im.is_zero() {
@@ -102,6 +148,59 @@ impl BigMachine {
 
     pub fn z(&self) -> &BigComplex {
         &self.z
+    }
+
+    /// The machine's state as the orbit store keeps it (plan, phase 4,
+    /// the speed work): its pass, its iterate and its variables, so a
+    /// stored custom reference deepens as the one that was saved. The
+    /// program, parameters and image come back from the reference's
+    /// identity, which names them.
+    pub fn save_state(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.pass.to_le_bytes());
+        put_complex(out, &self.z);
+        out.extend_from_slice(&(self.vars.len() as u32).to_le_bytes());
+        for v in &self.vars {
+            match v {
+                BigValue::Bool(b) => {
+                    out.push(0);
+                    out.push(u8::from(*b));
+                }
+                BigValue::Int(i) => {
+                    out.push(1);
+                    out.extend_from_slice(&i.to_le_bytes());
+                }
+                BigValue::Float(x) => {
+                    out.push(2);
+                    put_float(out, x);
+                }
+                BigValue::Complex(c) => {
+                    out.push(3);
+                    put_complex(out, c);
+                }
+            }
+        }
+    }
+
+    /// Restore what [`Self::save_state`] wrote, advancing `bytes` past it;
+    /// `None` when it does not fit this program (a miss for the store).
+    pub fn load_state(&mut self, bytes: &mut &[u8]) -> Option<()> {
+        self.pass = take_u32(bytes)?;
+        self.z = take_complex(bytes)?;
+        let n = take_u32(bytes)? as usize;
+        if n != self.vars.len() {
+            return None;
+        }
+        for v in &mut self.vars {
+            let tag = take(bytes, 1)?[0];
+            *v = match tag {
+                0 => BigValue::Bool(take(bytes, 1)?[0] != 0),
+                1 => BigValue::Int(i32::from_le_bytes(take(bytes, 4)?.try_into().ok()?)),
+                2 => BigValue::Float(take_float(bytes)?),
+                3 => BigValue::Complex(take_complex(bytes)?),
+                _ => return None,
+            };
+        }
+        Some(())
     }
 
     /// A variable's value as a complex (a float's with a zero imaginary

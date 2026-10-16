@@ -1386,9 +1386,11 @@ keeps compiling as UF; the editor converts what it opens.
      takes the slope in f64 too, in big floats only to finish a double
      root. Big floats keep their limbs inline (2.5x a pass); whole real
      powers by squaring (the Multibrot's twin 79 us a pass to 1.6). The
-     Mandelbrot's twin is now faster than the built-in at depth. Left:
-     the derived equations on the GPU (the Ship's at floatexp ~3x), the
-     custom BLA table's build, and the orbit store for custom formulas.
+     Mandelbrot's twin is now faster than the built-in at depth. Custom
+     references now go through the orbit store, their machines' state
+     saved and restored from the formula's identity. Left: the derived
+     equations on the GPU (the Ship's at floatexp ~3x) and the custom BLA
+     table's build.
    - Next: retiring native code, family by family, where the twin
      matches it in speed and accuracy -- a decision for the user. Open: the deep
      rung's BLA at 2^-24 costs the floatexp rung's double float a
