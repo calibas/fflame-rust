@@ -117,6 +117,13 @@ pub fn formula(p: &Program) -> String {
         body,
         "fn formula_bailout(s: FormulaState, pixel: vec2<f32>) -> bool {{\n    return {test};\n}}\n"
     );
+    // Where the test ends the orbit, whether it settled
+    // (`perturb::settle_of`): the template's `converged`.
+    let settled = p.bailout.as_ref().and_then(super::perturb::settle_of).map_or_else(|| "false".to_string(), |t| g.expr(&t));
+    let _ = write!(
+        body,
+        "\nfn formula_settled(s: FormulaState, pixel: vec2<f32>) -> bool {{\n    return {settled};\n}}\n"
+    );
     // Two states equal to the bit, for interior detection: the state is
     // everything the loop and the test read that changes, so a repeat
     // proves the orbit periodic. Bits, not `==`: +0 and -0 compare
@@ -212,6 +219,8 @@ pub fn formula(p: &Program) -> String {
             // The carried value's full value, which the test may read.
             let cv = if carried.is_some() { ", cv: vec2<f32>" } else { "" };
             let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>{cv}) -> bool {{\n    return {test};\n}}\n");
+            let settled = super::perturb::settle_of(&b).map_or_else(|| "false".to_string(), |t| g.expr(&t));
+            let _ = write!(body, "\nfn formula_perturb_settled(z: vec2<f32>, pixel: vec2<f32>{cv}) -> bool {{\n    return {settled};\n}}\n");
         }
     }
     if g.user_jac {

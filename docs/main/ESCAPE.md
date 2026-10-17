@@ -336,6 +336,17 @@ fn escaped(s, p) {
   one pass on -- the same variable, or a new map, every value of which
   reads the state before any is set -- and `escaped` says when the pixel
   has left. What a step carries from pass to pass is then visible.
+  Without `escaped` a formula never escapes (UF's `bailout: true`): it
+  runs `maxiter` passes, is `FormulaFeature::NonEscaping` (the
+  colourings' gate as for Kaliset's), and the Bailout control hides
+  where it has no `bailout` parameter (`perturb::never_escapes`).
+- **Settling** (`perturb::settle_of`): a test whose "done" includes the
+  iterate's distance from a variable under a bound -- `(s.z -
+  s.zold).norm_sqr() < 1e-12`, UF's `|z - zold| > @tol` to iterate on --
+  ends the orbit as converged where that part ends it, as the built-ins'
+  settle test does, so Root Basin's general key reads it
+  (`formula_settled`, `formula_perturb_settled`), and the program is
+  `FormulaFeature::Convergent`.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
   (the slider runs logarithmically, `custom::is_exponential`), or
@@ -1589,8 +1600,10 @@ as rewrites of the program (`lang/modifiers.rs`; plan, phase 4, step
   for itself describe the undamped map, so they go, and the loop's are
   derived.
 - **Biomorph**: the escape test reads `real(z)^2` or `imag(z)^2` where
-  it read `|z|` -- the built-ins' metric replaced. A test without `|z|`
-  has no biomorph, and the panel offers none (`custom::biomorph_ok`).
+  it read its measure of z -- `|z|`, or the exponential and trig
+  families' `real(z)` and `abs(imag(z))` -- the built-ins' metric
+  replaced, as theirs replaces any. A test without one has no biomorph,
+  and the panel offers none (`custom::biomorph_ok`).
 
 `custom::resolve` gives the renderer the config to render: the variant's
 name (a hash of the base's and the switches), the damping bound to its

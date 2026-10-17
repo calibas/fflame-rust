@@ -80,14 +80,24 @@ pub fn damped(p: &Program) -> Program {
     out
 }
 
-/// Whether an expression is `|z|`.
-fn is_modulus_of_z(e: &IExpr) -> bool {
-    matches!(&e.kind, IExprKind::Modulus(a) if matches!(a.kind, IExprKind::Predef(Predef::Z)))
+/// Whether an expression is an escape test's measure of z: `|z|`, or
+/// the exponential and trig families' `real(z)` and `abs(imag(z))` --
+/// whatever the built-ins' metric is, their biomorph replaces it.
+fn is_metric_of_z(e: &IExpr) -> bool {
+    let z = |x: &IExpr| matches!(x.kind, IExprKind::Predef(Predef::Z));
+    match &e.kind {
+        IExprKind::Modulus(a) => z(a),
+        IExprKind::Call(Builtin::Real, a) => z(a),
+        IExprKind::Call(Builtin::Abs, a) if e.ty == Ty::Float => matches!(&a.kind, IExprKind::Call(Builtin::Imag, b) if z(b)),
+        IExprKind::Convert(a) => is_metric_of_z(a),
+        _ => false,
+    }
 }
 
-/// `e` with each `|z|` replaced by the axis's square; whether any was.
+/// `e` with each measure of z replaced by the axis's square; whether
+/// any was.
 fn rewrite(e: &IExpr, axis: Axis, found: &mut bool) -> IExpr {
-    if is_modulus_of_z(e) {
+    if is_metric_of_z(e) {
         *found = true;
         let part = if axis == Axis::Re { Builtin::Real } else { Builtin::Imag };
         let z = cx(IExprKind::Predef(Predef::Z));
@@ -110,7 +120,7 @@ fn rewrite(e: &IExpr, axis: Axis, found: &mut bool) -> IExpr {
 }
 
 /// The program with its escape test reading the axis's part (the
-/// module's docs); `None` when its test does not read `|z|`.
+/// module's docs); `None` when its test reads no measure of z.
 pub fn biomorph(p: &Program, axis: Axis) -> Option<Program> {
     let mut found = false;
     let test = rewrite(p.bailout.as_ref()?, axis, &mut found);
@@ -193,7 +203,26 @@ mod tests {
             }
         }
         assert_eq!((r.n, r.z), (n, z));
-        let other = program("N {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n real(z) < 4\n}");
+        // The exponential and trig families' measures, as the built-ins'
+        // biomorph replaces any metric: `real(z)` and `abs(imag(z))`.
+        for test in ["real(z) < 50", "abs(imag(z)) < 50"] {
+            let e = program(&format!("E {{\ninit:\n z = 0\nloop:\n z = exp(z) + #pixel\nbailout:\n {test}\n}}"));
+            let b = biomorph(&e, Axis::Im).unwrap_or_else(|| panic!("{test}"));
+            let c = C64::new(0.3, 2.1);
+            let r = run(&b, &ParamValues::defaults(&b), None, &Env::at(c, 50));
+            let mut z = C64::ZERO;
+            let mut n = 50;
+            for i in 0..50 {
+                z = z.exp().add(c);
+                if z.im * z.im >= 50.0 {
+                    n = i + 1;
+                    break;
+                }
+            }
+            assert_eq!(r.n, n, "{test}");
+        }
+        // A distance is not a measure of z.
+        let other = program("N {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z - #pixel| < 4\n}");
         assert!(biomorph(&other, Axis::Im).is_none());
         for name in ["mandelbrot", "multibrot", "burning_ship", "tricorn", "lambda", "cactus"] {
             let src = crate::escape::twins::custom_source(name).unwrap();

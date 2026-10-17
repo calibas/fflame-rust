@@ -312,7 +312,8 @@ pub fn iteration_controls(formula: &FormulaDef) -> IterationControls {
     // test reads |z|. The bailout does through its `bailout` parameter
     // and the colourings that read the radius.
     if formula.has_feature(FormulaFeature::Program) {
-        return IterationControls { bailout: true, biomorph: custom::biomorph_ok_named(formula.name), damping: true };
+        let bailout = formula.parameters.iter().any(|p| p.name == "bailout");
+        return IterationControls { bailout, biomorph: custom::biomorph_ok_named(formula.name), damping: true };
     }
     let escapes = !formula.has_feature(FormulaFeature::NonEscaping);
     IterationControls { bailout: escapes, biomorph: escapes, damping: true }

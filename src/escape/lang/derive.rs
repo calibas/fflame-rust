@@ -981,38 +981,17 @@ mod tests {
     #[test]
     fn a_user_call_costs_the_derivative_what_a_builtin_does() {
         let chained = |blocks: usize, f: [&str; 3]| {
-            let mut s = String::from("C {
-init:
- z = #pixel
- x = z
-loop:
-");
+            let mut s = String::from("C {\ninit:\n z = #pixel\n x = z\nloop:\n");
             for _ in 0..blocks {
-                s.push_str(&format!(" if @mode == 0
-  x = {}(z^@a) + {}(z^@b)
-", f[0], f[1]));
+                s.push_str(&format!(" if @mode == 0\n  x = {}(z^@a) + {}(z^@b)\n", f[0], f[1]));
                 for (m, op) in ["-", "*", "/"].iter().enumerate() {
-                    s.push_str(&format!(" elseif @mode == {}
-  x = {}(z^@a) {op} {}(z^@b)
-", m + 1, f[0], f[1]));
+                    s.push_str(&format!(" elseif @mode == {}\n  x = {}(z^@a) {op} {}(z^@b)\n", m + 1, f[0], f[1]));
                 }
-                s.push_str(&format!(" endif
- z = {}(x) * 0.5 + #pixel
-", f[2]));
+                s.push_str(&format!(" endif\n z = {}(x) * 0.5 + #pixel\n", f[2]));
             }
-            s.push_str("bailout:
- |z| < 4
-default:
- int param mode
-  default = 0
- endparam
- complex param a
-  default = (2, 0)
- endparam
- complex param b
-  default = (3, 0)
- endparam
-}");
+            s.push_str(
+                "bailout:\n |z| < 4\ndefault:\n int param mode\n  default = 0\n endparam\n complex param a\n  default = (2, 0)\n endparam\n complex param b\n  default = (3, 0)\n endparam\n}",
+            );
             program(&s, Dialect::UltraFractal)
         };
         let size = |p: &Program| super::super::wgsl::formula_with_derivative(p).expect("a derivative").len();

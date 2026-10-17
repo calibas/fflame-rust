@@ -18,6 +18,8 @@
 //! formula still perturbs, rebasing only where the orbit ends, as the
 //! built-in Ducks tier does.
 
+use super::ast::{BinOp, UnOp};
+use super::builtins::Builtin;
 use super::ir::*;
 use super::wgsl::reads_a_variable;
 
@@ -99,6 +101,86 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
 /// the parameters and the constants, which the loop never writes (a
 /// `bailout = 4` in `init:`, common in UF-format conversions of Fractint
 /// formulas). `None` when it reads anything else.
+/// When a formula's test (true: iterate again) ends an orbit by its
+/// settling -- the part of "done" that is the iterate's distance from a
+/// variable under a bound, `|z - zold| < tol`, as a convergent formula's
+/// is -- that part, true when it does; `None` for a test with none. The
+/// templates set `converged` by it where the test ends the orbit, as the
+/// built-ins' settle test does (the root colourings read it), and a
+/// program with one is convergent (`FormulaFeature::Convergent`).
+pub fn settle_of(test: &IExpr) -> Option<IExpr> {
+    let boolean = |kind| IExpr { kind, ty: Ty::Bool };
+    // "Done" as disjuncts: the test negated, pushed through `&&`.
+    fn done(t: &IExpr, out: &mut Vec<IExpr>) {
+        match &t.kind {
+            IExprKind::Unary(UnOp::Not, x) => disjuncts(x, out),
+            IExprKind::Binary(BinOp::And, a, b) => {
+                done(a, out);
+                done(b, out);
+            }
+            IExprKind::Binary(op @ (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge), a, b) => {
+                let negated = match op {
+                    BinOp::Lt => BinOp::Ge,
+                    BinOp::Le => BinOp::Gt,
+                    BinOp::Gt => BinOp::Le,
+                    _ => BinOp::Lt,
+                };
+                out.push(IExpr { kind: IExprKind::Binary(negated, a.clone(), b.clone()), ty: Ty::Bool });
+            }
+            _ => out.push(IExpr { kind: IExprKind::Unary(UnOp::Not, Box::new(t.clone())), ty: Ty::Bool }),
+        }
+    }
+    fn disjuncts(t: &IExpr, out: &mut Vec<IExpr>) {
+        match &t.kind {
+            IExprKind::Binary(BinOp::Or, a, b) => {
+                disjuncts(a, out);
+                disjuncts(b, out);
+            }
+            _ => out.push(t.clone()),
+        }
+    }
+    // The iterate's distance from a variable: `|z - v|`, `cabs(z - v)`.
+    fn distance(e: &IExpr) -> bool {
+        let e = match &e.kind {
+            IExprKind::Convert(a) => a,
+            _ => e,
+        };
+        let diff = match &e.kind {
+            IExprKind::Modulus(a) | IExprKind::Call(Builtin::Cabs, a) => a,
+            _ => return false,
+        };
+        let is_z = |x: &IExpr| matches!(x.kind, IExprKind::Predef(Predef::Z));
+        let is_var = |x: &IExpr| matches!(x.kind, IExprKind::Var(_));
+        matches!(&diff.kind, IExprKind::Binary(BinOp::Sub, a, b) if (is_z(a) && is_var(b)) || (is_var(a) && is_z(b)))
+    }
+    // A bound that is the same at every pass: a constant or a parameter.
+    fn bound(e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Float(_) | IExprKind::Int(_) | IExprKind::Complex(..) | IExprKind::Param(_) => true,
+            IExprKind::Convert(a) | IExprKind::Unary(UnOp::Neg, a) => bound(a),
+            IExprKind::Binary(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, a, b) => bound(a) && bound(b),
+            _ => false,
+        }
+    }
+    let mut parts = Vec::new();
+    done(test, &mut parts);
+    let settles: Vec<IExpr> = parts
+        .into_iter()
+        .filter(|d| match &d.kind {
+            IExprKind::Binary(BinOp::Lt | BinOp::Le, x, t) => distance(x) && bound(t),
+            IExprKind::Binary(BinOp::Gt | BinOp::Ge, t, x) => distance(x) && bound(t),
+            _ => false,
+        })
+        .collect();
+    settles.into_iter().reduce(|a, b| boolean(IExprKind::Binary(BinOp::Or, Box::new(a), Box::new(b))))
+}
+
+/// Whether a formula's test never ends an orbit: none, or `true` (UF's
+/// `bailout: true`; a Rhai formula without `escaped`).
+pub fn never_escapes(p: &Program) -> bool {
+    p.bailout.as_ref().is_none_or(|t| matches!(t.kind, IExprKind::Bool(true)))
+}
+
 pub fn perturb_test(p: &Program) -> Option<IExpr> {
     let test = p.bailout.as_ref()?;
     if !reads_a_variable(test, p) {
@@ -222,5 +304,38 @@ mod tests {
             "W {{\ninit:\n z = 0\n b = 4\nloop:\n z = sqr(z) + #pixel\n b = b + 1\nbailout:\n |z| < b\n{EQ}}}"
         ));
         assert!(perturb_test(&w).is_none());
+    }
+
+    /// A test's settling part, which sets `converged`: UF's `|z - zold| >
+    /// tol` (iterate while far), a Rhai `escaped` of an escape or a
+    /// settle, a settle alone; none in a plain escape test, nor in a
+    /// distance from a value that is not a variable. A Rhai formula
+    /// without `escaped` never escapes.
+    #[test]
+    fn a_test_settles_where_the_iterate_stops_moving() {
+        let uf = program("N {\ninit:\n z = #pixel\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\nbailout:\n |z - zold| > @tol\ndefault:\n float param tol\n  default = 1e-12\n endparam\n}");
+        assert!(settle_of(uf.bailout.as_ref().unwrap()).is_some());
+        let rhai = |escaped: &str| {
+            let src = format!(
+                "const PARAMS = #{{ bailout: #{{ value: 4.0 }} }};\n\
+                 fn start(pixel, p) {{ #{{ z: pixel, zold: pixel, c: pixel }} }}\n\
+                 fn step(s, p) {{ s.zold = s.z; s.z = s.z * s.z + s.c; s }}\n{escaped}"
+            );
+            super::super::rhai::program(&src).unwrap_or_else(|d| panic!("{escaped}: {d:?}"))
+        };
+        let both = rhai("fn escaped(s, p) { s.z.norm_sqr() > p.bailout || (s.z - s.zold).norm_sqr() < 1e-12 }");
+        assert!(settle_of(both.bailout.as_ref().unwrap()).is_some());
+        assert!(!never_escapes(&both));
+        let alone = rhai("fn escaped(s, p) { (s.z - s.zold).norm_sqr() <= 1e-12 }");
+        assert!(settle_of(alone.bailout.as_ref().unwrap()).is_some());
+        let plain = rhai("fn escaped(s, p) { s.z.norm_sqr() > p.bailout }");
+        assert!(settle_of(plain.bailout.as_ref().unwrap()).is_none());
+        let from_a_constant = rhai("fn escaped(s, p) { (s.z - complex(1.0, 0.0)).norm_sqr() < 1e-12 }");
+        assert!(settle_of(from_a_constant.bailout.as_ref().unwrap()).is_none());
+        // No `escaped`: a formula still, that never escapes.
+        let src = "fn start(pixel, p) { #{ z: pixel } }\nfn step(s, p) { s.z = s.z.fold() / s.z.norm_sqr(); s }";
+        assert_eq!(super::super::rhai::kind_of(src), Some(EntryKind::Formula));
+        let open = super::super::rhai::program(src).unwrap();
+        assert!(never_escapes(&open) && settle_of(open.bailout.as_ref().unwrap()).is_none());
     }
 }

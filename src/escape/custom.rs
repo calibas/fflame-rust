@@ -375,6 +375,25 @@ fn compile_variant(src: &CustomSource, name: &str, damped: bool, axis: Option<la
 
 /// Register a checked program under `name`: its WGSL, its derivative's,
 /// its perturbation equations.
+/// What a program is, for the panel and the colourings' gates.
+fn program_features(p: &ir::Program) -> &'static [FormulaFeature] {
+    let mut f = vec![FormulaFeature::Program];
+    // A program owns its seed, its escape and its plane: the Julia
+    // toggle has nothing to swap, unless it reads Fractint's `ismand`
+    // (Rhai's `ctx.julia`), which the toggle sets.
+    if !p.reads(ir::Predef::IsMand) {
+        f.push(FormulaFeature::DynamicalOnly);
+    }
+    if lang::perturb::never_escapes(p) {
+        f.push(FormulaFeature::NonEscaping);
+    }
+    // A test that ends the orbit as it settles: a convergent formula.
+    if p.bailout.as_ref().and_then(lang::perturb::settle_of).is_some() {
+        f.push(FormulaFeature::Convergent);
+    }
+    Box::leak(f.into_boxed_slice())
+}
+
 fn compile_program(p: ir::Program, name: &str) -> Result<&'static FormulaDef, Vec<Diag>> {
     // Without equations of its own, a formula gets them from its loop
     // when the rules cover it (lang::delta): the perturbed path at depth.
@@ -404,14 +423,7 @@ fn compile_program(p: ir::Program, name: &str) -> Result<&'static FormulaDef, Ve
     let def: &'static FormulaDef = Box::leak(Box::new(FormulaDef {
         name: leak(name.to_string()),
         display_name: display_name(&p),
-        // A program owns its seed, its escape and its plane: the Julia
-        // toggle has nothing to swap, unless it reads Fractint's
-        // `ismand`, which the toggle sets.
-        features: if p.reads(ir::Predef::IsMand) {
-            &[FormulaFeature::Program]
-        } else {
-            &[FormulaFeature::Program, FormulaFeature::DynamicalOnly]
-        },
+        features: program_features(&p),
         parameters: leak_params(&p),
         wgsl: leak(wgsl),
         wgsl_param_seed: "",
