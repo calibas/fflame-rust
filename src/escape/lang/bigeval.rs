@@ -884,5 +884,14 @@ mod speed {
             x = x.mul(&b).add(&a);
         }
         println!("BigFloat mul+add: {:.1} ns ({})", t.elapsed().as_secs_f64() * 1e9 / 100_000.0, x.to_f64());
+        // The built-ins' fixed point, the same width.
+        use crate::escape::fixedpoint::FixedPoint;
+        let (fa, fb) = (FixedPoint::from_f64(0.7, n), FixedPoint::from_f64(-0.3, n));
+        let t = std::time::Instant::now();
+        let mut y = fa.clone();
+        for _ in 0..100_000 {
+            y = y.mul(&fb).add(&fa);
+        }
+        println!("FixedPoint mul+add: {:.1} ns ({})", t.elapsed().as_secs_f64() * 1e9 / 100_000.0, y.to_f64());
     }
 }
