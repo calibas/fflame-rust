@@ -221,6 +221,19 @@ pub fn formula(p: &Program) -> String {
             let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>{cv}) -> bool {{\n    return {test};\n}}\n");
             let settled = super::perturb::settle_of(&b).map_or_else(|| "false".to_string(), |t| g.expr(&t));
             let _ = write!(body, "\nfn formula_perturb_settled(z: vec2<f32>, pixel: vec2<f32>{cv}) -> bool {{\n    return {settled};\n}}\n");
+            // A test of |z|^2 under a bound: the bound, which the template
+            // tests by the built-ins' margin (`perturb::modulus_bound`).
+            if let Some(t) = super::perturb::modulus_bound(&b) {
+                // A complex bound compares by its real part, as UF's
+                // comparisons do (an undeclared variable is complex).
+                let v = g.expr(&t);
+                let v = match t.ty {
+                    Ty::Complex => format!("({v}).x"),
+                    Ty::Float => v,
+                    _ => format!("f32({v})"),
+                };
+                let _ = write!(body, "\nfn formula_perturb_bound() -> f32 {{\n    return {v};\n}}\n");
+            }
         }
     }
     if g.user_jac {

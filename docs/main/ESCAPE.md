@@ -436,9 +436,10 @@ fn escaped(s, p) {
   `assets/formulas/twins/*.rhai`): Mandelbrot, Multibrot, Tricorn, the
   Burning Ship family, Lambda, Cactus, (step 5, carrying a value
   besides z) Phoenix, Manowar and Spider, Littlewood with its three
-  digit sets, and the families escaping on `Re z` or `|Im z|` --
-  Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration -- each a
-  Rhai formula that renders as its built-in.
+  digit sets, the families escaping on `Re z` or `|Im z|` --
+  Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration -- and
+  Feather and McMullen, each a Rhai formula that renders as its
+  built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
     through `ctx`, and declares its degree.
@@ -492,6 +493,24 @@ fn escaped(s, p) {
     deep views must be chosen where it is defined at all: where an orbit
     reaches `Im(z ln c)` near 1e34 and falls back, sin and cos of that
     decide, differently on every machine, and big floats too.
+  - **Feather and McMullen** (item 2, batch 2): powers by parameters
+    and a pole, the built-in's guard at the pole written out. At depth
+    they count as the native tiers do (Feather 439 and 439 of 439 at the
+    suite's view, zoom 30; McMullen on the Julia plane 431 against 437).
+    Feather's home view is chaotic in f32: its twin's counts differ from
+    the built-in's on 5.5% of pixels, and each one's from f64's as much
+    (328 and 313 of 6,144) -- rounding decides there, not the formula.
+  - **The escape test at depth.** A custom formula whose perturbed test
+    is `|z|^2` under a bound the same for every pixel (`!(|z|^2 > T)`, a
+    Rhai `escaped`; UF's `|z| < T`) tests by the built-ins' delta-aware
+    margin, `(|Z|^2 - T) + 2 Re(conj Z d) + |d|^2` with `|Z|^2` kept in
+    double float (`perturb::modulus_bound`, `PerturbTier::Custom::margin`,
+    `escape_margin_custom`): its full z in f32 quantizes away a deviation
+    below an ulp of the bound, so where a band's edge -- a level set of
+    `|z_n|^2` -- crosses the view, the custom formula's count was noise
+    and the built-in's sharp (Feather's twin at its suite view, zoom 30:
+    219 of 439 right, now 439). One reference and nothing carried; the
+    others test their own way.
   - **Origami** has no twin: it needs a table built once per image (its
     64 fold lines, each folded through the ones before, `derived_data`),
     an integer hash for the seed's lines, and its crease relief

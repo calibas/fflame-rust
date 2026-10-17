@@ -2261,6 +2261,14 @@ mod tests {
             ("littlewood", &[("digit_set", 1.0)], ("0", "0"), 0.5, false, 0.0),
             ("littlewood", &[("digit_set", 2.0)], ("0", "0"), 0.5, false, 0.0),
             ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, true, 0.0),
+            // Powers by parameters, a pole (item 2, batch 2).
+            // Chaotic in f32 here: against f64 the built-in's counts differ
+            // on 328 of 6,144 pixels, the twin's on 313 (each one's f32
+            // rounding decides); the two differ on 10% of pixels by 1e-4.
+            ("feather", &[("power", 3.0)], ("-0.35", "0"), 0.5, false, 0.12),
+            ("feather", &[("power", 4.0)], ("0", "0"), 0.5, true, 0.03),
+            ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("0", "0"), 0.5, true, 0.03),
+            ("mcmullen", &[("n", 3.0), ("m", 2.0)], ("0", "0"), 0.0, false, 0.03),
             // Escaping on Re z or |Im z| (item 2, batch 1).
             ("exponential", &[], ("-1", "0"), -1.0, false, 0.0),
             ("exponential", &[], ("0", "0"), -1.0, true, 0.0),
@@ -2294,6 +2302,7 @@ mod tests {
                 // Past the unit circle, or every start stays bounded.
                 "littlewood" => (1.1, 0.4),
                 "exponential" => (-0.65, 0.0),
+                "mcmullen" => (0.04, 0.0),
                 "trig" => (1.0, 0.5),
                 "lambda_sine" => (1.0, 0.4),
                 "tetration" => (1.2, 0.6),
@@ -2312,20 +2321,26 @@ mod tests {
         }
 
         // At depth, perturbed: the twin by derived equations, the built-in
-        // by its native tier. (built-in, params, centre, zoom, iterations)
-        let deep: &[(&str, &[(&str, f32)], (&str, &str), f64, u32)] = &[
-            ("mandelbrot", &[], ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549"), 42.0, 8000),
-            ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000),
-            ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000),
-            ("burning_ship", &[("variant", 0.0)], ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000),
+        // by its native tier. (built-in, params, centre, zoom, iterations,
+        // the Julia constant on that plane)
+        let deep: &[(&str, &[(&str, f32)], (&str, &str), f64, u32, Option<(f32, f32)>)] = &[
+            ("mandelbrot", &[], ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549"), 42.0, 8000, None),
+            ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000, None),
+            ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000, None),
+            ("burning_ship", &[("variant", 0.0)], ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000, None),
             // Carrying the previous z (step 5).
-            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-1.1543534481639833789918460777111", "0.6293282132782021964135047790493"), 22.436075, 256),
-            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256),
-            ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000),
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-1.1543534481639833789918460777111", "0.6293282132782021964135047790493"), 22.436075, 256, None),
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256, None),
+            ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000, None),
             // A power given as a parameter, by its difference form (step 6).
-            ("multibrot", &[("power", 4.0)], ("-0.9641787397769701302601128871474335232", "0.20113415795567669775171048165243266489"), 30.0, 2660),
+            ("multibrot", &[("power", 4.0)], ("-0.9641787397769701302601128871474335232", "0.20113415795567669775171048165243266489"), 30.0, 2660, None),
+            // Powers by parameters, a pole (item 2, batch 2): the visual
+            // suite's deep views; McMullen's native tier is the Julia
+            // plane's.
+            ("feather", &[("power", 3.0)], ("-0.77291940505873225", "-1.83786610577385723"), 30.0, 600, None),
+            ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, Some((0.05, 0.03))),
         ];
-        for &(formula, params, (cre, cim), zoom, max_iter) in deep {
+        for &(formula, params, (cre, cim), zoom, max_iter, julia) in deep {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = formula.into();
             for (k, v) in params {
@@ -2336,6 +2351,9 @@ mod tests {
             esc.zoom_log2 = zoom;
             esc.max_iter = max_iter;
             esc.bailout = 4.0;
+            if let Some((jr, ji)) = julia {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, jr, ji);
+            }
             let twin = twin_of(&esc);
             crate::escape::custom::ensure(&twin);
             let tier = crate::escape::EscapeRenderer::perturb_tier(&twin);
@@ -2356,7 +2374,8 @@ mod tests {
                     params.values[i].0 = f64::from(*v);
                 }
             }
-            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, max_iter, (64, 48), 7, 6);
+            let plane = julia.map(|(jr, ji)| crate::escape::lang::builtins::C64::new(f64::from(jr), f64::from(ji)));
+            let truth = truth_counts_on(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, max_iter, (64, 48), 7, 6, plane);
             let agree = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, n)| r[*i].n == *n).count();
             let (built_in_true, twin_true) = (agree(&a), agree(&b));
             let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
@@ -3322,9 +3341,25 @@ final:
         centre: (&str, &str),
         zoom: f64,
         iters: u32,
+        dims: (u32, u32),
+        stride: usize,
+        n_limbs: usize,
+    ) -> Vec<(usize, u32)> {
+        truth_counts_on(prog, params, centre, zoom, iters, dims, stride, n_limbs, None)
+    }
+
+    /// [`truth_counts_of`] on the Julia plane of `julia` where it is one.
+    #[allow(clippy::too_many_arguments)]
+    fn truth_counts_on(
+        prog: std::sync::Arc<crate::escape::lang::ir::Program>,
+        params: crate::escape::lang::interp::ParamValues,
+        centre: (&str, &str),
+        zoom: f64,
+        iters: u32,
         (w, h): (u32, u32),
         stride: usize,
         n_limbs: usize,
+        julia: Option<crate::escape::lang::builtins::C64>,
     ) -> Vec<(usize, u32)> {
         use crate::escape::bigfloat::BigComplex;
         use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
@@ -3341,7 +3376,10 @@ final:
                 let (px, py) = (idx as u32 % w, idx as u32 / w);
                 let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
                 let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
-                let env = lang::interp::Env::at(lang::builtins::C64::ZERO, iters);
+                let mut env = lang::interp::Env::at(lang::builtins::C64::ZERO, iters);
+                if let Some(j) = julia {
+                    (env.julia, env.julia_c) = (true, j);
+                }
                 let mut m = lang::bigeval::BigMachine::new(prog.clone(), params.clone(), env, c.add(&BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
                 let mut count = iters;
                 for i in 0..iters {

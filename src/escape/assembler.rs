@@ -3430,7 +3430,7 @@ pub enum PerturbTier {
     /// 4, step 5: `Program::carried`), recorded after z, whose
     /// deviation the pixel keeps in `w_prev` as Phoenix keeps its
     /// history.
-    Custom { hash: u64, rebase: bool, stride: u8, width: u8, deep: bool },
+    Custom { hash: u64, rebase: bool, stride: u8, width: u8, deep: bool, margin: bool },
 }
 
 impl PerturbTier {
@@ -4209,6 +4209,16 @@ fn escape_test_custom(floatexp: bool, width: u8) -> String {
          \x20           break;\n\
          \x20       }}"
     )
+}
+
+/// A custom formula whose test is `|z|^2` under a bound tests by the
+/// built-ins' delta-aware margin (`escape_margin_scaled`), its own bound
+/// for the bailout (`perturb::modulus_bound`).
+fn escape_margin_custom(floatexp: bool) -> String {
+    let margin = if floatexp { escape_margin_fe() } else { escape_margin_scaled() };
+    let out = margin.replace("params.bailout", "formula_perturb_bound()");
+    debug_assert!(out.contains("formula_perturb_bound()"));
+    out
 }
 
 /// What a custom formula's WGSL reads on the perturbed path, which the
@@ -5875,7 +5885,9 @@ pub fn assemble_perturbed_full(
                 // template does for the feature, and runs every pixel to
                 // max_iter for its orbit accumulators. A custom formula
                 // tests with its own test.
-                if let PerturbTier::Custom { width, .. } = tier {
+                if let PerturbTier::Custom { margin: true, .. } = tier {
+                    out.push(escape_margin_custom(floatexp));
+                } else if let PerturbTier::Custom { width, .. } = tier {
                     out.push(escape_test_custom(floatexp, width));
                 } else if !tier.is_non_escaping() {
                     out.push(if floatexp { escape_margin_fe() } else { escape_margin_scaled() });
@@ -9863,7 +9875,7 @@ mod tests {
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1, deep: false };
+            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1, deep: false, margin: false };
             for coloring in [crate::escape::get_coloring("smooth"), crate::escape::get_coloring("stripe_average")] {
                 for floatexp in [false, true] {
                     let what = format!("{} {} fe={floatexp}", &source[..2], coloring.name);
@@ -9921,7 +9933,7 @@ mod tests {
             let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
             assert_eq!(cycle, h.cycle(), "{name}");
             let hash = u64::from_str_radix(&formula[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1, deep: false };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1, deep: false, margin: false };
             for floatexp in [false, true] {
                 let what = format!("{name} fe={floatexp}");
                 let wgsl = assemble_perturbed(crate::escape::get_coloring("smooth"), floatexp, tier);
@@ -9950,7 +9962,7 @@ mod tests {
             let how = crate::escape::lang::perturb::perturbation(&derived).expect("perturbs");
             assert!(how.rebase, "{}: what it carries rebases", &source[..2]);
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2, deep: false };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2, deep: false, margin: false };
             for floatexp in [false, true] {
                 let what = format!("{} fe={floatexp}", &source[..2]);
                 let coloring = crate::escape::get_coloring("smooth");

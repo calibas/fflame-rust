@@ -479,7 +479,11 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
     }
     let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
     let deep = lang::perturb::grows_past_f32(&prog);
-    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride: how.references() as u8, width: (1 + prog.carried.len()) as u8, deep })
+    let (stride, width) = (how.references() as u8, (1 + prog.carried.len()) as u8);
+    // The built-ins' margin test needs the reference's |Z|^2 at the
+    // pixel's index: one reference, nothing carried.
+    let margin = stride == 1 && width == 1 && lang::perturb::perturb_test(&prog).as_ref().and_then(lang::perturb::modulus_bound).is_some();
+    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride, width, deep, margin })
 }
 
 /// The program and inputs a config's custom formula iterates with: its
