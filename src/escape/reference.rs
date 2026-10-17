@@ -5722,9 +5722,46 @@ mod tests {
                 plain.len()
             );
         }
+        // The folds' twins at the measurement's interior views
+        // (`measure_twins_against_their_builtins`): the built-in's plain
+        // reference, the twin's nucleus-aware (the period watch riding
+        // on it) and plain.
+        for (family, params, ship, cre, cim) in [
+            ("burning_ship", &[("variant", 0.0)][..], true, "-0.5", "-0.5"),
+            ("tricorn", &[("power", 2.0)][..], false, "-0.2", "0.0"),
+        ] {
+            let (zoom, max_iter) = (30.0, 20_000);
+            let src = crate::escape::twins::custom_source(family).unwrap();
+            let mut esc = EscapeConfig { bailout: 4.0, max_iter, zoom_log2: zoom, ..EscapeConfig::default() };
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            crate::escape::custom::ensure(&esc);
+            let id = crate::escape::custom::reference_identity(&esc).unwrap();
+            let n = crate::escape::fixedpoint::limbs_for_view(cre, cim, zoom);
+            let variant = if ship { 0 } else { MAP_CONJ };
+            let t = std::time::Instant::now();
+            let built_in = ReferenceOrbit::compute(cre, cim, zoom, Some(n), max_iter, None, 2, ship, variant, [0.0; 2]).unwrap();
+            let tb = t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let ours = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, max_iter, 1080.0, id, None, max_iter).unwrap();
+            let tn = t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let plain = ReferenceOrbit::compute(cre, cim, zoom, Some(n), max_iter, None, 2, false, MAP_CUSTOM, id).unwrap();
+            let tp = t.elapsed().as_secs_f64();
+            println!(
+                "{family} (zoom {zoom}, {n} limbs): built-in plain {tb:.3} s, {} entries; the twin nucleus-aware {tn:.3} s, {} entries, period {:?}; plain {tp:.3} s, {} entries",
+                built_in.len(),
+                ours.len(),
+                ours.periodic,
+                plain.len()
+            );
+        }
     }
-
-
 
 
 

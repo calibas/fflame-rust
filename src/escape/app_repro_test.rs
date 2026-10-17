@@ -2256,6 +2256,11 @@ mod tests {
             ("phoenix", &[("p_re", -0.5)], ("0", "0"), -0.3, true, 0.0),
             ("manowar", &[], ("-0.4", "0"), 1.0, false, 0.0),
             ("spider", &[], ("-0.4", "0"), 0.0, false, 0.0),
+            // A branch on the iterate: the greedy digit, every set.
+            ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, false, 0.0),
+            ("littlewood", &[("digit_set", 1.0)], ("0", "0"), 0.5, false, 0.0),
+            ("littlewood", &[("digit_set", 2.0)], ("0", "0"), 0.5, false, 0.0),
+            ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, true, 0.0),
         ];
         for &(formula, params, (cre, cim), zoom, julia, allowed) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -2273,6 +2278,8 @@ mod tests {
             (esc.julia_re, esc.julia_im) = match formula {
                 "lambda" => (1.5, 0.4),
                 "phoenix" => (0.5667, 0.0),
+                // Past the unit circle, or every start stays bounded.
+                "littlewood" => (1.1, 0.4),
                 _ => (-0.8, 0.156),
             };
             let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
@@ -2430,6 +2437,57 @@ mod tests {
                 println!("{name} on the floatexp rung: {right} right");
                 assert!(right as f64 >= 0.95 * truth.len() as f64, "{name} floatexp: {right} of {}", truth.len());
             }
+        }
+    }
+
+    /// Littlewood's twin deep-zooms, which the built-in cannot: its greedy
+    /// digit is a branch on the iterate, and the derived equations follow
+    /// it (the plan's look at the formulas thought native for good).
+    /// Against the big-float truth at the root cloud's edge, zoom 30, the
+    /// view's points found by bisection along a ray. The map expands by
+    /// |lambda| every step, so any difference grows as |lambda|^n -- the
+    /// GPU's pixel, an f32 offset from the reference, sits 2^-24 of that
+    /// offset from the truth's, and past ~ln(2^24 / offset) / ln|lambda|
+    /// steps the two sample a field that is noise at this depth (at
+    /// |lambda| 1.28 and 150 iterations both rungs counted 359 and 360 of
+    /// 439, every miss past 100). These views escape within 100 at
+    /// |lambda| 1.32 and 1.23.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_littlewood_twin_deep_zooms() {
+        let src = crate::escape::twins::custom_source("littlewood").unwrap();
+        for (digit_set, (cre, cim)) in [(0.0f32, ("0.4772929003733922", "1.2276697019857257")), (1.0, ("1.011542751811001", "0.6920336294844374"))] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            esc.formula_params.insert("digit_set".into(), digit_set);
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = 100;
+            esc.bailout = 4.0;
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "digit set {digit_set}: {tier:?}");
+            let got = records_on(&esc, 64, 48, false, true, false);
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 4.0;
+                } else if x.name == "digit_set" {
+                    params.values[i].0 = f64::from(digit_set);
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), 30.0, 100, (64, 48), 7, 6);
+            let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+            let escaped = truth.iter().filter(|(_, n)| *n < 100).count();
+            let deep = records_on(&esc, 64, 48, true, true, false);
+            let deep_right = truth.iter().filter(|(i, n)| deep[*i].n == *n).count();
+            println!("littlewood, digit set {digit_set}, at zoom 30: of {} pixels in big floats ({escaped} escape), the twin counts {right} right, {deep_right} on the floatexp rung", truth.len());
+            assert!(escaped > truth.len() / 4, "digit set {digit_set}: the view escapes too little");
+            assert!(right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set}: {right} of {}", truth.len());
+            assert!(deep_right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set} floatexp: {deep_right} of {}", truth.len());
         }
     }
 
@@ -15951,7 +16009,8 @@ fn main() {
             let _ = run(&esc, floatexp);
             let _ = run(&twin, floatexp);
             for (who, cfg) in [("built-in", &esc), ("twin", &twin)] {
-                let (t, orbit, bla, len) = run(cfg, floatexp);
+                // The best of three: a single run swings by half.
+                let (t, orbit, bla, len) = (0..3).map(|_| run(cfg, floatexp)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
                 let rest = t * 1000.0 - f64::from(orbit) - f64::from(bla);
                 println!(
                     "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.0} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.0}",

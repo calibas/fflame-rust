@@ -312,6 +312,104 @@ fn cfe2_sub(a: CFe2, b: CFe2) -> CFe2 {
     return cfe2_add(a, cfe2_neg(b));
 }
 
+// A real CFe2's operations (a value the program types Float: its
+// imaginary halves are zero), on the real halves alone -- a complex
+// product of two reals did four double-float products for one.
+fn cfe2_mul_r(a: CFe2, b: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E || b.e == CFE_ZERO_E) {
+        return cfe2_zero();
+    }
+    let r = df_mul(vec2<f32>(a.hi.x, a.lo.x), vec2<f32>(b.hi.x, b.lo.x));
+    return cfe2_norm(CFe2(vec2<f32>(r.x, 0.0), vec2<f32>(r.y, 0.0), a.e + b.e));
+}
+
+fn cfe2_sqr_r(a: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    let ax = vec2<f32>(a.hi.x, a.lo.x);
+    let r = df_mul(ax, ax);
+    return cfe2_norm(CFe2(vec2<f32>(r.x, 0.0), vec2<f32>(r.y, 0.0), a.e * 2));
+}
+
+fn cfe2_add_r(a: CFe2, b: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return b;
+    }
+    if (b.e == CFE_ZERO_E) {
+        return a;
+    }
+    let d = a.e - b.e;
+    if (d > 49) {
+        return a;
+    }
+    if (d < -49) {
+        return b;
+    }
+    if (d >= 0) {
+        let re = df_add(vec2<f32>(a.hi.x, a.lo.x), vec2<f32>(b.hi.x, b.lo.x) * exp2(f32(-d)));
+        return cfe2_norm(CFe2(vec2<f32>(re.x, 0.0), vec2<f32>(re.y, 0.0), a.e));
+    }
+    let re = df_add(vec2<f32>(a.hi.x, a.lo.x) * exp2(f32(d)), vec2<f32>(b.hi.x, b.lo.x));
+    return cfe2_norm(CFe2(vec2<f32>(re.x, 0.0), vec2<f32>(re.y, 0.0), b.e));
+}
+
+fn cfe2_sub_r(a: CFe2, b: CFe2) -> CFe2 {
+    return cfe2_add_r(a, cfe2_neg(b));
+}
+
+// |c + d| - |c| of reals, by sign case, as `cfe2_diffabs`.
+fn cfe2_diffabs_r(c: CFe2, d: CFe2) -> CFe2 {
+    let sum = cfe2_add_r(c, d);
+    if (c.hi.x >= 0.0) {
+        if (sum.hi.x >= 0.0) {
+            return d;
+        }
+        return cfe2_neg(cfe2_add_r(cfe2_add_r(c, c), d));
+    }
+    if (sum.hi.x > 0.0) {
+        return cfe2_add_r(cfe2_add_r(c, c), d);
+    }
+    return cfe2_neg(d);
+}
+
+// a k for a constant k: each half times it in double float (an f32 k is
+// exact there), the exponent kept.
+fn cfe2_scale(a: CFe2, k: f32) -> CFe2 {
+    if (a.e == CFE_ZERO_E || k == 0.0) {
+        return cfe2_zero();
+    }
+    let re = df_muls(vec2<f32>(a.hi.x, a.lo.x), k);
+    let im = df_muls(vec2<f32>(a.hi.y, a.lo.y), k);
+    return cfe2_norm(CFe2(vec2<f32>(re.x, im.x), vec2<f32>(re.y, im.y), a.e));
+}
+
+// re + i im of two reals: the smaller aligned to the larger's exponent,
+// no sums.
+fn cfe2_pair_r(re: CFe2, im: CFe2) -> CFe2 {
+    if (im.e == CFE_ZERO_E) {
+        return re;
+    }
+    if (re.e == CFE_ZERO_E) {
+        return CFe2(vec2<f32>(0.0, im.hi.x), vec2<f32>(0.0, im.lo.x), im.e);
+    }
+    let d = re.e - im.e;
+    if (d >= 0) {
+        let sc = select(0.0, exp2(f32(-d)), d <= 49);
+        return cfe2_norm(CFe2(vec2<f32>(re.hi.x, im.hi.x * sc), vec2<f32>(re.lo.x, im.lo.x * sc), re.e));
+    }
+    let sc = select(0.0, exp2(f32(d)), d >= -49);
+    return cfe2_norm(CFe2(vec2<f32>(re.hi.x * sc, im.hi.x), vec2<f32>(re.lo.x * sc, im.lo.x), im.e));
+}
+
+// a 2^n, exactly.
+fn cfe2_ldexp(a: CFe2, n: i32) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    return CFe2(a.hi, a.lo, a.e + n);
+}
+
 fn cfe2_conj(a: CFe2) -> CFe2 {
     return CFe2(vec2<f32>(a.hi.x, -a.hi.y), vec2<f32>(a.lo.x, -a.lo.y), a.e);
 }
@@ -1439,15 +1537,40 @@ impl<'p> Gen<'p> {
             IExprKind::Convert(a) if numeric(a.ty) && numeric(e.ty) => self.fegen(a),
             IExprKind::MakeComplex(a, b) => {
                 let (ca, cb) = (self.fegen(a), self.fegen(b));
-                format!("cfe2_add({ca}, cfe2_times_i({cb}))")
+                if a.ty == Ty::Float && b.ty == Ty::Float {
+                    format!("cfe2_pair_r({ca}, {cb})")
+                } else {
+                    format!("cfe2_add({ca}, cfe2_times_i({cb}))")
+                }
             }
             IExprKind::Unary(UnOp::Neg, a) if numeric(a.ty) => format!("cfe2_neg({})", self.fegen(a)),
+            // A constant factor scales (an exponent's shift for a power of
+            // two), not a full product.
+            IExprKind::Binary(BinOp::Mul, a, b) if numeric(e.ty) && (fe_constant(a).is_some() || fe_constant(b).is_some()) && !(self.reads_cfe(a) && self.reads_cfe(b)) => {
+                let (k, x) = match fe_constant(a) {
+                    Some(k) if self.reads_cfe(b) => (k, b),
+                    _ => (fe_constant(b).unwrap_or(1.0), a),
+                };
+                let cx = self.fegen(x);
+                let n = k.abs().log2();
+                if k != 0.0 && n == n.round() && n.abs() < 64.0 {
+                    let shifted = format!("cfe2_ldexp({cx}, {}i)", n as i32);
+                    if k < 0.0 { format!("cfe2_neg({shifted})") } else { shifted }
+                } else {
+                    format!("cfe2_scale({cx}, {})", lit_f32(k as f64))
+                }
+            }
             IExprKind::Binary(op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div), a, b) if numeric(e.ty) => {
                 let (ca, cb) = (self.fegen(a), self.fegen(b));
-                let f = match op {
-                    BinOp::Add => "cfe2_add",
-                    BinOp::Sub => "cfe2_sub",
-                    BinOp::Mul => "cfe2_mul",
+                // Two reals, by their real halves alone.
+                let real = e.ty == Ty::Float && a.ty == Ty::Float && b.ty == Ty::Float;
+                let f = match (op, real) {
+                    (BinOp::Add, true) => "cfe2_add_r",
+                    (BinOp::Sub, true) => "cfe2_sub_r",
+                    (BinOp::Mul, true) => "cfe2_mul_r",
+                    (BinOp::Add, false) => "cfe2_add",
+                    (BinOp::Sub, false) => "cfe2_sub",
+                    (BinOp::Mul, false) => "cfe2_mul",
                     _ => "cfe2_div",
                 };
                 format!("{f}({ca}, {cb})")
@@ -1456,6 +1579,7 @@ impl<'p> Gen<'p> {
                 let ca = self.fegen(a);
                 match *n {
                     1 => ca,
+                    2 if a.ty == Ty::Float => format!("cfe2_sqr_r({ca})"),
                     2 => format!("cfe2_sqr({ca})"),
                     n => format!("cfe2_powi({ca}, {n}i)"),
                 }
@@ -1463,11 +1587,16 @@ impl<'p> Gen<'p> {
             IExprKind::Modulus(a) if numeric(a.ty) => format!("cfe2_abs2({})", self.fegen(a)),
             IExprKind::Binary(BinOp::DiffAbs, a, b) => {
                 let (ca, cb) = (self.fegen(a), self.fegen(b));
-                format!("cfe2_diffabs({ca}, {cb})")
+                if a.ty == Ty::Float && b.ty == Ty::Float {
+                    format!("cfe2_diffabs_r({ca}, {cb})")
+                } else {
+                    format!("cfe2_diffabs({ca}, {cb})")
+                }
             }
             IExprKind::Call(f, a) if numeric(a.ty) && numeric(e.ty) => {
                 let complex = a.ty == Ty::Complex;
                 match f {
+                    Builtin::Sqr if !complex => format!("cfe2_sqr_r({})", self.fegen(a)),
                     Builtin::Sqr => format!("cfe2_sqr({})", self.fegen(a)),
                     Builtin::Ident => self.fegen(a),
                     Builtin::Zero => "cfe2_zero()".into(),
@@ -3373,5 +3502,17 @@ pub(crate) mod tests {
         assert_eq!(lit_f32(1e-45), "0.0", "subnormal flushes here, not on the GPU");
         assert_eq!(lit_f32(1e40), format!("{:?}", f32::MAX));
         assert!(lit_f32(1e-7).contains('e'));
+    }
+}
+
+/// A real constant's value, for the floatexp rung's scales.
+fn fe_constant(e: &IExpr) -> Option<f32> {
+    match &e.kind {
+        IExprKind::Float(v) => Some(*v as f32),
+        IExprKind::Int(v) => Some(*v as f32),
+        IExprKind::Complex(re, im) if *im == 0.0 => Some(*re as f32),
+        IExprKind::Convert(a) => fe_constant(a),
+        IExprKind::Unary(UnOp::Neg, a) => fe_constant(a).map(|v| -v),
+        _ => None,
     }
 }

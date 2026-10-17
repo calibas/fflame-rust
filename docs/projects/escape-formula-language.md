@@ -1388,17 +1388,59 @@ keeps compiling as UF; the editor converts what it opens.
      powers by squaring (the Multibrot's twin 79 us a pass to 1.6). The
      Mandelbrot's twin is now faster than the built-in at depth. Custom
      references now go through the orbit store, their machines' state
-     saved and restored from the formula's identity. Left: the derived
-     equations on the GPU (the Ship's at floatexp ~3x) and the custom BLA
-     table's build.
+     saved and restored from the formula's identity.
+   - **Speed, the GPU's part (2026-10-16)**: the floatexp rung's
+     generated code runs a real value on its real halves and a constant
+     factor as a scale (the Ship's twin at zoom 60: 126 ms of GPU time to
+     62; the built-in 34, on a single-f32 mantissa); the product rule
+     takes two products, one for a square or for deviations the same or
+     opposite (Lambda's `z (1 - z)`); a power whose exponent is a whole
+     number from 1 to 64 derives by degrees, not by `expm1(b log1p(d /
+     A))` (the Multibrot's twin 9 ms to 7, the built-in 5). And the BLA
+     table backs off per pixel where its lookups keep failing -- for the
+     built-ins too, which the table made up to twice slower where it
+     could not skip (the Tricorn's suite view at zoom 28: 163 ms to 81).
+     Left: the Ship at floatexp (a precision difference); the
+     references' builds where no nucleus serves (big floats 1 to 2.4 us
+     a pass, three times their arithmetic; the period watch's f64
+     derivative pass beside them, the Ship's 2 us); the custom BLA
+     table's build (26 ms against 6 for the Mandelbrot at zoom 60).
+     Open: a double-double reference machine would serve to zoom ~34 --
+     the precision policy asks zoom + 72 bits, double-double has 106 --
+     which is where perturbation starts (zoom 6 to 14) and most
+     browsing happens; past that big floats are needed.
    - Next: retiring native code, family by family, where the twin
      matches it in speed and accuracy -- a decision for the user. Open: the deep
      rung's BLA at 2^-24 costs the floatexp rung's double float a
      little in chaotic views (the twin from zero at the seahorse view,
      zoom 42: 419 right per step, 405 with BLA).
 
-Probably native for good: Origami (fold lines computed on the CPU),
-Littlewood, Digit Set.
+The formulas thought native for good, examined (2026-10-16):
+- **Littlewood, with its digit sets: converted.** The greedy digit is
+  comparisons and a branch on the iterate; the twin renders as the
+  built-in on every pixel, every set, both planes, and deep-zooms by
+  derived equations where the built-in has no perturbed tier (439 of
+  439 at zoom 30, sets `{±1}` and `{0, ±1}`, both rungs). "Digit Set"
+  is Littlewood's parameter, not a formula of its own.
+- **Origami: not yet.** What it needs that a formula cannot say:
+  - a table built once per image -- 64 fold lines, line j's endpoints
+    folded through lines 0..j-1, O(F^2) (per pixel it was a TDR);
+  - an integer hash for the seed's lines (xor, shifts, wrapping
+    multiplies), bit-exact on CPU and GPU;
+  - its crease relief, `formula_creases(p0)`, a second function the
+    terrain and the relief read beside the step;
+  - its feature flags (non-escaping, the step's index, dynamical only)
+    are already a formula's: no test, `#pass`, a start at the pixel.
+
+  Two ways to give a formula the table: arrays in the language (a
+  `global:` array, computed by the interpreter on the CPU as `global:`
+  already is, read by index on the GPU), which UF formulas could use
+  too; or a Rhai-only `fn data(p)` run by the Rhai engine itself on the
+  CPU, its floats uploaded as the built-ins' `derived_data` is and read
+  by a `data(k)` built-in -- no IR arrays, and Rhai's own bit operations
+  give the hash. The crease relief would be a third function a formula
+  may define. A decision for the user; Origami does not deep-zoom
+  either way (its folds are isometries, ESCAPE.md).
 
 ### Phase 5: distribution
 

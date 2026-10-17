@@ -10,10 +10,11 @@
 //! What a built-in has besides its step -- Mann damping, the biomorph
 //! test, its native deep-zoom tiers and their series approximation --
 //! the twin has not: it deep-zooms by derived equations
-//! (`lang::delta`), the families the derivation covers (all but a
-//! Multibrot's or a multicorn's real power). Phoenix, Manowar and Spider
-//! carry a value besides z (the previous z, the moving c), which the
-//! derived equations follow (phase 4, step 5).
+//! (`lang::delta`), every family, a real power by its difference form.
+//! Phoenix, Manowar and Spider carry a value besides z (the previous z,
+//! the moving c), which the derived equations follow (phase 4, step 5);
+//! Littlewood's greedy digit is a branch on the iterate, so its twin
+//! deep-zooms where the built-in does not.
 //!
 //! The sources are `assets/formulas/twins/*.rhai`; the GPU tests hold
 //! each to its built-in (`escape::app_repro_test`).
@@ -30,6 +31,8 @@ pub const TWINS: &[(&str, &str)] = &[
     ("phoenix", include_str!("../../assets/formulas/twins/phoenix.rhai")),
     ("manowar", include_str!("../../assets/formulas/twins/manowar.rhai")),
     ("spider", include_str!("../../assets/formulas/twins/spider.rhai")),
+    // The greedy digit map: its choice a branch on the iterate.
+    ("littlewood", include_str!("../../assets/formulas/twins/littlewood.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -124,6 +127,10 @@ mod tests {
             assert!(holds("phoenix", &[], julia));
             assert!(holds("manowar", &[], julia));
             assert!(holds("spider", &[], julia));
+            // The greedy digit, a branch on the iterate, by every set.
+            for d in 0..3 {
+                assert!(holds("littlewood", &[(0, d as f64)], julia), "littlewood digit set {d}");
+            }
         }
     }
 }
