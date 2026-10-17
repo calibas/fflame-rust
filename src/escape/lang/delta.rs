@@ -825,6 +825,17 @@ impl<'p> Deriver<'p> {
                 let plain = bin(BinOp::Sub, call(Builtin::Log, bin(BinOp::Add, ra.clone(), x.clone()), ty), call(Builtin::Log, ra.clone(), ty));
                 self.chosen(vec![(large(&ra, &x), plain), (crossed, turned)], l, ty)
             }
+            // arg, log's imaginary part: Im(log1p(d / A)), the turns at
+            // the cut added back.
+            Builtin::Atan2 if complex && ty == Ty::Float => {
+                let l = difference_form(Builtin::Log, ra.clone(), x.clone(), Ty::Complex)?;
+                let k = cut_turns(&ra, &x, &l);
+                let crossed = test(BinOp::Ne, k.clone(), konst(0.0, Ty::Float));
+                let form = call(Builtin::Imag, l, Ty::Float);
+                let turned = bin(BinOp::Add, form.clone(), bin(BinOp::Mul, k, konst(std::f64::consts::TAU, Ty::Float)));
+                let plain = bin(BinOp::Sub, call(Builtin::Atan2, bin(BinOp::Add, ra.clone(), x.clone()), Ty::Float), call(Builtin::Atan2, ra.clone(), Ty::Float));
+                self.chosen(vec![(large(&ra, &x), plain), (crossed, turned)], form, Ty::Float)
+            }
             f if ty == a_ty && matches!(ty, Ty::Float | Ty::Complex) => difference_form(f, ra, x, ty)?,
             // |a| of a complex, a float: (2 Re(conj A da) + |da|^2)
             // / (|A + da| + |A|).
@@ -1719,6 +1730,23 @@ impl<'p> Deriver<'p> {
                 let d = bin(BinOp::Add, bin(BinOp::Mul, konst(2.0, Ty::Float), cross), mk(IExprKind::Modulus(Box::new(x)), Ty::Float));
                 (r, Some(d))
             }
+            // log |a|^2 of a complex: 2 Re(log1p(da / A)), as log a's
+            // real part, conditioned by |A + da| / |A| where the real
+            // log1p of the moduli's ratio is by its square (a grazing
+            // orbit's 1e-4 against 1e-2); the plain difference when da
+            // is large.
+            IExprKind::Call(Builtin::Log, a) if ty == Ty::Float && matches!(&a.kind, IExprKind::Modulus(m) if m.ty == Ty::Complex) => {
+                let IExprKind::Modulus(m) = &a.kind else { unreachable!() };
+                let modulus = |v: IExpr| mk(IExprKind::Modulus(Box::new(v)), Ty::Float);
+                let (rm, dm) = self.pair(m, written, is_loop)?;
+                let r = call(Builtin::Log, modulus(rm.clone()), ty);
+                let Some(x) = dm else { return Some((r, None)) };
+                let (rm, x) = (self.bound(rm, Role::Reference), self.bound(x, Role::Deviation));
+                let l = difference_form(Builtin::Log, rm.clone(), x.clone(), Ty::Complex)?;
+                let form = bin(BinOp::Mul, konst(2.0, Ty::Float), call(Builtin::Real, l, Ty::Float));
+                let plain = bin(BinOp::Sub, call(Builtin::Log, modulus(bin(BinOp::Add, rm.clone(), x.clone())), ty), call(Builtin::Log, modulus(rm.clone()), ty));
+                (r, Some(self.chosen(vec![(large(&rm, &x), plain)], form, Ty::Float)))
+            }
             IExprKind::Call(f, a) => {
                 let (ra, da) = self.pair(a, written, is_loop)?;
                 let r = call(*f, ra.clone(), ty);
@@ -2099,6 +2127,10 @@ mod tests {
                 (0.3, 0.5),
                 300,
             ),
+            // arg, across its cut as the orbit crosses the negative reals.
+            ("A {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.05 * atan2(z)\nbailout:\n |z| < 4\n}", (-1.26, 0.1), 300),
+            // log |z|^2, as log z's real part.
+            ("L {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.01 * log(|z|)\nbailout:\n |z| < 4\n}", (0.3, 0.5), 300),
         ];
         for &(src, (rx, ry), maxiter) in cases {
             let p = program(src, Dialect::UltraFractal);

@@ -568,7 +568,14 @@ fn fe_cexpm1(z: vec2<f32>) -> vec2<f32> {
     let h = fe_sin(0.5 * z.y);
     return vec2<f32>(fe_expm1(z.x) * cos(z.y) - 2.0 * h * h, exp(z.x) * fe_sin(z.y));
 }
+// Near -1 the log of 1 + z itself, exact there (Sterbenz): the squared
+// form, 2x + x^2 + y^2 = |1 + z|^2 - 1, cancels to nothing as |1 + z|
+// goes to 0 (an orbit grazing a log's singularity).
 fn fe_clog1p(z: vec2<f32>) -> vec2<f32> {
+    if (z.x < -0.5) {
+        let u = vec2<f32>(1.0 + z.x, z.y);
+        return vec2<f32>(0.5 * log(dot(u, u)), atan2(u.y, u.x));
+    }
     return vec2<f32>(0.5 * fe_log1p(2.0 * z.x + z.x * z.x + z.y * z.y), atan2(z.y, 1.0 + z.x));
 }
 
@@ -584,6 +591,8 @@ fn cfe2_expm1(d: CFe2) -> CFe2 {
     }
     return cfe2_from_f32(fe_cexpm1(cfe2_to_f32(d)));
 }
+// log1p: large, or near -1, the log of 1 + d in extended range (whose
+// square f32 would overflow, or whose |1 + d| f32 would flush).
 fn cfe2_log1p(d: CFe2) -> CFe2 {
     if (d.e == CFE_ZERO_E) {
         return d;
@@ -591,7 +600,46 @@ fn cfe2_log1p(d: CFe2) -> CFe2 {
     if (d.e < -20) {
         return cfe2_sub(d, cfe2_mul_c32(cfe2_sqr(d), vec2<f32>(0.5, 0.0)));
     }
+    if (d.e > 20 || cfe2_to_f32(d).x < -0.5) {
+        return cfe2_log(cfe2_add(d, cfe2_from_f32(vec2<f32>(1.0, 0.0))));
+    }
     return cfe2_from_f32(fe_clog1p(cfe2_to_f32(d)));
+}
+fn cfe2_log1p_r(d: CFe2) -> CFe2 {
+    if (d.e == CFE_ZERO_E) {
+        return d;
+    }
+    if (d.e < -20) {
+        return cfe2_sub_r(d, cfe2_ldexp(cfe2_sqr_r(d), -1i));
+    }
+    if (d.e > 20 || (d.hi.x < 0.0 && d.e >= 0)) {
+        return cfe2_log_r(cfe2_add_r(d, cfe2_from_f32(vec2<f32>(1.0, 0.0))));
+    }
+    return cfe2_from_f32(vec2<f32>(fe_log1p(cfe2_to_f32(d).x), 0.0));
+}
+
+// The log and argument of an extended-range value, by its mantissa and
+// its exponent (with the mantissa's low half): f32 would flush a
+// reference's |z|^2 under 2^-126 to zero (log -inf), or saturate one
+// past 2^128. Zero as f32 takes it.
+fn cfe2_log(a: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return cfe2_from_f32(vec2<f32>(log(length(cfe2_to_f32(a))), 0.0));
+    }
+    let n = dot(a.hi, a.hi);
+    return cfe2_from_f32(vec2<f32>(0.5 * log(n) + dot(a.hi, a.lo) / n + f32(a.e) * 0.6931472, atan2(a.hi.y, a.hi.x)));
+}
+fn cfe2_log_r(a: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return cfe2_from_f32(vec2<f32>(log(cfe2_to_f32(a).x), 0.0));
+    }
+    return cfe2_from_f32(vec2<f32>(log(a.hi.x) + a.lo.x / a.hi.x + f32(a.e) * 0.6931472, 0.0));
+}
+fn cfe2_arg(a: CFe2) -> CFe2 {
+    if (a.e == CFE_ZERO_E) {
+        return a;
+    }
+    return cfe2_from_f32(vec2<f32>(atan2(a.hi.y, a.hi.x), 0.0));
 }
 fn cfe2_sin_small(d: CFe2) -> CFe2 {
     if (d.e == CFE_ZERO_E || d.e < -20) {
@@ -1256,6 +1304,14 @@ impl<'p> Gen<'p> {
             let z = self.expr(z);
             return format!("({k} * {z})");
         }
+        // ...and divides each part, as the built-ins do (Kaliset's
+        // `abs(z) / r2`): a complex division by (r, 0) rounds otherwise
+        // ((x r) / r^2), which a chaotic map amplifies.
+        if op == Div && a.ty == Ty::Complex && b.is_lifted_real() {
+            let z = self.expr(a);
+            let k = self.real_of(b);
+            return format!("({z} / {k})");
+        }
         let (l, r) = (self.expr(a), self.expr(b));
         let ty = a.ty;
         match op {
@@ -1677,7 +1733,12 @@ impl<'p> Gen<'p> {
                     Builtin::Imag if complex => format!("cfe2_im({})", self.fegen(a)),
                     // x + O(x^2): a series in extended range when small.
                     Builtin::Expm1 => format!("cfe2_expm1({})", self.fegen(a)),
-                    Builtin::Log1p => format!("cfe2_log1p({})", self.fegen(a)),
+                    Builtin::Log1p if complex => format!("cfe2_log1p({})", self.fegen(a)),
+                    Builtin::Log1p => format!("cfe2_log1p_r({})", self.fegen(a)),
+                    // Past f32's range, by mantissa and exponent.
+                    Builtin::Log if complex => format!("cfe2_log({})", self.fegen(a)),
+                    Builtin::Log => format!("cfe2_log_r({})", self.fegen(a)),
+                    Builtin::Atan2 if complex => format!("cfe2_arg({})", self.fegen(a)),
                     Builtin::Sin => format!("cfe2_sin_small({})", self.fegen(a)),
                     Builtin::Sinh => format!("cfe2_sinh_small({})", self.fegen(a)),
                     _ => plain(self, e),
@@ -2360,13 +2421,19 @@ impl Helper {
     }
     return log(1.0 + x);
 }",
-            // exp(z) - 1 and log(1 + z), neither part cancelling.
+            // exp(z) - 1 and log(1 + z), neither part cancelling: near -1
+            // the log of 1 + z itself, exact there (Sterbenz), where the
+            // squared form |1 + z|^2 - 1 cancels to nothing.
             CExpm1 => "fn uf_cexpm1(z: vec2<f32>) -> vec2<f32> {
     let y = uf_reduce(z.y);
     let h = uf_sin(0.5 * y);
     return vec2<f32>(uf_expm1(z.x) * cos(y) - 2.0 * h * h, exp(z.x) * uf_sin(y));
 }",
             CLog1p => "fn uf_clog1p(z: vec2<f32>) -> vec2<f32> {
+    if (z.x < -0.5) {
+        let u = vec2<f32>(1.0 + z.x, z.y);
+        return vec2<f32>(0.5 * log(dot(u, u)), uf_atan2(u.y, u.x));
+    }
     return vec2<f32>(0.5 * uf_log1p(2.0 * z.x + z.x * z.x + z.y * z.y), uf_atan2(z.y, 1.0 + z.x));
 }",
             // sin and sinh of a small complex: each part exact near zero.

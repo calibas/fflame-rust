@@ -1541,7 +1541,19 @@ Each item is ticked here when done; findings go in as they are made.
      custom tier took the built-ins' delta-aware escape margin for a
      `|z|^2` test (`modulus_bound`; Feather's twin was 219: a band's edge
      crossed its suite view); (3) Barnsley, Kaliset, Ducks, Lattès
-     (branches on the iterate, folds, three non-escaping); (4) Magnet,
+     (branches on the iterate, folds, three non-escaping) -- **done
+     2026-10-17**: every pixel as the built-in's (Ducks' variant 0 98.4%,
+     a chaotic map's rounding); Barnsley deep at zoom 30 against big
+     floats 426 to 439 of 439, the three non-escaping by the orbit's mean `|z|` against big
+     floats, both rungs, under 2e-7 mean relative error (Ducks' scaled
+     rung 7.5e-5, below). It took: the derivation of `arg` (Im of
+     log1p, the cut's turns) and of `log |a|^2` (2 Re log1p); a complex
+     divided by a lifted real part by part, as the built-ins; big floats'
+     real log without the complex one's sentinel; `log1p` near -1 by
+     the log of `1 + z` itself (the squared form cancelled to log 0 on an
+     orbit grazing a log's singularity: Ducks' floatexp rung read inf);
+     and the floatexp rung's log, arg and log1p by mantissa and exponent;
+     (4) Magnet,
      Nova, Novaretti, Newton (convergent; Newton 6 functions by 3
      schemes).
    - Each: renders as its built-in on both planes (where it has two),
@@ -1605,6 +1617,16 @@ Each item is ticked here when done; findings go in as they are made.
    - **The references' speed**: the program flattened to in-place
      operations on preallocated big floats (a pass spends two thirds of
      its time interpreting).
+   - **The scaled rung's reference values are f32.** A derived equation
+     reads the reference's own sub-values (Ducks' `t = f(Z) + c`)
+     recomputed from Z's high half; where such a sum cancels -- Ducks'
+     reference passing 2.6e-7 from its log's singularity -- f32 keeps
+     little of it, and the pixels by it are off: the Ducks twin at its
+     deep view, 42 of 6,912 pixels over 1e-3 (mean 7.5e-5) where the
+     native tier, which reads `ref_z_lo`, has 1.1e-6. The floatexp rung
+     reads the double-float reference and is exact (1.1e-7). A fix:
+     reference sums in double float on the scaled rung, or the floatexp
+     rung where a program's equations hold such a sum.
    - **Fixed point's limits**, for the record: magnitudes below 2^8,
      absolute precision 2^-(64n - 8), division only by values of size 1
      or more, and an overflow that wraps silently in release builds (the

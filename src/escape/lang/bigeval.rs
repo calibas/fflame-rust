@@ -541,7 +541,7 @@ impl BigMachine {
         if z.is_zero() {
             return Ok(BigComplex::zero(self.n));
         }
-        Ok(self.cexp(&w.mul(&clog(z))))
+        Ok(self.cexp(&w.mul(&clog(z)?)))
     }
 
     fn cexp(&self, z: &BigComplex) -> BigComplex {
@@ -581,7 +581,7 @@ impl BigMachine {
         Ok(match f {
             Sqr => z.mul(z),
             Sqrt => self.csqrt(z)?,
-            Log => clog(z),
+            Log => clog(z)?,
             Exp => self.cexp(z),
             Abs => BigComplex { re: z.re.abs(), im: z.im.abs() },
             Cabs => real(z.norm_sqr().sqrt()),
@@ -613,16 +613,16 @@ impl BigMachine {
             Tanh => cdiv(&self.ccall(Sinh, z)?, &self.ccall(Cosh, z)?)?,
             Cotanh => cdiv(&self.ccall(Cosh, z)?, &self.ccall(Sinh, z)?)?,
             // The f64 interpreter's forms (builtins.rs), principal cuts.
-            Asin => cneg(&i).mul(&clog(&i.mul(z).add(&self.csqrt(&one.sub(&z.mul(z)))?))),
+            Asin => cneg(&i).mul(&clog(&i.mul(z).add(&self.csqrt(&one.sub(&z.mul(z)))?))?),
             Acos => real(self.pi.mul_pow2(-1)).sub(&self.ccall(Asin, z)?),
             Atan => {
                 let half_i = BigComplex { re: BigFloat::zero(n), im: self.f(0.5) };
-                half_i.mul(&clog(&cdiv(&i.add(z), &i.sub(z))?))
+                half_i.mul(&clog(&cdiv(&i.add(z), &i.sub(z))?)?)
             }
-            Asinh => clog(&z.add(&self.csqrt(&z.mul(z).add(&one))?)),
-            Acosh => clog(&z.add(&self.csqrt(&z.add(&one))?.mul(&self.csqrt(&z.sub(&one))?))),
+            Asinh => clog(&z.add(&self.csqrt(&z.mul(z).add(&one))?))?,
+            Acosh => clog(&z.add(&self.csqrt(&z.add(&one))?.mul(&self.csqrt(&z.sub(&one))?)))?,
             Atanh => {
-                let l = clog(&cdiv(&one.add(z), &one.sub(z))?);
+                let l = clog(&cdiv(&one.add(z), &one.sub(z))?)?;
                 BigComplex { re: l.re.mul_pow2(-1), im: l.im.mul_pow2(-1) }
             }
             Atan2 => real(BigFloat::atan2(&z.im, &z.re)),
@@ -641,7 +641,7 @@ impl BigMachine {
             IsInf | IsNan => BigComplex::zero(n),
             // Exact enough in big floats as the plain forms.
             Expm1 => self.cexp(z).sub(&one),
-            Log1p => clog(&one.add(z)),
+            Log1p => clog(&one.add(z))?,
         })
     }
 
@@ -690,6 +690,11 @@ impl BigMachine {
                 };
                 if off {
                     return Err(Stop);
+                }
+                // A real log is the real one (the lifted complex one
+                // would square its argument for its test of zero).
+                if f == Log {
+                    return Ok(BigValue::Float(x.ln()));
                 }
                 let lifted = BigComplex { re: x, im: BigFloat::zero(self.n) };
                 BigValue::Float(self.ccall(f, &lifted)?.re)
@@ -753,8 +758,16 @@ fn cdiv(a: &BigComplex, b: &BigComplex) -> R<BigComplex> {
 }
 
 /// The principal log; the origin, which has none, ends the orbit.
-fn clog(z: &BigComplex) -> BigComplex {
-    z.ln()
+/// The language's complex log, as the GPU's `uf_clog` takes it: no
+/// sentinel near zero (`BigComplex::ln`'s is the built-in Ducks
+/// shader's, -34.5 under |z|^2 1e-30, which for a real `ln(x)` lifted
+/// to complex fired at x 1e-15 and parted the reference from the pixels
+/// wherever an orbit grazed zero); none at zero itself.
+fn clog(z: &BigComplex) -> R<BigComplex> {
+    if z.is_zero() {
+        return Err(Stop);
+    }
+    Ok(BigComplex { re: z.norm_sqr().ln().mul_pow2(-1), im: BigFloat::atan2(&z.im, &z.re) })
 }
 
 #[cfg(test)]

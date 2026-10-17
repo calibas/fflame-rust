@@ -119,9 +119,13 @@ impl C64 {
     }
 
     /// `log(1 + z)`, exact near zero: `(log1p(2u + u^2 + v^2) / 2,
-    /// atan2(v, 1 + u))`.
+    /// atan2(v, 1 + u))`; near -1 the log of `1 + z` itself, exact there
+    /// (Sterbenz), where the squared form `|1 + z|^2 - 1` cancels.
     pub fn ln1p(self) -> C64 {
         let (u, v) = (self.re, self.im);
+        if u < -0.5 {
+            return C64::new(1.0 + u, v).ln();
+        }
         C64::new(0.5 * (2.0 * u + u * u + v * v).ln_1p(), v.atan2(1.0 + u))
     }
 
