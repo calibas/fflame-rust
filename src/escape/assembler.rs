@@ -1304,6 +1304,7 @@ fn program_step(z_before: bool, derivative: bool) -> Vec<String> {
 fn program_escape_test() -> String {
     "        if (!formula_bailout(fs, pixel)) {\n\
      \x20           escaped = true;\n\
+     \x20           converged = formula_settled(fs, pixel);\n\
      \x20           n = i + 1u;\n\
      \x20           break;\n\
      \x20       }"
@@ -4203,6 +4204,7 @@ fn escape_test_custom(floatexp: bool, width: u8) -> String {
         "        // A custom formula's own test (escape::lang).\n\
          \x20       if (!formula_perturb_bailout(z_full, {pixel}{carried})) {{\n\
          \x20           escaped = true;\n\
+         \x20           converged = formula_perturb_settled(z_full, {pixel}{carried});\n\
          \x20           n = i;\n\
          \x20           break;\n\
          \x20       }}"

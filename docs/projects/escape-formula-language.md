@@ -1509,7 +1509,11 @@ Each item is ticked here when done; findings go in as they are made.
      pass-local values -- DaddyBrot's had 12,890 -- which locals would
      shrink for every formula with a derivative.
 2. [ ] **Twins for the 14 built-ins without one.**
-   - First, in the language and tests:
+   - First, in the language and tests (the first three done 2026-10-17:
+     `perturb::settle_of` and `formula_settled` /
+     `formula_perturb_settled`; `escaped` optional, `never_escapes`, the
+     Bailout control by the program's `bailout`; the biomorph's
+     `is_metric_of_z`):
      - **converged**: the built-ins' convergent formulas set
        `converged` beside `escaped`, which Root Basin's general key
        reads; a program's test only ends the orbit. Where a test is

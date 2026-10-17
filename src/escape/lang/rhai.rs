@@ -148,13 +148,14 @@ fn checked(lowered: Lowered, kind: EntryKind) -> Result<Program, Vec<Diag>> {
 }
 
 /// What a Rhai file holds, by its functions: a colouring has `finish`,
-/// a formula `escaped`. `None` when it does not parse or has neither.
+/// a formula `escaped` or, never escaping, only its `step`. `None` when
+/// it does not parse or has neither.
 pub fn kind_of(source: &str) -> Option<EntryKind> {
     let (ast, _) = parse(source).ok()?;
     let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
     if has("finish") {
         Some(EntryKind::Coloring)
-    } else if has("escaped") {
+    } else if has("escaped") || has("step") {
         Some(EntryKind::Formula)
     } else {
         None
@@ -535,8 +536,8 @@ impl<'s> Lowerer<'s> {
     /// perturbation equations when it brings them.
     fn formula_sections(&mut self, span: Span, default: &mut Settings) -> R<Vec<Section>> {
         let get = |l: &Self, name: &str| l.fns.get(name).cloned();
-        let (Some(start), Some(step), Some(escaped)) = (get(self, "start"), get(self, "step"), get(self, "escaped")) else {
-            let missing: Vec<&str> = ["start", "step", "escaped"].into_iter().filter(|n| !self.fns.contains_key(*n)).collect();
+        let (Some(start), Some(step)) = (get(self, "start"), get(self, "step")) else {
+            let missing: Vec<&str> = ["start", "step"].into_iter().filter(|n| !self.fns.contains_key(*n)).collect();
             return Err(Diag::error(Span::default(), format!("a formula needs `fn {}`", missing.join("`, `fn "))));
         };
         // start: its map's fields become the state.
@@ -563,19 +564,25 @@ impl<'s> Lowerer<'s> {
         }
         let mut lp = Vec::new();
         self.state_body(&step.body, &mut scope, &mut lp)?;
-        // escaped: one test, its lets substituted.
-        let mut scope = Scope::new(Fn3::Escaped, fields);
-        if escaped.params.len() > 3 || escaped.params.len() < 2 {
-            return self.err(escaped.body.position(), "`escaped(s, p)` or `escaped(s, p, ctx)`");
-        }
-        for (name, role) in escaped.params.iter().zip([Binding::State, Binding::Params, Binding::Ctx]) {
-            scope.bind(name, role);
-        }
-        self.pure = true;
-        let test = self.pure_body(&escaped.body, &mut scope)?;
-        self.pure = false;
-        let tspan = test.span;
-        let go = mk(ExprKind::Unary(UnOp::Not, Box::new(test)), tspan);
+        // escaped: one test, its lets substituted; without it the formula
+        // never escapes (UF's `bailout: true`).
+        let go = match get(self, "escaped") {
+            Some(escaped) => {
+                let mut scope = Scope::new(Fn3::Escaped, fields);
+                if escaped.params.len() > 3 || escaped.params.len() < 2 {
+                    return self.err(escaped.body.position(), "`escaped(s, p)` or `escaped(s, p, ctx)`");
+                }
+                for (name, role) in escaped.params.iter().zip([Binding::State, Binding::Params, Binding::Ctx]) {
+                    scope.bind(name, role);
+                }
+                self.pure = true;
+                let test = self.pure_body(&escaped.body, &mut scope)?;
+                self.pure = false;
+                let tspan = test.span;
+                mk(ExprKind::Unary(UnOp::Not, Box::new(test)), tspan)
+            }
+            None => mk(ExprKind::Bool(true), span),
+        };
         let mut sections = vec![
             Section { kind: SectionKind::Init, span, body: init, last_is_bailout: false, labelled: true },
             Section { kind: SectionKind::Loop, span, body: lp, last_is_bailout: false, labelled: true },
