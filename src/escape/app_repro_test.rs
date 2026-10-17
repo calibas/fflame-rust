@@ -2261,6 +2261,21 @@ mod tests {
             ("littlewood", &[("digit_set", 1.0)], ("0", "0"), 0.5, false, 0.0),
             ("littlewood", &[("digit_set", 2.0)], ("0", "0"), 0.5, false, 0.0),
             ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, true, 0.0),
+            // Branches on the iterate, a fold, never escaping (batch 3).
+            ("barnsley", &[("variant", 0.0)], ("0", "0"), 0.0, true, 0.0),
+            ("barnsley", &[("variant", 1.0)], ("0", "0"), 0.0, true, 0.0),
+            ("barnsley", &[("variant", 2.0)], ("0.3", "0"), 0.0, false, 0.0),
+            ("kaliset", &[("plus_c", 0.0)], ("0", "0"), 0.5, true, 0.0),
+            ("kaliset", &[("plus_c", 1.0)], ("0", "0"), 0.5, false, 0.0),
+            // The built-in's arithmetic step for step (its other variants
+            // match exactly); the map is chaotic over these 80 passes, and
+            // a rounding moves 1.6% of the pixels.
+            ("ducks", &[("variant", 0.0)], ("0", "0"), -0.5, false, 0.02),
+            ("ducks", &[("variant", 2.0)], ("0", "0"), -0.5, false, 0.0),
+            ("ducks", &[("variant", 3.0)], ("0", "0"), -0.5, true, 0.0),
+            ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
+            ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
+            ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.0),
             // Powers by parameters, a pole (item 2, batch 2).
             // Chaotic in f32 here: against f64 the built-in's counts differ
             // on 328 of 6,144 pixels, the twin's on 313 (each one's f32
@@ -2288,6 +2303,17 @@ mod tests {
             esc.coloring = "smooth".into();
             esc.max_iter = 200;
             esc.bailout = 16.0;
+            // One that never escapes draws by an interior colouring, over
+            // its presets' short orbits (chaotic maps: a long one's end is
+            // its rounding's).
+            if crate::escape::get_formula(formula).has_feature(crate::escape::FormulaFeature::NonEscaping) {
+                esc.coloring = "orbit_average".into();
+                esc.max_iter = match formula {
+                    "lattes" => 5,
+                    "kaliset" => 24,
+                    _ => 80,
+                };
+            }
             esc.formula = formula.into();
             for (k, v) in params {
                 esc.formula_params.insert(k.to_string(), *v);
@@ -2303,6 +2329,9 @@ mod tests {
                 "littlewood" => (1.1, 0.4),
                 "exponential" => (-0.65, 0.0),
                 "mcmullen" => (0.04, 0.0),
+                "barnsley" => (0.6, 1.1),
+                "kaliset" => (0.6, 0.4),
+                "ducks" => (-0.3, 0.6),
                 "trig" => (1.0, 0.5),
                 "lambda_sine" => (1.0, 0.4),
                 "tetration" => (1.2, 0.6),
@@ -2527,19 +2556,23 @@ mod tests {
         }
     }
 
-    /// The twins of the built-ins escaping on `Re z` or `|Im z|` deep-zoom
-    /// by derived equations, which their built-ins cannot (order of work,
-    /// item 2, batch 1): against the big-float truth at zoom 30, on both
+    /// The twins of the built-ins without a native deep tier deep-zoom by
+    /// derived equations (order of work, item 2): those escaping on `Re z`
+    /// or `|Im z|` (batch 1) and Barnsley, whose steps branch on the
+    /// iterate (batch 3), against the big-float truth at zoom 30, on both
     /// rungs, at views by the edge found by bisection.
     #[test]
     #[ignore = "needs a GPU"]
-    fn the_twins_escaping_on_a_part_deep_zoom() {
+    fn the_twins_without_a_native_tier_deep_zoom() {
         let cases: &[(&str, &[(&str, f32)], (&str, &str), f32, u32)] = &[
             ("exponential", &[], ("1.028396859500487", "-2.5"), 50.0, 300),
             ("trig", &[("variant", 0.0)], ("-2.498552209316636", "-1.25"), 50.0, 300),
             ("lambda_sine", &[], ("-0.9686709039042004", "-0.25"), 50.0, 300),
             ("collatz", &[], ("0.9760853061268013", "-0.08"), 10.0, 300),
             ("tetration", &[], ("2.3523916463991066", "-3.0"), 50.0, 300),
+            ("barnsley", &[("variant", 0.0)], ("-0.9790606547635894", "0.56"), 4.0, 300),
+            ("barnsley", &[("variant", 1.0)], ("-0.24909749436944575", "-0.72"), 4.0, 300),
+            ("barnsley", &[("variant", 2.0)], ("0.13063281077701902", "-0.32"), 4.0, 300),
         ];
         for &(formula, params, (cre, cim), bailout, max_iter) in cases {
             let src = crate::escape::twins::custom_source(formula).unwrap();
@@ -5593,6 +5626,93 @@ final:
                 sum / max_iter as f64
             })
             .collect()
+    }
+
+    /// [`exact_mean_magnitude`] of a custom formula: its own program in
+    /// big floats at each pixel, the mean of `|z|` over its passes.
+    fn exact_mean_magnitude_of(esc: &crate::config::escape::EscapeConfig, w: u32, h: u32) -> Vec<f64> {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
+        use rayon::prelude::*;
+        let src = esc.custom_formula.as_ref().expect("a custom formula");
+        let prog = std::sync::Arc::new(crate::escape::custom::check_entry(lang::EntryKind::Formula, src).unwrap());
+        let mut values = lang::interp::ParamValues::defaults(&prog);
+        for (i, x) in prog.params.iter().enumerate() {
+            if let Some(v) = esc.formula_params.get(&x.name) {
+                values.values[i].0 = f64::from(*v);
+            }
+        }
+        let values = as_on_the_gpu(values);
+        let n = 6;
+        let c = BigComplex::from_fixed(&FixedComplex { re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(), im: FixedPoint::from_decimal(&esc.center_im, n).unwrap() });
+        let span_y = 4.0 / esc.zoom_log2.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        (0..w * h)
+            .into_par_iter()
+            .map(|i| {
+                let (px, py) = (i % w, i / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                let mut env = lang::interp::Env::at(lang::builtins::C64::ZERO, esc.max_iter);
+                if esc.julia {
+                    (env.julia, env.julia_c) = (true, lang::builtins::C64::new(f64::from(esc.julia_re), f64::from(esc.julia_im)));
+                }
+                let mut m = lang::bigeval::BigMachine::new(prog.clone(), values.clone(), env, c.add(&BigComplex::from_f64(dx, dy, n)), n).unwrap();
+                let mut sum = 0.0;
+                for _ in 0..esc.max_iter {
+                    m.step().unwrap();
+                    let z = m.z();
+                    sum += z.re.to_f64().hypot(z.im.to_f64());
+                }
+                sum / f64::from(esc.max_iter)
+            })
+            .collect()
+    }
+
+    /// The twins of the built-ins that never escape deep-zoom by derived
+    /// equations (order of work, item 2, batch 3): the orbit-average
+    /// field against the twin's own program in big floats, both rungs,
+    /// at the native tiers' deep views for Kaliset and Ducks. Lattès has
+    /// no native tier, and its maps are ergodic: at zoom 30 five passes
+    /// leave the field flat and more leave it chaos, so its view is at
+    /// zoom 12, where five passes carry the contrast and stay determined.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_twins_that_never_escape_deep_zoom() {
+        let (w, h) = (96u32, 72u32);
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f64, u32, Option<(f32, f32)>)] = &[
+            ("kaliset", &[("plus_c", 0.0)], ("1.22551892238358673", "1.57367616586387160"), 30.0, 60, None),
+            ("kaliset", &[("plus_c", 1.0)], ("-1.79112587335209006", "-0.87051608470578978"), 30.0, 60, None),
+            ("ducks", &[("variant", 0.0)], ("-0.08431922458112219", "1.53503858856856801"), 30.0, 80, Some((0.1, -0.62))),
+            ("ducks", &[("variant", 4.0)], ("0.15", "-0.2"), 30.0, 40, Some((0.1, -0.62))),
+            ("lattes", &[("variant", 0.0)], ("0.3", "0.2"), 12.0, 5, None),
+        ];
+        for &(formula, params, (cre, cim), zoom, max_iter, julia) in cases {
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            esc.coloring = "magnitude_average".into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = max_iter;
+            if let Some((jr, ji)) = julia {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, jr, ji);
+            }
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let truth = exact_mean_magnitude_of(&esc, w, h);
+            for deep in [false, true] {
+                let gpu = perturbed_records(&esc, w, h, deep);
+                compare_means(&format!("{formula} {params:?} deep {deep}"), &gpu, &truth);
+            }
+        }
     }
 
     /// Compare the records' `magnitude_average` accumulators against

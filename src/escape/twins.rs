@@ -42,6 +42,12 @@ pub const TWINS: &[(&str, &str)] = &[
     // Powers by parameters, a pole (item 2, batch 2).
     ("feather", include_str!("../../assets/formulas/twins/feather.rhai")),
     ("mcmullen", include_str!("../../assets/formulas/twins/mcmullen.rhai")),
+    // Branches on the iterate, a fold, three that never escape (item 2,
+    // batch 3).
+    ("barnsley", include_str!("../../assets/formulas/twins/barnsley.rhai")),
+    ("kaliset", include_str!("../../assets/formulas/twins/kaliset.rhai")),
+    ("ducks", include_str!("../../assets/formulas/twins/ducks.rhai")),
+    ("lattes", include_str!("../../assets/formulas/twins/lattes.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -84,8 +90,10 @@ mod tests {
                     assert_eq!(t.choices, want, "{name}.{}", b.name);
                 }
             }
-            assert!(p.params.iter().any(|x| x.name == "bailout"), "{name}: the panel's bailout");
-            assert_eq!(p.params.len(), builtin.parameters.len() + 1, "{name}: no other parameters");
+            // A built-in that never escapes has no bailout, nor its twin.
+            let escapes = !builtin.has_feature(super::super::FormulaFeature::NonEscaping);
+            assert_eq!(p.params.iter().any(|x| x.name == "bailout"), escapes, "{name}: the panel's bailout");
+            assert_eq!(p.params.len(), builtin.parameters.len() + usize::from(escapes), "{name}: no other parameters");
             // The degree, at the defaults and at a power.
             let mut slots: Vec<f32> = builtin.parameters.iter().map(|b| b.default).collect();
             let deg = |slots: &[f32]| {
@@ -141,6 +149,19 @@ mod tests {
             assert!(holds("phoenix", &[], julia));
             assert!(holds("manowar", &[], julia));
             assert!(holds("spider", &[], julia));
+            // Branches on the iterate, a fold, never escaping (batch 3).
+            for v in 0..3 {
+                assert!(holds("barnsley", &[(0, v as f64)], julia), "barnsley variant {v}");
+            }
+            for v in 0..2 {
+                assert!(holds("kaliset", &[(0, v as f64)], julia), "kaliset {v}");
+            }
+            for v in 0..5 {
+                assert!(holds("ducks", &[(0, v as f64)], julia), "ducks variant {v}");
+            }
+            for v in 0..3 {
+                assert!(holds("lattes", &[(0, v as f64)], julia), "lattes variant {v}");
+            }
             // Powers by parameters, a pole (item 2, batch 2).
             assert!(holds("feather", &[], julia), "feather");
             assert!(holds("mcmullen", &[], julia), "mcmullen");

@@ -437,9 +437,9 @@ fn escaped(s, p) {
   Burning Ship family, Lambda, Cactus, (step 5, carrying a value
   besides z) Phoenix, Manowar and Spider, Littlewood with its three
   digit sets, the families escaping on `Re z` or `|Im z|` --
-  Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration -- and
-  Feather and McMullen, each a Rhai formula that renders as its
-  built-in.
+  Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration --
+  Feather and McMullen, and Barnsley, Kaliset, Ducks and Lattès, each a
+  Rhai formula that renders as its built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
     through `ctx`, and declares its degree.
@@ -484,7 +484,7 @@ fn escaped(s, p) {
     map is chaotic), and deep-zoom, which the built-ins cannot: at zoom
     30 against big floats, Exponential, Collatz and Tetration 439 of 439
     on both rungs, Sine and Lambda Sine 430 to 433, where the maps'
-    chaos takes the high counts (`the_twins_escaping_on_a_part_deep_zoom`).
+    chaos takes the high counts (`the_twins_without_a_native_tier_deep_zoom`).
     A program whose loop takes `exp`, `expm1`, `sinh` or `cosh` of a
     value that changes reaches `e^50` before it escapes, past the scaled
     rung's f32, and perturbs on the floatexp rung at every depth
@@ -500,6 +500,35 @@ fn escaped(s, p) {
     Feather's home view is chaotic in f32: its twin's counts differ from
     the built-in's on 5.5% of pixels, and each one's from f64's as much
     (328 and 313 of 6,144) -- rounding decides there, not the formula.
+  - **Barnsley, Kaliset, Ducks and Lattès** (item 2, batch 3): branches
+    on the iterate and folds; Kaliset, Ducks and Lattès never escape
+    (no `escaped`), so they draw by the colourings that read the orbit.
+    They render as their built-ins on every pixel (Ducks' variant 0 on
+    98.4%: its map is chaotic over the 80 passes, and a rounding moves
+    the rest). Ducks writes the built-in's log out -- `-34.5` under
+    `|w|^2` 1e-30, `0.5 ln(w.norm_sqr())` above -- and its division's
+    1e20 at a pole; Kaliset divides by `|z|^2` part by part, as the
+    built-in (a complex divided by a lifted real does so in the
+    language: `(x r) / r^2` rounded otherwise). At depth Barnsley counts
+    as the big-float truth at zoom 30 on 426 to 439 of 439 pixels, both
+    rungs (`the_twins_without_a_native_tier_deep_zoom`); the three that never escape
+    match the truth's mean `|z|` over the orbit at the native tiers'
+    deep views (Kaliset, Ducks; Lattès at zoom 12, where five passes of
+    an ergodic map still carry contrast) to under 2e-7 relative, both
+    rungs (`the_twins_that_never_escape_deep_zoom`). The exception is
+    Ducks on the scaled rung, 7.5e-5: there the derived equations
+    recompute the reference's `t = f(Z) + c` in f32, which cancels where
+    the reference grazes the log's singularity; the native tier reads
+    the reference's low half (the plan's item 6).
+    - The derivation reads `arg z` as `Im log1p(d / A)` with the cut's
+      turns, and `log |a|^2` as `2 Re log1p(d / A)`, conditioned by
+      `|A + d| / |A|` where the moduli's ratio is by its square.
+    - `log1p` near -1 takes the log of `1 + z` itself (exact there):
+      the squared form `|1 + z|^2 - 1` cancels to nothing as an orbit
+      grazes a log's singularity, which read inf on Ducks' floatexp
+      rung. That rung takes log, arg and log1p by mantissa and exponent
+      (`cfe2_log`, `cfe2_arg`, `cfe2_log1p_r`), f32 having flushed a
+      reference's `|t|^2` under 2^-126 to zero.
   - **The escape test at depth.** A custom formula whose perturbed test
     is `|z|^2` under a bound the same for every pixel (`!(|z|^2 > T)`, a
     Rhai `escaped`; UF's `|z| < T`) tests by the built-ins' delta-aware
