@@ -1508,7 +1508,8 @@ Each item is ticked here when done; findings go in as they are made.
      temporaries are fields of the per-pixel state (`FormulaState`), not
      pass-local values -- DaddyBrot's had 12,890 -- which locals would
      shrink for every formula with a derivative.
-2. [ ] **Twins for the 14 built-ins without one.**
+2. [x] **Twins for the 14 built-ins without one** (done 2026-10-17:
+   every built-in formula but Origami has one).
    - First, in the language and tests (the first three done 2026-10-17:
      `perturb::settle_of` and `formula_settled` /
      `formula_perturb_settled`; `escaped` optional, `never_escapes`, the
@@ -1555,7 +1556,19 @@ Each item is ticked here when done; findings go in as they are made.
      and the floatexp rung's log, arg and log1p by mantissa and exponent;
      (4) Magnet,
      Nova, Novaretti, Newton (convergent; Newton 6 functions by 3
-     schemes).
+     schemes) -- **done 2026-10-17**: Magnet as its built-in on every
+     pixel; the others' powers round otherwise (`exp(p log z)` against
+     polar), and the settle test's pass is f32 rounding's, so their
+     counts part by one on up to 30% of pixels, off f64's by more than
+     one no more often than the built-ins'. At the native tiers' deep
+     views 439 of 439 each (Magnet's native tier 356); at basin
+     boundaries within one of f64's own count but `z^p sin z - 1`'s (410
+     against 437; item 6). It took: a test that only settles never
+     escapes (Novaretti); a loop variable holding one value at every
+     pixel derives as one (`delta::uniform_vars`: `let k = p.power; z **
+     k`); a carried value only the test reads rebases on z's deviation
+     alone (`Perturbable::pair`; Newton's twin at a `z^3 - 1` boundary
+     was 377 of 439, now 436, the native 439).
    - Each: renders as its built-in on both planes (where it has two),
      and deep views against the big-float truth, beside the native tier
      where there is one.
@@ -1617,6 +1630,13 @@ Each item is ticked here when done; findings go in as they are made.
    - **The references' speed**: the program flattened to in-place
      operations on preallocated big floats (a pass spends two thirds of
      its time interpreting).
+   - **Newton's `z^p sin z - 1` at a basin boundary** (zoom 30): the
+     twin counts 410 of 439 within one of the big-float count, f64
+     unperturbed 437, the derived equations' f64 model 437, both rungs
+     alike -- f32's rounding of what the rungs share, where the pixels
+     settle and their reference, its sin growing as `e^|Im z|`, wanders
+     on. No native tier to compare. Leads: the reference's sub-values in
+     double float; a pixel far from its reference iterating on its own.
    - **The scaled rung's reference values are f32.** A derived equation
      reads the reference's own sub-values (Ducks' `t = f(Z) + c`)
      recomputed from Z's high half; where such a sum cancels -- Ducks'

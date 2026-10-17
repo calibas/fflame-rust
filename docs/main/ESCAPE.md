@@ -438,8 +438,10 @@ fn escaped(s, p) {
   besides z) Phoenix, Manowar and Spider, Littlewood with its three
   digit sets, the families escaping on `Re z` or `|Im z|` --
   Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration --
-  Feather and McMullen, and Barnsley, Kaliset, Ducks and Lattès, each a
-  Rhai formula that renders as its built-in.
+  Feather and McMullen, Barnsley, Kaliset, Ducks and Lattès, and the
+  convergent Magnet, Nova, Novaretti and Newton (every function and
+  scheme) -- every built-in formula but Origami -- each a Rhai formula
+  that renders as its built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
     through `ctx`, and declares its degree.
@@ -529,6 +531,41 @@ fn escaped(s, p) {
       rung. That rung takes log, arg and log1p by mantissa and exponent
       (`cfe2_log`, `cfe2_arg`, `cfe2_log1p_r`), f32 having flushed a
       reference's `|t|^2` under 2^-126 to zero.
+  - **Magnet, Nova, Novaretti and Newton** (item 2, batch 4) end an
+    orbit as it settles, `(s.z - s.prev).norm_sqr() < 1e-12` (the
+    built-ins' test; `s.prev` set from z first in `step`), or escapes;
+    Novaretti's test only settles, which makes it non-escaping and
+    convergent, as the built-in (`perturb::never_escapes`). Magnet
+    renders as its built-in on every pixel, both planes. The others take
+    their powers by `exp(p log z)` where the built-ins' are polar, and
+    the pass a settle test fires on is f32 rounding's, so counts part by
+    one (Nova on 16% of pixels, Newton relaxed on 30%) -- against f64
+    each is right on about half of those, and the twins' counts are off
+    f64's by more than one no more often than the built-ins'
+    (`builtin_twins_render_and_deep_zoom_as_their_builtins` measures
+    so). Newton's `sin z - 1` and `cosh z - 1` have double roots, where f
+    cancels to f32's noise as z nears one: no f32 path counts their
+    settling (the direct one off f64's by more than one on 22% and 51%
+    of pixels, the built-in's as the twin's).
+    - At the native tiers' deep views (zoom 30) against big floats:
+      Magnet's twin 439 of 439, its native tier 356; Nova and Newton (its
+      Newton and Halley schemes) 439 and 439.
+    - At basin boundaries, where pixels settle long before their
+      reference (`the_convergent_twins_deep_zoom`, within one, against
+      f64's own count there): Newton's `z^3 - 1` 436 of 439 (f64 439,
+      the native tier 439), `z^p sin z - 1` 410 (f64 437: f32's rounding
+      of what both rungs share, the reference's sin growing as
+      `e^|Im z|`), Novaretti 409 (f64 401: chaotic past double precision
+      by 150 passes).
+    - A carried value only the test reads (`zold`) rebases on z's
+      deviation alone (`Perturbable::pair`): weighed with z's, as a
+      value the loop reads (Phoenix's previous z) must be, it held a
+      pixel settled on a root to a reference wandering far, and it
+      settled late or never (377 of 439 at the `z^3 - 1` boundary).
+    - The derivation keeps a loop variable that holds the same value at
+      every pixel as one (`delta::uniform_vars`): `let k = p.power;
+      z ** k` derives as `z ** p.power` does, where its exponent read as
+      varying before.
   - **The escape test at depth.** A custom formula whose perturbed test
     is `|z|^2` under a bound the same for every pixel (`!(|z|^2 > T)`, a
     Rhai `escaped`; UF's `|z| < T`) tests by the built-ins' delta-aware

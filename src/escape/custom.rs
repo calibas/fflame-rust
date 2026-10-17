@@ -483,7 +483,7 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
     // The built-ins' margin test needs the reference's |Z|^2 at the
     // pixel's index: one reference, nothing carried.
     let margin = stride == 1 && width == 1 && lang::perturb::perturb_test(&prog).as_ref().and_then(lang::perturb::modulus_bound).is_some();
-    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride, width, deep, margin })
+    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride, width, deep, margin, pair: how.pair })
 }
 
 /// The program and inputs a config's custom formula iterates with: its

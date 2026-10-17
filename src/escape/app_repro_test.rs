@@ -2276,6 +2276,25 @@ mod tests {
             ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
             ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
             ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.0),
+            // Convergent: an orbit ends as it settles (batch 4); Newton by
+            // every function, and every scheme at two.
+            ("magnet", &[("variant", 0.0)], ("1", "0"), -0.8, false, 0.001),
+            ("magnet", &[("variant", 1.0)], ("1", "0"), -0.8, false, 0.001),
+            ("magnet", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.001),
+            ("nova", &[], ("-0.3", "0"), 0.5, false, 0.001),
+            ("nova", &[], ("0", "0"), 0.0, true, 0.001),
+            ("novaretti", &[], ("0", "0"), -2.0, false, 0.001),
+            ("novaretti", &[], ("0", "0"), 0.0, true, 0.001),
+            ("newton", &[("func", 0.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 0.0), ("scheme", 1.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 0.0), ("scheme", 2.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 0.0), ("relax_re", 1.5), ("relax_im", 0.3)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 1.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 1.0), ("scheme", 2.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 2.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 3.0)], ("1.5", "0"), -1.5, false, 0.001),
+            ("newton", &[("func", 4.0)], ("0", "0"), -1.0, false, 0.001),
+            ("newton", &[("func", 5.0)], ("0", "0"), 0.0, false, 0.001),
             // Powers by parameters, a pole (item 2, batch 2).
             // Chaotic in f32 here: against f64 the built-in's counts differ
             // on 328 of 6,144 pixels, the twin's on 313 (each one's f32
@@ -2306,13 +2325,22 @@ mod tests {
             // One that never escapes draws by an interior colouring, over
             // its presets' short orbits (chaotic maps: a long one's end is
             // its rounding's).
-            if crate::escape::get_formula(formula).has_feature(crate::escape::FormulaFeature::NonEscaping) {
+            let built = crate::escape::get_formula(formula);
+            if built.has_feature(crate::escape::FormulaFeature::NonEscaping) && !built.has_feature(crate::escape::FormulaFeature::Convergent) {
                 esc.coloring = "orbit_average".into();
                 esc.max_iter = match formula {
                     "lattes" => 5,
                     "kaliset" => 24,
                     _ => 80,
                 };
+            }
+            // One that settles by its count: the smooth colouring's log of
+            // log |z| at a settled z, |z| near 1 at a root, amplifies a
+            // power's rounding (the twin's `exp(p log z)` against the
+            // built-in's polar form) into colour. A root finder by its
+            // basins, which read `converged`.
+            if built.has_feature(crate::escape::FormulaFeature::Convergent) {
+                esc.coloring = if formula == "newton" { "root_basin" } else { "escape_count" }.into();
             }
             esc.formula = formula.into();
             for (k, v) in params {
@@ -2335,6 +2363,9 @@ mod tests {
                 "trig" => (1.0, 0.5),
                 "lambda_sine" => (1.0, 0.4),
                 "tetration" => (1.2, 0.6),
+                "magnet" => (1.4, 0.3),
+                "nova" => (-0.3, 0.2),
+                "novaretti" => (0.3, 0.2),
                 _ => (-0.8, 0.156),
             };
             let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
@@ -2345,6 +2376,58 @@ mod tests {
             let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
             assert!(covered > 100, "{what}: the view shows too little ({covered})");
             let d = differing(&built_in, &got);
+            // The pass a settle test fires on is f32 rounding's (`|z -
+            // prev|^2` under 1e-12 at an O(1) z): where the twin's
+            // arithmetic is not the built-in's to the rounding (a power by
+            // `exp(p log z)`, the built-in's polar), counts part by one --
+            // against f64 each is right on about half of those -- and on a
+            // chaotic boundary by more. Measured: each one's counts off
+            // f64's by more than one, the twin's no more often than the
+            // built-in's, `allowed` the slack.
+            if built.has_feature(crate::escape::FormulaFeature::Convergent) {
+                use rayon::prelude::*;
+                let (ra, rb) = (records_on(&esc, w, h, false, false, true), records_on(&twin, w, h, false, false, true));
+                let src = twin.custom_formula.as_ref().unwrap();
+                let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+                let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+                for (i, x) in prog.params.iter().enumerate() {
+                    if x.name == "bailout" {
+                        values.values[i].0 = f64::from(esc.bailout);
+                    } else if let Some(v) = esc.formula_params.get(&x.name) {
+                        values.values[i].0 = f64::from(*v);
+                    }
+                }
+                let values = as_on_the_gpu(values);
+                let (cx, cy): (f64, f64) = (cre.parse().unwrap(), cim.parse().unwrap());
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                let exact: Vec<u32> = (0..w * h)
+                    .into_par_iter()
+                    .map(|i| {
+                        let (px, py) = (i % w, i / w);
+                        let c = crate::escape::lang::builtins::C64::new(
+                            cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x,
+                            cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y,
+                        );
+                        let mut env = crate::escape::lang::interp::Env::at(c, esc.max_iter);
+                        if julia {
+                            (env.julia, env.julia_c) = (true, crate::escape::lang::builtins::C64::new(f64::from(esc.julia_re), f64::from(esc.julia_im)));
+                        }
+                        crate::escape::lang::interp::run(&prog, &values, None, &env).n
+                    })
+                    .collect();
+                let share = |r: &[crate::escape::renderer::IterRecord], f: &dyn Fn(u32, u32) -> bool| r.iter().zip(&exact).filter(|(a, t)| f(a.n, **t)).count() as f64 / r.len() as f64;
+                let apart = ra.iter().zip(&rb).filter(|(a, b)| a.n != b.n).count() as f64 / ra.len() as f64;
+                let (off_built_in, off_twin) = (share(&ra, &|a, t| a.abs_diff(t) > 1), share(&rb, &|a, t| a.abs_diff(t) > 1));
+                println!(
+                    "{what}: the twin's counts differ on {:.3}% of pixels; off f64's by more than one, the built-in's {:.3}%, the twin's {:.3}%",
+                    apart * 100.0,
+                    off_built_in * 100.0,
+                    off_twin * 100.0
+                );
+                assert!(off_twin <= off_built_in + allowed, "{what}: the twin {:.3}%, the built-in {:.3}%", off_twin * 100.0, off_built_in * 100.0);
+                continue;
+            }
             println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
             assert!(d <= allowed, "{what}: {:.3}%", d * 100.0);
         }
@@ -2368,6 +2451,11 @@ mod tests {
             // plane's.
             ("feather", &[("power", 3.0)], ("-0.77291940505873225", "-1.83786610577385723"), 30.0, 600, None),
             ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, Some((0.05, 0.03))),
+            // Convergent (batch 4): the visual suite's deep views.
+            ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 30.0, 400, None),
+            ("nova", &[("power", 3.0)], ("-0.36039383324484020", "0.22577954314649112"), 30.0, 400, None),
+            ("newton", &[("power", 3.0), ("scheme", 0.0), ("func", 0.0)], ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, None),
+            ("newton", &[("power", 3.0), ("scheme", 1.0), ("func", 0.0)], ("-0.50000000000000000", "0.00365726284994825"), 30.0, 400, None),
         ];
         for &(formula, params, (cre, cim), zoom, max_iter, julia) in deep {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -2607,6 +2695,94 @@ mod tests {
                 let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
                 println!("{formula} at zoom 30{}: {right} of {} right ({escaped} escape)", if floatexp { ", floatexp" } else { "" }, truth.len());
                 assert!(right as f64 >= 0.95 * truth.len() as f64, "{formula}, floatexp {floatexp}: {right} of {}", truth.len());
+            }
+        }
+    }
+
+    /// The convergent twins deep-zoom by derived equations at basin
+    /// boundaries (order of work, item 2, batch 4): Newton on the
+    /// dynamical plane, `z^3 - 1` (which the native tier also takes) and
+    /// `z^p sin z - 1` (which it does not), and Novaretti, whose orbits
+    /// only settle, on the parameter plane -- each at zoom 30 on a basin's
+    /// boundary found by bisection, where pixels settle long before their
+    /// reference, against the twin's program in big floats, both rungs. A settle count is held within one: the test,
+    /// `|z - prev|^2 < 1e-12`, sits at f32's resolution of an O(1) z, so
+    /// the pass it fires on is rounding's (`builtin_twins_render_and_deep_zoom_as_their_builtins`'s
+    /// convergent Newton counts so too). On a boundary the orbits wander
+    /// before they settle, chaotic past double precision: f64 itself,
+    /// unperturbed, counts Novaretti's view within one on 401 of 439 at
+    /// 150 passes (72% at 300). The bar is f64's: each rung within 2% of
+    /// it (`slack` the divisor), save the one recorded below.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_convergent_twins_deep_zoom() {
+        // Not `sin z - 1` nor `cosh z - 1`: their roots are double, where f
+        // cancels to f32's noise as z nears one, so no f32 path counts
+        // their settling (the direct one at zoom -1.5 off f64's by more
+        // than one on 22% and 51% of pixels, the built-in's as the twin's).
+        // (formula, params, centre, iterations, slack against f64's count)
+        // `z^p sin z - 1` short of f64's by 6%: the same on both rungs, so
+        // not the deviation's precision, and the equations' f64 model
+        // counts 437 -- f32's rounding of what the rungs share, where the
+        // pixels settle and the reference, its sin growing as e^|Im z|,
+        // wanders on (the plan's order of work, item 6).
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), u32, usize)] = &[
+            ("newton", &[("func", 0.0)], ("0.6982638162659913", "-1.0990000000000002"), 300, 50),
+            ("newton", &[("func", 5.0)], ("-1.4976661726096265", "-2.0"), 300, 14),
+            ("novaretti", &[], ("-1.1495849563492808", "-2.0"), 150, 50),
+        ];
+        for &(formula, params, (cre, cim), max_iter, slack) in cases {
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = max_iter;
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    values.values[i].0 = f64::from(esc.bailout);
+                } else if let Some(v) = esc.formula_params.get(&x.name) {
+                    values.values[i].0 = f64::from(*v);
+                }
+            }
+            let values = as_on_the_gpu(values);
+            let truth = truth_counts_of(std::sync::Arc::new(prog.clone()), values.clone(), (cre, cim), 30.0, max_iter, (64, 48), 7, 6);
+            let settled = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            let distinct = truth.iter().map(|(_, n)| *n).collect::<std::collections::BTreeSet<_>>().len();
+            assert!(settled > truth.len() / 20 && distinct > 5, "{formula} {params:?}: {settled} of {} settle, {distinct} counts", truth.len());
+            // f64, unperturbed, at the same pixels: what double precision
+            // resolves of the view.
+            let (cx, cy): (f64, f64) = (cre.parse().unwrap(), cim.parse().unwrap());
+            let span_y = 4.0 / 30f64.exp2();
+            let span_x = span_y * 64.0 / 48.0;
+            let f64_near = truth
+                .iter()
+                .filter(|&&(i, n)| {
+                    let (px, py) = (i as u32 % 64, i as u32 / 64);
+                    let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
+                    crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(c, max_iter)).n.abs_diff(n) <= 1
+                })
+                .count();
+            for floatexp in [false, true] {
+                let got = records_on(&esc, 64, 48, floatexp, true, false);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+                println!(
+                    "{formula} {params:?} at zoom 30{}: of {} pixels ({settled} settle, {distinct} counts), {right} right, {near} within one (f64 {f64_near})",
+                    if floatexp { ", floatexp" } else { "" },
+                    truth.len()
+                );
+                assert!(near + truth.len() / slack >= f64_near, "{formula} {params:?}, floatexp {floatexp}: {near} of {}, f64 {f64_near}", truth.len());
             }
         }
     }
