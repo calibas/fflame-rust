@@ -867,9 +867,20 @@ name, so a saved file, a PNG or an upload renders anywhere.
   real-linear one: `conj` swaps and conjugates the pair, `abs` takes
   each part's by its sign, `cabs` and `|x|` through `a conj(a)`, `arg`
   through `da / a`. A user function on the pixel's path is chosen at run
-  time and may be a fold, so it always takes the Jacobian, its rule
-  picked by the choice (a fold's had derivative zero before, and
-  distance estimation went flat). What a colouring reads is one complex
+  time and may be a fold, so it always takes the Jacobian: its
+  derivative at `a` is `A d + B conj(d)`, and `IExprKind::UserJac` reads
+  A or B for the chosen function from one helper (`uf_user_jac`; the
+  forms, `derive::user_jac_forms`, are each function's own rule applied
+  to the unit pair, so they cannot drift from it), the pair then
+  `A (P, Q) + B conj(Q, P)`. An arm per choice at each call, the first
+  way, made a formula of a thousand user calls a derivative of tens of
+  megabytes (`as.ufm`'s Chaotic-fly: 54 MB of WGSL, which validating
+  took minutes over and overflowed the stack). A derivative adding more
+  than `derive::MAX_DERIVATIVE_VARIABLES` (2,048) variables is refused:
+  over UF's public library half add 15 or fewer and 99% at most 455;
+  57 giants of 9,250 go without, as a formula without a derivative does
+  (`a_user_call_costs_the_derivative_what_a_builtin_does`,
+  `every_user_choice_has_its_jacobian`). What a colouring reads is one complex
   number: the escape potential's gradient is `J^T u = conj(P) u + Q
   conj(u)` for `u = z/|z|`, and `dz = P + conj(Q) u^2` reports it as a
   complex derivative does (`|dz|` its length, `z / dz` its direction;

@@ -242,6 +242,12 @@ pub enum IExprKind {
     /// (zero for a choice with no complex derivative): the derivative
     /// pass's, never the checker's.
     UserDeriv(FuncId, Box<IExpr>),
+    /// The real-linear derivative of the user's chosen function at the
+    /// operand, `f'(a) d = A d + B conj(d)`: `A` (false) or `B` (true),
+    /// each choice by its rule (`derive::user_jac_forms`), so a user call
+    /// in a Jacobian is two nodes, not an arm per choice. The derivative
+    /// pass's, never the checker's.
+    UserJac(FuncId, Box<IExpr>, bool),
     /// Which function a user function's parameter picks, an int, its
     /// index into `USER_FUNCTIONS`: the derived perturbation equations',
     /// which branch on it, never the checker's.
@@ -400,7 +406,7 @@ impl Program {
         fn e(x: &IExpr, p: Predef) -> bool {
             match &x.kind {
                 IExprKind::Predef(q) => *q == p,
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => e(a, p),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, p),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
                 _ => false,
             }

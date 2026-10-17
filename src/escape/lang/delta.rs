@@ -219,7 +219,7 @@ fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
     fn e(x: &IExpr, p: &Program) -> bool {
         match &x.kind {
             IExprKind::Var(v) => !(p.vars[*v].perturb || p.vars[*v].global),
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => e(a, p),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, p),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
             _ => false,
         }
@@ -359,7 +359,7 @@ fn per_image(e: &IExpr) -> bool {
             q,
             Predef::Pi | Predef::E | Predef::Center | Predef::Magn | Predef::MaxIter | Predef::JuliaC | Predef::IsMand | Predef::MagXMag | Predef::RotSkew
         ),
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => per_image(a),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => per_image(a),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => per_image(a) && per_image(b),
         _ => true,
     }
@@ -500,6 +500,7 @@ fn subst_z(e: &IExpr, z: &IExpr) -> IExpr {
         IExprKind::Call(f, a) => IExprKind::Call(*f, b(a)),
         IExprKind::UserCall(f, a) => IExprKind::UserCall(*f, b(a)),
         IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(*f, b(a)),
+        IExprKind::UserJac(f, a, w) => IExprKind::UserJac(*f, b(a), *w),
         other => other.clone(),
     };
     mk(kind, e.ty)
@@ -558,6 +559,7 @@ pub(crate) fn subst(e: &IExpr, values: &[Option<IExpr>], poisoned: &[bool], p: &
         IExprKind::Call(f, a) => IExprKind::Call(*f, b(a, ok)),
         IExprKind::UserCall(f, a) => IExprKind::UserCall(*f, b(a, ok)),
         IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(*f, b(a, ok)),
+        IExprKind::UserJac(f, a, w) => IExprKind::UserJac(*f, b(a, ok), *w),
         other => other.clone(),
     };
     mk(kind, e.ty)
@@ -634,7 +636,7 @@ fn stmt_nodes(s: &IStmt) -> usize {
 
 fn nodes(e: &IExpr) -> usize {
     1 + match &e.kind {
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => nodes(a),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => nodes(a),
         IExprKind::MakeComplex(a, c) | IExprKind::Binary(_, a, c) => nodes(a) + nodes(c),
         _ => 0,
     }
@@ -1775,7 +1777,7 @@ fn stmt_reads_var(s: &IStmt, v: VarId) -> bool {
     fn e(x: &IExpr, v: VarId) -> bool {
         match &x.kind {
             IExprKind::Var(w) => *w == v,
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => e(a, v),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, v),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, v) || e(b, v),
             _ => false,
         }
@@ -1809,7 +1811,7 @@ fn strip_assigns(stmts: &mut Vec<IStmt>, v: VarId) {
 fn reads_z(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Predef(Predef::Z) => true,
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => reads_z(a),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads_z(a),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_z(a) || reads_z(b),
         _ => false,
     }

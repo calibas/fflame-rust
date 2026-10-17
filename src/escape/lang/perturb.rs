@@ -118,7 +118,7 @@ pub fn perturb_test(p: &Program) -> Option<IExpr> {
                     || p.carried.iter().any(|c| c.var == *v)
                     || (values[*v].is_some() && !super::delta::writes_var(&p.loop_body, *v))
             }
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => {
                 constants_only(a, p, values)
             }
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => constants_only(a, p, values) && constants_only(b, p, values),
@@ -138,7 +138,7 @@ pub fn perturb_test(p: &Program) -> Option<IExpr> {
 fn reads_other_than(e: &IExpr, p: &Program, allowed: &dyn Fn(VarId) -> bool) -> bool {
     match &e.kind {
         IExprKind::Var(v) => !p.vars[*v].global && !allowed(*v),
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => {
             reads_other_than(a, p, allowed)
         }
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_other_than(a, p, allowed) || reads_other_than(b, p, allowed),
