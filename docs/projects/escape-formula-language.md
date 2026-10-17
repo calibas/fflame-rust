@@ -1415,8 +1415,9 @@ keeps compiling as UF; the editor converts what it opens.
      thirds of its time interpreting. What would close the references'
      gap at every depth: the program flattened to in-place operations
      on preallocated big floats.
-   - **Next: twins for every built-in that can have one, then
-     retiring** (decided 2026-10-16). A native formula retires where its
+   - **Next: the order of work below** (agreed 2026-10-17), whose item 2
+     is twins for every built-in that can have one and item 6 retiring
+     (decided 2026-10-16). A native formula retires where its
      twin performs nearly the same or better; that is the last step,
      after converting as many as possible. Without twins today:
      McMullen, Kaliset, Barnsley, Exponential, Trig, Lambda Sine,
@@ -1455,8 +1456,130 @@ The formulas thought native for good, examined (2026-10-16):
   CPU, its floats uploaded as the built-ins' `derived_data` is and read
   by a `data(k)` built-in -- no IR arrays, and Rhai's own bit operations
   give the hash. The crease relief would be a third function a formula
-  may define. A decision for the user; Origami does not deep-zoom
-  either way (its folds are isometries, ESCAPE.md).
+  may define. Decided 2026-10-17: arrays in the language, with
+  everything else Origami needs (the order of work, item 3). Origami
+  does not deep-zoom either way (its folds are isometries, ESCAPE.md).
+
+### After phase 4: the order of work (agreed 2026-10-17)
+
+Each item is ticked here when done; findings go in as they are made.
+
+1. [ ] **The pathological compile** (a bug, found 2026-10-17 measuring
+   UF's library). Four entries of `as.ufm` -- Chaotic-fly (9,314
+   lines), DaddyBrot (2,932), Insect3 (5,326), Insect3M (5,323): chains
+   of `if`/`elseif` on parameters and nested user functions -- take
+   over 60 s each through `measure_a_uf_corpus`, and the whole library
+   overflows even a 64 MB stack (the test thread's 2 MB too). The 14 Oct
+   build took 6 s for Chaotic-fly and 20 s for DaddyBrot, Insect3 and
+   Insect3M already over 60 s; by 16 Oct 15:20 all four were over 60 s,
+   and GenericBrot went from 0.5 s to 19 s (the per-entry folders and
+   timings: `output/uf-one-entries.txt`, `output/uf-by-binary.txt`). In
+   the app, opening such an entry hangs the Formula Editor, and the
+   overflow crashes the process.
+   - Find the stage (the check, the derivative, the derived equations,
+     the conversion to Rhai, the WGSL); bound its work as it grows (a
+     size budget charged while expressions are built, not after); a
+     regression test from a generated formula of the same shape (the
+     library is not ours to bundle, nor may a test read `output/`);
+     compile off the UI thread if it is not already.
+   - Then the library's measurement in full again. Seven eighths of it
+     measured 2026-10-17: formulas 8,214 of 8,723 compile (94%),
+     colourings 649 of 1,061 (61%; 35% before the state cap rose from
+     4 floats to 32).
+2. [ ] **Twins for the 14 built-ins without one.**
+   - First, in the language and tests:
+     - **converged**: the built-ins' convergent formulas set
+       `converged` beside `escaped`, which Root Basin's general key
+       reads; a program's test only ends the orbit. Where a test is
+       "escaped or settled", the settled half sets `converged`.
+     - **No escape test**: `escaped` may be left out of a Rhai formula;
+       such a program is non-escaping (`coloring_suits_formula`'s gate
+       applies), and the Bailout control hides where a program has no
+       `bailout` parameter; the twin test's bailout rule follows.
+     - **The biomorph on `Re z` and `|Im z|` tests**, which the built-ins
+       offer on any metric (the rewrite now replaces `|z|` only).
+     - **Guards**: the built-ins' helpers return 1e20 for a division by
+       zero (`esc_cdiv`), -34.5 for log 0, clamp `exp` at 80, and take
+       powers in polar form; the language's follow UF. Per twin, the
+       guard written out where it changes the picture, else a measured
+       tolerance.
+   - Batches: (1) Exponential, Trig, Lambda Sine, Collatz, Tetration
+     (no native deep tier, so they gain deep zoom; Tetration written
+     `exp(z ln c)`, since `c^z`'s exponent varies and has no derived
+     form); (2) Feather, McMullen (native tiers to compare; McMullen's
+     on the Julia plane only); (3) Barnsley, Kaliset, Ducks, Lattès
+     (branches on the iterate, folds, three non-escaping); (4) Magnet,
+     Nova, Novaretti, Newton (convergent; Newton 6 functions by 3
+     schemes).
+   - Each: renders as its built-in on both planes (where it has two),
+     and deep views against the big-float truth, beside the native tier
+     where there is one.
+   - Not twins: Origami (item 3); the fields, Weierstrass,
+     Markus-Lyapunov and Standard Map FTLE (mode B: a third entry kind,
+     later).
+3. [ ] **Arrays, and everything Origami needs** (decided 2026-10-17).
+   - **Arrays in the language**, both dialects: global arrays (UF's
+     `global:`, Rhai's `prepare`), computed on the CPU once per image as
+     `global:` is now and read by index on the GPU; small fixed
+     per-pixel arrays within the state cap; arrays the length of
+     `#maxiter` or of the image refused, as no GPU pixel can hold them.
+     UF's static and dynamic arrays (`setLength`, `length`), Rhai's
+     arrays. Reach: 131 formulas and 131 colourings stop at arrays first
+     (seven eighths of the library).
+   - **Integer bit operations** for Origami's hash: xor, and, or,
+     shifts, a wrapping 32-bit multiply (Rhai's operators; UF has none),
+     bit-exact with the built-in's `origami_hash`.
+   - **The crease relief as a formula's function**: a Rhai `fn
+     creases(p0, p, ctx)` returning the height and its slope, as the
+     built-in's `formula_creases`, reading the panel's crease settings;
+     the Creases relief field and terrain source offered for a formula
+     that defines it. Chosen over a crease colouring, which would lose
+     the exact slope and the panel's settings.
+   - **Origami's twin**: its lines in `prepare`, a fold a pass by
+     `ctx.pass`, no escape test, dynamical only, its creases; renders
+     as the built-in, relief and terrain included.
+4. [ ] **The cheap UF items**: parameters past 64 floats (31 formulas, 47
+   colourings stop there first); colouring state past 32 floats (31);
+   the smaller mismatches, triaged by message (about 150 entries: used
+   before assigned 29, unknown function 24, a parameter written 20, an
+   argument count 17, unknown symbol 28, ...); UF gradients (`.ugr`) as
+   palettes.
+5. [ ] **Classes and plug-ins: the user decides after item 4.** What they
+   would reach: `import` stops 197 formulas and 97 colourings first;
+   the `.ulb` libraries hold 3,284 classes (12 MB) -- about 1,040
+   formulas (`DivergentFormula` 856, `ConvergentFormula` 138, and
+   kin), 308 trap shapes, 165 transforms (UF's transformations live
+   here now: the library has no `.uxf` files), about 150 colourings --
+   reachable only through classes. The model: class-typed parameters
+   (`Formula param formulaClass1 ... default = Standard_Mandelbrot`),
+   objects made with `new` in `global:`, arrays of objects, virtual
+   calls (`Init`, `Iterate`, `IsBailedOut`), inheritance. Large: needs
+   arrays, then objects as structs, methods, plug-in parameters with
+   their own nested parameters in the panel, devirtualised at compile
+   time by the chosen class. Not worth much, by the library's count:
+   `visible=`/`enabled=` and headings (parsed and ignored: such
+   parameters always show), image import (9 files), `#calculationPurpose`
+   (2), `builtin:` (1). Other UF files: `.upr` parameter files (medium;
+   they need the formulas they name).
+6. [ ] **Retiring native formulas, last**, each where its twin performs
+   nearly the same or better (decided 2026-10-16). Before it:
+   - **Custom orbits compress in the store.** The built-ins' orbits
+     are replayed by a deterministic double-double shadow of their map
+     (`shadow_step`), so a stored file keeps only corrections: a 202 MB
+     orbit becomes a couple of MB. A custom orbit is stored raw, 20 B an
+     entry. The same shadow, run from the program, would compress
+     custom orbits: the one place double-double earns its keep.
+   - **The references' speed**: the program flattened to in-place
+     operations on preallocated big floats (a pass spends two thirds of
+     its time interpreting).
+   - **Fixed point's limits**, for the record: magnitudes below 2^8,
+     absolute precision 2^-(64n - 8), division only by values of size 1
+     or more, and an overflow that wraps silently in release builds (the
+     carries are `debug_assert`ed). Big floats: an i64 exponent, 64n
+     bits relative, no overflow. A lead to check, unverified: a
+     Multibrot or Tricorn reference at power 9 or more could wrap on the
+     step before escape (|z| <= 2 then, and 2^9 > 2^8). Fixed point
+     stays for the view's decimal centres and the cameras.
 
 ### Phase 5: distribution
 
