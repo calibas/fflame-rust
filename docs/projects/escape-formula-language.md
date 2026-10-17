@@ -1405,12 +1405,28 @@ keeps compiling as UF; the editor converts what it opens.
      a pass, three times their arithmetic; the period watch's f64
      derivative pass beside them, the Ship's 2 us); the custom BLA
      table's build (26 ms against 6 for the Mandelbrot at zoom 60).
-     Open: a double-double reference machine would serve to zoom ~34 --
-     the precision policy asks zoom + 72 bits, double-double has 106 --
-     which is where perturbation starts (zoom 6 to 14) and most
-     browsing happens; past that big floats are needed.
-   - Next: retiring native code, family by family, where the twin
-     matches it in speed and accuracy -- a decision for the user. Open: the deep
+     Not pursued (decided 2026-10-16): a double-double reference
+     machine, which would serve only to zoom ~34 (the precision policy
+     asks zoom + 72 bits, double-double has 106) beside the big floats
+     that serve every depth. Nor would the built-ins' fixed point help:
+     its general multiply-add at 3 limbs costs 187 ns against the big
+     floats' 80 (`measure_a_pass_of_each_twin`); the built-ins' speed is
+     their hand-written in-place steps, and a big-float pass spends two
+     thirds of its time interpreting. What would close the references'
+     gap at every depth: the program flattened to in-place operations
+     on preallocated big floats.
+   - **Next: twins for every built-in that can have one, then
+     retiring** (decided 2026-10-16). A native formula retires where its
+     twin performs nearly the same or better; that is the last step,
+     after converting as many as possible. Without twins today:
+     McMullen, Kaliset, Barnsley, Exponential, Trig, Lambda Sine,
+     Lattès, Ducks, Tetration, Collatz, Feather, Newton, Nova, Magnet,
+     Novaretti -- each in the language already (complex arithmetic,
+     branches on parameters and the iterate, the escape tests `Re z` and
+     `|Im z|`, no test, a convergence test) -- and Origami (below). The
+     fields (Weierstrass, Markus-Lyapunov, Standard Map FTLE) are mode B,
+     a third entry kind the language does not have. Origami: considered,
+     not started. Open: the deep
      rung's BLA at 2^-24 costs the floatexp rung's double float a
      little in chaotic views (the twin from zero at the seahorse view,
      zoom 42: 419 right per step, 405 with BLA).
