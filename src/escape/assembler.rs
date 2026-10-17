@@ -3430,7 +3430,7 @@ pub enum PerturbTier {
     /// 4, step 5: `Program::carried`), recorded after z, whose
     /// deviation the pixel keeps in `w_prev` as Phoenix keeps its
     /// history.
-    Custom { hash: u64, rebase: bool, stride: u8, width: u8 },
+    Custom { hash: u64, rebase: bool, stride: u8, width: u8, deep: bool },
 }
 
 impl PerturbTier {
@@ -9863,7 +9863,7 @@ mod tests {
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1 };
+            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1, deep: false };
             for coloring in [crate::escape::get_coloring("smooth"), crate::escape::get_coloring("stripe_average")] {
                 for floatexp in [false, true] {
                     let what = format!("{} {} fe={floatexp}", &source[..2], coloring.name);
@@ -9921,7 +9921,7 @@ mod tests {
             let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
             assert_eq!(cycle, h.cycle(), "{name}");
             let hash = u64::from_str_radix(&formula[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1 };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1, deep: false };
             for floatexp in [false, true] {
                 let what = format!("{name} fe={floatexp}");
                 let wgsl = assemble_perturbed(crate::escape::get_coloring("smooth"), floatexp, tier);
@@ -9950,7 +9950,7 @@ mod tests {
             let how = crate::escape::lang::perturb::perturbation(&derived).expect("perturbs");
             assert!(how.rebase, "{}: what it carries rebases", &source[..2]);
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2 };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2, deep: false };
             for floatexp in [false, true] {
                 let what = format!("{} fe={floatexp}", &source[..2]);
                 let coloring = crate::escape::get_coloring("smooth");

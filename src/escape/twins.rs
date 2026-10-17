@@ -33,6 +33,12 @@ pub const TWINS: &[(&str, &str)] = &[
     ("spider", include_str!("../../assets/formulas/twins/spider.rhai")),
     // The greedy digit map: its choice a branch on the iterate.
     ("littlewood", include_str!("../../assets/formulas/twins/littlewood.rhai")),
+    // Escaping on Re z or |Im z|, not |z| (order of work, item 2, batch 1).
+    ("exponential", include_str!("../../assets/formulas/twins/exponential.rhai")),
+    ("trig", include_str!("../../assets/formulas/twins/trig.rhai")),
+    ("lambda_sine", include_str!("../../assets/formulas/twins/lambda_sine.rhai")),
+    ("collatz", include_str!("../../assets/formulas/twins/collatz.rhai")),
+    ("tetration", include_str!("../../assets/formulas/twins/tetration.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -81,7 +87,9 @@ mod tests {
             let mut slots: Vec<f32> = builtin.parameters.iter().map(|b| b.default).collect();
             let deg = |slots: &[f32]| {
                 let params = ParamValues::from_slots(&p, slots);
-                super::super::lang::interp::degree_of(&p, &params, &Env::at(C64::ZERO, 1)).unwrap() as f32
+                // Undeclared, 2: the smooth colourings' default, as the
+                // built-ins' without a polynomial degree.
+                super::super::lang::interp::degree_of(&p, &params, &Env::at(C64::ZERO, 1)).unwrap_or(2.0) as f32
             };
             assert_eq!(deg(&slots), super::super::escape_degree_of(builtin, &slots), "{name}: degree");
             if let Some(first) = slots.first_mut().filter(|_| builtin.parameters[0].name == "power") {
@@ -127,6 +135,13 @@ mod tests {
             assert!(holds("phoenix", &[], julia));
             assert!(holds("manowar", &[], julia));
             assert!(holds("spider", &[], julia));
+            // Escaping on Re z or |Im z| (item 2, batch 1).
+            for name in ["exponential", "lambda_sine", "collatz", "tetration"] {
+                assert!(holds(name, &[], julia), "{name}");
+            }
+            for v in 0..2 {
+                assert!(holds("trig", &[(0, v as f64)], julia), "trig variant {v}");
+            }
             // The greedy digit, a branch on the iterate, by every set.
             for d in 0..3 {
                 assert!(holds("littlewood", &[(0, d as f64)], julia), "littlewood digit set {d}");
@@ -134,4 +149,3 @@ mod tests {
         }
     }
 }
-

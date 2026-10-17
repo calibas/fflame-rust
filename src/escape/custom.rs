@@ -478,7 +478,8 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
         return None;
     }
     let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
-    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride: how.references() as u8, width: (1 + prog.carried.len()) as u8 })
+    let deep = lang::perturb::grows_past_f32(&prog);
+    Some(super::assembler::PerturbTier::Custom { hash, rebase: how.rebase, stride: how.references() as u8, width: (1 + prog.carried.len()) as u8, deep })
 }
 
 /// The program and inputs a config's custom formula iterates with: its

@@ -769,7 +769,7 @@ struct PerturbParamsGpu {
 /// the big-float truth: 337 of 439 sampled pixels right on the scaled
 /// rung, 420 on this one.
 fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
-    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. })
+    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. } | assembler::PerturbTier::Custom { deep: true, .. })
 }
 
 fn orbit_depth(max_iter: u32, tier: assembler::PerturbTier) -> u32 {
