@@ -1536,7 +1536,11 @@ Each item is ticked here when done; findings go in as they are made.
      99.8%), deep at zoom 30 against big floats 430 to 439 of 439 on
      both rungs; exp-like loops perturb on the floatexp rung
      (`grows_past_f32`); (2) Feather, McMullen (native tiers to compare; McMullen's
-     on the Julia plane only); (3) Barnsley, Kaliset, Ducks, Lattès
+     on the Julia plane only) -- **done 2026-10-17**: at depth as the
+     native tiers (Feather 439 and 439, McMullen 431 and 437), after the
+     custom tier took the built-ins' delta-aware escape margin for a
+     `|z|^2` test (`modulus_bound`; Feather's twin was 219: a band's edge
+     crossed its suite view); (3) Barnsley, Kaliset, Ducks, Lattès
      (branches on the iterate, folds, three non-escaping); (4) Magnet,
      Nova, Novaretti, Newton (convergent; Newton 6 functions by 3
      schemes).

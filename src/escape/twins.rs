@@ -39,6 +39,9 @@ pub const TWINS: &[(&str, &str)] = &[
     ("lambda_sine", include_str!("../../assets/formulas/twins/lambda_sine.rhai")),
     ("collatz", include_str!("../../assets/formulas/twins/collatz.rhai")),
     ("tetration", include_str!("../../assets/formulas/twins/tetration.rhai")),
+    // Powers by parameters, a pole (item 2, batch 2).
+    ("feather", include_str!("../../assets/formulas/twins/feather.rhai")),
+    ("mcmullen", include_str!("../../assets/formulas/twins/mcmullen.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -91,14 +94,17 @@ mod tests {
                 // built-ins' without a polynomial degree.
                 super::super::lang::interp::degree_of(&p, &params, &Env::at(C64::ZERO, 1)).unwrap_or(2.0) as f32
             };
-            assert_eq!(deg(&slots), super::super::escape_degree_of(builtin, &slots), "{name}: degree");
+            // Through the smooth colourings' rule: 1 or less keeps 2.
+            let used = |d: f32| if d > 1.0001 && d <= 1.0e6 { d } else { 2.0 };
+            assert_eq!(used(deg(&slots)), super::super::escape_degree_of(builtin, &slots), "{name}: degree");
             if let Some(first) = slots.first_mut().filter(|_| builtin.parameters[0].name == "power") {
                 *first = 5.0;
-                assert_eq!(deg(&slots), 5.0, "{name}: degree at power 5");
+                assert_eq!(used(deg(&slots)), super::super::escape_degree_of(builtin, &slots), "{name}: degree at power 5");
             }
             assert!(custom_source(name).is_some_and(|s| s.entry == p.name));
         }
-        assert!(source("mcmullen").is_none());
+        // A field has none (mode B; the order of work, item 2).
+        assert!(source("weierstrass").is_none());
     }
 
     /// Every twin deep-zooms by derived equations on both planes: a power
@@ -135,6 +141,9 @@ mod tests {
             assert!(holds("phoenix", &[], julia));
             assert!(holds("manowar", &[], julia));
             assert!(holds("spider", &[], julia));
+            // Powers by parameters, a pole (item 2, batch 2).
+            assert!(holds("feather", &[], julia), "feather");
+            assert!(holds("mcmullen", &[], julia), "mcmullen");
             // Escaping on Re z or |Im z| (item 2, batch 1).
             for name in ["exponential", "lambda_sine", "collatz", "tetration"] {
                 assert!(holds(name, &[], julia), "{name}");

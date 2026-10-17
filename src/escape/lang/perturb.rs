@@ -175,6 +175,46 @@ pub fn settle_of(test: &IExpr) -> Option<IExpr> {
     settles.into_iter().reduce(|a, b| boolean(IExprKind::Binary(BinOp::Or, Box::new(a), Box::new(b))))
 }
 
+/// When a formula's perturbed test is `|z|^2` under a bound the same for
+/// every pixel and pass -- `!(|z|^2 > T)` as a Rhai `escaped` lowers,
+/// UF's `|z| < T` -- that bound. The perturbed path then tests the
+/// built-ins' way, by the margin `(|Z|^2 - T) + 2 Re(conj Z d) + |d|^2`
+/// with `|Z|^2` kept in double float, where the pixel's full z in f32
+/// quantizes away a deviation below an ulp of the bound: a band's edge
+/// (a level set of `|z_n|^2`) is decided there, sharp at the built-ins
+/// and noise at the custom formula's (the Feather's twin at its suite
+/// view, zoom 30: 219 of 439 right, the built-in 439).
+pub fn modulus_bound(test: &IExpr) -> Option<IExpr> {
+    fn modulus_of_z(e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Modulus(a) => matches!(a.kind, IExprKind::Predef(Predef::Z)),
+            IExprKind::Convert(a) => modulus_of_z(a),
+            _ => false,
+        }
+    }
+    fn bound(e: &IExpr) -> bool {
+        match &e.kind {
+            IExprKind::Float(_) | IExprKind::Int(_) | IExprKind::Param(_) => true,
+            IExprKind::Convert(a) | IExprKind::Unary(UnOp::Neg, a) => bound(a),
+            IExprKind::Binary(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, a, b) => bound(a) && bound(b),
+            _ => false,
+        }
+    }
+    let (go, inner) = match &test.kind {
+        IExprKind::Unary(UnOp::Not, x) => (false, x.as_ref()),
+        _ => (true, test),
+    };
+    match &inner.kind {
+        // Iterate while under: `|z|^2 < T`, `T > |z|^2`.
+        IExprKind::Binary(BinOp::Lt | BinOp::Le, a, b) if go && modulus_of_z(a) && bound(b) => Some((**b).clone()),
+        IExprKind::Binary(BinOp::Gt | BinOp::Ge, a, b) if go && bound(a) && modulus_of_z(b) => Some((**a).clone()),
+        // Escaped when over: `!(|z|^2 > T)`, `!(T < |z|^2)`.
+        IExprKind::Binary(BinOp::Gt | BinOp::Ge, a, b) if !go && modulus_of_z(a) && bound(b) => Some((**b).clone()),
+        IExprKind::Binary(BinOp::Lt | BinOp::Le, a, b) if !go && bound(a) && modulus_of_z(b) => Some((**a).clone()),
+        _ => None,
+    }
+}
+
 /// Whether a formula's iterate grows past the scaled rung's f32 before
 /// it escapes: its loop takes `exp`, `expm1`, `sinh` or `cosh` of a value
 /// that changes, as the exponential family does (`e^z + c`, escaping at
