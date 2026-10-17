@@ -535,7 +535,7 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
         match &e.kind {
             IExprKind::Predef(Predef::Z | Predef::Pixel | Predef::NumIter | Predef::Pass) => true,
             IExprKind::Var(v) => !p.vars[*v].global,
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => varies(a, p),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => varies(a, p),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => varies(a, p) || varies(b, p),
             _ => false,
         }
@@ -1350,7 +1350,7 @@ mod tests {
         fn on_pixel(e: &IExpr) -> bool {
             match &e.kind {
                 IExprKind::Predef(Predef::Pixel | Predef::Z | Predef::X | Predef::Y | Predef::ScreenPixel | Predef::Random | Predef::WhiteSq) => true,
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => on_pixel(a),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => on_pixel(a),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => on_pixel(a) || on_pixel(b),
                 _ => false,
             }
@@ -1409,7 +1409,7 @@ mod tests {
                     }
                     first(a, p, inits, out);
                 }
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::UserDeriv(_, a) => first(a, p, inits, out),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => first(a, p, inits, out),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
                     first(a, p, inits, out);
                     first(b, p, inits, out);
@@ -1422,7 +1422,7 @@ mod tests {
             fn pixel(e: &IExpr) -> bool {
                 match &e.kind {
                     IExprKind::Predef(Predef::Pixel | Predef::Z) => true,
-                    IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => pixel(a),
+                    IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => pixel(a),
                     IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => pixel(a) || pixel(b),
                     _ => false,
                 }
@@ -1434,7 +1434,7 @@ mod tests {
                     let by_pixel = lang::delta::writes_var(&p.loop_body, *v) || inits[*v].as_ref().map_or(p.init.iter().any(|s| matches!(s, IStmt::Assign(Place::Var(w), _) if w == v)), pixel);
                     by_pixel.then_some("a branch on the iterate")
                 }
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => varies(a, p, inits),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => varies(a, p, inits),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => varies(a, p, inits).or_else(|| varies(b, p, inits)),
                 _ => None,
             }

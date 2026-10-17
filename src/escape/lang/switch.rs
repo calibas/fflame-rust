@@ -269,6 +269,7 @@ impl Remap<'_> {
             IExprKind::Call(f, a) => IExprKind::Call(*f, b(a)),
             IExprKind::UserCall(f, a) => IExprKind::UserCall(self.funcs[*f], b(a)),
             IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(self.funcs[*f], b(a)),
+            IExprKind::UserJac(f, a, w) => IExprKind::UserJac(self.funcs[*f], b(a), *w),
             other => other.clone(),
         };
         IExpr { kind, ty: e.ty }

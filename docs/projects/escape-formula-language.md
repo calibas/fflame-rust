@@ -1464,7 +1464,7 @@ The formulas thought native for good, examined (2026-10-16):
 
 Each item is ticked here when done; findings go in as they are made.
 
-1. [ ] **The pathological compile** (a bug, found 2026-10-17 measuring
+1. [x] **The pathological compile** (a bug, found 2026-10-17 measuring
    UF's library). Four entries of `as.ufm` -- Chaotic-fly (9,314
    lines), DaddyBrot (2,932), Insect3 (5,326), Insect3M (5,323): chains
    of `if`/`elseif` on parameters and nested user functions -- take
@@ -1486,6 +1486,28 @@ Each item is ticked here when done; findings go in as they are made.
      measured 2026-10-17: formulas 8,214 of 8,723 compile (94%),
      colourings 649 of 1,061 (61%; 35% before the state cap rose from
      4 floats to 32).
+   - **Done 2026-10-17.** The stage was the derivative: a user function
+     in a Jacobian (step 9d) expanded into an arm per choice at every
+     call, and the Jacobian of these giants is large besides --
+     DaddyBrot's 435 KB of WGSL had a derivative of 16.7 MB, Chaotic-fly's
+     1.4 MB one of 54 MB, which naga took minutes over and overflowed
+     the stack on. A user call is now `IExprKind::UserJac` (A or B of
+     `A d + B conj(d)`, one helper, the forms each function's own rule on
+     the unit pair): 54 MB to 20 MB, and a user call costs the
+     derivative 1.5 times a fold's (the arms: 3.9 times). And a
+     derivative adding more than 2,048 variables is refused
+     (`MAX_DERIVATIVE_VARIABLES`): over the library half add 15 or fewer,
+     99% at most 455; 57 giants of 9,250 go without. The largest now
+     compile in 6 to 8 s, nearly all of it naga validating their own
+     WGSL, and on a 1 MB stack (the desktop main thread's). The library
+     in full, 206 s: formulas 9,250 of 9,831 compile (94%), colourings
+     726 of 1,209 (60%), 9,193 with a derivative, 3,417 deep-zoom, every
+     conversion to Rhai round-tripping.
+   - Open, smaller: the editor still compiles on the UI thread, so those
+     few giants freeze it for their 6 to 8 s; and a derivative's
+     temporaries are fields of the per-pixel state (`FormulaState`), not
+     pass-local values -- DaddyBrot's had 12,890 -- which locals would
+     shrink for every formula with a derivative.
 2. [ ] **Twins for the 14 built-ins without one.**
    - First, in the language and tests:
      - **converged**: the built-ins' convergent formulas set

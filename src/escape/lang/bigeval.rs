@@ -373,7 +373,7 @@ impl BigMachine {
             // The derived equations', never in a reference program.
             IExprKind::UserDiff(..) => return Err(Stop),
             // The derivative pass's, never in a reference program.
-            IExprKind::UserDeriv(..) => return Err(Stop),
+            IExprKind::UserDeriv(..) | IExprKind::UserJac(..) => return Err(Stop),
         })
     }
 

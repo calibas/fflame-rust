@@ -214,6 +214,10 @@ pub fn formula(p: &Program) -> String {
             let _ = write!(body, "\nfn formula_perturb_bailout(z: vec2<f32>, pixel: vec2<f32>{cv}) -> bool {{\n    return {test};\n}}\n");
         }
     }
+    if g.user_jac {
+        let f = g.user_jac_fn();
+        body.push_str(&f);
+    }
     g.finish(&format!("// custom formula: {}\n", sanitize(&p.name)), body)
 }
 
@@ -797,6 +801,10 @@ struct Gen<'p> {
     /// A user function's difference called, on true values and on the
     /// floatexp rung: its helper is emitted ([`Gen::user_diff_fn`]).
     user_diff: (bool, bool),
+    /// Whether the code calls the helper a user function's Jacobian
+    /// does (`IExprKind::UserJac`): it is emitted with the formula
+    /// ([`Gen::user_jac_fn`]).
+    user_jac: bool,
     /// sin and sinh by the helpers exact near zero (the difference forms
     /// on true values take them of a deviation; the GPU's own sin may
     /// err by 2^-11 absolutely).
@@ -831,6 +839,7 @@ impl<'p> Gen<'p> {
             small_vars: Vec::new(),
             true_small: false,
             user_diff: (false, false),
+            user_jac: false,
             exact_near_zero: false,
         }
     }
@@ -877,6 +886,37 @@ impl<'p> Gen<'p> {
         self.small_vars = saved_small;
         self.global_slots = saved_globals;
         self.exact_near_zero = false;
+        out
+    }
+
+    /// The helper a user function's Jacobian calls
+    /// (`IExprKind::UserJac`): each choice's `A` and `B`
+    /// (`derive::user_jac_forms`), `B` where `b` holds.
+    fn user_jac_fn(&mut self) -> String {
+        let forms = super::derive::user_jac_forms();
+        let n = forms.prog.vars.len();
+        let saved_small = std::mem::replace(&mut self.small_vars, vec![false; n]);
+        let saved_globals = std::mem::replace(&mut self.global_slots, vec![None; n]);
+        let (saved_p, saved_ctx, saved_true) = (self.p, self.ctx, self.true_small);
+        self.p = &forms.prog;
+        self.ctx = Ctx::Perturb;
+        self.true_small = false;
+        let mut out = String::from("\nfn uf_user_jac(k: i32, a: vec2<f32>, b: bool) -> vec2<f32> {\n");
+        for (i, v) in forms.prog.vars.iter().enumerate() {
+            let _ = writeln!(out, "    var v{i}: {} = {};", wgsl_ty(v.ty), zero_of(v.ty));
+        }
+        let _ = writeln!(out, "    v{} = a;", forms.a);
+        for (k, code) in forms.choices.iter().enumerate() {
+            let _ = writeln!(out, "    if (k == {k}) {{");
+            self.stmts(code, 2, &mut out);
+            let _ = writeln!(out, "        return select(v{}, v{}, b);\n    }}", forms.ra, forms.rb);
+        }
+        let _ = writeln!(out, "    return vec2<f32>(0.0, 0.0);\n}}");
+        self.p = saved_p;
+        self.ctx = saved_ctx;
+        self.true_small = saved_true;
+        self.small_vars = saved_small;
+        self.global_slots = saved_globals;
         out
     }
 
@@ -1116,6 +1156,13 @@ impl<'p> Gen<'p> {
                 let f = self.param_fn();
                 format!("{}(i32(round({f}({k}u))), {v})", self.use_(Helper::UserD))
             }
+            IExprKind::UserJac(id, a, b) => {
+                self.user_jac = true;
+                let v = self.expr(a);
+                let k = self.func_slots[*id];
+                let f = self.param_fn();
+                format!("uf_user_jac(i32(round({f}({k}u))), {v}, {b})")
+            }
             IExprKind::FuncChoice(id) => {
                 let k = self.func_slots[*id];
                 let f = self.param_fn();
@@ -1287,7 +1334,7 @@ impl<'p> Gen<'p> {
         match &e.kind {
             IExprKind::Predef(Predef::DZ | Predef::DPixel) => true,
             IExprKind::Var(v) => self.small_vars.get(*v).copied().unwrap_or(false),
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => {
                 self.has_small(a)
             }
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => self.has_small(a) || self.has_small(b),
@@ -1498,7 +1545,7 @@ impl<'p> Gen<'p> {
         match &e.kind {
             IExprKind::Predef(Predef::DZ | Predef::DPixel | Predef::Z) => true,
             IExprKind::Var(v) => self.small_vars.get(*v).copied().unwrap_or(false),
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => {
                 self.reads_cfe(a)
             }
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => self.reads_cfe(a) || self.reads_cfe(b),
@@ -1851,7 +1898,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
             match &e.kind {
                 IExprKind::Predef(Predef::DZ | Predef::DPixel) => true,
                 IExprKind::Var(v) => small[*v],
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => has(a, small),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => has(a, small),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => has(a, small) || has(b, small),
                 _ => false,
             }
@@ -1952,7 +1999,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
 pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
     match &e.kind {
         IExprKind::Var(v) => !p.vars[*v].global,
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => {
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => {
             reads_a_variable(a, p)
         }
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_a_variable(a, p) || reads_a_variable(b, p),
@@ -1965,7 +2012,7 @@ pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
 fn constant(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
-        IExprKind::Var(_) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) | IExprKind::FuncChoice(_) => false,
+        IExprKind::Var(_) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) | IExprKind::FuncChoice(_) => false,
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => {
             constant(a)
         }

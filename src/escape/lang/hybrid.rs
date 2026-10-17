@@ -578,6 +578,7 @@ impl Remap {
             IExprKind::Predef(Predef::Z) if self.z.is_some() => IExprKind::Var(self.z.unwrap_or_default()),
             IExprKind::UserCall(f, a) => IExprKind::UserCall(f + self.fo, b(a)),
             IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(f + self.fo, b(a)),
+            IExprKind::UserJac(f, a, w) => IExprKind::UserJac(f + self.fo, b(a), *w),
             IExprKind::FuncChoice(f) => IExprKind::FuncChoice(f + self.fo),
             IExprKind::UserDiff(f, a, d) => IExprKind::UserDiff(f + self.fo, b(a), b(d)),
             IExprKind::Convert(a) => IExprKind::Convert(b(a)),

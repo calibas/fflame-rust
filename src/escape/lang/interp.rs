@@ -301,6 +301,22 @@ impl DerivStepper {
     }
 }
 
+/// `A` (`b` false) or `B` of the user function choice `k`'s derivative
+/// at `a`, `A d + B conj(d)`, by its rule (`derive::user_jac_forms`).
+pub(crate) fn user_jac(k: usize, a: C64, b: bool) -> C64 {
+    let forms = super::derive::user_jac_forms();
+    let Some(code) = forms.choices.get(k) else {
+        return C64::ZERO;
+    };
+    let params = ParamValues { values: Vec::new(), funcs: Vec::new() };
+    let mut m = Machine::new(&forms.prog, &params);
+    m.vars[forms.a] = Value::Complex(a);
+    let env = Env::at(C64::ZERO, 1);
+    let mut sh = Shared::new(&env);
+    m.exec(code, &mut sh);
+    m.vars[if b { forms.rb } else { forms.ra }].as_c64()
+}
+
 /// `f(a + d) - f(a)` for the user function choice `k`, by the form the
 /// derived equations use (`delta::user_diff_forms`); NaN for a choice
 /// without one.
@@ -654,6 +670,7 @@ impl<'p> Machine<'p> {
                 let f = USER_FUNCTIONS[self.params.funcs[*id].min(USER_FUNCTIONS.len() - 1)];
                 Value::Complex(f.deriv_c(self.eval(a, sh).as_c64()))
             }
+            IExprKind::UserJac(id, a, b) => Value::Complex(user_jac(self.params.funcs[*id], self.eval(a, sh).as_c64(), *b)),
         }
     }
 }

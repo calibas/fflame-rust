@@ -37,11 +37,19 @@ use super::builtins::{Builtin, C64, USER_FUNCTIONS};
 use super::ir::*;
 use std::cell::RefCell;
 
+/// The most variables a derivative may add. Over UF's public library
+/// (9,250 formulas) half add 15 or fewer, 99% at most 724; the few past
+/// a few thousand are giants of thousands of lines (`as.ufm`'s Insect3,
+/// 53,108, a derivative of 20 MB of WGSL that validating took minutes
+/// over and overflowed the stack), whose state no GPU pixel holds well:
+/// they go without, as a formula without a derivative does.
+pub const MAX_DERIVATIVE_VARIABLES: usize = 2048;
+
 /// The program extended with its derivative: the complex one where the
 /// iterate has it, the Jacobian ([`with_jacobian`]) where it folds;
-/// `None` when it has neither.
+/// `None` when it has neither, or past [`MAX_DERIVATIVE_VARIABLES`].
 pub fn with_derivative(p: &Program) -> Option<Program> {
-    complex_derivative(p).or_else(|| with_jacobian(p))
+    complex_derivative(p).or_else(|| with_jacobian(p)).filter(|d| d.vars.len() - p.vars.len() <= MAX_DERIVATIVE_VARIABLES)
 }
 
 /// The derivative a colouring reads from a Jacobian `(P, Q)` at the
@@ -162,7 +170,7 @@ fn needed(p: &Program) -> Vec<bool> {
                     *changed = true;
                 }
             }
-            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => mark(a, need, changed),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => mark(a, need, changed),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
                 mark(a, need, changed);
                 mark(b, need, changed);
@@ -202,7 +210,7 @@ fn follows(e: &IExpr, t: &[bool]) -> bool {
     match &e.kind {
         IExprKind::Var(v) => t[*v],
         IExprKind::Predef(Predef::Pixel | Predef::Z) => true,
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => follows(a, t),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => follows(a, t),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => follows(a, t) || follows(b, t),
         _ => false,
     }
@@ -433,7 +441,7 @@ impl D<'_> {
                 }
                 None
             }
-            IExprKind::UserDeriv(..) | IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) => None,
+            IExprKind::UserDeriv(..) | IExprKind::UserJac(..) | IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) => None,
         })
     }
 }
@@ -476,6 +484,54 @@ pub fn with_jacobian(p: &Program) -> Option<Program> {
 /// A derivative pair `(P, Q)`, `None` for zero.
 type Pair = Option<(IExpr, IExpr)>;
 
+/// Each user-function choice's derivative at `a` as `A d + B conj(d)`,
+/// statements writing `ra` and `rb` from `a` on a program of their own:
+/// the rules the Jacobian takes for the function itself, applied to the
+/// unit pair (1, 0), whose image is (A, B). The GPU's helper
+/// (`uf_user_jac`) and the f64 model (`interp::user_jac`) run them, so
+/// a user call in a Jacobian is [`IExprKind::UserJac`], not an arm per
+/// choice.
+pub(crate) struct UserJacForms {
+    pub prog: Program,
+    pub a: VarId,
+    pub ra: VarId,
+    pub rb: VarId,
+    pub choices: Vec<Vec<IStmt>>,
+}
+
+pub(crate) fn user_jac_forms() -> &'static UserJacForms {
+    static FORMS: std::sync::OnceLock<UserJacForms> = std::sync::OnceLock::new();
+    FORMS.get_or_init(|| {
+        // A program to hold the forms' variables, from the smallest
+        // formula there is.
+        let (file, _) = super::parser::parse_file("J {\nloop:\n z = z\nbailout:\n false\n}");
+        let (base, _) = super::check::check(&file.entries[0], super::EntryKind::Formula, super::Dialect::UltraFractal);
+        let mut prog = base.expect("the forms' program");
+        prog.vars.clear();
+        prog.loop_body.clear();
+        let mut var_of = |prog: &mut Program, name: &str| {
+            prog.vars.push(Var { name: name.into(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false });
+            prog.vars.len() - 1
+        };
+        let (a, ra, rb) = (var_of(&mut prog, "a"), var_of(&mut prog, "ra"), var_of(&mut prog, "rb"));
+        let none: Vec<Option<(VarId, VarId)>> = Vec::new();
+        let j = J { dvar: &none, dz: (ra, rb), dpix: ra, base: prog.vars.len(), temps: RefCell::new(Vec::new()), prelude: RefCell::new(Vec::new()) };
+        let unit = (konst(1.0, 0.0), konst(0.0, 0.0));
+        let choices = USER_FUNCTIONS
+            .iter()
+            .map(|&fun| {
+                let (pa, pb) = j.call_pair(fun, var(a), unit.clone()).unwrap_or_else(|| (konst(0.0, 0.0), konst(0.0, 0.0)));
+                let mut code = std::mem::take(&mut *j.prelude.borrow_mut());
+                code.push(IStmt::Assign(Place::Var(ra), pa));
+                code.push(IStmt::Assign(Place::Var(rb), pb));
+                code
+            })
+            .collect();
+        prog.vars.extend(j.temps.into_inner());
+        UserJacForms { prog, a, ra, rb, choices }
+    })
+}
+
 struct J<'a> {
     dvar: &'a [Option<(VarId, VarId)>],
     dz: (VarId, VarId),
@@ -500,7 +556,7 @@ fn conj(a: IExpr) -> IExpr {
 fn reads(e: &IExpr, v: VarId) -> bool {
     match &e.kind {
         IExprKind::Var(w) => *w == v,
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) => reads(a, v),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads(a, v),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads(a, v) || reads(b, v),
         _ => false,
     }
@@ -690,7 +746,7 @@ impl J<'_> {
             return Ok(None);
         }
         Ok(match &e.kind {
-            IExprKind::Complex(..) | IExprKind::Float(_) | IExprKind::Int(_) | IExprKind::Bool(_) | IExprKind::Param(_) | IExprKind::FuncChoice(_) | IExprKind::UserDeriv(..) => None,
+            IExprKind::Complex(..) | IExprKind::Float(_) | IExprKind::Int(_) | IExprKind::Bool(_) | IExprKind::Param(_) | IExprKind::FuncChoice(_) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) => None,
             // The perturbation equations', which are not differentiated.
             IExprKind::UserDiff(..) => return Err(()),
             IExprKind::Predef(Predef::Pixel) => Some((var(self.dpix), konst(0.0, 0.0))),
@@ -753,35 +809,21 @@ impl J<'_> {
                 let da = if matches!(fun, Abs | Cabs | Real | Imag | Atan2) { self.bound(Some(da)).unwrap() } else { da };
                 self.call_pair(*fun, as_cx(a), da)
             }
-            // The user's choice decides: a holomorphic one by its
-            // derivative, as the complex pass has it (zero for the
-            // rest), then a fold or a part by its own rule.
+            // The user's choice decides, at run time: its derivative is
+            // `A d + B conj(d)` (B zero for a holomorphic choice), each
+            // choice's A and B by its own rule in one helper
+            // (`user_jac_forms`), so the pair is A (P, Q) + B conj(Q, P).
+            // An arm per choice here made a formula of a thousand user
+            // calls a derivative of tens of megabytes.
             IExprKind::UserCall(id, a) => {
                 let Some(da) = self.bound(self.d(a)?) else {
                     return Ok(None);
                 };
                 let arg = self.bind(as_cx(a));
-                let k = self.bind(cx(IExprKind::UserDeriv(*id, Box::new(arg.clone()))));
-                let p = self.bind(times(k.clone(), da.0.clone()));
-                let q = self.bind(times(k, da.1.clone()));
-                let (IExprKind::Var(pv), IExprKind::Var(qv)) = (&p.kind, &q.kind) else { unreachable!("bound") };
-                let (pv, qv) = (*pv, *qv);
-                let choice = IExpr { kind: IExprKind::FuncChoice(*id), ty: Ty::Int };
-                let mut arms = Vec::new();
-                for (n, fun) in USER_FUNCTIONS.iter().enumerate() {
-                    if !matches!(fun, Abs | Cabs | Real | Imag | Conj | Flip | Cosxx) {
-                        continue;
-                    }
-                    // The rule's own temporaries go inside its arm.
-                    let outer = std::mem::take(&mut *self.prelude.borrow_mut());
-                    let (rp, rq) = self.call_pair(*fun, arg.clone(), da.clone()).unwrap();
-                    let mut body = std::mem::replace(&mut *self.prelude.borrow_mut(), outer);
-                    body.push(IStmt::Assign(Place::Var(pv), rp));
-                    body.push(IStmt::Assign(Place::Var(qv), rq));
-                    let test = IExpr { kind: IExprKind::Binary(BinOp::Eq, Box::new(choice.clone()), Box::new(IExpr { kind: IExprKind::Int(n as i64), ty: Ty::Int })), ty: Ty::Bool };
-                    arms.push((test, body));
-                }
-                self.prelude.borrow_mut().push(IStmt::If { arms, otherwise: Vec::new() });
+                let jac = |b: bool| self.bind(cx(IExprKind::UserJac(*id, Box::new(arg.clone()), b)));
+                let (ja, jb) = (jac(false), jac(true));
+                let p = bin(BinOp::Add, times(ja.clone(), da.0.clone()), times(jb.clone(), conj(da.1.clone())));
+                let q = bin(BinOp::Add, times(ja, da.1), times(jb, conj(da.0)));
                 Some((p, q))
             }
         })
@@ -911,5 +953,74 @@ mod tests {
         let d = with_derivative(&p).expect("the fold is beside the iterate");
         assert!(!d.vars.iter().any(|v| v.name == "d_zold"));
         matches_differences(&p, C64::new(-0.6, 0.2), 4);
+    }
+
+    /// Each user-function choice's derivative, `A d + B conj(d)`
+    /// (`user_jac_forms`), against central differences of the function
+    /// itself along 1 and i.
+    #[test]
+    fn every_user_choice_has_its_jacobian() {
+        let a = C64::new(0.37, 0.29);
+        let h = 1e-6;
+        for (k, f) in USER_FUNCTIONS.iter().enumerate() {
+            let (ja, jb) = (super::super::interp::user_jac(k, a, false), super::super::interp::user_jac(k, a, true));
+            for d in [C64::real(1.0), C64::new(0.0, 1.0)] {
+                let fd = f.eval_c(a.add(d.scale(h))).sub(f.eval_c(a.sub(d.scale(h)))).scale(0.5 / h);
+                let ours = ja.mul(d).add(jb.mul(d.conj()));
+                assert!(ours.sub(fd).abs() < 1e-5 * fd.abs().max(1.0), "{}: {ours:?} against {fd:?} along {d:?}", f.name());
+            }
+        }
+    }
+
+    /// A formula of parameter branches full of user calls, as UF's
+    /// largest are (`as.ufm`'s DaddyBrot: a derivative of 16.7 MB of WGSL
+    /// for 435 KB of formula, which validating took minutes over): a user
+    /// call costs its derivative what a built-in call does, not an arm
+    /// per choice; and past [`MAX_DERIVATIVE_VARIABLES`] the formula goes
+    /// without.
+    #[test]
+    fn a_user_call_costs_the_derivative_what_a_builtin_does() {
+        let chained = |blocks: usize, f: [&str; 3]| {
+            let mut s = String::from("C {
+init:
+ z = #pixel
+ x = z
+loop:
+");
+            for _ in 0..blocks {
+                s.push_str(&format!(" if @mode == 0
+  x = {}(z^@a) + {}(z^@b)
+", f[0], f[1]));
+                for (m, op) in ["-", "*", "/"].iter().enumerate() {
+                    s.push_str(&format!(" elseif @mode == {}
+  x = {}(z^@a) {op} {}(z^@b)
+", m + 1, f[0], f[1]));
+                }
+                s.push_str(&format!(" endif
+ z = {}(x) * 0.5 + #pixel
+", f[2]));
+            }
+            s.push_str("bailout:
+ |z| < 4
+default:
+ int param mode
+  default = 0
+ endparam
+ complex param a
+  default = (2, 0)
+ endparam
+ complex param b
+  default = (3, 0)
+ endparam
+}");
+            program(&s, Dialect::UltraFractal)
+        };
+        let size = |p: &Program| super::super::wgsl::formula_with_derivative(p).expect("a derivative").len();
+        // Against folds, which take the Jacobian as any user call does.
+        let (user, builtin) = (size(&chained(10, ["fn1", "@fn2", "fn3"])), size(&chained(10, ["abs", "flip", "abs"])));
+        // 1.5 times now (a user call binds its A and B); an arm per choice
+        // for each call made it several times the size.
+        assert!((user as f64) < 2.0 * builtin as f64, "with user calls {user} B, with folds {builtin} B");
+        assert!(with_derivative(&chained(200, ["fn1", "@fn2", "fn3"])).is_none(), "past the cap");
     }
 }
