@@ -314,6 +314,9 @@ struct Deriver<'p> {
     /// loop: its value is the same for every pixel (it has no
     /// deviation), so the equations keep it once.
     uniforms: Vec<Option<VarId>>,
+    /// The loop's float and complex variables that hold the same value
+    /// at every pixel ([`uniform_vars`]): kept once, as the int ones.
+    uniform_floats: Vec<bool>,
     /// The tests of the arms (and the init's case) the statement being
     /// derived stands in.
     path: Vec<IExpr>,
@@ -346,6 +349,57 @@ fn and(a: Option<IExpr>, b: IExpr) -> IExpr {
     match a {
         None => b,
         Some(a) => mk(IExprKind::Binary(BinOp::And, Box::new(a), Box::new(b)), Ty::Bool),
+    }
+}
+
+/// The loop's float and complex variables that hold the same value at
+/// every pixel: the loop assigns them only what [`per_image`] allows
+/// besides one another, and the init such a value or nothing (they start
+/// at zero then). Their deviation is zero, so they take none (an
+/// exponent read from one, `let k = p.power; z ** k`, is the same for
+/// every pixel, as `z ** p.power`'s).
+fn uniform_vars(p: &Program) -> Vec<bool> {
+    fn assigns<'a>(stmts: &'a [IStmt], out: &mut Vec<(VarId, &'a IExpr)>) {
+        for s in stmts {
+            match s {
+                IStmt::Assign(Place::Var(v), e) => out.push((*v, e)),
+                IStmt::Assign(..) => {}
+                IStmt::If { arms, otherwise } => {
+                    for (_, b) in arms {
+                        assigns(b, out);
+                    }
+                    assigns(otherwise, out);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => assigns(body, out),
+            }
+        }
+    }
+    fn uniformly(e: &IExpr, p: &Program, uniform: &[bool]) -> bool {
+        match &e.kind {
+            IExprKind::Var(v) => uniform[*v] || p.vars[*v].global,
+            // The same at every pixel, which `per_image` (the `perturb`
+            // setting's, once an image) cannot read.
+            IExprKind::Predef(Predef::Pass) => true,
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => uniformly(a, p, uniform),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => uniformly(a, p, uniform) && uniformly(b, p, uniform),
+            _ => per_image(e),
+        }
+    }
+    let mut uniform: Vec<bool> = (0..p.vars.len()).map(|v| matches!(p.vars[v].ty, Ty::Float | Ty::Complex) && !p.vars[v].global && writes_var(&p.loop_body, v)).collect();
+    let mut all = Vec::new();
+    assigns(&p.init, &mut all);
+    assigns(&p.loop_body, &mut all);
+    loop {
+        let mut changed = false;
+        for &(v, e) in &all {
+            if uniform[v] && !uniformly(e, p, &uniform) {
+                uniform[v] = false;
+                changed = true;
+            }
+        }
+        if !changed {
+            return uniform;
+        }
     }
 }
 
@@ -899,6 +953,7 @@ impl<'p> Deriver<'p> {
             z_ref: None,
             z_written: false,
             uniforms: vec![None; p.vars.len()],
+            uniform_floats: uniform_vars(p),
             path: Vec::new(),
             excluded: Vec::new(),
             carried: vec![None; p.vars.len()],
@@ -1065,7 +1120,8 @@ impl<'p> Deriver<'p> {
                             let (r, d) = self.pair(e, written, is_loop)?;
                             out.append(&mut self.pending);
                             let ty = self.p.vars[*v].ty;
-                            if matches!(ty, Ty::Int | Ty::Bool) {
+                            let uniform = self.uniform_floats[*v] && self.carried[*v].is_none();
+                            if matches!(ty, Ty::Int | Ty::Bool) || uniform {
                                 // The same for every pixel (a pass's phase,
                                 // a count): one variable, no pair.
                                 if d.is_some() {
@@ -2131,6 +2187,13 @@ mod tests {
             ("A {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.05 * atan2(z)\nbailout:\n |z| < 4\n}", (-1.26, 0.1), 300),
             // log |z|^2, as log z's real part.
             ("L {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.01 * log(|z|)\nbailout:\n |z| < 4\n}", (0.3, 0.5), 300),
+            // A loop variable holding a parameter, the same at every
+            // pixel: a power's exponent read from it.
+            (
+                "K {\ninit:\n z = 0\nloop:\n k = @power\n z = z^k + #pixel\nbailout:\n |z| < 4\ndefault:\n float param power\n  default = 3\n endparam\n}",
+                (0.4, 0.65),
+                300,
+            ),
         ];
         for &(src, (rx, ry), maxiter) in cases {
             let p = program(src, Dialect::UltraFractal);

@@ -3429,8 +3429,9 @@ pub enum PerturbTier {
     /// 1 (z), or 2 when the equations carry one value besides z (phase
     /// 4, step 5: `Program::carried`), recorded after z, whose
     /// deviation the pixel keeps in `w_prev` as Phoenix keeps its
-    /// history.
-    Custom { hash: u64, rebase: bool, stride: u8, width: u8, deep: bool, margin: bool },
+    /// history. `pair`: that value feeds the loop, so a rebase weighs its
+    /// deviation with z's (`lang::perturb::Perturbable::pair`).
+    Custom { hash: u64, rebase: bool, stride: u8, width: u8, deep: bool, margin: bool, pair: bool },
 }
 
 impl PerturbTier {
@@ -4104,12 +4105,19 @@ fn custom_pass_wgsl(tier: PerturbTier, name: &str) -> String {
 /// a pad or past the orbit). During the prefix no other reference has
 /// the pixel's phase; the main one ending there leaves the pixel nothing
 /// to follow, and it counts as escaped.
-fn rebase_phased(floatexp: bool, rebase: bool, width: u8, phased: bool) -> String {
+fn rebase_phased(floatexp: bool, rebase: bool, width: u8, phased: bool, pair: bool) -> String {
     // A carried deviation (phase 4, step 5) moves as z's -- its full
-    // value less the new start's record of it -- and the test weighs the
-    // pair, as the built-in two-term tiers do: a rebase that shrinks z's
-    // deviation but grows the carried one costs precision.
-    let test = match (rebase, width > 1) {
+    // value less the new start's record of it -- and where it feeds the
+    // loop the test weighs the pair, as the built-in two-term tiers do: a
+    // rebase that shrinks z's deviation but grows the carried one costs
+    // precision. One only the test reads (a convergent formula's `zold`,
+    // which the loop sets from z first) rebases on z's alone, as the
+    // built-ins' root finders do: weighing it kept a pixel settled on a
+    // root on a reference wandering far, z's precision |Z|'s, and it
+    // settled late or never (Newton's twin at a z^3 - 1 basin boundary,
+    // zoom 30: 377 of 439 sampled pixels within one of the big-float
+    // count, the native tier 439).
+    let test = match (rebase, width > 1 && pair) {
         (false, _) => String::new(),
         (true, false) => " || dot(rebase_delta, rebase_delta) < dot(delta, delta)".to_string(),
         (true, true) => {
@@ -5900,7 +5908,7 @@ pub fn assemble_perturbed_full(
                 _ => "            m = m + 1u;".to_string(),
             }),
             "//__REBASE__" => out.push(match (tier, floatexp) {
-                (PerturbTier::Custom { stride, width, rebase, .. }, fe) if stride > 1 || width > 1 => rebase_phased(fe, rebase, width, stride > 1),
+                (PerturbTier::Custom { stride, width, rebase, pair, .. }, fe) if stride > 1 || width > 1 => rebase_phased(fe, rebase, width, stride > 1, pair),
                 (PerturbTier::Custom { rebase, .. }, false) => rebase_custom_scaled(rebase),
                 (PerturbTier::Custom { rebase: false, .. }, true) => rebase_only_at_orbit_end_fe(),
                 (PerturbTier::Phoenix, false) => rebase_phoenix(),
@@ -9875,7 +9883,7 @@ mod tests {
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1, deep: false, margin: false };
+            let tier = PerturbTier::Custom { hash, rebase, stride: 1, width: 1, deep: false, margin: false, pair: false };
             for coloring in [crate::escape::get_coloring("smooth"), crate::escape::get_coloring("stripe_average")] {
                 for floatexp in [false, true] {
                     let what = format!("{} {} fe={floatexp}", &source[..2], coloring.name);
@@ -9933,7 +9941,7 @@ mod tests {
             let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
             assert_eq!(cycle, h.cycle(), "{name}");
             let hash = u64::from_str_radix(&formula[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1, deep: false, margin: false };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: (1 + cycle.period) as u8, width: 1, deep: false, margin: false, pair: false };
             for floatexp in [false, true] {
                 let what = format!("{name} fe={floatexp}");
                 let wgsl = assemble_perturbed(crate::escape::get_coloring("smooth"), floatexp, tier);
@@ -9962,7 +9970,7 @@ mod tests {
             let how = crate::escape::lang::perturb::perturbation(&derived).expect("perturbs");
             assert!(how.rebase, "{}: what it carries rebases", &source[..2]);
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
-            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2, deep: false, margin: false };
+            let tier = PerturbTier::Custom { hash, rebase: true, stride: 1, width: 2, deep: false, margin: false, pair: true };
             for floatexp in [false, true] {
                 let what = format!("{} fe={floatexp}", &source[..2]);
                 let coloring = crate::escape::get_coloring("smooth");

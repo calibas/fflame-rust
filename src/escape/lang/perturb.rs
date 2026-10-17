@@ -33,6 +33,11 @@ pub struct Perturbable {
     /// per phase of its cycle besides the main one, and a pixel rebases
     /// only onto the reference of its own phase.
     pub cycle: Option<Cycle>,
+    /// The value the equations carry besides z feeds the loop (it reads
+    /// it before it writes it: Phoenix's previous z), so a rebase weighs
+    /// its deviation with z's. One the loop writes first and only the
+    /// test reads (a convergent formula's `zold`) rebases on z's alone.
+    pub pair: bool,
 }
 
 /// The most phases a cycle may have and still perturb: the references
@@ -92,15 +97,10 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
     // What the derived equations carry (`Program::carried`) rebases with
     // z; anything else carried restarts wrong, so only at the orbit's end.
     let rebase = carried.iter().all(|v| p.carried.iter().any(|c| c.var == *v));
-    Ok(Perturbable { rebase, cycle })
+    let pair = p.carried.iter().any(|c| carried.contains(&c.var));
+    Ok(Perturbable { rebase, cycle, pair })
 }
 
-/// The formula's test as the perturbed path evaluates it, on the pixel's
-/// full z: as written when it reads no variable, else with the init's
-/// constants put in by value -- variables the init sets from the pixel,
-/// the parameters and the constants, which the loop never writes (a
-/// `bailout = 4` in `init:`, common in UF-format conversions of Fractint
-/// formulas). `None` when it reads anything else.
 /// When a formula's test (true: iterate again) ends an orbit by its
 /// settling -- the part of "done" that is the iterate's distance from a
 /// variable under a bound, `|z - zold| < tol`, as a convergent formula's
@@ -110,7 +110,12 @@ pub fn perturbation(p: &Program) -> Result<Perturbable, String> {
 /// program with one is convergent (`FormulaFeature::Convergent`).
 pub fn settle_of(test: &IExpr) -> Option<IExpr> {
     let boolean = |kind| IExpr { kind, ty: Ty::Bool };
-    // "Done" as disjuncts: the test negated, pushed through `&&`.
+    done_parts(test).into_iter().filter(is_settle).reduce(|a, b| boolean(IExprKind::Binary(BinOp::Or, Box::new(a), Box::new(b))))
+}
+
+/// "Done" as disjuncts: the test (true: iterate again) negated, pushed
+/// through `&&`.
+fn done_parts(test: &IExpr) -> Vec<IExpr> {
     fn done(t: &IExpr, out: &mut Vec<IExpr>) {
         match &t.kind {
             IExprKind::Unary(UnOp::Not, x) => disjuncts(x, out),
@@ -139,6 +144,14 @@ pub fn settle_of(test: &IExpr) -> Option<IExpr> {
             _ => out.push(t.clone()),
         }
     }
+    let mut parts = Vec::new();
+    done(test, &mut parts);
+    parts
+}
+
+/// Whether a part of "done" is the iterate's settling: its distance from
+/// a variable under a bound the same at every pass.
+fn is_settle(d: &IExpr) -> bool {
     // The iterate's distance from a variable: `|z - v|`, `cabs(z - v)`.
     fn distance(e: &IExpr) -> bool {
         let e = match &e.kind {
@@ -162,17 +175,11 @@ pub fn settle_of(test: &IExpr) -> Option<IExpr> {
             _ => false,
         }
     }
-    let mut parts = Vec::new();
-    done(test, &mut parts);
-    let settles: Vec<IExpr> = parts
-        .into_iter()
-        .filter(|d| match &d.kind {
-            IExprKind::Binary(BinOp::Lt | BinOp::Le, x, t) => distance(x) && bound(t),
-            IExprKind::Binary(BinOp::Gt | BinOp::Ge, t, x) => distance(x) && bound(t),
-            _ => false,
-        })
-        .collect();
-    settles.into_iter().reduce(|a, b| boolean(IExprKind::Binary(BinOp::Or, Box::new(a), Box::new(b))))
+    match &d.kind {
+        IExprKind::Binary(BinOp::Lt | BinOp::Le, x, t) => distance(x) && bound(t),
+        IExprKind::Binary(BinOp::Gt | BinOp::Ge, t, x) => distance(x) && bound(t),
+        _ => false,
+    }
 }
 
 /// When a formula's perturbed test is `|z|^2` under a bound the same for
@@ -249,12 +256,19 @@ pub fn grows_past_f32(p: &Program) -> bool {
     s(&p.loop_body, p)
 }
 
-/// Whether a formula's test never ends an orbit: none, or `true` (UF's
-/// `bailout: true`; a Rhai formula without `escaped`).
+/// Whether a formula's test never ends an orbit by escaping: none, `true`
+/// (UF's `bailout: true`; a Rhai formula without `escaped`), or one that
+/// only settles (Novaretti's: infinity maps to 0).
 pub fn never_escapes(p: &Program) -> bool {
-    p.bailout.as_ref().is_none_or(|t| matches!(t.kind, IExprKind::Bool(true)))
+    p.bailout.as_ref().is_none_or(|t| matches!(t.kind, IExprKind::Bool(true)) || done_parts(t).iter().all(is_settle))
 }
 
+/// The formula's test as the perturbed path evaluates it, on the pixel's
+/// full z: as written when it reads no variable, else with the init's
+/// constants put in by value -- variables the init sets from the pixel,
+/// the parameters and the constants, which the loop never writes (a
+/// `bailout = 4` in `init:`, common in UF-format conversions of Fractint
+/// formulas). `None` when it reads anything else.
 pub fn perturb_test(p: &Program) -> Option<IExpr> {
     let test = p.bailout.as_ref()?;
     if !reads_a_variable(test, p) {
@@ -338,12 +352,12 @@ mod tests {
         // The Mandelbrot: perturbs and rebases; `c`, written in init and
         // only read in the loop, is no carried state.
         let m = program(&format!("M {{\ninit:\n z = 0\n c = #pixel\nloop:\n z = sqr(z) + c\nbailout:\n |z| < 4\n{EQ}}}"));
-        assert_eq!(perturbation(&m), Ok(Perturbable { rebase: true, cycle: None }));
+        assert_eq!(perturbation(&m), Ok(Perturbable { rebase: true, cycle: None, pair: false }));
         // A history: perturbs, but rebases only at the orbit's end.
         let h = program(&format!(
             "H {{\ninit:\n z = 0\n zold = 0\nloop:\n t = z\n z = sqr(z) + #pixel + zold * 0.1\n zold = t\nbailout:\n |z| < 4\n{EQ}}}"
         ));
-        assert_eq!(perturbation(&h), Ok(Perturbable { rebase: false, cycle: None }));
+        assert_eq!(perturbation(&h), Ok(Perturbable { rebase: false, cycle: None, pair: false }));
         // No equations, a test of more than z, a screen position: no.
         let none = program("N {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}");
         assert!(perturbation(&none).unwrap_err().contains("no perturbation equations"));
@@ -402,8 +416,11 @@ mod tests {
         assert!(!never_escapes(&both));
         let alone = rhai("fn escaped(s, p) { (s.z - s.zold).norm_sqr() <= 1e-12 }");
         assert!(settle_of(alone.bailout.as_ref().unwrap()).is_some());
+        // A test that only settles never escapes (Novaretti's).
+        assert!(never_escapes(&alone));
         let plain = rhai("fn escaped(s, p) { s.z.norm_sqr() > p.bailout }");
         assert!(settle_of(plain.bailout.as_ref().unwrap()).is_none());
+        assert!(!never_escapes(&plain));
         let from_a_constant = rhai("fn escaped(s, p) { (s.z - complex(1.0, 0.0)).norm_sqr() < 1e-12 }");
         assert!(settle_of(from_a_constant.bailout.as_ref().unwrap()).is_none());
         // No `escaped`: a formula still, that never escapes.

@@ -14,7 +14,9 @@
 //! Phoenix, Manowar and Spider carry a value besides z (the previous z,
 //! the moving c), which the derived equations follow (phase 4, step 5);
 //! Littlewood's greedy digit is a branch on the iterate, so its twin
-//! deep-zooms where the built-in does not.
+//! deep-zooms where the built-in does not. The convergent ones (Magnet,
+//! Nova, Novaretti, Newton) test their settling, `|z - prev|^2` under
+//! the built-ins' 1e-12, which sets `converged` as theirs does.
 //!
 //! The sources are `assets/formulas/twins/*.rhai`; the GPU tests hold
 //! each to its built-in (`escape::app_repro_test`).
@@ -48,6 +50,12 @@ pub const TWINS: &[(&str, &str)] = &[
     ("kaliset", include_str!("../../assets/formulas/twins/kaliset.rhai")),
     ("ducks", include_str!("../../assets/formulas/twins/ducks.rhai")),
     ("lattes", include_str!("../../assets/formulas/twins/lattes.rhai")),
+    // Convergent: an orbit ends as it settles, or escapes (item 2,
+    // batch 4); Novaretti's only settles.
+    ("magnet", include_str!("../../assets/formulas/twins/magnet.rhai")),
+    ("nova", include_str!("../../assets/formulas/twins/nova.rhai")),
+    ("novaretti", include_str!("../../assets/formulas/twins/novaretti.rhai")),
+    ("newton", include_str!("../../assets/formulas/twins/newton.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -161,6 +169,18 @@ mod tests {
             }
             for v in 0..3 {
                 assert!(holds("lattes", &[(0, v as f64)], julia), "lattes variant {v}");
+            }
+            // Convergent (item 2, batch 4): Newton by every function and
+            // scheme.
+            for v in 0..2 {
+                assert!(holds("magnet", &[(0, v as f64)], julia), "magnet variant {v}");
+            }
+            assert!(holds("nova", &[], julia), "nova");
+            assert!(holds("novaretti", &[], julia), "novaretti");
+            for func in 0..6 {
+                for scheme in 0..3 {
+                    assert!(holds("newton", &[(1, scheme as f64), (4, func as f64)], julia), "newton function {func} scheme {scheme}");
+                }
             }
             // Powers by parameters, a pole (item 2, batch 2).
             assert!(holds("feather", &[], julia), "feather");
