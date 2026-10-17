@@ -1851,6 +1851,13 @@ struct IterState {
     //__DZ_STATE__
 }
 const ITER_ESCAPED_BIT: u32 = 0x80000000u;
+// The stored `m` carries the pixel's run of failed BLA lookups in its
+// top bits (the loop's `bla_fails`): an orbit of 2^29 entries would
+// need a buffer past any storage binding, so an index never reaches
+// them.
+const BLA_FAILS_SHIFT: u32 = 29u;
+const BLA_M_MASK: u32 = 0x1FFFFFFFu;
+const BLA_FAILS_MAX: u32 = 5u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
 // BLA table (binding 7): iteration skipping. Level l holds entries
 // each collapsing 2^(l+1) delta iterations to one affine application
@@ -2031,6 +2038,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let d0_term = select(d0, vec2<f32>(0.0, 0.0), is_julia_perturb);
     let px_index = gid.y * params.width + gid.x;
     var m = 0u;
+    // Failed BLA lookups in a row (see the skip).
+    var bla_fails = 0u;
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
     var n = 0u;
@@ -2065,7 +2074,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // free here, so the two-term history resumes through it.
         w_prev = st.w_lo;
         z = st.z;
-        m = st.m;
+        m = st.m & BLA_M_MASK;
+        bla_fails = st.m >> BLA_FAILS_SHIFT;
         //__DZ_RESUME__
         accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
@@ -2080,8 +2090,19 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // longest valid run of iterations to one affine application.
         // m == 0 never validates (the Z_0 = 0 step has no linear
         // part, so its entry radius is 0 by construction).
+        //
+        // A pixel whose lookups keep failing -- its deviation past the
+        // table's radii, where the view's orbits stay close to the
+        // reference's critical points -- looks less often: after f
+        // failures in a row only at an index aligned to 2^(f+1) (level
+        // f's own alignment), so a stretch without skips pays a lookup
+        // every 2^f steps or so rather than every other one, and a
+        // success looks again at once. A failed lookup cost more than
+        // the step it tried to replace: up to twice the render where
+        // nothing skips (Tricorn, zoom 28: 163 ms with the table, 83
+        // without; 81 with this).
         var did_skip = false;
-        if (bla.n_levels > 0u && m > 0u) {
+        if (bla.n_levels > 0u && m > 0u && (m & ((2u << bla_fails) - 1u)) == 0u) {
             // |delta| = |w| * S, held symbolically (s_m * 2^s_e).
             let aw = length(w);
             var d_m = 0.0;
@@ -2141,6 +2162,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 m = m + pick_span;
                 i = i + pick_span;
                 did_skip = true;
+                bla_fails = 0u;
+            } else {
+                bla_fails = min(bla_fails + 1u, BLA_FAILS_MAX);
             }
         }
         if (!did_skip) {
@@ -2179,7 +2203,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (perturb.iter_end < params.max_iter) {
         // More chunks follow: persist the registers.
         iter_state[px_index] = IterState(
-            w, z, accum_state.xy, /*ACCUM2_STORE*/ w_prev, 0, m,
+            w, z, accum_state.xy, /*ACCUM2_STORE*/ w_prev, 0, m | (bla_fails << BLA_FAILS_SHIFT),
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
             //__DZ_SAVE__
@@ -2366,6 +2390,13 @@ struct IterState {
     //__DZ_STATE__
 }
 const ITER_ESCAPED_BIT: u32 = 0x80000000u;
+// The stored `m` carries the pixel's run of failed BLA lookups in its
+// top bits (the loop's `bla_fails`): an orbit of 2^29 entries would
+// need a buffer past any storage binding, so an index never reaches
+// them.
+const BLA_FAILS_SHIFT: u32 = 29u;
+const BLA_M_MASK: u32 = 0x1FFFFFFFu;
+const BLA_FAILS_MAX: u32 = 5u;
 @group(0) @binding(6) var<storage, read_write> iter_state: array<IterState>;
 // BLA table (binding 7): iteration skipping. Level l holds entries
 // each collapsing 2^(l+1) delta iterations to one affine application
@@ -2987,6 +3018,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     //__W_INIT__
 
     var m = 0u;
+    // Failed BLA lookups in a row (see the scaled template's skip).
+    var bla_fails = 0u;
     var z = vec2<f32>(0.0, 0.0);
     var escaped = false;
     var n = 0u;
@@ -3014,7 +3047,8 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         w = CFe2(st.w, st.w_lo, st.w_e);
         //__STATE_RESUME_TAIL__
         z = st.z;
-        m = st.m;
+        m = st.m & BLA_M_MASK;
+        bla_fails = st.m >> BLA_FAILS_SHIFT;
         //__DZ_RESUME__
         accum_state = vec4<f32>(st.accum, /*ST_ACCUM2*/);
         i = max(i, st.i_at);
@@ -3025,11 +3059,11 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     while (i < perturb.iter_end && !escaped) {
-        // BLA skip (see the scaled template). Here w IS the absolute
-        // delta as a CFe, so validity compares and the affine
-        // application run in full extended range -- no clamps.
+        // BLA skip (see the scaled template, and its backing off). Here
+        // w IS the absolute delta as a CFe, so validity compares and the
+        // affine application run in full extended range -- no clamps.
         var did_skip = false;
-        if (bla.n_levels > 0u && m > 0u) {
+        if (bla.n_levels > 0u && m > 0u && (m & ((2u << bla_fails) - 1u)) == 0u) {
             let aw = length(w.hi);
             var pick_a = vec2<f32>(0.0, 0.0);
             var pick_b = vec2<f32>(0.0, 0.0);
@@ -3073,6 +3107,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 m = m + pick_span;
                 i = i + pick_span;
                 did_skip = true;
+                bla_fails = 0u;
+            } else {
+                bla_fails = min(bla_fails + 1u, BLA_FAILS_MAX);
             }
         }
         if (!did_skip) {
@@ -3107,7 +3144,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if (perturb.iter_end < params.max_iter) {
         iter_state[px_index] = IterState(
-            w.hi, z, accum_state.xy, /*ACCUM2_STORE*/ w.lo, w.e, m,
+            w.hi, z, accum_state.xy, /*ACCUM2_STORE*/ w.lo, w.e, m | (bla_fails << BLA_FAILS_SHIFT),
             select(0u, n | ITER_ESCAPED_BIT, escaped),
             i,
             //__STATE_SAVE_TAIL__

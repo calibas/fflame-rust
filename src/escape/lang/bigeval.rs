@@ -855,10 +855,25 @@ mod speed {
             let mut m = BigMachine::new(p.clone(), pv, Env::at(C64::new(-0.5, -0.5), 20000), c, n).unwrap();
             let steps = 2000;
             let t = std::time::Instant::now();
+            let mut zs = Vec::with_capacity(steps);
             for _ in 0..steps {
+                zs.push(m.z().clone());
                 let _ = m.step();
             }
-            println!("{name}: {:.2} us a pass", t.elapsed().as_secs_f64() * 1e6 / steps as f64);
+            let big = t.elapsed().as_secs_f64() * 1e6 / steps as f64;
+            // The nucleus search's watch beside it (`periodic::SlopeWatch`):
+            // the f64 derivative pass and the test, along the same orbit.
+            let search = super::super::periodic::NucleusSearch::new(&p, ParamValues::defaults(&p), Env::at(C64::new(-0.5, -0.5), 20000));
+            let watch = search.and_then(|s| s.watch(C64::new(-0.5, -0.5), zs[0].clone(), -30.0));
+            let per_watch = watch.map(|mut w| {
+                let t = std::time::Instant::now();
+                for pair in zs.windows(2) {
+                    let prev = C64::new(pair[0].re.to_f64(), pair[0].im.to_f64());
+                    let _ = w.observe(prev, &pair[1]);
+                }
+                t.elapsed().as_secs_f64() * 1e6 / (steps - 1) as f64
+            });
+            println!("{name}: {big:.2} us a pass; the watch {per_watch:.2?} us");
         }
         let n = 3;
         let a = BigFloat::from_f64(0.7, n);

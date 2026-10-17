@@ -423,9 +423,9 @@ fn escaped(s, p) {
   bailout. Without it, 2.
 - **The built-ins' twins** (`escape::twins`,
   `assets/formulas/twins/*.rhai`): Mandelbrot, Multibrot, Tricorn, the
-  Burning Ship family, Lambda, Cactus, and (step 5, carrying a value
-  besides z) Phoenix, Manowar and Spider, each a Rhai formula that
-  renders as its built-in.
+  Burning Ship family, Lambda, Cactus, (step 5, carrying a value
+  besides z) Phoenix, Manowar and Spider, and Littlewood with its three
+  digit sets, each a Rhai formula that renders as its built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
     through `ctx`, and declares its degree.
@@ -451,6 +451,21 @@ fn escaped(s, p) {
   - Mann damping and the biomorph test reach them as rewrites of the
     program (below, step 9e): the twins render as their built-ins with
     either on, and deep-zoom with them, which the built-ins cannot.
+  - **Littlewood's** greedy digit -- whichever of the set leaves `λw + d`
+    smallest -- is a branch on the iterate, which the derived equations
+    follow, so its twin deep-zooms where the built-in has no perturbed
+    tier: 439 of 439 sampled pixels right at zoom 30 for the sets
+    `{±1}` and `{0, ±1}`, on both rungs (`the_littlewood_twin_deep_zooms`).
+    The map expands by `|λ|` every step, so a count is only defined to
+    the depth the sampling resolves: a pixel an f32 offset from its
+    reference sits `2^-24` of that offset off the exact centre, and past
+    about `ln(2^24 / offset) / ln|λ|` steps (some 100 to 200 at zoom 30)
+    the two sample a field that is noise there -- any renderer's
+    picture, past that, is one sample of it.
+  - **Origami** has no twin: it needs a table built once per image (its
+    64 fold lines, each folded through the ones before, `derived_data`),
+    an integer hash for the seed's lines, and its crease relief
+    (`formula_creases`), none of which a formula can express yet.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
@@ -583,7 +598,9 @@ derived WGSL fails validation). Each value becomes a pair: its value
 at the reference (from `#z` and the reference point `#pixel -
 #dpixel`) and the pixel's deviation (from `#dz` and `#dpixel`), by
 rules free of the cancellation `f(Z + d) - f(Z)` suffers: sums,
-products, the quotient form `(da - (A/B) db) / (B + db)`, binomial
+products (`x B + (A + x) y`, two products; one where the deviations are
+the same or opposite -- a square's `(2A + x) x`, `a (1 - a)`'s `x (B - A
+- x)`), the quotient form `(da - (A/B) db) / (B + db)`, binomial
 integer powers, `sqr`, `recip`, `|a|`, `conj`/`flip`/`real`/`imag`,
 and `abs` by `diffabs` (`|A + d| - |A|` by sign case, per part for a
 complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
@@ -626,7 +643,12 @@ complex: `BinOp::DiffAbs`, the compiler's own operator; `uf_diffabs`,
   difference forms, each free of the cancellation:
   - `exp(A + d) - exp(A) = exp(A) expm1(d)`; `log` as `log1p(d / A)`;
     a real or complex power whose exponent has no deviation as
-    `A^b expm1(b log1p(d / A))`; `sqrt` as `d / (sqrt(A + d) + sqrt A)`;
+    `A^b expm1(b log1p(d / A))` -- or, where that exponent is a whole
+    number from 1 to 64 (a Multibrot's `z ** p.power` at 4), by degrees,
+    `Q_1 = d`, `Q_(j+1) = (A + d) Q_j + d A^j`: two products a degree, no
+    logarithm and no cut, the branch the same for every pixel (the
+    Multibrot's twin at zoom 30: 9 ms of GPU time, now 7; the built-in
+    5); `sqrt` as `d / (sqrt(A + d) + sqrt A)`;
     `cabs` as `(2 Re(conj(A) d) + |d|^2) / (|A + d| + |A|)`;
   - `sin`, `cos`, `sinh`, `cosh` by the half difference (`sin(A + d) -
     sin A = 2 cos(A + d/2) sin(d/2)`), `tan` and the rest as
@@ -1320,6 +1342,29 @@ speckle changed with BLA, and their baselines were regenerated
 test's walked edges the Mandelbrot's twin alone counts 374 and 393 (zoom
 24 and 51).
 
+**Backing off.** A lookup that finds nothing costs more than the step
+it tried to replace, so where a view's deviations stay past the table's
+radii (its orbits close to the reference's critical points) the table
+made the render slower, up to twice. Each pixel counts its failed
+lookups in a row, `f` (at most 5), and looks only at an index aligned
+to `2^(f+1)` -- level `f`'s own alignment -- so a stretch without skips
+pays a lookup every `2^f` steps or so rather than every other one, and
+a success looks again at once. The count rides across chunks in the
+top bits of the stored `m` (`BLA_FAILS_SHIFT`: an orbit of 2^29 entries
+would need a buffer past any storage binding), so the image does not
+depend on where chunks end. GPU time at 512x384
+(`measure_twins_against_their_builtins`, best of three):
+
+| view | no table | table | table, backing off |
+| --- | --- | --- | --- |
+| Mandelbrot built-in, zoom 30, 20,000 | 110 | 157 | 103-127 |
+| Tricorn built-in, suite view zoom 28 | 83 | 163 | 81-117 |
+| Lambda's twin, zoom 30 | 16 | 31 | 18 |
+| Burning Ship built-in, interior zoom 30 | 120 | 6 | 6 |
+| Mandelbrot built-in, zoom 60, floatexp | 652 | 25 | 24 |
+
+Where the table skips, nothing changes.
+
 ### Nucleus finding
 
 `nucleus.rs` finds the minibrot governing a view: the period by the ball
@@ -1471,31 +1516,52 @@ viewport; a thumbnail or an export decides at its own size.
 ### How fast the twins are
 
 A twin against its built-in, each render from cold at 512x384 with BLA
-where the tier has it (`measure_twins_against_their_builtins`), in ms --
-the whole render (the reference's build):
+where the tier has it (`measure_twins_against_their_builtins`, the best
+of three; a single run swings by half), in ms -- the whole render, then
+the GPU's part:
 
-| view | built-in | twin |
-| --- | --- | --- |
-| Mandelbrot, seahorse zoom 42, 8,000 | 35 (8) | 46 (11) |
-| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 194 (159) | 116 (51) |
-| Multibrot power 4, zoom 30 | 9 (3) | 13 (3) |
-| Tricorn, suite view zoom 28 | 228 (27) | 242 (20) |
-| Tricorn interior, zoom 30 | 49 (18) | 68 (37) |
-| Burning Ship, suite view zoom 60, floatexp | 41 (1) | 139 (12) |
-| Burning Ship interior, zoom 30 | 85 (28) | 155 (97) |
-| Lambda, zoom 30 | 21 (5) | 39 (5) |
-| Manowar, zoom 26, floatexp | 114 (8) | 162 (5) |
+| view | built-in | twin | GPU: built-in | twin |
+| --- | --- | --- | --- | --- |
+| Mandelbrot, seahorse zoom 42, 8,000 | 28 | 36 | 19 | 24 |
+| Mandelbrot, seahorse zoom 60, 30,000, floatexp | 164 | 106 | 24 | 30 |
+| Mandelbrot, zoom 30, 20,000 | 128 | 129 | 127 | 128 |
+| Multibrot power 4, zoom 30 | 8 | 11 | 5 | 6 |
+| Tricorn, suite view zoom 28 | 154 | 141 | 117 | 119 |
+| Tricorn interior, zoom 30 | 46 | 64 | 6 | 7 |
+| Burning Ship, suite view zoom 60, floatexp | 37 | 77 | 34 | 62 |
+| Burning Ship interior, zoom 30 | 71 | 151 | 6 | 8 |
+| Lambda, zoom 30 | 20 | 26 | 16 | 18 |
+| Phoenix, zoom 48, floatexp | 16 | 19 | 15 | 18 |
+| Manowar, zoom 26, floatexp | 127 | 116 | 119 | 111 |
 
-What made the references this cheap: big floats keep up to eight limbs
+What made the references cheap: big floats keep up to eight limbs
 inline (`bigfloat::Limbs`, a `SmallVec`: an operation or a variable's
 read was a heap allocation, and a pass of the Mandelbrot's twin took 2.4
-us, now 0.94); a whole real power (the Multibrot's `z ** p.power`) is
+us, now about 1); a whole real power (the Multibrot's `z ** p.power`) is
 taken by repeated squaring, not `exp(w log z)` (79 us a pass, now 1.6);
 and the nucleus search rides on the reference's build (above). What
-remains is mostly the GPU's: the derived equations against the
-built-ins' hand-written ones -- the Ship's at floatexp ~3x, Lambda's
-and Phoenix's ~2x -- and a custom BLA table read from the equations
-(28 ms against the power table's 6 for the Mandelbrot at zoom 60).
+made the GPU's part cheap: on the floatexp rung a value the program
+types real runs on its real halves (`cfe2_mul_r` and kin: a complex
+product of two reals did four double-float products for one), a
+constant factor scales the mantissa or shifts the exponent
+(`cfe2_scale`, `cfe2_ldexp`), and a complex of two reals is aligned, not
+summed (`cfe2_pair_r`) -- the Ship's twin at zoom 60 went from 126 ms of
+GPU time to 62; the product and power rules above; and the table's
+backing off.
+
+What remains:
+- **The Ship at floatexp**, about twice: the built-in's deep Ship
+  carries a single f32 mantissa (`SFe`), the generated equations a
+  double-float one (`CFe2`), more precise by design.
+- **The references' builds**, where no nucleus serves: a big-float pass
+  costs 1 to 2.4 us (about three times its arithmetic, a 3-limb
+  multiply-add being 80 ns), the built-ins' fixed-point steps 0.8; and
+  the period search's f64 derivative pass rides on each, 0.45 us (the
+  Ship's Jacobian, 2). The Ship's interior view at zoom 30: 51 ms of
+  big floats and 43 of watching against the built-in's 16, which
+  watches nothing.
+- **A custom BLA table's build** from the equations: 26 ms against the
+  power table's 6 for the Mandelbrot at zoom 60.
 
 ### Damping and the biomorph on custom formulas
 
@@ -1536,386 +1602,3 @@ critical point, and damping moves that (to `(alpha - 1) / 2 alpha` for
 `z^2 + c`). The reference still relocates there, where it wraps
 exactly.
 
-### The derivative under perturbation
-
-**Custom formulas** (phase 4, step 9d) carry theirs where they follow
-one reference and carry nothing besides z: the derivative program
-replaces the plain one in the perturbed shader (the same equations, and
-the derivative's variables), and each step sets its state's z to the
-full pre-step iterate and runs one pass, its init having made the state
-at the pixel (`assembler::custom_deriv_splices`). The pair `(P, Q)` (Q
-zero for a complex derivative) lives in that state. A BLA skip composes
-it with the real-linear entry, `A (P, Q) + B`. The scaled rung holds the
-derivatives absolute. The floatexp rung holds every one the state keeps
--- the pair, the init's constants' (`d_c` for `c = #pixel`), the
-pixel's own (`d_pixel`, a variable for this) -- in units of `2^e`,
-rescaling them together as `e` moves (`formula_deriv_scale`); scaling
-the pixel's alone left the constants' unscaled, and the derivative grew
-`2^e` too fast a step. Against the derivative in f64 at a shallow view
-(`a_custom_formula_carries_its_derivative_at_depth`), the perturbed
-rungs count more pixels right than the direct path: the Mandelbrot's
-twin 91% and 94% to the direct path's 80%, the Burning Ship's 78% and
-81% to its 51% (a fold multiplies a small difference in the orbit into
-a flipped sign); at depth, against big floats, the twin as the built-in
-(293 and 294 of 439 at zoom 30; 343 and 333 at zoom 42 on the floatexp
-rung). The cost: the formula's own pass in f32 each step beside the
-perturbation equations -- the Burning Ship's twin at zoom 60 (640x480,
-25,000 iterations) 1.1 s with distance estimation, 0.45 s smooth.
-
-Both rungs carry the derivative for every single-term tier, stored per
-**render pixel** (`dz/dc` times the pixel size) so it stays a moderate
-number at any depth. `distance_estimate`, `normal_map` and analytic
-relief therefore work at depth on formulas that define a derivative.
-Design record: [derivative-under-perturbation.md](../archive/escape-time/derivative-under-perturbation.md).
-
-### Which formulas perturb
-
-Common conditions: past the view's [direct limit](#where-the-direct-path-ends), no damping, biomorph off (custom formulas excepted: they take both into their programs).
-
-| formula | tier | condition | BLA |
-| --- | --- | --- | --- |
-| `mandelbrot` | `Power(2)` | — | yes |
-| `multibrot` | `Power(p)` | integer `p` 2–12 | yes |
-| `tricorn` | `Tricorn(p)` | integer `p` 2–12 | yes, real-linear (the twin's) |
-| `burning_ship` | `Ship(v)` | all six variants | yes, real-linear (the twin's) |
-| `phoenix` | `Phoenix` | — | no |
-| `manowar` | `Manowar` | floatexp rung at every depth | no |
-| `lambda` | `Lambda` | — | no |
-| `feather` | `Feather(p)` | integer `p` 2–8 | no |
-| `mcmullen` | `McMullen(n, m)` | Julia mode; integer `n` 2–8, `m` 1–8 | no |
-| `magnet` | `Magnet(v)` | both variants | no |
-| `newton` | `Newton` | integer `p` 2–12; the three polynomial functions; `rootfinder_has_delta` (Chebyshev declines the two non-unity ones) | no |
-| `nova` | `Nova(p)` | integer `p` 2–12 | no |
-| `kaliset` | `Kaliset` | both sign branches | no |
-| `ducks` | `Ducks(v)` | variants 0 and 4 | no |
-| custom | `Custom` | derived or own equations | where sound (`custom::bla_steps`) |
-
-`EscapeRenderer::perturb_tier` is the authority. Everything else —
-the transcendental formulas, Spider, Barnsley, Cactus, Collatz,
-Littlewood, Origami, Lattès, Novaretti, the fields and mode D — renders
-the direct path at every depth. The per-tier error measurements are in
-[escape-time-completion.md](../archive/escape-time/escape-time-completion.md);
-the theory in [pertubation-theory.md](../archive/escape-time/pertubation-theory.md).
-
----
-
-## Colouring and appearance
-
-Everything here acts after the iteration, so it is a recolour, not a
-re-render, unless noted.
-
-| setting | config | what it does |
-| --- | --- | --- |
-| **Palette Mapping** | `palette_map` | a transfer curve `k·f(v/k)` on the value before the wrap (`TransferCurve`, pivot `k`), a curve on the position within each cycle (`PaletteCurve`), and a **stepped palette** (each stop a flat band) |
-| **Auto Contrast** | `contrast` | fits the value range to the palette from a 96×72 probe of the settled frame: `AutoRange`, `Flatten` (subtract the fitted plane first — the fix for non-escaping fields that become a plane at depth), `Equalize` (rank-equalised, a 256-entry CDF), with clip, strength and palette turns. A terrain pins one fit across its sections |
-| **Texture Layer** | `layer` | a second mode-A colouring blended into the first before the palette lookup (`Screen`, `Multiply`, `Add`, `Overlay`, `Mix`, at a weight), subject to `layer_refusal`. Its needs combine with the base's: either can compile in the accumulator, period detection or the derivative |
-| **Relief Shading** | `shading` | a lit surface composited over the finished colour (below) |
-| **Antialiasing**, **Downsample** | `supersample`, `downsample` | see [Antialiasing](#antialiasing) |
-| **Biomorph** | `biomorph` | the escape test reads `(Re z)²` or `(Im z)²`; re-iterates; turns perturbation off for a built-in (a custom formula's test is rewritten, and perturbs) |
-| **Damping α** | `damping_re`, `damping_im` | Mann iteration `z ← (1−α)z + α·f(z)` with complex α, compiled in only when α ≠ 1; re-iterates; turns perturbation off for a built-in (a custom formula's loop is rewritten, and perturbs) |
-| **Texture** | `texture`, `texture_overlay` | a simulation texture (below) |
-
-**Relief shading** is deliberately not a colouring: a colouring returns
-one scalar and replaces the others, while relief runs after the palette
-lookup on the finished RGB, so it composes with every colouring. The
-surface is a height field — by default the colouring's own value,
-finite-differenced — lit by a light at `light_angle` degrees
-counter-clockwise from east (135 by default, the upper left; a file
-without the key means 315). The slope can come from (`ShadingField`):
-
-- `Smooth` — the value before the wrap: terrain;
-- `Banded` — the wrapped position: every band edge a step;
-- `Layer` — the texture layer's value;
-- `Analytic` — the distance estimate's slope from the derivative;
-- `Offset` — the value at orbits a small step beside the pixel;
-- `Embossed` — Ultra Fractal's bevelled contours from two such orbits;
-- `Creases` — a folding formula's paper (below).
-
-`Analytic`, `Offset`, `Embossed` and `Creases` re-iterate, and the last
-three run on the direct path only.
-
-**Creases** (`FormulaFeature::Creases`; Origami's) draws the folds as
-paper. Each fold is a crease, and the paper rises or falls in a straight
-line with the distance from it, the same slope on both sides. Fold `i`'s
-crease weighs `decay^i` (`CreaseSettings`: **Decay**, 0.6 by default),
-so the first is the main crease and each later one is finer; the
-iteration count is the crease count, one per fold, at most 64. The
-**Pattern** sets each fold's direction: Valley (every flap toward the
-viewer), Alternate, or Random from the line seed. **Flip** swaps
-mountain and valley. Each crease keeps its fold's direction along its
-whole length, on every layer, which keeps the sheet in one piece. This is
-how gently folded paper bends. Reversing a crease on a face-down layer
-(the flat-folded valley/mountain pattern) tears the height wherever it
-crosses an earlier crease. The slope is exact, not
-differenced: every fold reflects, so the folded point is `M p0 + t` for
-an orthogonal `M`, and the gradient of a distance from a line is
-`Mᵀ n`. `formula_creases` returns the height and gradient. The
-iterate pass stores the height in the relief channel, and stores a
-tenth of `−∇h`, turned into the screen frame, as the slope (at the
-default relief Height of 10, the first crease tilts 45°). Every pixel
-gets one, the interior's too. The recolour shortcut cannot recompute
-them, so a crease render always iterates
-(`EscapeConfig::wants_creases`); Origami's 64 folds are cheap. The
-settings reach the shader through the uniform's `crease` row. The
-model was prototyped in `scripts/escape_prototypes/origami_creases.py`
-([plan](../projects/origami-creases.md)).
-
-Lighting is `Tilt` (the signed lean toward the light) or
-`Lambert` (with an elevation); shadow and highlight each have a colour,
-strength and blend (`ShadingBlend`, blended in a perceptual space so the
-two strengths read alike); `softness` is a Gaussian on the height, in
-display pixels; a slope stencil, a height curve and a micro-texture
-complete it. The simulation's relief colouring uses the same lighting
-(see [SIMULATION.md](SIMULATION.md)).
-
-**The surface texture** (`ShadingTexture`: Grain, Paper, Rock or the
-simulation texture) is shared with the 3D terrain
-([surface-textures.md](../projects/surface-textures.md); on a terrain it
-is bumped into the surface, [TERRAIN.md](TERRAIN.md)). In 2D it tilts
-the relief's slope, in display pixels: it is fixed to the screen until
-that plan's step 3. **Where** (`TextureWhere`: everywhere, the steep
-faces, the flats) masks it by the relief's tilt against
-`texture_angle` ± `texture_angle_soft`. Rock is ridged gradient noise,
-four octaves.
-
-**Textures** are simulation recipes, not image files: an `EscapeTexture`
-embeds a whole Simulation-mode config, so the file that uses it is
-self-contained, and the image is generated (or read from a PNG cache) by
-`crate::textures`. They come from the shipped presets in
-`assets/textures/` and from Simulation mode's **Save as texture**, and
-are picked in the **Textures** panel. Three things read one
-(`EscapeConfig::uses_texture`): the **overlay** (`texture_overlay`,
-Kalles Fraktaler's texture warped by the count's slope and mixed into the
-colour), the relief's `Simulation` micro-texture, and the `image_trap`
-colouring. Design record: [sim-textures.md](../archive/projects/sim-textures.md).
-
----
-
-## The camera lens
-
-A lens is a **variation applied to the screen offset**: each pixel's
-normalised offset `n` becomes `L(n)` before the view scale, rotation and
-centre, so the fractal is untouched and only which point each pixel
-samples changes.
-
-```
-pixel -> offset n -> L(n) -> × span -> rotate -> + centre -> the formula
-```
-
-That is the inverse direction of a flame's final transform, so a lens
-need not be invertible (a many-to-one lens shows a region twice, and
-every pixel still gets one sample), and a variation's lens picture is not
-its final-transform picture.
-
-- **Units:** half-height one — `n.y` in [−1, 1], `n.x` in [−aspect,
-  aspect] — the scale variations are written for. Each call site
-  converts into it and back (`lens_apply_span`, `lens_apply_pixels` for
-  the perturbed path, `lens_apply_uv` for mode D).
-- **Amount** (`lens_amount`, ±5, `LENS_AMOUNT_LIMIT`) blends
-  `mix(n, L(n), amount)`: past 1 it overshoots, below 0 it runs the
-  displacement backwards, roughly the inverse. The slider is a camera
-  control, so positive bulges the middle out; for the radial lenses in
-  the recommended set that is the variation run backwards, so
-  `lens_flame` hands the shader the negated value. It rides in the lens
-  transform's weight, so dragging it does not recompile.
-- **No variation code is duplicated:** `lens_source` builds a
-  one-transform flame and has `ShaderBuilder::build_layer_map_at` emit
-  the variation, its helper libraries and `flame_map` at bind group 2
-  (`LENS_GROUP`); `LENS_GLUE` adds `esc_lens`.
-- **The picker** offers `LENS_RECOMMENDED` (26 that read as a camera)
-  first, then the rest of `LENS_USABLE` (396 variations measured usable
-  by `variation_probe lens`, `src/probe/lens.rs`), with a Show all box
-  for the rest.
-
-The lens applies to the escape plane (the direct, perturbed and field
-kernels) and to mode D, planar and solid. It does not yet apply to the
-terrains, simulations or flames: [camera-lens-everywhere.md](../projects/camera-lens-everywhere.md)
-is the plan. Design record: [escape-camera-lens.md](../archive/escape-time/escape-camera-lens.md).
-
----
-
-## 3D: solids and terrains
-
-Two things in escape mode are three-dimensional, and both are covered in
-depth elsewhere.
-
-- **Mode D solids** (`ifs_flame_3d`, `quaternion_julia_solid`) march a
-  ray through a distance field on a camera of their own: a target as
-  exact decimal strings (`cam_target_x/y/z`, empty for the attractor's
-  centre), `cam_pitch`, `cam_yaw`, `cam_bank`, `cam_fov`, with the
-  screen roll in `rotation` and the distance from `zoom_log2`.
-  `solid_tier` chooses the lit walk (`Lit`, the default for a solid) or
-  the path tracer (`renderer/solid_path.rs`).
-- **The escape terrain** (`terrain`, Cargo feature `terrain`) draws the
-  2D picture as a lit height field to the horizon: `footprint.rs` renders
-  the ground in sections, each an ordinary `EscapeRenderer` render;
-  `terrain.rs` walks it; `terrain_tiers.rs` picks the tier;
-  `path_core.rs` is the path tracer the terrain and the solids share.
-  `terrain_active()` is true when the terrain is on and the formula is
-  not a solid.
-
-Both share the View panel's camera, lighting, material, fog and path
-tracer settings. See [TERRAIN.md](TERRAIN.md) and [CAMERA.md](CAMERA.md).
-
----
-
-## The config
-
-`EscapeConfig` ([src/config/escape.rs](../../src/config/escape.rs)) sits
-in `FractalConfig` behind skip-if-default, and so does each sub-block,
-so a flame that never touched escape mode serialises as before.
-
-| group | fields |
-| --- | --- |
-| formula | `formula`, `formula_params`, `julia`, `julia_re`, `julia_im` |
-| view | `center_re`, `center_im` (strings), `zoom_log2`, `rotation` |
-| iteration | `max_iter` (256), `bailout` (1e4 new, 4 when absent), `damping_re`, `damping_im`, `biomorph`, `reference_period` |
-| colour | `coloring`, `coloring_params`, `palette_map`, `contrast`, `layer`, `shading`, `texture`, `texture_overlay` |
-| antialiasing | `supersample` (1), `downsample` |
-| lens | `lens`, `lens_params`, `lens_amount` (1) |
-| 3D | `cam_target_x/y/z`, `cam_pitch`, `cam_yaw`, `cam_bank`, `cam_fov`, `solid_tier`, `terrain`, `path` |
-
-Defaults: formula `mandelbrot`, colouring `smooth`, centre `-0.5`, `0`.
-
-Every field but `texture` has a `ConfigPath::Escape*` — `EscapeFormula`,
-`EscapeZoomLog2`, `EscapeCenterRe`, the keyed `EscapeFormulaParam`,
-`EscapeColoringParam`, `EscapeLayerParam` and `EscapeLensParam`, and the
-shading, contrast, palette-map, terrain and path families — whose string
-keys read `Escape.Formula`, `Escape.ZoomLog2`, `Escape.FormulaParam.<name>`.
-(The Textures panel sets `texture` as one structural undo step.) They all
-route to `UpdateType::EscapeRerender`, which sets the app's
-`escape_dirty`; there is no flame-style reset/accumulate distinction to
-encode.
-
-What an animation track can drive is decided by
-`delta::json_to_config_value`: the numeric paths — zoom, rotation, the
-Julia seed, bailout, damping, `max_iter`, every parameter, the camera
-angles and most shading, contrast, terrain and path-tracer values — and
-the solid camera's target, whose strings are rebuilt from an `f64`. The
-formula and colouring selectors, the biomorph mode, the reference period
-and the planar centre strings are not animatable: a planar zoom runs far
-past what an `f64` centre could hold.
-
-### Presets
-
-A formula's identity is more than its step: Origami wants zoom −1 at 32
-iterations with a position map, the Mandelbrot smooth colouring at 512.
-An `EscapePreset` carries the centre, zoom, `max_iter`, colouring,
-optional Julia seed, both parameter sets and an optional bailout. The
-first preset of a formula or field is its default, applied as one undo
-step when the user switches to it, so the previous formula's view does
-not follow.
-
-`src/escape/presets.rs` is **generated** by `scripts/gen_escape_presets.py`
-from the visual-regression configs in `tests/visual/configs/escape/`
-(chosen in the script's `SELECTION`), then committed: each preset is a
-view the visual suite already renders and compares. It holds 53 presets
-covering all 26 formulas and the three fields; mode D defs have none.
-
----
-
-## Integration
-
-| piece | where |
-| --- | --- |
-| **Dispatch** | `render_with` → `render_escape` (or `render_escape_terrain`) in `src/renderer/render.rs`, so CLI export, thumbnails, video and the gallery modules inherit it. `prepare_escape` hands mode D its analysed flame and coarse pass, and a texture its image, before the first chunk. A caller passing `RenderEngines` (video export) keeps one renderer and its warm reference across frames |
-| **The app** | `App::escape_renderer`, created lazily on the first escape frame with `progressive` on (desktop), and `escape_dirty`, set by escape edits, palette changes and loads and cleared when a render reports final. The frame loop re-analyses a mode-D flame every frame and marks dirty only when `set_ifs` reports a change. Held instead by `escape_terrain` while a terrain is drawn |
-| **Animation** | playback advances only on a settled frame (`!escape_dirty`), so no preview frame becomes an animation frame |
-| **Panels** | the **Escape Fractal** panel (`src/ui/escape_panel.rs`: preset, formula, view, iteration and colouring controls, then collapsible sections for Palette Mapping, Texture Layer, Auto Contrast, Relief Shading, Camera Lens, 3D Terrain, Reference orbit and Diagnostics) and the **Textures** panel (`src/ui/textures_panel.rs`). The **Escape Time** workspace puts the Escape panel where Standard puts Transforms. Every control writes through `ConfigManager` with an `Escape*` path |
-| **Visibility** | `src/ui/visibility.rs`: flame-only panels and chaos-game controls are hidden or greyed, the tone-map mode is Linear-only, the orbit cache setting is shown only in Escape, and lighting follows `Solid::of` (a solid formula or a terrain), not the mode |
-| **Scripting** | the `escape` object; touching it switches the config to escape and applies the same entry tone mapping. See [SCRIPTING.md](SCRIPTING.md) |
-| **Online** | `ApiRenderMode::Escape` (`"escape"`): stored as flames on the same endpoints, told apart by `render_mode`, so `transform_count` is 0 and `variation_names` empty. See [ONLINE.md](ONLINE.md) |
-| **Cargo** | `engine-escape` gates `src/escape`; without it an escape config still parses and `render_with` returns `RenderError::EngineMissing`. `terrain` implies `engine-escape`. `wasm/escape` builds `engine-escape` without `engine-flame`, so its built-in variation catalogue — which the lens and the Flame Attractor draw on — is `linear` alone, and a lens naming any other variation is inactive there; it also builds without `terrain`, rendering a terrain config as its 2D picture |
-| **Export** | the CLI's `--supersample` doubles an escape picture's own antialiasing; see [EXPORT.md](EXPORT.md) for memory during exports and the video loop |
-
-`.flame` XML neither reads nor writes escape configs; they are `.fflame`
-only.
-
----
-
-## Platform notes
-
-21 escape-time visual renders differ between macOS and Windows (listed
-in [CLAUDE.md](../../CLAUDE.md), *Known Issues*). Two real causes found
-on the way — the double-float fold and trig range reduction — were wrong
-on both platforms and are fixed; reassociation and ulp amplification
-were measured and ruled out. The residual is unexplained and parked:
-perceptually the renders are indistinguishable. The measurements and the
-next leads — `normalize`/`inversesqrt`, the `clamp(dot(...))`
-discontinuity, `pow` in the output conversion, `fract` and palette
-texture filtering — are in the design record's macOS sections (from
-*The macOS visual divergence*, 2026-09-02).
-
----
-
-## Testing
-
-- **Visual corpus**: `tests/visual/configs/escape/` (119 configs —
-  every formula, the perturbation thresholds and deep zooms, the
-  colourings, relief, layers, textures, terrains, mode-D solids),
-  rendered and compared against baselines with a tolerance by
-  `tests/visual/run_tests.py` (see [TESTING-GUIDE.md](../TESTING-GUIDE.md)).
-  Presets are generated from it.
-- **Shader tests** (CPU, in `assembler.rs`): every combination
-  validates; fast-math lints; a lens-free shader is byte-identical to
-  one built before lenses (`a_shader_without_a_lens_is_byte_identical`);
-  every variation compiles as a lens.
-- **Registry tests** (`mod.rs`, `formulas.rs`): unique names, unknown-name
-  fallback, labelled choices, `DynamicalOnly` and the iteration controls
-  checked against the assembled WGSL (`dynamical_only_matches_the_shader`,
-  `iteration_controls_match_the_assembled_shader`).
-- **GPU tests** (`src/escape/app_repro_test.rs`, `#[ignore]`d — run them
-  deliberately): the app's frame sequence reproduced headless,
-  `perturbed_agrees_with_direct_at_moderate_zoom`,
-  `recolor_cache_is_invisible_and_invalidates_correctly`, chunk invariance
-  (`batched_chunks_render_the_same_image`,
-  `fixed_chunk_renders_the_same_image_as_adaptive`), and
-  `every_preset_renders_a_picture`, the only check that every shipped
-  preset draws something.
-- **Probes**: `gpu_bignum_probe.rs` measures a GPU big-number multiply
-  against the CPU reference cost, the go/no-go of
-  [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md);
-  `variation_probe lens` (`src/probe/lens.rs`) classifies every
-  variation as a lens.
-- **Diagnostic switches**: `ESCAPE_CHUNK_MS` and `ESCAPE_CHUNK_BATCH`
-  force chunk sizes (the image must not change), `ESCAPE_BLA=0` turns
-  BLA off.
-
----
-
-## Adding a formula or a colouring
-
-1. Write a `static FormulaDef` in `formulas.rs` (or a `ColoringDef` in
-   `colorings.rs`) with inline WGSL, citing its source. Prefix helper
-   functions with its name. Declare the features the WGSL needs; the
-   flag tests read the WGSL.
-2. Append it to `FORMULAS` or `COLORINGS` in `mod.rs` (**append-only**).
-3. Give a formula a derivative if it has one, `escape_degree` if it is
-   polynomial at infinity, and a `wgsl_param_seed` at its critical point.
-4. Add a visual config under `tests/visual/configs/escape/`, list it in
-   `scripts/gen_escape_presets.py`, regenerate `presets.rs`, and run
-   `every_preset_renders_a_picture` on a GPU.
-5. A perturbation tier is separate work: a delta form for both rungs,
-   an arm in `perturb_tier`, and a measurement against exact orbits.
-6. A parameter that multiplies the work -- a walk's depth, a beam, a
-   march's steps -- goes in `SLOW_PARAMS` in `mod.rs`, so the panel
-   commits it when a drag ends instead of overshooting (UI.md, *Slow
-   settings*).
-
----
-
-## Gotchas
-
-**A raw-metric formula wants a raw bailout.** The exponential and trig
-families test `Re z` or `|Im z|`, not a square: a bailout of 1e4 carried
-over from a polynomial formula overflows `exp` long before it trips. The
-presets carry their own.
-
-**Non-escaping statistics go flat at depth.** An orbit average is a
-smooth function of `c`; in a small enough window it is a plane, which a
-cyclic palette shows as parallel bands. That is a colouring problem, not
-a precision one: Auto Contrast's Flatten is the answer.
-
-**A deep view is the direct path's mush when it does not perturb.**
-Damping, biomorph, or a formula without a tier all stop resolving past
-zoom 14; the panel's depth line says which case applies.

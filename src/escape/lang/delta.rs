@@ -1553,11 +1553,27 @@ impl<'p> Deriver<'p> {
                             (None, None) => None,
                             (Some(x), None) => Some(bin(BinOp::Mul, widen(x, ty), widen(rb, ty))),
                             (None, Some(y)) => Some(bin(BinOp::Mul, widen(ra, ty), widen(y, ty))),
+                            // One product where the rule below takes two: a
+                            // square, `a * a`, is (2A + x) x; deviations the
+                            // same give x (A + B + x), opposite ones (`a (1 -
+                            // a)`) x (B - A - x).
+                            (Some(x), Some(_)) if same_operand(a, b) => {
+                                let twice = bin(BinOp::Mul, konst(2.0, ty), widen(ra, ty));
+                                Some(bin(BinOp::Mul, bin(BinOp::Add, twice, widen(x.clone(), ty)), widen(x, ty)))
+                            }
+                            (Some(x), Some(y)) if same_operand(&x, &y) => {
+                                let sum = bin(BinOp::Add, widen(ra, ty), widen(rb, ty));
+                                Some(bin(BinOp::Mul, bin(BinOp::Add, sum, widen(x.clone(), ty)), widen(x, ty)))
+                            }
+                            (Some(x), Some(y)) if negation_of(&y, &x) => {
+                                let gap = bin(BinOp::Sub, widen(rb, ty), widen(ra, ty));
+                                Some(bin(BinOp::Mul, bin(BinOp::Sub, gap, widen(x.clone(), ty)), widen(x, ty)))
+                            }
+                            // x B + A y + x y as x B + (A + x) y.
                             (Some(x), Some(y)) => {
                                 let xb = bin(BinOp::Mul, widen(x.clone(), ty), widen(rb, ty));
-                                let ay = bin(BinOp::Mul, widen(ra, ty), widen(y.clone(), ty));
-                                let xy = bin(BinOp::Mul, widen(x, ty), widen(y, ty));
-                                Some(bin(BinOp::Add, bin(BinOp::Add, xb, ay), xy))
+                                let moved = bin(BinOp::Add, widen(ra, ty), widen(x, ty));
+                                Some(bin(BinOp::Add, xb, bin(BinOp::Mul, moved, widen(y, ty))))
                             }
                         };
                         (r, d)
@@ -1597,7 +1613,7 @@ impl<'p> Deriver<'p> {
                         // which the form, continuous, does not: there the
                         // plain difference, which is large.
                         if ty == Ty::Complex {
-                            let (ca, cx, b) = (widen(ra.clone(), ty), widen(x.clone(), ty), widen(rb, ty));
+                            let (ca, cx, b) = (widen(ra.clone(), ty), widen(x.clone(), ty), widen(rb.clone(), ty));
                             let l = call(Builtin::Log1p, bin(BinOp::Div, cx.clone(), ca.clone()), ty);
                             let re_b = call(Builtin::Real, b.clone(), Ty::Float);
                             let whole = test(
@@ -1609,8 +1625,39 @@ impl<'p> Deriver<'p> {
                             let jumps = test(BinOp::And, crossed, mk(IExprKind::Unary(UnOp::Not, Box::new(whole)), Ty::Bool));
                             when = test(BinOp::Or, when, jumps);
                         }
-                        let d = self.chosen(vec![(when, plain)], form, ty);
-                        (r, Some(d))
+                        // A whole power from 1 to 64 (the exponent is the
+                        // same for every pixel, so the branch is too):
+                        // (A + d)^n - A^n by Q_1 = d, Q_(j+1) = (A + d) Q_j
+                        // + d A^j -- two products a degree, cancellation-
+                        // free at any d, no logarithm and no cut.
+                        let re_b = if ty == Ty::Complex { call(Builtin::Real, widen(rb.clone(), ty), Ty::Float) } else { rb.clone() };
+                        let mut whole = test(
+                            BinOp::And,
+                            test(BinOp::Eq, re_b.clone(), call(Builtin::Round, re_b.clone(), Ty::Float)),
+                            test(BinOp::And, test(BinOp::Ge, re_b.clone(), konst(1.0, Ty::Float)), test(BinOp::Le, re_b.clone(), konst(64.0, Ty::Float))),
+                        );
+                        if ty == Ty::Complex {
+                            let im_b = call(Builtin::Imag, widen(rb.clone(), ty), Ty::Float);
+                            whole = test(BinOp::And, whole, test(BinOp::Eq, im_b, konst(0.0, Ty::Float)));
+                        }
+                        let t = self.guard_var(ty, Role::Chosen);
+                        // The sum in the deviation's units (the chosen
+                        // value's other arms are in the plane's).
+                        let q = self.guard_var(ty, Role::Deviation);
+                        let power = self.guard_var(ty, Role::Reference);
+                        let k = self.guard_var(Ty::Int, Role::Reference);
+                        let (ca, cx) = (widen(ra.clone(), ty), widen(x.clone(), ty));
+                        let var = |v: VarId, t: Ty| mk(IExprKind::Var(v), t);
+                        let set = |v: VarId, e: IExpr| IStmt::Assign(Place::Var(v), e);
+                        let degree = vec![
+                            set(q, bin(BinOp::Add, bin(BinOp::Mul, bin(BinOp::Add, ca.clone(), cx.clone()), var(q, ty)), bin(BinOp::Mul, cx.clone(), var(power, ty)))),
+                            set(power, bin(BinOp::Mul, ca.clone(), var(power, ty))),
+                            set(k, bin(BinOp::Add, var(k, Ty::Int), mk(IExprKind::Int(1), Ty::Int))),
+                        ];
+                        let below = test(BinOp::Lt, mk(IExprKind::Convert(Box::new(var(k, Ty::Int))), Ty::Float), re_b);
+                        let by_degrees = vec![set(q, cx), set(power, ca), set(k, mk(IExprKind::Int(1), Ty::Int)), IStmt::While { cond: below, body: degree }, set(t, var(q, ty))];
+                        self.pending.push(IStmt::If { arms: vec![(whole, by_degrees), (when, vec![set(t, plain)])], otherwise: vec![set(t, form)] });
+                        (r, Some(var(t, ty)))
                     }
                     // A remainder, a power of a varying exponent: no
                     // cancellation-free form.
@@ -2260,5 +2307,20 @@ mod diag_tmp {
                 if b.sub(a).abs() > 1e-6 { break; }
             }
         }
+    }
+}
+
+/// Whether `y` is `-x`, `x` an operand [`same_operand`] tells.
+fn negation_of(y: &IExpr, x: &IExpr) -> bool {
+    matches!(&y.kind, IExprKind::Unary(UnOp::Neg, inner) if same_operand(inner, x))
+}
+
+/// Whether two operands are the same value: a variable, the iterate, a
+/// predefined symbol (the square rule's test).
+fn same_operand(a: &IExpr, b: &IExpr) -> bool {
+    match (&a.kind, &b.kind) {
+        (IExprKind::Var(x), IExprKind::Var(y)) => x == y && a.ty == b.ty,
+        (IExprKind::Predef(x), IExprKind::Predef(y)) => x == y && a.ty == b.ty,
+        _ => false,
     }
 }
