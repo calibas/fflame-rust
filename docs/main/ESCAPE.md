@@ -435,8 +435,10 @@ fn escaped(s, p) {
 - **The built-ins' twins** (`escape::twins`,
   `assets/formulas/twins/*.rhai`): Mandelbrot, Multibrot, Tricorn, the
   Burning Ship family, Lambda, Cactus, (step 5, carrying a value
-  besides z) Phoenix, Manowar and Spider, and Littlewood with its three
-  digit sets, each a Rhai formula that renders as its built-in.
+  besides z) Phoenix, Manowar and Spider, Littlewood with its three
+  digit sets, and the families escaping on `Re z` or `|Im z|` --
+  Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration -- each a
+  Rhai formula that renders as its built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
     through `ctx`, and declares its degree.
@@ -473,6 +475,23 @@ fn escaped(s, p) {
     about `ln(2^24 / offset) / ln|λ|` steps (some 100 to 200 at zoom 30)
     the two sample a field that is noise there -- any renderer's
     picture, past that, is one sample of it.
+  - **The families escaping on `Re z` or `|Im z|`** (the order of work,
+    item 2, batch 1) write their test as such (`s.z.re > p.bailout`,
+    `s.z.im.abs() > p.bailout`), and the built-in's clamp of `exp`'s
+    real part at 80 where it is reached. They render as their built-ins
+    on every pixel (Tetration on 99.8%: its log rounds otherwise, and the
+    map is chaotic), and deep-zoom, which the built-ins cannot: at zoom
+    30 against big floats, Exponential, Collatz and Tetration 439 of 439
+    on both rungs, Sine and Lambda Sine 430 to 433, where the maps'
+    chaos takes the high counts (`the_twins_escaping_on_a_part_deep_zoom`).
+    A program whose loop takes `exp`, `expm1`, `sinh` or `cosh` of a
+    value that changes reaches `e^50` before it escapes, past the scaled
+    rung's f32, and perturbs on the floatexp rung at every depth
+    (`perturb::grows_past_f32`, `PerturbTier::Custom::deep`; the
+    Exponential's twin on the scaled rung: 410 of 439). Tetration's
+    deep views must be chosen where it is defined at all: where an orbit
+    reaches `Im(z ln c)` near 1e34 and falls back, sin and cos of that
+    decide, differently on every machine, and big floats too.
   - **Origami** has no twin: it needs a table built once per image (its
     64 fold lines, each folded through the ones before, `derived_data`),
     an integer hash for the seed's lines, and its crease relief

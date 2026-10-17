@@ -2261,6 +2261,19 @@ mod tests {
             ("littlewood", &[("digit_set", 1.0)], ("0", "0"), 0.5, false, 0.0),
             ("littlewood", &[("digit_set", 2.0)], ("0", "0"), 0.5, false, 0.0),
             ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, true, 0.0),
+            // Escaping on Re z or |Im z| (item 2, batch 1).
+            ("exponential", &[], ("-1", "0"), -1.0, false, 0.0),
+            ("exponential", &[], ("0", "0"), -1.0, true, 0.0),
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
+            ("trig", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.0),
+            ("lambda_sine", &[], ("0", "0"), -1.0, false, 0.0),
+            ("lambda_sine", &[], ("0", "0"), -1.0, true, 0.0),
+            ("collatz", &[], ("1", "0"), 1.5, false, 0.0),
+            // Its log rounds otherwise than the built-in's (`log(length)`
+            // against `0.5 log(r^2)`), and the map is chaotic: 0.2%.
+            ("tetration", &[], ("0", "0"), -1.5, false, 0.005),
+            ("tetration", &[], ("0", "0"), -1.5, true, 0.005),
         ];
         for &(formula, params, (cre, cim), zoom, julia, allowed) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -2280,6 +2293,10 @@ mod tests {
                 "phoenix" => (0.5667, 0.0),
                 // Past the unit circle, or every start stays bounded.
                 "littlewood" => (1.1, 0.4),
+                "exponential" => (-0.65, 0.0),
+                "trig" => (1.0, 0.5),
+                "lambda_sine" => (1.0, 0.4),
+                "tetration" => (1.2, 0.6),
                 _ => (-0.8, 0.156),
             };
             let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
@@ -2488,6 +2505,57 @@ mod tests {
             assert!(escaped > truth.len() / 4, "digit set {digit_set}: the view escapes too little");
             assert!(right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set}: {right} of {}", truth.len());
             assert!(deep_right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set} floatexp: {deep_right} of {}", truth.len());
+        }
+    }
+
+    /// The twins of the built-ins escaping on `Re z` or `|Im z|` deep-zoom
+    /// by derived equations, which their built-ins cannot (order of work,
+    /// item 2, batch 1): against the big-float truth at zoom 30, on both
+    /// rungs, at views by the edge found by bisection.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_twins_escaping_on_a_part_deep_zoom() {
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f32, u32)] = &[
+            ("exponential", &[], ("1.028396859500487", "-2.5"), 50.0, 300),
+            ("trig", &[("variant", 0.0)], ("-2.498552209316636", "-1.25"), 50.0, 300),
+            ("lambda_sine", &[], ("-0.9686709039042004", "-0.25"), 50.0, 300),
+            ("collatz", &[], ("0.9760853061268013", "-0.08"), 10.0, 300),
+            ("tetration", &[], ("2.3523916463991066", "-3.0"), 50.0, 300),
+        ];
+        for &(formula, params, (cre, cim), bailout, max_iter) in cases {
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = max_iter;
+            esc.bailout = bailout;
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    values.values[i].0 = f64::from(bailout);
+                } else if let Some(v) = esc.formula_params.get(&x.name) {
+                    values.values[i].0 = f64::from(*v);
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(values), (cre, cim), 30.0, max_iter, (64, 48), 7, 6);
+            let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            assert!(escaped > truth.len() / 4 && escaped < truth.len() * 9 / 10, "{formula}: {escaped} of {} escape", truth.len());
+            for floatexp in [false, true] {
+                let got = records_on(&esc, 64, 48, floatexp, true, false);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                println!("{formula} at zoom 30{}: {right} of {} right ({escaped} escape)", if floatexp { ", floatexp" } else { "" }, truth.len());
+                assert!(right as f64 >= 0.95 * truth.len() as f64, "{formula}, floatexp {floatexp}: {right} of {}", truth.len());
+            }
         }
     }
 

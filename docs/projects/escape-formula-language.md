@@ -1532,7 +1532,10 @@ Each item is ticked here when done; findings go in as they are made.
    - Batches: (1) Exponential, Trig, Lambda Sine, Collatz, Tetration
      (no native deep tier, so they gain deep zoom; Tetration written
      `exp(z ln c)`, since `c^z`'s exponent varies and has no derived
-     form); (2) Feather, McMullen (native tiers to compare; McMullen's
+     form) -- **done 2026-10-17**: every pixel as the built-in's (Tetration
+     99.8%), deep at zoom 30 against big floats 430 to 439 of 439 on
+     both rungs; exp-like loops perturb on the floatexp rung
+     (`grows_past_f32`); (2) Feather, McMullen (native tiers to compare; McMullen's
      on the Julia plane only); (3) Barnsley, Kaliset, Ducks, Lattès
      (branches on the iterate, folds, three non-escaping); (4) Magnet,
      Nova, Novaretti, Newton (convergent; Newton 6 functions by 3

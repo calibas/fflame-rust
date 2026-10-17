@@ -175,6 +175,40 @@ pub fn settle_of(test: &IExpr) -> Option<IExpr> {
     settles.into_iter().reduce(|a, b| boolean(IExprKind::Binary(BinOp::Or, Box::new(a), Box::new(b))))
 }
 
+/// Whether a formula's iterate grows past the scaled rung's f32 before
+/// it escapes: its loop takes `exp`, `expm1`, `sinh` or `cosh` of a value
+/// that changes, as the exponential family does (`e^z + c`, escaping at
+/// `Re z > 50`, reaches `e^50`; its deviation in the scaled rung's units
+/// overflowed, and the pixels never escaped: 410 of 439 right at zoom
+/// 30, 439 on the floatexp rung). Such a formula perturbs on the
+/// floatexp rung at every depth (`PerturbTier::Custom::deep`).
+pub fn grows_past_f32(p: &Program) -> bool {
+    fn e(x: &IExpr, p: &Program) -> bool {
+        match &x.kind {
+            IExprKind::Call(Builtin::Exp | Builtin::Expm1 | Builtin::Sinh | Builtin::Cosh, a) => reads_a_variable(a, p) || reads_z(a) || e(a, p),
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, p),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
+            _ => false,
+        }
+    }
+    fn reads_z(x: &IExpr) -> bool {
+        match &x.kind {
+            IExprKind::Predef(Predef::Z) => true,
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads_z(a),
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_z(a) || reads_z(b),
+            _ => false,
+        }
+    }
+    fn s(st: &[IStmt], p: &Program) -> bool {
+        st.iter().any(|x| match x {
+            IStmt::Assign(_, v) => e(v, p),
+            IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),
+            IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
+        })
+    }
+    s(&p.loop_body, p)
+}
+
 /// Whether a formula's test never ends an orbit: none, or `true` (UF's
 /// `bailout: true`; a Rhai formula without `escaped`).
 pub fn never_escapes(p: &Program) -> bool {
