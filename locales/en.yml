@@ -2793,6 +2793,7 @@ escape_panel:
   depth_direct: "Deep zoom: to about 10^%{zoom}"
   depth_direct_tip: "This formula has no perturbation tier, so it renders through the direct path — whose f32 pixel mapping stops separating neighbouring pixels past this zoom."
   depth_exceeded: "Past this formula's usable depth — detail here is float noise, not structure."
+  sizes_failed: "At these settings its arrays do not fit (%{why}); it renders at its default sizes."
   julia: "Julia mode"
   tooltip_julia: "Iterate from the pixel with a fixed c (dynamical plane) instead of from the critical point with c = pixel"
   julia_seed: "Seed c"

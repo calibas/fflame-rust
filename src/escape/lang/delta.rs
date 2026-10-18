@@ -802,7 +802,7 @@ fn binomial(n: i64, k: i64) -> f64 {
 
 impl<'p> Deriver<'p> {
     fn new_var(&mut self, name: String, ty: Ty) -> VarId {
-        self.out.vars.push(Var { name, ty, span: Default::default(), stored_real: false, global: false, perturb: true, dims: Vec::new() });
+        self.out.vars.push(Var { name, ty, span: Default::default(), stored_real: false, global: false, perturb: true, dims: Vec::new(), size: Vec::new() });
         self.out.vars.len() - 1
     }
 

@@ -276,6 +276,17 @@ pub fn render_escape_content(
         }
     }
 
+    // A custom entry whose arrays, sized by its parameters or the
+    // iteration count, do not fit at these settings renders at its
+    // default sizes: say why rather than draw something else silently.
+    if let Some(why) = crate::escape::custom::size_failure(&esc) {
+        ui.label(
+            egui::RichText::new(t!("escape_panel.sizes_failed", why = why))
+                .small()
+                .color(egui::Color32::from_rgb(220, 160, 60)),
+        );
+    }
+
     // How deep this formula goes, said out loud. 17 of the 23
     // formulas stop resolving around zoom 14 -- the direct path's f32
     // pixel mapping runs out -- and nothing in the panel used to say

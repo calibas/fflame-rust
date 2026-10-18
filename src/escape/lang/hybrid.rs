@@ -428,7 +428,7 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
     out.carried.clear();
     out.name = "Hybrid".into();
     let var = |out: &mut Program, name: String, ty: Ty| {
-        out.vars.push(Var { name, ty, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
+        out.vars.push(Var { name, ty, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() });
         out.vars.len() - 1
     };
     let z = || IExpr { kind: IExprKind::Predef(Predef::Z), ty: Ty::Complex };
@@ -514,7 +514,7 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
     // The pass this one behaves as -- past the prefix, its place in the
     // first round -- and the group whose turn that is.
     let k = out.vars.len();
-    out.vars.push(Var { name: "turn".into(), ty: Ty::Int, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
+    out.vars.push(Var { name: "turn".into(), ty: Ty::Int, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() });
     let int = |v: i64| IExpr { kind: IExprKind::Int(v), ty: Ty::Int };
     let kv = || IExpr { kind: IExprKind::Var(k), ty: Ty::Int };
     let bin = |op: BinOp, a: IExpr, b: IExpr, ty: Ty| IExpr { kind: IExprKind::Binary(op, Box::new(a), Box::new(b)), ty };

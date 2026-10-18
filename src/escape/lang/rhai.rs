@@ -375,8 +375,9 @@ struct Lowerer<'s> {
     /// `prepare`'s fields, read as `p.name`.
     prepared: HashMap<String, TypeName>,
     /// The arrays' lengths, by lowered name (their elements' type is in
-    /// `types`).
-    arrays: HashMap<String, usize>,
+    /// `types`): a constant, or an int of the parameters and
+    /// `ctx.maxiter`, which the settings fix (plan, item 3, step 3f).
+    arrays: HashMap<String, ast::Expr>,
     names: Vec<(String, String)>,
     fresh: usize,
 }
@@ -932,10 +933,10 @@ impl<'s> Lowerer<'s> {
     /// array) declared at its length and copied whole.
     fn decl(&mut self, ty: TypeName, name: String, init: ast::Expr, span: Span, out: &mut Vec<ast::Stmt>) {
         if let ExprKind::Name(from) = &init.kind {
-            if let Some(&len) = self.arrays.get(from) {
-                self.arrays.insert(name.clone(), len);
+            if let Some(len) = self.arrays.get(from).cloned() {
+                self.arrays.insert(name.clone(), len.clone());
                 self.types.insert(name.clone(), ty);
-                let dims = Some(vec![mk(ExprKind::Int(len as i64), span)]);
+                let dims = Some(vec![len]);
                 out.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims, span });
                 out.push(assign(mk(ExprKind::Name(name), span), init, span));
                 return;
@@ -945,30 +946,43 @@ impl<'s> Lowerer<'s> {
     }
 
     /// A new local array of `len` elements, its declaration pending.
-    fn new_array(&mut self, ty: TypeName, len: usize, span: Span) -> String {
+    fn new_array(&mut self, ty: TypeName, len: ast::Expr, span: Span) -> String {
         let name = self.local("array", ty);
-        self.arrays.insert(name.clone(), len);
-        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: Some(vec![mk(ExprKind::Int(len as i64), span)]), span });
+        self.arrays.insert(name.clone(), len.clone());
+        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: Some(vec![len]), span });
         name
     }
 
     /// The array a lowered value names, and its length.
-    fn array_of(&self, e: &ast::Expr) -> Option<(String, usize)> {
+    fn array_of(&self, e: &ast::Expr) -> Option<(String, ast::Expr)> {
         match &e.kind {
-            ExprKind::Name(n) => self.arrays.get(n).map(|&l| (n.clone(), l)),
+            ExprKind::Name(n) => self.arrays.get(n).map(|l| (n.clone(), l.clone())),
             _ => None,
         }
     }
 
-    /// `array[index]`, the array a lowered value.
-    fn index(&mut self, array: ast::Expr, index: &Expr, scope: &mut Scope, p: Position) -> R<ast::Expr> {
+    /// `array[index]`, the array a lowered value. Rhai's tree keeps what
+    /// follows an index inside it (`a[i].re` is `a[(i).re]` there, the
+    /// index's node without `BREAK`, which ends a chain; `a[s.i]` has
+    /// it): a value's chain goes on from the element; a target's ends at
+    /// it.
+    fn index(&mut self, array: ast::Expr, index: &Expr, flags: ASTFlags, scope: &mut Scope, p: Position, value: bool) -> R<ast::Expr> {
         let span = self.pos.span(p);
         if let ExprKind::Index(..) = array.kind {
             return self.err(p, "an array of arrays: index one array, `a[i * n + j]`");
         }
         let Some((name, _)) = self.array_of(&array) else { return self.err(p, "only an array is indexed") };
+        let (index, rest) = match index {
+            Expr::Dot(be, _, _) if !flags.contains(ASTFlags::BREAK) => (&be.lhs, Some(&be.rhs)),
+            other => (other, None),
+        };
         let i = self.expr(index, scope)?;
-        Ok(mk(ExprKind::Index(name, vec![i]), span))
+        let element = mk(ExprKind::Index(name, vec![i]), span);
+        match rest {
+            None => Ok(element),
+            Some(_) if !value => self.err(p, "set an element whole, `a[i] = ...`"),
+            Some(r) => self.chain(Base::Value(element), r, scope),
+        }
     }
 
     /// Statements an expression left pending, before what holds it.
@@ -1383,9 +1397,9 @@ impl<'s> Lowerer<'s> {
                 Some(_) => self.err(*p, format!("`{}` is not a variable to set", v.1)),
                 None => self.err(*p, format!("`{}` is not declared: `let {} = ...`", v.1, v.1)),
             },
-            Expr::Index(be, _, p) => {
+            Expr::Index(be, flags, p) => {
                 let array = self.target(&be.lhs, scope)?;
-                self.index(array, &be.rhs, scope, *p)
+                self.index(array, &be.rhs, *flags, scope, *p, false)
             }
             Expr::Dot(be, _, _) => {
                 let Expr::Variable(v, _, _) = &be.lhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
@@ -1393,14 +1407,14 @@ impl<'s> Lowerer<'s> {
                     return self.err(e.position(), "set a field of the state, `s.z = ...`");
                 };
                 // `s.hist[i] = ...`: an element of a field.
-                if let Expr::Index(ibe, _, ip) = &be.rhs {
+                if let Expr::Index(ibe, flags, ip) = &be.rhs {
                     let Expr::Property(prop, pp) = &ibe.lhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
                     let f = prop.2.to_string();
                     if !scope.fields.contains(&f) {
                         return self.err(*pp, format!("`{f}` is not in the state `start` returns"));
                     }
                     let array = self.field_target(scope.which, &f, self.pos.span(*pp));
-                    return self.index(array, &ibe.rhs, scope, *ip);
+                    return self.index(array, &ibe.rhs, *flags, scope, *ip, false);
                 }
                 let Expr::Property(prop, pp) = &be.rhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
                 let f = prop.2.to_string();
@@ -1522,16 +1536,16 @@ impl<'s> Lowerer<'s> {
                     values.push(v);
                 }
                 let ty = values.iter().map(|v| self.ty_of(v)).reduce(join).unwrap_or(TypeName::Float);
-                let name = self.new_array(ty, values.len(), span);
+                let name = self.new_array(ty, mk(ExprKind::Int(values.len() as i64), span), span);
                 for (k, v) in values.into_iter().enumerate() {
                     let at = mk(ExprKind::Index(name.clone(), vec![mk(ExprKind::Int(k as i64), span)]), span);
                     self.pending.push(assign(at, v, span));
                 }
                 mk(ExprKind::Name(name), span)
             }
-            Expr::Index(be, _, p) => {
+            Expr::Index(be, flags, p) => {
                 let array = self.expr(&be.lhs, scope)?;
-                self.index(array, &be.rhs, scope, *p)?
+                self.index(array, &be.rhs, *flags, scope, *p, true)?
             }
             _ => return self.err(e.position(), "not in a formula"),
         })
@@ -1559,9 +1573,9 @@ impl<'s> Lowerer<'s> {
                 self.chain(Base::Value(first), &be.rhs, scope)
             }
             // A field's element: `p.lines[i]`, `s.hist[0]`.
-            Expr::Index(be, _, p) => {
+            Expr::Index(be, flags, p) => {
                 let array = self.chain(base, &be.lhs, scope)?;
-                self.index(array, &be.rhs, scope, *p)
+                self.index(array, &be.rhs, *flags, scope, *p, true)
             }
             Expr::Property(prop, p) => {
                 let name = prop.2.as_str();
@@ -1693,17 +1707,19 @@ impl<'s> Lowerer<'s> {
             Ok(args.remove(0))
         };
         let call = |n: &str, a: ast::Expr| mk(ExprKind::Call { name: n.to_string(), args: vec![a], user: false }, span);
-        // An array's length, a constant.
+        // An array's length: a constant, or what the settings fix.
         if name == "len" {
             return match args.as_slice() {
                 [a] => match self.array_of(a) {
-                    Some((_, len)) => Ok(mk(ExprKind::Int(len as i64), span)),
+                    Some((_, len)) => Ok(len),
                     None => self.err(p, "`len` is an array's length"),
                 },
                 _ => self.err(p, "`a.len()`, an array's length"),
             };
         }
-        // `array(n, v)`: n elements, each `v`; n a constant int.
+        // `array(n, v)`: n elements, each `v`; n a constant int, or one of
+        // the parameters and `ctx.maxiter` (the checker folds it at the
+        // settings).
         if name == "array" {
             if self.pure {
                 return self.err(p, "`escaped` is one test: build arrays in `step`");
@@ -1713,11 +1729,11 @@ impl<'s> Lowerer<'s> {
             }
             let v = args.pop().unwrap();
             let n = args.pop().unwrap();
-            let Some(len) = const_int(&n).filter(|&n| n >= 1) else {
-                return self.err(p, "`array(n, value)`: n is a constant int, at least 1");
-            };
+            if const_int(&n).is_some_and(|n| n < 1) {
+                return self.err(p, "`array(n, value)`: n is at least 1");
+            }
             let ty = self.ty_of(&v);
-            let name = self.new_array(ty, len as usize, span);
+            let name = self.new_array(ty, n.clone(), span);
             fn is_zero(e: &ast::Expr) -> bool {
                 match &e.kind {
                     ExprKind::Int(0) | ExprKind::Bool(false) => true,
@@ -1738,7 +1754,7 @@ impl<'s> Lowerer<'s> {
                     assign(mk(ExprKind::Index(name.clone(), vec![at(&i)]), span), v, span),
                     assign(at(&i), mk(ExprKind::Binary(BinOp::Add, Box::new(at(&i)), Box::new(mk(ExprKind::Int(1), span))), span), span),
                 ];
-                let cond = mk(ExprKind::Binary(BinOp::Lt, Box::new(at(&i)), Box::new(mk(ExprKind::Int(len), span))), span);
+                let cond = mk(ExprKind::Binary(BinOp::Lt, Box::new(at(&i)), Box::new(n)), span);
                 self.pending.push(ast::Stmt::While { cond, body, span });
             }
             return Ok(mk(ExprKind::Name(name), span));
@@ -2032,7 +2048,9 @@ fn escaped(s, p) {
 
     /// Arrays (plan, item 3, step 3b): `prepare`'s tables read as
     /// `p.k[i]`, a literal, `array(n, v)`, a state field indexed and
-    /// written, `len` -- running as the same formula in UF with arrays.
+    /// written, `len`, an element's part (`a[i].re`) and an index that is
+    /// a field (`a[s.u]`) -- running as the same formula in UF with
+    /// arrays.
     #[test]
     fn rhai_arrays_run_as_their_uf_twin() {
         let r = rh(r#"
@@ -2047,14 +2065,15 @@ fn prepare(p) {
 }
 
 fn start(pixel, p) {
-    #{ z: complex(0.0, 0.0), c: pixel, hist: array(3, complex(0.0, 0.0)), t: 0 }
+    #{ z: complex(0.0, 0.0), c: pixel, hist: array(3, complex(0.0, 0.0)), t: 0, u: 1 }
 }
 
 fn step(s, p) {
     s.hist[s.t % 3] = s.z;
     s.t += 1;
     let picks = [p.k[2] / 3.0, p.unit[0]];
-    s.z = s.z * s.z + s.c * picks[0] * picks[1] + p.w * s.hist[(s.t + 1) % 3] + 0.001 * p.k[p.k.len() - 1];
+    s.z = s.z * s.z + s.c * picks[0] * picks[1] + p.w * s.hist[(s.t + 1) % 3] + 0.001 * p.k[p.k.len() - 1]
+        + 0.0001 * (s.hist[s.u].re + p.k[s.u] + s.hist[2].norm_sqr());
     s
 }
 
@@ -2063,8 +2082,9 @@ fn escaped(s, p) {
 }
 "#);
         let u = uf("A {\nglobal:\n float k[4]\n int i = 0\n while i < 4\n  k[i] = i + 1\n  i = i + 1\n endwhile\n float unit[2]\n unit[0] = 1\n\
-                    init:\n z = 0\n c = #pixel\n complex hist[3]\n int t = 0\nloop:\n hist[t % 3] = z\n t = t + 1\n float picks[2]\n\
+                    init:\n z = 0\n c = #pixel\n complex hist[3]\n int t = 0\n int u = 1\nloop:\n hist[t % 3] = z\n t = t + 1\n float picks[2]\n\
                     picks[0] = k[2] / 3\n picks[1] = unit[0]\n z = z * z + c * picks[0] * picks[1] + @w * hist[(t + 1) % 3] + 0.001 * k[3]\n\
+                    z = z + 0.0001 * (real(hist[u]) + k[u] + |hist[2]|)\n\
                     bailout:\n |z| <= @bailout\ndefault:\n float param bailout\n  default = 4\n endparam\n float param w\n  default = 0.01\n endparam\n}");
         same(&r, &u, false);
         let refused = |body: &str, want: &str| {
@@ -2074,7 +2094,7 @@ fn escaped(s, p) {
             assert!(all.iter().any(|m| m.contains(want)), "{body}: {all:?}");
         };
         refused(" let a = [];", "an empty array");
-        refused(" let n = 3;\n let a = array(n, 0.0);", "n is a constant int");
+        refused(" let n = 3;\n let a = array(n, 0.0);", "numbers, parameters and `ctx.maxiter`");
         refused(" let a = [[1.0], [2.0]];\n s.z = s.z * a[0][0];", "an array of arrays");
         refused(" let x = 2.0;\n s.z = s.z * x.len();", "an array's length");
         refused(" let x = 2.0;\n s.z = s.z * x[0];", "only an array is indexed");
@@ -2125,6 +2145,26 @@ fn step(s, p) {
     s
 }
 "#;
+
+    /// An array sized by a parameter or `ctx.maxiter` (plan, item 3,
+    /// step 3f): `array(n, v)` fills it at the size the settings fix, and
+    /// `len` is that size (the size as written, so a run at other
+    /// settings than its check's reads those).
+    #[test]
+    fn rhai_arrays_sized_by_the_settings() {
+        use super::super::check::{at_settings, SizeSettings};
+        let text = "const PARAMS = #{ n: #{ value: 3 } };\nfn start(pixel, p, ctx) {\n let a = array(p.n * 2, 1.5);\n let b = array(ctx.maxiter - 1, 0.0);\n\
+                    #{ z: complex(to_float(a.len() + b.len()), a[p.n * 2 - 1]) }\n}\nfn step(s, p) { s }\nfn escaped(s, p) { true }";
+        // At the defaults: the panel's 256 iterations, as a render's.
+        let z = |p: &Program| run(p, &ParamValues::defaults(p), None, &Env::at(C64::ZERO, 256)).z;
+        assert_eq!(z(&rh(text)), C64::new(6.0 + 255.0, 1.5));
+        let settings = SizeSettings { params: [("n".to_string(), 5.0)].into_iter().collect(), maxiter: Some(20) };
+        let p = at_settings(settings, || rh(text));
+        // The values the sizes fold at are the run's too.
+        let mut values = ParamValues::defaults(&p);
+        values.values[0].0 = 5.0;
+        assert_eq!(run(&p, &values, None, &Env::at(C64::ZERO, 20)).z, C64::new(10.0 + 19.0, 1.5));
+    }
 
     /// The crease relief as a formula's function (plan, item 3, step 3d):
     /// `creases(p0, p, ctx)` gives the paper's height and gradient from

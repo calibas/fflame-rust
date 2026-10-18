@@ -36,6 +36,34 @@ pub const LOOP_CAP: u32 = 4096;
 /// private memory (the uniform's `fdata` is as large).
 pub const ARRAY_CAP_FLOATS: usize = 256;
 
+/// The settings an entry is checked at: an array's size that reads a
+/// parameter or `#maxiter` folds with these values (plan, item 3, step
+/// 3f), each parameter's real part by its name; one not named, and
+/// every one outside [`at_settings`], at its default, and `#maxiter`
+/// at the entry's own (else the panel's default).
+#[derive(Clone, Debug, Default)]
+pub struct SizeSettings {
+    pub params: HashMap<String, f64>,
+    pub maxiter: Option<u32>,
+}
+
+thread_local! {
+    static SETTINGS: std::cell::RefCell<Option<SizeSettings>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The settings checks run at now: [`at_settings`]'s, else `None`.
+pub fn current_settings() -> Option<SizeSettings> {
+    SETTINGS.with(|s| s.borrow().clone())
+}
+
+/// Run `f` (checks, a compile) with every entry it checks at `settings`.
+pub fn at_settings<T>(settings: SizeSettings, f: impl FnOnce() -> T) -> T {
+    let before = SETTINGS.with(|s| s.replace(Some(settings)));
+    let out = f();
+    SETTINGS.with(|s| *s.borrow_mut() = before);
+    out
+}
+
 /// Fractint's own predefined names, read in Fractint's dialect only.
 const FRACTINT_NAMES: &[&str] = &["lastsqr", "whitesq", "scrnpix", "scrnmax", "ismand", "center", "magxmag", "rotskew"];
 
@@ -75,6 +103,8 @@ fn check_with(entry: &Entry, kind: EntryKind, dialect: Dialect, internal: bool, 
         warned_bool: false,
         shadows: Vec::new(),
         lastsqr: None,
+        settings: SETTINGS.with(|s| s.borrow().clone()),
+        maxiter: 0,
     };
     let program = c.run(entry);
     let failed = super::has_errors(&c.diags);
@@ -103,6 +133,12 @@ struct Checker {
     shadows: Vec<(VarId, Shadowed)>,
     /// Fractint's `LastSqr`: the variable `sqr()` writes, when read.
     lastsqr: Option<VarId>,
+    /// What an array's size reading the settings folds with
+    /// ([`at_settings`]); `None`, the defaults.
+    settings: Option<SizeSettings>,
+    /// `#maxiter` in a size: the settings', else the entry's, else the
+    /// panel's default.
+    maxiter: u32,
 }
 
 /// What a written parameter or predefined name copies.
@@ -114,7 +150,12 @@ enum Shadowed {
 
 impl Checker {
     fn error(&mut self, span: Span, msg: impl Into<String>) {
-        self.diags.push(Diag::error(span, msg));
+        // Once per place: a lowered Rhai array is declared twice from one
+        // `array(n, v)` (its constructor's and the name's).
+        let d = Diag::error(span, msg);
+        if !self.diags.iter().any(|x| x.span == d.span && x.message == d.message) {
+            self.diags.push(d);
+        }
     }
 
     fn warn(&mut self, span: Span, msg: impl Into<String>) {
@@ -125,6 +166,13 @@ impl Checker {
         let sections = self.arrange(entry)?;
         self.read_blocks(&entry.default);
         let view = self.view_settings(&entry.default);
+        self.maxiter = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.maxiter)
+            .or(view.maxiter)
+            .unwrap_or_else(|| crate::config::escape::EscapeConfig::default().max_iter)
+            .max(1);
         let region = match (self.kind, entry.setting.as_deref().map(str::to_ascii_lowercase).as_deref()) {
             (EntryKind::Coloring, Some("inside")) => Region::Inside,
             (EntryKind::Coloring, Some("outside")) => Region::Outside,
@@ -556,8 +604,8 @@ impl Checker {
                             continue;
                         }
                     };
-                    let dims = match dims {
-                        None => Vec::new(),
+                    let (dims, size) = match dims {
+                        None => (Vec::new(), Vec::new()),
                         Some(d) => match self.array_dims(d, ty, *span) {
                             Some(d) => d,
                             None => continue,
@@ -574,7 +622,9 @@ impl Checker {
                         Some(_) => {}
                         None => {
                             self.new_var(name, ty, *span);
-                            self.vars.last_mut().expect("the new variable").dims = dims.clone();
+                            let var = self.vars.last_mut().expect("the new variable");
+                            var.dims = dims.clone();
+                            var.size = size;
                         }
                     }
                     if let Some(e) = init {
@@ -639,19 +689,45 @@ impl Checker {
         }
     }
 
-    /// An array declaration's sizes: constant integer expressions (UF's
-    /// rule), each at least one, the whole within [`ARRAY_CAP_FLOATS`].
-    fn array_dims(&mut self, dims: &[Expr], ty: Ty, span: Span) -> Option<Vec<u32>> {
+    /// An array declaration's sizes, folded and as written: constant
+    /// integer expressions (UF's rule, which counts the parameters and
+    /// `#maxiter` constants: those fold at the settings, [`SizeSettings`]),
+    /// each at least one, the whole within [`ARRAY_CAP_FLOATS`].
+    fn array_dims(&mut self, dims: &[Expr], ty: Ty, span: Span) -> Option<(Vec<u32>, Vec<IExpr>)> {
         if dims.is_empty() {
             self.error(span, "dynamic arrays (`[]`, `setLength`) are not supported yet");
             return None;
         }
         let mut out = Vec::new();
+        let mut size = Vec::new();
         for d in dims {
             let n = match const_size(d) {
-                Ok(n) => n,
-                Err(why) => {
-                    self.error(d.span, why);
+                Ok(n) => {
+                    size.push(IExpr { kind: IExprKind::Int(n), ty: Ty::Int });
+                    n
+                }
+                Err(_) if settings_size(d).is_empty() => {
+                    let e = self.expr(d)?;
+                    if e.ty != Ty::Int {
+                        self.error(d.span, format!("an array's size is an int, not a {}: `round` or `trunc` it", e.ty.name()));
+                        return None;
+                    }
+                    let settings = self.settings.clone();
+                    let params = &self.params;
+                    let param = |id: ParamId| {
+                        let p = &params[id];
+                        let x = settings.as_ref().and_then(|s| s.params.get(&p.name).copied()).unwrap_or(p.default.0);
+                        if p.ty() == Ty::Int { x.round() } else { x }
+                    };
+                    let Some(v) = size_value(&e, &param, self.maxiter).filter(|v| v.is_finite()) else {
+                        self.error(d.span, "this size has no value at the parameters' values");
+                        return None;
+                    };
+                    size.push(e);
+                    v.round().clamp(-1.0e12, 1.0e12) as i64
+                }
+                Err(_) => {
+                    self.error(d.span, settings_size(d));
                     return None;
                 }
             };
@@ -666,7 +742,7 @@ impl Checker {
             self.error(span, format!("this array takes {floats} floats; at most {ARRAY_CAP_FLOATS} fit (a complex takes two)"));
             return None;
         }
-        Some(out)
+        Some((out, size))
     }
 
     /// An array element: `name[i, j]` read at its flattened index, each
@@ -678,6 +754,7 @@ impl Checker {
             return None;
         };
         let dims = self.vars[id].dims.clone();
+        let size = self.vars[id].size.clone();
         if dims.is_empty() {
             self.error(span, format!("`{name}` is not an array"));
             return None;
@@ -688,14 +765,18 @@ impl Checker {
         }
         let int = |kind: IExprKind| IExpr { kind, ty: Ty::Int };
         let mut flat: Option<IExpr> = None;
-        for (x, &d) in index.iter().zip(&dims) {
+        for ((x, &d), written) in index.iter().zip(&dims).zip(&size) {
             let i = self.expr(x)?;
             if i.ty != Ty::Int {
                 self.error(x.span, format!("an array index is an int, not a {}", i.ty.name()));
                 return None;
             }
-            if let IExprKind::Int(k) = i.kind {
-                if k < 0 || k >= i64::from(d) {
+            // A dimension the settings fix is read as written, so the
+            // index means the same at every size (a converted formula's
+            // too); a constant index past it is clamped as a computed one.
+            let fixed = matches!(written.kind, IExprKind::Int(_));
+            if let (IExprKind::Int(k), true) = (&i.kind, fixed) {
+                if *k < 0 || *k >= i64::from(d) {
                     self.error(x.span, format!("index {k} is outside `{name}`, whose dimension has {d}"));
                     return None;
                 }
@@ -703,9 +784,9 @@ impl Checker {
             flat = Some(match (flat, &i.kind) {
                 (None, _) => i,
                 // Constant indices fold: the element is known.
-                (Some(IExpr { kind: IExprKind::Int(f), .. }), IExprKind::Int(k)) => int(IExprKind::Int(f * i64::from(d) + k)),
+                (Some(IExpr { kind: IExprKind::Int(f), .. }), IExprKind::Int(k)) if fixed => int(IExprKind::Int(f * i64::from(d) + k)),
                 (Some(f), _) => {
-                    let scaled = int(IExprKind::Binary(BinOp::Mul, Box::new(f), Box::new(int(IExprKind::Int(i64::from(d))))));
+                    let scaled = int(IExprKind::Binary(BinOp::Mul, Box::new(f), Box::new(written.clone())));
                     int(IExprKind::Binary(BinOp::Add, Box::new(scaled), Box::new(i)))
                 }
             });
@@ -716,7 +797,7 @@ impl Checker {
     fn new_var(&mut self, name: &str, ty: Ty, span: Span) {
         self.var_ids.insert(name.to_string(), self.vars.len());
         let perturb = matches!(self.section, SectionKind::PerturbInit | SectionKind::PerturbLoop);
-        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false, perturb, dims: Vec::new() });
+        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false, perturb, dims: Vec::new(), size: Vec::new() });
     }
 
     fn param(&mut self, name: &str, span: Span) -> ParamId {
@@ -1723,8 +1804,8 @@ fn last_sqr_argument(x: &Expr) -> Option<&Expr> {
 }
 
 /// An array size: a constant integer expression, its literals and
-/// arithmetic folded. UF counts parameters and most predefined symbols
-/// as constants too; those sizes are a later step.
+/// arithmetic folded; otherwise why not ([`settings_size`]: empty for a
+/// size the settings fix, which `Checker::array_dims` folds).
 fn const_size(e: &Expr) -> Result<i64, String> {
     let fold = |a: &Expr, b: &Expr, f: fn(i64, i64) -> Option<i64>| -> Result<i64, String> {
         f(const_size(a)?, const_size(b)?).ok_or_else(|| "this size does not fold to an integer".to_string())
@@ -1735,8 +1816,26 @@ fn const_size(e: &Expr) -> Result<i64, String> {
         ExprKind::Binary(BinOp::Add, a, b) => fold(a, b, i64::checked_add),
         ExprKind::Binary(BinOp::Sub, a, b) => fold(a, b, i64::checked_sub),
         ExprKind::Binary(BinOp::Mul, a, b) => fold(a, b, i64::checked_mul),
-        ExprKind::Param(_) | ExprKind::Predef(_) => Err("an array sized by a parameter or a predefined symbol is not supported yet".to_string()),
-        _ => Err("an array's size is a constant integer expression".to_string()),
+        _ => Err(settings_size(e)),
+    }
+}
+
+/// Why a size cannot fold at the settings, or empty when it can: it
+/// reads only what they fix before the image -- numbers, parameters,
+/// `#maxiter`, `#pi` and `#e`, arithmetic and the built-ins.
+fn settings_size(e: &Expr) -> String {
+    let first = |xs: &[&Expr]| xs.iter().map(|x| settings_size(x)).find(|w| !w.is_empty()).unwrap_or_default();
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Param(_) => String::new(),
+        ExprKind::Predef(n) if matches!(n.as_str(), "maxiter" | "maxit" | "pi" | "e") => String::new(),
+        ExprKind::Predef(n) if matches!(n.as_str(), "width" | "height") => {
+            format!("an array sized by `#{n}` is not supported: the picture's size differs between the view, an export and its tiles")
+        }
+        ExprKind::Predef(n) => format!("an array's size reads numbers, parameters and `#maxiter`, not `#{n}`"),
+        ExprKind::Unary(UnOp::Neg, a) => settings_size(a),
+        ExprKind::Binary(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow, a, b) => first(&[a, b]),
+        ExprKind::Call { args, user: false, .. } if !args.is_empty() => first(&args.iter().collect::<Vec<_>>()),
+        _ => "an array's size is a constant integer expression: numbers, parameters and `#maxiter`".to_string(),
     }
 }
 
@@ -2150,6 +2249,46 @@ mod tests {
         assert_eq!(USER_FUNCTIONS[p.funcs[0].default], Builtin::Cosh);
         assert_eq!(p.param_slots(), 2);
     }
+    /// A size the settings fix (plan, item 3, step 3f): parameters and
+    /// `#maxiter` fold at the defaults (the entry's own `maxiter`), or at
+    /// the settings a check runs at; the size stays as written, so a
+    /// stride follows it, and a constant index is clamped rather than
+    /// refused where the size may change.
+    #[test]
+    fn sizes_fold_at_the_settings() {
+        let src = "S {\nglobal:\n float t[#maxiter]\n complex m[2, @n]\ninit:\n z = 0\n float k[round(@w * 2.5) + 1]\n k[9] = 1\n\
+                   loop:\n z = sqr(z) + #pixel + m[1, 2] * t[3] + k[1]\nbailout:\n |z| < 4\n\
+                   default:\n maxiter = 50\n int param n\n  default = 3\n endparam\n float param w\n  default = 1\n endparam\n}";
+        let dims = |p: &Program| -> Vec<Vec<u32>> { ["t", "m", "k"].iter().map(|n| p.vars.iter().find(|v| v.name == *n).unwrap().dims.clone()).collect() };
+        let p = ok(src, EntryKind::Formula);
+        assert_eq!(dims(&p), vec![vec![50], vec![2, 3], vec![4]]);
+        assert!(p.sized_by_settings());
+        assert_eq!(p.sizes_at(&[(5.0, 0.0), (2.0, 0.0)], 80), Some(vec![80, 2, 5, 6]));
+        let settings = SizeSettings { params: [("n".to_string(), 5.0), ("w".to_string(), 2.0)].into_iter().collect(), maxiter: Some(80) };
+        let q = at_settings(settings, || ok(src, EntryKind::Formula));
+        assert_eq!(dims(&q), vec![vec![80], vec![2, 5], vec![6]]);
+        // `m[1, 2]` reads `1 * @n + 2`, at any `@n`.
+        fn strided(e: &IExpr) -> bool {
+            match &e.kind {
+                IExprKind::Elem(_, i) => matches!(&i.kind, IExprKind::Binary(BinOp::Add, a, _)
+                    if matches!(&a.kind, IExprKind::Binary(BinOp::Mul, _, n) if matches!(n.kind, IExprKind::Param(_)))),
+                IExprKind::Binary(_, a, b) => strided(a) || strided(b),
+                IExprKind::Call(_, a) | IExprKind::Convert(a) | IExprKind::Unary(_, a) => strided(a),
+                _ => false,
+            }
+        }
+        let IStmt::Assign(_, e) = q.loop_body.last().unwrap() else { panic!("{:?}", q.loop_body) };
+        assert!(strided(e), "{e:?}");
+        // A constant program is not sized by the settings.
+        assert!(!ok("C {\ninit:\n z = 0\n float a[3]\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}", EntryKind::Formula).sized_by_settings());
+        // Past the cap at these settings, under 1 at those.
+        let at = |n: f64| SizeSettings { params: [("n".to_string(), n)].into_iter().collect(), maxiter: None };
+        let e = at_settings(at(200.0), || errors(src, EntryKind::Formula));
+        assert!(e.iter().any(|m| m.contains("at most 256")), "{e:?}");
+        let e = at_settings(at(0.0), || errors(src, EntryKind::Formula));
+        assert!(e.iter().any(|m| m.contains("at least 1, not 0")), "{e:?}");
+    }
+
     /// Static arrays (plan, item 3, step 3a): declared with constant
     /// sizes in any section, read and written by element at a flattened
     /// index; a global one packed with the globals, a colouring's kept
@@ -2194,7 +2333,10 @@ mod tests {
         };
         let shell = |body: &str| format!("F {{\ninit:\n z = 0\n{body}\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}}");
         refused(&shell(" float a[]"), "dynamic arrays");
-        refused(&shell(" float a[@n]"), "sized by a parameter");
+        refused(&shell(" float a[@n]"), "an array's size is an int, not a complex");
+        refused(&shell(" float a[#width]"), "the picture's size differs");
+        refused(&shell(" float a[#numiter]"), "not `#numiter`");
+        refused(&shell(" int n = 2\n float a[n]"), "numbers, parameters and `#maxiter`");
         refused(&shell(" float a[0]"), "at least 1");
         refused(&shell(" complex a[200]"), "at most 256");
         refused(&shell(" float a[2] = 1"), "not set in its declaration");

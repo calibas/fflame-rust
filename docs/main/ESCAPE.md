@@ -382,8 +382,10 @@ fn escaped(s, p) {
   in f64, it lets a table be computed as f32 code computes it, an
   operation at a time.
 - **Arrays**, of one dimension: a literal `[a, b, c]`, `array(n, v)`
-  (n a constant int, each element `v`), `a[i]` read and written (an int
-  index, clamped), `a.len()`. A state field may be one (`s.hist[i] =
+  (n a constant int, or one the settings fix: `array(p.n + 1, 0.0)`,
+  `array(ctx.maxiter, 0.0)`, as UF's sizes below; each element `v`),
+  `a[i]` read and written (an int index, clamped), an element's part or
+  method (`a[i].re`, `a[i].norm_sqr()`), `a.len()`. A state field may be one (`s.hist[i] =
   s.z`), and `prepare` may return one (`p.k[i]`, a table the image's);
   `let b = a` copies one. Arrays of arrays are refused (index one
   array, `a[i * n + j]`). As UF's arrays (below) on every path.
@@ -693,11 +695,21 @@ Fractal 6 defines them. Settings may share a line, separated by commas.
 A constant expression WGSL would refuse to fold (`sqrt(-3)`, `1 / 0`)
 reaches the GPU unfolded, which computes UF's NaN or infinity.
 
-**Arrays** (UF's static arrays; the plan's item 3, step 3a): `float
-a[10]`, `complex m[3, 4]`, each size a constant integer expression (UF
-counts parameters and most predefined symbols as constants too; those
-sizes, and dynamic arrays with `setLength`, are a later step), in any
-section, at most 256 floats each. Elements are `a[i]`, `m[i, j]`,
+**Arrays** (UF's static arrays; the plan's item 3, steps 3a and 3f):
+`float a[10]`, `complex m[3, 4]`, `float t[@n + 1]`, `complex
+trace[#maxiter]`, each size a constant integer expression, which as in
+UF may read the parameters and `#maxiter` (and `#pi`, `#e`, the
+built-ins: `round(@w * 2.5)`), in any section, at most 256 floats each.
+Such a size folds at the settings: the entry is checked at its
+defaults (its own `maxiter`, else the panel's), and a config whose
+values give other sizes renders a variant compiled at them
+(`custom::resolve`), so a change of size recompiles and nothing else
+does. Where they do not fit at those settings, the Escape panel says
+why and the entry renders at its default sizes. Refused: a size
+reading the picture's size (`#width`, `#height`, which differ between
+the view, an export and its tiles), any other predefined name or a
+variable; dynamic arrays (`setLength`, every use of which in UF's
+library is behind `import`). Elements are `a[i]`, `m[i, j]`,
 zero-based, the indices ints (`/` never makes one: `trunc` it), in the
 declared order; a constant index outside its dimension is refused, as
 UF refuses it, and one computed is clamped to the array (UF stops the
@@ -723,7 +735,11 @@ same size and type; it is no other kind of value.
   a field of the state (`s.last[i]`), a whole-array copy as `s.prev =
   s.last`. Rhai's arrays have one dimension, so a two-dimensional one
   converts flattened, as the compiler flattens it: `m[1, 2]` of a
-  `complex m[2, 3]` reads `m[5]`.
+  `complex m[2, 3]` reads `m[5]`. A size the settings fix converts as
+  written (`array(2 * p.n, ...)`, the index `m[1 * p.n + 2]`), so the
+  Rhai means the same at every value.
+- A `switch:` target's sizes read the pair's parameters (a copied one
+  the formula's) and fold at the values those hold there.
 
 **Fractint's conventions** apply to a `.frm` file, or with the editor's
 language set to Fractint (from its `parser.c`): a test is true when its

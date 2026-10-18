@@ -18,7 +18,7 @@
 //! engine already drives.
 
 use super::ast::{Entry, ExprKind, File, SettingValue};
-use super::check::{check, FDATA_FLOATS, PARAM_SLOTS};
+use super::check::{at_settings, check, current_settings, SizeSettings, FDATA_FLOATS, PARAM_SLOTS};
 use super::ir::*;
 use super::{Diag, Dialect, EntryKind};
 
@@ -110,7 +110,42 @@ pub fn check_formula(file: &File, entry: &Entry, dialect: Dialect) -> (Option<Pr
         return (Some(program), diags);
     }
 
-    let pair = splice(program, tgt, &params, &funcs, &target.name.to_ascii_lowercase());
+    // A target's arrays sized by its parameters fold at the values they
+    // hold in the pair (plan, item 3, step 3f): a copied one the
+    // formula's, its own under its name there, the formula's iterations.
+    let tag = target.name.to_ascii_lowercase();
+    let tgt = if tgt.sized_by_settings() {
+        let outer = current_settings();
+        let value = |name: &str, default: f64| outer.as_ref().and_then(|s| s.params.get(name).copied()).unwrap_or(default);
+        let mut taken: Vec<String> = program.params.iter().map(|p| p.name.clone()).collect();
+        let mut values = std::collections::HashMap::new();
+        for (d, p) in tgt.params.iter().enumerate() {
+            match params[d] {
+                Some(Source::Param(s)) => {
+                    values.insert(p.name.clone(), value(&program.params[s].name, program.params[s].default.0));
+                }
+                Some(Source::JuliaC) => {}
+                None => {
+                    let merged = if taken.contains(&p.name) { format!("{tag}_{}", p.name) } else { p.name.clone() };
+                    values.insert(p.name.clone(), value(&merged, p.default.0));
+                    taken.push(merged);
+                }
+            }
+        }
+        let maxiter = outer.as_ref().and_then(|s| s.maxiter).or(program.view.maxiter);
+        let (again, d) = at_settings(SizeSettings { params: values, maxiter }, || check(target, EntryKind::Formula, dialect));
+        match again.filter(|_| !super::has_errors(&d)) {
+            Some(t) => t,
+            None => {
+                let first = d.iter().find(|x| x.severity == super::Severity::Error).map_or(String::new(), |x| x.message.clone());
+                diags.push(ignored(format!("the switch target `{}` does not compile at these values ({first})", target.name)));
+                return (Some(program), diags);
+            }
+        }
+    } else {
+        tgt
+    };
+    let pair = splice(program, tgt, &params, &funcs, &tag);
     if pair.param_slots() > PARAM_SLOTS {
         diags.push(Diag::error(
             entry.span,
@@ -200,6 +235,10 @@ fn splice(src: Program, tgt: Program, copies: &[Option<Source>], func_copies: &[
         });
     }
     let r = Remap { var_offset, params: &param_to, funcs: &func_to };
+    // The target's array sizes read the pair's parameters.
+    for v in &mut pair.vars[var_offset..] {
+        v.size = v.size.iter().map(|e| r.expr(e)).collect();
+    }
 
     let on_parameter_plane = IExpr {
         kind: IExprKind::Convert(Box::new(IExpr { kind: IExprKind::Predef(Predef::IsMand), ty: Ty::Complex })),
@@ -299,6 +338,40 @@ mod tests {
         let entry = file.entries.iter().find(|e| e.name == name).unwrap();
         let (p, d) = check_formula(&file, entry, Dialect::UltraFractal);
         (p, d.iter().map(|x| x.render(src)).collect())
+    }
+
+    /// A target's arrays sized by its parameters (plan, item 3, step 3f)
+    /// fold at the values those hold in the pair, and their sizes read
+    /// the pair's parameters: a copied one the formula's, its own under
+    /// its name there (`j_m`, as the formula has an `m`).
+    #[test]
+    fn a_targets_array_sizes_follow_the_pair() {
+        use super::super::check::{at_settings, SizeSettings};
+        let src = "M {\ninit:\n z = 0\n float h[@n]\nloop:\n z = sqr(z) + #pixel + h[0] * @m\nbailout:\n |z| < 4\n\
+                   default:\n int param n\n  default = 2\n endparam\n float param m\n  default = 0\n endparam\n\
+                   switch:\n type = \"J\"\n seed = #pixel\n terms = n\n}\n\
+                   J {\ninit:\n z = #pixel\n float a[@terms]\n float b[@m]\nloop:\n z = sqr(z) + @seed + a[0] + b[0]\nbailout:\n |z| < 4\n\
+                   default:\n param seed\n  default = (0, 0)\n endparam\n int param terms\n  default = 9\n endparam\n\
+                   int param m\n  default = 4\n endparam\n}\n";
+        let dims = |p: &Program| -> Vec<Vec<u32>> { ["h", "a", "b"].iter().map(|n| p.vars.iter().find(|v| v.name == *n).unwrap().dims.clone()).collect() };
+        let (p, d) = checked(src, "M");
+        let p = p.unwrap_or_else(|| panic!("{d:?}"));
+        assert!(p.reads(Predef::IsMand), "the toggle: {d:?}");
+        assert_eq!(dims(&p), vec![vec![2], vec![2], vec![4]]);
+        assert!(p.params.iter().any(|x| x.name == "j_m"), "{:?}", p.params.iter().map(|x| &x.name).collect::<Vec<_>>());
+        let values: Vec<(f64, f64)> = p
+            .params
+            .iter()
+            .map(|x| match x.name.as_str() {
+                "n" => (5.0, 0.0),
+                "j_m" => (7.0, 0.0),
+                _ => x.default,
+            })
+            .collect();
+        assert_eq!(p.sizes_at(&values, 100), Some(vec![5, 5, 7]));
+        let settings = SizeSettings { params: [("n".to_string(), 5.0), ("j_m".to_string(), 7.0)].into_iter().collect(), maxiter: None };
+        let (q, d) = at_settings(settings, || checked(src, "M"));
+        assert_eq!(dims(&q.unwrap_or_else(|| panic!("{d:?}"))), vec![vec![5], vec![5], vec![7]]);
     }
 
     /// Off, the pair is the Mandelbrot; on, the Julia, its seed the

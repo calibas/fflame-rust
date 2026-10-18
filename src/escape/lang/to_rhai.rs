@@ -565,15 +565,12 @@ impl<'p> Printer<'p> {
         }
         self.begin(Fun::Prepare);
         self.body(&p.global_body)?;
-        let fields: Vec<String> = p
-            .globals
-            .iter()
-            .map(|&g| {
-                let name = self.global[g].clone().unwrap_or_default();
-                let value = if self.declared.contains(&Slot::Var(g)) { self.var[g].clone() } else { self.slot_zero(Slot::Var(g)) };
-                field(&name, value)
-            })
-            .collect();
+        let mut fields = Vec::new();
+        for &g in &p.globals {
+            let name = self.global[g].clone().unwrap_or_default();
+            let value = if self.declared.contains(&Slot::Var(g)) { self.var[g].clone() } else { self.slot_zero(Slot::Var(g))? };
+            fields.push(field(&name, value));
+        }
         let map = map_literal(&fields, self.depth);
         self.line(&map);
         Ok(Some(format!("fn prepare(p{}) {{\n{}}}\n", self.ctx_arg(), self.out)))
@@ -589,7 +586,7 @@ impl<'p> Printer<'p> {
         }
         for v in 0..p.vars.len() {
             if self.state[v] {
-                let value = if self.declared.contains(&Slot::Var(v)) { self.var[v].clone() } else { self.slot_zero(Slot::Var(v)) };
+                let value = if self.declared.contains(&Slot::Var(v)) { self.var[v].clone() } else { self.slot_zero(Slot::Var(v))? };
                 fields.push(field(&self.var[v], value));
             }
         }
@@ -671,14 +668,26 @@ impl<'p> Printer<'p> {
 
     /// A slot's value before anything is written: its type's zero, an
     /// array's elements' (`array(n, 0.0)`; UF's arrays flattened to one
-    /// dimension, as their indices are).
-    fn slot_zero(&self, s: Slot) -> String {
+    /// dimension, as their indices are), a size the settings fix as
+    /// written (`array(p.n + 1, 0.0)`).
+    fn slot_zero(&mut self, s: Slot) -> R<String> {
         match s {
             Slot::Var(v) if self.p.vars[v].is_array() => {
-                let var = &self.p.vars[v];
-                format!("array({}, {})", var.len(), zero(var.ty))
+                let p = self.p;
+                let var = &p.vars[v];
+                let n = if var.size.iter().all(|e| matches!(e.kind, IExprKind::Int(_))) {
+                    var.len().to_string()
+                } else {
+                    let mut parts = Vec::new();
+                    for e in &var.size {
+                        let P(text, prec) = self.expr(e)?;
+                        parts.push(if var.size.len() > 1 && prec < MUL { format!("({text})") } else { text });
+                    }
+                    parts.join(" * ")
+                };
+                Ok(format!("array({n}, {})", zero(var.ty)))
             }
-            other => zero(self.slot_decl(other).1).to_string(),
+            other => Ok(zero(self.slot_decl(other).1).to_string()),
         }
     }
 
@@ -724,7 +733,7 @@ impl<'p> Printer<'p> {
         }
         for s in hoisted {
             let name = self.slot_decl(s).0;
-            let value = self.slot_zero(s);
+            let value = self.slot_zero(s)?;
             self.line(&format!("let {name} = {value};"));
             self.declared.insert(s);
         }
@@ -1402,6 +1411,29 @@ mod tests {
         ] {
             assert!(text.contains(line), "no `{line}` in\n{text}");
         }
+    }
+
+    /// Sizes the settings fix (step 3f) convert as written: the Rhai,
+    /// checked at other settings, has the UF's sizes there and runs as it.
+    #[test]
+    fn sizes_the_settings_fix_convert_as_written() {
+        use super::super::check::{at_settings, SizeSettings};
+        let src = "S {\nglobal:\n float t[@n + 1]\n int i = 0\n while i <= @n\n  t[i] = i * 0.5\n  i = i + 1\n endwhile\ninit:\n z = 0\n complex m[2, @n]\n\
+                   loop:\n m[1, @n - 1] = z\n z = sqr(z) + #pixel + t[@n] * 0.01 + m[1, @n - 1] * 0.001 + #maxiter * 0.0\nbailout:\n |z| < 4\n\
+                   default:\n int param n\n  default = 3\n endparam\n}";
+        let text = round_trip(&programs(src, Dialect::UltraFractal).remove(0));
+        for line in ["let t = array(p.n + 1, 0.0);", "array(2 * p.n, complex(0.0, 0.0))"] {
+            assert!(text.contains(line), "no `{line}` in\n{text}");
+        }
+        let settings = SizeSettings { params: [("n".to_string(), 6.0)].into_iter().collect(), maxiter: Some(90) };
+        let uf = at_settings(settings.clone(), || programs(src, Dialect::UltraFractal).remove(0));
+        let back = at_settings(settings, || super::super::rhai::program(&text)).unwrap_or_else(|d| panic!("{:?}\n{text}", d[0].message));
+        // The lengths (Rhai's are one-dimensional, and its constructors
+        // make temporaries).
+        let lens = |p: &Program| -> std::collections::BTreeSet<usize> { p.vars.iter().filter(|v| v.is_array()).map(|v| v.len()).collect() };
+        assert_eq!(lens(&uf), [7, 12].into_iter().collect());
+        assert_eq!(lens(&back), lens(&uf), "{text}");
+        assert_eq!(parting(&uf, &back, 200), None, "{text}");
     }
 
     /// Names Rhai keeps are renamed, and the literal forms read back
