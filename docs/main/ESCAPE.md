@@ -703,7 +703,8 @@ declared order; a constant index outside its dimension is refused, as
 UF refuses it, and one computed is clamped to the array (UF stops the
 render with a message under `$define debug`, which a GPU cannot). An
 array is zero until written (UF leaves it undefined). It is read and
-written by element only: a whole array is neither a value nor assigned.
+written by element, and assigned whole (`x = y`) only from one of the
+same size and type; it is no other kind of value.
 - A `global:` array is the image's: computed on the CPU and packed with
   the other globals, read by index from `fdata` or the colouring's
   block.
@@ -717,7 +718,12 @@ written by element only: a whole array is neither a value nor assigned.
   pass) as they take a parameter. A formula whose loop writes an array,
   or reads one where the iterate decides the index, keeps the direct
   path and has no derivative.
-- Arrays do not yet convert to Rhai (Edit as Rhai refuses them).
+- Edit as Rhai converts them: each declared as `array(n, zero)`, a
+  `global:` one built in `prepare` and read as `p.k[i]`, a carried one
+  a field of the state (`s.last[i]`), a whole-array copy as `s.prev =
+  s.last`. Rhai's arrays have one dimension, so a two-dimensional one
+  converts flattened, as the compiler flattens it: `m[1, 2]` of a
+  `complex m[2, 3]` reads `m[5]`.
 
 **Fractint's conventions** apply to a `.frm` file, or with the editor's
 language set to Fractint (from its `parser.c`): a test is true when its

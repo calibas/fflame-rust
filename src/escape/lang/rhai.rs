@@ -1718,7 +1718,17 @@ impl<'s> Lowerer<'s> {
             };
             let ty = self.ty_of(&v);
             let name = self.new_array(ty, len as usize, span);
-            let zero = matches!(v.kind, ExprKind::Int(0) | ExprKind::Bool(false)) || matches!(v.kind, ExprKind::Float(x) if x == 0.0);
+            fn is_zero(e: &ast::Expr) -> bool {
+                match &e.kind {
+                    ExprKind::Int(0) | ExprKind::Bool(false) => true,
+                    ExprKind::Float(x) => *x == 0.0,
+                    ExprKind::Complex(a, b) => is_zero(a) && is_zero(b),
+                    _ => false,
+                }
+            }
+            // What every element starts as already (a converted UF
+            // array's `array(n, complex(0.0, 0.0))` among them).
+            let zero = is_zero(&v);
             if !zero {
                 // Each element set, by a counter of its own.
                 let i = self.local("i", TypeName::Int);
