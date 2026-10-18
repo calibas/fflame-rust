@@ -317,6 +317,9 @@ pub enum Place {
     /// The creases section's height and gradient ([`Predef::CreaseHeight`]).
     CreaseHeight,
     CreaseSlope,
+    /// `#pixel`, written in a transformation's `transform:` section: the
+    /// point it gives.
+    Pixel,
 }
 
 #[derive(Clone, Debug)]
@@ -412,6 +415,10 @@ pub struct Program {
     /// reading its own variables, the parameters and the globals. Empty:
     /// none.
     pub creases: Vec<IStmt>,
+    /// A transformation's `transform:` section (`EntryKind::Transform`):
+    /// `#pixel` the point in, and the point out once written. Empty for
+    /// a formula or a colouring.
+    pub transform: Vec<IStmt>,
 }
 
 /// A variable the loop carries from one pass to the next besides z, as
@@ -547,6 +554,7 @@ impl Program {
             || s(&self.perturb_init, p)
             || s(&self.perturb_loop, p)
             || s(&self.creases, p)
+            || s(&self.transform, p)
     }
 
     /// Slots the parameters take in a 16-float block: one each, two for

@@ -479,6 +479,38 @@ The registry's rules:
 
 A flame that uses a local plugin renders only where the plugin is
 installed (`local_plugin_dependencies` reports it).
+
+### Variations written in Rhai
+
+A **custom variation** (`Provenance::Custom`, `variations::custom`) is
+a Rhai transformation from the Formula Editor -- `fn variation(z, p)`,
+a point to a point ([ESCAPE.md](ESCAPE.md#the-formula-language)) --
+compiled to the same `VariationDownload` a plug-in is: its parameters
+(a complex one as two, `name_re` and `name_im`), category `plugin`,
+phase normal, and WGSL from the formula language's emitter. The 2D
+function takes the point, and the ids when it has parameters (as
+`shader_builder_v2::variation_call` passes them); the 3D one runs the
+2D body on `p.xy` and passes `p.z` through. Helpers are prefixed
+`cv_<name>_`.
+- **The flame carries the source** (`Flame::custom_variations`, skip if
+  empty; `ConfigPath::FlameCustomVariations`, one undo step), so a saved
+  flame renders anywhere. `custom::ensure` registers a flame's sources
+  (and its subflames') before anything reads the registry for it: on
+  load (`missing_variations_in`, so it is not fetched from the API),
+  when a `FlameRenderer` is built, `load_config`, `update_flame`, and
+  `render_with` (an escape lens, CLI, thumbnails, video).
+- **Names**: a lowercase identifier from `INFO.name`; refused when a
+  built-in, a download or a plug-in has it, and a download or plug-in
+  cannot displace one. Using a source again replaces it, and the
+  registry's version rebuilds the shader.
+- **`.flame` export drops it** (JWildfire has no such variation): its
+  weight, its parameters and its `plugins=` entry, with a warning.
+- **As a lens**: the lens menu lists custom variations after the
+  measured ones (`lens::lens_menu`).
+- Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
+  render as the built-ins in a flame, by density
+  (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
+  for pixel (`the_twins_are_lenses_as_the_builtins`).
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is

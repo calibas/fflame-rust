@@ -118,6 +118,7 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
     eat(match kind {
         EntryKind::Formula => b"formula",
         EntryKind::Coloring => b"coloring",
+        EntryKind::Transform => b"transform",
     });
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
@@ -137,6 +138,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
         return match kind {
             EntryKind::Formula => lang::rhai::program(&src.source),
             EntryKind::Coloring => lang::rhai::coloring(&src.source),
+            EntryKind::Transform => lang::rhai::transformation(&src.source),
         };
     }
     if src.dialect == CustomDialect::Hybrid {
@@ -157,7 +159,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
     // the pair one program with the Julia toggle (lang::switch).
     let (program, d) = match kind {
         EntryKind::Formula => lang::switch::check_formula(&file, entry, dialect(src.dialect)),
-        EntryKind::Coloring => lang::check::check(entry, kind, dialect(src.dialect)),
+        EntryKind::Coloring | EntryKind::Transform => lang::check::check(entry, kind, dialect(src.dialect)),
     };
     diags.extend(d);
     match program {
@@ -196,7 +198,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
     let d = dialect(from);
     let (program, diags) = match kind {
         EntryKind::Formula => lang::switch::check_formula(&file, e, d),
-        EntryKind::Coloring => lang::check::check(e, kind, d),
+        EntryKind::Coloring | EntryKind::Transform => lang::check::check(e, kind, d),
     };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
@@ -226,12 +228,14 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
     let rhai = match kind {
         EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
         EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
+        EntryKind::Transform => return Err("a transformation does not convert to Rhai yet".to_string()),
     };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
     let back = match kind {
         EntryKind::Formula => lang::rhai::program(&rhai),
         EntryKind::Coloring => lang::rhai::coloring(&rhai),
+        EntryKind::Transform => lang::rhai::transformation(&rhai),
     };
     back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
@@ -1188,6 +1192,8 @@ pub fn ensure(escape: &EscapeConfig) {
         let known = match kind {
             EntryKind::Formula => formula(name).is_some(),
             EntryKind::Coloring => coloring(name).is_some(),
+            // An escape config carries no transformation.
+            EntryKind::Transform => true,
         };
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
@@ -1195,6 +1201,7 @@ pub fn ensure(escape: &EscapeConfig) {
         let result = match kind {
             EntryKind::Formula => compile_formula(src, name).map(|_| ()),
             EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
+            EntryKind::Transform => Ok(()),
         };
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
@@ -1462,10 +1469,17 @@ mod tests {
             if is_rhai(file) {
                 let src = CustomSource { dialect: CustomDialect::Rhai, entry: lang::rhai::title(text).unwrap_or_default(), source: text.to_string() };
                 let kind = lang::rhai::kind_of(text).unwrap_or_else(|| panic!("{file}: neither a formula nor a colouring"));
+                // A transformation is a flame variation: compiled as one.
+                if kind == EntryKind::Transform {
+                    if let Err(e) = crate::variations::custom::compile(text) {
+                        panic!("{file}: {e}");
+                    }
+                    continue;
+                }
                 let name = name_of(kind, &src);
                 let compiled = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = compiled {
                     panic!("{file}: {:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>());
@@ -1485,7 +1499,7 @@ mod tests {
                 let name = name_of(kind, &src);
                 let ok = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = ok {
                     panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());

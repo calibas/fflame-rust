@@ -212,6 +212,7 @@ impl Checker {
         let mut loop_body = Vec::new();
         let mut final_body = Vec::new();
         let mut creases = Vec::new();
+        let mut transform = Vec::new();
         let mut bailout = None;
         for (kind, body) in sections {
             self.section = kind.0;
@@ -235,6 +236,7 @@ impl Checker {
                 }
                 (SectionKind::Final, _) => final_body = self.stmts(body),
                 (SectionKind::Creases, _) => creases = self.stmts(body),
+                (SectionKind::Transform, _) => transform = self.stmts(body),
                 _ => {}
             }
         }
@@ -287,6 +289,7 @@ impl Checker {
             cycle: None,
             carried: Vec::new(),
             creases,
+            transform,
         };
         // The creases read their own variables, the parameters and the
         // globals: they run apart from the orbit.
@@ -358,10 +361,14 @@ impl Checker {
                     }
                     EntryKind::Formula => kind = SectionKind::Init,
                     EntryKind::Coloring => kind = SectionKind::Final,
+                    EntryKind::Transform => kind = SectionKind::Transform,
                 }
             }
             let allowed = match (self.kind, kind) {
-                (_, SectionKind::Global) => true,
+                // A transformation's derived values would be its
+                // variation's `wgsl_init`: a later step.
+                (EntryKind::Formula | EntryKind::Coloring, SectionKind::Global) => true,
+                (EntryKind::Transform, SectionKind::Transform) => true,
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
@@ -372,6 +379,7 @@ impl Checker {
                 let what = match self.kind {
                     EntryKind::Formula => "a formula",
                     EntryKind::Coloring => "a colouring",
+                    EntryKind::Transform => "a transformation",
                 };
                 self.error(s.span, format!("{what} has no `{}:` section", kind.label()));
                 continue;
@@ -394,6 +402,12 @@ impl Checker {
             EntryKind::Coloring => {
                 if !has(SectionKind::Final) {
                     self.error(entry.span, "a colouring needs a `final:` section");
+                    return None;
+                }
+            }
+            EntryKind::Transform => {
+                if !has(SectionKind::Transform) {
+                    self.error(entry.span, "a transformation needs a `transform:` section");
                     return None;
                 }
             }
@@ -908,6 +922,11 @@ impl Checker {
             self.error(span, "`creases` runs once, at the starting point: it has no pass");
             return None;
         }
+        // A variation sees its point and nothing of an image or an orbit.
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E) {
+            self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
+            return None;
+        }
         let colouring = self.kind == EntryKind::Coloring;
         if matches!(p, Predef::Index | Predef::Solid | Predef::NumIter) {
             if !colouring {
@@ -1256,6 +1275,7 @@ impl Checker {
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
                     Predef::CreaseHeight | Predef::CreaseSlope => true,
+                    Predef::Pixel => self.section == SectionKind::Transform,
                     _ => false,
                 };
                 if !ok {
@@ -1273,6 +1293,7 @@ impl Checker {
                     Predef::DZ => (Place::DZ, Ty::Complex),
                     Predef::CreaseHeight => (Place::CreaseHeight, Ty::Float),
                     Predef::CreaseSlope => (Place::CreaseSlope, Ty::Complex),
+                    Predef::Pixel => (Place::Pixel, Ty::Complex),
                     _ => (Place::Solid, Ty::Bool),
                 })
             }
@@ -1872,6 +1893,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::DZ => IExprKind::Predef(Predef::DZ),
         Place::CreaseHeight => IExprKind::Predef(Predef::CreaseHeight),
         Place::CreaseSlope => IExprKind::Predef(Predef::CreaseSlope),
+        Place::Pixel => IExprKind::Predef(Predef::Pixel),
     })
 }
 

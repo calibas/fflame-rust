@@ -3136,6 +3136,7 @@ mod tests {
                     rhai.coloring = crate::escape::custom::name_of(kind, &src);
                     rhai.custom_coloring = Some(src);
                 }
+                EntryKind::Transform => unreachable!("a formula and a colouring"),
             }
         }
         let got = output_on(&device, &queue, &renderer, &rhai, w, h, false);

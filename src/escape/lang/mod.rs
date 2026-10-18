@@ -46,6 +46,10 @@ pub enum Dialect {
 pub enum EntryKind {
     Formula,
     Coloring,
+    /// UF's third kind: a `transform:` section rewriting `#pixel`, a point
+    /// to a point with parameters -- a flame variation's shape (the KIFS
+    /// plan, C1). Written in Rhai as `fn variation(z, p)`.
+    Transform,
 }
 
 /// A byte range in the source text.

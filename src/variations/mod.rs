@@ -16,6 +16,9 @@ pub mod inverse;
 pub mod defs;
 pub mod docs;
 pub mod analytic_blur;
+/// Variations written in the formula language (the KIFS plan, C1).
+#[cfg(feature = "engine-escape")]
+pub mod custom;
 
 use definition::VariationDef;
 pub use definition::Feature;
@@ -634,6 +637,11 @@ impl VariationRegistry {
                 );
                 return;
             }
+            // Nor one the user wrote: only its own source replaces it.
+            if existing.provenance == crate::provenance::Provenance::Custom && provenance != crate::provenance::Provenance::Custom {
+                log::warn!("Cannot register variation '{}' — a custom variation has that name", dl.name);
+                return;
+            }
         }
 
         // A missing 2D body is legal for exactly one category.
@@ -985,6 +993,10 @@ pub fn classify_missing(
 /// Scan a flame's transforms for variation names not registered.
 /// Returns the deduplicated list of missing names (empty if all are present).
 pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
+    // The variations the flame carries the source of are not missing:
+    // registered here, they are not fetched.
+    #[cfg(feature = "engine-escape")]
+    custom::ensure(flame);
     let registry = global_registry();
     let mut missing = std::collections::HashSet::new();
     let mut scan = |xform: &crate::scene::transforms::Transform| {

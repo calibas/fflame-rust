@@ -418,6 +418,8 @@ fn parse_flame_element(
         // xform carried one (the common Apo case).
         subflames: imported_subflames,
         post_symmetry,
+        // A `.flame` carries no source: JWildfire has no such variations.
+        custom_variations: Vec::new(),
     };
     for final_xform in final_transforms_processed {
         flame.migrate_legacy_final(Some(final_xform));
@@ -1595,6 +1597,9 @@ fn collect_plugin_names(flame: &Flame) -> String {
             names.insert(name.as_str());
         }
     }
+    // Not the user's own (`write_xform` drops them).
+    let registry = crate::variations::global_registry();
+    names.retain(|n| registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Custom));
     names.into_iter().collect::<Vec<_>>().join(" ")
 }
 
@@ -1635,12 +1640,23 @@ fn write_xform(
         out.push_str(&format!(" pluginColor=\"{}\"", fmt_f32(xform.direct_color)));
     }
 
+    // A variation the user wrote (`variations::custom`) is no variation
+    // JWildfire or Apophysis has: dropped, with a warning, its weight and
+    // its parameters both. The `.fflame` carries its source.
+    let custom = |name: &str| registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom);
+    for name in xform.variations.keys().filter(|n| custom(n)) {
+        log::warn!("`.flame` export: the custom variation `{name}` is not written (only a .fflame carries it)");
+    }
+
     // Variations — emit in the transform's recorded order
     // (`variation_order`) so the dispatch order survives a `.flame`
     // round-trip (JWildfire applies variations in xform-list order); then
     // any active variations not in the hint, sorted, for determinism.
     let mut emitted_vars: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for name in &xform.variation_order {
+        if custom(name) {
+            continue;
+        }
         if let Some(weight) = xform.variations.get(name) {
             out.push_str(&format!(" {}=\"{}\"", name, fmt_f32(*weight)));
             emitted_vars.insert(name.as_str());
@@ -1649,7 +1665,7 @@ fn write_xform(
     let mut variation_names: Vec<&String> = xform
         .variations
         .keys()
-        .filter(|n| !emitted_vars.contains(n.as_str()))
+        .filter(|n| !emitted_vars.contains(n.as_str()) && !custom(n))
         .collect();
     variation_names.sort();
     for name in &variation_names {
@@ -1664,7 +1680,7 @@ fn write_xform(
     let mut priority_names: Vec<&String> = xform.variation_priorities.keys().collect();
     priority_names.sort();
     for name in &priority_names {
-        if !xform.variations.contains_key(*name) {
+        if !xform.variations.contains_key(*name) || custom(name) {
             continue; // override for a removed variation — don't emit
         }
         out.push_str(&format!(" {}_fx_priority=\"{}\"", name, xform.variation_priorities[*name]));
@@ -1727,7 +1743,7 @@ fn write_xform(
     param_entries.sort_by_key(|(k, _)| k.as_str());
     for (key, value) in param_entries {
         let Some((var_name, param_name)) = key.split_once('.') else { continue };
-        if !xform.variations.contains_key(var_name) {
+        if !xform.variations.contains_key(var_name) || custom(var_name) {
             continue;
         }
         // Validate the param is user-facing (defensive — `variation_params`

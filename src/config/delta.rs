@@ -273,6 +273,9 @@ pub enum ConfigPath {
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
     Xaos { src: usize, dst: usize },
+    /// The variations the user wrote that the flame uses
+    /// (`config.flame.custom_variations`), as JSON: their sources.
+    FlameCustomVariations,
     /// Solo transform index (0-indexed). When Some(n), only transform n is active,
     /// all others effectively have weight 0. Used for debugging.
     /// Matches Apophysis XML: soloxform="N"
@@ -1350,6 +1353,7 @@ impl Display for ConfigPath {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
             }
             ConfigPath::SoloTransform => write!(f, "Solo Transform"),
+            ConfigPath::FlameCustomVariations => write!(f, "Custom Variations"),
 
             // Post-symmetry
             ConfigPath::PostSymmetryType => write!(f, "Symmetry Type"),
@@ -2069,6 +2073,7 @@ impl ConfigPath {
                 ],
             ),
             ConfigPath::SoloTransform => I18nKey::simple("history.param.solo_transform"),
+            ConfigPath::FlameCustomVariations => I18nKey::simple("history.param.flame_custom_variations"),
             ConfigPath::PostSymmetryType => I18nKey::simple("history.param.post_symmetry_type"),
             ConfigPath::PostSymmetryOrder => I18nKey::simple("history.param.post_symmetry_order"),
             ConfigPath::PostSymmetryCenterX => I18nKey::simple("history.param.post_symmetry_center_x"),
@@ -3083,6 +3088,7 @@ impl ConfigPath {
             | ConfigPath::DepthDensityCompensation
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform
+            | ConfigPath::FlameCustomVariations
             | ConfigPath::PostSymmetryType
             | ConfigPath::PostSymmetryOrder
             | ConfigPath::PostSymmetryCenterX
@@ -3787,6 +3793,7 @@ impl ConfigPath {
             ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
+            ConfigPath::FlameCustomVariations => "CustomVariations".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
             ConfigPath::PostSymmetryOrder => "PostSymmetryOrder".to_string(),
             ConfigPath::PostSymmetryCenterX => "PostSymmetryCenterX".to_string(),
@@ -3926,6 +3933,7 @@ impl ConfigPath {
             "GapFill" => return Some(ConfigPath::GapFill),
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
+            "CustomVariations" => return Some(ConfigPath::FlameCustomVariations),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
             "PostSymmetryCenterX" => return Some(ConfigPath::PostSymmetryCenterX),
@@ -5032,6 +5040,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::EscapeFormula
         | ConfigPath::EscapeCustomFormula
         | ConfigPath::EscapeCustomColoring
+        | ConfigPath::FlameCustomVariations
         | ConfigPath::EscapeColoring
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend

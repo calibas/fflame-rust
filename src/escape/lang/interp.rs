@@ -174,11 +174,14 @@ struct Shared<'e> {
     crease: [f64; 4],
     crease_height: f64,
     crease_slope: C64,
+    /// `#pixel`: the environment's, unless a transformation wrote it.
+    pixel: C64,
 }
 
 impl<'e> Shared<'e> {
     fn new(env: &'e Env) -> Self {
         Shared {
+            pixel: env.pixel,
             env,
             z: C64::ZERO,
             numiter: 0,
@@ -192,6 +195,18 @@ impl<'e> Shared<'e> {
             crease_slope: C64::ZERO,
         }
     }
+}
+
+/// A transformation's point for the point `z` (`Program::transform`; the
+/// KIFS plan, C1): its `transform:` section run with `#pixel` set to `z`,
+/// and `#pixel` as it leaves it -- what its variation gives in a flame,
+/// before the weight.
+pub fn transform(p: &Program, params: &ParamValues, z: C64) -> C64 {
+    let env = Env::at(z, 1);
+    let mut m = Machine::new(p, params);
+    let mut sh = Shared::new(&env);
+    m.exec(&p.transform, &mut sh);
+    sh.pixel
 }
 
 /// A formula's crease relief at the starting point `p0`
@@ -619,6 +634,7 @@ impl<'p> Machine<'p> {
                         Place::DZ => sh.dz = v.as_c64(),
                         Place::CreaseHeight => sh.crease_height = v.as_f64(),
                         Place::CreaseSlope => sh.crease_slope = v.as_c64(),
+                        Place::Pixel => sh.pixel = v.as_c64(),
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -733,7 +749,7 @@ impl<'p> Machine<'p> {
 fn predef(p: Predef, sh: &Shared) -> Value {
     let env = sh.env;
     match p {
-        Predef::Pixel => Value::Complex(env.pixel),
+        Predef::Pixel => Value::Complex(sh.pixel),
         Predef::Z => Value::Complex(sh.z),
         Predef::NumIter => Value::Int(sh.numiter as i32),
         Predef::Pass => Value::Int(sh.pass as i32),

@@ -455,6 +455,14 @@ fn escaped(s, p) {
   - Examples: `assets/formulas/smooth.rhai`, `orbit-trap.rhai`; the
     test file `tests/formulas/rhai/coloring.rhai` runs on the GPU as the
     interpreter does.
+- **A Rhai transformation** has `fn variation(z, p)`: a point to a
+  point, the third entry kind (`EntryKind::Transform`, UF's
+  `transform:` section, the point `#pixel` read and assigned). It is
+  not an escape formula: it compiles to a **flame variation**
+  ([VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)) and, in
+  Escape mode, is offered as the camera lens. `INFO.name` is its
+  registry name; `PARAMS` as a formula's; no `prepare`, no `ctx`, no
+  random numbers yet. Example: `assets/formulas/variation-whorl.rhai`.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to

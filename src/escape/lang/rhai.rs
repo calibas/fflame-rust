@@ -120,6 +120,34 @@ pub fn coloring(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Coloring)
 }
 
+/// The program a Rhai transformation compiles to (`fn variation(z, p)`;
+/// the KIFS plan, C1): UF's `transform:` section, a flame variation's
+/// shape.
+pub fn transformation(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::Transform)
+}
+
+/// The registry name a transformation gives itself (`INFO.name`), when
+/// it gives one.
+pub fn variation_name(source: &str) -> Option<String> {
+    info_string(source, "name")
+}
+
+/// A string field of a script's `INFO`.
+fn info_string(source: &str, key: &str) -> Option<String> {
+    let (ast, _) = parse(source).ok()?;
+    ast.statements().iter().find_map(|st| {
+        let Stmt::Var(x, _, _) = st else { return None };
+        let (ident, value, _) = &**x;
+        let Expr::Map(m, _) = value else { return None };
+        (ident.name.as_str() == "INFO").then_some(())?;
+        m.0.iter().find(|(k, _)| k.name.as_str() == key).and_then(|(_, v)| match v {
+            Expr::StringConstant(s, _) => Some(s.to_string()),
+            _ => None,
+        })
+    })
+}
+
 /// A formula from a script's own function `f(z, c)` (phase 4, step 8):
 /// the Mandelbrot's shape on both planes, `f` its step, the panel's
 /// bailout its test. `fns` are the script's functions, by name, which `f`
@@ -162,7 +190,9 @@ fn checked(lowered: Lowered, kind: EntryKind) -> Result<Program, Vec<Diag>> {
 pub fn kind_of(source: &str) -> Option<EntryKind> {
     let (ast, _) = parse(source).ok()?;
     let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
-    if has("finish") {
+    if has("variation") {
+        Some(EntryKind::Transform)
+    } else if has("finish") {
         Some(EntryKind::Coloring)
     } else if has("escaped") || has("step") {
         Some(EntryKind::Formula)
@@ -225,6 +255,7 @@ fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) 
     let (ast, pos) = parse(source)?;
     let mut l = Lowerer {
         coloring: kind == EntryKind::Coloring,
+        transform: kind == EntryKind::Transform,
         pos,
         source,
         fns: HashMap::new(),
@@ -346,6 +377,8 @@ enum Fn3 {
     Finish,
     /// A formula's `creases`: the paper's height and gradient.
     Creases,
+    /// A transformation's `variation`: the new point.
+    Variation,
 }
 
 impl Fn3 {
@@ -359,6 +392,8 @@ struct Lowerer<'s> {
     /// A colouring: `z` is the formula's, and a state field of that name
     /// is the colouring's own.
     coloring: bool,
+    /// A transformation: `fn variation`, its top level as a formula's.
+    transform: bool,
     pos: Positions,
     source: &'s str,
     fns: HashMap<String, ScriptFuncDef>,
@@ -461,7 +496,13 @@ impl<'s> Lowerer<'s> {
         for f in ast.iter_fn_def() {
             self.fns.insert(f.name.to_string(), (**f).clone());
         }
-        let what = if self.coloring { "a colouring" } else { "a formula" };
+        let what = if self.coloring {
+            "a colouring"
+        } else if self.transform {
+            "a transformation"
+        } else {
+            "a formula"
+        };
         // The top level: PARAMS, INFO, nothing else.
         let mut params: Vec<(String, Expr, Position)> = Vec::new();
         let mut info: Vec<(String, Expr, Position)> = Vec::new();
@@ -489,7 +530,14 @@ impl<'s> Lowerer<'s> {
         for (name, v, p) in &params {
             self.param(name, v, *p, &mut default)?;
         }
-        let mut title = if self.coloring { "Colouring" } else { "Formula" }.to_string();
+        let mut title = if self.coloring {
+            "Colouring"
+        } else if self.transform {
+            "Variation"
+        } else {
+            "Formula"
+        }
+        .to_string();
         let mut cycle = None;
         let mut region = None;
         for (name, v, p) in &info {
@@ -498,6 +546,12 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(s, _) => title = s.to_string(),
                     _ => return self.err(*p, "`title` is a string"),
                 },
+                // The registry name (`variation_name`), read apart.
+                "name" if self.transform => match v {
+                    Expr::StringConstant(..) => {}
+                    _ => return self.err(*p, "`name` is a string"),
+                },
+                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title` and `name`, not `{o}`")),
                 "center" | "magn" | "maxiter" | "angle" if !self.coloring => {
                     let value = self.literal(v)?;
                     default.items.push(Setting { name: name.clone(), value: SettingValue::Expr(value), span: self.pos.span(*p) });
@@ -529,6 +583,10 @@ impl<'s> Lowerer<'s> {
         }
         let span = Span { start: 0, end: self.source.len() };
         let mut sections = Vec::new();
+        if self.transform && self.fns.contains_key("prepare") {
+            let f = &self.fns["prepare"];
+            return self.err(f.body.position(), "a transformation has no `prepare` yet: its values are computed in `variation`");
+        }
         // prepare: once per image, its map's fields read as `p.name`.
         if let Some(prep) = self.fns.get("prepare").cloned() {
             let mut scope = Scope::new(Fn3::Prepare, Vec::new());
@@ -545,11 +603,52 @@ impl<'s> Lowerer<'s> {
         match kind {
             EntryKind::Formula => sections.extend(self.formula_sections(span, &mut default)?),
             EntryKind::Coloring => sections.extend(self.coloring_sections(span)?),
+            EntryKind::Transform => sections.push(self.transform_section(span)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
         let entry = Entry { name: title, setting, span, body: span, sections, default, switch: Settings::default() };
         Ok(Lowered { entry, cycle, names: Vec::new() })
+    }
+
+    /// A transformation's function as its section (UF's `transform:`):
+    /// `variation(z, p)`, the point `z` a local the body may reassign,
+    /// set from `#pixel`, and the last value written back to `#pixel`.
+    fn transform_section(&mut self, span: Span) -> R<Section> {
+        let Some(f) = self.fns.get("variation").cloned() else {
+            return self.err(Position::NONE, "a transformation has `fn variation(z, p)`");
+        };
+        if f.params.is_empty() || f.params.len() > 2 {
+            return self.err(f.body.position(), "`variation(z)` or `variation(z, p)`");
+        }
+        let mut scope = Scope::new(Fn3::Variation, Vec::new());
+        let point = self.local(&f.params[0], TypeName::Complex);
+        let mut body = vec![ast::Stmt::Decl {
+            ty: TypeName::Complex,
+            name: point.clone(),
+            init: Some(mk(ExprKind::Predef("pixel".into()), span)),
+            dims: None,
+            span,
+        }];
+        scope.bind(&f.params[0], Binding::Local(point));
+        if let Some(p) = f.params.get(1) {
+            scope.bind(p, Binding::Params);
+        }
+        const RESULT: &str = "`variation` ends with the new point";
+        let stmts = f.body.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
+        for st in rest {
+            self.stmt(st, &mut scope, &mut body)?;
+        }
+        let value = match final_value(last) {
+            Some(Final::Expr(x)) => self.expr(x, &mut scope)?,
+            Some(Final::If(fc, p)) => self.if_value(fc, p, &mut scope)?,
+            _ => return self.err(last.position(), RESULT),
+        };
+        self.flush(&mut body);
+        let at = self.pos.span(last.position());
+        body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
     /// A formula's functions as its sections: `start` the init, `step`
@@ -1676,7 +1775,7 @@ impl<'s> Lowerer<'s> {
                 // first parameter.
                 return self.err(p, format!("call a helper as a function, `{name}(x)`"));
             }
-            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases") {
+            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases" | "variation") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
             for a in f.args.iter() {

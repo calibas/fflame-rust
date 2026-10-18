@@ -260,7 +260,7 @@ impl BigMachine {
                         Place::Var(id) => self.vars[*id] = v,
                         Place::Z => self.z = self.to_c(v),
                         // A formula writes neither; the checker keeps it so.
-                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope => {}
+                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {

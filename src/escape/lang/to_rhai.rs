@@ -275,7 +275,7 @@ fn place_slot(p: Place) -> Option<Slot> {
         Place::Index => Some(Slot::Index),
         Place::Solid => Some(Slot::Solid),
         // A Rhai formula's `creases`, which the converter does not write.
-        Place::CreaseHeight | Place::CreaseSlope => None,
+        Place::CreaseHeight | Place::CreaseSlope | Place::Pixel => None,
     }
 }
 

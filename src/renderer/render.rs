@@ -169,6 +169,9 @@ pub struct RenderOutput {
 /// which in the app comes with a warning -- and from the CLI was a
 /// Mandelbrot saved under the unknown formula's name, exit code 0.
 pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
+    // A variation the flame carries the source of is known (a lens).
+    #[cfg(feature = "engine-escape")]
+    crate::variations::custom::ensure(&config.flame);
     #[allow(unused_mut)]
     let mut out = Vec::new();
     match config.render_mode {
@@ -443,6 +446,10 @@ pub async fn render_with(
         return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
     }
     let start_time = web_time::Instant::now();
+    // The variations the flame carries the source of, registered for
+    // every engine: a flame's, an escape lens, a simulation's warp.
+    #[cfg(feature = "engine-escape")]
+    crate::variations::custom::ensure(&job.config.flame);
 
     // Escape-time mode is a different generator with the same tail:
     // one compute pass instead of the chaos-game loop, then the shared
