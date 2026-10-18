@@ -792,6 +792,9 @@ pub const SLOW_PARAMS: &[(&str, &str)] = &[
     ("quaternion_julia_solid", "levels"),
     ("quaternion_julia_solid", "beam"),
     ("quaternion_julia_solid", "steps"),
+    ("kifs_solid", "levels"),
+    ("kifs_solid", "beam"),
+    ("kifs_solid", "steps"),
 ];
 
 /// Whether `param` of the formula or colouring `def` is slow

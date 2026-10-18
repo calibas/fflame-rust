@@ -1735,7 +1735,7 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 
 /// Ordered mode-D registry. **Append-only** — same contract as
 /// [`super::FORMULAS`].
-pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA];
+pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA, &IFS_KIFS];
 
 /// A quaternion Julia set as a solid, needing no flame (plan §8.11,
 /// step 1): `q ↦ qⁿ + c` in ℍ on a 3D slice, by the escape-time
@@ -2001,18 +2001,347 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 "#,
 };
 
+/// A kaleidoscopic IFS as a solid, needing no flame (the KIFS plan,
+/// [docs/projects/escape-kifs-and-variations.md] A1): Knighty's fold
+/// fractals (Fractal Forums, 2010), each iteration a rotation, a fold of
+/// space into one piece of it, a rotation and a scaling about the
+/// offset, `z = s z - o (s - 1)`. The folds follow Syntopia's
+/// "Distance Estimated 3D Fractals (III): Folding Space" (2011): the
+/// Sierpinski tetrahedron's plane folds, the cubic and octahedral
+/// mirrors, and the Menger sponge's correction.
+///
+/// The distance is `(|z_n| - |o|) s^-n` once `z` passes `|o|`: every
+/// fold and rotation is 1-Lipschitz and fixes the origin, so the set
+/// lies within `|o|` and the estimate is a lower bound, as a march
+/// wants (the sponge's correction is a conditional translation, for
+/// which that holds in practice, not by proof). The ball is `|o|` at
+/// the origin (`standalone_radius`). Slots 0-6 are the solid
+/// template's, as the quaternion Julia's.
+///
+/// [docs/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+pub static IFS_KIFS: IfsDef = IfsDef {
+    name: "kifs_solid",
+    display_name: "KIFS (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_level",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many folds and scalings before calling the point part of the set. Each one \
+                      resolves the set a scale finer: past about a dozen the detail is below a pixel.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: a fold has one orbit. Kept so the march, shadow and occlusion slots \
+                      line up with the flame solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 128.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.7,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here: a KIFS is three-dimensional. Kept for the slot.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "fold",
+            display_name: "Fold",
+            default: 3.0,
+            min: 0.0,
+            max: 3.0,
+            tooltip: "How each iteration folds space into one piece of it: the tetrahedron's three plane \
+                      folds (the Sierpinski tetrahedron), each axis's mirror (cubic), the mirrors and \
+                      the diagonal ones (octahedral), or those with the sponge's correction (Menger).",
+            choices: &["Tetrahedral", "Cubic", "Octahedral", "Menger"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 3.0,
+            min: 1.1,
+            max: 4.0,
+            tooltip: "How much each iteration enlarges space about the offset. 2 for the tetrahedron, 3 \
+                      for the sponge; between, the pieces overlap or part.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset_x",
+            display_name: "Offset X",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The point each iteration scales about: the set's corner.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset_y",
+            display_name: "Offset Y",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The offset's y.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset_z",
+            display_name: "Offset Z",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The offset's z.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot1_x",
+            display_name: "Pre-Fold Rotation X",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about x before each fold (Knighty's rotation): small angles twist the set \
+                      into new shapes.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot1_y",
+            display_name: "Pre-Fold Rotation Y",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about y before each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot1_z",
+            display_name: "Pre-Fold Rotation Z",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about z before each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot2_x",
+            display_name: "Post-Fold Rotation X",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about x after each fold, before the scaling.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot2_y",
+            display_name: "Post-Fold Rotation Y",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about y after each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot2_z",
+            display_name: "Post-Fold Rotation Z",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about z after each fold.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+// A rotation by Euler angles in degrees, x first, then y, then z
+// (`kifs::rotation` on the CPU is the same).
+fn kifs_rotation(deg: vec3<f32>) -> mat3x3<f32> {
+    let r = deg * 0.017453292519943295;
+    let cx = cos(r.x);
+    let sx = sin(r.x);
+    let cy = cos(r.y);
+    let sy = sin(r.y);
+    let cz = cos(r.z);
+    let sz = sin(r.z);
+    let rx = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, cx, sx), vec3<f32>(0.0, -sx, cx));
+    let ry = mat3x3<f32>(vec3<f32>(cy, 0.0, -sy), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(sy, 0.0, cy));
+    let rz = mat3x3<f32>(vec3<f32>(cz, sz, 0.0), vec3<f32>(-sz, cz, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    return rz * ry * rx;
+}
+
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 64.0));
+    let fold = u32(clamp(round(fparam(7u)), 0.0, 3.0));
+    let s = clamp(fparam(8u), 1.1, 4.0);
+    let o = vec3<f32>(fparam(9u), fparam(10u), fparam(11u));
+    let a1 = vec3<f32>(fparam(12u), fparam(13u), fparam(14u));
+    let a2 = vec3<f32>(fparam(15u), fparam(16u), fparam(17u));
+    let turn1 = any(a1 != vec3<f32>(0.0));
+    let turn2 = any(a2 != vec3<f32>(0.0));
+    let r1 = kifs_rotation(a1);
+    let r2 = kifs_rotation(a2);
+    // Every fold and rotation is an isometry fixing the origin, so a
+    // point past |o| escapes and the set lies within it.
+    let radius = max(length(o), 1.0e-3);
+
+    var z = delta + ifs_target_offset();
+    var k = 0u;
+    var escape_k = -1;
+    var address = 0.0;
+    var place = 0.125;
+    loop {
+        if (k >= levels) {
+            break;
+        }
+        if (turn1) {
+            z = r1 * z;
+        }
+        // The fold, and which of its three mirrors fired: a base-8
+        // digit of the address.
+        var digit = 0u;
+        if (fold == 0u) {
+            if (z.x + z.y < 0.0) {
+                z = vec3<f32>(-z.y, -z.x, z.z);
+                digit = digit | 1u;
+            }
+            if (z.x + z.z < 0.0) {
+                z = vec3<f32>(-z.z, z.y, -z.x);
+                digit = digit | 2u;
+            }
+            if (z.y + z.z < 0.0) {
+                z = vec3<f32>(z.x, -z.z, -z.y);
+                digit = digit | 4u;
+            }
+        } else {
+            digit = select(0u, 1u, z.x < 0.0) | select(0u, 2u, z.y < 0.0) | select(0u, 4u, z.z < 0.0);
+            z = abs(z);
+            if (fold >= 2u) {
+                // Descending, by the three diagonal mirrors.
+                if (z.x < z.y) {
+                    z = z.yxz;
+                }
+                if (z.x < z.z) {
+                    z = z.zyx;
+                }
+                if (z.y < z.z) {
+                    z = z.xzy;
+                }
+            }
+        }
+        if (turn2) {
+            z = r2 * z;
+        }
+        z = s * z - o * (s - 1.0);
+        // The sponge: the middle layer's cubes move back up.
+        if (fold == 3u && z.z < -0.5 * o.z * (s - 1.0)) {
+            z.z = z.z + o.z * (s - 1.0);
+        }
+        if (k < 8u) {
+            address = address + f32(digit) * place;
+            place = place * 0.125;
+        }
+        if (k == 0u) {
+            res.color = (f32(digit) + 0.5) * 0.125;
+        }
+        k = k + 1u;
+        let r = length(z);
+        if (escape_k < 0 && r > radius) {
+            escape_k = i32(k);
+            res.point = z.xy;
+        }
+        // Past the set, a few more for the estimate's sake.
+        if (r > 1.0e3 * radius) {
+            break;
+        }
+    }
+
+    let r = length(z);
+    res.address = address;
+    if (escape_k >= 0) {
+        res.escaped = 1u;
+        // A lower bound: each step stretches distances by at most s.
+        res.distance = (r - radius) * pow(s, -f32(k));
+        // The smooth count: where |z| - |o| grows by s a step.
+        let smooth_k = f32(k) - log(max((r - radius) / radius, 1.0e-30)) / log(s);
+        res.level = clamp(f32(levels) - smooth_k, 0.0, f32(levels));
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    } else {
+        res.level = f32(levels);
+        res.depth = levels;
+        res.point = z.xy;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
 /// The packing for a def that needs no flame (plan §8.11 Q3): no
 /// maps, and a ball of the bailout's radius at the origin, which is
 /// what frames the camera and bounds the march. Everything downstream
 /// -- `set_ifs`, the globals, the keys -- works as for a flame.
 pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> PackedIfs {
-    let radius = def
-        .parameters
-        .iter()
-        .find(|p| p.name == "bailout")
-        .map(|p| escape.formula_params.get("bailout").copied().unwrap_or(p.default) as f64)
-        .unwrap_or(2.0)
-        .max(1e-3);
+    let radius = standalone_radius(def, escape);
     let ball2 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0], radius };
     let ball3 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0, 0.0], radius };
     let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball2.radius, ball: ball2, aux_centre: 0.0, xaos: None };
@@ -2032,6 +2361,21 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         xaos: vec![0.0; 4],
         solid: Some((ifs3, Vec::new())),
     }
+}
+
+/// The radius of the ball a def that needs no flame frames and bounds
+/// its march by: a KIFS's offset's length (its set lies within it), else
+/// the bailout's (the quaternion Julia's).
+pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> f64 {
+    let value = |name: &str| -> Option<f64> {
+        let p = def.parameters.iter().find(|p| p.name == name)?;
+        Some(escape.formula_params.get(name).copied().unwrap_or(p.default) as f64)
+    };
+    if def.name == IFS_KIFS.name {
+        let o = [value("offset_x"), value("offset_y"), value("offset_z")].map(|v| v.unwrap_or(1.0));
+        return (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt().max(1e-3);
+    }
+    value("bailout").unwrap_or(2.0).max(1e-3)
 }
 
 /// The packing a config's formula wants: the flame's analysis for a
@@ -5878,6 +6222,7 @@ mod tests {
             .chain(super::gpu_tests::julia_presets())
             .chain(super::gpu_tests::kernel_presets())
             .chain(super::gpu_tests::quaternion_presets())
+            .chain(super::gpu_tests::kifs_presets())
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -12156,6 +12501,454 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // of it: a closer frame than the ball's own.
         c.escape.zoom_log2 = 0.7;
         vec![c]
+    }
+
+    // ---- KIFS (the KIFS plan, A1) ------------------------------------
+
+    /// `IFS_KIFS`'s walk on the CPU, in f64, step for step as its WGSL:
+    /// the twin its gates hold it to.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct Kifs {
+        pub fold: u32,
+        pub s: f64,
+        pub o: [f64; 3],
+        pub a1: [f64; 3],
+        pub a2: [f64; 3],
+        pub levels: u32,
+    }
+
+    fn norm3(v: [f64; 3]) -> f64 {
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    }
+
+    impl Kifs {
+        pub(super) fn new(fold: u32, s: f64, o: [f64; 3]) -> Kifs {
+            Kifs { fold, s, o, a1: [0.0; 3], a2: [0.0; 3], levels: 12 }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            norm3(self.o).max(1e-3)
+        }
+
+        /// Euler angles in degrees, about x, then y, then z.
+        fn rotate(deg: [f64; 3], z: [f64; 3]) -> [f64; 3] {
+            if deg == [0.0; 3] {
+                return z;
+            }
+            let r = deg.map(f64::to_radians);
+            let (sx, cx) = r[0].sin_cos();
+            let (sy, cy) = r[1].sin_cos();
+            let (sz, cz) = r[2].sin_cos();
+            let z = [z[0], cx * z[1] - sx * z[2], sx * z[1] + cx * z[2]];
+            let z = [cy * z[0] + sy * z[2], z[1], -sy * z[0] + cy * z[2]];
+            [cz * z[0] - sz * z[1], sz * z[0] + cz * z[1], z[2]]
+        }
+
+        /// One iteration: rotate, fold, rotate, scale about the offset.
+        pub(super) fn step(&self, z: [f64; 3]) -> [f64; 3] {
+            let mut z = Self::rotate(self.a1, z);
+            if self.fold == 0 {
+                if z[0] + z[1] < 0.0 {
+                    z = [-z[1], -z[0], z[2]];
+                }
+                if z[0] + z[2] < 0.0 {
+                    z = [-z[2], z[1], -z[0]];
+                }
+                if z[1] + z[2] < 0.0 {
+                    z = [z[0], -z[2], -z[1]];
+                }
+            } else {
+                z = z.map(f64::abs);
+                if self.fold >= 2 {
+                    if z[0] < z[1] {
+                        z = [z[1], z[0], z[2]];
+                    }
+                    if z[0] < z[2] {
+                        z = [z[2], z[1], z[0]];
+                    }
+                    if z[1] < z[2] {
+                        z = [z[0], z[2], z[1]];
+                    }
+                }
+            }
+            let z = Self::rotate(self.a2, z);
+            let s = self.s;
+            let mut z = [s * z[0] - self.o[0] * (s - 1.0), s * z[1] - self.o[1] * (s - 1.0), s * z[2] - self.o[2] * (s - 1.0)];
+            if self.fold == 3 && z[2] < -0.5 * self.o[2] * (s - 1.0) {
+                z[2] += self.o[2] * (s - 1.0);
+            }
+            z
+        }
+
+        /// The distance's lower bound, as the walk computes it.
+        pub(super) fn distance(&self, p: [f64; 3]) -> f64 {
+            let radius = self.radius();
+            let (mut z, mut k, mut escaped) = (p, 0u32, false);
+            while k < self.levels {
+                z = self.step(z);
+                k += 1;
+                let r = norm3(z);
+                escaped |= r > radius;
+                if r > 1.0e3 * radius {
+                    break;
+                }
+            }
+            if escaped {
+                (norm3(z) - radius).max(0.0) * self.s.powi(-(k as i32))
+            } else {
+                0.0
+            }
+        }
+
+        /// Whether `p`'s orbit stays within the radius for `m` steps.
+        pub(super) fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            let radius = self.radius();
+            let mut z = p;
+            for _ in 0..m {
+                z = self.step(z);
+                if norm3(z) > radius {
+                    return false;
+                }
+            }
+            true
+        }
+
+        pub(super) fn config(&self, coloring: &str) -> crate::config::FractalConfig {
+            let mut cfg = crate::config::FractalConfig::default();
+            cfg.render_mode = RenderMode::Escape;
+            cfg.flame.name = "KIFS".to_string();
+            cfg.escape.formula = IFS_KIFS.name.to_string();
+            cfg.escape.coloring = coloring.to_string();
+            let p = &mut cfg.escape.formula_params;
+            for (name, v) in [
+                ("levels", self.levels as f64),
+                ("fold", self.fold as f64),
+                ("scale", self.s),
+                ("offset_x", self.o[0]),
+                ("offset_y", self.o[1]),
+                ("offset_z", self.o[2]),
+                ("rot1_x", self.a1[0]),
+                ("rot1_y", self.a1[1]),
+                ("rot1_z", self.a1[2]),
+                ("rot2_x", self.a2[0]),
+                ("rot2_y", self.a2[1]),
+                ("rot2_z", self.a2[2]),
+            ] {
+                p.insert(name.to_string(), v as f32);
+            }
+            cfg.escape.cam_yaw = 0.9;
+            cfg.escape.cam_pitch = 0.42;
+            cfg.escape.zoom_log2 = 0.0;
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            cfg.gamma = crate::config::defaults::DEFAULT_GAMMA;
+            cfg
+        }
+    }
+
+    /// The gates' sets: each fold at its usual scale and offset, and two
+    /// turned by the rotations.
+    fn kifs_cases() -> Vec<(&'static str, Kifs)> {
+        let turned = |mut k: Kifs, a1: [f64; 3], a2: [f64; 3]| {
+            k.a1 = a1;
+            k.a2 = a2;
+            k
+        };
+        vec![
+            ("tetrahedron", Kifs::new(0, 2.0, [1.0, 1.0, 1.0])),
+            ("cantor-dust", Kifs::new(1, 3.0, [1.0, 1.0, 1.0])),
+            ("octahedron-flake", Kifs::new(2, 2.0, [1.0, 0.0, 0.0])),
+            ("menger", Kifs::new(3, 3.0, [1.0, 1.0, 1.0])),
+            ("turned-tetrahedron", turned(Kifs::new(0, 2.0, [1.0, 1.0, 1.0]), [12.0, 0.0, 25.0], [0.0, 18.0, 0.0])),
+            ("turned-octahedral", turned(Kifs::new(2, 2.3, [1.0, 0.8, 0.4]), [0.0, 0.0, 30.0], [20.0, 0.0, 0.0])),
+            ("turned-menger", turned(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]), [8.0, 0.0, 0.0], [0.0, 10.0, 0.0])),
+        ]
+    }
+
+    /// A small deterministic stream for the gates' samples.
+    struct XorShift(u64);
+    impl XorShift {
+        fn unit(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+        /// A point uniformly in the ball of radius `r` about `c`, or on
+        /// its sphere when `surface`.
+        fn in_ball(&mut self, c: [f64; 3], r: f64, surface: bool) -> [f64; 3] {
+            loop {
+                let v = [self.unit() * 2.0 - 1.0, self.unit() * 2.0 - 1.0, self.unit() * 2.0 - 1.0];
+                let n = norm3(v);
+                if n > 1e-9 && n <= 1.0 {
+                    let scale = if surface { r / n } else { r * self.unit().cbrt() / n };
+                    return [c[0] + v[0] * scale, c[1] + v[1] * scale, c[2] + v[2] * scale];
+                }
+            }
+        }
+    }
+
+    /// The KIFS plan A1, gate 2 on the CPU: the distance is a lower
+    /// bound. Around points near each set, nothing in the ball the
+    /// distance promises is in the set as a deeper walk sees it (its
+    /// orbit bounded for eight more steps than the walk takes, which
+    /// puts it within `2 |o| s^-m` of the set: the ball is shrunk by
+    /// that). A wrong fold, a distance that forgot a power of the scale
+    /// or a radius the set exceeds would all put set points inside.
+    #[test]
+    fn the_kifs_distance_is_a_lower_bound() {
+        for (case, (name, k)) in kifs_cases().into_iter().enumerate() {
+            // Each case its own stream, so one case's samples do not
+            // depend on how many the cases before it drew.
+            let mut rng = XorShift(0x9E37_79B9_7F4A_7C15 ^ ((case as u64 + 1) << 32));
+            let m = k.levels + 8;
+            let shrink = 2.0 * k.radius() * k.s.powi(-(m as i32));
+            let (mut checked, mut near, mut violations) = (0usize, 0usize, Vec::new());
+            for _ in 0..2000 {
+                let q = rng.in_ball([0.0; 3], 1.2 * k.radius(), false);
+                let d = k.distance(q);
+                // Close to the set: most of these sets have no volume,
+                // so a sample is near one, not in it.
+                near += usize::from(d < 0.05 * k.radius());
+                if d <= 0.0 {
+                    continue;
+                }
+                let r = d - shrink;
+                if r <= 0.0 {
+                    continue;
+                }
+                checked += 1;
+                for i in 0..48 {
+                    let p = rng.in_ball(q, r, i % 2 == 0);
+                    if k.bounded(p, m) {
+                        violations.push((q, d, p));
+                        break;
+                    }
+                }
+            }
+            println!("{name}: {checked} points checked, {near} near the set, {} violations", violations.len());
+            assert!(checked > 600 && near > 30, "{name}: the samples missed the set ({checked} checked, {near} near it)");
+            assert!(violations.is_empty(), "{name}: set points inside the promised ball: {:?}", &violations[..violations.len().min(3)]);
+        }
+    }
+
+    /// A pixel's ray as the solid template's `ifs_ray` makes it, and the
+    /// eye it starts from (`eye_rel`, the target at the ball's centre).
+    fn kifs_rays(cfg: &crate::config::FractalConfig, n: u32) -> (SolidCamera, Vec<[f64; 3]>) {
+        let packed = pack_standalone(&IFS_KIFS, &cfg.escape);
+        let ifs3 = packed.solid.as_ref().map(|(i, _)| i).expect("standalone solid");
+        let cam = solid_camera(&cfg.escape, ifs3);
+        let tan_half = (cam.fov as f64 * 0.5).tan();
+        let mut rays = Vec::with_capacity((n * n) as usize);
+        for py in 0..n {
+            for px in 0..n {
+                let u = (px as f64 + 0.5) / n as f64 - 0.5;
+                let v = (py as f64 + 0.5) / n as f64 - 0.5;
+                let d: [f64; 3] = std::array::from_fn(|i| cam.forward[i] + cam.right[i] * (u * 2.0 * tan_half) - cam.up[i] * (v * 2.0 * tan_half));
+                let len = norm3(d);
+                rays.push(d.map(|x| x / len));
+            }
+        }
+        (cam, rays)
+    }
+
+    /// Which pixels of a GPU render show the solid: a flat white palette
+    /// and no shadow or occlusion, so every hit is bright and the
+    /// background is not.
+    fn kifs_gpu_coverage(device: &wgpu::Device, queue: &wgpu::Queue, k: &Kifs, n: u32) -> Vec<bool> {
+        let mut cfg = k.config("ifs_level");
+        cfg.escape.formula_params.insert("shadow".to_string(), 0.0);
+        cfg.escape.formula_params.insert("occlusion".to_string(), 0.0);
+        let white = crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] };
+        cfg.palette = crate::scene::palette::Palette {
+            name: "White".to_string(),
+            stops: vec![white.clone(), crate::scene::palette::ColorStop { position: 1.0, ..white }],
+            locked: false,
+            built_in: false,
+        };
+        let job = crate::renderer::RenderJob::new(&cfg, n, n);
+        let out = pollster::block_on(crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress)).expect("render");
+        out.rgba_data.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).collect()
+    }
+
+    /// Pixels where two coverages differ, and how many of those have a
+    /// neighbour where the first changes (an edge pixel).
+    fn coverage_mismatch(a: &[bool], b: &[bool], n: u32) -> (usize, usize) {
+        let n = n as i64;
+        let at = |x: i64, y: i64| a[(y.clamp(0, n - 1) * n + x.clamp(0, n - 1)) as usize];
+        let (mut differ, mut on_edges) = (0, 0);
+        for y in 0..n {
+            for x in 0..n {
+                let i = (y * n + x) as usize;
+                if a[i] != b[i] {
+                    differ += 1;
+                    let here = a[i];
+                    if [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)].iter().any(|&(dx, dy)| at(x + dx, y + dy) != here) {
+                        on_edges += 1;
+                    }
+                }
+            }
+        }
+        (differ, on_edges)
+    }
+
+    /// The KIFS plan A1, gate 2's exact half: with cubic folds, scale 2
+    /// and offset (1, 1, 1), every point of the cube maps into the cube
+    /// and every point outside it escapes, so the set is exactly the
+    /// solid cube. Its silhouette, cast through each pixel's ray against
+    /// the box, is what the GPU must draw, grown by the march's pixel of
+    /// tolerance: a wrong fold, scale, offset, ball or distance would
+    /// move the edges.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_kifs_of_cubic_folds_at_scale_two_is_the_cube() {
+        const N: u32 = 256;
+        let (device, queue) = device();
+        let k = Kifs::new(1, 2.0, [1.0, 1.0, 1.0]);
+        let gpu = kifs_gpu_coverage(&device, &queue, &k, N);
+        let (cam, rays) = kifs_rays(&k.config("ifs_level"), N);
+        let exact: Vec<bool> = rays
+            .iter()
+            .map(|d| {
+                // The slab test against [-1, 1]^3.
+                let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
+                for i in 0..3 {
+                    let (o, dir) = (cam.eye_rel[i], d[i]);
+                    if dir.abs() < 1e-15 {
+                        if o.abs() > 1.0 {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let (a, b) = ((-1.0 - o) / dir, (1.0 - o) / dir);
+                    t0 = t0.max(a.min(b));
+                    t1 = t1.min(a.max(b));
+                }
+                t0 <= t1
+            })
+            .collect();
+        let lit = exact.iter().filter(|x| **x).count();
+        let (differ, on_edges) = coverage_mismatch(&exact, &gpu, N);
+        // The march stops where the surface is within a pixel's width
+        // (the solid template's rule), so a ray grazing an edge hits: the
+        // drawn silhouette is the box's grown by up to a pixel, never
+        // shrunk. The ring one pixel outside the box bounds the growth.
+        let grown = exact.iter().zip(&gpu).filter(|(e, g)| !**e && **g).count();
+        let shrunk = exact.iter().zip(&gpu).filter(|(e, g)| **e && !**g).count();
+        let n = N as i64;
+        let ring = (0..n * n)
+            .filter(|&i| {
+                let (x, y) = (i % n, i / n);
+                !exact[i as usize]
+                    && [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
+                        .iter()
+                        .any(|&(dx, dy)| (0..n).contains(&(x + dx)) && (0..n).contains(&(y + dy)) && exact[((y + dy) * n + x + dx) as usize])
+            })
+            .count();
+        println!("the cube: {lit} pixels by the box, {differ} differ ({grown} grown, {shrunk} shrunk, {on_edges} on its edges); the ring outside it has {ring}");
+        assert!(lit > 4000, "the cube fills too little of the frame ({lit})");
+        assert_eq!(differ, on_edges, "a pixel away from the cube's edges differs");
+        assert_eq!(shrunk, 0, "the drawn cube is smaller than the box");
+        assert!(grown <= ring, "the cube grew by more than a pixel: {grown} of a {ring}-pixel ring");
+    }
+
+    /// The KIFS plan A1, gate 2's twin half: each set the GPU draws is
+    /// the one the CPU twin's march finds, ray for ray as the solid
+    /// template marches (entering at the ball, stopping within a pixel
+    /// of the surface), every fold and both rotations included. Only
+    /// edge pixels may differ, where f32 and f64 part over a pixel.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn kifs_renders_as_its_twin() {
+        const N: u32 = 192;
+        let (device, queue) = device();
+        for (name, k) in kifs_cases() {
+            let gpu = kifs_gpu_coverage(&device, &queue, &k, N);
+            let cfg = k.config("ifs_level");
+            let (cam, rays) = kifs_rays(&cfg, N);
+            let tan_half = (cam.fov as f64 * 0.5).tan();
+            let px_at = 2.0 * tan_half / N as f64;
+            let radius = k.radius();
+            let steps = 128u32;
+            let twin: Vec<bool> = rays
+                .iter()
+                .map(|dir| {
+                    let o = cam.eye_rel;
+                    let b = o[0] * dir[0] + o[1] * dir[1] + o[2] * dir[2];
+                    let disc = b * b - (norm3(o).powi(2) - radius * radius);
+                    if disc < 0.0 {
+                        return false;
+                    }
+                    let (mut t, t_max) = ((-b - disc.sqrt()).max(0.0), -b + disc.sqrt());
+                    for _ in 0..steps {
+                        if t > t_max {
+                            return false;
+                        }
+                        let p = [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
+                        let d = k.distance(p);
+                        if d < (px_at * t).max(1e-30) {
+                            return true;
+                        }
+                        t += d;
+                    }
+                    false
+                })
+                .collect();
+            let lit = twin.iter().filter(|x| **x).count();
+            let (differ, on_edges) = coverage_mismatch(&twin, &gpu, N);
+            println!("{name}: {lit} pixels by the twin, {differ} differ, {on_edges} of them on edges");
+            assert!(lit > 1000, "{name}: the set fills too little of the frame ({lit})");
+            assert!(differ * 25 <= lit, "{name}: {differ} pixels differ of {lit}");
+            assert!(on_edges * 10 >= differ * 9, "{name}: {} pixels away from edges differ", differ - on_edges);
+        }
+    }
+
+    /// The KIFS cases under the level colouring, for inspection before a
+    /// preset ships (the KIFS plan A1, gate 3).
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/kifs-*.png"]
+    fn render_kifs_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        let mut cases: Vec<(String, crate::config::FractalConfig)> =
+            kifs_cases().into_iter().map(|(name, k)| (name.to_string(), k.config("ifs_level"))).collect();
+        cases.extend(kifs_presets().into_iter().map(|c| (format!("preset-{}", c.flame.name.to_ascii_lowercase().replace(' ', "-")), c)));
+        for (name, cfg) in cases {
+            let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+            let path = dir.join(format!("kifs-{name}.png"));
+            image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+            println!("    {}", path.display());
+        }
+    }
+
+    /// The KIFS presets (the KIFS plan A1): the Menger sponge, the
+    /// Sierpinski tetrahedron, the octahedron flake, and three turned by
+    /// the rotations or off the symmetric offset -- picked from rendered
+    /// candidates and inspected before they ship
+    /// (`render_kifs_for_inspection`).
+    pub(super) fn kifs_presets() -> Vec<crate::config::FractalConfig> {
+        let named = |name: &str, k: Kifs, coloring: &str, zoom: f64| {
+            let mut c = k.config(coloring);
+            c.flame.name = name.to_string();
+            c.escape.zoom_log2 = zoom;
+            c
+        };
+        let turned = |fold: u32, s: f64, o: [f64; 3], a1: [f64; 3], a2: [f64; 3]| {
+            let mut k = Kifs::new(fold, s, o);
+            k.a1 = a1;
+            k.a2 = a2;
+            k
+        };
+        vec![
+            named("KIFS Menger", Kifs::new(3, 3.0, [1.0, 1.0, 1.0]), "ifs_address", 0.0),
+            named("KIFS Tetrahedron", Kifs::new(0, 2.0, [1.0, 1.0, 1.0]), "ifs_level", 0.2),
+            named("KIFS Octahedron", Kifs::new(2, 2.0, [1.0, 0.0, 0.0]), "ifs_level", 0.0),
+            named("KIFS Turned", turned(3, 3.0, [1.0, 1.0, 1.0], [8.0, 0.0, 0.0], [0.0, 10.0, 0.0]), "ifs_address", 0.1),
+            named("KIFS Bloom", turned(2, 2.0, [1.0, 0.3, 0.0], [0.0; 3], [0.0, 0.0, 25.0]), "ifs_address", 0.1),
+            named("KIFS Columns", turned(1, 2.2, [1.0, 1.0, 1.0], [0.0, 30.0, 0.0], [0.0; 3]), "ifs_level", 0.1),
+        ]
     }
 
     /// Plan 8.11 gate 2, the math: with `c = 0` the orbit of `q` is

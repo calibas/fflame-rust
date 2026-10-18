@@ -1165,6 +1165,24 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `ifs_flame` | Flame Attractor (Distance) | the loaded flame's attractor, by inverse iteration. Planar; needs a qualifying flame; default colouring `ifs_distance` |
 | `ifs_flame_3d` | Flame Attractor (Solid) | the same in three dimensions, sphere-traced. Solid; needs a qualifying flame; default `ifs_address` |
 | `quaternion_julia_solid` | Quaternion Julia (Solid) | `q ↦ qⁿ + c` on a 3D slice, by the Hart–Sandin–Kauffman distance estimate. Solid; needs no flame; default `ifs_level` |
+| `kifs_solid` | KIFS (Solid) | Knighty's kaleidoscopic IFS: rotate, fold (tetrahedral, cubic, octahedral or Menger), rotate, `z = s z − o (s − 1)`. Solid; needs no flame; default `ifs_level` |
+
+**KIFS (Solid)** ([escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md),
+A1) takes its folds from Syntopia's "Folding Space" (2011): the
+Sierpinski tetrahedron's three plane folds, `abs` of each axis
+(cubic), those and a descending sort (octahedral), and the sponge's
+correction of `z` (Menger); a rotation before the fold and one after
+(Knighty's), three Euler angles each in degrees. Its distance is
+`(|z_n| − |o|) s⁻ⁿ` once `|z|` passes `|o|`, zero if it never does
+within the iterations: a lower bound, because every fold and rotation
+is 1-Lipschitz and fixes the origin, so the set lies within `|o|`
+(which is also the ball the camera frames, `standalone_radius`). The
+address is the fold history, a base-8 digit per iteration (which of
+three mirrors fired) for the first eight; the colour the first digit;
+the trap point the escaped `z`'s `xy`. Presets: KIFS Menger,
+Tetrahedron, Octahedron (the octahedron flake), Turned, Bloom and
+Columns. The tests hold it to a CPU twin (`gpu_tests::Kifs`), pixel for
+pixel. Like the quaternion Julia it is f32 and absolute: no deep zoom.
 
 The colourings are `ifs_distance` (Distance: the set with an antialiased
 edge and optional contour bands), `ifs_level` (Escape Level: shells of
