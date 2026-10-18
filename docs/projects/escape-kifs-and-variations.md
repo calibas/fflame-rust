@@ -161,7 +161,20 @@ hillshade the part to check.
 
 ## Order of work
 
-1. [ ] A1 KIFS (Solid).
+1. [x] A1 KIFS (Solid). **Done 2026-10-17**: `kifs_solid` in
+   `IFS_DEFS`, as specified above. Measured: the GPU's coverage equals
+   the CPU twin's march on every pixel for seven sets (each fold, two
+   with rotations, a turned Menger); the bound holds at 2,000 points per
+   set with no set point inside a promised ball (the Menger's
+   correction included, though it is not proved); cubic folds at scale
+   2 draw the box's silhouette grown by the march's pixel of tolerance
+   (660 pixels grown of a 772-pixel ring, none shrunk). Six presets,
+   picked from rendered candidates: KIFS Menger, Tetrahedron,
+   Octahedron (offset (1, 0, 0): the octahedron flake), Turned (the
+   sponge with a rotation either side of the fold), Bloom, Columns.
+   Found on the way: an octahedral offset off the axes at scale 2 is a
+   blob of shells, and the octahedron's vertices sit on its ball, so it
+   frames at zoom 0.
 2. [ ] A2 Mandelbox (Solid).
 3. [ ] A3 Mandelbulb (Solid).
 4. [ ] C1 Rhai transformations, 2D.
