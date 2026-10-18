@@ -795,6 +795,12 @@ pub const SLOW_PARAMS: &[(&str, &str)] = &[
     ("kifs_solid", "levels"),
     ("kifs_solid", "beam"),
     ("kifs_solid", "steps"),
+    ("mandelbox_solid", "levels"),
+    ("mandelbox_solid", "beam"),
+    ("mandelbox_solid", "steps"),
+    ("mandelbulb_solid", "levels"),
+    ("mandelbulb_solid", "beam"),
+    ("mandelbulb_solid", "steps"),
 ];
 
 /// Whether `param` of the formula or colouring `def` is slow

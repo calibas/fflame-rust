@@ -1166,6 +1166,8 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `ifs_flame_3d` | Flame Attractor (Solid) | the same in three dimensions, sphere-traced. Solid; needs a qualifying flame; default `ifs_address` |
 | `quaternion_julia_solid` | Quaternion Julia (Solid) | `q ↦ qⁿ + c` on a 3D slice, by the Hart–Sandin–Kauffman distance estimate. Solid; needs no flame; default `ifs_level` |
 | `kifs_solid` | KIFS (Solid) | Knighty's kaleidoscopic IFS: rotate, fold (tetrahedral, cubic, octahedral or Menger), rotate, `z = s z − o (s − 1)`. Solid; needs no flame; default `ifs_level` |
+| `mandelbox_solid` | Mandelbox (Solid) | Lowe's box fold, sphere fold and scale, `z = s fold(z) + c`, the point or a Julia constant; the distance `0.95 |z| / |dr|`. Solid; needs no flame; default `ifs_trap` |
+| `mandelbulb_solid` | Mandelbulb (Solid) | White and Nylander's power in spherical coordinates, `z = zⁿ + c`, the point or a Julia constant; Hart's estimate times the Step Factor. Solid; needs no flame; default `ifs_trap` |
 
 **KIFS (Solid)** ([escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md),
 A1) takes its folds from Syntopia's "Folding Space" (2011): the
@@ -1198,6 +1200,23 @@ derivative is `s^n` everywhere); the quaternion's address is which side
 of the plane across `c`'s axis each iterate falls, then the angle from
 that axis. `the_solids_colours_settle_as_the_view_refines` holds them
 to it on the CPU twins. The flame solids still read the tail.
+
+**The Mandelbox and the Mandelbulb** (the plan's A2, A3) follow the same
+rules. Their balls are their escape bounds (`mandelbox_radius`: Lowe's
+`2L(|s| + 1) / (|s| − 1)` in the largest coordinate, `(2L|s| + |c|) /
+(|s| − 1)` for a Julia; `mandelbulb_radius`: `2^(1/(n−1))`, or `1 + |c|`),
+held by `the_solids_lie_within_their_balls`. Lowe's `|z| / |dr|` runs at
+0.95 of itself, which makes it a bound at every point the gate samples;
+Hart's estimate is no bound for the bulb (measured 1.7 times the distance
+beside a thin part), so it carries a **Step Factor** (default 1) for the
+user to lower when thin parts break up. Colours: the level `log2` of the
+running derivative at the colour depth (the bulb's per power, `/ (n −
+1)`); the trap the closest approach (the box's sorted absolute
+coordinates in units of its ball, the bulb's `(z, |xy|)`); the address
+base 12 for the box (how many axes the box fold reflected, which sphere
+case applied: kept by the cube's symmetries) and the hemispheres then the
+polar angle for the bulb (kept by its turns about z). The tests hold both
+to CPU twins (`gpu_tests::Solid`), pixel for pixel on the GPU.
 
 The colourings are `ifs_distance` (Distance: the set with an antialiased
 edge and optional contour bands), `ifs_level` (Escape Level: shells of

@@ -1735,7 +1735,7 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 
 /// Ordered mode-D registry. **Append-only** — same contract as
 /// [`super::FORMULAS`].
-pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA, &IFS_KIFS];
+pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA, &IFS_KIFS, &IFS_MANDELBOX, &IFS_MANDELBULB];
 
 /// A quaternion Julia set as a solid, needing no flame (plan §8.11,
 /// step 1): `q ↦ qⁿ + c` in ℍ on a 3D slice, by the escape-time
@@ -2418,6 +2418,531 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 "#,
 };
 
+/// The Mandelbox as a solid, needing no flame (the KIFS plan,
+/// [docs/projects/escape-kifs-and-variations.md] A2): Tom Lowe's
+/// (2010) box fold, sphere fold and scaling, `z = s fold(z) + c` with
+/// `c` the point (the Mandelbox) or a constant (its Julia), as Syntopia
+/// writes it in "Distance Estimated 3D Fractals (VI): The Mandelbox"
+/// (2011): the distance `|z| / |dr|`, `dr` the running scale. The ball
+/// is `mandelbox_radius`'s. Coloured by the plan's "Colouring solids".
+///
+/// [docs/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+pub static IFS_MANDELBOX: IfsDef = IfsDef {
+    name: "mandelbox_solid",
+    display_name: "Mandelbox (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_trap",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 16.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many folds and scalings before calling the point part of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: the set has one orbit per point. Kept so the march, shadow and \
+                      occlusion slots line up with the flame solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 192.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.7,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here: the set is three-dimensional. Kept for the slot.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 2.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "How much each iteration enlarges space after the folds. 2 is Lowe's box; \
+                      negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 \
+                      nothing escapes, so the magnitude is held to 1.05 at least.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "min_radius",
+            display_name: "Minimum Radius",
+            default: 0.5,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Inside this radius the sphere fold scales linearly; between it and the fixed \
+                      radius, it inverts.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "fixed_radius",
+            display_name: "Fixed Radius",
+            default: 1.0,
+            min: 0.1,
+            max: 3.0,
+            tooltip: "The radius the sphere fold inverts in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "fold_limit",
+            display_name: "Folding Limit",
+            default: 1.0,
+            min: 0.1,
+            max: 3.0,
+            tooltip: "Where the box fold reflects each axis.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Mode",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The Mandelbox adds the point itself each iteration; its Julia adds the \
+                      constant below, the same for every point.",
+            choices: &["Mandelbox", "Julia"],
+        },
+        EscapeParamDef {
+            name: "cx",
+            display_name: "Julia X",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The Julia constant's x.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cy",
+            display_name: "Julia Y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The Julia constant's y.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cz",
+            display_name: "Julia Z",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The Julia constant's z.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach, the level's stretch and the address. The surface is drawn \
+                      a pixel from the set, and past a few iterations that pixel decides the \
+                      orbit, so deeper colours change with the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 64.0));
+    // |s| at least 1.05, its sign kept: between -1 and 1 nothing escapes.
+    let s_in = fparam(7u);
+    let s = select(max(s_in, 1.05), min(s_in, -1.05), s_in < 0.0);
+    let min_r = max(fparam(8u), 0.0);
+    let fixed_r = max(fparam(9u), 0.1);
+    let min_r2 = max(min(min_r * min_r, fixed_r * fixed_r), 1.0e-6);
+    let fixed_r2 = fixed_r * fixed_r;
+    let limit = max(fparam(10u), 0.1);
+    let julia = fparam(11u) > 0.5;
+    let depth = u32(clamp(round(fparam(15u)), 1.0, 12.0));
+    let radius = ifs_radius();
+
+    let p = delta + ifs_target_offset();
+    let c = select(p, vec3<f32>(fparam(12u), fparam(13u), fparam(14u)), julia);
+    var z = p;
+    var dr = 1.0;
+    var r = length(z);
+    // The colourings read the start of the orbit (the KIFS's note): the
+    // closest approach within `depth`, the running scale there, and per
+    // iteration how many axes the box fold reflected and which of the
+    // sphere fold's three cases applied -- both kept by the cube's
+    // symmetries, which commute with the folds.
+    var trap_r = 1.0e30;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var spread = 1.0;
+    var address = 0.0;
+    var place = 1.0 / 12.0;
+    var k = 0u;
+    var escape_k = -1;
+    loop {
+        if (k >= levels || r > 100.0) {
+            break;
+        }
+        let axes = u32(abs(z.x) > limit) + u32(abs(z.y) > limit) + u32(abs(z.z) > limit);
+        z = clamp(z, vec3<f32>(-limit), vec3<f32>(limit)) * 2.0 - z;
+        let r2 = dot(z, z);
+        var case_ = 0u;
+        if (r2 < min_r2) {
+            let t = fixed_r2 / min_r2;
+            z = z * t;
+            dr = dr * t;
+            case_ = 2u;
+        } else if (r2 < fixed_r2) {
+            let t = fixed_r2 / r2;
+            z = z * t;
+            dr = dr * t;
+            case_ = 1u;
+        }
+        z = s * z + c;
+        dr = dr * abs(s) + select(1.0, 0.0, julia);
+        r = length(z);
+        k = k + 1u;
+        if (k <= depth) {
+            spread = dr;
+            if (r < trap_r) {
+                trap_r = r;
+                // In units of the ball: the box is a dozen across where
+                // the other solids are two, and the trap's palette scale
+                // is per unit.
+                let a = abs(z) / radius;
+                trap_p = vec2<f32>(max(max(a.x, a.y), a.z), min(min(a.x, a.y), a.z));
+            }
+            address = address + f32(axes * 3u + case_) * place;
+            place = place / 12.0;
+        }
+        if (escape_k < 0 && r > radius) {
+            escape_k = i32(k);
+        }
+    }
+    res.point = trap_p;
+    res.address = address;
+    res.color = address;
+    res.level = log2(max(abs(spread), 1.0));
+    // Lowe's estimate, as Syntopia writes it, at 0.95 of itself: whole it
+    // was measured up to a percent over the distance at a negative scale
+    // (`the_solid_distances_are_lower_bounds`), where a march wants it
+    // never over.
+    res.distance = 0.95 * r / max(abs(dr), 1.0e-30);
+    if (escape_k >= 0) {
+        res.escaped = 1u;
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    } else {
+        res.depth = levels;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
+/// The Mandelbulb as a solid, needing no flame (the KIFS plan,
+/// [docs/projects/escape-kifs-and-variations.md] A3): White and
+/// Nylander's (2009) power in spherical coordinates, `z = z^n + c`, `c`
+/// the point (the Mandelbulb) or a constant (its Julia), as Syntopia
+/// writes it in "Distance Estimated 3D Fractals (V): The Mandelbulb"
+/// (2011), with Hart's half of the estimate as the quaternion Julia's.
+/// Coloured by the plan's "Colouring solids".
+///
+/// [docs/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+pub static IFS_MANDELBULB: IfsDef = IfsDef {
+    name: "mandelbulb_solid",
+    display_name: "Mandelbulb (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_trap",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many powers before calling the point part of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: the set has one orbit per point. Kept so the march, shadow and \
+                      occlusion slots line up with the flame solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 160.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.7,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here: the set is three-dimensional. Kept for the slot.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "power",
+            display_name: "Power",
+            default: 8.0,
+            min: 2.0,
+            max: 16.0,
+            tooltip: "The n in White and Nylander's power: 8 is the bulb everyone knows, 2 the \
+                      quadratic one.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Mode",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The Mandelbulb adds the point itself each iteration; its Julia adds the \
+                      constant below, the same for every point.",
+            choices: &["Mandelbulb", "Julia"],
+        },
+        EscapeParamDef {
+            name: "cx",
+            display_name: "Julia X",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The Julia constant's x.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cy",
+            display_name: "Julia Y",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The Julia constant's y.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cz",
+            display_name: "Julia Z",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The Julia constant's z.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach, the level's stretch and the address. The surface is drawn \
+                      a pixel from the set, and past a few iterations that pixel decides the \
+                      orbit, so deeper colours change with the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "step_factor",
+            display_name: "Step Factor",
+            default: 1.0,
+            min: 0.25,
+            max: 1.0,
+            tooltip: "Scales the distance the march steps by. The bulb's estimate is not a                       bound: beside thin parts it was measured at 1.7 times the true distance,                       so a ray can step past a hair. Lower it if thin parts break up, at the                       cost of more steps.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 64.0));
+    let n = clamp(fparam(7u), 2.0, 16.0);
+    let step_factor = clamp(fparam(13u), 0.25, 1.0);
+    let julia = fparam(8u) > 0.5;
+    let depth = u32(clamp(round(fparam(12u)), 1.0, 12.0));
+    // Past the ball the orbit escapes; the estimate is taken further out,
+    // where `ln r` has settled (stopping at 4, it was over by a percent
+    // near the set), and short of where a power of 16 overflows f32.
+    let radius = ifs_radius();
+    let bail = max(2.0 * radius, 64.0);
+
+    let p = delta + ifs_target_offset();
+    let c = select(p, vec3<f32>(fparam(9u), fparam(10u), fparam(11u)), julia);
+    var z = p;
+    var dr = 1.0;
+    var r = length(z);
+    // The colourings read the start of the orbit: the closest approach
+    // within `depth` as (z, |xy|), the running derivative there, and
+    // which hemisphere each iterate falls in, then its polar angle --
+    // all kept by the bulb's turns about the z axis.
+    var trap_r = 1.0e30;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var spread = 1.0;
+    var address = 0.0;
+    var place = 0.5;
+    var k = 0u;
+    var escape_k = -1;
+    loop {
+        if (k >= levels || r > bail) {
+            break;
+        }
+        let theta = acos(clamp(z.z / max(r, 1.0e-30), -1.0, 1.0));
+        let phi = ff_atan2(z.y, z.x);
+        dr = select(0.0, pow(r, n - 1.0), r > 0.0) * n * dr + select(1.0, 0.0, julia);
+        let zr = select(0.0, pow(r, n), r > 0.0);
+        let th = theta * n;
+        let ph = phi * n;
+        z = zr * vec3<f32>(sin(th) * cos(ph), sin(ph) * sin(th), cos(th)) + c;
+        r = length(z);
+        k = k + 1u;
+        if (k <= depth) {
+            spread = dr;
+            if (r < trap_r) {
+                trap_r = r;
+                trap_p = vec2<f32>(z.z, length(z.xy));
+            }
+            if (k < depth) {
+                address = address + select(0.0, place, z.z < 0.0);
+                place = place * 0.5;
+            } else {
+                address = address + acos(clamp(z.z / max(r, 1.0e-30), -1.0, 1.0)) * 0.31830988618 * place;
+            }
+        }
+        if (escape_k < 0 && r > radius) {
+            escape_k = i32(k);
+        }
+    }
+    res.point = trap_p;
+    res.address = address;
+    // Per power of r: the derivative carries r^(n-1) each step, so at
+    // power 8 its log moved seven times as fast over the surface as the
+    // quaternion's.
+    res.level = log2(max(spread, 1.0)) / (n - 1.0);
+    if (escape_k >= 0) {
+        res.escaped = 1u;
+        // Hart's estimate, with his half, as the quaternion Julia's; not a
+        // bound for the bulb, so the step factor is the user's margin.
+        res.distance = step_factor * max(0.5 * log(r) * r / max(dr, 1.0e-30), 0.0);
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    } else {
+        res.depth = levels;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
 /// The packing for a def that needs no flame (plan §8.11 Q3): no
 /// maps, and a ball of the bailout's radius at the origin, which is
 /// what frames the camera and bounds the march. Everything downstream
@@ -2446,18 +2971,59 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
 }
 
 /// The radius of the ball a def that needs no flame frames and bounds
-/// its march by: a KIFS's offset's length (its set lies within it), else
-/// the bailout's (the quaternion Julia's).
+/// its march by, which its set lies within: a KIFS's offset's length,
+/// the Mandelbox's and the Mandelbulb's escape bounds, else the bailout
+/// (the quaternion Julia's).
 pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> f64 {
     let value = |name: &str| -> Option<f64> {
         let p = def.parameters.iter().find(|p| p.name == name)?;
         Some(escape.formula_params.get(name).copied().unwrap_or(p.default) as f64)
     };
+    let julia = || value("mode").unwrap_or(0.0) > 0.5;
+    let constant = || [value("cx"), value("cy"), value("cz")].map(|v| v.unwrap_or(0.0));
     if def.name == IFS_KIFS.name {
         let o = [value("offset_x"), value("offset_y"), value("offset_z")].map(|v| v.unwrap_or(1.0));
         return (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt().max(1e-3);
     }
+    if def.name == IFS_MANDELBOX.name {
+        let c = julia().then(constant);
+        return mandelbox_radius(value("scale").unwrap_or(2.0), value("fold_limit").unwrap_or(1.0), c);
+    }
+    if def.name == IFS_MANDELBULB.name {
+        let c = julia().then(constant);
+        return mandelbulb_radius(value("power").unwrap_or(8.0), c);
+    }
     value("bailout").unwrap_or(2.0).max(1e-3)
+}
+
+/// The Mandelbox's ball, as the walk holds its scale (`|s| >= 1.05`).
+/// Once every coordinate's size is past `m`, the box fold takes at most
+/// `2L` from it and the sphere fold leaves it, so the next is at least
+/// `|s| (m - 2L) - |c|`, larger than `m` past `(2L|s| + |c|) / (|s| - 1)`:
+/// that for a Julia's constant, and for the Mandelbox, whose `c` is the
+/// point, Lowe's `2L(|s| + 1) / (|s| - 1)`, in the cube's largest
+/// coordinate -- the ball reaches its corners. (Held by
+/// `the_solids_lie_within_their_balls`.)
+pub fn mandelbox_radius(scale: f64, limit: f64, julia: Option<[f64; 3]>) -> f64 {
+    let s = scale.abs().max(1.05);
+    let l = limit.max(0.1);
+    let cube = match julia {
+        Some(c) => (2.0 * l * s + c.iter().fold(0.0f64, |m, x| m.max(x.abs()))) / (s - 1.0),
+        None => 2.0 * l * (s + 1.0) / (s - 1.0),
+    };
+    (cube * 3f64.sqrt()).min(256.0)
+}
+
+/// The Mandelbulb's ball: past `2^(1/(n-1))` a point's orbit grows (each
+/// `|z|` at least `|z| (|z|^(n-1) - 1)`), and for a Julia also past
+/// `1 + |c|`.
+pub fn mandelbulb_radius(power: f64, julia: Option<[f64; 3]>) -> f64 {
+    let n = power.clamp(2.0, 16.0);
+    let bulb = 2f64.powf(1.0 / (n - 1.0));
+    match julia {
+        Some(c) => bulb.max(1.0 + (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()),
+        None => bulb,
+    }
 }
 
 /// The packing a config's formula wants: the flame's analysis for a
@@ -6305,6 +6871,7 @@ mod tests {
             .chain(super::gpu_tests::kernel_presets())
             .chain(super::gpu_tests::quaternion_presets())
             .chain(super::gpu_tests::kifs_presets())
+            .chain(super::gpu_tests::box_bulb_presets())
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -12883,6 +13450,353 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
+    const MANDELBOX_DE_FACTOR: f64 = 0.95;
+
+    /// `IFS_MANDELBOX`'s walk on the CPU, in f64, step for step.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct Mandelbox {
+        pub s: f64,
+        pub min_r: f64,
+        pub fixed_r: f64,
+        pub limit: f64,
+        pub julia: Option<[f64; 3]>,
+        pub levels: u32,
+        pub depth: u32,
+    }
+
+    impl Mandelbox {
+        pub(super) fn new(s: f64) -> Mandelbox {
+            Mandelbox { s, min_r: 0.5, fixed_r: 1.0, limit: 1.0, julia: None, levels: 16, depth: 3 }
+        }
+
+        fn scale(&self) -> f64 {
+            if self.s < 0.0 { self.s.min(-1.05) } else { self.s.max(1.05) }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            mandelbox_radius(self.s, self.limit, self.julia)
+        }
+
+        /// One iteration from `z` with constant `c`, the running scale,
+        /// and its address digit.
+        fn step(&self, z: [f64; 3], c: [f64; 3], dr: f64) -> ([f64; 3], f64, u32) {
+            let fixed_r = self.fixed_r.max(0.1);
+            let (fixed_r2, limit) = (fixed_r * fixed_r, self.limit.max(0.1));
+            let min_r = self.min_r.max(0.0);
+            let min_r2 = (min_r * min_r).min(fixed_r2).max(1e-6);
+            let axes = z.iter().filter(|v| v.abs() > limit).count() as u32;
+            let mut z = z.map(|v| v.clamp(-limit, limit) * 2.0 - v);
+            let mut dr = dr;
+            let r2 = z[0] * z[0] + z[1] * z[1] + z[2] * z[2];
+            let mut case = 0;
+            if r2 < min_r2 {
+                let t = fixed_r2 / min_r2;
+                z = z.map(|v| v * t);
+                dr *= t;
+                case = 2;
+            } else if r2 < fixed_r2 {
+                let t = fixed_r2 / r2;
+                z = z.map(|v| v * t);
+                dr *= t;
+                case = 1;
+            }
+            let s = self.scale();
+            let z = [s * z[0] + c[0], s * z[1] + c[1], s * z[2] + c[2]];
+            (z, dr * s.abs() + if self.julia.is_some() { 0.0 } else { 1.0 }, axes * 3 + case)
+        }
+
+        pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
+            let c = self.julia.unwrap_or(p);
+            let radius = self.radius();
+            let (mut z, mut dr, mut r, mut k) = (p, 1.0f64, norm3(p), 0u32);
+            let mut out = SolidColour::default();
+            let (mut trap_r, mut spread, mut place, mut escaped) = (f64::INFINITY, 1.0f64, 1.0 / 12.0, false);
+            while k < self.levels && r <= 100.0 {
+                let (next, next_dr, digit) = self.step(z, c, dr);
+                (z, dr) = (next, next_dr);
+                r = norm3(z);
+                k += 1;
+                if k <= self.depth {
+                    spread = dr;
+                    if r < trap_r {
+                        trap_r = r;
+                        let a = z.map(|v| v.abs() / radius);
+                        out.point = [a[0].max(a[1]).max(a[2]), a[0].min(a[1]).min(a[2])];
+                    }
+                    out.address += f64::from(digit) * place;
+                    place /= 12.0;
+                }
+                if !escaped && r > radius {
+                    escaped = true;
+                    out.tail_point = [z[0], z[1]];
+                }
+            }
+            out.level = spread.abs().max(1.0).log2();
+            (MANDELBOX_DE_FACTOR * r / dr.abs().max(1e-30), out)
+        }
+
+        /// Whether `p`'s orbit stays within the ball for `m` steps.
+        fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            let (c, radius) = (self.julia.unwrap_or(p), self.radius());
+            let mut z = p;
+            (0..m).all(|_| {
+                z = self.step(z, c, 1.0).0;
+                norm3(z) <= radius
+            })
+        }
+
+        /// Whether `p`'s orbit runs off to infinity (far past the ball).
+        fn escapes(&self, p: [f64; 3]) -> bool {
+            let (c, far) = (self.julia.unwrap_or(p), 1e4 * self.radius().max(1.0));
+            let mut z = p;
+            (0..400).any(|_| {
+                z = self.step(z, c, 1.0).0;
+                norm3(z) > far
+            })
+        }
+    }
+
+    /// `IFS_MANDELBULB`'s walk on the CPU, in f64, step for step.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct Mandelbulb {
+        pub n: f64,
+        pub julia: Option<[f64; 3]>,
+        pub levels: u32,
+        pub depth: u32,
+    }
+
+    impl Mandelbulb {
+        pub(super) fn new(n: f64) -> Mandelbulb {
+            Mandelbulb { n, julia: None, levels: 12, depth: 3 }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            mandelbulb_radius(self.n, self.julia)
+        }
+
+        fn power(&self, z: [f64; 3]) -> [f64; 3] {
+            let n = self.n.clamp(2.0, 16.0);
+            let r = norm3(z);
+            if r <= 0.0 {
+                return [0.0; 3];
+            }
+            let theta = (z[2] / r.max(1e-30)).clamp(-1.0, 1.0).acos() * n;
+            let phi = z[1].atan2(z[0]) * n;
+            let zr = r.powf(n);
+            [zr * theta.sin() * phi.cos(), zr * phi.sin() * theta.sin(), zr * theta.cos()]
+        }
+
+        pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
+            let n = self.n.clamp(2.0, 16.0);
+            let c = self.julia.unwrap_or(p);
+            let radius = self.radius();
+            let bail = (2.0 * radius).max(64.0);
+            let (mut z, mut dr, mut r, mut k) = (p, 1.0f64, norm3(p), 0u32);
+            let mut out = SolidColour::default();
+            let (mut trap_r, mut spread, mut place, mut escaped) = (f64::INFINITY, 1.0f64, 0.5, false);
+            while k < self.levels && r <= bail {
+                dr = if r > 0.0 { r.powf(n - 1.0) } else { 0.0 } * n * dr + if self.julia.is_some() { 0.0 } else { 1.0 };
+                let zn = self.power(z);
+                z = [zn[0] + c[0], zn[1] + c[1], zn[2] + c[2]];
+                r = norm3(z);
+                k += 1;
+                if k <= self.depth {
+                    spread = dr;
+                    if r < trap_r {
+                        trap_r = r;
+                        out.point = [z[2], (z[0] * z[0] + z[1] * z[1]).sqrt()];
+                    }
+                    if k < self.depth {
+                        out.address += if z[2] < 0.0 { place } else { 0.0 };
+                        place *= 0.5;
+                    } else {
+                        out.address += (z[2] / r.max(1e-30)).clamp(-1.0, 1.0).acos() / std::f64::consts::PI * place;
+                    }
+                }
+                if !escaped && r > radius {
+                    escaped = true;
+                    out.tail_point = [z[0], z[1]];
+                }
+            }
+            out.level = spread.max(1.0).log2() / (n - 1.0);
+            let d = if escaped { (0.5 * r.ln() * r / dr.max(1e-30)).max(0.0) } else { 0.0 };
+            (d, out)
+        }
+
+        fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            let (c, radius) = (self.julia.unwrap_or(p), self.radius());
+            let mut z = p;
+            (0..m).all(|_| {
+                let zn = self.power(z);
+                z = [zn[0] + c[0], zn[1] + c[1], zn[2] + c[2]];
+                norm3(z) <= radius
+            })
+        }
+
+        fn escapes(&self, p: [f64; 3]) -> bool {
+            let (c, far) = (self.julia.unwrap_or(p), 1e4 * self.radius().max(1.0));
+            let mut z = p;
+            (0..400).any(|_| {
+                let zn = self.power(z);
+                z = [zn[0] + c[0], zn[1] + c[1], zn[2] + c[2]];
+                norm3(z) > far
+            })
+        }
+    }
+
+    /// The flame-less solids' twins as one, for the gates every one of
+    /// them passes.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) enum Solid {
+        Kifs(Kifs),
+        Quat(QuatJulia),
+        Box(Mandelbox),
+        Bulb(Mandelbulb),
+    }
+
+    impl Solid {
+        pub(super) fn def(&self) -> &'static IfsDef {
+            match self {
+                Solid::Kifs(_) => &IFS_KIFS,
+                Solid::Quat(_) => &IFS_QUATERNION_JULIA,
+                Solid::Box(_) => &IFS_MANDELBOX,
+                Solid::Bulb(_) => &IFS_MANDELBULB,
+            }
+        }
+
+        pub(super) fn distance(&self, p: [f64; 3]) -> f64 {
+            match self {
+                Solid::Kifs(k) => k.distance(p),
+                Solid::Quat(q) => q.walk(p).0,
+                Solid::Box(b) => b.walk(p).0,
+                Solid::Bulb(b) => b.walk(p).0,
+            }
+        }
+
+        pub(super) fn colour(&self, p: [f64; 3]) -> SolidColour {
+            match self {
+                Solid::Kifs(k) => k.colour(p),
+                Solid::Quat(q) => q.walk(p).1,
+                Solid::Box(b) => b.walk(p).1,
+                Solid::Bulb(b) => b.walk(p).1,
+            }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            match self {
+                Solid::Kifs(k) => k.radius(),
+                Solid::Quat(q) => q.bail,
+                Solid::Box(b) => b.radius(),
+                Solid::Bulb(b) => b.radius(),
+            }
+        }
+
+        fn levels(&self) -> u32 {
+            match self {
+                Solid::Kifs(k) => k.levels,
+                Solid::Quat(q) => q.levels,
+                Solid::Box(b) => b.levels,
+                Solid::Bulb(b) => b.levels,
+            }
+        }
+
+        fn set_depth(&mut self, depth: u32) {
+            match self {
+                Solid::Kifs(k) => k.depth = depth,
+                Solid::Quat(q) => q.depth = depth,
+                Solid::Box(b) => b.depth = depth,
+                Solid::Bulb(b) => b.depth = depth,
+            }
+        }
+
+        /// Whether `p`'s orbit stays within the ball for `m` steps: as the
+        /// walk sees the set at depth `m`.
+        fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            match self {
+                Solid::Kifs(k) => k.bounded(p, m),
+                Solid::Box(b) => b.bounded(p, m),
+                Solid::Bulb(b) => b.bounded(p, m),
+                Solid::Quat(_) => unreachable!("the quaternion Julia's bound is gated by its unit ball"),
+            }
+        }
+
+        /// How much a depth-`m` view of the set can stand off it: the
+        /// KIFS's `2 |o| s^-m`; the others' sets are the bounded orbits
+        /// themselves, so none.
+        fn shrink(&self, m: u32) -> f64 {
+            match self {
+                Solid::Kifs(k) => 2.0 * k.radius() * k.s.powi(-(m as i32)),
+                _ => 0.0,
+            }
+        }
+
+        /// How much of the promised ball the lower-bound gate holds the
+        /// estimate to: a percent short of all of it, for the estimates
+        /// that are bounds (the KIFS's) or made one (the Mandelbox's at
+        /// 0.95); half for the Mandelbulb, whose Hart estimate is no bound
+        /// (it is not conformal): beside a thin part it was measured at
+        /// 1.7 times the distance to points that stay in the ball for
+        /// 2,000 iterations, where the query point leaves in two. The
+        /// gate catches a lost factor there; the bulb's `step_factor` is
+        /// the user's margin.
+        fn tolerance(&self) -> f64 {
+            match self {
+                Solid::Bulb(_) => 0.5,
+                _ => 0.99,
+            }
+        }
+
+        /// The march's step budget, the def's default.
+        fn steps(&self) -> u32 {
+            self.def().parameters.iter().find(|p| p.name == "steps").map_or(128, |p| p.default as u32)
+        }
+
+        pub(super) fn config(&self, coloring: &str) -> crate::config::FractalConfig {
+            let mut cfg = match self {
+                Solid::Kifs(k) => return k.config(coloring),
+                Solid::Quat(q) => return quaternion_config(q.c.map(|v| v as f32), 3.0, coloring),
+                _ => crate::config::FractalConfig::default(),
+            };
+            cfg.render_mode = RenderMode::Escape;
+            cfg.flame.name = self.def().display_name.to_string();
+            cfg.escape.formula = self.def().name.to_string();
+            cfg.escape.coloring = coloring.to_string();
+            let mut set = |name: &str, v: f64| {
+                cfg.escape.formula_params.insert(name.to_string(), v as f32);
+            };
+            match self {
+                Solid::Box(b) => {
+                    for (name, v) in [("levels", f64::from(b.levels)), ("scale", b.s), ("min_radius", b.min_r), ("fixed_radius", b.fixed_r), ("fold_limit", b.limit), ("colour_depth", f64::from(b.depth))] {
+                        set(name, v);
+                    }
+                    set("mode", if b.julia.is_some() { 1.0 } else { 0.0 });
+                    for (name, v) in ["cx", "cy", "cz"].iter().zip(b.julia.unwrap_or([0.0; 3])) {
+                        set(name, v);
+                    }
+                }
+                Solid::Bulb(b) => {
+                    for (name, v) in [("levels", f64::from(b.levels)), ("power", b.n), ("colour_depth", f64::from(b.depth))] {
+                        set(name, v);
+                    }
+                    set("mode", if b.julia.is_some() { 1.0 } else { 0.0 });
+                    for (name, v) in ["cx", "cy", "cz"].iter().zip(b.julia.unwrap_or([0.0; 3])) {
+                        set(name, v);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            cfg.escape.cam_yaw = 0.9;
+            cfg.escape.cam_pitch = 0.42;
+            // A box at a negative scale fills about a fifth of its ball
+            // (Lowe's bound is loose there).
+            cfg.escape.zoom_log2 = if matches!(self, Solid::Box(b) if b.s < 0.0) { 1.6 } else { 0.0 };
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            cfg.gamma = crate::config::defaults::DEFAULT_GAMMA;
+            cfg
+        }
+    }
+
     /// The colour quantities the measurement compares, at their
     /// colourings' default palette scales.
     const SOLID_FIELDS: [(&str, fn(&SolidColour) -> f64); 5] = [
@@ -12903,10 +13817,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// Each quantity's mean change between the steps, in palette units
     /// at its default scale: a quantity that is the surface's settles as
     /// the view refines (the second change a fraction of the first); one
-    /// that is the pixel's changes as much at every step. Per set: its
-    /// name, the rays that hit, and the two changes for each of
-    /// [`SOLID_FIELDS`].
-    fn solid_colour_settling(kifs_depth: u32, quat_depth: u32) -> Vec<(String, usize, [f64; 5], [f64; 5])> {
+    /// that is the pixel's changes as much at every step. Per set (every
+    /// solid case and Bourke's quaternion Julia, at `depth` or each def's
+    /// default colour depth): its name, the rays that hit, and the two
+    /// changes for each of [`SOLID_FIELDS`].
+    fn solid_colour_settling(depth: Option<u32>) -> Vec<(String, usize, [f64; 5], [f64; 5])> {
         let px = 2.0 * (0.35f64).tan() / 448.0;
         let march = |de: &dyn Fn([f64; 3]) -> f64, o: [f64; 3], dir: [f64; 3], radius: f64, f: f64| -> Option<[f64; 3]> {
             let b = o[0] * dir[0] + o[1] * dir[1] + o[2] * dir[2];
@@ -12954,13 +13869,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             (name, hits, coarse.map(|x| x / h), fine.map(|x| x / h))
         };
         let mut rows = Vec::new();
-        for (name, mut k) in kifs_cases() {
-            k.depth = kifs_depth;
-            rows.push(measure(name.to_string(), &|p| k.distance(p), &|p| k.colour(p), k.radius()));
+        for (name, mut solid) in solid_cases().into_iter().chain([("quaternion", Solid::Quat(QuatJulia::bourke()))]) {
+            let default = solid.def().parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default as u32).expect("a colour depth");
+            solid.set_depth(depth.unwrap_or(default));
+            rows.push(measure(name.to_string(), &|p| solid.distance(p), &|p| solid.colour(p), solid.radius()));
         }
-        let mut q = QuatJulia::bourke();
-        q.depth = quat_depth;
-        rows.push(measure("quaternion".to_string(), &|p| q.walk(p).0, &|p| q.walk(p).1, q.bail));
         rows
     }
 
@@ -12970,7 +13883,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     fn which_solid_colours_follow_the_camera() {
         for depth in 2..=6 {
             println!("colour depth {depth}:");
-            for (name, hits, coarse, fine) in solid_colour_settling(depth, depth) {
+            for (name, hits, coarse, fine) in solid_colour_settling(Some(depth)) {
                 let row: Vec<String> = SOLID_FIELDS.iter().enumerate().map(|(i, (n, _))| format!("{n} {:.3} > {:.3}", coarse[i], fine[i])).collect();
                 println!("  {name} ({hits} hits): {}", row.join(", "));
             }
@@ -12985,8 +13898,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// cycle at every step.
     #[test]
     fn the_solids_colours_settle_as_the_view_refines() {
-        let depth = |def: &IfsDef| def.parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default as u32).expect("a colour depth");
-        for (name, hits, coarse, fine) in solid_colour_settling(depth(&IFS_KIFS), depth(&IFS_QUATERNION_JULIA)) {
+        for (name, hits, coarse, fine) in solid_colour_settling(None) {
             if hits < 50 {
                 continue;
             }
@@ -13018,6 +13930,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         ]
     }
 
+    /// The gates' sets: the KIFS's, and the Mandelbox and the Mandelbulb
+    /// each at its usual values, at a second, and as a Julia.
+    pub(super) fn solid_cases() -> Vec<(&'static str, Solid)> {
+        let mut out: Vec<(&'static str, Solid)> = kifs_cases().into_iter().map(|(n, k)| (n, Solid::Kifs(k))).collect();
+        let box_julia = Mandelbox { julia: Some([0.6, 0.3, -0.4]), ..Mandelbox::new(2.0) };
+        let bulb_julia = Mandelbulb { julia: Some([-0.2, 0.6, 0.3]), ..Mandelbulb::new(8.0) };
+        out.extend([
+            ("mandelbox", Solid::Box(Mandelbox::new(2.0))),
+            ("mandelbox-negative", Solid::Box(Mandelbox::new(-1.5))),
+            ("mandelbox-julia", Solid::Box(box_julia)),
+            ("mandelbulb", Solid::Bulb(Mandelbulb::new(8.0))),
+            ("mandelbulb-power-3", Solid::Bulb(Mandelbulb::new(3.0))),
+            ("mandelbulb-julia", Solid::Bulb(bulb_julia)),
+        ]);
+        out
+    }
+
     /// A small deterministic stream for the gates' samples.
     struct XorShift(u64);
     impl XorShift {
@@ -13041,54 +13970,103 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
-    /// The KIFS plan A1, gate 2 on the CPU: the distance is a lower
-    /// bound. Around points near each set, nothing in the ball the
-    /// distance promises is in the set as a deeper walk sees it (its
-    /// orbit bounded for eight more steps than the walk takes, which
-    /// puts it within `2 |o| s^-m` of the set: the ball is shrunk by
-    /// that). A wrong fold, a distance that forgot a power of the scale
-    /// or a radius the set exceeds would all put set points inside.
+    /// The KIFS plan A1, gate 2 on the CPU, for every flame-less solid:
+    /// the distance is a lower bound. Around points near each set,
+    /// nothing in the ball the distance promises is in the set as a
+    /// deeper walk sees it (its orbit within the ball for forty more
+    /// steps than the walk takes: at sixteen, a Mandelbulb point that
+    /// escapes later counted as the set; for a KIFS, which puts it within
+    /// `2 |o| s^-m` of the set, the ball is shrunk by that). A wrong fold,
+    /// a distance that forgot a power of the scale or a ball the set
+    /// exceeds would all put set points inside. The Mandelbox's `|z| /
+    /// |dr|` needs 0.95 of itself to pass (`MANDELBOX_DE_FACTOR`: it was
+    /// 0.2-1% over at a negative scale).
     #[test]
-    fn the_kifs_distance_is_a_lower_bound() {
-        for (case, (name, k)) in kifs_cases().into_iter().enumerate() {
+    fn the_solid_distances_are_lower_bounds() {
+        for (case, (name, solid)) in solid_cases().into_iter().enumerate() {
             // Each case its own stream, so one case's samples do not
             // depend on how many the cases before it drew.
             let mut rng = XorShift(0x9E37_79B9_7F4A_7C15 ^ ((case as u64 + 1) << 32));
-            let m = k.levels + 8;
-            let shrink = 2.0 * k.radius() * k.s.powi(-(m as i32));
+            let m = solid.levels() + 40;
+            let shrink = solid.shrink(m);
+            let radius = solid.radius();
             let (mut checked, mut near, mut violations) = (0usize, 0usize, Vec::new());
-            for _ in 0..2000 {
-                let q = rng.in_ball([0.0; 3], 1.2 * k.radius(), false);
-                let d = k.distance(q);
+            for i in 0..3000 {
+                // Two thirds from the whole ball, a third from its inner
+                // part, where a set much smaller than its ball (the
+                // Mandelbox at a negative scale) lies.
+                let q = rng.in_ball([0.0; 3], if i % 3 < 2 { 1.2 } else { 0.3 } * radius, false);
+                let d = solid.distance(q);
                 // Close to the set: most of these sets have no volume,
                 // so a sample is near one, not in it.
-                near += usize::from(d < 0.05 * k.radius());
-                if d <= 0.0 {
+                near += usize::from(d < 0.05 * radius);
+                // Within a thousandth of the ball (a fifth of a pixel at a
+                // default view, where the march stops a pixel out), no
+                // march acts on the distance, and two estimates are
+                // rough there: the Mandelbox's `|z| / |dr|` is tiny but
+                // not zero where the orbit stays within the walk's
+                // iterations, and Hart's estimate for the Mandelbulb was
+                // measured 15% over at 1.3e-4 of the ball, where escape is
+                // slow.
+                if d <= 1e-3 * radius {
                     continue;
                 }
-                let r = d - shrink;
+                // Short of the whole ball by the solid's tolerance (half
+                // the samples are on the sphere itself): what the gate is
+                // for (a lost power of the scale, a ball too small) is off
+                // by factors, not percent.
+                let r = (d - shrink) * solid.tolerance();
                 if r <= 0.0 {
                     continue;
                 }
                 checked += 1;
                 for i in 0..48 {
                     let p = rng.in_ball(q, r, i % 2 == 0);
-                    if k.bounded(p, m) {
+                    if solid.bounded(p, m) {
                         violations.push((q, d, p));
                         break;
                     }
                 }
             }
             println!("{name}: {checked} points checked, {near} near the set, {} violations", violations.len());
-            assert!(checked > 600 && near > 30, "{name}: the samples missed the set ({checked} checked, {near} near it)");
             assert!(violations.is_empty(), "{name}: set points inside the promised ball: {:?}", &violations[..violations.len().min(3)]);
+            assert!(checked > 600 && near > 30, "{name}: the samples missed the set ({checked} checked, {near} near it)");
+        }
+    }
+
+    /// Every flame-less solid's set lies within the ball its camera
+    /// frames and its march is bounded by (`standalone_radius`): every
+    /// point a little past it runs off to infinity.
+    #[test]
+    fn the_solids_lie_within_their_balls() {
+        for (case, (name, solid)) in solid_cases().into_iter().enumerate() {
+            let escapes = |p: [f64; 3]| match &solid {
+                Solid::Box(b) => b.escapes(p),
+                Solid::Bulb(b) => b.escapes(p),
+                // A KIFS point past |o| escapes by the bound's own
+                // argument (A1); the lower-bound gate covers it.
+                _ => true,
+            };
+            let mut rng = XorShift(0xD1B5_4A32_D192_ED03 ^ ((case as u64 + 1) << 32));
+            let radius = solid.radius();
+            let stays: Vec<[f64; 3]> = (0..2000)
+                .map(|_| {
+                    let on = rng.in_ball([0.0; 3], 1.0, true);
+                    let r = radius * (1.0 + 0.5 * rng.unit());
+                    on.map(|v| v * r)
+                })
+                .filter(|p| !escapes(*p))
+                .collect();
+            println!("{name}: ball {radius:.3}, {} of 2000 points past it stay", stays.len());
+            assert!(stays.is_empty(), "{name}: points past the ball of {radius:.3} stay: {:?}", &stays[..stays.len().min(3)]);
         }
     }
 
     /// A pixel's ray as the solid template's `ifs_ray` makes it, and the
     /// eye it starts from (`eye_rel`, the target at the ball's centre).
-    fn kifs_rays(cfg: &crate::config::FractalConfig, n: u32) -> (SolidCamera, Vec<[f64; 3]>) {
-        let packed = pack_standalone(&IFS_KIFS, &cfg.escape);
+    fn solid_rays(cfg: &crate::config::FractalConfig, n: u32) -> (SolidCamera, Vec<[f64; 3]>) {
+        let def = get_ifs(&cfg.escape.formula).expect("a mode-D def");
+        let packed = pack_standalone(def, &cfg.escape);
         let ifs3 = packed.solid.as_ref().map(|(i, _)| i).expect("standalone solid");
         let cam = solid_camera(&cfg.escape, ifs3);
         let tan_half = (cam.fov as f64 * 0.5).tan();
@@ -13108,8 +14086,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// Which pixels of a GPU render show the solid: a flat white palette
     /// and no shadow or occlusion, so every hit is bright and the
     /// background is not.
-    fn kifs_gpu_coverage(device: &wgpu::Device, queue: &wgpu::Queue, k: &Kifs, n: u32) -> Vec<bool> {
-        let mut cfg = k.config("ifs_level");
+    fn solid_gpu_coverage(device: &wgpu::Device, queue: &wgpu::Queue, cfg: &crate::config::FractalConfig, n: u32) -> Vec<bool> {
+        let mut cfg = cfg.clone();
         cfg.escape.formula_params.insert("shadow".to_string(), 0.0);
         cfg.escape.formula_params.insert("occlusion".to_string(), 0.0);
         let white = crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] };
@@ -13158,8 +14136,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         const N: u32 = 256;
         let (device, queue) = device();
         let k = Kifs::new(1, 2.0, [1.0, 1.0, 1.0]);
-        let gpu = kifs_gpu_coverage(&device, &queue, &k, N);
-        let (cam, rays) = kifs_rays(&k.config("ifs_level"), N);
+        let gpu = solid_gpu_coverage(&device, &queue, &k.config("ifs_level"), N);
+        let (cam, rays) = solid_rays(&k.config("ifs_level"), N);
         let exact: Vec<bool> = rays
             .iter()
             .map(|d| {
@@ -13205,24 +14183,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         assert!(grown <= ring, "the cube grew by more than a pixel: {grown} of a {ring}-pixel ring");
     }
 
-    /// The KIFS plan A1, gate 2's twin half: each set the GPU draws is
-    /// the one the CPU twin's march finds, ray for ray as the solid
-    /// template marches (entering at the ball, stopping within a pixel
-    /// of the surface), every fold and both rotations included. Only
+    /// The KIFS plan A1, gate 2's twin half, for every flame-less solid:
+    /// each set the GPU draws is the one its CPU twin's march finds, ray
+    /// for ray as the solid template marches (entering at the ball,
+    /// stopping within a pixel of the surface) -- every KIFS fold and both
+    /// rotations, the Mandelbox and Mandelbulb and their Julias. Only
     /// edge pixels may differ, where f32 and f64 part over a pixel.
     #[test]
     #[ignore = "needs a GPU"]
-    fn kifs_renders_as_its_twin() {
+    fn the_solids_render_as_their_twins() {
         const N: u32 = 192;
         let (device, queue) = device();
-        for (name, k) in kifs_cases() {
-            let gpu = kifs_gpu_coverage(&device, &queue, &k, N);
-            let cfg = k.config("ifs_level");
-            let (cam, rays) = kifs_rays(&cfg, N);
+        for (name, solid) in solid_cases() {
+            let cfg = solid.config("ifs_level");
+            let gpu = solid_gpu_coverage(&device, &queue, &cfg, N);
+            let (cam, rays) = solid_rays(&cfg, N);
             let tan_half = (cam.fov as f64 * 0.5).tan();
             let px_at = 2.0 * tan_half / N as f64;
-            let radius = k.radius();
-            let steps = 128u32;
+            let radius = solid.radius();
+            let steps = solid.steps();
             let twin: Vec<bool> = rays
                 .iter()
                 .map(|dir| {
@@ -13238,7 +14217,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                             return false;
                         }
                         let p = [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
-                        let d = k.distance(p);
+                        let d = solid.distance(p);
                         if d < (px_at * t).max(1e-30) {
                             return true;
                         }
@@ -13265,8 +14244,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         std::fs::create_dir_all(dir).expect("output dir");
         let (device, queue) = device();
         let mut cases: Vec<(String, crate::config::FractalConfig)> =
-            kifs_cases().into_iter().map(|(name, k)| (name.to_string(), k.config("ifs_level"))).collect();
-        cases.extend(kifs_presets().into_iter().chain(quaternion_presets()).map(|c| (format!("preset-{}", c.flame.name.to_ascii_lowercase().replace(' ', "-")), c)));
+            solid_cases().into_iter().map(|(name, solid)| (name.to_string(), solid.config("ifs_trap"))).collect();
+        cases.extend(
+            kifs_presets()
+                .into_iter()
+                .chain(quaternion_presets())
+                .chain(box_bulb_presets())
+                .map(|c| (format!("preset-{}", c.flame.name.to_ascii_lowercase().replace(' ', "-")), c)),
+        );
         for (name, cfg) in cases {
             let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
             let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
@@ -13274,6 +14259,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
             println!("    {}", path.display());
         }
+    }
+
+    /// The Mandelbox and Mandelbulb presets (the KIFS plan A2, A3),
+    /// picked from two rounds of rendered candidates under each
+    /// colouring and inspected before they ship
+    /// (`render_kifs_for_inspection`).
+    pub(super) fn box_bulb_presets() -> Vec<crate::config::FractalConfig> {
+        let named = |name: &str, solid: Solid, coloring: &str, zoom: f64| {
+            let mut c = solid.config(coloring);
+            c.flame.name = name.to_string();
+            c.escape.zoom_log2 = zoom;
+            c
+        };
+        vec![
+            named("Mandelbox", Solid::Box(Mandelbox::new(2.0)), "ifs_trap", 0.0),
+            named("Mandelbox Scale 3", Solid::Box(Mandelbox::new(3.0)), "ifs_address", 0.3),
+            named("Mandelbox Inverted", Solid::Box(Mandelbox::new(-2.0)), "ifs_level", 1.6),
+            named("Mandelbox Julia", Solid::Box(Mandelbox { julia: Some([1.2, 0.8, -0.6]), ..Mandelbox::new(3.0) }), "ifs_address", 0.3),
+            named("Mandelbulb", Solid::Bulb(Mandelbulb::new(8.0)), "ifs_trap", -0.15),
+            named("Mandelbulb Power 4", Solid::Bulb(Mandelbulb::new(4.0)), "ifs_address", 0.0),
+            named("Mandelbulb Julia", Solid::Bulb(Mandelbulb { julia: Some([-0.2, 0.6, 0.3]), ..Mandelbulb::new(8.0) }), "ifs_level", 0.6),
+        ]
     }
 
     /// The KIFS presets (the KIFS plan A1): the Menger sponge, the

@@ -3441,5 +3441,540 @@
     "render_mode": "escape",
     "tonemap_mode": "linear",
     "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_trap",
+      "formula": "mandelbox_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": 0.0,
+        "cy": 0.0,
+        "cz": 0.0,
+        "fixed_radius": 1.0,
+        "fold_limit": 1.0,
+        "levels": 16.0,
+        "min_radius": 0.5,
+        "mode": 0.0,
+        "scale": 2.0
+      },
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "Mandelbox",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_address",
+      "formula": "mandelbox_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": 0.0,
+        "cy": 0.0,
+        "cz": 0.0,
+        "fixed_radius": 1.0,
+        "fold_limit": 1.0,
+        "levels": 16.0,
+        "min_radius": 0.5,
+        "mode": 0.0,
+        "scale": 3.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.3
+    },
+    "flame": {
+      "name": "Mandelbox Scale 3",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_level",
+      "formula": "mandelbox_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": 0.0,
+        "cy": 0.0,
+        "cz": 0.0,
+        "fixed_radius": 1.0,
+        "fold_limit": 1.0,
+        "levels": 16.0,
+        "min_radius": 0.5,
+        "mode": 0.0,
+        "scale": -2.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 1.6
+    },
+    "flame": {
+      "name": "Mandelbox Inverted",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_address",
+      "formula": "mandelbox_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": 1.2,
+        "cy": 0.8,
+        "cz": -0.6,
+        "fixed_radius": 1.0,
+        "fold_limit": 1.0,
+        "levels": 16.0,
+        "min_radius": 0.5,
+        "mode": 1.0,
+        "scale": 3.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.3
+    },
+    "flame": {
+      "name": "Mandelbox Julia",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_trap",
+      "formula": "mandelbulb_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": 0.0,
+        "cy": 0.0,
+        "cz": 0.0,
+        "levels": 12.0,
+        "mode": 0.0,
+        "power": 8.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.15
+    },
+    "flame": {
+      "name": "Mandelbulb",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_address",
+      "formula": "mandelbulb_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": 0.0,
+        "cy": 0.0,
+        "cz": 0.0,
+        "levels": 12.0,
+        "mode": 0.0,
+        "power": 4.0
+      },
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "Mandelbulb Power 4",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_level",
+      "formula": "mandelbulb_solid",
+      "formula_params": {
+        "colour_depth": 3.0,
+        "cx": -0.2,
+        "cy": 0.6,
+        "cz": 0.3,
+        "levels": 12.0,
+        "mode": 1.0,
+        "power": 8.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6
+    },
+    "flame": {
+      "name": "Mandelbulb Julia",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
   }
 ]
