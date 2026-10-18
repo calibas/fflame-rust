@@ -439,9 +439,29 @@ hillshade the part to check.
    pixels (60 distinct counts). Not done: a variation's state inside a
    formula (refused), state arrays, `rand()` in `init`, writing RGB
    (`WritesRgb`; needs the vector type).
-8. [ ] **Review UF's transformations** once C is done (the user,
+8. [x] **Review UF's transformations** once C is done (the user,
    2026-10-18; UF transformations themselves stay unsupported): what
    the public library's `.uxf` entries do, and which our variations
-   already cover.
+   already cover. **Done 2026-10-18**:
+   [uf-transforms-review.md](uf-transforms-review.md). The library has
+   no `.uxf` files; its transformations are 192 classes in 11 `.ulb`
+   libraries: 126 point maps, 44 maps needing more (a class-valued
+   parameter in 32 of them, else state, the screen or an image), 22
+   utilities (clipping, merging, bases). Of the 170 maps, 18 have an
+   equivalent here (12 of them plain affines), 40 something close, 112
+   nothing. Worth writing as Rhai variations, by the review: circle-
+   inversion folds for Kleinian and Apollonian packings (9 classes), a
+   2D fold toolkit (box, ball, Kali, abs, triangle, diagonal,
+   Sierpinski -- the 2D side of the KIFS's folds; we have no fold
+   variation), the hyperbolic tiling fold (hypertile's inverse), an
+   angular kaleidoscope fold, general inversion in curves, Newton /
+   Halley / Laguerre steps, polylog and Blaschke maps, complex Γ, the
+   attractor maps we lack (Hopalong, Martin, Chip, Quadruptwo, Sprott)
+   and Pickover's original popcorn, fBm displacement, local lenses. What
+   UF has that a flame variation does not: the solid flag, maps as
+   parameters of maps (products, quotients, powers of two maps), state
+   along a pixel's orbit, the screen, and a function menu -- a shared
+   function-menu helper for Rhai variations would cover much of jlb.ulb.
+   Which of these to write is the user's call.
 9. [ ] B (the vector type) for 3D variations and editable solids; A4
    and C3 as wanted.

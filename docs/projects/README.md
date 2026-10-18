@@ -18,6 +18,7 @@ which rewrites the references in code comments too).
 | [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Planned 2026-10-12: hold any slider's drag once its frames turn slow, beyond the listed slow settings. |
 | [escape-formula-language.md](escape-formula-language.md) | Planned 2026-10-13: Ultra Fractal and Fractint formulas and colourings, compiled to WGSL and carried in the config. Built through item 3; further UF support paused 2026-10-17. |
 | [escape-kifs-and-variations.md](escape-kifs-and-variations.md) | Planned 2026-10-17: KIFS, Mandelbox and Mandelbulb solids in mode D; flame variations written in Rhai for flames and escape-time; editable solids later. |
+| [uf-transforms-review.md](uf-transforms-review.md) | Reviewed 2026-10-18: Ultra Fractal's 192 transformation classes against our variations -- what is covered, what is missing and worth writing as Rhai variations, what UF has that a variation cannot. |
 | [rhai-plugins.md](rhai-plugins.md) | The direction (2026-10-18): every plug-in a Rhai script -- variations, formulas, simulation rules, colourings -- carried in the `.fflame` and downloadable, parameters animatable; scripts as animation tracks. The design rules the scripting work keeps. |
 
 ## Paused
