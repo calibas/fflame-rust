@@ -1843,6 +1843,43 @@ mod tests {
         esc
     }
 
+    /// **A formula's `rand()` draws the interpreter's stream** (the KIFS
+    /// plan, C2a): a formula that escapes on its first draw past 0.9
+    /// counts, on the GPU, what the interpreter counts at the same place
+    /// on the screen -- on every pixel -- so a still reproduces. And the
+    /// counts vary by pixel: the stream is the pixel's.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_formula_draws_the_interpreters_stream() {
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        const DRAWS: &str = "const PARAMS = #{ bailout: 4.0 };\nconst INFO = #{ title: \"Draws\" };\n\
+                             fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                             fn step(s, p) {\n    s.z = complex(rand(), rand());\n    s\n}\n\
+                             fn escaped(s, p) { s.z.re > 0.9 }\n";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "escape_count".into();
+        esc.max_iter = 500;
+        let esc = with_rhai(esc, DRAWS);
+        crate::escape::custom::ensure(&esc);
+        let (w, h) = (64u32, 48u32);
+        let gpu = records_on(&esc, w, h, false, false, false);
+        let prog = crate::escape::lang::rhai::program(DRAWS).expect("compiles");
+        let values = ParamValues::defaults(&prog);
+        let mut same = 0;
+        let mut counts = std::collections::BTreeSet::new();
+        for (i, r) in gpu.iter().enumerate() {
+            let mut env = Env::at(C64::ZERO, esc.max_iter);
+            (env.x, env.y) = ((i as u32 % w) as i32, (i as u32 / w) as i32);
+            let n = run(&prog, &values, None, &env).n;
+            same += usize::from(r.n == n);
+            counts.insert(r.n);
+        }
+        println!("the GPU counts as the interpreter on {same} of {} pixels; {} distinct counts", gpu.len(), counts.len());
+        assert!(counts.len() > 10, "the pixels draw alike: {counts:?}");
+        assert_eq!(same, gpu.len(), "the GPU's stream is the interpreter's");
+    }
+
     /// **A formula that calls a variation renders as the formula with the
     /// variation written out** (the KIFS plan, C1e's gate): a Mandelbrot
     /// bent each step by a variation of the user's, carried in the config

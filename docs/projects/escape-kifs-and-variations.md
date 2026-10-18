@@ -422,8 +422,23 @@ hillshade the part to check.
    Not done: a formula's Live re-apply does not follow an edit to a
    variation it calls (Use the formula again); a hybrid's member that
    calls a variation does not carry it.
-7. [ ] **C2 hooks** (the user, 2026-10-18): random numbers, the
-   accumulator, per-thread state, colour writes.
+7. [x] **C2 hooks** (the user, 2026-10-18): random numbers, the
+   accumulator, per-thread state, colour writes. **Done 2026-10-18**,
+   as C2's steps above, with these changes: **state starts from `fn
+   init(p)`**, not a constant `STATE` map -- MacMillan's starting state
+   is its parameters -- and **`ctx.weight`** joined `ctx.accum`
+   (JWildfire variations read their own amount; MacMillan does). The IR
+   gained `Predef::Draw`, `Accum`, `Weight`, `VarColor` and
+   `Place::Color`; `wgsl::variation_shape` decides the features and the
+   function's arguments in the builder's order. Measured: the MacMillan
+   twin equal to the built-in's arithmetic in the interpreter over 50
+   calls (1e-12, point and colour); on the GPU, the `blur` and
+   `macmillan` twins against the built-ins after a half-weight linear,
+   by density and each colour's light, worst block |z| 4.6, none past
+   5; a formula's draws on the GPU the interpreter's on all 3,072
+   pixels (60 distinct counts). Not done: a variation's state inside a
+   formula (refused), state arrays, `rand()` in `init`, writing RGB
+   (`WritesRgb`; needs the vector type).
 8. [ ] **Review UF's transformations** once C is done (the user,
    2026-10-18; UF transformations themselves stay unsupported): what
    the public library's `.uxf` entries do, and which our variations
