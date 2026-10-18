@@ -1947,6 +1947,7 @@ impl ConfigManager {
             ConfigPath::EscapeFormula => Ok(ConfigValue::String(config.escape.formula.clone())),
             ConfigPath::EscapeCustomFormula => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_formula))),
             ConfigPath::EscapeCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_coloring))),
+            ConfigPath::FlameCustomVariations => Ok(ConfigValue::String(serde_json::to_string(&config.flame.custom_variations).unwrap_or_default())),
             ConfigPath::EscapeJulia => Ok(config.escape.julia.into()),
             ConfigPath::EscapeJuliaRe => Ok(config.escape.julia_re.into()),
             ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
@@ -3153,6 +3154,11 @@ impl ConfigManager {
             ConfigPath::EscapeCustomColoring => {
                 let s: String = value.try_into()?;
                 self.current.escape.custom_coloring = custom_source_from_json(&s)?;
+            }
+            ConfigPath::FlameCustomVariations => {
+                let s: String = value.try_into()?;
+                self.current.flame.custom_variations =
+                    if s.is_empty() { Vec::new() } else { serde_json::from_str(&s).map_err(|_| ConfigError::TypeMismatch)? };
             }
             ConfigPath::EscapeJulia => {
                 self.current.escape.julia = value.try_into()?;

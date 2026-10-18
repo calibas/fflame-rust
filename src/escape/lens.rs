@@ -199,7 +199,8 @@ pub fn lens_is_usable(name: &str) -> bool {
 }
 
 /// The picker's order: the recommended head, then everything else
-/// usable in the registry's own order.
+/// usable in the registry's own order, then the variations the user
+/// wrote (`variations::custom`; unmeasured, as theirs to judge).
 pub fn lens_menu(registry: &VariationRegistry) -> Vec<String> {
     let mut out: Vec<String> = LENS_RECOMMENDED
         .iter()
@@ -208,6 +209,11 @@ pub fn lens_menu(registry: &VariationRegistry) -> Vec<String> {
         .collect();
     for name in registry.names() {
         if lens_is_usable(name) && !LENS_RECOMMENDED.contains(&name.as_str()) {
+            out.push(name.clone());
+        }
+    }
+    for name in registry.names() {
+        if registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom) {
             out.push(name.clone());
         }
     }

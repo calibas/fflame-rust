@@ -242,7 +242,7 @@ Panels:
 | Escape Fractal | Show | Show | Show | Grey (other engine) |
 | Simulation | Show | Show | Grey (other engine) | Show |
 | Textures | Grey | Grey | Show | Show |
-| Formula Editor (escape-time formulas and colourings in Ultra Fractal's and Fractint's languages; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Grey | Grey | Show | Grey (other engine) |
+| Formula Editor (escape-time formulas and colourings, Rhai and Ultra Fractal's and Fractint's languages; in the flame modes, Rhai variations; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Show | Show | Show | Grey (other engine) |
 | Hybrid Designer (Kalles Fraktaler-style hybrid formulas; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Grey | Grey | Show | Grey (other engine) |
 | Solid & Lighting (follows `Solid::of`, not the mode) | Grey | Show | Show for a solid formula or a terrain, else Grey | Show for a terrain, else Grey |
 | Every other panel | Show | Show | Show | Show |

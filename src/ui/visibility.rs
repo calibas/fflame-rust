@@ -53,8 +53,6 @@ const NEEDS_SURFACE: &str = "visibility.needs_surface";
 const OTHER_ENGINE: &str = "visibility.other_engine";
 /// The Texture panel: only an escape-time fractal uses a texture so far.
 const ESCAPE_TEXTURES: &str = "visibility.escape_textures";
-/// The Formula Editor writes escape-time formulas and colourings.
-const ESCAPE_FORMULAS: &str = "visibility.escape_formulas";
 /// The Hybrid Designer writes escape-time formulas.
 const ESCAPE_HYBRIDS: &str = "visibility.escape_hybrids";
 /// Produces a flame, so using it would leave this mode.
@@ -210,11 +208,11 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
             M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_TEXTURES),
         },
 
-        // Its formulas and colourings are escape-time ones.
+        // Its formulas and colourings are escape-time ones; its
+        // transformations are the flame's variations (the KIFS plan, C1).
         P::FormulaEditor => match m {
-            M::Escape => Vis::Show,
+            M::Escape | M::TwoD | M::ThreeD => Vis::Show,
             M::Simulation => Vis::Grey(OTHER_ENGINE),
-            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_FORMULAS),
         },
 
         // So are its hybrids.
@@ -742,7 +740,7 @@ mod tests {
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
         for p in ALL_PANELS {
-            let escape_only = matches!(*p, PanelType::Textures | PanelType::FormulaEditor | PanelType::HybridDesigner);
+            let escape_only = matches!(*p, PanelType::Textures | PanelType::HybridDesigner);
             assert_eq!(
                 panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
                 !escape_only,

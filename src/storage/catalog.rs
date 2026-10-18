@@ -80,7 +80,8 @@ pub fn merge_state<T: CatalogItem>(
 ) -> CatalogState {
     match installed {
         Some(Provenance::Builtin) => CatalogState::BuiltIn,
-        Some(Provenance::Local) => CatalogState::LocalOverride,
+        // The user's own, plug-in or written: never an update candidate.
+        Some(Provenance::Local | Provenance::Custom) => CatalogState::LocalOverride,
         Some(Provenance::Api { version: have }) => {
             if item.version() > *have {
                 CatalogState::UpdateAvailable { have: *have, available: item.version() }

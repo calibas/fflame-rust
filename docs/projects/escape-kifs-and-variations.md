@@ -333,6 +333,37 @@ hillshade the part to check.
    every pixel -- the level and the trap are flat there, and the
    address, which the link chain carries, is the colouring for deep
    views.
-5. [ ] C1 Rhai transformations, 2D.
+5. [x] **C1 Rhai transformations, 2D** (C1a-d; C1e's lens). **Done
+   2026-10-18**, as C1's steps above, with these changes and additions:
+   - **Category `plugin`, not a new "Custom" one** (C1d said Custom): a
+     new `VariationCategory` would need the API repository told, and
+     the provenance already says whose it is. A decision to review.
+   - **The function's signature follows the parameters**: the flame
+     shader passes the ids only to a variation with parameters
+     (`variation_call`), so a parameterless one takes the point alone.
+   - **Registered wherever a flame is read**: `missing_variations_in`
+     (else a loaded flame's custom variation was fetched from the API),
+     `FlameRenderer`'s build, `load_config`, `update_flame`,
+     `render_with`, `unknown_names`.
+   - **The editor**: in a flame mode, a transformation gets "Use as
+     variation" (formulas and colourings are not offered there), and New
+     starts a variation; in Escape mode, "Use as lens", which also sets
+     the lens (amount 1 if it was off). Using one prunes the flame's
+     list to the sources its transforms or the lens still name, so a
+     renamed variation's old source goes. Live re-applies an edit that
+     compiles. A UF transformation shows its errors but is not used
+     (UF support is paused). The lens menu lists custom variations
+     after the measured ones. Example: `variation-whorl.rhai`.
+   - **`.flame` export** drops a custom variation's weight, parameters
+     and `plugins=` entry, with a warning.
+   - **Measured** (the gates): the five twins against their built-ins
+     in a three-transform flame, 256 px, 8 replicates -- worst block
+     |z| 3.6, none past 5, the whole view's density within 0.2 standard
+     errors; neighbouring built-ins told apart. As lenses on a
+     Mandelbrot: 0 of 16,384 pixels more than 8 levels apart, each lens
+     moving 74-95% of the picture.
+   - **Not done**: calling a custom variation inside a formula (C1e's
+     second half); removing one from a flame (it goes when nothing uses
+     it and another is used); random numbers and the other hooks (C2).
 6. [ ] C2 hooks, then B (the vector type) for 3D variations and
    editable solids; A4 and C3 as wanted.

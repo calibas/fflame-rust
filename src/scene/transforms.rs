@@ -2018,6 +2018,13 @@ pub struct Flame {
     /// ignores them.
     #[serde(default, skip_serializing_if = "PostSymmetry::is_default")]
     pub post_symmetry: PostSymmetry,
+    /// The variations this flame uses that the user wrote, as their
+    /// sources (Rhai transformations; the KIFS plan, C1): registered on
+    /// load and before every render (`variations::custom::ensure`), so
+    /// the flame renders wherever it goes. `entry` is the variation's
+    /// registry name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_variations: Vec<crate::config::escape::CustomSource>,
     // preserve_z moved to `FractalConfig` in config v3 (scene-global Z
     // semantics, never per-flame). See `FractalConfig::preserve_z` and the
     // v2→v3 migration (absent ⇒ true to preserve pre-flag flames' look).
@@ -2142,6 +2149,7 @@ impl Default for Flame {
             solo_transform: None,  // Default: no solo (all transforms active)
             subflames: Vec::new(),  // Default: no subflames
             post_symmetry: PostSymmetry::default(),
+            custom_variations: Vec::new(),
         }
     }
 }
@@ -2457,6 +2465,7 @@ impl<'de> Deserialize<'de> for Flame {
             SoloTransform,
             Subflames,
             PostSymmetry,
+            CustomVariations,
             // The scene-level render fields (render_mode, perspective_strength,
             // depth_density_compensation, far_density_fade,
             // far_density_fade_start, preserve_z) and the legacy `projection`
@@ -2491,6 +2500,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut solo_transform = None;
                 let mut subflames: Option<Vec<Flame>> = None;
                 let mut post_symmetry: Option<PostSymmetry> = None;
+                let mut custom_variations: Option<Vec<crate::config::escape::CustomSource>> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -2521,6 +2531,9 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::PostSymmetry => {
                             post_symmetry = Some(map.next_value()?);
                         }
+                        Field::CustomVariations => {
+                            custom_variations = Some(map.next_value()?);
+                        }
                         Field::Ignore => {
                             let _ = map.next_value::<de::IgnoredAny>()?;
                         }
@@ -2543,6 +2556,7 @@ impl<'de> Deserialize<'de> for Flame {
                     solo_transform: solo_transform.unwrap_or(None),
                     subflames: subflames.unwrap_or_default(),
                     post_symmetry: post_symmetry.unwrap_or_default(),
+                    custom_variations: custom_variations.unwrap_or_default(),
                 };
                 // Migrate any legacy singular `final_transform` field
                 // (consumed locally above into `final_transform`) into the
@@ -2555,7 +2569,7 @@ impl<'de> Deserialize<'de> for Flame {
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "xaos", "solo_transform", "subflames", "post_symmetry"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "linked_transforms", "final_transforms", "xaos", "solo_transform", "subflames", "post_symmetry", "custom_variations"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

@@ -80,6 +80,40 @@ pub struct ColoringWgsl {
     pub ext_vec4s: usize,
 }
 
+/// A transformation's WGSL as a flame variation (the KIFS plan, C1):
+/// its 2D body `fn variation_<name>(p: vec2<f32>, xform_id: u32,
+/// variation_id: u32) -> vec2<f32>`, reading its parameters through
+/// `get_param`, and the 3D body running it on `p.xy` and passing `p.z`
+/// through, as JWildfire's 2D variations do. Its helpers are prefixed
+/// with the name, so two of them never define one twice.
+pub struct VariationWgsl {
+    pub wgsl_2d: String,
+    pub wgsl_3d: String,
+}
+
+/// [`VariationWgsl`] for a checked transformation and its registry name.
+pub fn variation(p: &Program, name: &str) -> VariationWgsl {
+    let prefix: &'static str = Box::leak(format!("cv_{name}_").into_boxed_str());
+    let mut g = Gen::new(p, Ctx::Variation, prefix);
+    let mut body = String::from("fn uf_variation_2d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {\n    var pixel = p;\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.transform, 1, &mut body);
+    body.push_str("    return pixel;\n}\n");
+    // The name goes in after the helpers' prefix: `uf_` inside it would
+    // be renamed.
+    let module = g.finish("", body);
+    let inner = format!("{prefix}variation_2d");
+    // The flame shader passes the ids to a variation with parameters
+    // only (`shader_builder_v2::variation_call`).
+    let (ids, args) = if p.params.is_empty() { ("", "0u, 0u") } else { (", xform_id: u32, variation_id: u32", "xform_id, variation_id") };
+    VariationWgsl {
+        wgsl_2d: format!("{module}\nfn variation_{name}(p: vec2<f32>{ids}) -> vec2<f32> {{\n    return {inner}(p, {args});\n}}\n"),
+        wgsl_3d: format!("{module}\nfn variation_{name}(p: vec3<f32>{ids}) -> vec3<f32> {{\n    return vec3<f32>({inner}(p.xy, {args}), p.z);\n}}\n"),
+    }
+}
+
 /// The WGSL of a formula program.
 pub fn formula(p: &Program) -> String {
     let mut g = Gen::new(p, Ctx::Formula, "uff_");
@@ -890,6 +924,9 @@ enum Ctx {
     /// A formula's crease relief, `formula_creases(pixel)`: its variables
     /// its own locals.
     Creases,
+    /// A transformation as a flame variation: its parameters the
+    /// variation's (`get_param`), `#pixel` the point, variables locals.
+    Variation,
 }
 
 struct Gen<'p> {
@@ -1153,6 +1190,7 @@ impl<'p> Gen<'p> {
                     Place::DZ => "dz".to_string(),
                     Place::CreaseHeight => "crease_h".to_string(),
                     Place::CreaseSlope => "crease_g".to_string(),
+                    Place::Pixel => "pixel".to_string(),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
@@ -1236,11 +1274,20 @@ impl<'p> Gen<'p> {
             IExprKind::Param(id) => {
                 let k = self.slots[*id];
                 let f = self.param_fn();
+                // A variation's parameters are its transform's: read by
+                // the flame's `get_param`.
+                let read = |k: usize| {
+                    if self.ctx == Ctx::Variation {
+                        format!("get_param(xform_id, variation_id, {k}u)")
+                    } else {
+                        format!("{f}({k}u)")
+                    }
+                };
                 match self.p.params[*id].ty() {
-                    Ty::Bool => format!("({f}({k}u) != 0.0)"),
-                    Ty::Int => format!("i32(round({f}({k}u)))"),
-                    Ty::Float => format!("{f}({k}u)"),
-                    Ty::Complex => format!("vec2<f32>({f}({k}u), {f}({}u))", k + 1),
+                    Ty::Bool => format!("({} != 0.0)", read(k)),
+                    Ty::Int => format!("i32(round({}))", read(k)),
+                    Ty::Float => read(k),
+                    Ty::Complex => format!("vec2<f32>({}, {})", read(k), read(k + 1)),
                 }
             }
             IExprKind::Predef(p) => self.predef(*p),
@@ -1324,7 +1371,7 @@ impl<'p> Gen<'p> {
 
     fn predef(&mut self, p: Predef) -> String {
         match (p, self.ctx) {
-            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases) => "pixel".into(),
+            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases | Ctx::Variation) => "pixel".into(),
             (Predef::Z, Ctx::PerturbFe) => "cfe2_to_f32(cfe2_ref(zm, zlo, ze))".into(),
             (Predef::DZ, Ctx::PerturbFe) => "cfe2_to_f32(w)".into(),
             (Predef::DPixel, Ctx::PerturbFe) => "cfe2_to_f32(d0)".into(),
@@ -1337,8 +1384,9 @@ impl<'p> Gen<'p> {
             (Predef::DPixel, _) => "d0".into(),
             (Predef::Pixel, _) => "esc_env_pixel".into(),
             (Predef::Z, Ctx::Formula) => "s.z".into(),
-            // Refused by the checker: the creases have the start alone.
-            (Predef::Z, Ctx::Creases) => "pixel".into(),
+            // Refused by the checker: the creases have the start alone,
+            // and a variation its point.
+            (Predef::Z, Ctx::Creases | Ctx::Variation) => "pixel".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
             (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
             // A colouring's init runs before the first iterate.
@@ -2924,6 +2972,15 @@ pub fn validate_formula(wgsl: &str) -> Result<(), String> {
     ))
 }
 
+/// [`validate_formula`] for a transformation's variation, both bodies,
+/// against the flame shader's `get_param`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
+    const GET_PARAM: &str = "fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n    return f32(xform_id + variation_id + param_slot);\n}\n";
+    validate_module(&format!("{GET_PARAM}{}", w.wgsl_2d))?;
+    validate_module(&format!("{GET_PARAM}{}", w.wgsl_3d))
+}
+
 /// [`validate_formula`] for a colouring.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_coloring(c: &ColoringWgsl) -> Result<(), String> {
@@ -3490,7 +3547,7 @@ fn step(s, p) {
             for e in &parsed.entries {
                 let (p, d) = match kind {
                     EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
-                    EntryKind::Coloring => check(e, kind, dialect),
+                    EntryKind::Coloring | EntryKind::Transform => check(e, kind, dialect),
                 };
                 let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
                 match p {
@@ -3526,6 +3583,7 @@ fn step(s, p) {
                         let back = super::super::rhai::coloring(&text);
                         (text, back)
                     }
+                    EntryKind::Transform => unreachable!("the test files hold no transformations"),
                 };
                 let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
@@ -3549,6 +3607,7 @@ fn step(s, p) {
                     None => Ok(()),
                 }),
                 EntryKind::Coloring => validate_coloring(&coloring(p)),
+                EntryKind::Transform => unreachable!("the test files hold no transformations"),
             };
             if let Err(e) = checked {
                 panic!("{file} / {name}: {e}");

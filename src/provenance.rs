@@ -43,6 +43,11 @@ pub enum Provenance {
     /// app did not fetch and cannot refresh — removing it is the user's
     /// business, not Clear Cache's.
     Local,
+    /// Written by the user in the formula language and carried in the
+    /// config that uses it (a Rhai transformation as a flame variation,
+    /// `variations::custom`). Not a file, not a download: the config is
+    /// its home, and loading the config registers it again.
+    Custom,
 }
 
 impl Provenance {
@@ -86,6 +91,7 @@ impl Provenance {
             Self::Builtin => "built-in".to_string(),
             Self::Api { version } => format!("API v{version}"),
             Self::Local => "local".to_string(),
+            Self::Custom => "custom".to_string(),
         }
     }
 }

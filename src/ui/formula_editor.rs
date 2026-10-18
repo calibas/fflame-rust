@@ -1,7 +1,9 @@
 //! The Formula Editor: Rhai formulas, and Ultra Fractal and Fractint
 //! formula files, checked as they are typed and used as the escape
 //! formula or colouring (`docs/projects/escape-formula-language.md`; the
-//! language is in `docs/main/ESCAPE.md`, "The formula language").
+//! language is in `docs/main/ESCAPE.md`, "The formula language"), and
+//! Rhai transformations used as flame variations (the KIFS plan, C1:
+//! `variations::custom`; the flame carries the source).
 //!
 //! A file holds entries, listed above the source (a Rhai file, one).
 //! Each is checked as a formula and as a colouring on a pause in typing,
@@ -39,9 +41,11 @@ struct EntryRow {
     source: String,
     /// What it most likely is, for which button leads.
     likely: EntryKind,
-    /// `line:col: message` per error, as a formula and as a colouring.
+    /// `line:col: message` per error, as a formula, as a colouring and as
+    /// a transformation (a flame variation).
     as_formula: Vec<String>,
     as_coloring: Vec<String>,
+    as_transform: Vec<String>,
 }
 
 impl EntryRow {
@@ -49,6 +53,7 @@ impl EntryRow {
         match kind {
             EntryKind::Formula => &self.as_formula,
             EntryKind::Coloring => &self.as_coloring,
+            EntryKind::Transform => &self.as_transform,
         }
     }
 }
@@ -149,14 +154,16 @@ impl FormulaEditorPanel {
         formula_store::is_coloring_file(&self.name)
     }
 
-    /// A Rhai file: one formula or colouring, the whole text; which, its
-    /// functions say (`finish` a colouring's, `escaped` a formula's).
+    /// A Rhai file: one formula, colouring or transformation, the whole
+    /// text; which, its functions say (`finish` a colouring's, `escaped`
+    /// a formula's, `variation` a transformation's).
     fn recheck_rhai(&mut self) {
         let text = self.text.clone();
         let kind = lang::rhai::kind_of(&text).unwrap_or(EntryKind::Formula);
         let checked = match kind {
             EntryKind::Formula => lang::rhai::program(&text),
             EntryKind::Coloring => lang::rhai::coloring(&text),
+            EntryKind::Transform => lang::rhai::transformation(&text),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),
@@ -166,16 +173,24 @@ impl FormulaEditorPanel {
         if kind == EntryKind::Coloring && checked.as_ref().is_ok_and(|p| !lang::wgsl::colours_anything(p)) {
             errors.push(t!("formula_editor.colours_nothing").to_string());
         }
+        // A transformation becomes a variation: its name and WGSL too.
+        if kind == EntryKind::Transform && checked.is_ok() {
+            if let Err(e) = crate::variations::custom::compile(&text) {
+                errors.push(e);
+            }
+        }
         let title = match &checked {
             Ok(p) => p.name.clone(),
             Err(_) => lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
         };
-        let (as_formula, as_coloring) = match kind {
-            EntryKind::Formula => (errors, vec![t!("formula_editor.rhai_is_formula").to_string()]),
-            EntryKind::Coloring => (vec![t!("formula_editor.rhai_is_coloring").to_string()], errors),
+        let is = |key: &str| vec![t!(key).to_string()];
+        let (as_formula, as_coloring, as_transform) = match kind {
+            EntryKind::Formula => (errors, is("formula_editor.rhai_is_formula"), is("formula_editor.rhai_is_formula")),
+            EntryKind::Coloring => (is("formula_editor.rhai_is_coloring"), errors, is("formula_editor.rhai_is_coloring")),
+            EntryKind::Transform => (is("formula_editor.rhai_is_transform"), is("formula_editor.rhai_is_transform"), errors),
         };
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring }];
+        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform }];
         self.checked = Some(text);
     }
 
@@ -213,7 +228,7 @@ impl FormulaEditorPanel {
                 let check = |kind| {
                     let (p, d) = match kind {
                         EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
-                        EntryKind::Coloring => lang::check::check(e, kind, dialect),
+                        EntryKind::Coloring | EntryKind::Transform => lang::check::check(e, kind, dialect),
                     };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
@@ -224,7 +239,10 @@ impl FormulaEditorPanel {
                     }
                     msgs
                 };
-                let likely = if coloring_file || e.section(lang::ast::SectionKind::Final).is_some() {
+                let transform = e.section(lang::ast::SectionKind::Transform).is_some();
+                let likely = if transform {
+                    EntryKind::Transform
+                } else if coloring_file || e.section(lang::ast::SectionKind::Final).is_some() {
                     EntryKind::Coloring
                 } else {
                     EntryKind::Formula
@@ -236,6 +254,9 @@ impl FormulaEditorPanel {
                     likely,
                     as_formula: check(EntryKind::Formula),
                     as_coloring: check(EntryKind::Coloring),
+                    // A UF transformation as a variation is a later step
+                    // (UF support is paused): it shows its errors alone.
+                    as_transform: if transform { check(EntryKind::Transform) } else { vec![t!("formula_editor.not_a_transform").to_string()] },
                 }
             })
             .collect();
@@ -246,12 +267,16 @@ impl FormulaEditorPanel {
     /// first time an entry is used, its `default:` view (centre and
     /// iterations) comes with it.
     fn use_entry(&mut self, cm: &mut ConfigManager, kind: EntryKind, row: usize) {
+        if kind == EntryKind::Transform {
+            return self.use_variation(cm, row);
+        }
         let Some(entry) = self.entries.get(row) else { return };
         let src = CustomSource { dialect: self.dialect, entry: entry.name.clone(), source: entry.source.clone() };
         let name = custom::name_of(kind, &src);
         let compiled = match kind {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
             EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
+            EntryKind::Transform => return,
         };
         if let Err(d) = compiled {
             let first = d.first().map(|x| x.render(&src.source)).unwrap_or_default();
@@ -266,7 +291,7 @@ impl FormulaEditorPanel {
                 ConfigPath::EscapeFormula,
                 "history.action.use_custom_formula",
             ),
-            EntryKind::Coloring => (
+            EntryKind::Coloring | EntryKind::Transform => (
                 escape.custom_coloring.as_ref(),
                 ConfigPath::EscapeCustomColoring,
                 ConfigPath::EscapeColoring,
@@ -298,7 +323,66 @@ impl FormulaEditorPanel {
                 self.in_use.push((kind, self.file.clone(), src.entry.clone()));
                 self.status = Some(match kind {
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
-                    EntryKind::Coloring => t!("formula_editor.using_coloring", entry = src.entry),
+                    EntryKind::Coloring | EntryKind::Transform => t!("formula_editor.using_coloring", entry = src.entry),
+                }
+                .to_string());
+            }
+            Err(e) => self.status = Some(format!("{e:?}")),
+        }
+    }
+
+    /// Use a transformation as a flame variation: register it
+    /// (`variations::custom`) and put its source in the flame, one undo
+    /// step, replacing the one of its name. It is then in every
+    /// transform's variation picker. In Escape mode it is also made the
+    /// camera lens (at full amount if the lens was off).
+    fn use_variation(&mut self, cm: &mut ConfigManager, row: usize) {
+        let Some(entry) = self.entries.get(row) else { return };
+        if self.dialect != CustomDialect::Rhai {
+            self.status = Some(t!("formula_editor.variation_rhai_only").to_string());
+            return;
+        }
+        let source = entry.source.clone();
+        let name = match crate::variations::custom::register(&source) {
+            Ok(name) => name,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = entry.name, error = e).to_string());
+                return;
+            }
+        };
+        // The flame carries the sources it uses: this one, and those
+        // its transforms (or the lens) still name -- a renamed variation's
+        // old source goes.
+        let config = cm.config();
+        let mut list: Vec<CustomSource> = config
+            .flame
+            .custom_variations
+            .iter()
+            .filter(|s| s.entry == name || crate::variations::custom::used_by(&config.flame, &s.entry) || config.escape.lens == s.entry)
+            .cloned()
+            .collect();
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source };
+        match list.iter_mut().find(|s| s.entry == name) {
+            Some(s) => *s = src,
+            None => list.push(src),
+        }
+        let json = serde_json::to_string(&list).unwrap_or_default();
+        let mut changes = vec![(ConfigPath::FlameCustomVariations, ConfigValue::String(json))];
+        let as_lens = cm.config().render_mode == crate::scene::transforms::RenderMode::Escape;
+        if as_lens {
+            changes.push((ConfigPath::EscapeLens, ConfigValue::String(name.clone())));
+            if cm.config().escape.lens_amount == 0.0 {
+                changes.push((ConfigPath::EscapeLensAmount, ConfigValue::Float(1.0)));
+            }
+        }
+        match cm.update_batch(changes, "history.action.use_custom_variation".to_string()) {
+            Ok(_) => {
+                self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Transform && *n == name));
+                self.in_use.push((EntryKind::Transform, self.file.clone(), name.clone()));
+                self.status = Some(if as_lens {
+                    t!("formula_editor.using_lens", name = name)
+                } else {
+                    t!("formula_editor.using_variation", name = name)
                 }
                 .to_string());
             }
@@ -314,10 +398,22 @@ impl FormulaEditorPanel {
             if file != self.file {
                 continue;
             }
+            // A variation: by its name, while the flame carries it.
+            if kind == EntryKind::Transform {
+                let carried = cm.config().flame.custom_variations.iter().find(|s| s.entry == entry).map(|s| s.source.clone());
+                let row = self.entries.iter().position(|r| lang::rhai::variation_name(&r.source).as_deref() == Some(entry.as_str()));
+                if let (Some(carried), Some(row)) = (carried, row) {
+                    let r = &self.entries[row];
+                    if r.errors(kind).is_empty() && r.source != carried {
+                        self.use_variation(cm, row);
+                    }
+                }
+                continue;
+            }
             let escape = &cm.config().escape;
             let (carried, name) = match kind {
                 EntryKind::Formula => (escape.custom_formula.as_ref(), &escape.formula),
-                EntryKind::Coloring => (escape.custom_coloring.as_ref(), &escape.coloring),
+                EntryKind::Coloring | EntryKind::Transform => (escape.custom_coloring.as_ref(), &escape.coloring),
             };
             let Some(carried) = carried else { continue };
             if carried.entry != entry || !name.starts_with(custom::PREFIX) {
@@ -373,6 +469,10 @@ impl FormulaEditorPanel {
             self.adopt(None, name.to_string(), text);
         }
 
+        // In a flame mode the editor makes variations; a formula or a
+        // colouring is the escape engine's.
+        let flame_mode = matches!(cm.config().render_mode, crate::scene::transforms::RenderMode::TwoD | crate::scene::transforms::RenderMode::ThreeD);
+
         // ---- Files ----
         ui.horizontal_wrapped(|ui| {
             let dirty = self.text != self.saved;
@@ -404,7 +504,9 @@ impl FormulaEditorPanel {
                 self.open_example(i);
             }
             if ui.button(t!("formula_editor.new")).on_hover_text(t!("formula_editor.new_tip")).clicked() {
-                self.adopt(None, "untitled.rhai".to_string(), NEW_FILE.to_string());
+                // In a flame mode a new file is a variation.
+                let text = if flame_mode { NEW_VARIATION } else { NEW_FILE };
+                self.adopt(None, "untitled.rhai".to_string(), text.to_string());
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -505,14 +607,22 @@ impl FormulaEditorPanel {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(&row.name);
                 let order = match row.likely {
-                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring],
-                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula],
+                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform],
+                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula, EntryKind::Transform],
+                    EntryKind::Transform => [EntryKind::Transform, EntryKind::Formula, EntryKind::Coloring],
                 };
                 for kind in order {
+                    // A flame mode uses variations; the escape mode,
+                    // formulas, colourings, and a variation as the lens.
+                    if flame_mode && kind != EntryKind::Transform {
+                        continue;
+                    }
                     let ok = row.errors(kind).is_empty();
                     let label = match kind {
                         EntryKind::Formula => t!("formula_editor.use_formula"),
                         EntryKind::Coloring => t!("formula_editor.use_coloring"),
+                        EntryKind::Transform if flame_mode => t!("formula_editor.use_variation"),
+                        EntryKind::Transform => t!("formula_editor.use_lens"),
                     };
                     // The kind it is not is offered only when it compiles
                     // as that too; the kind it is shows its errors.
@@ -573,6 +683,26 @@ impl FormulaEditorPanel {
         }
     }
 }
+
+/// What New starts from in a flame mode: a variation, a point to a point
+/// (the KIFS plan, C1).
+const NEW_VARIATION: &str = "\
+// A new variation. `variation` takes a point `z` and the parameters `p`
+// and gives the point it maps to; the transform's weight scales it.
+// `INFO.name` is its name in the variation list.
+
+const PARAMS = #{
+    twist: #{ value: 1.0, min: -4.0, max: 4.0, caption: \"Twist\" },
+};
+
+const INFO = #{ title: \"My Variation\", name: \"my_variation\" };
+
+fn variation(z, p) {
+    let r2 = z.norm_sqr();
+    let a = r2 * p.twist;
+    complex(z.re * cos(a) - z.im * sin(a), z.re * sin(a) + z.im * cos(a))
+}
+";
 
 /// What New starts from: a formula in Rhai, the language's own.
 const NEW_FILE: &str = "\
