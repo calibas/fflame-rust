@@ -1734,7 +1734,11 @@ Each item is ticked here when done; findings go in as they are made.
        `random(seed)` the most (item 4; its generator is UF's, not to be
        guessed). **Not done**, by the measurement: screen-sized arrays,
        per-pixel orbit buffers, dynamic arrays.
-4. [ ] **The cheap UF items**: parameters past 64 floats (31 formulas, 47
+4. [ ] **Paused 2026-10-17, with all further UF support (the user's
+   call):** not as cheap as it looked -- the unknown functions are a
+   vague list, and fixing an entry's first error says nothing about
+   its next. UF support is revisited later; item 5 waits with it.
+   **The cheap UF items**: parameters past 64 floats (31 formulas, 47
    colourings stop there first); colouring state past 32 floats (31);
    the smaller mismatches, triaged by message (about 150 entries: used
    before assigned 29, unknown function 24, a parameter written 20, an
