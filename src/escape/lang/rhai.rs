@@ -268,6 +268,11 @@ const CTX_FIELDS: &[(&str, &str)] = &[
     ("pixel", "pixel"),
     // A colouring's, in `finish`.
     ("numiter", "numiter"),
+    // The panel's crease settings, in `creases`.
+    ("crease_decay", "crease_decay"),
+    ("crease_pattern", "crease_pattern"),
+    ("crease_sign", "crease_sign"),
+    ("crease_reach", "crease_reach"),
 ];
 
 // ---- positions --------------------------------------------------------
@@ -339,6 +344,8 @@ enum Fn3 {
     Perturb,
     /// A colouring's `finish`.
     Finish,
+    /// A formula's `creases`: the paper's height and gradient.
+    Creases,
 }
 
 impl Fn3 {
@@ -630,6 +637,20 @@ impl<'s> Lowerer<'s> {
             self.pure = false;
             default.items.push(Setting { name: "degree".into(), value: SettingValue::Expr(value?), span });
         }
+        // A folding formula's paper: `creases(p0, p, ctx)` ends with
+        // `#{ height, slope }`.
+        if let Some(f) = get(self, "creases") {
+            let mut scope = Scope::new(Fn3::Creases, Vec::new());
+            if f.params.len() < 2 || f.params.len() > 3 {
+                return self.err(f.body.position(), "`creases(p0, p)` or `creases(p0, p, ctx)`");
+            }
+            for (n, role) in f.params.iter().zip([Binding::Pixel, Binding::Params, Binding::Ctx]) {
+                scope.bind(n, role);
+            }
+            let mut body = Vec::new();
+            self.creases_body(&f.body, &mut scope, &mut body)?;
+            sections.push(Section { kind: SectionKind::Creases, span, body, last_is_bailout: false, labelled: true });
+        }
         if let Some(f) = get(self, "perturb_when") {
             let mut scope = Scope::new(Fn3::Escaped, Vec::new());
             if f.params.is_empty() || f.params.len() > 2 {
@@ -729,6 +750,36 @@ impl<'s> Lowerer<'s> {
             }
             None => self.err(last.position(), RESULT),
         }
+    }
+
+    /// `creases`'s body: statements, then `#{ height: h, slope: g }`, the
+    /// paper's height and gradient at the starting point.
+    fn creases_body(&mut self, b: &StmtBlock, scope: &mut Scope, out: &mut Vec<ast::Stmt>) -> R<()> {
+        const RESULT: &str = "`creases` ends with `#{ height: ..., slope: ... }`";
+        let stmts = b.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(b.position(), RESULT) };
+        for st in rest {
+            self.stmt(st, scope, out)?;
+        }
+        let Some(Final::Expr(Expr::Map(m, p))) = final_value(last) else { return self.err(last.position(), RESULT) };
+        let mut values = Vec::new();
+        for (k, x) in &m.0 {
+            let place = match k.name.as_str() {
+                "height" => "crease_height",
+                "slope" => "crease_slope",
+                o => return self.err(k.pos, format!("`creases` gives `height` and `slope`, not `{o}`")),
+            };
+            let v = self.expr(x, scope)?;
+            values.push((place, v, self.pos.span(k.pos)));
+        }
+        if values.len() != 2 {
+            return self.err(*p, RESULT);
+        }
+        self.flush(out);
+        for (place, v, span) in values {
+            out.push(assign(mk(ExprKind::Predef(place.into()), span), v, span));
+        }
+        Ok(())
     }
 
     /// An `if` that ends `finish`, each arm ending in a result.
@@ -1611,7 +1662,7 @@ impl<'s> Lowerer<'s> {
                 // first parameter.
                 return self.err(p, format!("call a helper as a function, `{name}(x)`"));
             }
-            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree") {
+            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
             for a in f.args.iter() {
@@ -1773,8 +1824,8 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) if n == "ismand" => TypeName::Complex,
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
-                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" => TypeName::Int,
-                "magn" | "pi" | "e" => TypeName::Float,
+                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" => TypeName::Int,
+                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" => TypeName::Float,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),
@@ -1880,6 +1931,8 @@ fn rename_function(name: &str) -> Option<&'static str> {
         "to_float" => "to_float",
         "to_int" => "to_int",
         "abs" => "abs",
+        // A value at the GPU's precision (UF-side `f32`).
+        "to_f32" => "f32",
         other => Builtin::from_name(other)
             .filter(|b| !matches!(b, Builtin::Log | Builtin::Cabs | Builtin::Real | Builtin::Imag | Builtin::Atan2 | Builtin::Cotan | Builtin::Cotanh))
             .map(|b| b.name())?,
@@ -2062,6 +2115,38 @@ fn step(s, p) {
     s
 }
 "#;
+
+    /// The crease relief as a formula's function (plan, item 3, step 3d):
+    /// `creases(p0, p, ctx)` gives the paper's height and gradient from
+    /// the starting point and the panel's settings, as the interpreter
+    /// computes them; what it may not read or give is refused.
+    #[test]
+    fn a_formulas_creases_give_height_and_slope() {
+        let base = |creases: &str| {
+            format!(
+                "const PARAMS = #{{ k: #{{ value: 2.0 }} }};\nfn start(pixel, p) {{ #{{ z: pixel }} }}\nfn step(s, p) {{ s.z = s.z * 0.5; s }}\n{creases}"
+            )
+        };
+        let p = rh(&base(
+            "fn creases(p0, p, ctx) {\n let h = p0.re * p.k * ctx.crease_sign + ctx.crease_decay + ctx.crease_reach;\n\
+             let g = complex(p.k, to_float(ctx.crease_pattern));\n #{ height: h, slope: g }\n}",
+        ));
+        assert!(!p.creases.is_empty());
+        let (h, g) = super::super::interp::creases(&p, &ParamValues::defaults(&p), &Env::at(C64::ZERO, 10), C64::new(1.5, 0.0), [0.6, 2.0, -1.0, 0.25]);
+        assert_eq!((h, g), (1.5 * 2.0 * -1.0 + 0.6 + 0.25, C64::new(2.0, 2.0)));
+        let refused = |creases: &str, want: &str| {
+            let src = base(creases);
+            let d = program(&src).err().unwrap_or_else(|| panic!("{creases}: compiled"));
+            let all: Vec<String> = d.iter().map(|x| x.render(&src)).collect();
+            assert!(all.iter().any(|m| m.contains(want)), "{creases}: {all:?}");
+        };
+        refused("fn creases(p0, p) { #{ height: 1.0, tilt: complex(0.0, 0.0) } }", "gives `height` and `slope`");
+        refused("fn creases(p0, p) { #{ height: 1.0 } }", "ends with `#{ height");
+        refused("fn creases(p0, p, ctx) { #{ height: to_float(ctx.pass), slope: complex(0.0, 0.0) } }", "it has no pass");
+        let in_step = "const PARAMS = #{ k: #{ value: 2.0 } };\nfn start(pixel, p) { #{ z: pixel } }\nfn step(s, p, ctx) { s.z = s.z * ctx.crease_decay; s }";
+        let d = program(in_step).err().expect("refused");
+        assert!(d.iter().any(|x| x.message.contains("belongs to `creases`")), "{d:?}");
+    }
 
     #[test]
     fn a_rhai_formula_runs_as_its_uf_twin() {

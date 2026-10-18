@@ -270,6 +270,8 @@ fn place_slot(p: Place) -> Option<Slot> {
         Place::DZ => Some(Slot::DZ),
         Place::Index => Some(Slot::Index),
         Place::Solid => Some(Slot::Solid),
+        // A Rhai formula's `creases`, which the converter does not write.
+        Place::CreaseHeight | Place::CreaseSlope => None,
     }
 }
 
@@ -301,6 +303,10 @@ fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
 /// Why a program with arrays does not convert yet (plan, item 3, step
 /// 3b).
 const ARRAYS: &str = "its arrays do not convert to Rhai yet";
+
+/// Why a program with creases does not convert (a Rhai formula's own:
+/// UF has none).
+const CREASES: &str = "its creases do not convert to Rhai yet";
 
 /// Which of the formula's functions is being printed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -909,6 +915,9 @@ impl<'p> Printer<'p> {
             Predef::Random => self.ctx_field("random"),
             Predef::Pass => self.ctx_field("pass"),
             Predef::JuliaC => self.ctx_field("c"),
+            Predef::CreaseDecay | Predef::CreasePattern | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight | Predef::CreaseSlope => {
+                return Err(CREASES.into())
+            }
             Predef::ScreenPixel => {
                 self.ctx = true;
                 P::atom("complex(ctx.x, ctx.y)")
@@ -1027,6 +1036,7 @@ impl<'p> Printer<'p> {
             Cotan => named(self, "cot"),
             Cotanh => named(self, "coth"),
             Ceil => named(self, "ceiling"),
+            F32 => named(self, "to_f32"),
             Real | Imag => {
                 let part = if b == Real { "re" } else { "im" };
                 let x = self.expr(a)?;

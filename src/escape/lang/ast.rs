@@ -44,6 +44,8 @@ pub enum SectionKind {
     PerturbLoop,
     Final,
     Transform,
+    /// A formula's crease relief (a Rhai `fn creases`; no UF label).
+    Creases,
 }
 
 impl SectionKind {
@@ -75,6 +77,7 @@ impl SectionKind {
             SectionKind::PerturbLoop => "perturbloop",
             SectionKind::Final => "final",
             SectionKind::Transform => "transform",
+            SectionKind::Creases => "creases",
         }
     }
 }

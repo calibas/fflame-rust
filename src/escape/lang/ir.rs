@@ -147,14 +147,28 @@ pub enum Predef {
     /// name in either language: UF reads `#numiter` only in a
     /// colouring's `final:`.
     Pass,
+    /// The panel's crease settings, in a formula's creases section (a
+    /// Rhai `fn creases`; `FormulaFeature::Creases`): how much finer each
+    /// later crease is, the pattern (0 valley, 1 alternate, 2 random),
+    /// the flip as a sign, and how far a slope runs in paper sizes (0:
+    /// unbounded, the 2D relief's; a terrain's levels off).
+    CreaseDecay,
+    CreasePattern,
+    CreaseSign,
+    CreaseReach,
+    /// What the creases section gives: the folded paper's height at the
+    /// starting point, and its gradient there.
+    CreaseHeight,
+    CreaseSlope,
 }
 
 impl Predef {
     pub fn ty(self) -> Ty {
         match self {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel => Ty::Complex,
-            Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass => Ty::Int,
-            Predef::Pi | Predef::E | Predef::Magn | Predef::Index => Ty::Float,
+            Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
+            Predef::Pi | Predef::E | Predef::Magn | Predef::Index | Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => Ty::Float,
+            Predef::CreaseSlope => Ty::Complex,
             Predef::Solid => Ty::Bool,
             Predef::WhiteSq
             | Predef::ScrnMax
@@ -295,6 +309,9 @@ pub enum Place {
     Solid,
     /// `#dz`, in the perturbation sections.
     DZ,
+    /// The creases section's height and gradient ([`Predef::CreaseHeight`]).
+    CreaseHeight,
+    CreaseSlope,
 }
 
 #[derive(Clone, Debug)]
@@ -384,6 +401,12 @@ pub struct Program {
     /// What the derived perturbation equations carry besides z, in the
     /// order the reference records them ([`Carried`]). Empty: z alone.
     pub carried: Vec<Carried>,
+    /// A folding formula's paper (a Rhai `fn creases`): from the starting
+    /// point (`#pixel` there) and the crease settings, the folded paper's
+    /// height and gradient (`Place::CreaseHeight`, `Place::CreaseSlope`),
+    /// reading its own variables, the parameters and the globals. Empty:
+    /// none.
+    pub creases: Vec<IStmt>,
 }
 
 /// A variable the loop carries from one pass to the next besides z, as
@@ -459,6 +482,7 @@ impl Program {
             || self.bailout.as_ref().is_some_and(|b| e(b, p))
             || s(&self.perturb_init, p)
             || s(&self.perturb_loop, p)
+            || s(&self.creases, p)
     }
 
     /// Slots the parameters take in a 16-float block: one each, two for

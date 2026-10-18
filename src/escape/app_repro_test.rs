@@ -2295,6 +2295,10 @@ mod tests {
             ("newton", &[("func", 3.0)], ("1.5", "0"), -1.5, false, 0.001),
             ("newton", &[("func", 4.0)], ("0", "0"), -1.0, false, 0.001),
             ("newton", &[("func", 5.0)], ("0", "0"), 0.0, false, 0.001),
+            // Folded paper (item 3): its lines a table `prepare` builds as
+            // the built-in's, in f32.
+            ("origami", &[("seed", 8.0), ("spread", 2.0)], ("0", "0"), -1.0, false, 0.0),
+            ("origami", &[("seed", 123.0), ("spread", 1.3)], ("0.3", "-0.2"), 1.5, false, 0.0),
             // Powers by parameters, a pole (item 2, batch 2).
             // Chaotic in f32 here: against f64 the built-in's counts differ
             // on 328 of 6,144 pixels, the twin's on 313 (each one's f32
@@ -2341,6 +2345,14 @@ mod tests {
             // basins, which read `converged`.
             if built.has_feature(crate::escape::FormulaFeature::Convergent) {
                 esc.coloring = if formula == "newton" { "root_basin" } else { "escape_count" }.into();
+            }
+            // Folded paper by the position its preset maps.
+            if formula == "origami" {
+                esc.coloring = "position_map".into();
+                esc.max_iter = 32;
+                for (k, v) in [("address_mix", 1.5), ("freq_x", 5.0), ("freq_y", 1.5)] {
+                    esc.coloring_params.insert(k.into(), v);
+                }
             }
             esc.formula = formula.into();
             for (k, v) in params {
@@ -4040,13 +4052,20 @@ final:
             &config.flame, config.palette_size,
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
-        for (creases, terrain) in [
+        // The built-in, and its twin's `creases` (plan, item 3, step 3e).
+        let cases = [
             (CreaseSettings { pattern: CreasePattern::Alternate, decay: 0.6, flip: false }, false),
             (CreaseSettings { pattern: CreasePattern::Random, decay: 0.8, flip: true }, false),
             (CreaseSettings { pattern: CreasePattern::Valley, decay: 0.6, flip: false }, true),
-        ] {
+        ];
+        for (twin, (creases, terrain)) in [false, true].into_iter().flat_map(|t| cases.clone().into_iter().map(move |c| (t, c))) {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.formula = "origami".to_string();
+            if twin {
+                let src = crate::escape::twins::custom_source("origami").unwrap();
+                esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                esc.custom_formula = Some(src);
+            }
             esc.coloring = "position_map".to_string();
             esc.center_re = "0.0".to_string();
             esc.center_im = "0.0".to_string();
@@ -4102,7 +4121,7 @@ final:
                     }
                 }
             }
-            println!("creases {:?} (terrain {terrain}): {close}/{total} pixels match the reference", creases.pattern);
+            println!("creases {:?} (terrain {terrain}, twin {twin}): {close}/{total} pixels match the reference", creases.pattern);
             assert!(
                 close * 100 >= total * 99,
                 "{:?}: only {close}/{total} pixels match the reference",

@@ -163,6 +163,7 @@ impl Checker {
         let mut init = Vec::new();
         let mut loop_body = Vec::new();
         let mut final_body = Vec::new();
+        let mut creases = Vec::new();
         let mut bailout = None;
         for (kind, body) in sections {
             self.section = kind.0;
@@ -185,6 +186,7 @@ impl Checker {
                     bailout = self.bailout_section(body);
                 }
                 (SectionKind::Final, _) => final_body = self.stmts(body),
+                (SectionKind::Creases, _) => creases = self.stmts(body),
                 _ => {}
             }
         }
@@ -236,12 +238,23 @@ impl Checker {
             dpixel_var: None,
             cycle: None,
             carried: Vec::new(),
+            creases,
         };
+        // The creases read their own variables, the parameters and the
+        // globals: they run apart from the orbit.
+        let mut cf = Flow::default();
+        flow(&program.creases, &mut cf);
+        let mut foreign: Vec<&str> = cf.exposed.iter().filter(|&&v| !program.vars[v].global).map(|&v| program.vars[v].name.as_str()).collect();
+        foreign.sort_unstable();
+        if let Some(n) = foreign.first() {
+            self.error(entry.span, format!("`creases` reads `{n}` before setting it: it reads its own variables, the parameters and the globals"));
+        }
         // The globals the other sections read are what the GPU needs.
         let mut f = Flow::default();
         flow(&program.init, &mut f);
         flow(&program.loop_body, &mut f);
         flow(&program.final_body, &mut f);
+        flow(&program.creases, &mut f);
         if let Some(b) = &program.bailout {
             reads(b, &mut f);
         }
@@ -303,6 +316,7 @@ impl Checker {
                 (_, SectionKind::Global) => true,
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
+                (EntryKind::Formula, SectionKind::Creases) => true,
                 (EntryKind::Coloring, SectionKind::Init | SectionKind::Loop | SectionKind::Final) => true,
                 _ => false,
             };
@@ -766,6 +780,22 @@ impl Checker {
             "solid" => Predef::Solid,
             "pass" if self.internal => Predef::Pass,
             "juliac" if self.internal => Predef::JuliaC,
+            "crease_decay" | "crease_pattern" | "crease_sign" | "crease_reach" | "crease_height" | "crease_slope"
+                if self.internal =>
+            {
+                if self.section != SectionKind::Creases {
+                    self.error(span, format!("`{name}` belongs to `creases`"));
+                    return None;
+                }
+                match name {
+                    "crease_decay" => Predef::CreaseDecay,
+                    "crease_pattern" => Predef::CreasePattern,
+                    "crease_sign" => Predef::CreaseSign,
+                    "crease_reach" => Predef::CreaseReach,
+                    "crease_height" => Predef::CreaseHeight,
+                    _ => Predef::CreaseSlope,
+                }
+            }
             "dz" | "dpixel" if self.in_perturb() => {
                 if name == "dz" {
                     Predef::DZ
@@ -787,6 +817,14 @@ impl Checker {
             }
         };
         if !self.per_image_ok(p, &format!("#{name}"), span) {
+            return None;
+        }
+        if p == Predef::Z && self.section == SectionKind::Creases {
+            self.error(span, "`creases` has the starting point, `#pixel`, not the iterate");
+            return None;
+        }
+        if p == Predef::Pass && self.section == SectionKind::Creases {
+            self.error(span, "`creases` runs once, at the starting point: it has no pass");
             return None;
         }
         let colouring = self.kind == EntryKind::Coloring;
@@ -914,6 +952,10 @@ impl Checker {
     fn unresolved(&mut self, n: &str, span: Span) -> Option<IExpr> {
         if self.kind == EntryKind::Formula && n == "z" {
             if !self.per_image_ok(Predef::Z, n, span) {
+                return None;
+            }
+            if self.section == SectionKind::Creases {
+                self.error(span, "`creases` has the starting point, `#pixel`, not the iterate");
                 return None;
             }
             return Some(predef_expr(Predef::Z));
@@ -1129,9 +1171,10 @@ impl Checker {
             ExprKind::Predef(n) => {
                 let p = self.predef(n, target.span)?;
                 let ok = match p {
-                    Predef::Z => self.kind == EntryKind::Formula && !self.in_perturb(),
+                    Predef::Z => self.kind == EntryKind::Formula && !self.in_perturb() && self.section != SectionKind::Creases,
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
+                    Predef::CreaseHeight | Predef::CreaseSlope => true,
                     _ => false,
                 };
                 if !ok {
@@ -1147,6 +1190,8 @@ impl Checker {
                     Predef::Z => (Place::Z, Ty::Complex),
                     Predef::Index => (Place::Index, Ty::Float),
                     Predef::DZ => (Place::DZ, Ty::Complex),
+                    Predef::CreaseHeight => (Place::CreaseHeight, Ty::Float),
+                    Predef::CreaseSlope => (Place::CreaseSlope, Ty::Complex),
                     _ => (Place::Solid, Ty::Bool),
                 })
             }
@@ -1726,6 +1771,8 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::Index => IExprKind::Predef(Predef::Index),
         Place::Solid => IExprKind::Predef(Predef::Solid),
         Place::DZ => IExprKind::Predef(Predef::DZ),
+        Place::CreaseHeight => IExprKind::Predef(Predef::CreaseHeight),
+        Place::CreaseSlope => IExprKind::Predef(Predef::CreaseSlope),
     })
 }
 

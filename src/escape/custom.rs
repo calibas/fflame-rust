@@ -381,6 +381,11 @@ fn program_features(p: &ir::Program) -> &'static [FormulaFeature] {
     // A program owns its seed, its escape and its plane: the Julia
     // toggle has nothing to swap, unless it reads Fractint's `ismand`
     // (Rhai's `ctx.julia`), which the toggle sets.
+    // Folding paper (a Rhai `fn creases`): the Creases relief field and
+    // terrain source draw it.
+    if !p.creases.is_empty() {
+        f.push(FormulaFeature::Creases);
+    }
     if !p.reads(ir::Predef::IsMand) {
         f.push(FormulaFeature::DynamicalOnly);
     }

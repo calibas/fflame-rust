@@ -180,6 +180,11 @@ pub enum Builtin {
     /// and a formula's to call.
     Expm1,
     Log1p,
+    /// The value rounded to f32 (each part of a complex): the GPU's own
+    /// precision, so a CPU section (`global:`, `prepare`) can compute as
+    /// f32 code does, an operation at a time (Origami's line table). On
+    /// the GPU, the identity.
+    F32,
 }
 
 /// Every built-in by name (lowered).
@@ -221,6 +226,7 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("cosxx", Builtin::Cosxx),
     ("expm1", Builtin::Expm1),
     ("log1p", Builtin::Log1p),
+    ("f32", Builtin::F32),
 ];
 
 /// What a user function (`@fn(z)`, Fractint's `fn1`..`fn4`) may be set
@@ -283,6 +289,7 @@ impl Builtin {
             Conj | Flip | Cosxx => Ty::Complex,
             // Keep an integer an integer where the result must be one.
             Sqr | Abs | Ident | Zero => arg,
+            F32 if arg == Ty::Int => Ty::Float,
             Round | Trunc | Ceil | Floor => {
                 if arg == Ty::Complex {
                     Ty::Complex
@@ -352,6 +359,7 @@ impl Builtin {
             Cosxx => Cos.eval_c(z).conj(),
             Expm1 => z.expm1(),
             Log1p => z.ln1p(),
+            F32 => C64::new(z.re as f32 as f64, z.im as f32 as f64),
         }
     }
 
@@ -385,6 +393,7 @@ impl Builtin {
             Atanh => one.div(one.sub(z.mul(z))),
             Expm1 => z.exp(),
             Log1p => one.div(one.add(z)),
+            F32 => one,
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -431,6 +440,7 @@ impl Builtin {
             IsNan => f64::from(u8::from(x.is_nan())),
             Expm1 => x.exp_m1(),
             Log1p => x.ln_1p(),
+            F32 => x as f32 as f64,
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
         }
     }

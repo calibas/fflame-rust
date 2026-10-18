@@ -423,7 +423,7 @@ impl D<'_> {
                 let sq = |x: IExpr| call(Sqr, x);
                 let factor = match fun {
                     Sqr => return Ok(Some(bin(BinOp::Mul, konst(2.0, 0.0), times(a, da)))),
-                    Ident => return Ok(Some(da)),
+                    Ident | F32 => return Ok(Some(da)),
                     Zero => return Ok(None),
                     Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),
                     Log => bin(BinOp::Div, one, a),
@@ -705,7 +705,7 @@ impl J<'_> {
         let sq = |x: IExpr| call(Sqr, x);
         let factor = match fun {
             Sqr => times(konst(2.0, 0.0), a),
-            Ident => return Some(da),
+            Ident | F32 => return Some(da),
             Zero | Round | Trunc | Ceil | Floor | IsInf | IsNan => return None,
             Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),
             Log => bin(BinOp::Div, one, a),
