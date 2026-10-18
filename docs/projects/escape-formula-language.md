@@ -1632,10 +1632,24 @@ Each item is ticked here when done; findings go in as they are made.
        factor of one read at run time (`z^2 * k + c`, array or scalar
        global alike) moves 0.03% of the Mandelbrot's pixels, the
        driver contracting the product otherwise -- the language's
-       arithmetic, not the arrays'.
+       arithmetic, not the arrays'. The library after it (2026-10-17):
+       formulas 9,267 of 9,831 compile (9,250 before), colourings 728 of
+       1,209 (726); every one's WGSL validates. First errors left that
+       are arrays': sized by a parameter or a predefined symbol 160
+       entries (74 formulas, 86 colourings), a size not a constant
+       integer expression 28, an array past 256 floats 20 colourings;
+       17 formulas and 2 colourings compile and stop converting to Rhai
+       (3b). So 3f's sizes from parameters reach the most of what is
+       left of arrays.
      - **3b.** Rhai arrays (a literal, a sized constructor, `a[i]`,
        `a.len()`, `p.name[i]` from `prepare`), and UF arrays converted
-       to Rhai.
+       to Rhai. **The Rhai half done 2026-10-17**: `[a, b]`, `array(n,
+       v)`, indexing in `prepare`, `start`, `step` and `escaped`, a state
+       field or `prepare` value an array, `let b = a` and UF's `x = y`
+       copying whole (`Checker::copy_array`); one dimension (arrays of
+       arrays refused). A Rhai formula with every form runs as its UF
+       twin. The conversion of UF arrays to Rhai comes after 3e (Origami
+       needs the dialect, not the conversion).
      - **3c.** 32-bit integers as UF's (wrapping `+ - *` in the
        interpreter, as the GPU's), and Rhai's bit operations (`^ & |
        << >>`, logical shifts on the 32-bit pattern), bit-exact with
