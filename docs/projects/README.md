@@ -16,7 +16,8 @@ which rewrites the references in code comments too).
 | [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |
 | [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Planned 2026-10-12: hold any slider's drag once its frames turn slow, beyond the listed slow settings. |
-| [escape-formula-language.md](escape-formula-language.md) | Planned 2026-10-13, phase 1 in progress: Ultra Fractal and Fractint formulas and colourings, compiled to WGSL and carried in the config. |
+| [escape-formula-language.md](escape-formula-language.md) | Planned 2026-10-13: Ultra Fractal and Fractint formulas and colourings, compiled to WGSL and carried in the config. Built through item 3; further UF support paused 2026-10-17. |
+| [escape-kifs-and-variations.md](escape-kifs-and-variations.md) | Planned 2026-10-17: KIFS, Mandelbox and Mandelbulb solids in mode D; flame variations written in Rhai for flames and escape-time; editable solids later. |
 
 ## Paused
 
