@@ -367,6 +367,12 @@ fn escaped(s, p) {
   `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`.
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
+- **Arrays**, of one dimension: a literal `[a, b, c]`, `array(n, v)`
+  (n a constant int, each element `v`), `a[i]` read and written (an int
+  index, clamped), `a.len()`. A state field may be one (`s.hist[i] =
+  s.z`), and `prepare` may return one (`p.k[i]`, a table the image's);
+  `let b = a` copies one. Arrays of arrays are refused (index one
+  array, `a[i * n + j]`). As UF's arrays (below) on every path.
 - **UF's own perturbation equations**, optional: `perturb_start(d, p)`
   and `perturb_step(d, p)` set `d.dz` (the pixel's deviation) from
   `d.z` (the reference's value) and `d.dpixel`, and return `d`;

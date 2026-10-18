@@ -62,6 +62,13 @@
 //!   its `let`s and its helpers' are substituted, so there an `if` value
 //!   is refused.
 //!
+//! Arrays (plan, item 3, step 3b), of one dimension: a literal `[a, b,
+//! c]`, `array(n, v)` (n a constant int, each element `v`), `a[i]` read
+//! and written (an int index, clamped to the array), `a.len()`; a state
+//! field or a `prepare` value may be one (`s.hist[i]`, `p.k[i]`), `let b
+//! = a` copies one. An array of arrays is refused: keep one, `a[i * n +
+//! j]`.
+//!
 //! Values are int, float, bool and complex (`complex(re, im)`; Rhai has
 //! no complex literal); a bool and a number do not mix, except by
 //! `to_float` and `to_int` (1 for true), Rhai's conversions. Operators:
@@ -225,6 +232,7 @@ fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) 
         types: HashMap::new(),
         param_tys: HashMap::new(),
         prepared: HashMap::new(),
+        arrays: HashMap::new(),
         names: Vec::new(),
         fresh: 0,
     };
@@ -357,6 +365,9 @@ struct Lowerer<'s> {
     param_tys: HashMap<String, TypeName>,
     /// `prepare`'s fields, read as `p.name`.
     prepared: HashMap<String, TypeName>,
+    /// The arrays' lengths, by lowered name (their elements' type is in
+    /// `types`).
+    arrays: HashMap<String, usize>,
     names: Vec<(String, String)>,
     fresh: usize,
 }
@@ -864,6 +875,49 @@ impl<'s> Lowerer<'s> {
         lowered
     }
 
+    /// `name`'s declaration with its value: an array's (a value naming an
+    /// array) declared at its length and copied whole.
+    fn decl(&mut self, ty: TypeName, name: String, init: ast::Expr, span: Span, out: &mut Vec<ast::Stmt>) {
+        if let ExprKind::Name(from) = &init.kind {
+            if let Some(&len) = self.arrays.get(from) {
+                self.arrays.insert(name.clone(), len);
+                self.types.insert(name.clone(), ty);
+                let dims = Some(vec![mk(ExprKind::Int(len as i64), span)]);
+                out.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims, span });
+                out.push(assign(mk(ExprKind::Name(name), span), init, span));
+                return;
+            }
+        }
+        out.push(ast::Stmt::Decl { ty, name, init: Some(init), dims: None, span });
+    }
+
+    /// A new local array of `len` elements, its declaration pending.
+    fn new_array(&mut self, ty: TypeName, len: usize, span: Span) -> String {
+        let name = self.local("array", ty);
+        self.arrays.insert(name.clone(), len);
+        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: Some(vec![mk(ExprKind::Int(len as i64), span)]), span });
+        name
+    }
+
+    /// The array a lowered value names, and its length.
+    fn array_of(&self, e: &ast::Expr) -> Option<(String, usize)> {
+        match &e.kind {
+            ExprKind::Name(n) => self.arrays.get(n).map(|&l| (n.clone(), l)),
+            _ => None,
+        }
+    }
+
+    /// `array[index]`, the array a lowered value.
+    fn index(&mut self, array: ast::Expr, index: &Expr, scope: &mut Scope, p: Position) -> R<ast::Expr> {
+        let span = self.pos.span(p);
+        if let ExprKind::Index(..) = array.kind {
+            return self.err(p, "an array of arrays: index one array, `a[i * n + j]`");
+        }
+        let Some((name, _)) = self.array_of(&array) else { return self.err(p, "only an array is indexed") };
+        let i = self.expr(index, scope)?;
+        Ok(mk(ExprKind::Index(name, vec![i]), span))
+    }
+
     /// Statements an expression left pending, before what holds it.
     fn flush(&mut self, out: &mut Vec<ast::Stmt>) {
         out.append(&mut self.pending);
@@ -967,7 +1021,7 @@ impl<'s> Lowerer<'s> {
                         }
                         let t = self.local(&format!("{f}_new"), ty);
                         let span = v.span;
-                        out.push(ast::Stmt::Decl { ty, name: t.clone(), init: Some(v), dims: None, span });
+                        self.decl(ty, t.clone(), v, span, out);
                         temps.push((f, t, span));
                     }
                 }
@@ -1001,7 +1055,7 @@ impl<'s> Lowerer<'s> {
                 self.types.insert(name.clone(), ty);
                 let written = if scope.which == Fn3::Prepare { format!("p.{f}") } else { format!("s.{f}") };
                 self.names.push((name.clone(), written));
-                out.push(ast::Stmt::Decl { ty, name, init: Some(v), dims: None, span });
+                self.decl(ty, name, v, span, out);
             }
             _ => out.push(assign(target, v, span)),
         }
@@ -1041,7 +1095,7 @@ impl<'s> Lowerer<'s> {
                 self.flush(out);
                 let ty = self.ty_of(&v);
                 let name = self.local(&ident.name, ty);
-                out.push(ast::Stmt::Decl { ty, name: name.clone(), init: Some(v), dims: None, span });
+                self.decl(ty, name.clone(), v, span, out);
                 scope.bind(&ident.name, Binding::Local(name));
                 Ok(())
             }
@@ -1276,11 +1330,25 @@ impl<'s> Lowerer<'s> {
                 Some(_) => self.err(*p, format!("`{}` is not a variable to set", v.1)),
                 None => self.err(*p, format!("`{}` is not declared: `let {} = ...`", v.1, v.1)),
             },
+            Expr::Index(be, _, p) => {
+                let array = self.target(&be.lhs, scope)?;
+                self.index(array, &be.rhs, scope, *p)
+            }
             Expr::Dot(be, _, _) => {
                 let Expr::Variable(v, _, _) = &be.lhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
                 let Some(Binding::State) = scope.get(v.1.as_str()) else {
                     return self.err(e.position(), "set a field of the state, `s.z = ...`");
                 };
+                // `s.hist[i] = ...`: an element of a field.
+                if let Expr::Index(ibe, _, ip) = &be.rhs {
+                    let Expr::Property(prop, pp) = &ibe.lhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
+                    let f = prop.2.to_string();
+                    if !scope.fields.contains(&f) {
+                        return self.err(*pp, format!("`{f}` is not in the state `start` returns"));
+                    }
+                    let array = self.field_target(scope.which, &f, self.pos.span(*pp));
+                    return self.index(array, &ibe.rhs, scope, *ip);
+                }
                 let Expr::Property(prop, pp) = &be.rhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
                 let f = prop.2.to_string();
                 if scope.which == Fn3::Perturb && f != "dz" {
@@ -1384,7 +1452,34 @@ impl<'s> Lowerer<'s> {
             Expr::StringConstant(..) | Expr::InterpolatedString(..) | Expr::CharConstant(..) => {
                 return self.err(e.position(), "a string is metadata, not a value")
             }
-            Expr::Array(..) => return self.err(e.position(), "a formula has no arrays (yet)"),
+            // `[a, b, c]`: a local array, its elements set.
+            Expr::Array(xs, p) => {
+                if self.pure {
+                    return self.err(*p, "`escaped` is one test: build arrays in `step`");
+                }
+                if xs.is_empty() {
+                    return self.err(*p, "an empty array has no length: `array(n, 0.0)`");
+                }
+                let mut values = Vec::new();
+                for x in xs.iter() {
+                    let v = self.expr(x, scope)?;
+                    if self.array_of(&v).is_some() {
+                        return self.err(x.position(), "an array of arrays: keep one array, `a[i * n + j]`");
+                    }
+                    values.push(v);
+                }
+                let ty = values.iter().map(|v| self.ty_of(v)).reduce(join).unwrap_or(TypeName::Float);
+                let name = self.new_array(ty, values.len(), span);
+                for (k, v) in values.into_iter().enumerate() {
+                    let at = mk(ExprKind::Index(name.clone(), vec![mk(ExprKind::Int(k as i64), span)]), span);
+                    self.pending.push(assign(at, v, span));
+                }
+                mk(ExprKind::Name(name), span)
+            }
+            Expr::Index(be, _, p) => {
+                let array = self.expr(&be.lhs, scope)?;
+                self.index(array, &be.rhs, scope, *p)?
+            }
             _ => return self.err(e.position(), "not in a formula"),
         })
     }
@@ -1409,6 +1504,11 @@ impl<'s> Lowerer<'s> {
             Expr::Dot(be, _, _) => {
                 let first = self.chain(base, &be.lhs, scope)?;
                 self.chain(Base::Value(first), &be.rhs, scope)
+            }
+            // A field's element: `p.lines[i]`, `s.hist[0]`.
+            Expr::Index(be, _, p) => {
+                let array = self.chain(base, &be.lhs, scope)?;
+                self.index(array, &be.rhs, scope, *p)
             }
             Expr::Property(prop, p) => {
                 let name = prop.2.as_str();
@@ -1540,6 +1640,46 @@ impl<'s> Lowerer<'s> {
             Ok(args.remove(0))
         };
         let call = |n: &str, a: ast::Expr| mk(ExprKind::Call { name: n.to_string(), args: vec![a], user: false }, span);
+        // An array's length, a constant.
+        if name == "len" {
+            return match args.as_slice() {
+                [a] => match self.array_of(a) {
+                    Some((_, len)) => Ok(mk(ExprKind::Int(len as i64), span)),
+                    None => self.err(p, "`len` is an array's length"),
+                },
+                _ => self.err(p, "`a.len()`, an array's length"),
+            };
+        }
+        // `array(n, v)`: n elements, each `v`; n a constant int.
+        if name == "array" {
+            if self.pure {
+                return self.err(p, "`escaped` is one test: build arrays in `step`");
+            }
+            if args.len() != 2 {
+                return self.err(p, "`array(n, value)`: n elements of the value");
+            }
+            let v = args.pop().unwrap();
+            let n = args.pop().unwrap();
+            let Some(len) = const_int(&n).filter(|&n| n >= 1) else {
+                return self.err(p, "`array(n, value)`: n is a constant int, at least 1");
+            };
+            let ty = self.ty_of(&v);
+            let name = self.new_array(ty, len as usize, span);
+            let zero = matches!(v.kind, ExprKind::Int(0) | ExprKind::Bool(false)) || matches!(v.kind, ExprKind::Float(x) if x == 0.0);
+            if !zero {
+                // Each element set, by a counter of its own.
+                let i = self.local("i", TypeName::Int);
+                let at = |k: &str| mk(ExprKind::Name(k.to_string()), span);
+                self.pending.push(ast::Stmt::Decl { ty: TypeName::Int, name: i.clone(), init: Some(mk(ExprKind::Int(0), span)), dims: None, span });
+                let body = vec![
+                    assign(mk(ExprKind::Index(name.clone(), vec![at(&i)]), span), v, span),
+                    assign(at(&i), mk(ExprKind::Binary(BinOp::Add, Box::new(at(&i)), Box::new(mk(ExprKind::Int(1), span))), span), span),
+                ];
+                let cond = mk(ExprKind::Binary(BinOp::Lt, Box::new(at(&i)), Box::new(mk(ExprKind::Int(len), span))), span);
+                self.pending.push(ast::Stmt::While { cond, body, span });
+            }
+            return Ok(mk(ExprKind::Name(name), span));
+        }
         Ok(match name {
             // Rhai's constants, `PI()` and `E()`.
             "PI" | "E" => {
@@ -1677,6 +1817,18 @@ impl<'s> Lowerer<'s> {
     }
 }
 
+/// A lowered constant integer expression's value (an array's length).
+fn const_int(e: &ast::Expr) -> Option<i64> {
+    match &e.kind {
+        ExprKind::Int(v) => Some(*v),
+        ExprKind::Binary(BinOp::Add, a, b) => const_int(a)?.checked_add(const_int(b)?),
+        ExprKind::Binary(BinOp::Sub, a, b) => const_int(a)?.checked_sub(const_int(b)?),
+        ExprKind::Binary(BinOp::Mul, a, b) => const_int(a)?.checked_mul(const_int(b)?),
+        ExprKind::Unary(UnOp::Neg, a) => const_int(a).map(|v| -v),
+        _ => None,
+    }
+}
+
 enum Base {
     State,
     Params,
@@ -1807,6 +1959,56 @@ fn escaped(s, p) {
     s.z.norm_sqr() > p.bailout
 }
 "#;
+
+    /// Arrays (plan, item 3, step 3b): `prepare`'s tables read as
+    /// `p.k[i]`, a literal, `array(n, v)`, a state field indexed and
+    /// written, `len` -- running as the same formula in UF with arrays.
+    #[test]
+    fn rhai_arrays_run_as_their_uf_twin() {
+        let r = rh(r#"
+const PARAMS = #{ bailout: #{ value: 4.0 }, w: #{ value: 0.01 } };
+
+fn prepare(p) {
+    let k = array(4, 0.0);
+    for i in 0..4 {
+        k[i] = to_float(i) + 1.0;
+    }
+    #{ k: k, unit: [1.0, 0.0] }
+}
+
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel, hist: array(3, complex(0.0, 0.0)), t: 0 }
+}
+
+fn step(s, p) {
+    s.hist[s.t % 3] = s.z;
+    s.t += 1;
+    let picks = [p.k[2] / 3.0, p.unit[0]];
+    s.z = s.z * s.z + s.c * picks[0] * picks[1] + p.w * s.hist[(s.t + 1) % 3] + 0.001 * p.k[p.k.len() - 1];
+    s
+}
+
+fn escaped(s, p) {
+    s.z.norm_sqr() > p.bailout
+}
+"#);
+        let u = uf("A {\nglobal:\n float k[4]\n int i = 0\n while i < 4\n  k[i] = i + 1\n  i = i + 1\n endwhile\n float unit[2]\n unit[0] = 1\n\
+                    init:\n z = 0\n c = #pixel\n complex hist[3]\n int t = 0\nloop:\n hist[t % 3] = z\n t = t + 1\n float picks[2]\n\
+                    picks[0] = k[2] / 3\n picks[1] = unit[0]\n z = z * z + c * picks[0] * picks[1] + @w * hist[(t + 1) % 3] + 0.001 * k[3]\n\
+                    bailout:\n |z| <= @bailout\ndefault:\n float param bailout\n  default = 4\n endparam\n float param w\n  default = 0.01\n endparam\n}");
+        same(&r, &u, false);
+        let refused = |body: &str, want: &str| {
+            let src = format!("fn start(pixel, p) {{ #{{ z: pixel }} }}\nfn step(s, p) {{\n{body}\n s\n}}\nfn escaped(s, p) {{ s.z.norm_sqr() > 4.0 }}");
+            let d = program(&src).err().unwrap_or_else(|| panic!("{body}: compiled"));
+            let all: Vec<String> = d.iter().map(|x| x.render(&src)).collect();
+            assert!(all.iter().any(|m| m.contains(want)), "{body}: {all:?}");
+        };
+        refused(" let a = [];", "an empty array");
+        refused(" let n = 3;\n let a = array(n, 0.0);", "n is a constant int");
+        refused(" let a = [[1.0], [2.0]];\n s.z = s.z * a[0][0];", "an array of arrays");
+        refused(" let x = 2.0;\n s.z = s.z * x.len();", "an array's length");
+        refused(" let x = 2.0;\n s.z = s.z * x[0];", "only an array is indexed");
+    }
 
     #[test]
     fn a_rhai_formula_runs_as_its_uf_twin() {
@@ -1981,7 +2183,7 @@ fn escaped(s, p) { s.z.re > 1e9 }
             ("s.z = s.z * p.power; s", "`power` is not in `PARAMS`"),
             ("s.z = gamma(s.z); s", "unknown function `gamma`"),
             ("while true { break; } s", "no `break`"),
-            ("let a = [1, 2]; s", "no arrays"),
+            ("let a = []; s", "an empty array has no length"),
             ("s.z = \"x\"; s", "a string is metadata"),
             ("s.z = s.z + 1.0;", "ends with the state"),
             ("s.z = q; s", "`q` is not declared"),

@@ -1019,6 +1019,16 @@ impl Checker {
     /// `target = value`, with `a = b = c` chains unwound innermost first.
     /// Returns what reads the target back.
     fn assign(&mut self, target: &Expr, value: &Expr, out: &mut Vec<IStmt>) -> Option<IExpr> {
+        // A whole array: UF's `x = y` of same-size arrays, element by
+        // element.
+        if let (ExprKind::Name(t), ExprKind::Name(v)) = (&target.kind, &value.kind) {
+            if let (Some(&dst), Some(&src)) = (self.var_ids.get(t), self.var_ids.get(v)) {
+                if self.vars[dst].is_array() || self.vars[src].is_array() {
+                    self.copy_array(dst, src, target.span, out);
+                    return None;
+                }
+            }
+        }
         let v = match &value.kind {
             ExprKind::Assign(t2, v2) => self.assign(t2, v2, out)?,
             _ => self.expr(value)?,
@@ -1056,6 +1066,36 @@ impl Checker {
         let v = self.convert(v, ty, value.span)?;
         out.push(IStmt::Assign(place, v));
         Some(IExpr { kind: place_read(place)?, ty })
+    }
+
+    /// `dst = src` for two arrays of the same dimensions and type: a loop
+    /// over the elements, its counter a variable of its own.
+    fn copy_array(&mut self, dst: VarId, src: VarId, span: Span, out: &mut Vec<IStmt>) {
+        let (d, s) = (&self.vars[dst], &self.vars[src]);
+        if d.dims != s.dims || d.ty != s.ty || !d.is_array() {
+            let (dn, sn) = (d.name.clone(), s.name.clone());
+            self.error(span, format!("`{dn} = {sn}`: an array is assigned whole from one of the same size and type, else by element"));
+            return;
+        }
+        if self.vars[dst].global && self.section != SectionKind::Global {
+            let n = self.vars[dst].name.clone();
+            self.error(span, format!("`{n}` is set in `global:` and is read-only elsewhere"));
+            return;
+        }
+        let (name, len, ty) = (format!("copy {}", self.vars.len()), self.vars[dst].len(), self.vars[dst].ty);
+        self.new_var(&name, Ty::Int, span);
+        let k = self.vars.len() - 1;
+        let int = |kind: IExprKind| IExpr { kind, ty: Ty::Int };
+        let i = || int(IExprKind::Var(k));
+        let element = IExpr { kind: IExprKind::Elem(src, Box::new(i())), ty };
+        out.push(IStmt::Assign(Place::Var(k), int(IExprKind::Int(0))));
+        out.push(IStmt::While {
+            cond: IExpr { kind: IExprKind::Binary(BinOp::Lt, Box::new(i()), Box::new(int(IExprKind::Int(len as i64)))), ty: Ty::Bool },
+            body: vec![
+                IStmt::SetElem { var: dst, index: i(), value: element },
+                IStmt::Assign(Place::Var(k), int(IExprKind::Binary(BinOp::Add, Box::new(i()), Box::new(int(IExprKind::Int(1)))))),
+            ],
+        });
     }
 
     fn place(&mut self, target: &Expr) -> Option<(Place, Ty)> {
@@ -2097,6 +2137,8 @@ mod tests {
         refused(&shell(" float a[2] = 1"), "not set in its declaration");
         refused(&shell(" float a[2]\n float b = a"), "is an array: read an element");
         refused(&shell(" float a[2]\n a = 1"), "assign its elements");
+        refused(&shell(" float a[2]\n float b[3]\n b = a"), "same size and type");
+        refused(&shell(" float a[2]\n int b[2]\n b = a"), "same size and type");
         refused(&shell(" float a[2, 2]\n float b = a[1]"), "2 dimensions");
         refused(&shell(" float a[2]\n float b = a[1.5]"), "an array index is an int");
         refused(&shell(" float a[2]\n float b = a[2]"), "outside `a`");
