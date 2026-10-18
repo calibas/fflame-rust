@@ -2884,7 +2884,7 @@
       "cam_yaw": 0.9,
       "center_im": "0",
       "center_re": "-0.5",
-      "coloring": "ifs_level",
+      "coloring": "ifs_trap",
       "formula": "quaternion_julia_solid",
       "formula_params": {
         "cw": 0.0,
@@ -2894,7 +2894,7 @@
         "slice_axis": 3.0
       },
       "max_iter": 256,
-      "zoom_log2": 0.7
+      "zoom_log2": 0.4
     },
     "flame": {
       "name": "Quaternion Julia",
@@ -2961,6 +2961,8 @@
       "coloring": "ifs_address",
       "formula": "kifs_solid",
       "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
         "fold": 3.0,
         "levels": 12.0,
         "offset_x": 1.0,
@@ -3040,6 +3042,8 @@
       "coloring": "ifs_level",
       "formula": "kifs_solid",
       "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
         "fold": 0.0,
         "levels": 12.0,
         "offset_x": 1.0,
@@ -3120,6 +3124,8 @@
       "coloring": "ifs_level",
       "formula": "kifs_solid",
       "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
         "fold": 2.0,
         "levels": 12.0,
         "offset_x": 1.0,
@@ -3199,6 +3205,8 @@
       "coloring": "ifs_address",
       "formula": "kifs_solid",
       "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
         "fold": 3.0,
         "levels": 12.0,
         "offset_x": 1.0,
@@ -3276,9 +3284,11 @@
       "cam_yaw": 0.9,
       "center_im": "0",
       "center_re": "-0.5",
-      "coloring": "ifs_address",
+      "coloring": "ifs_level",
       "formula": "kifs_solid",
       "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
         "fold": 2.0,
         "levels": 12.0,
         "offset_x": 1.0,
@@ -3359,6 +3369,8 @@
       "coloring": "ifs_level",
       "formula": "kifs_solid",
       "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
         "fold": 1.0,
         "levels": 12.0,
         "offset_x": 1.0,

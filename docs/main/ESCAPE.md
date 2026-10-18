@@ -1178,11 +1178,26 @@ within the iterations: a lower bound, because every fold and rotation
 is 1-Lipschitz and fixes the origin, so the set lies within `|o|`
 (which is also the ball the camera frames, `standalone_radius`). The
 address is the fold history, a base-8 digit per iteration (which of
-three mirrors fired) for the first eight; the colour the first digit;
-the trap point the escaped `z`'s `xy`. Presets: KIFS Menger,
+three mirrors fired) for eight iterations from the `address_symmetry`th
+on (from the second, mirror images share their orbit: the colouring is
+as symmetric as the set); the colour that first digit. Presets: KIFS Menger,
 Tetrahedron, Octahedron (the octahedron flake), Turned, Bloom and
 Columns. The tests hold it to a CPU twin (`gpu_tests::Kifs`), pixel for
 pixel. Like the quaternion Julia it is f32 and absolute: no deep zoom.
+
+**The flame-less solids colour from the start of the orbit.** A solid is
+drawn where the march stops, a pixel's width from the set, and that
+width is the camera's, so a quantity read from where or when the orbit
+escapes changes with the camera (measured: it never settles as the view
+refines). The KIFS and the quaternion Julia read their first
+`colour_depth` iterations (default 3) instead: the orbit trap is the
+closest approach to the origin, as coordinates the set's symmetry
+keeps; the level `log2` of the running derivative at the depth (the
+quaternion) or the iteration of the closest approach (the KIFS, whose
+derivative is `s^n` everywhere); the quaternion's address is which side
+of the plane across `c`'s axis each iterate falls, then the angle from
+that axis. `the_solids_colours_settle_as_the_view_refines` holds them
+to it on the CPU twins. The flame solids still read the tail.
 
 The colourings are `ifs_distance` (Distance: the set with an antialiased
 edge and optional contour bands), `ifs_level` (Escape Level: shells of

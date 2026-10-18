@@ -57,10 +57,9 @@ z = R1 z;  z = fold(z);  z = R2 z;  z = s z - o (s - 1)
 - **The ball** the camera frames and the march is bounded by is radius
   `|o|` at the origin (`pack_standalone` learns the def's radius; it
   read `bailout` for the quaternion Julia).
-- **The four quantities**: level the smooth escape count; address the
-  fold history, a base-8 digit per iteration (which of the three folds
-  fired) for the first eight; colour the first digit; the trap point
-  the escaped `z`'s `xy`.
+- **The four quantities**: as *Colouring solids* below (they were the
+  escape count and the escaped point at first, which follow the
+  camera).
 - **A CPU twin** of the walk, in Rust, for the gates: the quaternion
   Julia has none, and this one is twenty lines.
 - **Gates**: (1) every mode-D combination compiles (by joining
@@ -71,12 +70,58 @@ z = R1 z;  z = fold(z);  z = R2 z;  z = s z - o (s - 1)
   the Sierpinski tetrahedron, the Menger sponge, an octahedral flake, a
   rotated KIFS -- rendered and inspected before they ship.
 
+**Colouring solids** (decided 2026-10-18, after the user saw Escape
+Level and Orbit Trap change with the camera on KIFS and the quaternion
+Julia). A solid is coloured where the march stops, a pixel's width from
+the set, and that width is the camera's. Whatever a colouring reads
+from the orbit's tail -- when it escapes, where it lands -- is decided
+by that pixel: measured (`which_solid_colours_follow_the_camera`),
+marching each ray to a pixel, an eighth and a sixty-fourth of one, the
+escape level and the escaped point move 0.2 to 1.2 palette units at
+every step, never settling. So every solid's quantities come from **the
+start of its orbit**, the first `colour_depth` iterations (default 3):
+
+- **Orbit trap**: the orbit's closest approach to the origin within the
+  depth, as two coordinates the set's symmetry keeps (KIFS: `z.xy`,
+  which the first fold makes the same for every mirror image; the
+  quaternion: the scalar part and the part along `c`'s vector axis).
+- **Level**: `log2` of the running derivative at the depth, where it
+  varies over the set (the quaternion; the Mandelbox and Mandelbulb);
+  where it is a constant (KIFS: `s^n`), the iteration of the closest
+  approach plus how close it came.
+- **Address**: digits of choices the set's symmetry keeps. KIFS: the
+  fold history from `address_symmetry` folds on (0 off, 1 the whole
+  object, 2 each piece too), because mirror images share their orbit
+  after the first fold. The quaternion: which side of the plane across
+  `c`'s axis each iterate falls (its binary decomposition), then the
+  vector part's angle from the axis at the depth.
+- **Gate**: `the_solids_colours_settle_as_the_view_refines`, on each
+  def's CPU twin: at the default depth each quantity moves under 0.15
+  palette units as the view refines eight times, and settles (the next
+  eight at most 0.6 of that). Every new solid's twin joins it.
+
+Measured at depth 3 (mean change, 1 to 1/8 pixel, then 1/8 to 1/64):
+the Menger's level 0.027 then 0.005, trap 0.086 then 0.015, address
+0.007 then 0.002; the quaternion's level 0.034 then 0.008, trap 0.086
+then 0.020, address 0.043 then 0.012. Past depth 5 the colours stop
+settling at 448 pixels: deeper iterations are the pixel's again, which
+is why the depth is a parameter (raise it when zoomed in). The flame
+solids (`ifs_flame_3d`) still colour from the tail: an open item.
+
 **A2. Mandelbox (Solid)** (Tom Lowe, 2010): box fold, sphere fold
 (minimum and fixed radius), scale, plus the point (the Mandelbox) or a
 constant (its Julia). The distance `|z| / |dr|`, `dr` the running
 scale. **A3. Mandelbulb (Solid)** (White and Nylander, 2009): the power
 `n` in spherical coordinates, the distance `½ ln|z| |z| / dr` as the
-quaternion Julia's. Each with the same gates, its twin and presets.
+quaternion Julia's. Each with the same gates, its twin and presets, and
+coloured by the rules above from the start: the level the running
+derivative; the trap the closest approach; the address symmetric --
+the Mandelbox's per iteration how many axes the box fold reflected and
+which of the sphere fold's three cases applied (invariant under the
+cube's symmetries, which commute with both folds), the Mandelbulb's
+which hemisphere each iterate falls in (invariant under its turns about
+the z axis). Each is checked against the settling gate before its
+presets are picked.
 
 **A4, later.** Icosahedral and dodecahedral folds (normals from a cited
 source, not derived here); the 2D KIFS as a Rhai formula in mode A,
@@ -174,7 +219,11 @@ hillshade the part to check.
    sponge with a rotation either side of the fold), Bloom, Columns.
    Found on the way: an octahedral offset off the axes at scale 2 is a
    blob of shells, and the octahedron's vertices sit on its ball, so it
-   frames at zoom 0.
+   frames at zoom 0. **Coloured from the start of the orbit
+   2026-10-18** (*Colouring solids*): the KIFS and the quaternion Julia,
+   with `colour_depth` and the KIFS's `address_symmetry`; the presets
+   re-inspected (Bloom moved to the level; the quaternion's preset to
+   the orbit trap and zoom 0.4, where 0.7 cut a lobe).
 2. [ ] A2 Mandelbox (Solid).
 3. [ ] A3 Mandelbulb (Solid).
 4. [ ] C1 Rhai transformations, 2D.

@@ -1899,6 +1899,19 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
                       through the 4D solid.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach, the level's bands and the address's angle. The \
+                      surface is drawn a pixel from the set, and past a few iterations that \
+                      pixel decides the orbit, so deeper colours change with the camera. \
+                      Raise it when zoomed in.",
+            choices: &[],
+        },
     ],
     wgsl: r#"
 // The quaternion as (scalar, i, j, k) in a vec4's (x, y, z, w). A
@@ -1952,10 +1965,25 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
 
     // dq is |dq_k / dq_0|, a scalar because the quaternion norm is
     // multiplicative: each step multiplies it by n |q|^(n-1) (Q1).
+    // The colourings read the start of the orbit (the KIFS's note):
+    // the closest approach to the origin within the first `depth`
+    // iterations, and the orbit's angle at `depth`, both in terms the
+    // set's own symmetry keeps -- rotations about the axis of c's
+    // vector part commute with q -> q^n + c, so what is kept is the
+    // scalar part, the part along that axis and the rest's length.
+    let depth = u32(clamp(round(fparam(16u)), 1.0, 12.0));
+    let vlen = length(c.yzw);
+    let axis_v = select(vec3<f32>(1.0, 0.0, 0.0), c.yzw / vlen, vlen > 1e-12);
+    var trap_r = 1.0e30;
+    var trap_k = 0u;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var address = 0.0;
+    var place = 0.5;
+    var spread = 1.0;
+
     var dq = 1.0;
     var mag = length(q);
     var escape_k = -1.0;
-    var escape_mag = 0.0;
     var k = 0u;
     loop {
         if (k >= levels || mag > 1.0e4) {
@@ -1965,28 +1993,44 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         q = qj_pow(q, n) + c;
         mag = length(q);
         k = k + 1u;
+        if (k <= depth) {
+            spread = dq;
+            let along = dot(q.yzw, axis_v);
+            if (mag < trap_r) {
+                trap_r = mag;
+                trap_k = k;
+                trap_p = vec2<f32>(q.x, along);
+            }
+            // The address: a binary digit each iteration, which side of
+            // the plane across the axis the orbit falls on (the binary
+            // decomposition, in terms the symmetry keeps); at `depth`,
+            // the vector part's angle from the axis fills the rest.
+            let angle = ff_atan2(length(q.yzw - along * axis_v), along) * 0.31830988618;
+            if (k < depth) {
+                address = address + select(0.0, place, along < 0.0);
+                place = place * 0.5;
+            } else {
+                address = address + angle * place;
+            }
+        }
         if (escape_k < 0.0 && mag > bail) {
             escape_k = f32(k);
-            escape_mag = mag;
         }
     }
+    res.point = trap_p;
+    res.address = address;
+    // The level: how much the first `depth` iterations stretch the
+    // neighbourhood, log2 of the running derivative there -- the
+    // surface's own scale, where the escape count was the pixel's.
+    res.level = log2(max(spread, 1.0));
 
     if (escape_k >= 0.0) {
         res.escaped = 1u;
         // Hart's estimate, with his half for the march's sake.
         res.distance = 0.5 * mag * log(mag) / max(dq, 1e-30);
-        // The smooth escape count, rising toward the set.
-        let smooth_k = escape_k + 1.0 - log(max(log(escape_mag), 1e-30) / log(bail)) / log(n);
-        res.level = max(f32(levels) - smooth_k, 0.0);
         res.depth = u32(max(f32(levels) - escape_k, 0.0));
-        // The binary decomposition: the escaped quaternion's azimuth
-        // in the (i, j) plane.
-        res.address = fract(ff_atan2(q.z, q.y) / 6.28318530718 + 0.5);
-        res.point = q.yz;
     } else {
-        res.level = f32(levels);
         res.depth = levels;
-        res.point = q.yz;
     }
     return res;
 }
@@ -2195,6 +2239,29 @@ pub static IFS_KIFS: IfsDef = IfsDef {
             tooltip: "Degrees about z after each fold.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach and the level's bands. The surface is drawn a pixel \
+                      from the set, and past a few iterations that pixel decides the orbit, so \
+                      deeper colours change with the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "address_symmetry",
+            display_name: "Address Symmetry",
+            default: 1.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Which folds the branch address starts from. Mirror images share their \
+                      orbit after the first fold, so starting after it colours every mirror \
+                      copy alike; after the second, each piece's copies too.",
+            choices: &["Off", "Whole object", "Each piece"],
+        },
     ],
     wgsl: r#"
 // A rotation by Euler angles in degrees, x first, then y, then z
@@ -2236,6 +2303,18 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     // Every fold and rotation is an isometry fixing the origin, so a
     // point past |o| escapes and the set lies within it.
     let radius = max(length(o), 1.0e-3);
+    // The colourings read the start of the orbit: the surface is drawn
+    // a pixel from the set, and that pixel decides the orbit's tail
+    // (where and when it escapes), so a colour from the tail changes
+    // with the camera. The closest approach to the origin within the
+    // first `depth` iterations is the orbit trap; the iteration it
+    // falls on, the level's band. The address starts after `skip`
+    // folds: mirror images share their orbit after the first.
+    let depth = u32(clamp(round(fparam(18u)), 1.0, 12.0));
+    let skip = u32(clamp(round(fparam(19u)), 0.0, 2.0));
+    var trap_r = 1.0e30;
+    var trap_k = 0u;
+    var trap_p = vec2<f32>(0.0, 0.0);
 
     var z = delta + ifs_target_offset();
     var k = 0u;
@@ -2289,18 +2368,22 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         if (fold == 3u && z.z < -0.5 * o.z * (s - 1.0)) {
             z.z = z.z + o.z * (s - 1.0);
         }
-        if (k < 8u) {
+        if (k >= skip && k < skip + 8u) {
             address = address + f32(digit) * place;
             place = place * 0.125;
         }
-        if (k == 0u) {
+        if (k == skip) {
             res.color = (f32(digit) + 0.5) * 0.125;
         }
         k = k + 1u;
         let r = length(z);
+        if (k <= depth && r < trap_r) {
+            trap_r = r;
+            trap_k = k;
+            trap_p = z.xy;
+        }
         if (escape_k < 0 && r > radius) {
             escape_k = i32(k);
-            res.point = z.xy;
         }
         // Past the set, a few more for the estimate's sake.
         if (r > 1.0e3 * radius) {
@@ -2310,18 +2393,17 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
 
     let r = length(z);
     res.address = address;
+    res.point = trap_p;
+    // The band: the iteration of the closest approach, and how close it
+    // came across it.
+    res.level = f32(trap_k) + clamp(trap_r / radius, 0.0, 0.999);
     if (escape_k >= 0) {
         res.escaped = 1u;
         // A lower bound: each step stretches distances by at most s.
-        res.distance = (r - radius) * pow(s, -f32(k));
-        // The smooth count: where |z| - |o| grows by s a step.
-        let smooth_k = f32(k) - log(max((r - radius) / radius, 1.0e-30)) / log(s);
-        res.level = clamp(f32(levels) - smooth_k, 0.0, f32(levels));
+        res.distance = max(r - radius, 0.0) * pow(s, -f32(k));
         res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
     } else {
-        res.level = f32(levels);
         res.depth = levels;
-        res.point = z.xy;
     }
     return res;
 }
@@ -12492,14 +12574,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }
 
     /// The presets that ship from plan 8.11 step 1: Bourke's
-    /// `c = (-1, 0.2, 0, 0)` on the k slice, under the escape-level
-    /// colouring. Inspected before shipping
+    /// `c = (-1, 0.2, 0, 0)` on the k slice, under the orbit trap (the
+    /// escape level until the solids' colourings were made the
+    /// surface's). Inspected before shipping
     /// (`render_the_quaternion_julia_for_inspection`).
     pub(super) fn quaternion_presets() -> Vec<crate::config::FractalConfig> {
-        let mut c = quaternion_config([-1.0, 0.2, 0.0, 0.0], 3.0, "ifs_level");
+        // The orbit trap: the colour that is the surface's and shows its
+        // rings (the KIFS plan, "Colouring solids").
+        let mut c = quaternion_config([-1.0, 0.2, 0.0, 0.0], 3.0, "ifs_trap");
         // The ball is the bailout's radius and the set is about half
-        // of it: a closer frame than the ball's own.
-        c.escape.zoom_log2 = 0.7;
+        // of it: a closer frame than the ball's own, though not so close
+        // that the long lobes leave it (0.7 cut the left one).
+        c.escape.zoom_log2 = 0.4;
         vec![c]
     }
 
@@ -12515,6 +12601,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pub a1: [f64; 3],
         pub a2: [f64; 3],
         pub levels: u32,
+        /// The colour depth and the address's start (`colour_depth`,
+        /// `address_symmetry`).
+        pub depth: u32,
+        pub skip: u32,
+    }
+
+    /// What a solid's colourings read at a point: the level, the
+    /// address and the trap point as the walk gives them now, and the
+    /// level and trap point it used to give (from where the orbit
+    /// escapes), for the measurement that retired them.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(super) struct SolidColour {
+        pub level: f64,
+        pub address: f64,
+        pub point: [f64; 2],
+        pub tail_level: f64,
+        pub tail_point: [f64; 2],
     }
 
     fn norm3(v: [f64; 3]) -> f64 {
@@ -12523,7 +12626,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     impl Kifs {
         pub(super) fn new(fold: u32, s: f64, o: [f64; 3]) -> Kifs {
-            Kifs { fold, s, o, a1: [0.0; 3], a2: [0.0; 3], levels: 12 }
+            Kifs { fold, s, o, a1: [0.0; 3], a2: [0.0; 3], levels: 12, depth: 3, skip: 1 }
         }
 
         pub(super) fn radius(&self) -> f64 {
@@ -12546,18 +12649,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         /// One iteration: rotate, fold, rotate, scale about the offset.
         pub(super) fn step(&self, z: [f64; 3]) -> [f64; 3] {
+            self.step_digit(z).0
+        }
+
+        /// One iteration and its address digit: which of the fold's three
+        /// mirrors fired.
+        fn step_digit(&self, z: [f64; 3]) -> ([f64; 3], u32) {
             let mut z = Self::rotate(self.a1, z);
+            let mut digit = 0;
             if self.fold == 0 {
                 if z[0] + z[1] < 0.0 {
                     z = [-z[1], -z[0], z[2]];
+                    digit |= 1;
                 }
                 if z[0] + z[2] < 0.0 {
                     z = [-z[2], z[1], -z[0]];
+                    digit |= 2;
                 }
                 if z[1] + z[2] < 0.0 {
                     z = [z[0], -z[2], -z[1]];
+                    digit |= 4;
                 }
             } else {
+                digit = u32::from(z[0] < 0.0) | u32::from(z[1] < 0.0) << 1 | u32::from(z[2] < 0.0) << 2;
                 z = z.map(f64::abs);
                 if self.fold >= 2 {
                     if z[0] < z[1] {
@@ -12577,7 +12691,46 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if self.fold == 3 && z[2] < -0.5 * self.o[2] * (s - 1.0) {
                 z[2] += self.o[2] * (s - 1.0);
             }
-            z
+            (z, digit)
+        }
+
+        /// The colourings' quantities at `p`, as the walk computes them.
+        pub(super) fn colour(&self, p: [f64; 3]) -> SolidColour {
+            let radius = self.radius();
+            let mut out = SolidColour::default();
+            let (mut z, mut k, mut escaped) = (p, 0u32, false);
+            let (mut trap_r, mut trap_k, mut place) = (f64::INFINITY, 0u32, 0.125);
+            while k < self.levels {
+                let (next, digit) = self.step_digit(z);
+                z = next;
+                if k >= self.skip && k < self.skip + 8 {
+                    out.address += f64::from(digit) * place;
+                    place *= 0.125;
+                }
+                k += 1;
+                let r = norm3(z);
+                if k <= self.depth && r < trap_r {
+                    trap_r = r;
+                    trap_k = k;
+                    out.point = [z[0], z[1]];
+                }
+                if !escaped && r > radius {
+                    escaped = true;
+                    out.tail_point = [z[0], z[1]];
+                }
+                if r > 1.0e3 * radius {
+                    break;
+                }
+            }
+            out.level = f64::from(trap_k) + (trap_r / radius).clamp(0.0, 0.999);
+            let r = norm3(z);
+            out.tail_level = if escaped {
+                let smooth_k = f64::from(k) - ((r - radius) / radius).max(1e-30).ln() / self.s.ln();
+                (f64::from(self.levels) - smooth_k).clamp(0.0, f64::from(self.levels))
+            } else {
+                f64::from(self.levels)
+            };
+            out
         }
 
         /// The distance's lower bound, as the walk computes it.
@@ -12633,6 +12786,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 ("rot2_x", self.a2[0]),
                 ("rot2_y", self.a2[1]),
                 ("rot2_z", self.a2[2]),
+                ("colour_depth", f64::from(self.depth)),
+                ("address_symmetry", f64::from(self.skip)),
             ] {
                 p.insert(name.to_string(), v as f32);
             }
@@ -12643,6 +12798,204 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             cfg.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
             cfg.gamma = crate::config::defaults::DEFAULT_GAMMA;
             cfg
+        }
+    }
+
+    /// `IFS_QUATERNION_JULIA`'s walk on the CPU, in f64: its distance and
+    /// its colourings' quantities, for the colour measurement.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct QuatJulia {
+        pub c: [f64; 4],
+        pub n: f64,
+        pub bail: f64,
+        pub slice: f64,
+        pub levels: u32,
+        pub depth: u32,
+    }
+
+    impl QuatJulia {
+        /// Bourke's set on the k slice, the shipped preset's.
+        pub(super) fn bourke() -> QuatJulia {
+            QuatJulia { c: [-1.0, 0.2, 0.0, 0.0], n: 2.0, bail: 2.0, slice: 0.0, levels: 32, depth: 3 }
+        }
+
+        fn pow(q: [f64; 4], n: f64) -> [f64; 4] {
+            let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            if mag < 1e-30 {
+                return [0.0; 4];
+            }
+            let rad = mag.powf(n);
+            let ang = (q[0] / mag).clamp(-1.0, 1.0).acos() * n;
+            let vlen = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            let nhat = if vlen > 1e-12 { [q[1] / vlen, q[2] / vlen, q[3] / vlen] } else { [1.0, 0.0, 0.0] };
+            [rad * ang.cos(), rad * ang.sin() * nhat[0], rad * ang.sin() * nhat[1], rad * ang.sin() * nhat[2]]
+        }
+
+        /// The walk at a point of the k slice: Hart's distance, and the
+        /// colour quantities.
+        pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
+            let mut q = [p[0], p[1], p[2], self.slice];
+            let len4 = |q: [f64; 4]| (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            let vlen = norm3([self.c[1], self.c[2], self.c[3]]);
+            let axis = if vlen > 1e-12 { [self.c[1] / vlen, self.c[2] / vlen, self.c[3] / vlen] } else { [1.0, 0.0, 0.0] };
+            let mut out = SolidColour::default();
+            let (mut trap_r, mut spread) = (f64::INFINITY, 1.0f64);
+            let (mut dq, mut mag, mut k, mut escape) = (1.0f64, len4(q), 0u32, None);
+            while k < self.levels && mag <= 1.0e4 {
+                dq *= self.n * mag.powf(self.n - 1.0);
+                let qn = Self::pow(q, self.n);
+                q = [qn[0] + self.c[0], qn[1] + self.c[1], qn[2] + self.c[2], qn[3] + self.c[3]];
+                mag = len4(q);
+                k += 1;
+                if k <= self.depth {
+                    spread = dq;
+                    let along = q[1] * axis[0] + q[2] * axis[1] + q[3] * axis[2];
+                    if mag < trap_r {
+                        trap_r = mag;
+                        out.point = [q[0], along];
+                    }
+                    let perp = norm3([q[1] - along * axis[0], q[2] - along * axis[1], q[3] - along * axis[2]]);
+                    let angle = perp.atan2(along) / std::f64::consts::PI;
+                    let place = 0.5f64.powi(k as i32);
+                    if k < self.depth {
+                        out.address += if along < 0.0 { place } else { 0.0 };
+                    } else {
+                        out.address += angle * place;
+                    }
+                }
+                if escape.is_none() && mag > self.bail {
+                    escape = Some((k, mag));
+                    out.tail_point = [q[1], q[2]];
+                }
+            }
+            out.level = spread.max(1.0).log2();
+            match escape {
+                Some((ek, em)) => {
+                    let smooth_k = f64::from(ek) + 1.0 - (em.ln().max(1e-30) / self.bail.ln()).ln() / self.n.ln();
+                    out.tail_level = (f64::from(self.levels) - smooth_k).max(0.0);
+                    (0.5 * mag * mag.ln() / dq.max(1e-30), out)
+                }
+                None => {
+                    out.tail_level = f64::from(self.levels);
+                    (0.0, out)
+                }
+            }
+        }
+    }
+
+    /// The colour quantities the measurement compares, at their
+    /// colourings' default palette scales.
+    const SOLID_FIELDS: [(&str, fn(&SolidColour) -> f64); 5] = [
+        ("tail level", |c| c.tail_level * 0.12),
+        ("tail trap", |c| (c.tail_point[0].powi(2) + c.tail_point[1].powi(2)).sqrt()),
+        ("level", |c| c.level * 0.12),
+        ("trap", |c| (c.point[0].powi(2) + c.point[1].powi(2)).sqrt()),
+        ("address", |c| c.address),
+    ];
+
+    /// How each solid's colours follow the camera (the KIFS plan,
+    /// "Colouring solids"): a surface is drawn where the march stops, a
+    /// pixel's width from the set, and that width is the camera's (its
+    /// distance, the zoom, the resolution). Each ray -- from an eye on
+    /// the framing sphere toward a point near the centre -- is marched
+    /// to a pixel at 448 pixels, then to an eighth and a sixty-fourth of
+    /// one: the same surface seen eight and sixty-four times closer.
+    /// Each quantity's mean change between the steps, in palette units
+    /// at its default scale: a quantity that is the surface's settles as
+    /// the view refines (the second change a fraction of the first); one
+    /// that is the pixel's changes as much at every step. Per set: its
+    /// name, the rays that hit, and the two changes for each of
+    /// [`SOLID_FIELDS`].
+    fn solid_colour_settling(kifs_depth: u32, quat_depth: u32) -> Vec<(String, usize, [f64; 5], [f64; 5])> {
+        let px = 2.0 * (0.35f64).tan() / 448.0;
+        let march = |de: &dyn Fn([f64; 3]) -> f64, o: [f64; 3], dir: [f64; 3], radius: f64, f: f64| -> Option<[f64; 3]> {
+            let b = o[0] * dir[0] + o[1] * dir[1] + o[2] * dir[2];
+            let disc = b * b - (norm3(o).powi(2) - radius * radius);
+            if disc < 0.0 {
+                return None;
+            }
+            let (mut t, t_max) = ((-b - disc.sqrt()).max(0.0), -b + disc.sqrt());
+            for _ in 0..2000 {
+                if t > t_max {
+                    return None;
+                }
+                let p = [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
+                let d = de(p);
+                if d < f * t {
+                    return Some(p);
+                }
+                t += d;
+            }
+            None
+        };
+        let measure = |name: String, de: &dyn Fn([f64; 3]) -> f64, colour: &dyn Fn([f64; 3]) -> SolidColour, radius: f64| {
+            let mut rng = XorShift(0x2545_F491_4F6C_DD1D);
+            let (mut coarse, mut fine) = ([0.0f64; 5], [0.0f64; 5]);
+            let mut hits = 0;
+            for _ in 0..400 {
+                let e = rng.in_ball([0.0; 3], 1.0, true);
+                let eye = e.map(|x| x * 3.2 * radius);
+                let aim = rng.in_ball([0.0; 3], 0.4 * radius, false);
+                let d = [aim[0] - eye[0], aim[1] - eye[1], aim[2] - eye[2]];
+                let dir = d.map(|x| x / norm3(d));
+                let (Some(a), Some(b), Some(c)) =
+                    (march(de, eye, dir, radius, px), march(de, eye, dir, radius, px / 8.0), march(de, eye, dir, radius, px / 64.0))
+                else {
+                    continue;
+                };
+                hits += 1;
+                let (ca, cb, cc) = (colour(a), colour(b), colour(c));
+                for (i, (_, f)) in SOLID_FIELDS.iter().enumerate() {
+                    coarse[i] += (f(&ca) - f(&cb)).abs();
+                    fine[i] += (f(&cb) - f(&cc)).abs();
+                }
+            }
+            let h = hits.max(1) as f64;
+            (name, hits, coarse.map(|x| x / h), fine.map(|x| x / h))
+        };
+        let mut rows = Vec::new();
+        for (name, mut k) in kifs_cases() {
+            k.depth = kifs_depth;
+            rows.push(measure(name.to_string(), &|p| k.distance(p), &|p| k.colour(p), k.radius()));
+        }
+        let mut q = QuatJulia::bourke();
+        q.depth = quat_depth;
+        rows.push(measure("quaternion".to_string(), &|p| q.walk(p).0, &|p| q.walk(p).1, q.bail));
+        rows
+    }
+
+    /// [`solid_colour_settling`] at colour depths 2 to 6, printed.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn which_solid_colours_follow_the_camera() {
+        for depth in 2..=6 {
+            println!("colour depth {depth}:");
+            for (name, hits, coarse, fine) in solid_colour_settling(depth, depth) {
+                let row: Vec<String> = SOLID_FIELDS.iter().enumerate().map(|(i, (n, _))| format!("{n} {:.3} > {:.3}", coarse[i], fine[i])).collect();
+                println!("  {name} ({hits} hits): {}", row.join(", "));
+            }
+        }
+    }
+
+    /// The solids' colours are the surface's (the KIFS plan, "Colouring
+    /// solids"): at the default colour depth the level, the trap and
+    /// the address move little as the view refines eight times, and
+    /// less again the next eight -- where the escape level and the
+    /// escaped point they replaced moved a fifth to a whole palette
+    /// cycle at every step.
+    #[test]
+    fn the_solids_colours_settle_as_the_view_refines() {
+        let depth = |def: &IfsDef| def.parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default as u32).expect("a colour depth");
+        for (name, hits, coarse, fine) in solid_colour_settling(depth(&IFS_KIFS), depth(&IFS_QUATERNION_JULIA)) {
+            if hits < 50 {
+                continue;
+            }
+            for i in 2..5 {
+                let what = SOLID_FIELDS[i].0;
+                println!("{name} {what}: {:.3} then {:.3}", coarse[i], fine[i]);
+                assert!(coarse[i] < 0.15, "{name}: the {what} moves {:.3} as the view refines", coarse[i]);
+                assert!(fine[i] <= 0.6 * coarse[i] + 0.005, "{name}: the {what} does not settle ({:.3}, then {:.3})", coarse[i], fine[i]);
+            }
         }
     }
 
@@ -12913,7 +13266,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let (device, queue) = device();
         let mut cases: Vec<(String, crate::config::FractalConfig)> =
             kifs_cases().into_iter().map(|(name, k)| (name.to_string(), k.config("ifs_level"))).collect();
-        cases.extend(kifs_presets().into_iter().map(|c| (format!("preset-{}", c.flame.name.to_ascii_lowercase().replace(' ', "-")), c)));
+        cases.extend(kifs_presets().into_iter().chain(quaternion_presets()).map(|c| (format!("preset-{}", c.flame.name.to_ascii_lowercase().replace(' ', "-")), c)));
         for (name, cfg) in cases {
             let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
             let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
@@ -12946,7 +13299,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             named("KIFS Tetrahedron", Kifs::new(0, 2.0, [1.0, 1.0, 1.0]), "ifs_level", 0.2),
             named("KIFS Octahedron", Kifs::new(2, 2.0, [1.0, 0.0, 0.0]), "ifs_level", 0.0),
             named("KIFS Turned", turned(3, 3.0, [1.0, 1.0, 1.0], [8.0, 0.0, 0.0], [0.0, 10.0, 0.0]), "ifs_address", 0.1),
-            named("KIFS Bloom", turned(2, 2.0, [1.0, 0.3, 0.0], [0.0; 3], [0.0, 0.0, 25.0]), "ifs_address", 0.1),
+            named("KIFS Bloom", turned(2, 2.0, [1.0, 0.3, 0.0], [0.0; 3], [0.0, 0.0, 25.0]), "ifs_level", 0.1),
             named("KIFS Columns", turned(1, 2.2, [1.0, 1.0, 1.0], [0.0, 30.0, 0.0], [0.0; 3]), "ifs_level", 0.1),
         ]
     }
