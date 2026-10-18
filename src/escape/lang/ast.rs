@@ -151,6 +151,14 @@ pub enum BinOp {
     /// `diffabs`): the deviation of `abs` in derived perturbation
     /// equations (`lang::delta`). Never parsed.
     DiffAbs,
+    /// Rhai's bit operations, on ints as 32-bit patterns (UF has none);
+    /// on bools `&` and `|` are and and or, `^` xor. `>>` is logical, as
+    /// a hash of unsigned values wants it.
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 impl BinOp {
@@ -171,6 +179,11 @@ impl BinOp {
             BinOp::And => "&&",
             BinOp::Or => "||",
             BinOp::DiffAbs => "diffabs",
+            BinOp::BitAnd => "&",
+            BinOp::BitOr => "|",
+            BinOp::BitXor => "^",
+            BinOp::Shl => "<<",
+            BinOp::Shr => ">>",
         }
     }
 }

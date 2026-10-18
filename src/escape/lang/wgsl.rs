@@ -1394,6 +1394,11 @@ impl<'p> Gen<'p> {
             Mod if ty == Ty::Int => format!("{}({l}, {r})", self.use_(Helper::IMod)),
             Mul | Div | Mod => format!("({l} {} {r})", op.symbol()),
             DiffAbs => format!("{}({l}, {r})", self.use_(Helper::DiffAbs)),
+            // Ints as 32-bit patterns: a shift by its amount's low five
+            // bits, `>>` logical (`interp::bits`).
+            BitAnd | BitOr | BitXor => format!("({l} {} {r})", op.symbol()),
+            Shl => format!("({l} << (u32({r}) & 31u))"),
+            Shr => format!("bitcast<i32>(bitcast<u32>({l}) >> (u32({r}) & 31u))"),
         }
     }
 
@@ -3206,6 +3211,47 @@ pub(crate) mod tests {
             let pixel = super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64);
             let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(pixel, 1)).z;
             assert!(close(*got, want), "({x}, {y}): gpu {got:?}, f64 ({}, {})", want.re, want.im);
+        }
+    }
+
+    /// Rhai's bit operations on the GPU as in the interpreter (plan, item
+    /// 3, step 3c): Origami's hash and the masks and shifts beside it,
+    /// bit for bit.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn bit_operations_match_the_interpreter_on_the_gpu() {
+        let src = r#"
+fn hash(x) {
+    let h = x;
+    h = h ^ (h >> 16);
+    h = h * 0x7feb352d;
+    h = h ^ (h >> 15);
+    h = h * 0x846ca68b;
+    h ^ (h >> 16)
+}
+
+fn start(pixel, p) {
+    let x = to_int(pixel.re) * 2654435761 + to_int(pixel.im);
+    let bits = ((x << 3) | (x & 7)) ^ ((x >> 29) & 0xff);
+    let odd = (hash(x) >> 31) == 1;
+    #{ z: complex(to_float(hash(x) >> 8) / 16777216.0, to_float(bits & 0xffff)), flag: odd ^ (x < 0) }
+}
+
+fn step(s, p) {
+    s
+}
+"#;
+        let p = super::super::rhai::program(src).expect("compiles");
+        let points: Vec<(f64, f64)> = [0.0, 1.0, 7.0, 255.0, 4096.0, 65535.0, 1.0e6, -1.0, -77.0, 3.0e6].iter().flat_map(|&x| [(x, 0.0), (x, 911.0)]).collect();
+        let inputs: Vec<(f32, f32, f32)> = points.iter().map(|&(x, y)| (x as f32, y as f32, 0.0)).collect();
+        let Some(out) = gpu_one_step(&p, &inputs) else {
+            eprintln!("no GPU");
+            return;
+        };
+        let params = super::super::interp::ParamValues::defaults(&p);
+        for (&(x, y), got) in points.iter().zip(&out) {
+            let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(super::super::builtins::C64::new(x, y), 1)).z;
+            assert_eq!((got.0 as f64, got.1 as f64), (want.re as f32 as f64, want.im as f32 as f64), "({x}, {y})");
         }
     }
 

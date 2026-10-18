@@ -1653,7 +1653,10 @@ Each item is ticked here when done; findings go in as they are made.
      - **3c.** 32-bit integers as UF's (wrapping `+ - *` in the
        interpreter, as the GPU's), and Rhai's bit operations (`^ & |
        << >>`, logical shifts on the 32-bit pattern), bit-exact with
-       `origami_hash`.
+       `origami_hash`. **Done 2026-10-17**: the interpreter's ints were 32-bit and
+       wrapping already; the bit operations are `BinOp::BitAnd` ..
+       `Shr` (`interp::bits`, the GPU's the same), and Origami's hash in
+       a formula gives `formulas::origami_hash`'s bits, on the GPU too.
      - **3d.** The `creases` hook (`FormulaFeature::Creases` for a
        program defining it).
      - **3e.** Origami's twin. Its lines are the built-in's in f32 on
