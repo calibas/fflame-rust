@@ -463,6 +463,20 @@ fn escaped(s, p) {
   Escape mode, is offered as the camera lens. `INFO.name` is its
   registry name; `PARAMS` as a formula's; no `prepare`, no `ctx`, no
   random numbers yet. Example: `assets/formulas/variation-whorl.rhai`.
+- **`vary("name", z)`** or `vary("name", z, #{ param: value })`, in
+  any function of a formula, colouring or transformation: the user's
+  variation `name` applied to `z`, its body inlined as a helper's is
+  (so deep zoom and the derivative derive through it), its parameters
+  the map's values -- in the caller's terms, `#{ k: p.twist }` -- or
+  their defaults. The source is looked up in what the entry carries
+  (`CustomSource::variations`), then the registered custom variations,
+  then the formula library and its examples
+  (`variations::custom::source_of`). Using an entry fills its
+  `variations` with the sources it called (`with_called_variations`,
+  flat: a variation a variation calls too), so the config carries them,
+  and `name_of` hashes them, so a changed variation is a changed entry.
+  A built-in variation is refused (C3, maybe). Example:
+  `assets/formulas/whorled-mandelbrot.rhai`.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to

@@ -75,6 +75,7 @@ pub fn custom_source(name: &str) -> Option<crate::config::escape::CustomSource> 
         dialect: crate::config::escape::CustomDialect::Rhai,
         entry: super::lang::rhai::title(text).unwrap_or_else(|| name.to_string()),
         source: text.to_string(),
+        variations: Vec::new(),
     })
 }
 

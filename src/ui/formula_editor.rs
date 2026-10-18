@@ -271,7 +271,8 @@ impl FormulaEditorPanel {
             return self.use_variation(cm, row);
         }
         let Some(entry) = self.entries.get(row) else { return };
-        let src = CustomSource { dialect: self.dialect, entry: entry.name.clone(), source: entry.source.clone() };
+        // With the variations it calls (`vary`), which the config carries.
+        let src = custom::with_called_variations(kind, CustomSource { dialect: self.dialect, entry: entry.name.clone(), source: entry.source.clone(), variations: Vec::new() });
         let name = custom::name_of(kind, &src);
         let compiled = match kind {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
@@ -361,7 +362,8 @@ impl FormulaEditorPanel {
             .filter(|s| s.entry == name || crate::variations::custom::used_by(&config.flame, &s.entry) || config.escape.lens == s.entry)
             .cloned()
             .collect();
-        let src = CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source };
+        let src = crate::variations::custom::carried(&source)
+            .unwrap_or(CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source, variations: Vec::new() });
         match list.iter_mut().find(|s| s.entry == name) {
             Some(s) => *s = src,
             None => list.push(src),

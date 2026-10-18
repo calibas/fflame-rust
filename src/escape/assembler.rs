@@ -9302,7 +9302,7 @@ mod tests {
                  z = sqr(z) + #pixel\n r = cabs(z)\n b = r > 2\nbailout:\n !b && k > 0\n}",
             ),
         ] {
-            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             let f = crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             for (analytic, orbits) in [
@@ -9838,7 +9838,7 @@ mod tests {
         let sums: String = (0..floats).map(|i| format!(" s{i} = s{i} + real(#z) * {}\n", i + 1)).collect();
         let total: String = (0..floats).map(|i| format!(" + s{i}")).collect();
         let source = format!("W {{\ninit:\n{decls}loop:\n{sums}final:\n #index = 0{total}\n}}");
-        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "W".into(), source };
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "W".into(), source, variations: Vec::new() };
         let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &src);
         let def = crate::escape::custom::compile_coloring(&src, &name).expect("compiles");
         let want = if floats <= 4 { AccumWidth::Wide } else { AccumWidth::Extended((floats - 4).div_ceil(4)) };
@@ -9879,7 +9879,7 @@ mod tests {
             ("DU {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.1 * @fn1(z) + 0.01 * sqrt(z) + 0.01 * log(z + 2)\nbailout:\n |z| < 4\n\
               default:\n func fn1\n  default = sin()\n endfunc\n}", true),
         ] {
-            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into() };
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into(), variations: Vec::new() };
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let hash = u64::from_str_radix(&name[crate::escape::custom::PREFIX.len()..], 16).unwrap();
@@ -9935,7 +9935,7 @@ mod tests {
         // A hybrid: a reference per phase, interleaved; the pixel steps
         // along its reference and rebases at its own phase.
         for (name, h) in crate::escape::lang::hybrid::presets().into_iter().filter(|(_, h)| h.groups.len() > 1) {
-            let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() };
+            let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
             let formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &formula).expect("compiles");
             let cycle = crate::escape::custom::cycle(&formula).expect("a cycle");
@@ -9961,7 +9961,7 @@ mod tests {
             "PX {\ninit:\n z = 0\n y = 0\nloop:\n t = z\n z = sqr(z) + #pixel + y * (-0.5, 0)\n y = t\nbailout:\n |z| < 4\n}",
             "NW {\ninit:\n z = #pixel\n zold = 0\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\nbailout:\n |z - zold| > 1e-8\n}",
         ] {
-            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into() };
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: source[..2].into(), source: source.into(), variations: Vec::new() };
             let name = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
             crate::escape::custom::compile_formula(&src, &name).expect("compiles");
             let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, &src).unwrap();

@@ -1585,6 +1585,12 @@ fn xml_escape_attr(s: &str) -> String {
 /// Build the `plugins` attribute value — space-separated unique
 /// variation names across all xforms (and the final, if any). Sorted
 /// for determinism.
+/// Whether `flame` (or a subflame of it) carries the source of the
+/// variation `name` (`Flame::custom_variations`).
+fn carries_custom(flame: &Flame, name: &str) -> bool {
+    flame.custom_variations.iter().any(|s| s.entry == name) || flame.subflames.iter().any(|f| carries_custom(f, name))
+}
+
 fn collect_plugin_names(flame: &Flame) -> String {
     let mut names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for xform in &flame.transforms {
@@ -1599,7 +1605,7 @@ fn collect_plugin_names(flame: &Flame) -> String {
     }
     // Not the user's own (`write_xform` drops them).
     let registry = crate::variations::global_registry();
-    names.retain(|n| registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Custom));
+    names.retain(|n| !carries_custom(flame, n) && registry.get(n).is_none_or(|v| v.provenance != crate::provenance::Provenance::Custom));
     names.into_iter().collect::<Vec<_>>().join(" ")
 }
 
@@ -1642,8 +1648,11 @@ fn write_xform(
 
     // A variation the user wrote (`variations::custom`) is no variation
     // JWildfire or Apophysis has: dropped, with a warning, its weight and
-    // its parameters both. The `.fflame` carries its source.
-    let custom = |name: &str| registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom);
+    // its parameters both. The `.fflame` carries its source. Known by the
+    // config carrying it, or by the registry's provenance.
+    let custom = |name: &str| {
+        carries_custom(&parent_config.flame, name) || registry.get(name).is_some_and(|v| v.provenance == crate::provenance::Provenance::Custom)
+    };
     for name in xform.variations.keys().filter(|n| custom(n)) {
         log::warn!("`.flame` export: the custom variation `{name}` is not written (only a .fflame carries it)");
     }

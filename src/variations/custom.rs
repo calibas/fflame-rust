@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::api::types::VariationDownload;
-use crate::config::escape::CustomSource;
-use crate::escape::lang::{self, ir::ParamKind};
+use crate::config::escape::{CustomDialect, CustomSource};
+use crate::escape::lang::{self, ir::ParamKind, EntryKind};
 use crate::provenance::Provenance;
 use crate::scene::transforms::Flame;
 
@@ -144,6 +144,31 @@ pub fn register(source: &str) -> Result<String, String> {
     }
 }
 
+/// The source of the user's variation `name`, for a formula's `vary`
+/// (the KIFS plan, C1e): as registered, else a Rhai transformation of
+/// that name in their formula library, else among the examples.
+pub fn source_of(name: &str) -> Option<String> {
+    if let Some(s) = registered().lock().ok().and_then(|k| k.get(name).cloned()) {
+        return Some(s);
+    }
+    use crate::storage::formula_store::{is_rhai, list, load, EXAMPLES};
+    let named = |text: &str| lang::rhai::kind_of(text) == Some(EntryKind::Transform) && lang::rhai::variation_name(text).as_deref() == Some(name);
+    for file in list().into_iter().filter(|f| is_rhai(f)) {
+        if let Some(text) = load(&file).filter(|t| named(t)) {
+            return Some(text);
+        }
+    }
+    EXAMPLES.iter().find(|(f, t)| is_rhai(f) && named(t)).map(|(_, t)| t.to_string())
+}
+
+/// A transformation's source as a flame carries it: named by its
+/// registry name, with the variations it calls (`vary`) beside it.
+pub fn carried(source: &str) -> Option<CustomSource> {
+    let name = lang::rhai::variation_name(source)?;
+    let src = CustomSource { dialect: CustomDialect::Rhai, entry: name, source: source.to_string(), variations: Vec::new() };
+    Some(crate::escape::custom::with_called_variations(EntryKind::Transform, src))
+}
+
 /// The registered custom variations' sources, by name, as last
 /// registered: what [`ensure`] compares against.
 fn registered() -> &'static Mutex<HashMap<String, String>> {
@@ -164,7 +189,9 @@ pub fn ensure(flame: &Flame) {
         // Remembered either way, so a failure is not retried every frame.
         known.insert(src.entry.clone(), src.source.clone());
         drop(known);
-        if let Err(e) = register(&src.source) {
+        // Against the variations it carries (`vary`).
+        let carried = crate::escape::custom::carried_variations(src);
+        if let Err(e) = lang::rhai::with_variations(&carried, || register(&src.source)) {
             log::warn!("Custom variation `{}` did not register: {e}", src.entry);
         }
     }
@@ -274,12 +301,15 @@ mod tests {
 
     /// A `.flame` export drops a custom variation, weight and parameters
     /// (JWildfire has no such variation), and keeps the rest of the
-    /// transform; the `.fflame` keeps its source.
+    /// transform; the `.fflame` keeps its source. Known by the flame
+    /// carrying it: unit tests never write the global registry, whose
+    /// readers run in parallel (a writer waiting behind one test's read
+    /// guard blocks the next read, and a test re-reading under its guard
+    /// deadlocks -- `every_variation_validates_in_the_layer_warp` does).
     #[test]
     fn a_flame_export_drops_a_custom_variation() {
         let src = "const PARAMS = #{ k: #{ value: 0.5 } };\nconst INFO = #{ title: \"Export\", name: \"rhai_export_test\" };\n\
                    fn variation(z, p) {\n    z * p.k\n}\n";
-        assert_eq!(register(src).as_deref(), Ok("rhai_export_test"));
         let mut cfg = crate::config::FractalConfig::default();
         cfg.flame.transforms.push(crate::scene::transforms::Transform::default());
         let t = cfg.flame.transforms.last_mut().unwrap();
@@ -288,12 +318,113 @@ mod tests {
         t.set_variation("swirl", 0.25);
         t.set_variation("rhai_export_test", 0.75);
         t.set_variation_param("rhai_export_test", "k", 0.3);
-        cfg.flame.custom_variations = vec![CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: "rhai_export_test".into(), source: src.into() }];
+        cfg.flame.custom_variations = vec![CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: "rhai_export_test".into(), source: src.into(), variations: Vec::new() }];
         let xml = crate::flame_xml::write_flame_xml(&cfg);
         assert!(xml.contains(" swirl=\"0.25\""), "{xml}");
         assert!(!xml.contains("rhai_export_test"), "{xml}");
         let back: crate::config::FractalConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back.flame.custom_variations, cfg.flame.custom_variations, "the .fflame carries the source");
+    }
+
+    // ---- a variation called inside a formula (C1e) ----------------------
+
+    /// A variation with parameters of two kinds, that reassigns its point.
+    const BEND: &str = "const PARAMS = #{\n    k: #{ value: 0.3 },\n    shift: #{ value: complex(0.1, 0.0) },\n};\n\
+                        const INFO = #{ title: \"Bend\", name: \"rhai_bend_test\" };\n\
+                        fn variation(z, p) {\n    let r2 = z.norm_sqr();\n    z = z * complex(cos(p.k * r2), sin(p.k * r2));\n    z + p.shift\n}\n";
+
+    /// A Mandelbrot whose step bends through `rhai_bend_test`, its `k` the
+    /// formula's `twist` and its shift the default -- and the same
+    /// formula with the variation written out.
+    const VARIED: &str = "const PARAMS = #{ bailout: 4.0, twist: 0.5 };\nconst INFO = #{ title: \"Varied\" };\n\
+                          fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                          fn step(s, p) {\n    s.z = vary(\"rhai_bend_test\", s.z * s.z + s.c, #{ k: p.twist });\n    s\n}\n\
+                          fn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n";
+    const WRITTEN_OUT: &str = "const PARAMS = #{ bailout: 4.0, twist: 0.5 };\nconst INFO = #{ title: \"Written Out\" };\n\
+                               fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                               fn step(s, p) {\n    let w = s.z * s.z + s.c;\n    let r2 = w.norm_sqr();\n    \
+                               w = w * complex(cos(p.twist * r2), sin(p.twist * r2));\n    s.z = w + complex(0.1, 0.0);\n    s\n}\n\
+                               fn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n";
+
+    fn bend_scope() -> Vec<(String, String)> {
+        vec![("rhai_bend_test".to_string(), BEND.to_string())]
+    }
+
+    /// A formula that calls a variation runs as the formula with the
+    /// variation written out, pixel by pixel, in the interpreter; deep
+    /// zoom derives its equations and the derivative as for that one.
+    #[test]
+    fn a_formula_calls_a_variation_as_written_out() {
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        let varied = lang::rhai::with_variations(&bend_scope(), || lang::rhai::program(VARIED)).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(VARIED)).collect::<Vec<_>>()));
+        let written = lang::rhai::program(WRITTEN_OUT).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(WRITTEN_OUT)).collect::<Vec<_>>()));
+        let (pv, pw) = (ParamValues::defaults(&varied), ParamValues::defaults(&written));
+        let mut escaped = 0;
+        for i in 0..24 {
+            for j in 0..24 {
+                let px = C64::new(-2.0 + 2.5 * i as f64 / 23.0, -1.25 + 2.5 * j as f64 / 23.0);
+                let (a, b) = (run(&varied, &pv, None, &Env::at(px, 200)), run(&written, &pw, None, &Env::at(px, 200)));
+                assert_eq!((a.n, a.escaped), (b.n, b.escaped), "at {px:?}");
+                assert!((a.z.re - b.z.re).abs() < 1e-12 && (a.z.im - b.z.im).abs() < 1e-12, "at {px:?}: {:?} against {:?}", a.z, b.z);
+                escaped += a.escaped as u32;
+            }
+        }
+        assert!(escaped > 100 && escaped < 24 * 24, "the view holds both: {escaped} escaped");
+        assert!(lang::delta::with_derived_equations(&varied).is_some(), "deep zoom derives through the variation");
+        assert_eq!(lang::derive::with_derivative(&varied).is_some(), lang::derive::with_derivative(&written).is_some());
+    }
+
+    /// What `vary` refuses: a name that is no variation of the user's, a
+    /// built-in's (a later step), a parameter the variation lacks, a
+    /// form that is not one.
+    #[test]
+    fn vary_refuses_what_it_cannot_inline() {
+        let msg = |src: &str| match lang::rhai::with_variations(&bend_scope(), || lang::rhai::program(src)) {
+            Ok(_) => panic!("compiled: {src}"),
+            Err(d) => d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; "),
+        };
+        let with = |step: &str| {
+            format!("const PARAMS = #{{ bailout: 4.0 }};\nfn start(pixel, p) {{ #{{ z: complex(0.0, 0.0), c: pixel }} }}\nfn step(s, p) {{ {step} s }}\nfn escaped(s, p) {{ s.z.norm_sqr() > p.bailout }}\n")
+        };
+        assert!(msg(&with("s.z = vary(\"rhai_nowhere_test\", s.z);")).contains("no variation of yours"));
+        assert!(msg(&with("s.z = vary(\"spherical\", s.z);")).contains("built-in"));
+        assert!(msg(&with("s.z = vary(\"rhai_bend_test\", s.z, #{ q: 1.0 });")).contains("no parameter `q`"));
+        assert!(msg(&with("s.z = vary(s.z);")).contains("vary(\"name\", z)"));
+    }
+
+    /// An entry that calls a variation carries it: filled from where it
+    /// is registered, compiled from what it carries alone, and named
+    /// anew when the variation changes.
+    #[test]
+    fn an_entry_carries_the_variations_it_calls() {
+        use crate::escape::custom::{check_entry, name_of, with_called_variations};
+        let bend = BEND.replace("rhai_bend_test", "rhai_bend_carried");
+        let varied = VARIED.replace("rhai_bend_test", "rhai_bend_carried");
+        // Where `source_of` finds a registered one (never the registry
+        // itself in a unit test: see the export test).
+        registered().lock().unwrap().insert("rhai_bend_carried".into(), bend.clone());
+        let plain = CustomSource { dialect: CustomDialect::Rhai, entry: "Varied".into(), source: varied, variations: Vec::new() };
+        let src = with_called_variations(EntryKind::Formula, plain.clone());
+        assert_eq!(src.variations.len(), 1);
+        assert_eq!((src.variations[0].entry.as_str(), src.variations[0].source.as_str()), ("rhai_bend_carried", bend.as_str()));
+        // Carried: compiles with no registry to look in.
+        let mut moved = src.clone();
+        for v in &mut moved.variations {
+            v.entry = "rhai_bend_moved".into();
+            v.source = v.source.replace("rhai_bend_carried", "rhai_bend_moved");
+        }
+        moved.source = moved.source.replace("rhai_bend_carried", "rhai_bend_moved");
+        assert!(check_entry(EntryKind::Formula, &moved).is_ok(), "compiles from what it carries");
+        // A changed variation is a changed entry.
+        let mut changed = src.clone();
+        changed.variations[0].source = changed.variations[0].source.replace("value: 0.3", "value: 0.4");
+        assert_ne!(name_of(EntryKind::Formula, &src), name_of(EntryKind::Formula, &changed));
+        assert_ne!(name_of(EntryKind::Formula, &src), name_of(EntryKind::Formula, &plain));
+        // A variation calling a variation carries both, flat.
+        let outer = "const INFO = #{ title: \"Outer\", name: \"rhai_outer_test\" };\nfn variation(z, p) {\n    vary(\"rhai_bend_carried\", z) * 0.5\n}\n";
+        let c = super::carried(outer).expect("named");
+        assert_eq!(c.variations.iter().map(|v| v.entry.as_str()).collect::<Vec<_>>(), ["rhai_bend_carried"]);
     }
 
     // ---- the GPU gates ----------------------------------------------------
@@ -329,7 +460,7 @@ mod tests {
     /// The twin's source, carried as a flame carries it.
     fn carried(builtin: &str) -> CustomSource {
         let src = TWINS.iter().find(|(n, _)| *n == builtin).unwrap().1;
-        CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: format!("rhai_{builtin}"), source: src.to_string() }
+        CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: format!("rhai_{builtin}"), source: src.to_string(), variations: Vec::new() }
     }
 
     /// A 2D flame of three transforms: `variation` on a turning shrink,

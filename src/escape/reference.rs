@@ -5634,7 +5634,7 @@ mod tests {
         let (cre, cim, zoom) = ("-1.75488", "0.00001", 14.0);
         let built_in = ReferenceOrbit::compute_nucleus_aware(cre, cim, zoom, 5000, 320.0, 2, None).unwrap();
         assert_eq!(built_in.periodic, Some(3));
-        let uf = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+        let uf = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
         let identity = |src: CustomSource| {
             let mut esc = EscapeConfig { bailout: 4.0, max_iter: 5000, zoom_log2: zoom, ..EscapeConfig::default() };
             esc.center_re = cre.into();

@@ -507,6 +507,9 @@ function takes the point, and the ids when it has parameters (as
   weight, its parameters and its `plugins=` entry, with a warning.
 - **As a lens**: the lens menu lists custom variations after the
   measured ones (`lens::lens_menu`).
+- **Inside a formula**: `vary("name", z)` inlines one into an escape
+  formula or colouring, the entry carrying its source
+  ([ESCAPE.md](ESCAPE.md#the-formula-language)).
 - Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
@@ -547,6 +550,13 @@ stays unknown.
 
 ## Testing
 
+- **Unit tests never write the global registry** (`register`,
+  `register_from_api`, `custom::ensure` on a flame that carries a
+  source). Tests run in parallel, and some read it under a guard they
+  re-take inside (`every_variation_validates_in_the_layer_warp`): a
+  writer queued behind the first read blocks the second, and the suite
+  hangs. Use a local `VariationRegistry`, or the `custom` module's own
+  map; GPU gates (`#[ignore]`, run alone) may register.
 - **Shader lints** (`shader_lint` in [mod.rs](../../src/variations/mod.rs))
   scan every registered variation's four WGSL strings and every file
   under `shaders/`.
