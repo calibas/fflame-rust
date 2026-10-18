@@ -1199,7 +1199,19 @@ quaternion) or the iteration of the closest approach (the KIFS, whose
 derivative is `s^n` everywhere); the quaternion's address is which side
 of the plane across `c`'s axis each iterate falls, then the angle from
 that axis. `the_solids_colours_settle_as_the_view_refines` holds them
-to it on the CPU twins. The flame solids still read the tail.
+to it on the CPU twins. **The flame solids** (`ifs_flame_3d`) colour the
+same way: a colourings' walk at the hit point, `colour_depth` levels
+from the sample's own point (link 0 of the chain, the final transform
+undone), the child the walk's ranking puts first at each level -- the
+walk's own path for a beam of one -- the trap the closest approach to the
+ball's centre, the level the band of that approach. It starts from the
+sample's point rather than its link because a sample near the target
+starts the main walk several levels down, and a window counted from
+there would part pixels along the links' edges. The address is the
+winning branch's, as before; **Address Start** shifts its first digits
+out so every copy of a first piece reads alike. At a deep zoom the
+level and the trap are flat (every pixel's point is the target's in
+f32); the address is the colouring there.
 
 **The Mandelbox and the Mandelbulb** (the plan's A2, A3) follow the same
 rules. Their balls are their escape bounds (`mandelbox_radius`: Lowe's
