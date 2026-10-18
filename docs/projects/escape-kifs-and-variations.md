@@ -8,6 +8,11 @@ editable solids, which waits on what C builds. Section **D** records a
 decision that came up beside them: the field fractals stay where they
 are.
 
+The direction this serves -- every plug-in a Rhai script, carried in
+the config, parameters animatable -- is recorded in
+[rhai-plugins.md](rhai-plugins.md) (2026-10-18), with the design rules
+C keeps.
+
 Background: mode D's distance functions
 ([docs/main/ESCAPE.md](../main/ESCAPE.md), `escape::ifs`), the formula
 language ([escape-formula-language.md](escape-formula-language.md)), the
@@ -365,5 +370,13 @@ hillshade the part to check.
    - **Not done**: calling a custom variation inside a formula (C1e's
      second half); removing one from a flame (it goes when nothing uses
      it and another is used); random numbers and the other hooks (C2).
-6. [ ] C2 hooks, then B (the vector type) for 3D variations and
-   editable solids; A4 and C3 as wanted.
+6. [ ] **C1e, the second half**: a custom variation called inside an
+   escape formula (the user, 2026-10-18).
+7. [ ] **C2 hooks** (the user, 2026-10-18): random numbers, the
+   accumulator, per-thread state, colour writes.
+8. [ ] **Review UF's transformations** once C is done (the user,
+   2026-10-18; UF transformations themselves stay unsupported): what
+   the public library's `.uxf` entries do, and which our variations
+   already cover.
+9. [ ] B (the vector type) for 3D variations and editable solids; A4
+   and C3 as wanted.
