@@ -2570,6 +2570,13 @@ pub struct CustomSource {
     pub dialect: CustomDialect,
     pub entry: String,
     pub source: String,
+    /// The user's variations the entry calls with `vary` (a Rhai entry;
+    /// the KIFS plan, C1e), each as its source -- `entry` its name -- as
+    /// it was when the entry was used: the entry compiles against these,
+    /// so the config carries everything it needs. Flat: a variation one
+    /// of them calls is listed here too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<CustomSource>,
 }
 
 /// The language of a [`CustomSource`]: Ultra Fractal's (`.ufm`, `.ucl`),

@@ -1808,7 +1808,7 @@ fn register_escape(engine: &mut Engine) {
             "rhai" => CustomDialect::Rhai,
             other => return Err(err(format!("unknown formula language `{other}` - use \"rhai\", \"uf\" or \"fractint\""))),
         };
-        Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string() })
+        Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string(), variations: Vec::new() })
     }
     #[cfg(feature = "engine-escape")]
     fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::escape::lang::Diag]) -> Box<EvalAltResult> {
@@ -1822,6 +1822,8 @@ fn register_escape(engine: &mut Engine) {
     #[cfg(feature = "engine-escape")]
     fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::escape::lang::EntryKind;
+        // With the variations it calls (`vary`), which the config carries.
+        let src = crate::escape::custom::with_called_variations(EntryKind::Formula, src);
         let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
         if let Err(d) = crate::escape::custom::compile_formula(&src, &name) {
             return Err(compile_error(&src, &d));
@@ -1838,6 +1840,7 @@ fn register_escape(engine: &mut Engine) {
     #[cfg(feature = "engine-escape")]
     fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
         use crate::escape::lang::EntryKind;
+        let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
         let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
         if let Err(d) = crate::escape::custom::compile_coloring(&src, &name) {
             return Err(compile_error(&src, &d));
@@ -1875,7 +1878,7 @@ fn register_escape(engine: &mut Engine) {
         // (phase 4, step 8).
         engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
             let entry = crate::escape::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
-            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string() })
+            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
         });
         // A formula from the script's own function `f(z, c)`, its step:
         // the Mandelbrot's shape on both planes. The config carries it as
@@ -1896,7 +1899,7 @@ fn register_escape(engine: &mut Engine) {
                 err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
             })?;
             let source = crate::escape::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
-            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source })
+            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
         });
         // A hybrid composed in the script: the Hybrid Designer's groups.
         engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
@@ -1958,7 +1961,7 @@ fn register_escape(engine: &mut Engine) {
         let json = serde_json::json!({ "groups": out, "loop_start": loop_start.max(0) });
         let h = Hybrid::from_json(&json.to_string()).map_err(err)?;
         h.validate().map_err(err)?;
-        Ok(crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() })
+        Ok(crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() })
     }
 
     // The formula's parameters, each a map of its metadata and value:

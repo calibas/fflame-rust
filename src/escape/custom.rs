@@ -128,18 +128,46 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
     });
     eat(src.entry.as_bytes());
     eat(src.source.as_bytes());
+    // The variations it calls: a changed one is a changed entry.
+    for v in &src.variations {
+        eat(v.entry.as_bytes());
+        eat(v.source.as_bytes());
+    }
     format!("{PREFIX}{h:016x}")
+}
+
+/// `src` with the variations it calls (`vary`) filled in from where they
+/// are now -- the user's registered variations and library -- so the
+/// config that carries it carries them too (the KIFS plan, C1e). A
+/// source that is not Rhai, or calls none, comes back as it was.
+pub fn with_called_variations(kind: EntryKind, src: CustomSource) -> CustomSource {
+    if src.dialect != CustomDialect::Rhai {
+        return src;
+    }
+    let called = lang::rhai::with_variations(&carried_variations(&src), || lang::rhai::variations_called(&src.source, kind));
+    let variations = called
+        .into_iter()
+        .map(|(entry, source)| CustomSource { dialect: CustomDialect::Rhai, entry, source, variations: Vec::new() })
+        .collect();
+    CustomSource { variations, ..src }
+}
+
+/// What `src` carries of the variations it calls, as the lowering's
+/// scope takes them.
+pub fn carried_variations(src: &CustomSource) -> Vec<(String, String)> {
+    src.variations.iter().map(|v| (v.entry.clone(), v.source.clone())).collect()
 }
 
 /// Parse and check the named entry of a source. The source may hold
 /// other entries; only this one is compiled.
 pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, Vec<Diag>> {
     if src.dialect == CustomDialect::Rhai {
-        return match kind {
+        // Against the variations it carries.
+        return lang::rhai::with_variations(&carried_variations(src), || match kind {
             EntryKind::Formula => lang::rhai::program(&src.source),
             EntryKind::Coloring => lang::rhai::coloring(&src.source),
             EntryKind::Transform => lang::rhai::transformation(&src.source),
-        };
+        });
     }
     if src.dialect == CustomDialect::Hybrid {
         if kind != EntryKind::Formula {
@@ -1218,7 +1246,7 @@ mod tests {
     use super::*;
 
     fn src(text: &str, entry: &str) -> CustomSource {
-        CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string() }
+        CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string(), variations: Vec::new() }
     }
 
     /// Arrays sized by the settings (plan, item 3, step 3f): the config's
@@ -1435,7 +1463,7 @@ mod tests {
         let rhai = convert_to_rhai(text, "SwitchM", EntryKind::Formula, CustomDialect::UltraFractal, "language.ufm").expect("converts");
         assert!(rhai.starts_with("// SwitchM, converted from Ultra Fractal (language.ufm).\n//\n// A Mandelbrot whose switch: names its Julia"), "{rhai}");
         assert!(rhai.contains("if ctx.julia {") || rhai.contains("if !ctx.julia {"), "both planes:\n{rhai}");
-        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "SwitchM".into(), source: text.to_string() };
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: "SwitchM".into(), source: text.to_string(), variations: Vec::new() };
         let uf = check_entry(EntryKind::Formula, &src).expect("the pair compiles");
         let back = lang::rhai::program(&rhai).expect("compiles back");
         assert_eq!(lang::to_rhai::parting(&uf, &back, 100), None, "{rhai}");
@@ -1455,7 +1483,7 @@ mod tests {
         let name = parsed.entries.iter().find(|e| lang::check::check(e, EntryKind::Coloring, Dialect::UltraFractal).0.is_some()).unwrap().name.clone();
         let rhai = convert_to_rhai(ucl, &name, EntryKind::Coloring, CustomDialect::UltraFractal, "language.ucl").expect("converts");
         assert!(rhai.contains("fn finish(s, z, p"), "{rhai}");
-        let src = CustomSource { dialect: CustomDialect::Rhai, entry: name, source: rhai };
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: name, source: rhai, variations: Vec::new() };
         assert!(check_entry(EntryKind::Coloring, &src).is_ok());
     }
 
@@ -1467,7 +1495,7 @@ mod tests {
         for (file, text) in EXAMPLES {
             // A Rhai file is one formula or colouring, as its functions say.
             if is_rhai(file) {
-                let src = CustomSource { dialect: CustomDialect::Rhai, entry: lang::rhai::title(text).unwrap_or_default(), source: text.to_string() };
+                let src = CustomSource { dialect: CustomDialect::Rhai, entry: lang::rhai::title(text).unwrap_or_default(), source: text.to_string(), variations: Vec::new() };
                 let kind = lang::rhai::kind_of(text).unwrap_or_else(|| panic!("{file}: neither a formula nor a colouring"));
                 // A transformation is a flame variation: compiled as one.
                 if kind == EntryKind::Transform {
@@ -1494,6 +1522,7 @@ mod tests {
                     dialect: if is_fractint(file) { CustomDialect::Fractint } else { CustomDialect::UltraFractal },
                     entry: e.name.clone(),
                     source: carried_source(text, &parsed, e),
+                    variations: Vec::new(),
                 };
                 let kind = if is_coloring_file(file) { EntryKind::Coloring } else { EntryKind::Formula };
                 let name = name_of(kind, &src);
@@ -1510,7 +1539,7 @@ mod tests {
         let (_, text) = EXAMPLES.iter().find(|(f, _)| f.ends_with(".ufm")).expect("a formula file");
         let (parsed, _) = lang::parser::parse_file(text);
         let m = parsed.entries.iter().find(|e| e.name == "Mandelbrot").expect("the Mandelbrot example");
-        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: m.name.clone(), source: carried_source(text, &parsed, m) };
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: m.name.clone(), source: carried_source(text, &parsed, m), variations: Vec::new() };
         let def = compile_formula(&src, &name_of(EntryKind::Formula, &src)).expect("compiles");
         assert!(super::super::formula_julia_is_meaningful(def), "the switch is the Julia toggle");
     }
@@ -1731,7 +1760,7 @@ mod tests {
         let text = String::from_utf8_lossy(&std::fs::read(path).expect("read")).into_owned();
         let (parsed, _) = lang::parser::parse_file(&text);
         let e = parsed.entries.iter().find(|e| e.name == entry).expect("the entry");
-        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e) };
+        let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e), variations: Vec::new() };
         let p = check_entry(EntryKind::Formula, &src).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>()));
         let rhai = lang::to_rhai::formula(&p, &[]).unwrap_or_else(|e| e);
         println!("---- as Rhai
@@ -1807,6 +1836,7 @@ mod tests {
                 dialect: CustomDialect::UltraFractal,
                 entry: "M".into(),
                 source: "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}".into(),
+                variations: Vec::new(),
             };
             check_entry(EntryKind::Formula, &src).expect("the Mandelbrot")
         };
@@ -1833,7 +1863,7 @@ mod tests {
                 if std::env::var("UF_TRACE").is_ok() {
                     eprintln!("TRACE {} / {}", path.display(), e.name);
                 }
-                let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e) };
+                let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: e.name.clone(), source: carried_source(&text, &parsed, e), variations: Vec::new() };
                 match check_entry(kind, &src) {
                     Ok(p) => {
                         compiled[k] += 1;

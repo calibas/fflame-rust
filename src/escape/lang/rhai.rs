@@ -133,6 +133,43 @@ pub fn variation_name(source: &str) -> Option<String> {
     info_string(source, "name")
 }
 
+// ---- variations called inside a formula (the KIFS plan, C1e) ---------------
+
+thread_local! {
+    /// The variation sources in scope for `vary`, by name: what the entry
+    /// being compiled carries (`CustomSource::variations`).
+    static VARIATIONS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with `sources` -- `(name, source)` of transformations -- the
+/// first place `vary` looks a variation up, then any scope outside this
+/// one, then the user's registered ones and their library
+/// (`variations::custom::source_of`).
+pub fn with_variations<T>(sources: &[(String, String)], f: impl FnOnce() -> T) -> T {
+    let outer = VARIATIONS.with(|v| {
+        let outer = v.borrow().clone();
+        let mut scope = sources.to_vec();
+        scope.extend(outer.iter().cloned());
+        std::mem::replace(&mut *v.borrow_mut(), scope)
+    });
+    let r = f();
+    VARIATIONS.with(|v| *v.borrow_mut() = outer);
+    r
+}
+
+/// The source of the variation `name`, for `vary`.
+fn variation_source(name: &str) -> Option<String> {
+    let carried = VARIATIONS.with(|v| v.borrow().iter().find(|(n, _)| n == name).map(|(_, s)| s.clone()));
+    carried.or_else(|| crate::variations::custom::source_of(name))
+}
+
+/// The variations an entry calls with `vary`, each with the source it
+/// compiled against (`kind` as the entry is): what a config carries
+/// beside it. Empty when it calls none or does not compile.
+pub fn variations_called(source: &str, kind: EntryKind) -> Vec<(String, String)> {
+    lower_as(source, kind).map(|l| l.variations).unwrap_or_default()
+}
+
 /// A string field of a script's `INFO`.
 fn info_string(source: &str, key: &str) -> Option<String> {
     let (ast, _) = parse(source).ok()?;
@@ -214,6 +251,8 @@ pub struct Lowered {
     pub cycle: Option<Cycle>,
     /// Lowered names to the script's, for messages.
     names: Vec<(String, String)>,
+    /// The variations `vary` inlined, `(name, source)`, first call first.
+    pub variations: Vec<(String, String)>,
 }
 
 impl Lowered {
@@ -268,12 +307,14 @@ fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) 
         arrays: HashMap::new(),
         names: Vec::new(),
         fresh: 0,
+        variations: Vec::new(),
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
     }
     let mut out = l.run(&ast, kind).map_err(|d| vec![d])?;
     out.names = l.names;
+    out.variations = l.variations;
     // The checker's names for what the context reads.
     for (uf, rhai) in CTX_FIELDS {
         out.names.push((format!("#{uf}"), format!("ctx.{rhai}")));
@@ -312,6 +353,9 @@ struct Positions {
     line_starts: Vec<usize>,
     len: usize,
     text: Vec<u8>,
+    /// Every position at this span: a variation's body inlined by
+    /// `vary`, whose positions are in its own source, placed at the call.
+    fixed: Option<Span>,
 }
 
 impl Positions {
@@ -322,12 +366,19 @@ impl Positions {
                 line_starts.push(i + 1);
             }
         }
-        Positions { line_starts, len: source.len(), text: source.as_bytes().to_vec() }
+        Positions { line_starts, len: source.len(), text: source.as_bytes().to_vec(), fixed: None }
+    }
+
+    fn fixed(at: Span) -> Self {
+        Positions { line_starts: vec![0], len: 0, text: Vec::new(), fixed: Some(at) }
     }
 
     /// A Rhai position (1-based line and column) as a byte span: the
     /// token there, a word or a single character.
     fn span(&self, p: Position) -> Span {
+        if let Some(at) = self.fixed {
+            return at;
+        }
         let (Some(line), Some(col)) = (p.line(), p.position()) else { return Span::default() };
         let start = self.line_starts.get(line.saturating_sub(1)).copied().unwrap_or(0) + col.saturating_sub(1);
         let start = start.min(self.len);
@@ -360,6 +411,9 @@ enum Binding {
     /// A value substituted where read: a helper's argument, a `let` in
     /// `escaped`.
     Value(ast::Expr),
+    /// An inlined variation's parameters (`vary`): each read as the
+    /// value the call gives it, or its default.
+    ParamMap(HashMap<String, ast::Expr>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -415,6 +469,8 @@ struct Lowerer<'s> {
     arrays: HashMap<String, ast::Expr>,
     names: Vec<(String, String)>,
     fresh: usize,
+    /// The variations `vary` inlined, `(name, source)`.
+    variations: Vec<(String, String)>,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -608,7 +664,7 @@ impl<'s> Lowerer<'s> {
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
         let entry = Entry { name: title, setting, span, body: span, sections, default, switch: Settings::default() };
-        Ok(Lowered { entry, cycle, names: Vec::new() })
+        Ok(Lowered { entry, cycle, names: Vec::new(), variations: Vec::new() })
     }
 
     /// A transformation's function as its section (UF's `transform:`):
@@ -1590,7 +1646,7 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::Pixel) => mk(ExprKind::Predef("pixel".into()), span),
                 Some(Binding::Z) => mk(ExprKind::Predef("z".into()), span),
                 Some(Binding::State) => return self.err(*p, "the state is read by its fields, `s.z`"),
-                Some(Binding::Params) => return self.err(*p, "the parameters are read by name, `p.power`"),
+                Some(Binding::Params) | Some(Binding::ParamMap(_)) => return self.err(*p, "the parameters are read by name, `p.power`"),
                 Some(Binding::Ctx) => return self.err(*p, "the context is read by its fields, `ctx.julia`"),
                 None => return self.err(*p, format!("`{}` is not declared", v.1)),
             },
@@ -1656,6 +1712,7 @@ impl<'s> Lowerer<'s> {
             match scope.get(v.1.as_str()) {
                 Some(Binding::State) => return Ok(Base::State),
                 Some(Binding::Params) => return Ok(Base::Params),
+                Some(Binding::ParamMap(m)) => return Ok(Base::Map(m.clone())),
                 Some(Binding::Ctx) => return Ok(Base::Ctx),
                 _ => {}
             }
@@ -1717,6 +1774,10 @@ impl<'s> Lowerer<'s> {
                             }
                         },
                     },
+                    Base::Map(m) => match m.get(name) {
+                        Some(v) => Ok(v.clone()),
+                        None => self.err(*p, format!("the variation has no parameter `{name}`")),
+                    },
                     Base::Value(v) => match name {
                         "re" => Ok(mk(ExprKind::Call { name: "real".into(), args: vec![v], user: false }, span)),
                         "im" => Ok(mk(ExprKind::Call { name: "imag".into(), args: vec![v], user: false }, span)),
@@ -1735,6 +1796,7 @@ impl<'s> Lowerer<'s> {
                     Ok(mk(ExprKind::Call { name, args: vec![arg], user: true }, self.pos.span(*p)))
                 }
                 Base::Value(v) => self.call(f, Some(v), *p, scope),
+                Base::Map(_) => self.err(*p, "a variation's parameters hold no functions"),
                 _ => self.err(*p, "call a function of a value, `s.z.sqr()`"),
             },
             other => self.err(other.position(), "not in a formula"),
@@ -1767,6 +1829,10 @@ impl<'s> Lowerer<'s> {
                 (op, _) => self.err(p, format!("`{op}` is not a formula's operator")),
             };
         }
+        // A variation of the user's, inlined (the KIFS plan, C1e).
+        if name == "vary" && args.is_empty() {
+            return self.vary(f, p, scope);
+        }
         // A helper of the script's own, inlined; it reads only its
         // arguments.
         if let Some(def) = self.fns.get(name).cloned() {
@@ -1775,7 +1841,7 @@ impl<'s> Lowerer<'s> {
                 // first parameter.
                 return self.err(p, format!("call a helper as a function, `{name}(x)`"));
             }
-            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases" | "variation") {
+            if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases" | "variation" | "vary") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
             for a in f.args.iter() {
@@ -1921,6 +1987,107 @@ impl<'s> Lowerer<'s> {
         })
     }
 
+    /// `vary("name", z)` or `vary("name", z, #{ param: value, ... })`: the
+    /// user's variation `name` applied to `z`, its body inlined as a
+    /// helper's is -- so deep zoom and the derivative see through it --
+    /// its parameters the map's values, or their defaults. The source
+    /// comes from what the entry carries, or the user's registered
+    /// variations and library (`variation_source`).
+    fn vary(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope) -> R<ast::Expr> {
+        const FORM: &str = "`vary(\"name\", z)` or `vary(\"name\", z, #{ param: value })`: a variation of yours applied to a point";
+        if !(2..=3).contains(&f.args.len()) {
+            return self.err(p, FORM);
+        }
+        let Expr::StringConstant(vname, _) = &f.args[0] else { return self.err(p, FORM) };
+        let vname = vname.to_string();
+        let Some(source) = variation_source(&vname) else {
+            let builtin = crate::variations::global_registry().get(&vname).is_some_and(|v| v.provenance != crate::provenance::Provenance::Custom);
+            return self.err(
+                p,
+                if builtin {
+                    format!("`{vname}` is a built-in variation: a formula calls the variations you write in Rhai (a built-in's is a later step)")
+                } else {
+                    format!("no variation of yours is named `{vname}`: use one as a variation, or keep its file in your library")
+                },
+            );
+        };
+        // Checked whole first: an error inside it is reported as its own.
+        let prog = match transformation(&source) {
+            Ok(prog) => prog,
+            Err(d) => {
+                let first = d.iter().find(|x| x.severity == super::Severity::Error).map(|x| x.render(&source)).unwrap_or_default();
+                return self.err(p, format!("the variation `{vname}` does not compile: {first}"));
+            }
+        };
+        let Ok((ast, _)) = parse(&source) else { return self.err(p, format!("the variation `{vname}` does not parse")) };
+        let fns: HashMap<String, ScriptFuncDef> = ast.iter_fn_def().map(|d| (d.name.to_string(), (**d).clone())).collect();
+        let Some(def) = fns.get("variation").cloned() else { return self.err(p, format!("`{vname}` is not a variation")) };
+        // Its parameters: the map's values (lowered here, in the caller's
+        // terms), the rest their defaults.
+        let span = self.pos.span(p);
+        let mut values: HashMap<String, ast::Expr> = HashMap::new();
+        if let Some(arg) = f.args.get(2) {
+            let Expr::Map(m, _) = arg else { return self.err(arg.position(), "the parameters are a map, `#{ name: value }`") };
+            for (k, v) in &m.0 {
+                if !prog.params.iter().any(|x| x.name == k.name.as_str()) {
+                    let all: Vec<String> = prog.params.iter().map(|x| format!("`{}`", x.name)).collect();
+                    let has = if all.is_empty() { "none".to_string() } else { all.join(", ") };
+                    return self.err(k.pos, format!("`{vname}` has no parameter `{}`; it has {has}", k.name));
+                }
+                let value = self.expr(v, scope)?;
+                values.insert(k.name.to_string(), value);
+            }
+        }
+        for x in &prog.params {
+            values.entry(x.name.clone()).or_insert_with(|| {
+                let (re, im) = x.default;
+                let kind = match x.kind {
+                    super::ir::ParamKind::Complex => ExprKind::Complex(Box::new(mk(ExprKind::Float(re), span)), Box::new(mk(ExprKind::Float(im), span))),
+                    super::ir::ParamKind::Float => ExprKind::Float(re),
+                    super::ir::ParamKind::Int | super::ir::ParamKind::Enum => ExprKind::Int(re as i64),
+                    super::ir::ParamKind::Bool => ExprKind::Bool(re != 0.0),
+                };
+                mk(kind, span)
+            });
+        }
+        let point = self.expr(&f.args[1], scope)?;
+        if self.depth > 32 {
+            return self.err(p, "variations call each other too deep (recursion?)");
+        }
+        // Its body in its own functions, every position at the call.
+        let mut inner = Scope::new(Fn3::Helper, Vec::new());
+        let point = if self.pure {
+            Binding::Value(point)
+        } else {
+            // A local, so the body may reassign its point.
+            let name = self.local(&def.params[0], TypeName::Complex);
+            self.pending.push(ast::Stmt::Decl { ty: TypeName::Complex, name: name.clone(), init: Some(point), dims: None, span });
+            Binding::Local(name)
+        };
+        inner.bind(&def.params[0], point);
+        if let Some(pp) = def.params.get(1) {
+            inner.bind(pp, Binding::ParamMap(values));
+        }
+        let fns = std::mem::replace(&mut self.fns, fns);
+        let pos = std::mem::replace(&mut self.pos, Positions::fixed(span));
+        let transform = std::mem::replace(&mut self.transform, false);
+        let coloring = std::mem::replace(&mut self.coloring, false);
+        self.depth += 1;
+        let r = if self.pure { self.pure_body(&def.body, &mut inner) } else { self.helper_body(&def.body, &mut inner) };
+        self.depth -= 1;
+        self.fns = fns;
+        self.pos = pos;
+        self.transform = transform;
+        self.coloring = coloring;
+        if !self.variations.iter().any(|(n, _)| *n == vname) {
+            self.variations.push((vname, source));
+        }
+        r.map_err(|mut d| {
+            d.message = format!("in the variation: {}", d.message);
+            d
+        })
+    }
+
     /// A helper's body inlined into `start` or `step`: its statements
     /// pending, its value returned.
     fn helper_body(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<ast::Expr> {
@@ -2010,6 +2177,8 @@ fn const_int(e: &ast::Expr) -> Option<i64> {
 enum Base {
     State,
     Params,
+    /// An inlined variation's parameters.
+    Map(HashMap<String, ast::Expr>),
     Ctx,
     Value(ast::Expr),
 }

@@ -218,6 +218,34 @@ deterministic per-pixel stream in escape-time, the flame's own RNG in a
 flame); JWildfire's accumulator (`NeedsAccum`); per-thread state;
 colour writes.
 
+C2's steps (planned 2026-10-18, the user away; the Rhai surface is the
+decision to review -- each keeps the script honest Rhai, and each hook
+is the `Feature` a built-in declares, so the shader builder has one path):
+- **C2a, random numbers.** `rand()`: a fresh draw in [0, 1) each call,
+  in any entry. In a variation, the flame's own stream
+  (`rng_nextf(rng)`; `NeedsRng`); in a formula or colouring -- or a
+  variation `vary` inlines there -- a deterministic stream per pixel,
+  seeded by its place, so a still reproduces; the interpreter draws the
+  same numbers. An entry that draws has no deep zoom (the reference and
+  the pixel would draw differently). The IR's `Predef::Draw`, not
+  UF's `#random` (one value per pixel, as UF's).
+- **C2b, the accumulator.** `fn variation(z, p, ctx)`: `ctx.accum`,
+  JWildfire's `pVarTP` -- the weighted sum of the transform's earlier
+  variations (`NeedsAccum`). Zero where `vary` inlines one.
+- **C2c, per-thread state.** `const STATE = #{ count: 0, last:
+  complex(0.0, 0.0) }` declares the fields and their starting values;
+  the body reads and writes them as `this.count` -- Rhai's own way for a
+  function called on an object to change it. Slots per (transform,
+  variation) per thread (`state_count`, `get_state` / `set_state`, the
+  starting values in `wgsl_state_init`), kept with the orbit. Refused
+  where `vary` inlines one (a formula's state is its own `start` map).
+- **C2d, colour writes.** The body may end with `#{ z: point, color:
+  index }`: the palette index the transform's `direct_color` blends in
+  (`WritesColor`). Where `vary` inlines one, the point alone.
+- Gates: each against a built-in twin where one exists (rand: a blur's
+  twin by density; accum: a `pVarTP` reader; colour: a direct-colour
+  variation), and the escape stream against the interpreter.
+
 **C3, maybe.** A built-in WGSL variation as a step in a formula,
 direct path only, the program marked so every CPU path refuses it.
 Decided after C1, by whether the Rhai versions cover what is wanted.
@@ -370,8 +398,30 @@ hillshade the part to check.
    - **Not done**: calling a custom variation inside a formula (C1e's
      second half); removing one from a flame (it goes when nothing uses
      it and another is used); random numbers and the other hooks (C2).
-6. [ ] **C1e, the second half**: a custom variation called inside an
-   escape formula (the user, 2026-10-18).
+6. [x] **C1e, the second half**: a custom variation called inside an
+   escape formula (the user, 2026-10-18). **Done 2026-10-18**:
+   `vary("name", z)` or `vary("name", z, #{ param: value })`, in a
+   formula, colouring or transformation, inlines the variation's body
+   as a helper's (`rhai.rs` `Lowerer::vary`: its positions placed at the
+   call, its point a local the body may reassign, `p.name` the map's
+   value or the default). **Decisions to review**: the call is `vary`
+   with the name as a string, so C3 could take built-ins with the same
+   form; **a config carries what an entry calls** --
+   `CustomSource::variations`, the sources as they were when the entry
+   was used, flat, in `name_of`'s hash -- rather than relying on the
+   flame's list or the registry, so an escape config renders anywhere
+   and a changed variation recompiles its caller (`with_called_variations`
+   fills it from the registered variations, then the library and its
+   examples). A 39-literal codemod added the field
+   (`scripts/codemod_custom_source_variations.py`). Measured: the
+   varied Mandelbrot against the same step written out -- the
+   interpreter equal to 1e-12 on 576 pixels; on the GPU 0% of pixels
+   apart on the direct path, and at 2^24 on the bent set's edge (found
+   by bisection) the same count on all 3,072 pixels, 84 distinct, the
+   perturbed path running on equations derived through the variation.
+   Not done: a formula's Live re-apply does not follow an edit to a
+   variation it calls (Use the formula again); a hybrid's member that
+   calls a variation does not carry it.
 7. [ ] **C2 hooks** (the user, 2026-10-18): random numbers, the
    accumulator, per-thread state, colour writes.
 8. [ ] **Review UF's transformations** once C is done (the user,

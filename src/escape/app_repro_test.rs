@@ -1812,12 +1812,12 @@ mod tests {
         use crate::config::escape::{CustomDialect, CustomSource};
         use crate::escape::lang::EntryKind;
         if let Some((text, entry)) = formula {
-            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
             esc.formula = crate::escape::custom::name_of(EntryKind::Formula, &src);
             esc.custom_formula = Some(src);
         }
         if let Some((text, entry)) = coloring {
-            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
             esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
             esc.custom_coloring = Some(src);
         }
@@ -1827,7 +1827,7 @@ mod tests {
     /// `esc` with a hybrid as its formula.
     fn with_hybrid(mut esc: crate::config::escape::EscapeConfig, h: &crate::escape::lang::hybrid::Hybrid) -> crate::config::escape::EscapeConfig {
         use crate::config::escape::{CustomDialect, CustomSource};
-        let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() };
+        let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
         esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
         esc.custom_formula = Some(src);
         esc
@@ -1837,10 +1837,111 @@ mod tests {
     fn with_rhai(mut esc: crate::config::escape::EscapeConfig, source: &str) -> crate::config::escape::EscapeConfig {
         use crate::config::escape::{CustomDialect, CustomSource};
         let title = crate::escape::lang::rhai::title(source).unwrap_or_default();
-        let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source: source.into() };
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source: source.into(), variations: Vec::new() };
         esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
         esc.custom_formula = Some(src);
         esc
+    }
+
+    /// **A formula that calls a variation renders as the formula with the
+    /// variation written out** (the KIFS plan, C1e's gate): a Mandelbrot
+    /// bent each step by a variation of the user's, carried in the config
+    /// and inlined, against the same arithmetic written in the step -- the
+    /// same picture on the direct path, and at zoom 2^24, where the
+    /// perturbed path runs on equations derived through the variation,
+    /// the same counts pixel for pixel. The deep view's centre is a point
+    /// of the bent set's edge, found by bisection in the interpreter.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_formula_calling_a_variation_renders_as_written_out() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::escape::lang::EntryKind;
+        const BEND: &str = "const PARAMS = #{\n    k: #{ value: 0.3 },\n    shift: #{ value: complex(0.1, 0.0) },\n};\n\
+                            const INFO = #{ title: \"Bend\", name: \"rhai_bend_gpu\" };\n\
+                            fn variation(z, p) {\n    let r2 = z.norm_sqr();\n    z = z * complex(cos(p.k * r2), sin(p.k * r2));\n    z + p.shift\n}\n";
+        const VARIED: &str = "const PARAMS = #{ bailout: 4.0, twist: 0.5 };\nconst INFO = #{ title: \"Varied\" };\n\
+                              fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                              fn step(s, p) {\n    s.z = vary(\"rhai_bend_gpu\", s.z * s.z + s.c, #{ k: p.twist });\n    s\n}\n\
+                              fn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n";
+        const WRITTEN_OUT: &str = "const PARAMS = #{ bailout: 4.0, twist: 0.5 };\nconst INFO = #{ title: \"Written Out\" };\n\
+                                   fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                                   fn step(s, p) {\n    let w = s.z * s.z + s.c;\n    let r2 = w.norm_sqr();\n    \
+                                   w = w * complex(cos(p.twist * r2), sin(p.twist * r2));\n    s.z = w + complex(0.1, 0.0);\n    s\n}\n\
+                                   fn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n";
+        let bend = CustomSource { dialect: CustomDialect::Rhai, entry: "rhai_bend_gpu".into(), source: BEND.into(), variations: Vec::new() };
+        let varied_src = CustomSource { dialect: CustomDialect::Rhai, entry: "Varied".into(), source: VARIED.into(), variations: vec![bend] };
+        let set = |mut esc: crate::config::escape::EscapeConfig, src: CustomSource| {
+            esc.formula = crate::escape::custom::name_of(EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            esc
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 400;
+        esc.bailout = 4.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        let varied = set(esc.clone(), varied_src.clone());
+        let written = with_rhai(esc.clone(), WRITTEN_OUT);
+
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let a = output_on(&device, &queue, &renderer, &varied, w, h, false);
+        assert!(crate::escape::get_formula(&varied.formula).has_feature(crate::escape::FormulaFeature::Program), "the varied formula did not compile");
+        let b = output_on(&device, &queue, &renderer, &written, w, h, false);
+        let covered = a.chunks(4).filter(|p| p[3] > 0.5).count();
+        assert!(covered > 100, "the view shows too little ({covered})");
+        let d = differing(&a, &b);
+        println!("direct: the varied formula differs from the written-out one on {:.3}% of pixels", d * 100.0);
+        assert!(d <= 0.001, "{:.3}%", d * 100.0);
+
+        // A point of the bent set's edge, on the line Im c = 0.3.
+        let prog = crate::escape::lang::rhai::program(WRITTEN_OUT).expect("compiles");
+        let pv = ParamValues::defaults(&prog);
+        let inside = |re: f64| !run(&prog, &pv, None, &Env::at(C64::new(re, 0.3), 4000)).escaped;
+        let (mut lo, mut hi) = (f64::NAN, f64::NAN);
+        for i in 0..400 {
+            let (x0, x1) = (-2.0 + 3.0 * i as f64 / 400.0, -2.0 + 3.0 * (i + 1) as f64 / 400.0);
+            if inside(x0) != inside(x1) {
+                (lo, hi) = (x0, x1);
+                break;
+            }
+        }
+        assert!(lo.is_finite(), "no edge on the line");
+        let lo_inside = inside(lo);
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if inside(mid) == lo_inside {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let mut deep = esc.clone();
+        deep.center_re = format!("{lo:.17}");
+        deep.center_im = "0.3".into();
+        deep.zoom_log2 = 24.0;
+        deep.max_iter = 4000;
+        let (varied, written) = (set(deep.clone(), varied_src), with_rhai(deep, WRITTEN_OUT));
+        crate::escape::custom::ensure(&varied);
+        crate::escape::custom::ensure(&written);
+        let (tv, tw) = (crate::escape::EscapeRenderer::perturb_tier(&varied), crate::escape::EscapeRenderer::perturb_tier(&written));
+        println!("tiers: {tv:?} against {tw:?}");
+        assert!(tv.is_some(), "the varied formula has no perturbed tier");
+        let (a, b) = (records_on(&varied, 64, 48, false, true, false), records_on(&written, 64, 48, false, true, false));
+        let same = a.iter().zip(&b).filter(|(x, y)| x.n == y.n).count();
+        let distinct: std::collections::BTreeSet<u32> = a.iter().map(|r| r.n).collect();
+        println!("zoom 2^24 at {lo:.17} + 0.3i: the same count on {same} of {} pixels; {} distinct counts", a.len(), distinct.len());
+        assert!(distinct.len() > 5, "the deep view is flat: {distinct:?}");
+        assert_eq!(same, a.len(), "the same program");
     }
 
     /// Rhai formulas (phase 4) through the whole renderer: the Mandelbrot
@@ -2815,7 +2916,7 @@ mod tests {
         );
         let with_rhai_coloring = |mut esc: crate::config::escape::EscapeConfig, source: String| {
             let title = crate::escape::lang::rhai::title(&source).unwrap_or_default();
-            let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source };
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source, variations: Vec::new() };
             esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
             esc.custom_coloring = Some(src);
             esc
@@ -3126,7 +3227,7 @@ mod tests {
         let mut rhai = custom.clone();
         for (kind, text, entry) in [(EntryKind::Formula, MS, "MS"), (EntryKind::Coloring, ECS, "ECS")] {
             let converted = crate::escape::custom::convert_to_rhai(text, entry, kind, CustomDialect::UltraFractal, "test").expect("converts");
-            let src = CustomSource { dialect: CustomDialect::Rhai, entry: entry.into(), source: converted };
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: entry.into(), source: converted, variations: Vec::new() };
             match kind {
                 EntryKind::Formula => {
                     rhai.formula = crate::escape::custom::name_of(kind, &src);
@@ -3207,6 +3308,7 @@ final:
             dialect: CustomDialect::Fractint,
             entry: "MJ".into(),
             source: "MJ {\n if (ismand)\n  c = pixel, z = 0\n else\n  c = p1, z = pixel\n endif\n :\n z = sqr(z) + c, |z| <= 4\n}".into(),
+            variations: Vec::new(),
         };
         for julia in [false, true] {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -3302,11 +3404,13 @@ final:
             dialect: CustomDialect::UltraFractal,
             entry: "M".into(),
             source: "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}".into(),
+            variations: Vec::new(),
         };
         let fractint = CustomSource {
             dialect: CustomDialect::Fractint,
             entry: "MJ".into(),
             source: "MJ {\n if (ismand)\n  c = pixel, z = 0\n else\n  c = p1, z = pixel\n endif\n :\n z = sqr(z) + c, |z| <= 4\n}".into(),
+            variations: Vec::new(),
         };
         for (src, julia) in [(&uf, false), (&fractint, false), (&fractint, true)] {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -3341,6 +3445,7 @@ final:
             dialect: CustomDialect::UltraFractal,
             entry: "B".into(),
             source: "B {\ninit:\n z = 0\nloop:\n z = sqr(@fn1(z)) + #pixel\nbailout:\n |z| < @bailout\ndefault:\n func fn1\n  default = abs()\n endfunc\n}".into(),
+            variations: Vec::new(),
         };
         let (rw, rh) = (64u32, 48u32);
         for src in [crate::escape::twins::custom_source("burning_ship").unwrap(), user] {
@@ -3410,7 +3515,7 @@ final:
                          float param radius\n  default = 2\n endparam\n}";
         const EC: &str = "EC(OUTSIDE) {\nglobal:\n float s = @half * 2\nfinal:\n #index = #numiter * s\ndefault:\n\
                           float param half\n  default = 0.025\n endparam\n}";
-        let custom = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into() };
+        let custom = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
         for (seed, half) in [((-0.4f32, 0.078f32), 0.025f32), ((-0.0615, 0.3725), 0.0125)] {
             let mut esc = crate::config::escape::EscapeConfig::default();
             esc.coloring = "escape_count".into();

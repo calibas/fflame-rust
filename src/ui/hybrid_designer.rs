@@ -56,7 +56,7 @@ impl HybridDesignerPanel {
     /// edit renames operators, and a stale value must not follow a
     /// name to another operator).
     fn apply(&mut self, cm: &mut ConfigManager, h: Hybrid) {
-        let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json() };
+        let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
         let name = custom::name_of(EntryKind::Formula, &src);
         if let Err(d) = custom::compile_formula(&src, &name) {
             let first = d.first().map(|x| x.message.clone()).unwrap_or_default();

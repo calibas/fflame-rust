@@ -36,6 +36,10 @@ plans that build it say what is next.
 | Animation tracks | no (keyframes and signals: `TrackSource`) | -- | -- | -- |
 | Generator scripts | yes (the scripting API, `src/script/`) | -- | the script library | yes (`ScriptResponse`) |
 
+Carrying: an entry that calls a variation (`vary`) carries its source
+in `CustomSource::variations`, so a config holds everything its
+entries need, whatever the registry holds where it is opened.
+
 Parameters: a custom formula's and colouring's `PARAMS` are
 `ConfigPath::EscapeFormulaParam` / `EscapeColoringParam` -- panel
 controls, animation targets, undo steps, script parameters. A custom
