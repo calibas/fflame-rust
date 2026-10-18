@@ -106,8 +106,8 @@ the Menger's level 0.027 then 0.005, trap 0.086 then 0.015, address
 then 0.020, address 0.043 then 0.012. Past depth 5 the colours stop
 settling at 448 pixels: deeper iterations are the pixel's again, which
 is why the depth is a parameter (raise it when zoomed in). The flame
-solids (`ifs_flame_3d`) still colour from the tail: A5, next after the
-Mandelbulb.
+solids (`ifs_flame_3d`) colour from the start of their inverse walk
+since A5.
 
 **A2. Mandelbox (Solid)** (Tom Lowe, 2010): box fold, sphere fold
 (minimum and fixed radius), scale, plus the point (the Mandelbox) or a
@@ -168,6 +168,45 @@ plan's "Later: transformations as flame variations" in
 - *Gates*: Rhai twins of a few built-ins (`linear`, `spherical`,
   `swirl`, `polar`, `horseshoe`) render as the built-ins in a flame, as
   a lens, and inside a formula against the same formula written out.
+
+C1's steps (planned 2026-10-18, started while the user was away; the
+decisions are marked for review):
+- **C1a, the language.** A Rhai source with `fn variation(z, p)` is a
+  transformation: `z` the point (complex), `p` the parameters, the last
+  expression the new point; `PARAMS` and `INFO` as a formula's, plus
+  `INFO.name`, the variation's registry name. In the IR it is UF's own
+  `transform:` section (`Program::transform`, a new entry kind): the
+  point is `#pixel`, read as the input and assigned as the output --
+  *decision*: UF's convention, so a `.uxf` transformation reads into the
+  same thing when UF support resumes. The checker allows the parameters,
+  `#pixel`, `#pi`, `#e` and local variables; no `prepare` (a variation's
+  derived parameters are its `wgsl_init`: later), no random numbers
+  (C2). The interpreter runs it (`interp::transform`); the WGSL emitter
+  writes `fn variation_<name>(p: vec2<f32>, xform_id: u32, variation_id:
+  u32) -> vec2<f32>`, parameters through `get_param`, its helpers
+  prefixed with the name so two custom variations never define one
+  twice; the 3D body runs the 2D one on `p.xy` and passes `p.z` through,
+  as JWildfire's 2D variations do (our builder zeroes `z` under
+  `preserve_z = false`, as for them).
+- **C1b, registration** (`variations::custom`): a source compiles to the
+  same `VariationDownload` a plug-in is, registered with a new
+  `Provenance::Custom` (*decision*: neither `Local`, which is a plug-in
+  file, nor a download). The name must be a lowercase identifier and is
+  refused if a built-in, download or plug-in has it; registering a
+  custom name again replaces it, and the registry's version rebuilds the
+  shader.
+- **C1c, the config carries it.** The flame's `custom_variations`
+  (sources, skip-if-empty), registered on load and before every render
+  (`render_with`, as `escape::custom::ensure`), so CLI, thumbnails,
+  video and the gallery inherit it. A `.flame` export cannot carry it
+  and drops the variation with a warning.
+- **C1d, the editor.** The Formula Editor in the flame modes too; a
+  transformation's source gets "Use as variation", which registers it
+  and adds it to the flame's list; it is then in every transform's
+  variation picker (category Custom).
+- **C1e, escape-time.** The camera lens takes any registered variation,
+  so a custom one is a lens with nothing more; calling one inside a
+  formula (inlined as a user function) is the step after.
 
 **C2. Hooks**, each its own step: random numbers (`NeedsRng`: a
 deterministic per-pixel stream in escape-time, the flame's own RNG in a
@@ -261,14 +300,39 @@ hillshade the part to check.
    the polar angle. The GPU's coverage equals the twin's on every
    pixel. Presets: Mandelbulb (power 8, trap), Mandelbulb Power 4
    (address), Mandelbulb Julia (level).
-4. [ ] **A5 The flame solids' colourings** (the user, 2026-10-18: next).
-   `ifs_flame_3d` colours from where the inverse walk escapes, which
-   the march's pixel decides, so its level and trap follow the camera
-   as the KIFS's did; its address (the branches) is the start of the
-   walk already. The rules above, for the flame's inverse walk: a
-   colour depth, the trap the closest approach within it, a level that
-   is the surface's; the reference walk `scene::ifs_estimate` as the
-   twin, and the settling gate.
+4. [x] **A5 The flame solids' colourings** (the user, 2026-10-18).
+   `ifs_flame_3d` coloured from where the inverse walk escapes, which
+   the march's pixel decides, so its level and trap followed the camera
+   as the KIFS's did; its address (the branches) was the start of the
+   walk already. **Done 2026-10-18**: a colourings' walk at the hit
+   point (`ifs_colour_walk3`, only where the march colours, never where
+   it steps): `colour_depth` levels (default 3) from the sample's own
+   point -- link 0, the final transform undone -- taking at each level
+   the child the walk's ranking puts first, which is the walk's own
+   path for a beam of one (the chain's prefix is the path its samples
+   agree on); the trap the closest approach to the ball's centre, the
+   level the band of that approach (the KIFS's rule: an affine walk's
+   contraction says nothing of the surface). **Not counted from the
+   main walk's start**: a sample near the target starts several links
+   down even at zoom 0 (a pixel there is a small offset), and a window
+   counted from there would part neighbouring pixels along the links'
+   edges. Measured (`which_solid_colours_follow_the_camera`, the
+   reference walk as the march's distance): the tail level moves 0.35
+   then 0.34 palette units on the Sierpinski tetrahedron, 0.22 then
+   0.23 on the sponge, never settling; at depth 3 the level moves 0.033
+   then 0.009 and 0.027 then 0.005, the trap 0.070 then 0.025 and 0.059
+   then 0.012, the address 0.025 then 0.007 and 0.001. Both join the
+   settling gate. **Address Start** (`address_start`, default the first
+   map, so the shipped presets look as they did): from the second, the
+   address's first digit is shifted out and every copy of a first piece
+   reads alike (the sponge's twenty cubes, the tetrahedron's four).
+   **Limits**: for a beam wider than one the colour walk follows the
+   greedy path, which need not be the winning branch (the address still
+   is); and at a deep zoom, where a pixel is below f32's resolution of
+   the set's own size, the colour walk sees the target's point from
+   every pixel -- the level and the trap are flat there, and the
+   address, which the link chain carries, is the colouring for deep
+   views.
 5. [ ] C1 Rhai transformations, 2D.
 6. [ ] C2 hooks, then B (the vector type) for 3D variations and
    editable solids; A4 and C3 as wanted.

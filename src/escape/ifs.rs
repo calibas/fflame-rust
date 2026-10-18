@@ -916,6 +916,27 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
                       value; set it here to hold it through an animation.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first inverse maps the orbit trap and the escape level \
+                      read. The surface is drawn a pixel from the set, and past a few levels \
+                      that pixel decides where the walk escapes, so deeper colours change with \
+                      the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "address_start",
+            display_name: "Address Start",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Which inverse map the branch address starts from. From the second, every                       copy of the set's first pieces is coloured alike (the sponge's twenty                       cubes, the tetrahedron's four); from the third, their pieces too.",
+            choices: &["First map", "Second map", "Third map"],
+        },
     ],
     wgsl: r#"
 // Inverse of map i, in three dimensions.
@@ -1463,9 +1484,88 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
     return ifs_walk3(delta, eps).distance;
 }
 
+// The colourings' walk (the KIFS plan, A5, "Colouring solids"): the
+// orbit trap and the escape level from the start of the inverse walk,
+// not from where it escapes. The march stops a pixel from the set, and
+// that pixel decides the walk's tail -- the level it escapes at, the
+// point it escapes to -- so colours read there followed the camera.
+//
+// It walks from the sample's own point, never from a link: a sample
+// near the target starts the main walk several levels down, and a
+// window counted from there would part neighbouring pixels along the
+// links' edges. Link 0 is the sample's own point (with the final
+// transform undone), so it starts there. At each level it takes the
+// child the walk's ranking puts first -- the nearest the centre, or by
+// the weighted key, whose parent factor is the same for every sibling
+// -- which is the main walk's own path for a beam of one (the chain's
+// prefix is, by its construction, the path every sample it carries
+// agrees on). The trap is the closest approach to the ball's centre
+// within `colour_depth` levels; the level the band of that approach.
+fn ifs_colour_walk3(delta: vec3<f32>, res: ptr<function, IfsResult>) {
+    let c = ifs_ball_centre();
+    let radius = ifs_radius();
+    let n = ifs_count();
+    if (n == 0u) {
+        return;
+    }
+    let depth = u32(clamp(round(fparam(8u)), 1.0, 12.0));
+    var q = delta + ifs_target_offset() + c;
+    if (ifs_link_levels() > 0u) {
+        q = ifs_link_point(ifs_links[0u], delta);
+    }
+    var w = ifs_slice_w();
+    var last = IFS_NO_LAST;
+    var trap_r = 1.0e30;
+    var trap_k = 0u;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    for (var k = 1u; k <= depth; k = k + 1u) {
+        var pick = n;
+        var pick_key = 0.0;
+        var pick_s = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        for (var i = 0u; i < n; i = i + 1u) {
+            if (!ifs_admits(i, last)) {
+                continue;
+            }
+            let s = ifs_inv_step3(i, q, w);
+            var key = ifs_radius4(s.xyz, s.w, c);
+            if (ifs_weighted_key()) {
+                key = key * ifs_inv_sigma3(i, q, w);
+            }
+            if (!(key <= 1e37)) {
+                key = 1e38;
+            }
+            if (pick == n || key < pick_key) {
+                pick = i;
+                pick_key = key;
+                pick_s = s;
+            }
+        }
+        if (pick == n) {
+            break;
+        }
+        q = pick_s.xyz;
+        w = pick_s.w;
+        last = pick;
+        let r = ifs_radius4(q, w, c);
+        if (!(r <= 1e37)) {
+            break;
+        }
+        if (r < trap_r) {
+            trap_r = r;
+            trap_k = k;
+            trap_p = q.xy;
+        }
+        if (r > radius) {
+            break;
+        }
+    }
+    (*res).point = trap_p;
+    (*res).level = f32(trap_k) + clamp(trap_r / radius, 0.0, 0.999);
+}
+
 // What the marcher colours with, at the offset it stopped at. Full
-// depth: the colourings want the level and the address, which are only
-// known once a candidate escapes.
+// depth for the address, which is only known once a candidate escapes;
+// the trap and the level from the colourings' walk above.
 //
 // The march stops on the surface's OUTSIDE, within its tolerance. Where
 // the attractor touches its bounding sphere -- a Menger sponge's corners
@@ -1492,7 +1592,18 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
             d = delta - rel * (1.0 - limit / len);
         }
     }
-    return ifs_walk3(d, 0.0);
+    var res = ifs_walk3(d, 0.0);
+    ifs_colour_walk3(d, &res);
+    // The address from a later map: its first digits shifted out, so
+    // every copy of a piece reads alike. The last branch at every level
+    // rounds the address up to 1.0 (the address colouring's note), which
+    // shifted is 0, the palette's other end: it stays at the end.
+    let start = round(clamp(fparam(9u), 0.0, 2.0));
+    if (start > 0.5) {
+        let shifted = res.address * pow(f32(max(ifs_count(), 1u)), start);
+        res.address = select(fract(shifted), 0.99999994, res.address >= 0.99999994);
+    }
+    return res;
 }
 "#,
 };
@@ -13797,6 +13908,82 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
     }
 
+    /// `IFS_FLAME_3D`'s colourings' walk on the CPU (`ifs_colour_walk3`),
+    /// with its address and its tail from the reference walk
+    /// (`ifs_estimate`): from the point with the final transform undone,
+    /// the child the walk's ranking puts first at each level, the
+    /// closest approach to the ball's centre within `depth` levels.
+    pub(super) fn flame_solid_colour(ifs: &crate::scene::ifs_analysis::Ifs3, p: [f64; 3], levels: u32, depth: u32, start: usize) -> SolidColour {
+        use crate::scene::ifs_analysis::Map3;
+        use crate::scene::ifs_estimate::{admits, estimate_aux, resolved_key, IfsSpace, RankKey};
+        let est = estimate_aux(ifs, p, ifs.aux_centre, levels, 1);
+        let mut out = SolidColour {
+            address: crate::scene::ifs_estimate::address_fraction(est.address.get(start..).unwrap_or(&[]), ifs.maps.len() as u32),
+            tail_level: est.level,
+            tail_point: [est.point[0], est.point[1]],
+            ..SolidColour::default()
+        };
+        let weighted = resolved_key(ifs, RankKey::Auto) == RankKey::Weighted;
+        let centre = ifs.ball.centre;
+        let radius4 = |q: [f64; 3], aux: f64| <Map3 as IfsSpace>::distance(q, centre).hypot(aux - ifs.aux_centre);
+        let mut q = match &ifs.final_map {
+            Some(f) => f.inverse.apply(p),
+            None => p,
+        };
+        let (mut aux, mut last) = (ifs.aux_centre, None);
+        let (mut trap_r, mut trap_k) = (f64::INFINITY, 0u32);
+        for k in 1..=depth {
+            let mut pick: Option<(f64, usize, [f64; 3], f64)> = None;
+            for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
+                let (cq, caux, sigma) = m.inverse.step(q, aux, m.sigma_min);
+                let mut key = radius4(cq, caux);
+                if weighted {
+                    key *= sigma;
+                }
+                if !(key <= 1e37) {
+                    key = 1e38;
+                }
+                if pick.as_ref().is_none_or(|(best, ..)| key < *best) {
+                    pick = Some((key, i, cq, caux));
+                }
+            }
+            let Some((_, i, cq, caux)) = pick else { break };
+            (q, aux, last) = (cq, caux, Some(i as u32));
+            let r = radius4(q, aux);
+            if !(r <= 1e37) {
+                break;
+            }
+            if r < trap_r {
+                trap_r = r;
+                trap_k = k;
+                out.point = [q[0], q[1]];
+            }
+            if r > ifs.ball.radius {
+                break;
+            }
+        }
+        out.level = f64::from(trap_k) + (trap_r / ifs.ball.radius).clamp(0.0, 0.999);
+        out
+    }
+
+    /// The shipped flame solids' sets (the Sierpinski tetrahedron, the
+    /// Menger sponge), analysed as the renderer does.
+    fn flame_solid_cases() -> Vec<(String, crate::scene::ifs_analysis::Ifs3)> {
+        let registry = global_registry();
+        crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .filter(|c| c.escape.formula == IFS_FLAME_3D.name)
+            .map(|c| {
+                let ifs = crate::scene::ifs_analysis::analyse_3d(&c.flame, &registry).expect("a shipped solid qualifies");
+                (c.flame.name.to_ascii_lowercase().replace(' ', "-"), ifs)
+            })
+            .collect()
+    }
+
     /// The colour quantities the measurement compares, at their
     /// colourings' default palette scales.
     const SOLID_FIELDS: [(&str, fn(&SolidColour) -> f64); 5] = [
@@ -13843,10 +14030,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             }
             None
         };
-        let measure = |name: String, de: &dyn Fn([f64; 3]) -> f64, colour: &dyn Fn([f64; 3]) -> SolidColour, radius: f64| {
+        let measure = |name: String, de: &dyn Fn([f64; 3]) -> f64, colour: &dyn Fn([f64; 3]) -> SolidColour, centre: [f64; 3], radius: f64| {
             let mut rng = XorShift(0x2545_F491_4F6C_DD1D);
             let (mut coarse, mut fine) = ([0.0f64; 5], [0.0f64; 5]);
             let mut hits = 0;
+            // The march works about the origin; the set is moved there.
+            let de = |p: [f64; 3]| de([p[0] + centre[0], p[1] + centre[1], p[2] + centre[2]]);
+            let colour = |p: [f64; 3]| colour([p[0] + centre[0], p[1] + centre[1], p[2] + centre[2]]);
+            let de: &dyn Fn([f64; 3]) -> f64 = &de;
             for _ in 0..400 {
                 let e = rng.in_ball([0.0; 3], 1.0, true);
                 let eye = e.map(|x| x * 3.2 * radius);
@@ -13872,7 +14063,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         for (name, mut solid) in solid_cases().into_iter().chain([("quaternion", Solid::Quat(QuatJulia::bourke()))]) {
             let default = solid.def().parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default as u32).expect("a colour depth");
             solid.set_depth(depth.unwrap_or(default));
-            rows.push(measure(name.to_string(), &|p| solid.distance(p), &|p| solid.colour(p), solid.radius()));
+            rows.push(measure(name.to_string(), &|p| solid.distance(p), &|p| solid.colour(p), [0.0; 3], solid.radius()));
+        }
+        // The flame solids (the KIFS plan, A5), at their defaults: the
+        // walk's depth and a beam of one, the march's distance the
+        // reference walk's.
+        let param = |name: &str| IFS_FLAME_3D.parameters.iter().find(|p| p.name == name).map(|p| p.default as u32).expect(name);
+        let (levels, flame_depth) = (param("levels"), depth.unwrap_or(param("colour_depth")));
+        for (name, ifs) in flame_solid_cases() {
+            let de = |p: [f64; 3]| crate::scene::ifs_estimate::estimate_aux(&ifs, p, ifs.aux_centre, levels, 1).distance;
+            let colour = |p: [f64; 3]| flame_solid_colour(&ifs, p, levels, flame_depth, param("address_start") as usize);
+            rows.push(measure(format!("flame {name}"), &de, &colour, ifs.ball.centre, ifs.ball.radius));
         }
         rows
     }
@@ -15615,7 +15816,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 cfg.flame.name
             );
         }
-        assert_eq!(seen, 11, "expected eleven IFS presets (four classical, two solid, three julia, one blob, one quaternion), found {seen}");
+        assert_eq!(
+            seen, 24,
+            "expected 24 mode-D presets (four classical, two flame solids, three julia, one blob, one quaternion,              six KIFS, four Mandelbox, three Mandelbulb), found {seen}"
+        );
     }
 
     /// A 3D flame: the XY affine is identity plus a translation and
