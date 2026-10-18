@@ -165,12 +165,26 @@ pub enum Predef {
     /// starting point, and its gradient there.
     CreaseHeight,
     CreaseSlope,
+    /// A fresh uniform draw in [0, 1) each time it is read: Rhai's
+    /// `rand()` (the KIFS plan, C2a). In a flame variation the flame's
+    /// own stream (`NeedsRng`); elsewhere a stream per pixel, seeded by
+    /// its place. No name in UF, whose `#random` is one value a pixel.
+    Draw,
+    /// A flame variation's context (C2b): the weighted sum of the
+    /// transform's earlier variations (JWildfire's `pVarTP`;
+    /// `NeedsAccum`), and the variation's own weight.
+    Accum,
+    Weight,
+    /// What a flame variation writes as its colour (C2d): the palette
+    /// index the transform's `direct_color` blends in (`WritesColor`).
+    VarColor,
 }
 
 impl Predef {
     pub fn ty(self) -> Ty {
         match self {
-            Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel => Ty::Complex,
+            Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
+            Predef::Draw | Predef::Weight | Predef::VarColor => Ty::Float,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index | Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => Ty::Float,
             Predef::CreaseSlope => Ty::Complex,
@@ -320,6 +334,8 @@ pub enum Place {
     /// `#pixel`, written in a transformation's `transform:` section: the
     /// point it gives.
     Pixel,
+    /// A flame variation's colour ([`Predef::VarColor`]).
+    Color,
 }
 
 #[derive(Clone, Debug)]

@@ -156,6 +156,24 @@ struct Machine<'p> {
     vars: Vec<Value>,
     /// Each array variable's elements; empty for a scalar.
     arrays: Vec<Vec<Value>>,
+    /// Rhai's `rand()` ([`Predef::Draw`], the KIFS plan, C2a): the
+    /// flame's stream when a variation runs as a flame runs it
+    /// (`flame_rng`, the shader's `rng_next`), else the pixel's, seeded
+    /// from its place on the first draw, as the GPU's `uf_draw`.
+    draw: std::cell::Cell<u32>,
+    flame_rng: std::cell::Cell<Option<u32>>,
+}
+
+/// The PCG output of a state (`shaders/core/rng.wgsl` `rng_next`), as a
+/// draw in [0, 1): the top 24 bits.
+fn pcg_draw(old: u32) -> f64 {
+    let w = ((old >> ((old >> 28) + 4)) ^ old).wrapping_mul(277_803_737);
+    f64::from(((w >> 22) ^ w) >> 8) / 16_777_216.0
+}
+
+/// The PCG step.
+fn pcg_step(s: u32) -> u32 {
+    s.wrapping_mul(747_796_405).wrapping_add(2_891_336_453)
 }
 
 /// What the shared symbols hold at the moment.
@@ -176,11 +194,18 @@ struct Shared<'e> {
     crease_slope: C64,
     /// `#pixel`: the environment's, unless a transformation wrote it.
     pixel: C64,
+    /// A flame variation's context and the colour it writes (C2b, C2d).
+    accum: C64,
+    weight: f64,
+    vcolor: Option<f64>,
 }
 
 impl<'e> Shared<'e> {
     fn new(env: &'e Env) -> Self {
         Shared {
+            accum: C64::ZERO,
+            weight: 1.0,
+            vcolor: None,
             pixel: env.pixel,
             env,
             z: C64::ZERO,
@@ -200,13 +225,41 @@ impl<'e> Shared<'e> {
 /// A transformation's point for the point `z` (`Program::transform`; the
 /// KIFS plan, C1): its `transform:` section run with `#pixel` set to `z`,
 /// and `#pixel` as it leaves it -- what its variation gives in a flame,
-/// before the weight.
+/// before the weight. One call of a fresh [`VariationRun`].
 pub fn transform(p: &Program, params: &ParamValues, z: C64) -> C64 {
-    let env = Env::at(z, 1);
-    let mut m = Machine::new(p, params);
-    let mut sh = Shared::new(&env);
-    m.exec(&p.transform, &mut sh);
-    sh.pixel
+    VariationRun::new(p, params, 1).call(z, C64::ZERO, 1.0).0
+}
+
+/// A transformation run as a flame runs it (the KIFS plan, C1, C2): call
+/// after call, its state (`init`, run once) kept between calls and its
+/// draws from one stream, as a thread's are.
+pub struct VariationRun<'p> {
+    m: Machine<'p>,
+    env: Env,
+}
+
+impl<'p> VariationRun<'p> {
+    /// `seed` starts the draws' stream (the flame's PCG state).
+    pub fn new(p: &'p Program, params: &'p ParamValues, seed: u32) -> Self {
+        let env = Env::at(C64::ZERO, 1);
+        let mut m = Machine::new(p, params);
+        m.flame_rng.set(Some(seed));
+        let mut sh = Shared::new(&env);
+        m.exec(&p.init, &mut sh);
+        VariationRun { m, env }
+    }
+
+    /// The point for `z`, and the colour it wrote if it writes one, given
+    /// the sum of the transform's earlier variations and its own weight.
+    pub fn call(&mut self, z: C64, accum: C64, weight: f64) -> (C64, Option<f64>) {
+        let mut sh = Shared::new(&self.env);
+        sh.pixel = z;
+        sh.accum = accum;
+        sh.weight = weight;
+        let prog = self.m.prog;
+        self.m.exec(&prog.transform, &mut sh);
+        (sh.pixel, sh.vcolor)
+    }
 }
 
 /// A formula's crease relief at the starting point `p0`
@@ -270,7 +323,7 @@ impl<'p> PerturbStepper<'p> {
 
     pub(crate) fn step(&self, z: C64, dz: C64, dpixel: C64) -> C64 {
         let env = Env { pixel: self.reference.add(dpixel), ..self.env };
-        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone() };
+        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone(), draw: Default::default(), flame_rng: Default::default() };
         let mut sh = Shared::new(&env);
         sh.z = z;
         sh.dz = dz;
@@ -318,7 +371,7 @@ impl DerivStepper {
 
     /// One pass from the iterate `z`.
     pub(crate) fn step(&mut self, z: C64) {
-        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays) };
+        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays), draw: Default::default(), flame_rng: Default::default() };
         let mut sh = Shared::new(&self.env);
         sh.z = z;
         m.exec(&self.prog.loop_body, &mut sh);
@@ -611,7 +664,29 @@ pub fn run(
 impl<'p> Machine<'p> {
     fn new(prog: &'p Program, params: &'p ParamValues) -> Self {
         let arrays = prog.vars.iter().map(|v| if v.is_array() { vec![Value::zero(v.ty); v.len()] } else { Vec::new() }).collect();
-        Machine { prog, params, vars: prog.vars.iter().map(|v| Value::zero(v.ty)).collect(), arrays }
+        Machine {
+            prog,
+            params,
+            vars: prog.vars.iter().map(|v| Value::zero(v.ty)).collect(),
+            arrays,
+            draw: std::cell::Cell::new(0),
+            flame_rng: std::cell::Cell::new(None),
+        }
+    }
+
+    /// The next draw in [0, 1) ([`Predef::Draw`]).
+    fn next_draw(&self, sh: &Shared) -> f64 {
+        if let Some(s) = self.flame_rng.get() {
+            self.flame_rng.set(Some(pcg_step(s)));
+            return pcg_draw(s);
+        }
+        let mut s = self.draw.get();
+        if s == 0 {
+            let (x, y) = (sh.env.x as u32, sh.env.y as u32);
+            s = x.wrapping_mul(1_664_525).wrapping_add(y.wrapping_mul(22_695_477)).wrapping_add(1_013_904_223) | 1;
+        }
+        self.draw.set(pcg_step(s));
+        pcg_draw(s)
     }
 
     /// An element's place: the flattened index clamped to the array, as
@@ -635,6 +710,7 @@ impl<'p> Machine<'p> {
                         Place::CreaseHeight => sh.crease_height = v.as_f64(),
                         Place::CreaseSlope => sh.crease_slope = v.as_c64(),
                         Place::Pixel => sh.pixel = v.as_c64(),
+                        Place::Color => sh.vcolor = Some(v.as_f64()),
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -692,6 +768,7 @@ impl<'p> Machine<'p> {
                     Ty::Complex => Value::Complex(C64::new(re, im)),
                 }
             }
+            IExprKind::Predef(Predef::Draw) => Value::Float(self.next_draw(sh)),
             IExprKind::Predef(p) => predef(*p, sh),
             IExprKind::Convert(a) => {
                 let v = self.eval(a, sh);
@@ -757,6 +834,11 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Pi => Value::Float(std::f64::consts::PI),
         Predef::E => Value::Float(std::f64::consts::E),
         Predef::Random => Value::Complex(env.random),
+        // `Machine::eval` draws; never reached.
+        Predef::Draw => Value::Float(0.0),
+        Predef::Accum => Value::Complex(sh.accum),
+        Predef::Weight => Value::Float(sh.weight),
+        Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(0.0)),
         Predef::Center => Value::Complex(env.center),
         Predef::Magn => Value::Float(env.magn),
         Predef::X => Value::Int(env.x),

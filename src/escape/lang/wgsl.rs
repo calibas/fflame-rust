@@ -80,38 +80,209 @@ pub struct ColoringWgsl {
     pub ext_vec4s: usize,
 }
 
-/// A transformation's WGSL as a flame variation (the KIFS plan, C1):
-/// its 2D body `fn variation_<name>(p: vec2<f32>, xform_id: u32,
-/// variation_id: u32) -> vec2<f32>`, reading its parameters through
-/// `get_param`, and the 3D body running it on `p.xy` and passing `p.z`
-/// through, as JWildfire's 2D variations do. Its helpers are prefixed
-/// with the name, so two of them never define one twice.
+/// A transformation's WGSL as a flame variation (the KIFS plan, C1, C2):
+/// its 2D body `fn variation_<name>(p: vec2<f32>, ...) -> vec2<f32>` and
+/// the 3D body running it on `p.xy` and passing `p.z` through, as
+/// JWildfire's 2D variations do; what it takes besides the point is
+/// [`VariationShape`]'s. Its helpers are prefixed with the name, so two of
+/// them never define one twice.
 pub struct VariationWgsl {
     pub wgsl_2d: String,
     pub wgsl_3d: String,
+    /// The `Feature`s it declares, by their wire names.
+    pub features: Vec<&'static str>,
+    /// Its per-thread state: the slots, and the statement that fills
+    /// them at a thread's start (`wgsl_state_init`).
+    pub state_count: usize,
+    pub state_init: Option<String>,
+}
+
+/// What a flame variation's function takes besides its point, from what
+/// the program reads and writes: the hooks a built-in declares as
+/// `Feature`s (the KIFS plan, C2), in the shader builder's order
+/// (`variation_call`): the accumulator, the ids, the stream, the colour.
+#[derive(Clone, Debug, Default)]
+pub struct VariationShape {
+    pub accum: bool,
+    /// `xform_id, variation_id`: for parameters, the state or the weight.
+    pub ids: bool,
+    pub rng: bool,
+    pub color: bool,
+    /// The state's variables (the fields `init` returns), each with its
+    /// first slot; a complex one takes two.
+    pub state: Vec<(VarId, u32)>,
+    pub state_slots: u32,
+}
+
+impl VariationShape {
+    /// The ids without parameters: the builder passes them for a
+    /// variation with parameters, or one declaring `NeedsTransform`.
+    pub fn needs_transform(&self, p: &Program) -> bool {
+        self.ids && p.params.is_empty()
+    }
+}
+
+/// [`VariationShape`] for a checked transformation, or why it cannot be a
+/// flame's variation.
+pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
+    fn assigned(stmts: &[IStmt], out: &mut BTreeSet<VarId>) {
+        for s in stmts {
+            match s {
+                IStmt::Assign(Place::Var(v), _) => {
+                    out.insert(*v);
+                }
+                IStmt::If { arms, otherwise } => {
+                    for (_, b) in arms {
+                        assigned(b, out);
+                    }
+                    assigned(otherwise, out);
+                }
+                IStmt::While { body, .. } | IStmt::Repeat { body, .. } => assigned(body, out),
+                _ => {}
+            }
+        }
+    }
+    fn writes_color(stmts: &[IStmt]) -> bool {
+        stmts.iter().any(|s| match s {
+            IStmt::Assign(Place::Color, _) => true,
+            IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes_color(b)) || writes_color(otherwise),
+            IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes_color(body),
+            _ => false,
+        })
+    }
+    // `init` runs at a thread's start: no stream, no earlier variations.
+    let init_only = Program { transform: Vec::new(), ..p.clone() };
+    if init_only.reads(Predef::Draw) {
+        return Err("`init` draws no random numbers: it runs once, at a thread's start".into());
+    }
+    if init_only.reads(Predef::Accum) {
+        return Err("`init` has no earlier variations: `ctx.accum` is `variation`'s".into());
+    }
+    // The state: the fields `init` returns (lowered `s_name`; its own
+    // locals are not kept).
+    let mut fields = BTreeSet::new();
+    assigned(&p.init, &mut fields);
+    let mut state = Vec::new();
+    let mut slots = 0u32;
+    for v in fields.into_iter().filter(|v| p.vars[*v].name.starts_with("s_")) {
+        let var = &p.vars[v];
+        if var.is_array() {
+            return Err(format!("the state's `{}` is an array: a later step", &var.name[2..]));
+        }
+        state.push((v, slots));
+        slots += if var.ty == Ty::Complex { 2 } else { 1 };
+    }
+    Ok(VariationShape {
+        accum: p.reads(Predef::Accum),
+        ids: !p.params.is_empty() || !state.is_empty() || p.reads(Predef::Weight),
+        rng: p.reads(Predef::Draw),
+        color: writes_color(&p.transform),
+        state,
+        state_slots: slots,
+    })
 }
 
 /// [`VariationWgsl`] for a checked transformation and its registry name.
-pub fn variation(p: &Program, name: &str) -> VariationWgsl {
+pub fn variation(p: &Program, name: &str) -> Result<VariationWgsl, String> {
+    let shape = variation_shape(p)?;
     let prefix: &'static str = Box::leak(format!("cv_{name}_").into_boxed_str());
     let mut g = Gen::new(p, Ctx::Variation, prefix);
-    let mut body = String::from("fn uf_variation_2d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {\n    var pixel = p;\n");
-    for (i, v) in p.vars.iter().enumerate() {
-        let _ = writeln!(body, "    {};", var_decl(i, v));
+    // What it takes besides the point, in the builder's order.
+    let (mut sig, mut args, mut args3) = (String::new(), String::new(), String::new());
+    if shape.accum {
+        sig.push_str(", accum: vec2<f32>");
+        args.push_str(", accum");
+        args3.push_str(", accum.xy");
     }
+    if shape.ids {
+        sig.push_str(", xform_id: u32, variation_id: u32");
+        args.push_str(", xform_id, variation_id");
+        args3.push_str(", xform_id, variation_id");
+    }
+    if shape.rng {
+        sig.push_str(", rng: ptr<function, RngState>");
+        args.push_str(", rng");
+        args3.push_str(", rng");
+    }
+    if shape.color {
+        sig.push_str(", vc: ptr<function, f32>");
+        args.push_str(", vc");
+        args3.push_str(", vc");
+    }
+    let decls = |out: &mut String| {
+        for (i, v) in p.vars.iter().enumerate() {
+            let _ = writeln!(out, "    {};", var_decl(i, v));
+        }
+    };
+    // The state: loaded at the start, stored at the end.
+    let load = |g: &Gen, out: &mut String| {
+        for &(v, k) in &shape.state {
+            let get = |k: u32| format!("get_state(xform_id, variation_id, {k}u)");
+            let value = match p.vars[v].ty {
+                Ty::Complex => format!("vec2<f32>({}, {})", get(k), get(k + 1)),
+                Ty::Int => format!("i32({})", get(k)),
+                Ty::Bool => format!("{} != 0.0", get(k)),
+                Ty::Float => get(k),
+            };
+            let _ = writeln!(out, "    {} = {value};", g.var(v));
+        }
+    };
+    let store = |g: &Gen, out: &mut String| {
+        for &(v, k) in &shape.state {
+            let name = g.var(v);
+            let mut set = |k: u32, x: String| {
+                let _ = writeln!(out, "    set_state(xform_id, variation_id, {k}u, {x});");
+            };
+            match p.vars[v].ty {
+                Ty::Complex => {
+                    set(k, format!("{name}.x"));
+                    set(k + 1, format!("{name}.y"));
+                }
+                Ty::Int => set(k, format!("f32({name})")),
+                Ty::Bool => set(k, format!("select(0.0, 1.0, {name})")),
+                Ty::Float => set(k, name),
+            }
+        }
+    };
+    let mut body = format!("fn uf_variation_2d(p: vec2<f32>{sig}) -> vec2<f32> {{\n    var pixel = p;\n");
+    decls(&mut body);
+    load(&g, &mut body);
     g.stmts(&p.transform, 1, &mut body);
+    store(&g, &mut body);
     body.push_str("    return pixel;\n}\n");
+    // `init`: the state a thread starts with.
+    if !shape.state.is_empty() {
+        body.push_str("\nfn uf_variation_init(xform_id: u32, variation_id: u32) {\n");
+        decls(&mut body);
+        g.stmts(&p.init, 1, &mut body);
+        store(&g, &mut body);
+        body.push_str("}\n");
+    }
     // The name goes in after the helpers' prefix: `uf_` inside it would
     // be renamed.
     let module = g.finish("", body);
     let inner = format!("{prefix}variation_2d");
-    // The flame shader passes the ids to a variation with parameters
-    // only (`shader_builder_v2::variation_call`).
-    let (ids, args) = if p.params.is_empty() { ("", "0u, 0u") } else { (", xform_id: u32, variation_id: u32", "xform_id, variation_id") };
-    VariationWgsl {
-        wgsl_2d: format!("{module}\nfn variation_{name}(p: vec2<f32>{ids}) -> vec2<f32> {{\n    return {inner}(p, {args});\n}}\n"),
-        wgsl_3d: format!("{module}\nfn variation_{name}(p: vec3<f32>{ids}) -> vec3<f32> {{\n    return vec3<f32>({inner}(p.xy, {args}), p.z);\n}}\n"),
+    let sig3 = sig.replace("accum: vec2<f32>", "accum: vec3<f32>");
+    let mut features = Vec::new();
+    if shape.rng {
+        features.push("needs_rng");
     }
+    if shape.accum {
+        features.push("needs_accum");
+    }
+    if shape.color {
+        features.push("writes_color");
+    }
+    if shape.needs_transform(p) {
+        features.push("needs_transform");
+    }
+    Ok(VariationWgsl {
+        wgsl_2d: format!("{module}\nfn variation_{name}(p: vec2<f32>{sig}) -> vec2<f32> {{\n    return {inner}(p{args});\n}}\n"),
+        wgsl_3d: format!("{module}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner}(p.xy{args3}), p.z);\n}}\n"),
+        features,
+        state_count: shape.state_slots as usize,
+        state_init: (!shape.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id);")),
+    })
 }
 
 /// The WGSL of a formula program.
@@ -1191,6 +1362,7 @@ impl<'p> Gen<'p> {
                     Place::CreaseHeight => "crease_h".to_string(),
                     Place::CreaseSlope => "crease_g".to_string(),
                     Place::Pixel => "pixel".to_string(),
+                    Place::Color => "(*vc)".to_string(),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
@@ -1399,6 +1571,14 @@ impl<'p> Gen<'p> {
             (Predef::Pi, _) => "3.14159265358979".into(),
             (Predef::E, _) => "2.71828182845905".into(),
             (Predef::Random, _) => format!("{}()", self.use_(Helper::Random)),
+            // Rhai's `rand()` (C2a): the flame's stream in a variation,
+            // the pixel's elsewhere.
+            (Predef::Draw, Ctx::Variation) => "rng_nextf(rng)".into(),
+            (Predef::Draw, _) => format!("{}()", self.use_(Helper::Draw)),
+            // A flame variation's context and colour (C2b, C2d).
+            (Predef::Accum, _) => "accum".into(),
+            (Predef::Weight, _) => "transforms[xform_id].variations[variation_id]".into(),
+            (Predef::VarColor, _) => "(*vc)".into(),
             (Predef::Center, _) => "esc_env_center".into(),
             (Predef::Magn, _) => "esc_env_magn".into(),
             (Predef::X, _) => "esc_env_px.x".into(),
@@ -2361,6 +2541,7 @@ enum Helper {
     FPowI,
     IMod,
     Random,
+    Draw,
     CMul,
     CDiv,
     CNorm,
@@ -2445,6 +2626,7 @@ impl Helper {
             FPowI => "uf_powi",
             IMod => "uf_imod",
             Random => "uf_random",
+            Draw => "uf_draw",
             CMul => "uf_cmul",
             CDiv => "uf_cdiv",
             CNorm => "uf_cnorm",
@@ -2669,6 +2851,21 @@ impl Helper {
 }",
             // One value per pixel, from its position: a hash, so a frame
             // reproduces exactly.
+            // Rhai's `rand()` outside a flame (C2a): a PCG stream per
+            // pixel, seeded from its place on the first draw, so a frame
+            // reproduces exactly (`interp::Machine::next_draw` draws the
+            // same numbers).
+            Draw => "var<private> uf_draw_state: u32;
+
+fn uf_draw() -> f32 {
+    if (uf_draw_state == 0u) {
+        uf_draw_state = (u32(esc_env_px.x) * 1664525u + u32(esc_env_px.y) * 22695477u + 1013904223u) | 1u;
+    }
+    let old = uf_draw_state;
+    uf_draw_state = old * 747796405u + 2891336453u;
+    let w = ((old >> ((old >> 28u) + 4u)) ^ old) * 277803737u;
+    return f32(((w >> 22u) ^ w) >> 8u) * (1.0 / 16777216.0);
+}",
             Random => "fn uf_random() -> vec2<f32> {
     var h = u32(esc_env_px.x) * 1664525u + u32(esc_env_px.y) * 22695477u + 1013904223u;
     h = (h ^ (h >> 16u)) * 2246822519u;
@@ -2976,7 +3173,13 @@ pub fn validate_formula(wgsl: &str) -> Result<(), String> {
 /// against the flame shader's `get_param`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
-    const GET_PARAM: &str = "fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n    return f32(xform_id + variation_id + param_slot);\n}\n";
+    const GET_PARAM: &str = "fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {\n    return f32(xform_id + variation_id + param_slot);\n}\n\
+         fn get_state(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n    return f32(xform_id + variation_id + slot);\n}\n\
+         fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {}\n\
+         struct RngState {\n    state: u32,\n}\n\
+         fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
+         struct StubTransform {\n    variations: array<f32, 4>,\n}\n\
+         var<private> transforms: array<StubTransform, 2>;\n";
     validate_module(&format!("{GET_PARAM}{}", w.wgsl_2d))?;
     validate_module(&format!("{GET_PARAM}{}", w.wgsl_3d))
 }

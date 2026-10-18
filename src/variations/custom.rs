@@ -54,7 +54,7 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
     if !p.funcs.is_empty() {
         return Err("a variation's function parameters are a later step".to_string());
     }
-    let wgsl = lang::wgsl::variation(&p, &name);
+    let wgsl = lang::wgsl::variation(&p, &name)?;
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_variation(&wgsl).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
 
@@ -116,6 +116,10 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
         "parameters": parameters,
         "shader_2d": wgsl.wgsl_2d,
         "shader_3d": wgsl.wgsl_3d,
+        // The hooks it uses (C2): `rand()`, `ctx.accum`, a colour, state.
+        "features": wgsl.features,
+        "state_count": wgsl.state_count,
+        "shader_state_init": wgsl.state_init,
     });
     serde_json::from_value(payload).map_err(|e| format!("the variation's payload: {e}"))
 }
@@ -427,6 +431,159 @@ mod tests {
         assert_eq!(c.variations.iter().map(|v| v.entry.as_str()).collect::<Vec<_>>(), ["rhai_bend_carried"]);
     }
 
+    // ---- the hooks (C2) ----------------------------------------------------
+
+    /// Twins of built-ins that use the hooks: `blur` draws (C2a);
+    /// `macmillan` reads the accumulator and its weight (C2b), keeps state
+    /// that its parameters seed (C2c) and writes a colour (C2d).
+    pub(crate) const HOOKED_TWINS: &[(&str, &str)] = &[
+        (
+            "blur",
+            "const INFO = #{ title: \"Blur (Rhai)\", name: \"rhai_blur\" };\n\
+             fn variation(z, p) {\n    let theta = rand() * 6.28318530718;\n    let r = rand();\n    complex(r * cos(theta), r * sin(theta))\n}\n",
+        ),
+        (
+            "macmillan",
+            "const PARAMS = #{\n    a: #{ value: 1.6, min: -10.0, max: 10.0 },\n    b: #{ value: 0.4, min: -10.0, max: 10.0 },\n    \
+             N: #{ value: 1.0, min: -10.0, max: 10.0 },\n    startx: #{ value: 0.1, min: -10.0, max: 10.0 },\n    \
+             starty: #{ value: 0.1, min: -10.0, max: 10.0 },\n};\n\
+             const INFO = #{ title: \"MacMillan (Rhai)\", name: \"rhai_macmillan\" };\n\
+             fn init(p) { #{ xa: p.startx, x: p.startx, y: p.starty } }\n\
+             fn variation(z, p, ctx) {\n    let xa = this.xa;\n    let x = this.x;\n    let y = this.y;\n    \
+             x = y;\n    y = -xa + 2.0 * p.a * (y / (1.0 + y * y)) + p.b * y;\n    xa = x;\n    \
+             x = y;\n    y = -xa + 2.0 * p.a * (y / (1.0 + y * y)) + p.b * y;\n    \
+             let fp = ctx.accum + complex(x, y) * ctx.weight;\n    let s = abs(0.5 * (fp.re + fp.im + 1.0));\n    \
+             this.xa = x;\n    this.x = x;\n    this.y = y;\n    #{ z: complex(x, y), color: s - floor(s) }\n}\n",
+        ),
+    ];
+
+    fn hooked(builtin: &str) -> &'static str {
+        HOOKED_TWINS.iter().find(|(n, _)| *n == builtin).unwrap().1
+    }
+
+    /// Each hook declares the built-in's `Feature`, takes its argument in
+    /// the shader builder's order, and validates; the state's slots and
+    /// the statement that seeds them come with it.
+    #[test]
+    fn the_hooks_compile_to_the_builtins_features() {
+        let blur = compile(hooked("blur")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(blur.features, ["needs_rng"]);
+        assert!(blur.shader_2d.as_deref().is_some_and(|s| s.contains("fn variation_rhai_blur(p: vec2<f32>, rng: ptr<function, RngState>)") && s.contains("rng_nextf(rng)")));
+        assert_eq!(blur.state_count, 0);
+        let mac = compile(hooked("macmillan")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(mac.features, ["needs_accum", "writes_color"]);
+        let s2 = mac.shader_2d.as_deref().unwrap();
+        assert!(s2.contains("fn variation_rhai_macmillan(p: vec2<f32>, accum: vec2<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>)"), "{s2}");
+        assert!(mac.shader_3d.as_deref().is_some_and(|s| s.contains("accum: vec3<f32>") && s.contains("accum.xy")));
+        assert_eq!(mac.state_count, 3);
+        assert!(mac.shader_state_init.as_deref().is_some_and(|s| s.contains("cv_rhai_macmillan_variation_init(xform_id, variation_id)")));
+        // State without parameters still takes the ids: needs_transform.
+        let counter = "const INFO = #{ name: \"rhai_counter_test\" };\nfn init(p) { #{ n: 0.0 } }\n\
+                       fn variation(z, p) {\n    this.n = this.n + 1.0;\n    z * (1.0 / this.n)\n}\n";
+        let c = compile(counter).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(c.features, ["needs_transform"]);
+        assert_eq!(c.state_count, 1);
+        // What the hooks refuse.
+        let refused = |src: &str| compile(src).err().unwrap_or_else(|| panic!("compiled: {src}"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn init(p) { #{ n: rand() } }\nfn variation(z, p) { z * this.n }\n").contains("no random numbers"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { z * this.n }\n").contains("no `init`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p, ctx) { z * ctx.julia }\n").contains("`accum` and `weight`"));
+        assert!(refused("const INFO = #{ name: \"rhai_bad\" };\nfn variation(z, p) { #{ z: z, hue: 0.5 } }\n").contains("`z` and `color`"));
+    }
+
+    /// The MacMillan twin runs as the built-in's arithmetic (its WGSL,
+    /// written out in f64), call after call: the state kept, the
+    /// accumulator and the weight read, the colour written.
+    #[test]
+    fn the_macmillan_twin_runs_as_the_builtin() {
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{ParamValues, VariationRun};
+        let p = lang::rhai::transformation(hooked("macmillan")).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
+        let params = ParamValues::defaults(&p);
+        let mut run = VariationRun::new(&p, &params, 7);
+        let (a, b) = (1.6f64, 0.4f64);
+        let (mut xa, mut x, mut y) = (0.1f64, 0.1f64, 0.1f64);
+        for i in 0..50 {
+            let accum = C64::new(0.3 * (i as f64).sin(), -0.2);
+            let weight = 0.75;
+            x = y;
+            y = -xa + 2.0 * a * (y / (1.0 + y * y)) + b * y;
+            xa = x;
+            x = y;
+            y = -xa + 2.0 * a * (y / (1.0 + y * y)) + b * y;
+            let (fpx, fpy) = (accum.re + weight * x, accum.im + weight * y);
+            let s = (0.5 * (fpx + fpy + 1.0)).abs();
+            let color = s - s.floor();
+            xa = x;
+            let (point, c) = run.call(C64::new(9.0, 9.0), accum, weight);
+            assert!((point.re - x).abs() < 1e-12 && (point.im - y).abs() < 1e-12, "call {i}: {point:?} against ({x}, {y})");
+            assert!(c.is_some_and(|c| (c - color).abs() < 1e-12), "call {i}: colour {c:?} against {color}");
+        }
+    }
+
+    /// `rand()` draws the flame's stream in a variation (the shader's
+    /// PCG, in [0, 1)), and a stream per pixel in a formula: the same
+    /// pixel draws the same numbers, another pixel others; an entry that
+    /// draws has no deep zoom.
+    #[test]
+    fn rand_draws_a_stream() {
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues, VariationRun};
+        let p = lang::rhai::transformation(hooked("blur")).unwrap();
+        let params = ParamValues::defaults(&p);
+        let mut v = VariationRun::new(&p, &params, 12345);
+        let mut mean_r = 0.0;
+        for _ in 0..4000 {
+            let (z, _) = v.call(C64::ZERO, C64::ZERO, 1.0);
+            let r = z.abs();
+            assert!((0.0..1.0).contains(&r));
+            mean_r += r / 4000.0;
+        }
+        assert!((mean_r - 0.5).abs() < 0.02, "the radius is uniform: mean {mean_r}");
+        // In a formula: the step adds a draw; where it escapes is the
+        // stream's, the same at the same pixel.
+        let src = "const PARAMS = #{ bailout: 4.0 };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                   fn step(s, p) { s.z = complex(rand(), 0.0); s }\nfn escaped(s, p) { s.z.re > 0.9 }\n";
+        let f = lang::rhai::program(src).unwrap();
+        let fp = ParamValues::defaults(&f);
+        let at = |x: i32, y: i32| {
+            let mut env = Env::at(C64::ZERO, 1000);
+            (env.x, env.y) = (x, y);
+            run(&f, &fp, None, &env).n
+        };
+        assert_eq!(at(3, 4), at(3, 4));
+        let counts: std::collections::BTreeSet<u32> = (0..40).map(|i| at(i, 7)).collect();
+        assert!(counts.len() > 5, "pixels draw apart: {counts:?}");
+        assert!(lang::perturb::perturbation(&f).is_err(), "no deep zoom for an entry that draws");
+    }
+
+    /// `vary` inlines a variation that uses the hooks: its draws are the
+    /// formula's stream, its context the identity's (no earlier
+    /// variations, weight 1), its result map its point; state is refused.
+    #[test]
+    fn vary_inlines_a_hooked_variation() {
+        let scope = vec![
+            ("rhai_ctx_test".to_string(), "const INFO = #{ name: \"rhai_ctx_test\" };\nfn variation(z, p, ctx) {\n    #{ z: z * ctx.weight + ctx.accum, color: 0.5 }\n}\n".to_string()),
+            ("rhai_macmillan".to_string(), hooked("macmillan").to_string()),
+            ("rhai_blur".to_string(), hooked("blur").to_string()),
+        ];
+        let formula = |step: &str| {
+            format!("const PARAMS = #{{ bailout: 4.0 }};\nfn start(pixel, p) {{ #{{ z: complex(0.0, 0.0), c: pixel }} }}\nfn step(s, p) {{ {step} s }}\nfn escaped(s, p) {{ s.z.norm_sqr() > p.bailout }}\n")
+        };
+        let compiled = |step: &str| lang::rhai::with_variations(&scope, || lang::rhai::program(&formula(step)));
+        let varied = compiled("s.z = vary(\"rhai_ctx_test\", s.z * s.z + s.c);").unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
+        let plain = lang::rhai::program(&formula("s.z = s.z * s.z + s.c;")).unwrap();
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        for px in [C64::new(-0.5, 0.3), C64::new(0.3, 0.5), C64::new(-1.2, 0.1)] {
+            let (a, b) = (run(&varied, &ParamValues::defaults(&varied), None, &Env::at(px, 100)), run(&plain, &ParamValues::defaults(&plain), None, &Env::at(px, 100)));
+            assert_eq!((a.n, a.escaped), (b.n, b.escaped));
+        }
+        assert!(compiled("s.z = vary(\"rhai_blur\", s.z * s.z + s.c);").is_ok(), "a drawing variation draws the formula's stream");
+        let e = compiled("s.z = vary(\"rhai_macmillan\", s.z);").err().map(|d| d[0].message.clone()).unwrap_or_default();
+        assert!(e.contains("keeps state"), "{e}");
+    }
+
     // ---- the GPU gates ----------------------------------------------------
 
     use crate::config::FractalConfig;
@@ -491,6 +648,57 @@ mod tests {
         cfg.zoom = 1.6;
         cfg.levels_enabled = false;
         cfg
+    }
+
+    /// **The hooked twins render as the built-ins in a flame** (C2's
+    /// gate): `blur` (draws) and `macmillan` (the accumulator, its weight,
+    /// state its parameters seed, a colour) after a linear at half weight
+    /// on the first transform -- so the accumulator holds something --
+    /// against the built-ins, by density and by each colour's light, block
+    /// by block over replicates.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_hooked_twins_render_as_the_builtins() {
+        use crate::renderer::density_gates::{compare_blocks, print_compared, render_blocks, Run};
+        const N: u32 = 256;
+        let (device, queue) = device();
+        let run = Run::default();
+        let flame = |v: &str, carries: Option<CustomSource>| {
+            let mut cfg = flame_with(v, carries);
+            let t = &mut cfg.flame.transforms[0];
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 0.5);
+            t.set_variation(v, 1.0);
+            cfg
+        };
+        let mut failures = Vec::new();
+        for (builtin, src) in HOOKED_TWINS {
+            let name = format!("rhai_{builtin}");
+            let carried = CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source: src.to_string(), variations: Vec::new() };
+            let reference = render_blocks(&device, &queue, &flame(builtin, None), N, &run);
+            let twin = render_blocks(&device, &queue, &flame(&name, Some(carried)), N, &run);
+            for (what, x, y) in [
+                ("density", &twin.density, &reference.density),
+                ("red", &twin.light[0], &reference.light[0]),
+                ("green", &twin.light[1], &reference.light[1]),
+                ("blue", &twin.light[2], &reference.light[2]),
+            ] {
+                let c = compare_blocks(x, y, y);
+                print_compared(&format!("{name} against {builtin}, {what}"), &c);
+                let (_, _, mx, _, my, _, z) = c.pooled[0];
+                if mx <= 0.0 {
+                    failures.push(format!("{name}: no {what}"));
+                }
+                if z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005 {
+                    failures.push(format!("{name}: the whole view's {what} is {:.4} of the built-in's", mx / my));
+                }
+                if c.worst_dense > 0.05 || c.worst_middle > 0.15 {
+                    failures.push(format!("{name}: a block's {what} is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// **The twins render as the built-ins in a flame** (the plan's C1

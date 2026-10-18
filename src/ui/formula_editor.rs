@@ -692,6 +692,12 @@ const NEW_VARIATION: &str = "\
 // A new variation. `variation` takes a point `z` and the parameters `p`
 // and gives the point it maps to; the transform's weight scales it.
 // `INFO.name` is its name in the variation list.
+//
+// Also at hand: `rand()`, a draw in [0, 1); a third argument `ctx` with
+// `ctx.accum` (the transform's earlier variations, summed) and
+// `ctx.weight`; `fn init(p)` returning a state each thread keeps, read
+// and set as `this.name`; and ending with `#{ z: point, color: index }`
+// to colour the point.
 
 const PARAMS = #{
     twist: #{ value: 1.0, min: -4.0, max: 4.0, caption: \"Twist\" },

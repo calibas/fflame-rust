@@ -260,7 +260,7 @@ impl BigMachine {
                         Place::Var(id) => self.vars[*id] = v,
                         Place::Z => self.z = self.to_c(v),
                         // A formula writes neither; the checker keeps it so.
-                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel => {}
+                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -452,6 +452,10 @@ impl BigMachine {
             Predef::CreasePattern => BigValue::Int(0),
             Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => BigValue::Float(BigFloat::zero(self.n)),
             Predef::CreaseSlope => BigValue::Complex(BigComplex::zero(self.n)),
+            // A draw has no reference value (`lang::perturb` refuses a
+            // program that draws); a flame variation's, no orbit.
+            Predef::Draw | Predef::Weight | Predef::VarColor => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::Accum => BigValue::Complex(BigComplex::zero(self.n)),
         }
     }
 

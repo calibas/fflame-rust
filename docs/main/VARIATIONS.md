@@ -510,6 +510,13 @@ function takes the point, and the ids when it has parameters (as
 - **Inside a formula**: `vary("name", z)` inlines one into an escape
   formula or colouring, the entry carrying its source
   ([ESCAPE.md](ESCAPE.md#the-formula-language)).
+- **Hooks** (`escape::lang::wgsl::variation_shape`): `rand()` declares
+  `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
+  `WritesColor`; `init(p)` and `this.name` are per-thread state
+  (`state_count`, the seeding call as `wgsl_state_init`); state or
+  `ctx.weight` without parameters declares `NeedsTransform` for the
+  ids. The function takes them in `variation_call`'s order. Gate:
+  `the_hooked_twins_render_as_the_builtins` (`blur`, `macmillan`).
 - Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel

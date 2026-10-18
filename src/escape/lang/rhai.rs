@@ -411,9 +411,10 @@ enum Binding {
     /// A value substituted where read: a helper's argument, a `let` in
     /// `escaped`.
     Value(ast::Expr),
-    /// An inlined variation's parameters (`vary`): each read as the
-    /// value the call gives it, or its default.
-    ParamMap(HashMap<String, ast::Expr>),
+    /// An inlined variation's parameters, or its context (`vary`): each
+    /// read as the value the call gives it, or its default; the label
+    /// says what it is, for a name it lacks.
+    ParamMap(HashMap<String, ast::Expr>, &'static str),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -656,10 +657,26 @@ impl<'s> Lowerer<'s> {
             self.state_body(&prep.body, &mut scope, &mut body)?;
             sections.push(Section { kind: SectionKind::Global, span, body, last_is_bailout: false, labelled: true });
         }
+        // A variation's state (C2c): `init(p)` returns the map each
+        // thread starts with, its fields `this.name` in `variation`.
+        let mut state_fields = Vec::new();
+        if self.transform {
+            if let Some(init) = self.fns.get("init").cloned() {
+                if init.params.len() != 1 {
+                    return self.err(init.body.position(), "`init(p)`: the state each thread starts with");
+                }
+                let mut scope = Scope::new(Fn3::Start, Vec::new());
+                scope.bind(&init.params[0], Binding::Params);
+                let mut body = Vec::new();
+                self.state_body(&init.body, &mut scope, &mut body)?;
+                state_fields = scope.fields.clone();
+                sections.push(Section { kind: SectionKind::Init, span, body, last_is_bailout: false, labelled: true });
+            }
+        }
         match kind {
             EntryKind::Formula => sections.extend(self.formula_sections(span, &mut default)?),
             EntryKind::Coloring => sections.extend(self.coloring_sections(span)?),
-            EntryKind::Transform => sections.push(self.transform_section(span)?),
+            EntryKind::Transform => sections.push(self.transform_section(span, state_fields)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
@@ -668,16 +685,19 @@ impl<'s> Lowerer<'s> {
     }
 
     /// A transformation's function as its section (UF's `transform:`):
-    /// `variation(z, p)`, the point `z` a local the body may reassign,
-    /// set from `#pixel`, and the last value written back to `#pixel`.
-    fn transform_section(&mut self, span: Span) -> R<Section> {
+    /// `variation(z, p[, ctx])`, the point `z` a local the body may
+    /// reassign, set from `#pixel`, and the last value written back to
+    /// `#pixel` -- or a map `#{ z, color }`, the colour the palette index
+    /// a flame blends in (C2d). `this.name` reads and sets the state
+    /// `init` returns (`fields`).
+    fn transform_section(&mut self, span: Span, fields: Vec<String>) -> R<Section> {
         let Some(f) = self.fns.get("variation").cloned() else {
             return self.err(Position::NONE, "a transformation has `fn variation(z, p)`");
         };
-        if f.params.is_empty() || f.params.len() > 2 {
-            return self.err(f.body.position(), "`variation(z)` or `variation(z, p)`");
+        if f.params.is_empty() || f.params.len() > 3 {
+            return self.err(f.body.position(), "`variation(z)`, `variation(z, p)` or `variation(z, p, ctx)`");
         }
-        let mut scope = Scope::new(Fn3::Variation, Vec::new());
+        let mut scope = Scope::new(Fn3::Variation, fields);
         let point = self.local(&f.params[0], TypeName::Complex);
         let mut body = vec![ast::Stmt::Decl {
             ty: TypeName::Complex,
@@ -690,19 +710,40 @@ impl<'s> Lowerer<'s> {
         if let Some(p) = f.params.get(1) {
             scope.bind(p, Binding::Params);
         }
-        const RESULT: &str = "`variation` ends with the new point";
+        if let Some(c) = f.params.get(2) {
+            scope.bind(c, Binding::Ctx);
+        }
+        const RESULT: &str = "`variation` ends with the new point, or `#{ z: point, color: index }`";
         let stmts = f.body.statements();
         let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
         for st in rest {
             self.stmt(st, &mut scope, &mut body)?;
         }
+        let mut color = None;
         let value = match final_value(last) {
+            Some(Final::Expr(Expr::Map(m, mp))) => {
+                let mut point = None;
+                for (k, v) in &m.0 {
+                    match k.name.as_str() {
+                        "z" => point = Some(self.expr(v, &mut scope)?),
+                        "color" => color = Some(self.expr(v, &mut scope)?),
+                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                    }
+                }
+                match point {
+                    Some(v) => v,
+                    None => return self.err(*mp, "the result needs `z`, the new point"),
+                }
+            }
             Some(Final::Expr(x)) => self.expr(x, &mut scope)?,
             Some(Final::If(fc, p)) => self.if_value(fc, p, &mut scope)?,
             _ => return self.err(last.position(), RESULT),
         };
         self.flush(&mut body);
         let at = self.pos.span(last.position());
+        if let Some(c) = color {
+            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        }
         body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
@@ -1292,7 +1333,7 @@ impl<'s> Lowerer<'s> {
             mk(ExprKind::Predef(f.into()), span)
         } else if which == Fn3::Prepare {
             mk(ExprKind::Name(prepared_name(f)), span)
-        } else if f == "z" && !self.coloring {
+        } else if f == "z" && !self.coloring && !self.transform {
             mk(ExprKind::Predef("z".into()), span)
         } else {
             mk(ExprKind::Name(field_name(f)), span)
@@ -1557,16 +1598,25 @@ impl<'s> Lowerer<'s> {
                 self.index(array, &be.rhs, *flags, scope, *p, false)
             }
             Expr::Dot(be, _, _) => {
-                let Expr::Variable(v, _, _) = &be.lhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
-                let Some(Binding::State) = scope.get(v.1.as_str()) else {
-                    return self.err(e.position(), "set a field of the state, `s.z = ...`");
+                let state = match &be.lhs {
+                    Expr::Variable(v, _, _) => matches!(scope.get(v.1.as_str()), Some(Binding::State)),
+                    // A variation's state (C2c).
+                    Expr::ThisPtr(tp) => {
+                        self.this_state(*tp, scope)?;
+                        true
+                    }
+                    _ => false,
                 };
+                if !state {
+                    return self.err(e.position(), "set a field of the state, `s.z = ...`");
+                }
+                let owner = if scope.which == Fn3::Variation { "init" } else { "start" };
                 // `s.hist[i] = ...`: an element of a field.
                 if let Expr::Index(ibe, flags, ip) = &be.rhs {
                     let Expr::Property(prop, pp) = &ibe.lhs else { return self.err(e.position(), "set a field of the state, `s.z = ...`") };
                     let f = prop.2.to_string();
                     if !scope.fields.contains(&f) {
-                        return self.err(*pp, format!("`{f}` is not in the state `start` returns"));
+                        return self.err(*pp, format!("`{f}` is not in the state `{owner}` returns"));
                     }
                     let array = self.field_target(scope.which, &f, self.pos.span(*pp));
                     return self.index(array, &ibe.rhs, *flags, scope, *ip, false);
@@ -1577,12 +1627,23 @@ impl<'s> Lowerer<'s> {
                     return self.err(*pp, format!("`{f}` is read here; the equations set `dz`"));
                 }
                 if !scope.fields.contains(&f) {
-                    return self.err(*pp, format!("`{f}` is not in the state `start` returns"));
+                    return self.err(*pp, format!("`{f}` is not in the state `{owner}` returns"));
                 }
                 Ok(self.field_target(scope.which, &f, self.pos.span(*pp)))
             }
             _ => self.err(e.position(), "set a variable or a field of the state"),
         }
+    }
+
+    /// `this` at `p`: the variation's state, which `init` must give.
+    fn this_state(&self, p: Position, scope: &Scope) -> R<()> {
+        if scope.which != Fn3::Variation {
+            return self.err(p, "`this` is a variation's state, read in `variation`");
+        }
+        if scope.fields.is_empty() {
+            return self.err(p, "`this` is the state `init(p)` returns; this variation has no `init`");
+        }
+        Ok(())
     }
 
     /// In `start` (or `prepare`), `s.f` for a field the map has not got
@@ -1646,7 +1707,7 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::Pixel) => mk(ExprKind::Predef("pixel".into()), span),
                 Some(Binding::Z) => mk(ExprKind::Predef("z".into()), span),
                 Some(Binding::State) => return self.err(*p, "the state is read by its fields, `s.z`"),
-                Some(Binding::Params) | Some(Binding::ParamMap(_)) => return self.err(*p, "the parameters are read by name, `p.power`"),
+                Some(Binding::Params) | Some(Binding::ParamMap(..)) => return self.err(*p, "the parameters are read by name, `p.power`"),
                 Some(Binding::Ctx) => return self.err(*p, "the context is read by its fields, `ctx.julia`"),
                 None => return self.err(*p, format!("`{}` is not declared", v.1)),
             },
@@ -1708,11 +1769,16 @@ impl<'s> Lowerer<'s> {
 
     /// The left of a `.`: a binding read by its fields, or a value.
     fn base(&mut self, e: &Expr, scope: &mut Scope) -> R<Base> {
+        // `this`: a variation's state (C2c), as Rhai binds the object a
+        // function is called on.
+        if let Expr::ThisPtr(p) = e {
+            return self.this_state(*p, scope).map(|_| Base::State);
+        }
         if let Expr::Variable(v, _, _) = e {
             match scope.get(v.1.as_str()) {
                 Some(Binding::State) => return Ok(Base::State),
                 Some(Binding::Params) => return Ok(Base::Params),
-                Some(Binding::ParamMap(m)) => return Ok(Base::Map(m.clone())),
+                Some(Binding::ParamMap(m, what)) => return Ok(Base::Map(m.clone(), what)),
                 Some(Binding::Ctx) => return Ok(Base::Ctx),
                 _ => {}
             }
@@ -1739,7 +1805,13 @@ impl<'s> Lowerer<'s> {
                 match base {
                     Base::State => {
                         if !scope.fields.iter().any(|f| f == name) {
-                            let when = if scope.which.builds() { "yet" } else { "that `start` returns" };
+                            let when = if scope.which.builds() {
+                                "yet"
+                            } else if scope.which == Fn3::Variation {
+                                "that `init` returns"
+                            } else {
+                                "that `start` returns"
+                            };
                             return self.err(*p, format!("`{name}` is not in the state {when}"));
                         }
                         Ok(self.field_target(scope.which, name, span))
@@ -1753,6 +1825,12 @@ impl<'s> Lowerer<'s> {
                         }
                         Ok(mk(ExprKind::Param(name.to_string()), span))
                     }
+                    // A variation's (C2b): what the flame hands it.
+                    Base::Ctx if self.transform => match name {
+                        "accum" => Ok(mk(ExprKind::Predef("accum".into()), span)),
+                        "weight" => Ok(mk(ExprKind::Predef("weight".into()), span)),
+                        o => self.err(*p, format!("a variation's context has `accum` and `weight`; not `{o}`")),
+                    },
                     Base::Ctx => match name {
                         // `ismand` is 1 on the parameter plane.
                         "julia" => Ok(mk(
@@ -1774,9 +1852,9 @@ impl<'s> Lowerer<'s> {
                             }
                         },
                     },
-                    Base::Map(m) => match m.get(name) {
+                    Base::Map(m, what) => match m.get(name) {
                         Some(v) => Ok(v.clone()),
-                        None => self.err(*p, format!("the variation has no parameter `{name}`")),
+                        None => self.err(*p, format!("`{name}` is not {what}")),
                     },
                     Base::Value(v) => match name {
                         "re" => Ok(mk(ExprKind::Call { name: "real".into(), args: vec![v], user: false }, span)),
@@ -1796,7 +1874,7 @@ impl<'s> Lowerer<'s> {
                     Ok(mk(ExprKind::Call { name, args: vec![arg], user: true }, self.pos.span(*p)))
                 }
                 Base::Value(v) => self.call(f, Some(v), *p, scope),
-                Base::Map(_) => self.err(*p, "a variation's parameters hold no functions"),
+                Base::Map(..) => self.err(*p, "a variation's parameters hold no functions"),
                 _ => self.err(*p, "call a function of a value, `s.z.sqr()`"),
             },
             other => self.err(other.position(), "not in a formula"),
@@ -1832,6 +1910,13 @@ impl<'s> Lowerer<'s> {
         // A variation of the user's, inlined (the KIFS plan, C1e).
         if name == "vary" && args.is_empty() {
             return self.vary(f, p, scope);
+        }
+        // A fresh draw in [0, 1) (C2a), unless the script has its own.
+        if name == "rand" && args.is_empty() && !self.fns.contains_key("rand") {
+            if !f.args.is_empty() {
+                return self.err(p, "`rand()` takes no argument: a draw in [0, 1)");
+            }
+            return Ok(mk(ExprKind::Predef("draw".into()), span));
         }
         // A helper of the script's own, inlined; it reads only its
         // arguments.
@@ -2022,6 +2107,25 @@ impl<'s> Lowerer<'s> {
         let Ok((ast, _)) = parse(&source) else { return self.err(p, format!("the variation `{vname}` does not parse")) };
         let fns: HashMap<String, ScriptFuncDef> = ast.iter_fn_def().map(|d| (d.name.to_string(), (**d).clone())).collect();
         let Some(def) = fns.get("variation").cloned() else { return self.err(p, format!("`{vname}` is not a variation")) };
+        if fns.contains_key("init") {
+            return self.err(p, format!("`{vname}` keeps state (`init`): a flame's; inside a formula, a later step"));
+        }
+        // A body ending `#{ z, color }` gives its point here: the colour
+        // is a flame's.
+        let def = match def.body.statements().last() {
+            Some(Stmt::Expr(e)) if matches!(&**e, Expr::Map(..)) => {
+                let Expr::Map(m, _) = &**e else { unreachable!() };
+                let Some((_, z)) = m.0.iter().find(|(k, _)| k.name.as_str() == "z") else {
+                    return self.err(p, format!("`{vname}` ends with a map without `z`"));
+                };
+                let mut stmts: Vec<Stmt> = def.body.statements().to_vec();
+                *stmts.last_mut().expect("a last statement") = Stmt::Expr(Box::new(z.clone()));
+                let mut d = def.clone();
+                d.body = StmtBlock::new(stmts, def.body.position(), def.body.end_position());
+                d
+            }
+            _ => def,
+        };
         // Its parameters: the map's values (lowered here, in the caller's
         // terms), the rest their defaults.
         let span = self.pos.span(p);
@@ -2066,7 +2170,13 @@ impl<'s> Lowerer<'s> {
         };
         inner.bind(&def.params[0], point);
         if let Some(pp) = def.params.get(1) {
-            inner.bind(pp, Binding::ParamMap(values));
+            inner.bind(pp, Binding::ParamMap(values, "one of the variation's parameters"));
+        }
+        // Its context inside a formula: no earlier variations, weight 1.
+        if let Some(cp) = def.params.get(2) {
+            let zero = mk(ExprKind::Complex(Box::new(mk(ExprKind::Float(0.0), span)), Box::new(mk(ExprKind::Float(0.0), span))), span);
+            let ctx: HashMap<String, ast::Expr> = [("accum".to_string(), zero), ("weight".to_string(), mk(ExprKind::Float(1.0), span))].into_iter().collect();
+            inner.bind(cp, Binding::ParamMap(ctx, "in a variation's context (`accum`, `weight`)"));
         }
         let fns = std::mem::replace(&mut self.fns, fns);
         let pos = std::mem::replace(&mut self.pos, Positions::fixed(span));
@@ -2117,7 +2227,7 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
                 "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" => TypeName::Int,
-                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" => TypeName::Float,
+                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" => TypeName::Float,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),
@@ -2177,8 +2287,8 @@ fn const_int(e: &ast::Expr) -> Option<i64> {
 enum Base {
     State,
     Params,
-    /// An inlined variation's parameters.
-    Map(HashMap<String, ast::Expr>),
+    /// An inlined variation's parameters, or its context.
+    Map(HashMap<String, ast::Expr>, &'static str),
     Ctx,
     Value(ast::Expr),
 }

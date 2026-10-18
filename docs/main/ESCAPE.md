@@ -461,14 +461,37 @@ fn escaped(s, p) {
   not an escape formula: it compiles to a **flame variation**
   ([VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)) and, in
   Escape mode, is offered as the camera lens. `INFO.name` is its
-  registry name; `PARAMS` as a formula's; no `prepare`, no `ctx`, no
-  random numbers yet. Example: `assets/formulas/variation-whorl.rhai`.
+  registry name; `PARAMS` as a formula's; no `prepare`. The flame's
+  hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
+  - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
+  - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the
+    transform's earlier variations (JWildfire's `pVarTP`;
+    `NeedsAccum`), and `ctx.weight`, its own weight;
+  - state per thread: `fn init(p)` returns the map each thread starts
+    with (its parameters may seed it), and the body reads and sets its
+    fields as `this.name` -- Rhai's own way for a function called on an
+    object to change it (`state_count` slots, `init` as
+    `wgsl_state_init`);
+  - a colour: the body may end with `#{ z: point, color: index }`, the
+    palette index the transform's `direct_color` blends in
+    (`WritesColor`).
+
+  Example: `assets/formulas/variation-whorl.rhai`; the hooks' twins of
+  `blur` and `macmillan` are in `variations::custom`'s tests.
+- **`rand()`** anywhere else -- a formula, a colouring, a variation
+  `vary` inlines there -- draws a stream of the pixel's own, seeded by
+  its place on the screen (`uf_draw`; the interpreter draws the same
+  numbers), so a still reproduces. An entry that draws has no deep
+  zoom: the reference point and the pixel would draw apart. UF's
+  `#random` (`ctx.random`) is still one value a pixel.
 - **`vary("name", z)`** or `vary("name", z, #{ param: value })`, in
   any function of a formula, colouring or transformation: the user's
   variation `name` applied to `z`, its body inlined as a helper's is
   (so deep zoom and the derivative derive through it), its parameters
   the map's values -- in the caller's terms, `#{ k: p.twist }` -- or
-  their defaults. The source is looked up in what the entry carries
+  their defaults; its `ctx` is a formula's identity (`accum` zero,
+  `weight` one), a result map gives its point, and a variation with
+  state is refused. The source is looked up in what the entry carries
   (`CustomSource::variations`), then the registered custom variations,
   then the formula library and its examples
   (`variations::custom::source_of`). Using an entry fills its

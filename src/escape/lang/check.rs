@@ -368,7 +368,9 @@ impl Checker {
                 // A transformation's derived values would be its
                 // variation's `wgsl_init`: a later step.
                 (EntryKind::Formula | EntryKind::Coloring, SectionKind::Global) => true,
-                (EntryKind::Transform, SectionKind::Transform) => true,
+                // A variation's `init(p)`: the state a thread starts with
+                // (C2c).
+                (EntryKind::Transform, SectionKind::Transform | SectionKind::Init) => true,
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
@@ -874,6 +876,20 @@ impl Checker {
             "index" => Predef::Index,
             "solid" => Predef::Solid,
             "pass" if self.internal => Predef::Pass,
+            // Rhai's `rand()` (C2a), and a variation's context and colour
+            // (C2b, C2d).
+            "draw" if self.internal => Predef::Draw,
+            "accum" | "weight" | "vcolor" if self.internal => {
+                if self.kind != EntryKind::Transform {
+                    self.error(span, format!("`{name}` is a flame variation's"));
+                    return None;
+                }
+                match name {
+                    "accum" => Predef::Accum,
+                    "weight" => Predef::Weight,
+                    _ => Predef::VarColor,
+                }
+            }
             "juliac" if self.internal => Predef::JuliaC,
             "crease_decay" | "crease_pattern" | "crease_sign" | "crease_reach" | "crease_height" | "crease_slope"
                 if self.internal =>
@@ -923,7 +939,7 @@ impl Checker {
             return None;
         }
         // A variation sees its point and nothing of an image or an orbit.
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
@@ -1275,7 +1291,7 @@ impl Checker {
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
                     Predef::CreaseHeight | Predef::CreaseSlope => true,
-                    Predef::Pixel => self.section == SectionKind::Transform,
+                    Predef::Pixel | Predef::VarColor => self.section == SectionKind::Transform,
                     _ => false,
                 };
                 if !ok {
@@ -1294,6 +1310,7 @@ impl Checker {
                     Predef::CreaseHeight => (Place::CreaseHeight, Ty::Float),
                     Predef::CreaseSlope => (Place::CreaseSlope, Ty::Complex),
                     Predef::Pixel => (Place::Pixel, Ty::Complex),
+                    Predef::VarColor => (Place::Color, Ty::Float),
                     _ => (Place::Solid, Ty::Bool),
                 })
             }
@@ -1894,6 +1911,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::CreaseHeight => IExprKind::Predef(Predef::CreaseHeight),
         Place::CreaseSlope => IExprKind::Predef(Predef::CreaseSlope),
         Place::Pixel => IExprKind::Predef(Predef::Pixel),
+        Place::Color => IExprKind::Predef(Predef::VarColor),
     })
 }
 
