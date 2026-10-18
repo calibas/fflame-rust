@@ -916,7 +916,7 @@ fn formula_creases(p0: vec2<f32>) -> vec3<f32> {
 /// The integer hash matches the WGSL one bit-for-bit.
 /// The hash behind origami's lines, and its Random crease pattern
 /// (`origami_crease_hash` in the WGSL).
-fn origami_hash(x: u32) -> u32 {
+pub(crate) fn origami_hash(x: u32) -> u32 {
     let mut h = x;
     h ^= h >> 16;
     h = h.wrapping_mul(0x7feb_352d);

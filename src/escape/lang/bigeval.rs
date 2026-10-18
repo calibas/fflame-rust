@@ -457,6 +457,10 @@ impl BigMachine {
         Ok(match op {
             And => BigValue::Bool(l.truth(dialect) && r.truth(dialect)),
             Or => BigValue::Bool(l.truth(dialect) || r.truth(dialect)),
+            BitAnd | BitOr | BitXor | Shl | Shr => match (l, r) {
+                (BigValue::Int(a), BigValue::Int(b)) => BigValue::Int(super::interp::bits(op, a, b)),
+                _ => return Err(Stop),
+            },
             Eq | Ne => {
                 let eq = match (&l, &r) {
                     (BigValue::Complex(a), BigValue::Complex(b)) if dialect == Dialect::Fractint => sign(&a.re.sub(&b.re)) == 0,

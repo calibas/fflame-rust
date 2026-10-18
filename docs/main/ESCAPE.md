@@ -384,7 +384,13 @@ fn escaped(s, p) {
 - Values are int, float, bool and complex (`complex(re, im)`); a bool
   and a number do not mix but by `to_float` / `to_int` (1 for true),
   and two ints divided is refused (Rhai would truncate). `**` is the
-  power (`^` is Rhai's XOR). Rhai's names where they differ from UF's:
+  power. Ints are 32-bit, as UF's: `+ - *` wrap, and a literal past
+  `i32::MAX` (`0x846ca68b`) is its 32-bit pattern. Rhai's bit
+  operations take ints as such patterns -- `^` xor, `&`, `|`, `<<`,
+  `>>` logical (a shift by its amount's low five bits) -- so an
+  unsigned hash runs bit for bit as in Rust (Origami's does: the
+  plan's item 3, step 3c); on bools `&` and `|` are and and or, `^`
+  xor. Rhai's names where they differ from UF's:
   `ln` the natural log and `log` base 10, `abs` of a complex its
   modulus and `fold` each part's absolute value (the Burning Ship),
   `norm_sqr` the squared modulus, `.re` / `.im`, `arg`, `atan2(y, x)`,

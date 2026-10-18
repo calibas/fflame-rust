@@ -1392,6 +1392,22 @@ impl Checker {
                 self.error(span, "`diffabs` is the compiler's own".to_string());
                 None
             }
+            // Rhai's: on bools logic, on ints bits.
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor if l.ty == Ty::Bool && r.ty == Ty::Bool => {
+                let op = match op {
+                    BinOp::BitAnd => BinOp::And,
+                    BinOp::BitOr => BinOp::Or,
+                    _ => BinOp::Ne,
+                };
+                Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Bool })
+            }
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                if l.ty != Ty::Int || r.ty != Ty::Int {
+                    self.error(span, format!("`{}` takes two ints (a float's bits are not a formula's)", op.symbol()));
+                    return None;
+                }
+                Some(IExpr { kind: IExprKind::Binary(op, Box::new(l), Box::new(r)), ty: Ty::Int })
+            }
             BinOp::And | BinOp::Or => {
                 let l = self.to_bool(l, a.span)?;
                 let r = self.to_bool(r, b.span)?;

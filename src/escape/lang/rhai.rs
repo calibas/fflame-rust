@@ -72,9 +72,11 @@
 //! Values are int, float, bool and complex (`complex(re, im)`; Rhai has
 //! no complex literal); a bool and a number do not mix, except by
 //! `to_float` and `to_int` (1 for true), Rhai's conversions. Operators:
-//! `+ - * / %`, `**` the power (`^` is Rhai's XOR), comparisons,
-//! `&& || !`. Two ints divided is refused -- Rhai would truncate where a
-//! formula wants the quotient. Functions (and as methods, `z.sqr()`):
+//! `+ - * / %`, `**` the power, comparisons, `&& || !`; on ints, 32-bit
+//! as UF's (a literal past `i32::MAX` its pattern), the bit operations
+//! `^ & | << >>`, `>>` logical (on bools `& |` are and and or, `^` xor).
+//! Two ints divided is refused -- Rhai would truncate where a formula
+//! wants the quotient. Functions (and as methods, `z.sqr()`):
 //! `sqr sqrt exp ln sin cos tan cot sinh cosh tanh coth asin acos atan
 //! asinh acosh atanh conj flip recip round floor ceiling trunc ident
 //! zero cosxx isinf isnan`; `abs` (of a complex, its modulus), `fold`
@@ -1854,6 +1856,11 @@ fn binop(op: &str) -> Option<BinOp> {
         "<=" => BinOp::Le,
         ">" => BinOp::Gt,
         ">=" => BinOp::Ge,
+        "&" => BinOp::BitAnd,
+        "|" => BinOp::BitOr,
+        "^" => BinOp::BitXor,
+        "<<" => BinOp::Shl,
+        ">>" => BinOp::Shr,
         _ => return None,
     })
 }
@@ -2009,6 +2016,52 @@ fn escaped(s, p) {
         refused(" let x = 2.0;\n s.z = s.z * x.len();", "an array's length");
         refused(" let x = 2.0;\n s.z = s.z * x[0];", "only an array is indexed");
     }
+
+    /// Rhai's bit operations (plan, item 3, step 3c) on ints as 32-bit
+    /// patterns: Origami's hash written in a formula gives the built-in's
+    /// (`formulas::origami_hash`) bit for bit, its constants past
+    /// `i32::MAX` read as their patterns, `>>` logical; and the masks and
+    /// shifts beside it as u32 arithmetic has them.
+    #[test]
+    fn bit_operations_hash_as_the_builtin() {
+        let r = rh(BIT_HASH);
+        for x in [0i64, 1, 7, 255, 4096, 65_535, 123_456_789, 2_000_000_000, -1, -77] {
+            for y in [0i64, 3, 911] {
+                let env = Env::at(C64::new(x as f64, y as f64), 1);
+                let got = run(&r, &ParamValues::defaults(&r), None, &env).z;
+                let u = (x as u32).wrapping_mul(2_654_435_761).wrapping_add(y as u32);
+                let h = crate::escape::formulas::origami_hash(u);
+                assert_eq!(got.re, f64::from(h >> 8) / 16_777_216.0, "hash at ({x}, {y})");
+                let bits = ((u << 3) | (u & 7)) ^ ((u >> 29) & 0xff);
+                assert_eq!(got.im, f64::from(bits & 0xffff), "bits at ({x}, {y})");
+            }
+        }
+        // Bools: `&` and `|` are and and or, `^` xor; a float's bits none.
+        let d = program("fn start(pixel, p) { #{ z: pixel } }\nfn step(s, p) { s.z = s.z * to_float(2.5 & 1); s }").err().expect("refused");
+        assert!(d.iter().any(|x| x.message.contains("takes two ints")), "{d:?}");
+    }
+
+    const BIT_HASH: &str = r#"
+fn hash(x) {
+    let h = x;
+    h = h ^ (h >> 16);
+    h = h * 0x7feb352d;
+    h = h ^ (h >> 15);
+    h = h * 0x846ca68b;
+    h ^ (h >> 16)
+}
+
+fn start(pixel, p) {
+    let x = to_int(pixel.re) * 2654435761 + to_int(pixel.im);
+    let bits = ((x << 3) | (x & 7)) ^ ((x >> 29) & 0xff);
+    let odd = (hash(x) >> 31) == 1;
+    #{ z: complex(to_float(hash(x) >> 8) / 16777216.0, to_float(bits & 0xffff)), flag: odd ^ (x < 0) }
+}
+
+fn step(s, p) {
+    s
+}
+"#;
 
     #[test]
     fn a_rhai_formula_runs_as_its_uf_twin() {
