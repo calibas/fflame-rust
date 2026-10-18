@@ -426,7 +426,7 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
     out.carried.clear();
     out.name = "Hybrid".into();
     let var = |out: &mut Program, name: String, ty: Ty| {
-        out.vars.push(Var { name, ty, span: Span::default(), stored_real: false, global: false, perturb: false });
+        out.vars.push(Var { name, ty, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
         out.vars.len() - 1
     };
     let z = || IExpr { kind: IExprKind::Predef(Predef::Z), ty: Ty::Complex };
@@ -512,7 +512,7 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
     // The pass this one behaves as -- past the prefix, its place in the
     // first round -- and the group whose turn that is.
     let k = out.vars.len();
-    out.vars.push(Var { name: "turn".into(), ty: Ty::Int, span: Span::default(), stored_real: false, global: false, perturb: false });
+    out.vars.push(Var { name: "turn".into(), ty: Ty::Int, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
     let int = |v: i64| IExpr { kind: IExprKind::Int(v), ty: Ty::Int };
     let kv = || IExpr { kind: IExprKind::Var(k), ty: Ty::Int };
     let bin = |op: BinOp, a: IExpr, b: IExpr, ty: Ty| IExpr { kind: IExprKind::Binary(op, Box::new(a), Box::new(b)), ty };
@@ -564,6 +564,7 @@ impl Remap {
                 };
                 IStmt::Assign(place, self.expr(e))
             }
+            IStmt::SetElem { var, index, value } => IStmt::SetElem { var: var + self.vo, index: self.expr(index), value: self.expr(value) },
             IStmt::If { arms, otherwise } => IStmt::If { arms: arms.iter().map(|(c, b)| (self.expr(c), self.stmts(b))).collect(), otherwise: self.stmts(otherwise) },
             IStmt::While { cond, body } => IStmt::While { cond: self.expr(cond), body: self.stmts(body) },
             IStmt::Repeat { body, cond } => IStmt::Repeat { body: self.stmts(body), cond: self.expr(cond) },
@@ -574,6 +575,7 @@ impl Remap {
         let b = |a: &IExpr| Box::new(self.expr(a));
         let kind = match &e.kind {
             IExprKind::Var(v) => IExprKind::Var(v + self.vo),
+            IExprKind::Elem(v, a) => IExprKind::Elem(v + self.vo, b(a)),
             IExprKind::Param(p) => IExprKind::Param(p + self.po),
             IExprKind::Predef(Predef::Z) if self.z.is_some() => IExprKind::Var(self.z.unwrap_or_default()),
             IExprKind::UserCall(f, a) => IExprKind::UserCall(f + self.fo, b(a)),

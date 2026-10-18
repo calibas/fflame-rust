@@ -116,7 +116,9 @@ impl TypeName {
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
-    Decl { ty: TypeName, name: String, init: Option<Expr>, span: Span },
+    /// `float x = 1`, or an array, `float a[10, 4]` (`dims`, each size as
+    /// written; empty for UF's dynamic `float a[]`).
+    Decl { ty: TypeName, name: String, init: Option<Expr>, dims: Option<Vec<Expr>>, span: Span },
     Expr(Expr),
     If { arms: Vec<(Expr, Vec<Stmt>)>, otherwise: Option<Vec<Stmt>>, span: Span },
     While { cond: Expr, body: Vec<Stmt>, span: Span },
@@ -200,6 +202,8 @@ pub enum ExprKind {
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// `|x|`: the squared modulus.
     Modulus(Box<Expr>),
+    /// `name[i, j]`: an array's element.
+    Index(String, Vec<Expr>),
     /// `target = value`; an expression, so `a = b = 1` chains.
     Assign(Box<Expr>, Box<Expr>),
     /// A string: a value only where UF compares an enum parameter with

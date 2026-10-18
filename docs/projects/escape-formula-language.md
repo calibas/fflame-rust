@@ -1596,6 +1596,58 @@ Each item is ticked here when done; findings go in as they are made.
    - **Origami's twin**: its lines in `prepare`, a fold a pass by
      `ctx.pass`, no escape test, dynamical only, its creases; renders
      as the built-in, relief and terrain included.
+   - **UF's rules** (its help, "Arrays" and "Dynamic arrays"): a static
+     array `int a[8]`, `float a[10, 2 * 6 - 2]`, each dimension a
+     constant integer expression -- parameters and most predefined
+     symbols count as constants; indices zero-based integers, in the
+     declared order (`a[3, 5 - 3]`); not initialized on declaration
+     (we zero them, as WGSL does); same-size arrays assign whole
+     (`x = y`); a constant index out of range is a compile error, a
+     computed one a run-time message under `$define debug` only (the
+     GPU clamps). Dynamic arrays (`int a[]`) are one-dimensional,
+     `setLength` sizes them and zeroes new elements, `length` reads the
+     size. Used in the library (survey 2026-10-17, 1,830 declarations
+     in 331 entries): `global:` 1,278 (colourings 903), `init:` 475,
+     `loop:` 38, `final:` 41; float 851, complex 506, int 360, bool
+     77, color 38; one dimension 1,441, two 317, three 14, dynamic
+     60; sizes constant 1,061, a parameter or `#maxiter` most of the
+     rest, the image's (`#width`) a few.
+   - **Steps** (order decided 2026-10-17):
+     - **3a.** Constant-size static arrays in UF: the IR (`Var::dims`,
+       `IExprKind::Elem`, `IStmt::SetElem`), the checker, the
+       interpreter, big floats, both GPU paths. Global arrays packed
+       after the scalars into `fdata` (formulas, 256 floats) or the
+       parameter block (colourings, 64 with the parameters, until item
+       4 grows it); per-pixel ones in the state (a colouring's within
+       its 32 floats). Deep zoom and the derivative take a global
+       array read at an index the same at every pixel (a parameter,
+       the pass) as a parameter; anything else with an array refuses
+       them for now. **Done 2026-10-17**: an array formula renders as
+       the built-in Mandelbrot on every pixel, direct and at zoom 20 by
+       derived equations reading its tables; an array colouring as its
+       scalar twin on both paths; the interpreter's array programs as
+       their scalar ones, the clamp included. A write at a constant
+       index defines that element for the pass (`Flow::written_elems`),
+       so a scratch array is no colouring state. Found on the way: a
+       factor of one read at run time (`z^2 * k + c`, array or scalar
+       global alike) moves 0.03% of the Mandelbrot's pixels, the
+       driver contracting the product otherwise -- the language's
+       arithmetic, not the arrays'.
+     - **3b.** Rhai arrays (a literal, a sized constructor, `a[i]`,
+       `a.len()`, `p.name[i]` from `prepare`), and UF arrays converted
+       to Rhai.
+     - **3c.** 32-bit integers as UF's (wrapping `+ - *` in the
+       interpreter, as the GPU's), and Rhai's bit operations (`^ & |
+       << >>`, logical shifts on the 32-bit pattern), bit-exact with
+       `origami_hash`.
+     - **3d.** The `creases` hook (`FormulaFeature::Creases` for a
+       program defining it).
+     - **3e.** Origami's twin. Its lines are the built-in's in f32 on
+       the CPU; `prepare` runs in f64, so they differ at the rounding
+       (measure, then decide).
+     - **3f.** For the library: dynamic arrays (`setLength`, `length`)
+       and arrays sized by a parameter or `#maxiter`, within the space
+       left; whole-array assignment.
 4. [ ] **The cheap UF items**: parameters past 64 floats (31 formulas, 47
    colourings stop there first); colouring state past 32 floats (31);
    the smaller mismatches, triaged by message (about 150 entries: used

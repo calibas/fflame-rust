@@ -623,9 +623,9 @@ sets `#solid`. `default:` holds `title`, the view (`center`, `magn`,
 `global:`, which runs once per image, before any pixel: on the CPU, in
 the interpreter, whenever a parameter or the view it can read changes.
 What it sets is read-only elsewhere (UF's rule), and it cannot read
-what belongs to a pixel (`#pixel`, `#z`, `#x`, `#random` ...). Without
-arrays it holds single values: a formula's go into the uniform's `fdata`
-(256 floats), a colouring's share its 64-float parameter block. A
+what belongs to a pixel (`#pixel`, `#z`, `#x`, `#random` ...). Its
+values and arrays, every element: a formula's go into the uniform's
+`fdata` (256 floats), a colouring's share its 64-float parameter block. A
 formula may end with `switch:`, UF's switch to another formula of the
 same file: `type = "Julia"`, then `destination = source` copies, the
 source one of its own parameters or `#pixel` (`seed = #pixel`,
@@ -658,6 +658,32 @@ directives choose lines: `$define`, `$undef`, `$ifdef`, `$else`,
 Fractal 6 defines them. Settings may share a line, separated by commas.
 A constant expression WGSL would refuse to fold (`sqrt(-3)`, `1 / 0`)
 reaches the GPU unfolded, which computes UF's NaN or infinity.
+
+**Arrays** (UF's static arrays; the plan's item 3, step 3a): `float
+a[10]`, `complex m[3, 4]`, each size a constant integer expression (UF
+counts parameters and most predefined symbols as constants too; those
+sizes, and dynamic arrays with `setLength`, are a later step), in any
+section, at most 256 floats each. Elements are `a[i]`, `m[i, j]`,
+zero-based, the indices ints (`/` never makes one: `trunc` it), in the
+declared order; a constant index outside its dimension is refused, as
+UF refuses it, and one computed is clamped to the array (UF stops the
+render with a message under `$define debug`, which a GPU cannot). An
+array is zero until written (UF leaves it undefined). It is read and
+written by element only: a whole array is neither a value nor assigned.
+- A `global:` array is the image's: computed on the CPU and packed with
+  the other globals, read by index from `fdata` or the colouring's
+  block.
+- A per-pixel array lives in the formula's state (compared element by
+  element for interior detection), or in a colouring's packed state
+  when the loop carries it -- each element a float of its 32. An
+  element written at a constant index before it is read in the same
+  pass is that pass's, so a scratch array costs no state.
+- Deep zoom and distance estimation take a global array read at an
+  index the same at every pixel (a constant, a parameter's choice, the
+  pass) as they take a parameter. A formula whose loop writes an array,
+  or reads one where the iterate decides the index, keeps the direct
+  path and has no derivative.
+- Arrays do not yet convert to Rhai (Edit as Rhai refuses them).
 
 **Fractint's conventions** apply to a `.frm` file, or with the editor's
 language set to Fractint (from its `parser.c`): a test is true when its
@@ -921,8 +947,8 @@ built-in and the twin on 109; each with its own floatexp rung on about
 as few). The counts there spread from the first steps to the cap and
 follow rounding, the reference's included.
 
-**Not yet:** UF's classes and plug-ins (`import`), arrays, colour values
-and direct colouring.
+**Not yet:** UF's classes and plug-ins (`import`), dynamic arrays and
+arrays sized by a parameter, colour values and direct colouring.
 
 **Measured against UF's public formula library** (its full download,
 read for measurement and never bundled; `measure_a_uf_corpus`, an

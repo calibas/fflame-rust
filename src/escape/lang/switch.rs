@@ -243,6 +243,7 @@ impl Remap<'_> {
                 };
                 IStmt::Assign(place, self.expr(e))
             }
+            IStmt::SetElem { var, index, value } => IStmt::SetElem { var: var + self.var_offset, index: self.expr(index), value: self.expr(value) },
             IStmt::If { arms, otherwise } => IStmt::If {
                 arms: arms.iter().map(|(c, b)| (self.expr(c), self.stmts(b))).collect(),
                 otherwise: self.stmts(otherwise),
@@ -256,6 +257,7 @@ impl Remap<'_> {
         let b = |x: &IExpr| Box::new(self.expr(x));
         let kind = match &e.kind {
             IExprKind::Var(v) => IExprKind::Var(v + self.var_offset),
+            IExprKind::Elem(v, a) => IExprKind::Elem(v + self.var_offset, b(a)),
             IExprKind::Param(p) => match self.params[*p] {
                 ParamTo::Param(q) => IExprKind::Param(q),
                 ParamTo::JuliaC => IExprKind::Predef(Predef::JuliaC),

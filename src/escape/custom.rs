@@ -552,6 +552,7 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
         match &e.kind {
             IExprKind::Predef(Predef::Z | Predef::Pixel | Predef::NumIter | Predef::Pass) => true,
             IExprKind::Var(v) => !p.vars[*v].global,
+            IExprKind::Elem(v, a) => !p.vars[*v].global || varies(a, p),
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => varies(a, p),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => varies(a, p) || varies(b, p),
             _ => false,
@@ -560,6 +561,9 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
     fn branches_on_the_iterate(stmts: &[IStmt], p: &ir::Program) -> bool {
         stmts.iter().any(|s| match s {
             IStmt::Assign(..) => false,
+            // An array written per pixel: not the straight-line map BLA
+            // approximates.
+            IStmt::SetElem { .. } => true,
             IStmt::If { arms, otherwise } => {
                 arms.iter().any(|(c, b)| varies(c, p) || branches_on_the_iterate(b, p)) || branches_on_the_iterate(otherwise, p)
             }
@@ -1463,6 +1467,10 @@ mod tests {
                 }
                 match s {
                     IStmt::Assign(_, e) => first(e, p, inits, found),
+                    IStmt::SetElem { .. } => {
+                        *found = Some("an array written in the loop".into());
+                        return;
+                    }
                     IStmt::If { arms, otherwise } => {
                         for (c, b) in arms {
                             // A branch on the iterate derives (step 6c),

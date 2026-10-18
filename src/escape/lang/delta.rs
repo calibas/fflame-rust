@@ -219,6 +219,7 @@ fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
     fn e(x: &IExpr, p: &Program) -> bool {
         match &x.kind {
             IExprKind::Var(v) => !(p.vars[*v].perturb || p.vars[*v].global),
+            IExprKind::Elem(v, a) => !(p.vars[*v].perturb || p.vars[*v].global) || e(a, p),
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, p),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
             _ => false,
@@ -227,6 +228,8 @@ fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
     match s {
         IStmt::Assign(Place::Var(v), x) => !(p.vars[*v].perturb) || e(x, p),
         IStmt::Assign(_, x) => e(x, p),
+        // The equations write no array.
+        IStmt::SetElem { .. } => true,
         IStmt::If { arms, otherwise } => {
             arms.iter().any(|(c, b)| e(c, p) || b.iter().any(|s| stmt_reads_foreign(s, p))) || otherwise.iter().any(|s| stmt_reads_foreign(s, p))
         }
@@ -363,7 +366,7 @@ fn uniform_vars(p: &Program) -> Vec<bool> {
         for s in stmts {
             match s {
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e)),
-                IStmt::Assign(..) => {}
+                IStmt::Assign(..) | IStmt::SetElem { .. } => {}
                 IStmt::If { arms, otherwise } => {
                     for (_, b) in arms {
                         assigns(b, out);
@@ -377,6 +380,8 @@ fn uniform_vars(p: &Program) -> Vec<bool> {
     fn uniformly(e: &IExpr, p: &Program, uniform: &[bool]) -> bool {
         match &e.kind {
             IExprKind::Var(v) => uniform[*v] || p.vars[*v].global,
+            // A global array's element at an index the same everywhere.
+            IExprKind::Elem(v, a) => p.vars[*v].global && uniformly(a, p, uniform),
             // The same at every pixel, which `per_image` (the `perturb`
             // setting's, once an image) cannot read.
             IExprKind::Predef(Predef::Pass) => true,
@@ -408,7 +413,7 @@ fn uniform_vars(p: &Program) -> Vec<bool> {
 /// pass.
 fn per_image(e: &IExpr) -> bool {
     match &e.kind {
-        IExprKind::Var(_) | IExprKind::Predef(Predef::Pass) => false,
+        IExprKind::Var(_) | IExprKind::Elem(..) | IExprKind::Predef(Predef::Pass) => false,
         IExprKind::Predef(q) => matches!(
             q,
             Predef::Pi | Predef::E | Predef::Center | Predef::Magn | Predef::MaxIter | Predef::JuliaC | Predef::IsMand | Predef::MagXMag | Predef::RotSkew
@@ -508,6 +513,7 @@ fn walk_init(stmts: &[IStmt], mut cases: Vec<InitCase>, p: &Program) -> Option<V
                     }
                 }
             }
+            IStmt::SetElem { .. } => return None,
             IStmt::If { arms, otherwise } => {
                 let mut next = Vec::new();
                 for c in cases {
@@ -555,6 +561,7 @@ fn subst_z(e: &IExpr, z: &IExpr) -> IExpr {
         IExprKind::UserCall(f, a) => IExprKind::UserCall(*f, b(a)),
         IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(*f, b(a)),
         IExprKind::UserJac(f, a, w) => IExprKind::UserJac(*f, b(a), *w),
+        IExprKind::Elem(v, a) => IExprKind::Elem(*v, b(a)),
         other => other.clone(),
     };
     mk(kind, e.ty)
@@ -614,6 +621,13 @@ pub(crate) fn subst(e: &IExpr, values: &[Option<IExpr>], poisoned: &[bool], p: &
         IExprKind::UserCall(f, a) => IExprKind::UserCall(*f, b(a, ok)),
         IExprKind::UserDeriv(f, a) => IExprKind::UserDeriv(*f, b(a, ok)),
         IExprKind::UserJac(f, a, w) => IExprKind::UserJac(*f, b(a, ok), *w),
+        // A global array's element, its index's values in; a per-pixel
+        // array's has no init value.
+        IExprKind::Elem(v, a) if p.vars[*v].global => IExprKind::Elem(*v, b(a, ok)),
+        IExprKind::Elem(..) => {
+            *ok = false;
+            return e.clone();
+        }
         other => other.clone(),
     };
     mk(kind, e.ty)
@@ -667,7 +681,7 @@ fn assigned_in(stmts: &[IStmt], out: &mut Vec<VarId>, dz: &mut bool) {
                 }
             }
             IStmt::Assign(Place::DZ, _) => *dz = true,
-            IStmt::Assign(..) => {}
+            IStmt::Assign(..) | IStmt::SetElem { .. } => {}
             IStmt::If { arms, otherwise } => {
                 for (_, b) in arms {
                     assigned_in(b, out, dz);
@@ -683,6 +697,7 @@ fn stmt_nodes(s: &IStmt) -> usize {
     let block = |b: &[IStmt]| b.iter().map(stmt_nodes).sum::<usize>();
     match s {
         IStmt::Assign(_, e) => 1 + nodes(e),
+        IStmt::SetElem { index, value, .. } => 1 + nodes(index) + nodes(value),
         IStmt::If { arms, otherwise } => 1 + arms.iter().map(|(c, b)| nodes(c) + block(b)).sum::<usize>() + block(otherwise),
         IStmt::While { cond, body } | IStmt::Repeat { body, cond } => 1 + nodes(cond) + block(body),
     }
@@ -690,7 +705,7 @@ fn stmt_nodes(s: &IStmt) -> usize {
 
 fn nodes(e: &IExpr) -> usize {
     1 + match &e.kind {
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => nodes(a),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) | IExprKind::Elem(_, a) => nodes(a),
         IExprKind::MakeComplex(a, c) | IExprKind::Binary(_, a, c) => nodes(a) + nodes(c),
         _ => 0,
     }
@@ -787,7 +802,7 @@ fn binomial(n: i64, k: i64) -> f64 {
 
 impl<'p> Deriver<'p> {
     fn new_var(&mut self, name: String, ty: Ty) -> VarId {
-        self.out.vars.push(Var { name, ty, span: Default::default(), stored_real: false, global: false, perturb: true });
+        self.out.vars.push(Var { name, ty, span: Default::default(), stored_real: false, global: false, perturb: true, dims: Vec::new() });
         self.out.vars.len() - 1
     }
 
@@ -1530,6 +1545,19 @@ impl<'p> Deriver<'p> {
                 | Predef::Pass,
             ) => (e.clone(), None),
             IExprKind::Predef(_) => return None,
+            // A global array's element, at an index the same at every pixel
+            // (an int's pair has no deviation; one varying from pixel to
+            // pixel fails to derive before it is here): the image's value.
+            IExprKind::Elem(v, index) => {
+                if !self.p.vars[*v].global {
+                    return None;
+                }
+                let (ri, di) = self.pair(index, written, is_loop)?;
+                if di.is_some() {
+                    return None;
+                }
+                (mk(IExprKind::Elem(*v, Box::new(ri)), e.ty), None)
+            }
             IExprKind::Var(v) => {
                 if self.p.vars[*v].global {
                     (e.clone(), None)
@@ -1861,6 +1889,7 @@ fn stmt_reads_var(s: &IStmt, v: VarId) -> bool {
     fn e(x: &IExpr, v: VarId) -> bool {
         match &x.kind {
             IExprKind::Var(w) => *w == v,
+            IExprKind::Elem(w, a) => *w == v || e(a, v),
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, v),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, v) || e(b, v),
             _ => false,
@@ -1868,6 +1897,7 @@ fn stmt_reads_var(s: &IStmt, v: VarId) -> bool {
     }
     match s {
         IStmt::Assign(_, x) => e(x, v),
+        IStmt::SetElem { index, value, .. } => e(index, v) || e(value, v),
         IStmt::If { arms, otherwise } => {
             arms.iter().any(|(c, b)| e(c, v) || b.iter().any(|s| stmt_reads_var(s, v))) || otherwise.iter().any(|s| stmt_reads_var(s, v))
         }
@@ -1887,7 +1917,7 @@ fn strip_assigns(stmts: &mut Vec<IStmt>, v: VarId) {
                 strip_assigns(otherwise, v);
             }
             IStmt::While { body, .. } | IStmt::Repeat { body, .. } => strip_assigns(body, v),
-            IStmt::Assign(..) => {}
+            IStmt::Assign(..) | IStmt::SetElem { .. } => {}
         }
     }
 }
@@ -1895,7 +1925,7 @@ fn strip_assigns(stmts: &mut Vec<IStmt>, v: VarId) {
 fn reads_z(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Predef(Predef::Z) => true,
-        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads_z(a),
+        IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) | IExprKind::Elem(_, a) => reads_z(a),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => reads_z(a) || reads_z(b),
         _ => false,
     }
@@ -1905,6 +1935,7 @@ pub(crate) fn writes_var(stmts: &[IStmt], v: VarId) -> bool {
     stmts.iter().any(|s| match s {
         IStmt::Assign(Place::Var(w), _) => *w == v,
         IStmt::Assign(..) => false,
+        IStmt::SetElem { var, .. } => *var == v,
         IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes_var(b, v)) || writes_var(otherwise, v),
         IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes_var(body, v),
     })
@@ -2213,6 +2244,46 @@ mod tests {
             }
             assert!(escaped > 0, "{}: nothing escapes there", p.name);
         }
+    }
+
+    /// Arrays (plan, item 3, step 3a): a global table read at an index
+    /// the same at every pixel -- a constant, a parameter's choice --
+    /// is the image's value, and the equations run perturbed as the
+    /// formula runs; an array the loop writes, or a table read at an
+    /// index that follows the pixel, keeps the direct path. The
+    /// derivative likewise: a table is constant in the pixel, an array
+    /// written from the iterate has none.
+    #[test]
+    fn global_arrays_derive_as_parameters() {
+        let table = "T {\nglobal:\n complex k[3]\n k[0] = (1, 0)\n k[1] = (0.9, 0.2)\n k[2] = @c\ninit:\n z = 0\n\
+                     loop:\n z = sqr(z) * k[@pick] + #pixel * k[0]\nbailout:\n |z| < 4\ndefault:\n int param pick\n  default = 1\n endparam\n\
+                     param c\n  default = (1.1, -0.1)\n endparam\n}";
+        let p = program(table, Dialect::UltraFractal);
+        let d = with_derived_equations(&p).expect("a table read at a parameter's index derives");
+        assert!(super::super::perturb::perturbation(&d).is_ok());
+        for pick in 0..3 {
+            let mut params = ParamValues::defaults(&d);
+            params.values[0].0 = f64::from(pick);
+            let reference = C64::new(-0.6, 0.45);
+            for k in 0..8 {
+                let t = k as f64 * 0.785;
+                let px = reference.add(C64::new(t.cos(), t.sin()).scale(1e-6 * (1.0 + k as f64)));
+                let env = Env::at(px, 400);
+                let mut direct_params = ParamValues::defaults(&p);
+                direct_params.values[0].0 = f64::from(pick);
+                let direct = run(&p, &direct_params, None, &env);
+                let pert = run_perturbed(&d, &params, &env, reference, true).unwrap();
+                assert_eq!((pert.n, pert.escaped), (direct.n, direct.escaped), "pick {pick} at {px:?}");
+            }
+        }
+        assert!(super::super::derive::with_derivative(&p).is_some(), "a table is constant in the pixel");
+        // An array the loop writes; a table read where the iterate says.
+        let history = "H {\ninit:\n z = 0\n complex h[2]\nloop:\n h[1] = h[0]\n h[0] = z\n z = sqr(z) + #pixel + 0.01 * h[1]\nbailout:\n |z| < 4\n}";
+        let h = program(history, Dialect::UltraFractal);
+        assert!(with_derived_equations(&h).is_none());
+        assert!(super::super::derive::with_derivative(&h).is_none(), "an array written from the iterate has no derivative");
+        let follows = "F {\nglobal:\n float k[2]\n k[1] = 1\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel * k[round(real(z)) % 2]\nbailout:\n |z| < 4\n}";
+        assert!(with_derived_equations(&program(follows, Dialect::UltraFractal)).is_none());
     }
 
     /// A user function of the iterate (phase 4, step 6b): the equations

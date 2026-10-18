@@ -318,13 +318,10 @@ impl Parser<'_> {
                 let ty = TypeName::from_name(&w).expect("a type");
                 self.bump();
                 let Tok::Ident(name) = self.bump().tok else { unreachable!() };
-                if matches!(self.peek(), Tok::LBracket) {
-                    self.error(self.span(), "arrays are not supported yet");
-                    self.recover();
-                    return None;
-                }
+                // An array: its sizes, or none for a dynamic one.
+                let dims = if matches!(self.peek(), Tok::LBracket) { Some(self.index_list()) } else { None };
                 let init = if self.eat(&Tok::Assign) { Some(self.expr()) } else { None };
-                Stmt::Decl { ty, name, init, span: start.to(self.prev_span()) }
+                Stmt::Decl { ty, name, init, dims, span: start.to(self.prev_span()) }
             }
             Tok::Ident(w) if w == "if" => {
                 self.bump();
@@ -518,6 +515,9 @@ impl Parser<'_> {
                 if matches!(self.peek(), Tok::LParen) {
                     let args = self.call_args();
                     at(ExprKind::Call { name: w, args, user: false }, start.to(self.prev_span()))
+                } else if matches!(self.peek(), Tok::LBracket) {
+                    let index = self.index_list();
+                    at(ExprKind::Index(w, index), start.to(self.prev_span()))
                 } else {
                     at(ExprKind::Name(w), start)
                 }
@@ -593,6 +593,29 @@ impl Parser<'_> {
         let mid = span.start + 1;
         self.toks[self.pos] = Token { tok: Tok::Bar, span: Span::new(span.start, mid) };
         self.toks.insert(self.pos + 1, Token { tok: Tok::Bar, span: Span::new(mid, span.end) });
+    }
+
+    /// `[a, b, ...]`, an array's sizes or an element's indices; `[]` is
+    /// none.
+    fn index_list(&mut self) -> Vec<Expr> {
+        self.bump(); // [
+        let saved = self.modulus_depth;
+        self.modulus_depth = 0;
+        let mut out = Vec::new();
+        if !matches!(self.peek(), Tok::RBracket) {
+            loop {
+                out.push(self.expr());
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+        }
+        self.modulus_depth = saved;
+        if !self.eat(&Tok::RBracket) {
+            let s = self.span();
+            self.error(s, "expected `]`");
+        }
+        out
     }
 
     fn call_args(&mut self) -> Vec<Expr> {
@@ -774,6 +797,7 @@ mod tests {
             ExprKind::Unary(UnOp::Not, e) => format!("(!{})", show(e)),
             ExprKind::Binary(op, l, r) => format!("({} {} {})", show(l), op.symbol(), show(r)),
             ExprKind::Modulus(e) => format!("|{}|", show(e)),
+            ExprKind::Index(n, index) => format!("{n}[{}]", index.iter().map(show).collect::<Vec<_>>().join(", ")),
             ExprKind::Assign(t, v) => format!("({} = {})", show(t), show(v)),
             ExprKind::Str(s) => format!("{s:?}"),
         }

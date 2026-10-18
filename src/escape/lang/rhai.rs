@@ -967,7 +967,7 @@ impl<'s> Lowerer<'s> {
                         }
                         let t = self.local(&format!("{f}_new"), ty);
                         let span = v.span;
-                        out.push(ast::Stmt::Decl { ty, name: t.clone(), init: Some(v), span });
+                        out.push(ast::Stmt::Decl { ty, name: t.clone(), init: Some(v), dims: None, span });
                         temps.push((f, t, span));
                     }
                 }
@@ -1001,7 +1001,7 @@ impl<'s> Lowerer<'s> {
                 self.types.insert(name.clone(), ty);
                 let written = if scope.which == Fn3::Prepare { format!("p.{f}") } else { format!("s.{f}") };
                 self.names.push((name.clone(), written));
-                out.push(ast::Stmt::Decl { ty, name, init: Some(v), span });
+                out.push(ast::Stmt::Decl { ty, name, init: Some(v), dims: None, span });
             }
             _ => out.push(assign(target, v, span)),
         }
@@ -1041,7 +1041,7 @@ impl<'s> Lowerer<'s> {
                 self.flush(out);
                 let ty = self.ty_of(&v);
                 let name = self.local(&ident.name, ty);
-                out.push(ast::Stmt::Decl { ty, name: name.clone(), init: Some(v), span });
+                out.push(ast::Stmt::Decl { ty, name: name.clone(), init: Some(v), dims: None, span });
                 scope.bind(&ident.name, Binding::Local(name));
                 Ok(())
             }
@@ -1108,10 +1108,10 @@ impl<'s> Lowerer<'s> {
                 let to = self.expr(&range.args[1], scope)?;
                 self.flush(out);
                 let name = self.local(&var.name, TypeName::Int);
-                out.push(ast::Stmt::Decl { ty: TypeName::Int, name: name.clone(), init: Some(from), span });
+                out.push(ast::Stmt::Decl { ty: TypeName::Int, name: name.clone(), init: Some(from), dims: None, span });
                 // The bound is read once, as Rhai reads its range.
                 let bound = self.local(&format!("{}_end", var.name), TypeName::Int);
-                out.push(ast::Stmt::Decl { ty: TypeName::Int, name: bound.clone(), init: Some(to), span });
+                out.push(ast::Stmt::Decl { ty: TypeName::Int, name: bound.clone(), init: Some(to), dims: None, span });
                 scope.blocks.push(HashMap::new());
                 scope.bind(&var.name, Binding::Local(name.clone()));
                 let body = self.block(&fc.body, scope);
@@ -1231,7 +1231,7 @@ impl<'s> Lowerer<'s> {
         let ty = arms.iter().map(|(_, _, v)| self.ty_of(v)).reduce(join).unwrap_or(TypeName::Float);
         let name = self.local("if", ty);
         self.pending.extend(conds_pending);
-        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, span });
+        self.pending.push(ast::Stmt::Decl { ty, name: name.clone(), init: None, dims: None, span });
         let mut lowered = Vec::new();
         let mut otherwise = None;
         for (cond, mut body, value) in arms {
@@ -1658,6 +1658,8 @@ impl<'s> Lowerer<'s> {
             ExprKind::Unary(UnOp::Neg, a) => self.ty_of(a),
             ExprKind::Unary(UnOp::Not, _) => TypeName::Bool,
             ExprKind::Modulus(_) => TypeName::Float,
+            // An array's element: its elements' type.
+            ExprKind::Index(n, _) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Assign(_, v) => self.ty_of(v),
             ExprKind::Binary(op, a, b) => match op {
                 BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::And | BinOp::Or => TypeName::Bool,
