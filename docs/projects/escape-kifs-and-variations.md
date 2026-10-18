@@ -106,7 +106,8 @@ the Menger's level 0.027 then 0.005, trap 0.086 then 0.015, address
 then 0.020, address 0.043 then 0.012. Past depth 5 the colours stop
 settling at 448 pixels: deeper iterations are the pixel's again, which
 is why the depth is a parameter (raise it when zoomed in). The flame
-solids (`ifs_flame_3d`) still colour from the tail: an open item.
+solids (`ifs_flame_3d`) still colour from the tail: A5, next after the
+Mandelbulb.
 
 **A2. Mandelbox (Solid)** (Tom Lowe, 2010): box fold, sphere fold
 (minimum and fixed radius), scale, plus the point (the Mandelbox) or a
@@ -224,8 +225,50 @@ hillshade the part to check.
    with `colour_depth` and the KIFS's `address_symmetry`; the presets
    re-inspected (Bloom moved to the level; the quaternion's preset to
    the orbit trap and zoom 0.4, where 0.7 cut a lobe).
-2. [ ] A2 Mandelbox (Solid).
-3. [ ] A3 Mandelbulb (Solid).
-4. [ ] C1 Rhai transformations, 2D.
-5. [ ] C2 hooks, then B (the vector type) for 3D variations and
+2. [x] A2 Mandelbox (Solid). **Done 2026-10-18**: `mandelbox_solid`,
+   Lowe's folds as Syntopia writes them, Mandelbox or Julia, the scale's
+   magnitude held to 1.05 or more. The ball (`mandelbox_radius`): past
+   `(2L|s| + |c|) / (|s| - 1)` in the largest coordinate a Julia's orbit
+   grows; for the Mandelbox Lowe's `2L(|s| + 1) / (|s| - 1)`, held by
+   `the_solids_lie_within_their_balls` at 2, -1.5 and a Julia (loose at
+   a negative scale: the set is about a fifth of the ball). **Lowe's
+   `|z| / |dr|` runs at 0.95 of itself**: whole, it was up to a percent
+   over the distance at scale -1.5, which 0.95 clears at 3,000 points.
+   Colour by the rules from the start: the level `log2` of the running
+   scale, the trap the closest approach's sorted absolute coordinates
+   **in units of the ball** (in world units the box, a dozen across,
+   cycled the palette as fast again as the others and failed the
+   settling gate at 0.26), the address base 12 (axes reflected, sphere
+   case). The GPU's coverage equals the twin's on every pixel. Presets:
+   Mandelbox (scale 2, trap), Mandelbox Scale 3 (address), Mandelbox
+   Inverted (scale -2, level), Mandelbox Julia (scale 3, address).
+3. [x] A3 Mandelbulb (Solid). **Done 2026-10-18**: `mandelbulb_solid`,
+   White and Nylander's power as Syntopia writes it, Mandelbulb or
+   Julia, with Hart's half of the estimate taken at radius 64. The ball
+   (`mandelbulb_radius`): `2^(1/(n-1))`, and `1 + |c|` for a Julia.
+   **Hart's estimate is no bound for the bulb** (it is not conformal):
+   beside a thin part it was measured at 1.7 times the distance to
+   points that stay in the ball for 2,000 iterations, while the query
+   point leaves in two. A strict bound would cost 1.7 times the steps,
+   so the estimate stays the standard one and a **Step Factor**
+   (`step_factor`, default 1, down to 0.25) is the user's margin, as in
+   Fragmentarium and Mandelbulber; the lower-bound gate holds the bulb
+   to half its promise (a lost factor, not percent). The level is `log2`
+   of the derivative **per power** (`/ (n - 1)`: the derivative carries
+   `r^(n-1)` a step, and at power 8 its log moved seven times as fast as
+   the quaternion's, 0.47 palette units a refinement); the trap `(z,
+   |xy|)` of the closest approach; the address the hemispheres, then
+   the polar angle. The GPU's coverage equals the twin's on every
+   pixel. Presets: Mandelbulb (power 8, trap), Mandelbulb Power 4
+   (address), Mandelbulb Julia (level).
+4. [ ] **A5 The flame solids' colourings** (the user, 2026-10-18: next).
+   `ifs_flame_3d` colours from where the inverse walk escapes, which
+   the march's pixel decides, so its level and trap follow the camera
+   as the KIFS's did; its address (the branches) is the start of the
+   walk already. The rules above, for the flame's inverse walk: a
+   colour depth, the trap the closest approach within it, a level that
+   is the surface's; the reference walk `scene::ifs_estimate` as the
+   twin, and the settling gate.
+5. [ ] C1 Rhai transformations, 2D.
+6. [ ] C2 hooks, then B (the vector type) for 3D variations and
    editable solids; A4 and C3 as wanted.
