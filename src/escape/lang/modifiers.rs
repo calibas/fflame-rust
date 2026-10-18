@@ -66,7 +66,7 @@ pub fn damped(p: &Program) -> Program {
         span: Default::default(),
     });
     let alpha = out.params.len() - 1;
-    out.vars.push(Var { name: "z_undamped".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false });
+    out.vars.push(Var { name: "z_undamped".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
     let before = out.vars.len() - 1;
     let z = cx(IExprKind::Predef(Predef::Z));
     let kept = cx(IExprKind::Var(before));

@@ -76,7 +76,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
     let mut dvar: Vec<Option<VarId>> = vec![None; p.vars.len()];
     for (i, v) in p.vars.iter().enumerate() {
         // A global is one value per image: constant in the pixel.
-        if v.ty == Ty::Complex && need[i] && !v.global {
+        if v.ty == Ty::Complex && need[i] && !v.global && !v.is_array() {
             dvar[i] = Some(out.vars.len());
             out.vars.push(Var {
                 name: format!("d_{}", v.name),
@@ -85,6 +85,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
                 stored_real: false,
                 global: false,
                 perturb: false,
+                dims: Vec::new(),
             });
         }
     }
@@ -96,6 +97,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
         stored_real: false,
         global: false,
         perturb: false,
+        dims: Vec::new(),
     });
     let dpix = pixel_unit(&mut out);
     let d = D { taint: &taint, dvar: &dvar, dz, dpix };
@@ -113,7 +115,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
 /// derivative's inhomogeneous term comes out in the mantissa's units
 /// (plan, phase 4, step 9d).
 fn pixel_unit(out: &mut Program) -> VarId {
-    out.vars.push(Var { name: "d_pixel".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false });
+    out.vars.push(Var { name: "d_pixel".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
     out.vars.len() - 1
 }
 
@@ -134,6 +136,13 @@ fn tainted(p: &Program) -> Vec<bool> {
                         IStmt::Assign(Place::Var(v), e) => {
                             if !t[*v] && follows(e, t) {
                                 t[*v] = true;
+                                *changed = true;
+                            }
+                        }
+                        // An array follows the pixel once an element does.
+                        IStmt::SetElem { var, index, value } => {
+                            if !t[*var] && (follows(value, t) || follows(index, t)) {
+                                t[*var] = true;
                                 *changed = true;
                             }
                         }
@@ -170,6 +179,13 @@ fn needed(p: &Program) -> Vec<bool> {
                     *changed = true;
                 }
             }
+            IExprKind::Elem(v, a) => {
+                if !need[*v] {
+                    need[*v] = true;
+                    *changed = true;
+                }
+                mark(a, need, changed);
+            }
             IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => mark(a, need, changed),
             IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
                 mark(a, need, changed);
@@ -183,7 +199,11 @@ fn needed(p: &Program) -> Vec<bool> {
             match s {
                 IStmt::Assign(Place::Z, e) => mark(e, need, changed),
                 IStmt::Assign(Place::Var(v), e) if need[*v] => mark(e, need, changed),
-                IStmt::Assign(..) => {}
+                IStmt::SetElem { var, index, value } if need[*var] => {
+                    mark(index, need, changed);
+                    mark(value, need, changed);
+                }
+                IStmt::Assign(..) | IStmt::SetElem { .. } => {}
                 IStmt::If { arms, otherwise } => {
                     for (_, b) in arms {
                         walk(b, need, changed);
@@ -209,6 +229,7 @@ fn needed(p: &Program) -> Vec<bool> {
 fn follows(e: &IExpr, t: &[bool]) -> bool {
     match &e.kind {
         IExprKind::Var(v) => t[*v],
+        IExprKind::Elem(v, a) => t[*v] || follows(a, t),
         IExprKind::Predef(Predef::Pixel | Predef::Z) => true,
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => follows(a, t),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => follows(a, t) || follows(b, t),
@@ -278,6 +299,9 @@ impl D<'_> {
                     }
                     out.push(s.clone());
                 }
+                // An array keeps no derivatives: one that follows the
+                // pixel refuses where it is read (`d`).
+                IStmt::SetElem { .. } => out.push(s.clone()),
                 IStmt::If { arms, otherwise } => {
                     let mut a = Vec::new();
                     for (c, b) in arms {
@@ -310,6 +334,8 @@ impl D<'_> {
             IExprKind::Predef(Predef::Z) => Some(cx(IExprKind::Var(self.dz))),
             IExprKind::Predef(_) => None,
             IExprKind::Var(v) => self.dvar[*v].map(|dv| cx(IExprKind::Var(dv))),
+            IExprKind::Elem(..) if f(e) => return Err(()),
+            IExprKind::Elem(..) => None,
             // A real number made complex, or a complex built from parts:
             // differentiable only where it does not follow the pixel.
             IExprKind::Convert(a) | IExprKind::Modulus(a) => {
@@ -452,16 +478,21 @@ impl D<'_> {
 pub fn with_jacobian(p: &Program) -> Option<Program> {
     let taint = tainted(p);
     let need = needed(p);
+    // An array keeps no derivatives: one the iterate needs that follows
+    // the pixel has none.
+    if p.vars.iter().enumerate().any(|(i, v)| v.is_array() && taint[i] && need[i]) {
+        return None;
+    }
     let mut out = p.clone();
     let mut dvar: Vec<Option<(VarId, VarId)>> = vec![None; p.vars.len()];
     let companion = |out: &mut Program, name: String| {
-        out.vars.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false });
+        out.vars.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
         out.vars.len() - 1
     };
     for (i, v) in p.vars.iter().enumerate() {
         // A global is one value per image: constant in the pixel. So is a
         // variable nothing pixel-dependent is ever assigned to.
-        if matches!(v.ty, Ty::Complex | Ty::Float) && need[i] && taint[i] && !v.global {
+        if matches!(v.ty, Ty::Complex | Ty::Float) && need[i] && taint[i] && !v.global && !v.is_array() {
             let pv = companion(&mut out, format!("d_{}", v.name));
             let qv = companion(&mut out, format!("dq_{}", v.name));
             dvar[i] = Some((pv, qv));
@@ -509,8 +540,8 @@ pub(crate) fn user_jac_forms() -> &'static UserJacForms {
         let mut prog = base.expect("the forms' program");
         prog.vars.clear();
         prog.loop_body.clear();
-        let mut var_of = |prog: &mut Program, name: &str| {
-            prog.vars.push(Var { name: name.into(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false });
+        let var_of = |prog: &mut Program, name: &str| {
+            prog.vars.push(Var { name: name.into(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
             prog.vars.len() - 1
         };
         let (a, ra, rb) = (var_of(&mut prog, "a"), var_of(&mut prog, "ra"), var_of(&mut prog, "rb"));
@@ -598,7 +629,7 @@ impl J<'_> {
         let mut temps = self.temps.borrow_mut();
         let id = self.base + temps.len();
         let name = format!("dj_{}", temps.len());
-        temps.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false });
+        temps.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
         self.prelude.borrow_mut().push(IStmt::Assign(Place::Var(id), e));
         var(id)
     }
@@ -637,6 +668,7 @@ impl J<'_> {
                     }
                     out.push(s.clone());
                 }
+                IStmt::SetElem { .. } => out.push(s.clone()),
                 IStmt::If { arms, otherwise } => {
                     let mut a = Vec::new();
                     for (c, b) in arms {
@@ -753,6 +785,9 @@ impl J<'_> {
             IExprKind::Predef(Predef::Z) => Some((var(self.dz.0), var(self.dz.1))),
             IExprKind::Predef(_) => None,
             IExprKind::Var(v) => self.dvar[*v].map(|(p, q)| (var(p), var(q))),
+            // Constant in the pixel (`with_jacobian` refuses an array that
+            // is not).
+            IExprKind::Elem(..) => None,
             IExprKind::Convert(a) => self.d(a)?,
             // |a|^2 = a conj(a): (conj(a) P + a conj(Q), conj(a) Q + a conj(P)).
             IExprKind::Modulus(a) => {

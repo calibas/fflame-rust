@@ -135,10 +135,15 @@ pub fn globals(p: &Program, params: &ParamValues, env: &Env) -> Vec<f32> {
     let mut sh = Shared::new(env);
     m.exec(&p.global_body, &mut sh);
     let mut out = Vec::with_capacity(p.global_floats());
+    let mut pack = |x: Value| match x {
+        Value::Complex(c) => out.extend([c.re as f32, c.im as f32]),
+        other => out.push(other.as_f64() as f32),
+    };
     for &v in &p.globals {
-        match m.vars[v] {
-            Value::Complex(c) => out.extend([c.re as f32, c.im as f32]),
-            other => out.push(other.as_f64() as f32),
+        if p.vars[v].is_array() {
+            m.arrays[v].iter().copied().for_each(&mut pack);
+        } else {
+            pack(m.vars[v]);
         }
     }
     out
@@ -149,6 +154,8 @@ struct Machine<'p> {
     prog: &'p Program,
     params: &'p ParamValues,
     vars: Vec<Value>,
+    /// Each array variable's elements; empty for a scalar.
+    arrays: Vec<Vec<Value>>,
 }
 
 /// What the shared symbols hold at the moment.
@@ -202,6 +209,7 @@ pub(crate) struct PerturbStepper<'p> {
     env: Env,
     /// The machine after `global:`, cloned for each step.
     vars: Vec<Value>,
+    arrays: Vec<Vec<Value>>,
 }
 
 impl<'p> PerturbStepper<'p> {
@@ -212,12 +220,12 @@ impl<'p> PerturbStepper<'p> {
         let mut m = Machine::new(formula, params);
         let mut sh = Shared::new(env);
         m.exec(&formula.global_body, &mut sh);
-        Some(PerturbStepper { formula, params, reference: env.pixel, env: *env, vars: m.vars })
+        Some(PerturbStepper { formula, params, reference: env.pixel, env: *env, vars: m.vars, arrays: m.arrays })
     }
 
     pub(crate) fn step(&self, z: C64, dz: C64, dpixel: C64) -> C64 {
         let env = Env { pixel: self.reference.add(dpixel), ..self.env };
-        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone() };
+        let mut m = Machine { prog: self.formula, params: self.params, vars: self.vars.clone(), arrays: self.arrays.clone() };
         let mut sh = Shared::new(&env);
         sh.z = z;
         sh.dz = dz;
@@ -239,6 +247,7 @@ pub(crate) struct DerivStepper {
     params: ParamValues,
     env: Env,
     vars: Vec<Value>,
+    arrays: Vec<Vec<Value>>,
     /// The first variable the derivative pass added: it and every one
     /// after are derivatives (or a temporary of one).
     first: usize,
@@ -252,23 +261,23 @@ impl DerivStepper {
     /// started at `env.pixel`: its `global:` and `init:` run.
     pub(crate) fn new(d: std::sync::Arc<Program>, first: usize, params: ParamValues, env: Env) -> Option<Self> {
         let (p, q) = (d.dz_var?, d.dzq_var);
-        let (vars, _) = {
+        let (vars, arrays) = {
             let mut m = Machine::new(&d, &params);
             let mut sh = Shared::new(&env);
             m.exec(&d.global_body, &mut sh);
             m.exec(&d.init, &mut sh);
-            (m.vars, sh.z)
+            (m.vars, m.arrays)
         };
-        Some(DerivStepper { prog: d, params, env, vars, first, p, q, e: 0 })
+        Some(DerivStepper { prog: d, params, env, vars, arrays, first, p, q, e: 0 })
     }
 
     /// One pass from the iterate `z`.
     pub(crate) fn step(&mut self, z: C64) {
-        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars) };
+        let mut m = Machine { prog: &self.prog, params: &self.params, vars: std::mem::take(&mut self.vars), arrays: std::mem::take(&mut self.arrays) };
         let mut sh = Shared::new(&self.env);
         sh.z = z;
         m.exec(&self.prog.loop_body, &mut sh);
-        self.vars = m.vars;
+        (self.vars, self.arrays) = (m.vars, m.arrays);
         // The larger part near one, the exponent at zero or above.
         let (p, q) = self.pair();
         let a = p.re.abs().max(p.im.abs()).max(q.re.abs()).max(q.im.abs());
@@ -556,7 +565,15 @@ pub fn run(
 
 impl<'p> Machine<'p> {
     fn new(prog: &'p Program, params: &'p ParamValues) -> Self {
-        Machine { prog, params, vars: prog.vars.iter().map(|v| Value::zero(v.ty)).collect() }
+        let arrays = prog.vars.iter().map(|v| if v.is_array() { vec![Value::zero(v.ty); v.len()] } else { Vec::new() }).collect();
+        Machine { prog, params, vars: prog.vars.iter().map(|v| Value::zero(v.ty)).collect(), arrays }
+    }
+
+    /// An element's place: the flattened index clamped to the array, as
+    /// the GPU's.
+    fn element(&self, v: VarId, index: &IExpr, sh: &Shared) -> usize {
+        let i = self.eval(index, sh).as_int();
+        (i.max(0) as usize).min(self.arrays[v].len().saturating_sub(1))
     }
 
     fn exec(&mut self, stmts: &[IStmt], sh: &mut Shared) {
@@ -571,6 +588,11 @@ impl<'p> Machine<'p> {
                         Place::Solid => sh.solid = v.as_bool(),
                         Place::DZ => sh.dz = v.as_c64(),
                     }
+                }
+                IStmt::SetElem { var, index, value } => {
+                    let v = self.eval(value, sh);
+                    let i = self.element(*var, index, sh);
+                    self.arrays[*var][i] = v;
                 }
                 IStmt::If { arms, otherwise } => {
                     let mut taken = false;
@@ -671,6 +693,7 @@ impl<'p> Machine<'p> {
                 Value::Complex(f.deriv_c(self.eval(a, sh).as_c64()))
             }
             IExprKind::UserJac(id, a, b) => Value::Complex(user_jac(self.params.funcs[*id], self.eval(a, sh).as_c64(), *b)),
+            IExprKind::Elem(v, index) => self.arrays[*v][self.element(*v, index, sh)],
         }
     }
 }
@@ -841,6 +864,54 @@ mod tests {
     }
 
     const MANDELBROT: &str = "Mandelbrot {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}";
+
+    /// Arrays (plan, item 3, step 3a): a global table, a per-pixel
+    /// history written and read by computed indices, and a colouring's
+    /// array carried across iterations, each as the same program written
+    /// with scalars; an index past the array reads its last element.
+    #[test]
+    fn arrays_run_as_their_scalars() {
+        let with = program(
+            "A {\nglobal:\n float k[2, 2]\n int r = 0\n while r < 2\n  int c = 0\n  while c < 2\n   k[r, c] = r * 2 + c + 1\n   c = c + 1\n  endwhile\n  r = r + 1\n endwhile\n\
+             init:\n z = 0\n complex h[3]\n int t = 0\nloop:\n h[t % 3] = z\n t = t + 1\n\
+             z = sqr(z) + #pixel * k[1, 0] / 3 + 0.01 * h[(t + 1) % 3] + 0.001 * k[1, t + 9]\nbailout:\n |z| < 4\n}",
+            EntryKind::Formula,
+        );
+        let scalars = program(
+            "S {\ninit:\n z = 0\n h0 = 0\n h1 = 0\n h2 = 0\n int t = 0\nloop:\n if t % 3 == 0\n  h0 = z\n elseif t % 3 == 1\n  h1 = z\n\
+             else\n  h2 = z\n endif\n t = t + 1\n complex old = h2\n if (t + 1) % 3 == 0\n  old = h0\n elseif (t + 1) % 3 == 1\n  old = h1\n endif\n\
+             z = sqr(z) + #pixel * 3 / 3 + 0.01 * old + 0.001 * 4\nbailout:\n |z| < 4\n}",
+            EntryKind::Formula,
+        );
+        let (pa, ps) = (ParamValues::defaults(&with), ParamValues::defaults(&scalars));
+        for &(x, y) in &[(-0.75, 0.1), (0.3, 0.5), (-1.3, 0.05), (0.26, 0.0), (-0.1, 0.9)] {
+            let env = Env::at(C64::new(x, y), 300);
+            let (a, b) = (run(&with, &pa, None, &env), run(&scalars, &ps, None, &env));
+            assert_eq!((a.n, a.escaped), (b.n, b.escaped), "({x}, {y})");
+            assert!(a.z.sub(b.z).abs() < 1e-12, "({x}, {y}): {:?} against {:?}", a.z, b.z);
+        }
+        // The global table, packed in order: k[0, 0], k[0, 1], k[1, 0], k[1, 1].
+        assert_eq!(globals(&with, &pa, &Env::at(C64::ZERO, 1)), vec![1.0, 2.0, 3.0, 4.0]);
+        // A colouring's array across iterations: the mean of the last
+        // three |z|, as three scalars shifted.
+        let f = program(MANDELBROT, EntryKind::Formula);
+        let ca = program(
+            "C {\ninit:\n float last[3]\nloop:\n last[2] = last[1]\n last[1] = last[0]\n last[0] = cabs(#z)\n\
+             final:\n #index = (last[0] + last[1] + last[2]) / 3\n}",
+            EntryKind::Coloring,
+        );
+        let cs = program(
+            "C {\ninit:\n float a = 0\n float b = 0\n float c = 0\nloop:\n c = b\n b = a\n a = cabs(#z)\nfinal:\n #index = (a + b + c) / 3\n}",
+            EntryKind::Coloring,
+        );
+        let fp = ParamValues::defaults(&f);
+        for &(x, y) in &[(-0.75, 0.1), (0.3, 0.5), (-1.3, 0.05)] {
+            let env = Env::at(C64::new(x, y), 100);
+            let ia = run(&f, &fp, Some((&ca, &ParamValues::defaults(&ca))), &env).index;
+            let is = run(&f, &fp, Some((&cs, &ParamValues::defaults(&cs))), &env).index;
+            assert_eq!(ia, is, "({x}, {y})");
+        }
+    }
 
     /// Escape counts against the textbook loop, for points of every kind.
     #[test]

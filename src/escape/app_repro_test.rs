@@ -2995,6 +2995,75 @@ mod tests {
         assert!(d == 0.0, "the custom colouring at depth differs on {:.3}% of pixels", d * 100.0);
     }
 
+    /// Arrays through the renderer (plan, item 3, step 3a): a formula
+    /// whose step reads global tables and keeps a per-pixel history
+    /// renders as the built-in Mandelbrot it equals -- a table picks the
+    /// branch and adds a zero, leaving the step's arithmetic alone (a
+    /// factor of one read at run time lets the driver contract `z^2 * k
+    /// + c` otherwise: 0.03% of pixels moved, a scalar global's alike) --
+    /// and a colouring counting its passes
+    /// in an array, its scale in a global one, as escape count's custom
+    /// twin, on the direct path and perturbed at depth.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_arrays_render_as_their_scalars() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const MA: &str = "MA {\nglobal:\n int sel[3]\n sel[2] = 1\n complex m[2, 2]\n m[1, 1] = (0, 0)\n\
+                          init:\n z = 0\n complex hist[2]\nloop:\n hist[1] = hist[0]\n hist[0] = z\n\
+                          if sel[2] == 1\n  z = sqr(z) + #pixel + m[1, 1]\n else\n  z = hist[1]\n endif\nbailout:\n |z| < @bailout\n}";
+        const EC: &str = "EC(OUTSIDE) {\nfinal:\n #index = #numiter * @scale\ndefault:\n float param scale\n  default = 0.05\n endparam\n}";
+        const ECA: &str = "ECA(OUTSIDE) {\nglobal:\n float wt[2]\n wt[1] = @scale\ninit:\n int count[2]\nloop:\n count[1] = count[1] + 1\n\
+                           final:\n #index = count[1] * wt[1]\ndefault:\n float param scale\n  default = 0.05\n endparam\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 200;
+        esc.bailout = 16.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+        let custom = with_custom(esc.clone(), Some((MA, "MA")), None);
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+        assert!(crate::escape::get_formula(&custom.formula).has_feature(crate::escape::FormulaFeature::Program), "the array formula did not compile");
+        let d = differing(&built_in, &got);
+        println!("an array formula differs from the Mandelbrot on {:.3}% of pixels", d * 100.0);
+        assert!(d == 0.0, "the array formula differs on {:.3}%", d * 100.0);
+        // The colourings, each custom, on the direct path and perturbed.
+        let mut deep = esc.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        // At depth, by derived equations reading the tables from `fdata`:
+        // as the same formula without them.
+        const MT: &str = "MT {\nglobal:\n int sel[3]\n sel[2] = 1\n complex m[2, 2]\n m[1, 1] = (0, 0)\ninit:\n z = 0\n\
+                          loop:\n if sel[2] == 1\n  z = sqr(z) + #pixel + m[1, 1]\n else\n  z = sqr(z)\n endif\nbailout:\n |z| < @bailout\n}";
+        const M: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}";
+        let tables = with_custom(deep.clone(), Some((MT, "MT")), None);
+        crate::escape::custom::ensure(&tables);
+        assert!(matches!(crate::escape::EscapeRenderer::perturb_tier(&tables), Some(crate::escape::assembler::PerturbTier::Custom { .. })), "the tables' formula derives");
+        let (a, b) = (output_on(&device, &queue, &renderer, &tables, w, h, true), output_on(&device, &queue, &renderer, &with_custom(deep.clone(), Some((M, "M")), None), w, h, true));
+        let d = differing(&a, &b);
+        println!("at depth, a formula reading tables differs from it without on {:.3}% of pixels", d * 100.0);
+        assert!(d == 0.0, "at depth the tables' formula differs on {:.3}%", d * 100.0);
+        for (what, view, perturbed) in [("direct", &esc, false), ("perturbed", &deep, true)] {
+            let a = output_on(&device, &queue, &renderer, &with_custom(view.clone(), None, Some((EC, "EC"))), w, h, perturbed);
+            let b = output_on(&device, &queue, &renderer, &with_custom(view.clone(), None, Some((ECA, "ECA"))), w, h, perturbed);
+            let covered = a.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&a, &b);
+            println!("{what}: an array colouring differs from its scalar twin on {:.3}% of pixels", d * 100.0);
+            assert!(d == 0.0, "{what}: the array colouring differs on {:.3}%", d * 100.0);
+        }
+    }
+
     /// `#solid` leaves a pixel to the background on every path, and the
     /// environment (`#pixel`) reaches a colouring there too: a colouring
     /// solid exactly on the interior covers what escape count covers.

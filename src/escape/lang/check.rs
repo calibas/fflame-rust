@@ -31,6 +31,10 @@ pub const FDATA_FLOATS: usize = 256;
 /// The most times one `while` or `repeat` runs per evaluation; past it
 /// the loop ends, so no formula can hang the GPU.
 pub const LOOP_CAP: u32 = 4096;
+/// The most floats one array may take: a global's must fit its block
+/// anyway, and a per-pixel one lives in each GPU thread's registers and
+/// private memory (the uniform's `fdata` is as large).
+pub const ARRAY_CAP_FLOATS: usize = 256;
 
 /// Fractint's own predefined names, read in Fractint's dialect only.
 const FRACTINT_NAMES: &[&str] = &["lastsqr", "whitesq", "scrnpix", "scrnmax", "ismand", "center", "magxmag", "rotskew"];
@@ -527,7 +531,7 @@ impl Checker {
     fn declare(&mut self, body: &[Stmt]) {
         for s in body {
             match s {
-                Stmt::Decl { ty, name, span, init } => {
+                Stmt::Decl { ty, name, span, init, dims } => {
                     let ty = match ty {
                         TypeName::Bool => Ty::Bool,
                         TypeName::Int => Ty::Int,
@@ -538,15 +542,31 @@ impl Checker {
                             continue;
                         }
                     };
+                    let dims = match dims {
+                        None => Vec::new(),
+                        Some(d) => match self.array_dims(d, ty, *span) {
+                            Some(d) => d,
+                            None => continue,
+                        },
+                    };
                     match self.var_ids.get(name) {
                         Some(&id) if self.vars[id].ty != ty => {
                             let was = self.vars[id].ty;
                             self.error(*span, format!("`{name}` is already a {}", was.name()));
                         }
+                        Some(&id) if self.vars[id].dims != dims => {
+                            self.error(*span, format!("`{name}` is already declared with other dimensions"));
+                        }
                         Some(_) => {}
-                        None => self.new_var(name, ty, *span),
+                        None => {
+                            self.new_var(name, ty, *span);
+                            self.vars.last_mut().expect("the new variable").dims = dims.clone();
+                        }
                     }
                     if let Some(e) = init {
+                        if !dims.is_empty() {
+                            self.error(e.span, "an array is not set in its declaration: assign its elements");
+                        }
                         self.declare_in_expr(e);
                     }
                 }
@@ -570,6 +590,11 @@ impl Checker {
 
     fn declare_in_expr(&mut self, e: &Expr) {
         if let ExprKind::Assign(target, value) = &e.kind {
+            // An element is written: its array is declared already.
+            if let ExprKind::Index(..) = &target.kind {
+                self.declare_in_expr(value);
+                return;
+            }
             if let ExprKind::Name(n) = &target.kind {
                 let writes_z = self.kind == EntryKind::Formula && n == "z";
                 if !writes_z && !self.var_ids.contains_key(n) {
@@ -600,10 +625,84 @@ impl Checker {
         }
     }
 
+    /// An array declaration's sizes: constant integer expressions (UF's
+    /// rule), each at least one, the whole within [`ARRAY_CAP_FLOATS`].
+    fn array_dims(&mut self, dims: &[Expr], ty: Ty, span: Span) -> Option<Vec<u32>> {
+        if dims.is_empty() {
+            self.error(span, "dynamic arrays (`[]`, `setLength`) are not supported yet");
+            return None;
+        }
+        let mut out = Vec::new();
+        for d in dims {
+            let n = match const_size(d) {
+                Ok(n) => n,
+                Err(why) => {
+                    self.error(d.span, why);
+                    return None;
+                }
+            };
+            if n < 1 {
+                self.error(d.span, format!("an array's size is at least 1, not {n}"));
+                return None;
+            }
+            out.push(n.min(i64::from(u32::MAX)) as u32);
+        }
+        let floats = out.iter().map(|&d| d as usize).fold(1usize, |a, d| a.saturating_mul(d)).saturating_mul(ty.floats());
+        if floats > ARRAY_CAP_FLOATS {
+            self.error(span, format!("this array takes {floats} floats; at most {ARRAY_CAP_FLOATS} fit (a complex takes two)"));
+            return None;
+        }
+        Some(out)
+    }
+
+    /// An array element: `name[i, j]` read at its flattened index, each
+    /// index an int, a constant one within its dimension (UF refuses it
+    /// otherwise; one computed is clamped where it is read).
+    fn element(&mut self, name: &str, index: &[Expr], span: Span) -> Option<(VarId, IExpr)> {
+        let Some(&id) = self.var_ids.get(name) else {
+            self.error(span, format!("`{name}` is not an array"));
+            return None;
+        };
+        let dims = self.vars[id].dims.clone();
+        if dims.is_empty() {
+            self.error(span, format!("`{name}` is not an array"));
+            return None;
+        }
+        if index.len() != dims.len() {
+            self.error(span, format!("`{name}` has {} dimensions: write {} indices", dims.len(), dims.len()));
+            return None;
+        }
+        let int = |kind: IExprKind| IExpr { kind, ty: Ty::Int };
+        let mut flat: Option<IExpr> = None;
+        for (x, &d) in index.iter().zip(&dims) {
+            let i = self.expr(x)?;
+            if i.ty != Ty::Int {
+                self.error(x.span, format!("an array index is an int, not a {}", i.ty.name()));
+                return None;
+            }
+            if let IExprKind::Int(k) = i.kind {
+                if k < 0 || k >= i64::from(d) {
+                    self.error(x.span, format!("index {k} is outside `{name}`, whose dimension has {d}"));
+                    return None;
+                }
+            }
+            flat = Some(match (flat, &i.kind) {
+                (None, _) => i,
+                // Constant indices fold: the element is known.
+                (Some(IExpr { kind: IExprKind::Int(f), .. }), IExprKind::Int(k)) => int(IExprKind::Int(f * i64::from(d) + k)),
+                (Some(f), _) => {
+                    let scaled = int(IExprKind::Binary(BinOp::Mul, Box::new(f), Box::new(int(IExprKind::Int(i64::from(d))))));
+                    int(IExprKind::Binary(BinOp::Add, Box::new(scaled), Box::new(i)))
+                }
+            });
+        }
+        Some((id, flat.expect("one index at least")))
+    }
+
     fn new_var(&mut self, name: &str, ty: Ty, span: Span) {
         self.var_ids.insert(name.to_string(), self.vars.len());
         let perturb = matches!(self.section, SectionKind::PerturbInit | SectionKind::PerturbLoop);
-        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false, perturb });
+        self.vars.push(Var { name: name.to_string(), ty, span, stored_real: false, global: false, perturb, dims: Vec::new() });
     }
 
     fn param(&mut self, name: &str, span: Span) -> ParamId {
@@ -777,8 +876,25 @@ impl Checker {
     /// symbol or parameter written without its prefix.
     fn name(&mut self, n: &str, span: Span) -> Option<IExpr> {
         if let Some(&id) = self.var_ids.get(n) {
+            if self.vars[id].is_array() {
+                self.error(span, format!("`{n}` is an array: read an element, `{n}[i]`"));
+                return None;
+            }
             // The perturbation equations and the formula's own sections
             // share no variables: the reference orbit keeps only `#z`.
+            if !self.readable(id, n, span) {
+                return None;
+            }
+            return Some(IExpr { kind: IExprKind::Var(id), ty: self.vars[id].ty });
+        }
+        self.unresolved(n, span)
+    }
+
+    /// Whether variable `id` may be read in this section: the
+    /// perturbation equations and the formula's own sections share none
+    /// (the reference orbit keeps only `#z`).
+    fn readable(&mut self, id: VarId, n: &str, span: Span) -> bool {
+        {
             let var = &self.vars[id];
             if !var.global && var.perturb != self.in_perturb() {
                 let why = if self.in_perturb() {
@@ -787,10 +903,15 @@ impl Checker {
                     "it belongs to the perturbation equations"
                 };
                 self.error(span, format!("`{n}` cannot be read here: {why}"));
-                return None;
+                return false;
             }
-            return Some(IExpr { kind: IExprKind::Var(id), ty: self.vars[id].ty });
         }
+        true
+    }
+
+    /// A name that is no variable: `z`, a predefined name or parameter
+    /// written bare.
+    fn unresolved(&mut self, n: &str, span: Span) -> Option<IExpr> {
         if self.kind == EntryKind::Formula && n == "z" {
             if !self.per_image_ok(Predef::Z, n, span) {
                 return None;
@@ -849,6 +970,9 @@ impl Checker {
             Stmt::Decl { name, init, .. } => {
                 if let Some(e) = init {
                     let Some(&id) = self.var_ids.get(name) else { return };
+                    if self.vars[id].is_array() {
+                        return;
+                    }
                     if let Some(v) = self.expr(e) {
                         let ty = self.vars[id].ty;
                         if let Some(v) = self.convert(v, ty, e.span) {
@@ -893,15 +1017,27 @@ impl Checker {
     }
 
     /// `target = value`, with `a = b = c` chains unwound innermost first.
-    /// Returns the place written.
-    fn assign(&mut self, target: &Expr, value: &Expr, out: &mut Vec<IStmt>) -> Option<(Place, Ty)> {
+    /// Returns what reads the target back.
+    fn assign(&mut self, target: &Expr, value: &Expr, out: &mut Vec<IStmt>) -> Option<IExpr> {
         let v = match &value.kind {
-            ExprKind::Assign(t2, v2) => {
-                let (place, ty) = self.assign(t2, v2, out)?;
-                IExpr { kind: place_read(place)?, ty }
-            }
+            ExprKind::Assign(t2, v2) => self.assign(t2, v2, out)?,
             _ => self.expr(value)?,
         };
+        if let ExprKind::Index(n, index) = &target.kind {
+            let (id, flat) = self.element(n, index, target.span)?;
+            if self.vars[id].global && self.section != SectionKind::Global {
+                self.error(target.span, format!("`{n}` is set in `global:` and is read-only elsewhere"));
+                return None;
+            }
+            if self.vars[id].perturb != self.in_perturb() {
+                self.error(target.span, format!("`{n}` cannot be written here: the perturbation equations have their own variables"));
+                return None;
+            }
+            let ty = self.vars[id].ty;
+            let v = self.convert(v, ty, value.span)?;
+            out.push(IStmt::SetElem { var: id, index: flat.clone(), value: v });
+            return Some(IExpr { kind: IExprKind::Elem(id, Box::new(flat)), ty });
+        }
         // Fractint's `sqr()` leaves its argument's squared modulus in
         // `LastSqr`: the last call evaluated, read from the values before
         // this assignment, so it is set first.
@@ -919,13 +1055,17 @@ impl Checker {
         let (place, ty) = self.place(target)?;
         let v = self.convert(v, ty, value.span)?;
         out.push(IStmt::Assign(place, v));
-        Some((place, ty))
+        Some(IExpr { kind: place_read(place)?, ty })
     }
 
     fn place(&mut self, target: &Expr) -> Option<(Place, Ty)> {
         match &target.kind {
             ExprKind::Name(n) => {
                 if let Some(&id) = self.var_ids.get(n) {
+                    if self.vars[id].is_array() {
+                        self.error(target.span, format!("`{n}` is an array: assign its elements, `{n}[i] = ...`"));
+                        return None;
+                    }
                     if self.vars[id].global && self.section != SectionKind::Global {
                         self.error(target.span, format!("`{n}` is set in `global:` and is read-only elsewhere"));
                         return None;
@@ -991,11 +1131,8 @@ impl Checker {
         let test = match last {
             Stmt::Expr(e) => match &e.kind {
                 ExprKind::Assign(t, v) => {
-                    let placed = self.assign(t, v, &mut out);
-                    placed.and_then(|(p, ty)| {
-                        let read = IExpr { kind: place_read(p)?, ty };
-                        self.to_bool(read, e.span)
-                    })
+                    let read = self.assign(t, v, &mut out);
+                    read.and_then(|read| self.to_bool(read, e.span))
                 }
                 _ => self.expr(e).and_then(|v| self.to_bool(v, e.span)),
             },
@@ -1056,6 +1193,13 @@ impl Checker {
                 lit(IExprKind::MakeComplex(Box::new(re), Box::new(im)), Ty::Complex)
             }
             ExprKind::Name(n) => self.name(n, e.span),
+            ExprKind::Index(n, index) => {
+                let (id, flat) = self.element(n, index, e.span)?;
+                if !self.readable(id, n, e.span) {
+                    return None;
+                }
+                lit(IExprKind::Elem(id, Box::new(flat)), self.vars[id].ty)
+            }
             ExprKind::Predef(n) => {
                 let p = self.predef(n, e.span)?;
                 Some(predef_expr(p))
@@ -1350,7 +1494,7 @@ impl Checker {
         // A complex whose every assignment is real keeps one float. The
         // fixpoint runs over every complex variable, temporaries too: a
         // state variable is only as real as what is added to it.
-        let mut real: HashSet<VarId> = (0..p.vars.len()).filter(|&v| p.vars[v].ty == Ty::Complex).collect();
+        let mut real: HashSet<VarId> = (0..p.vars.len()).filter(|&v| p.vars[v].ty == Ty::Complex && !p.vars[v].is_array()).collect();
         let mut assigns: Vec<(VarId, IExpr)> = Vec::new();
         collect_assigns(&p.global_body, &mut assigns);
         collect_assigns(&p.init, &mut assigns);
@@ -1379,7 +1523,7 @@ impl Checker {
                 .iter()
                 .map(|&v| {
                     let var = &p.vars[v];
-                    let n = if var.stored_real { 1 } else { var.ty.floats() };
+                    let n = if var.stored_real { 1 } else { var.floats() };
                     format!("`{}` ({n})", var.name)
                 })
                 .collect();
@@ -1443,11 +1587,14 @@ fn mentions(body: &[Stmt], n: &str) -> bool {
             ExprKind::Complex(a, b) | ExprKind::Binary(_, a, b) | ExprKind::Assign(a, b) => e(a, n) || e(b, n),
             ExprKind::Unary(_, a) | ExprKind::Modulus(a) => e(a, n),
             ExprKind::Call { args, .. } => args.iter().any(|a| e(a, n)),
+            ExprKind::Index(m, index) => m == n || index.iter().any(|a| e(a, n)),
             _ => false,
         }
     }
     body.iter().any(|s| match s {
-        Stmt::Decl { name, init, .. } => name == n || init.as_ref().is_some_and(|i| e(i, n)),
+        Stmt::Decl { name, init, dims, .. } => {
+            name == n || init.as_ref().is_some_and(|i| e(i, n)) || dims.as_ref().is_some_and(|d| d.iter().any(|x| e(x, n)))
+        }
         Stmt::Expr(x) => e(x, n),
         Stmt::If { arms, otherwise, .. } => {
             arms.iter().any(|(c, b)| e(c, n) || mentions(b, n)) || otherwise.as_ref().is_some_and(|b| mentions(b, n))
@@ -1464,13 +1611,31 @@ fn last_sqr_argument(x: &Expr) -> Option<&Expr> {
             last_sqr_argument(b).or_else(|| last_sqr_argument(a))
         }
         ExprKind::Unary(_, a) | ExprKind::Modulus(a) => last_sqr_argument(a),
-        ExprKind::Call { args, .. } => args.iter().rev().find_map(last_sqr_argument),
+        ExprKind::Call { args, .. } | ExprKind::Index(_, args) => args.iter().rev().find_map(last_sqr_argument),
         _ => None,
     };
     match &x.kind {
         // This call comes after its own argument's calls.
         ExprKind::Call { name, args, user: false } if name == "sqr" && args.len() == 1 => Some(&args[0]),
         _ => inner,
+    }
+}
+
+/// An array size: a constant integer expression, its literals and
+/// arithmetic folded. UF counts parameters and most predefined symbols
+/// as constants too; those sizes are a later step.
+fn const_size(e: &Expr) -> Result<i64, String> {
+    let fold = |a: &Expr, b: &Expr, f: fn(i64, i64) -> Option<i64>| -> Result<i64, String> {
+        f(const_size(a)?, const_size(b)?).ok_or_else(|| "this size does not fold to an integer".to_string())
+    };
+    match &e.kind {
+        ExprKind::Int(v) => Ok(*v),
+        ExprKind::Unary(UnOp::Neg, a) => Ok(-const_size(a)?),
+        ExprKind::Binary(BinOp::Add, a, b) => fold(a, b, i64::checked_add),
+        ExprKind::Binary(BinOp::Sub, a, b) => fold(a, b, i64::checked_sub),
+        ExprKind::Binary(BinOp::Mul, a, b) => fold(a, b, i64::checked_mul),
+        ExprKind::Param(_) | ExprKind::Predef(_) => Err("an array sized by a parameter or a predefined symbol is not supported yet".to_string()),
+        _ => Err("an array's size is a constant integer expression".to_string()),
     }
 }
 
@@ -1537,6 +1702,10 @@ fn const_int(e: &IExpr) -> Option<i64> {
 pub(crate) struct Flow {
     /// Definitely written so far.
     pub(crate) written: HashSet<VarId>,
+    /// Array elements definitely written so far, at constant indices: a
+    /// later read of one reads this pass's value (a scratch array is no
+    /// state).
+    pub(crate) written_elems: HashSet<(VarId, i64)>,
     /// Written on any path.
     pub(crate) any_write: HashSet<VarId>,
     /// Read where an earlier write is not certain.
@@ -1553,35 +1722,45 @@ pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
                     f.any_write.insert(*v);
                 }
             }
+            // One element written: the array is not, so a later read of it
+            // still reads what came before.
+            IStmt::SetElem { var, index, value } => {
+                reads(index, f);
+                reads(value, f);
+                f.any_write.insert(*var);
+                if let IExprKind::Int(k) = index.kind {
+                    f.written_elems.insert((*var, k));
+                }
+            }
             IStmt::If { arms, otherwise } => {
-                let start = f.written.clone();
-                let mut after: Option<HashSet<VarId>> = None;
+                let start = (f.written.clone(), f.written_elems.clone());
+                let mut after: Option<(HashSet<VarId>, HashSet<(VarId, i64)>)> = None;
                 for (cond, body) in arms {
                     // Each test runs with only what came before the
                     // `if`: an earlier arm's body did not run.
-                    f.written = start.clone();
+                    (f.written, f.written_elems) = start.clone();
                     reads(cond, f);
                     flow(body, f);
                     after = Some(match after {
-                        None => f.written.clone(),
-                        Some(a) => a.intersection(&f.written).copied().collect(),
+                        None => (f.written.clone(), f.written_elems.clone()),
+                        Some((a, e)) => (a.intersection(&f.written).copied().collect(), e.intersection(&f.written_elems).copied().collect()),
                     });
                 }
-                f.written = start.clone();
+                (f.written, f.written_elems) = start.clone();
                 flow(otherwise, f);
-                let w = f.written.clone();
-                f.written = match after {
-                    Some(a) => a.intersection(&w).copied().collect(),
-                    None => w,
+                let (w, we) = (f.written.clone(), f.written_elems.clone());
+                (f.written, f.written_elems) = match after {
+                    Some((a, e)) => (a.intersection(&w).copied().collect(), e.intersection(&we).copied().collect()),
+                    None => (w, we),
                 };
             }
             IStmt::While { cond, body } => {
                 reads(cond, f);
-                let start = f.written.clone();
+                let start = (f.written.clone(), f.written_elems.clone());
                 flow(body, f);
                 reads(cond, f);
                 // The body may not run at all.
-                f.written = start;
+                (f.written, f.written_elems) = start;
             }
             IStmt::Repeat { body, cond } => {
                 flow(body, f);
@@ -1598,6 +1777,13 @@ pub(crate) fn reads(e: &IExpr, f: &mut Flow) {
                 f.exposed.insert(*v);
             }
         }
+        IExprKind::Elem(v, index) => {
+            let known = matches!(index.kind, IExprKind::Int(k) if f.written_elems.contains(&(*v, k)));
+            if !f.written.contains(v) && !known {
+                f.exposed.insert(*v);
+            }
+            reads(index, f);
+        }
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => reads(a, f),
         IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => {
             reads(a, f);
@@ -1611,7 +1797,7 @@ fn collect_assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
     for s in stmts {
         match s {
             IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
-            IStmt::Assign(..) => {}
+            IStmt::Assign(..) | IStmt::SetElem { .. } => {}
             IStmt::If { arms, otherwise } => {
                 for (_, b) in arms {
                     collect_assigns(b, out);
@@ -1860,5 +2046,64 @@ mod tests {
         assert_eq!(p.params[0].choices, ["one", "two", "three"]);
         assert_eq!(USER_FUNCTIONS[p.funcs[0].default], Builtin::Cosh);
         assert_eq!(p.param_slots(), 2);
+    }
+    /// Static arrays (plan, item 3, step 3a): declared with constant
+    /// sizes in any section, read and written by element at a flattened
+    /// index; a global one packed with the globals, a colouring's kept
+    /// whole in its state; and what is refused, and where.
+    #[test]
+    fn static_arrays_declare_index_and_pack() {
+        let p = ok(
+            "A {\nglobal:\n float k[3]\n complex m[2, 2 * 2 - 1]\n k[0] = 1\n m[1, 2] = (0, 1)\ninit:\n z = 0\n int h[4]\n\
+             loop:\n h[1] = h[0] + 1\n z = sqr(z) * k[0] + #pixel + m[1, 2] * k[2]\nbailout:\n |z| < 4\n}",
+            EntryKind::Formula,
+        );
+        let var = |n: &str| p.vars.iter().position(|v| v.name == n).expect(n);
+        let (k, m, h) = (var("k"), var("m"), var("h"));
+        assert_eq!((p.vars[k].dims.clone(), p.vars[m].dims.clone(), p.vars[h].dims.clone()), (vec![3], vec![2, 3], vec![4]));
+        assert!(p.vars[k].global && p.vars[m].global && !p.vars[h].global);
+        // The globals the loop reads, every element packed: 3 + 6 complex.
+        assert_eq!(p.globals, vec![k, m]);
+        assert_eq!(p.global_floats(), 3 + 12);
+        // `m[1, 2]` flattens to 1 * 3 + 2.
+        fn flat(e: &IExpr) -> Option<i64> {
+            match &e.kind {
+                IExprKind::Int(i) => Some(*i),
+                IExprKind::Binary(BinOp::Add, a, b) => Some(flat(a)? + flat(b)?),
+                IExprKind::Binary(BinOp::Mul, a, b) => Some(flat(a)? * flat(b)?),
+                _ => None,
+            }
+        }
+        let IStmt::SetElem { var: v, index, .. } = &p.global_body[1] else { panic!("{:?}", p.global_body[1]) };
+        assert_eq!((*v, flat(index)), (m, Some(5)));
+
+        // A colouring keeps an array it carries across iterations whole.
+        let c = ok(
+            "C {\ninit:\n float last[3]\nloop:\n last[2] = last[1]\n last[1] = last[0]\n last[0] = cabs(#z)\n\
+             final:\n #index = last[0] + last[1] + last[2]\n}",
+            EntryKind::Coloring,
+        );
+        assert_eq!(c.state_floats(), 3);
+
+        let refused = |src: &str, want: &str| {
+            let e = errors(src, EntryKind::Formula);
+            assert!(e.iter().any(|m| m.contains(want)), "{src}: {e:?}");
+        };
+        let shell = |body: &str| format!("F {{\ninit:\n z = 0\n{body}\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}}");
+        refused(&shell(" float a[]"), "dynamic arrays");
+        refused(&shell(" float a[@n]"), "sized by a parameter");
+        refused(&shell(" float a[0]"), "at least 1");
+        refused(&shell(" complex a[200]"), "at most 256");
+        refused(&shell(" float a[2] = 1"), "not set in its declaration");
+        refused(&shell(" float a[2]\n float b = a"), "is an array: read an element");
+        refused(&shell(" float a[2]\n a = 1"), "assign its elements");
+        refused(&shell(" float a[2, 2]\n float b = a[1]"), "2 dimensions");
+        refused(&shell(" float a[2]\n float b = a[1.5]"), "an array index is an int");
+        refused(&shell(" float a[2]\n float b = a[2]"), "outside `a`");
+        refused(&shell(" float b = c[0]"), "`c` is not an array");
+        refused(
+            "F {\nglobal:\n float k[2]\ninit:\n z = 0\n k[0] = 1\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}",
+            "read-only elsewhere",
+        );
     }
 }

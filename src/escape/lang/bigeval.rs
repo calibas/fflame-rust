@@ -67,6 +67,39 @@ pub(crate) fn take_complex(bytes: &mut &[u8]) -> Option<BigComplex> {
     Some(BigComplex { re: take_float(bytes)?, im: take_float(bytes)? })
 }
 
+/// A variable's value, tagged by its type.
+fn put_value(out: &mut Vec<u8>, v: &BigValue) {
+    match v {
+        BigValue::Bool(b) => {
+            out.push(0);
+            out.push(u8::from(*b));
+        }
+        BigValue::Int(i) => {
+            out.push(1);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        BigValue::Float(x) => {
+            out.push(2);
+            put_float(out, x);
+        }
+        BigValue::Complex(c) => {
+            out.push(3);
+            put_complex(out, c);
+        }
+    }
+}
+
+fn take_value(bytes: &mut &[u8]) -> Option<BigValue> {
+    let tag = take(bytes, 1)?[0];
+    Some(match tag {
+        0 => BigValue::Bool(take(bytes, 1)?[0] != 0),
+        1 => BigValue::Int(i32::from_le_bytes(take(bytes, 4)?.try_into().ok()?)),
+        2 => BigValue::Float(take_float(bytes)?),
+        3 => BigValue::Complex(take_complex(bytes)?),
+        _ => return None,
+    })
+}
+
 /// A real, whole `w` of modest size, as an integer.
 fn whole(w: &BigComplex) -> Option<i64> {
     if !w.im.is_zero() {
@@ -105,6 +138,8 @@ pub struct BigMachine {
     pass: u32,
     pixel: BigComplex,
     vars: Vec<BigValue>,
+    /// Each array variable's elements; empty for a scalar.
+    arrays: Vec<Vec<BigValue>>,
     z: BigComplex,
     pi: BigFloat,
 }
@@ -116,7 +151,8 @@ impl BigMachine {
         let n = n_limbs.max(1);
         let pi = BigFloat::atan2(&BigFloat::zero(n), &BigFloat::from_f64(-1.0, n));
         let vars = prog.vars.iter().map(|v| zero_of(v.ty, n)).collect();
-        let mut m = BigMachine { params, env, n, pass: 0, pixel, vars, z: BigComplex::zero(n), pi, prog };
+        let arrays = prog.vars.iter().map(|v| if v.is_array() { vec![zero_of(v.ty, n); v.len()] } else { Vec::new() }).collect();
+        let mut m = BigMachine { params, env, n, pass: 0, pixel, vars, arrays, z: BigComplex::zero(n), pi, prog };
         let prog = m.prog.clone();
         m.exec(&prog.global_body)?;
         m.exec(&prog.init)?;
@@ -160,22 +196,14 @@ impl BigMachine {
         put_complex(out, &self.z);
         out.extend_from_slice(&(self.vars.len() as u32).to_le_bytes());
         for v in &self.vars {
-            match v {
-                BigValue::Bool(b) => {
-                    out.push(0);
-                    out.push(u8::from(*b));
-                }
-                BigValue::Int(i) => {
-                    out.push(1);
-                    out.extend_from_slice(&i.to_le_bytes());
-                }
-                BigValue::Float(x) => {
-                    out.push(2);
-                    put_float(out, x);
-                }
-                BigValue::Complex(c) => {
-                    out.push(3);
-                    put_complex(out, c);
+            put_value(out, v);
+        }
+        // The arrays' elements, when the program has any (a stored state
+        // of one without reads as it was written).
+        if self.prog.vars.iter().any(|v| v.is_array()) {
+            for a in &self.arrays {
+                for v in a {
+                    put_value(out, v);
                 }
             }
         }
@@ -191,14 +219,12 @@ impl BigMachine {
             return None;
         }
         for v in &mut self.vars {
-            let tag = take(bytes, 1)?[0];
-            *v = match tag {
-                0 => BigValue::Bool(take(bytes, 1)?[0] != 0),
-                1 => BigValue::Int(i32::from_le_bytes(take(bytes, 4)?.try_into().ok()?)),
-                2 => BigValue::Float(take_float(bytes)?),
-                3 => BigValue::Complex(take_complex(bytes)?),
-                _ => return None,
-            };
+            *v = take_value(bytes)?;
+        }
+        for a in &mut self.arrays {
+            for v in a {
+                *v = take_value(bytes)?;
+            }
         }
         Some(())
     }
@@ -237,6 +263,11 @@ impl BigMachine {
                         Place::Index | Place::Solid | Place::DZ => {}
                     }
                 }
+                IStmt::SetElem { var, index, value } => {
+                    let v = self.eval(value)?;
+                    let i = self.element(*var, index)?;
+                    self.arrays[*var][i] = v;
+                }
                 IStmt::If { arms, otherwise } => {
                     let mut taken = false;
                     for (c, b) in arms {
@@ -272,6 +303,16 @@ impl BigMachine {
         Ok(())
     }
 
+    /// An element's place: the flattened index clamped to the array, as
+    /// the GPU's.
+    fn element(&self, v: VarId, index: &IExpr) -> R<usize> {
+        let i = match self.eval(index)? {
+            BigValue::Int(i) => i,
+            other => self.to_f(other).to_f64() as i32,
+        };
+        Ok((i.max(0) as usize).min(self.arrays[v].len().saturating_sub(1)))
+    }
+
     fn f(&self, v: f64) -> BigFloat {
         BigFloat::from_f64(v, self.n)
     }
@@ -305,6 +346,7 @@ impl BigMachine {
             IExprKind::Float(f) => BigValue::Float(self.f(*f)),
             IExprKind::Complex(re, im) => BigValue::Complex(self.c(*re, *im)),
             IExprKind::Var(v) => self.vars[*v].clone(),
+            IExprKind::Elem(v, index) => self.arrays[*v][self.element(*v, index)?].clone(),
             IExprKind::Param(id) => {
                 let (re, im) = self.params.values[*id];
                 match self.prog.params[*id].ty() {

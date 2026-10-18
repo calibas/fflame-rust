@@ -89,7 +89,7 @@ pub fn formula(p: &Program) -> String {
     body.push_str("struct FormulaState {\n    z: vec2<f32>,\n");
     for (i, v) in p.vars.iter().enumerate() {
         if !v.global && !v.perturb {
-            let _ = writeln!(body, "    v{i}: {},", wgsl_ty(v.ty));
+            let _ = writeln!(body, "    v{i}: {},", var_ty(v));
         }
     }
     // The pass index (`npass`: `pass` is a WGSL keyword), for a program
@@ -131,6 +131,22 @@ pub fn formula(p: &Program) -> String {
     // float comparisons (CLAUDE.md).
     let mut same = vec!["all(bitcast<vec2<u32>>(a.z) == bitcast<vec2<u32>>(b.z))".to_string()];
     for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global && !v.perturb) {
+        if v.is_array() {
+            // Element by element, by bits as the scalars.
+            let el = match v.ty {
+                Ty::Complex => "any(bitcast<vec2<u32>>(a[k]) != bitcast<vec2<u32>>(b[k]))",
+                Ty::Float => "bitcast<u32>(a[k]) != bitcast<u32>(b[k])",
+                Ty::Int | Ty::Bool => "a[k] != b[k]",
+            };
+            let t = var_ty(v);
+            let _ = write!(
+                body,
+                "\nfn uf_same_v{i}(a: {t}, b: {t}) -> bool {{\n    for (var k = 0; k < {}; k = k + 1) {{\n        if ({el}) {{\n            return false;\n        }}\n    }}\n    return true;\n}}\n",
+                v.len()
+            );
+            same.push(format!("uf_same_v{i}(a.v{i}, b.v{i})"));
+            continue;
+        }
         same.push(match v.ty {
             Ty::Complex => format!("all(bitcast<vec2<u32>>(a.v{i}) == bitcast<vec2<u32>>(b.v{i}))"),
             Ty::Float => format!("bitcast<u32>(a.v{i}) == bitcast<u32>(b.v{i})"),
@@ -729,7 +745,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     let mut at = 0usize;
     for &v in &p.state {
         offsets.push((v, at));
-        at += if p.vars[v].stored_real { 1 } else { p.vars[v].ty.floats() };
+        at += if p.vars[v].stored_real { 1 } else { p.vars[v].floats() };
     }
     let ext_vec4s = at.saturating_sub(4).div_ceil(4);
     let lanes = ["x", "y", "z", "w"];
@@ -743,29 +759,43 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     let unpack = |out: &mut String| {
         for &(v, o) in &offsets {
             let var = &p.vars[v];
-            let read = match (var.ty, var.stored_real) {
+            let read = |o: usize| match (var.ty, var.stored_real) {
                 (Ty::Complex, true) => format!("vec2<f32>({}, 0.0)", slot(o)),
                 (Ty::Complex, false) => format!("vec2<f32>({}, {})", slot(o), slot(o + 1)),
                 (Ty::Float, _) => slot(o),
                 (Ty::Int, _) => format!("i32(round({}))", slot(o)),
                 (Ty::Bool, _) => format!("({} != 0.0)", slot(o)),
             };
-            let _ = writeln!(out, "    var v{v}: {} = {read};", wgsl_ty(var.ty));
+            if var.is_array() {
+                let _ = writeln!(out, "    var v{v}: {};", var_ty(var));
+                for k in 0..var.len() {
+                    let _ = writeln!(out, "    v{v}[{k}] = {};", read(o + k * var.ty.floats()));
+                }
+            } else {
+                let _ = writeln!(out, "    var v{v}: {} = {};", wgsl_ty(var.ty), read(o));
+            }
         }
     };
     let pack = |out: &mut String| {
         let mut parts = vec!["0.0".to_string(); 4 + 4 * ext_vec4s];
         for &(v, o) in &offsets {
             let var = &p.vars[v];
-            match (var.ty, var.stored_real) {
-                (Ty::Complex, true) => parts[o] = format!("v{v}.x"),
-                (Ty::Complex, false) => {
-                    parts[o] = format!("v{v}.x");
-                    parts[o + 1] = format!("v{v}.y");
+            let elems: Vec<(String, usize)> = if var.is_array() {
+                (0..var.len()).map(|k| (format!("v{v}[{k}]"), o + k * var.ty.floats())).collect()
+            } else {
+                vec![(format!("v{v}"), o)]
+            };
+            for (x, o) in elems {
+                match (var.ty, var.stored_real) {
+                    (Ty::Complex, true) => parts[o] = format!("{x}.x"),
+                    (Ty::Complex, false) => {
+                        parts[o] = format!("{x}.x");
+                        parts[o + 1] = format!("{x}.y");
+                    }
+                    (Ty::Float, _) => parts[o] = x,
+                    (Ty::Int, _) => parts[o] = format!("f32({x})"),
+                    (Ty::Bool, _) => parts[o] = format!("select(0.0, 1.0, {x})"),
                 }
-                (Ty::Float, _) => parts[o] = format!("v{v}"),
-                (Ty::Int, _) => parts[o] = format!("f32(v{v})"),
-                (Ty::Bool, _) => parts[o] = format!("select(0.0, 1.0, v{v})"),
             }
         }
         for k in 0..ext_vec4s {
@@ -777,7 +807,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     let locals = |out: &mut String| {
         for (i, v) in p.vars.iter().enumerate() {
             if !p.state.contains(&i) && !v.global {
-                let _ = writeln!(out, "    var v{i}: {} = {};", wgsl_ty(v.ty), zero_of(v.ty));
+                let _ = writeln!(out, "    {};", var_decl(i, v));
             }
         }
     };
@@ -793,7 +823,7 @@ pub fn coloring(p: &Program) -> ColoringWgsl {
     let mut g = Gen::new(p, Ctx::ColoringInit, "ufc_");
     body.push_str("fn ufc_init() -> vec4<f32> {\n");
     for &(v, _) in &offsets {
-        let _ = writeln!(body, "    var v{v}: {} = {};", wgsl_ty(p.vars[v].ty), zero_of(p.vars[v].ty));
+        let _ = writeln!(body, "    {};", var_decl(v, &p.vars[v]));
     }
     locals(&mut body);
     g.stmts(&p.init, 1, &mut body);
@@ -894,7 +924,7 @@ impl<'p> Gen<'p> {
         let mut g = 0;
         for &v in &p.globals {
             global_slots[v] = Some(g);
-            g += p.vars[v].ty.floats();
+            g += p.vars[v].floats();
         }
         Gen {
             p,
@@ -1063,6 +1093,25 @@ impl<'p> Gen<'p> {
         }
     }
 
+    /// An array's element: a per-pixel one's from its variable, a
+    /// global one's from the block the CPU filled, at the index clamped.
+    fn element(&mut self, v: VarId, index: &IExpr) -> String {
+        let i = self.expr(index);
+        let var = &self.p.vars[v];
+        let clamped = format!("clamp({i}, 0, {})", var.len() - 1);
+        let Some(k) = self.global_slots[v] else {
+            return format!("{}[{clamped}]", self.var(v));
+        };
+        let read = self.use_(if self.formula_side() { Helper::GArrF } else { Helper::GArrC });
+        let at = if self.formula_side() { k } else { self.p.param_slots() + k };
+        match var.ty {
+            Ty::Complex => format!("vec2<f32>({read}({at} + 2 * {clamped}), {read}({at} + 2 * {clamped} + 1))"),
+            Ty::Float => format!("{read}({at} + {clamped})"),
+            Ty::Int => format!("i32(round({read}({at} + {clamped})))"),
+            Ty::Bool => format!("({read}({at} + {clamped}) != 0.0)"),
+        }
+    }
+
     fn use_(&mut self, h: Helper) -> &'static str {
         self.used.insert(h);
         h.name()
@@ -1089,6 +1138,13 @@ impl<'p> Gen<'p> {
                     Place::DZ => "dz".to_string(),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
+            }
+            IStmt::SetElem { var, index, value } => {
+                let v = self.expr(value);
+                let i = self.expr(index);
+                let a = self.var(*var);
+                let last = self.p.vars[*var].len() - 1;
+                let _ = writeln!(out, "{pad}{a}[clamp({i}, 0, {last})] = {v};");
             }
             IStmt::If { arms, otherwise } => {
                 for (k, (cond, body)) in arms.iter().enumerate() {
@@ -1159,6 +1215,7 @@ impl<'p> Gen<'p> {
             }
             IExprKind::Complex(re, im) => format!("vec2<f32>({}, {})", lit_f32(*re), lit_f32(*im)),
             IExprKind::Var(v) => self.var(*v),
+            IExprKind::Elem(v, index) => self.element(*v, index),
             IExprKind::Param(id) => {
                 let k = self.slots[*id];
                 let f = self.param_fn();
@@ -1370,6 +1427,9 @@ impl<'p> Gen<'p> {
                 let code = as_class(code, class, want);
                 let _ = writeln!(out, "{pad}{target} = {code};");
             }
+            // Never in the equations (the checker and `lang::delta` keep
+            // arrays out of them); as plain code if it were.
+            IStmt::SetElem { .. } => self.stmt(s, depth, out),
             IStmt::If { arms, otherwise } => {
                 for (k, (cond, body)) in arms.iter().enumerate() {
                     let c = self.full_code(cond);
@@ -1580,6 +1640,7 @@ impl<'p> Gen<'p> {
                 let code = if cfe { self.fegen(e) } else { self.expr(e) };
                 let _ = writeln!(out, "{pad}{target} = {code};");
             }
+            IStmt::SetElem { .. } => self.stmt(s, depth, out),
             IStmt::If { arms, otherwise } => {
                 for (k, (cond, body)) in arms.iter().enumerate() {
                     let c = self.expr(cond);
@@ -2041,7 +2102,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
         for s in stmts {
             match s {
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
-                IStmt::Assign(..) => {}
+                IStmt::Assign(..) | IStmt::SetElem { .. } => {}
                 IStmt::If { arms, otherwise } => {
                     for (_, b) in arms {
                         assigns(b, out);
@@ -2095,7 +2156,7 @@ pub fn reads_a_variable(e: &IExpr, p: &Program) -> bool {
 fn constant(e: &IExpr) -> bool {
     match &e.kind {
         IExprKind::Bool(_) | IExprKind::Int(_) | IExprKind::Float(_) | IExprKind::Complex(..) => true,
-        IExprKind::Var(_) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) | IExprKind::FuncChoice(_) => false,
+        IExprKind::Var(_) | IExprKind::Elem(..) | IExprKind::Param(_) | IExprKind::Predef(_) | IExprKind::UserCall(..) | IExprKind::UserDeriv(..) | IExprKind::UserJac(..) | IExprKind::FuncChoice(_) => false,
         IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) => {
             constant(a)
         }
@@ -2127,9 +2188,28 @@ pub fn colours_anything(p: &Program) -> bool {
 fn writes(stmts: &[IStmt], place: Place) -> bool {
     stmts.iter().any(|s| match s {
         IStmt::Assign(p, _) => *p == place,
+        IStmt::SetElem { .. } => false,
         IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes(b, place)) || writes(otherwise, place),
         IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes(body, place),
     })
+}
+
+/// A variable's WGSL type: an array's of its elements.
+fn var_ty(v: &Var) -> String {
+    if v.is_array() {
+        format!("array<{}, {}>", wgsl_ty(v.ty), v.len())
+    } else {
+        wgsl_ty(v.ty).to_string()
+    }
+}
+
+/// `var v<i>: T = 0`, an array zeroed by WGSL itself.
+fn var_decl(i: VarId, v: &Var) -> String {
+    if v.is_array() {
+        format!("var v{i}: {}", var_ty(v))
+    } else {
+        format!("var v{i}: {} = {}", wgsl_ty(v.ty), zero_of(v.ty))
+    }
 }
 
 fn wgsl_ty(t: Ty) -> &'static str {
@@ -2240,6 +2320,10 @@ enum Helper {
     User,
     UserD,
     Opaque,
+    // A global array's float at a slot: a formula's `fdata`, a
+    // colouring's parameter block.
+    GArrF,
+    GArrC,
     // Exact near zero (`Builtin::Expm1`, `Log1p`, and the small sin and
     // sinh of the derived perturbation equations' difference forms).
     FSin,
@@ -2319,6 +2403,8 @@ impl Helper {
             User => "uf_user",
             UserD => "uf_user_d",
             Opaque => "uf_k",
+            GArrF => "uf_garr_f",
+            GArrC => "uf_garr_c",
         }
     }
 
@@ -2675,6 +2761,13 @@ impl Helper {
 }",
             User => return user_source(),
             UserD => return user_d_source(),
+            GArrF => "fn uf_garr_f(k: i32) -> f32 {
+    let i = u32(max(k, 0));
+    return fdata4(i / 4u)[i % 4u];
+}",
+            GArrC => "fn uf_garr_c(k: i32) -> f32 {
+    return cparam(u32(max(k, 0)));
+}",
             // The identity, which WGSL does not fold: see `Gen::expr`.
             Opaque => "fn uf_k(x: f32) -> f32 {
     return x;
@@ -2869,6 +2962,38 @@ pub(crate) mod tests {
         );
         let p = program(&src, EntryKind::Formula);
         let module = formula_module(&p);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+    }
+
+    /// Arrays of every type (plan, item 3, step 3a): global ones read
+    /// from the formula's `fdata` and the colouring's parameter block,
+    /// per-pixel ones in the formula's state (compared element by element
+    /// for interior detection) and a colouring's packed state, written and
+    /// read at computed indices.
+    #[test]
+    fn arrays_compile_to_valid_wgsl() {
+        let f = program(
+            "A {\nglobal:\n float k[3]\n complex m[2, 2]\n int n[2]\n bool b[2]\n k[1] = real(@a)\n m[1, 1] = (0, 1)\n n[0] = 2\n b[1] = true\n\
+             init:\n z = 0\n complex h[4]\n int t = 0\n bool seen[2]\nloop:\n h[t % 4] = z\n t = t + 1\n seen[t % 2] = b[t % 2]\n\
+             z = sqr(z) * k[t % 3] + #pixel + m[t % 2, 1] * n[0] + h[(t + 3) % 4] * 0.01\n if seen[0]\n  z = z * 1.01\n endif\n\
+             bailout:\n |z| < 4\n}",
+            EntryKind::Formula,
+        );
+        let module = formula_module(&f);
+        if let Err(e) = validate(&module) {
+            panic!("{e}\n---\n{module}");
+        }
+        assert!(module.contains("uff_same_v"), "the state's arrays compared for interior detection");
+        let c = program(
+            "C {\nglobal:\n float w[3]\n w[0] = real(@scale)\n w[1] = 2\n w[2] = 3\ninit:\n complex last[2]\n int hits[3]\n\
+             loop:\n last[1] = last[0]\n last[0] = #z\n float tmp[2]\n tmp[0] = cabs(#z)\n hits[round(tmp[0]) % 3] = hits[round(tmp[0]) % 3] + 1\n\
+             final:\n #index = cabs(last[0] - last[1]) * w[0] + hits[1] * w[2]\n}",
+            EntryKind::Coloring,
+        );
+        assert_eq!(c.state_floats(), 2 * 2 + 3, "the arrays the loop carries; not the temporary");
+        let module = coloring_module(&c);
         if let Err(e) = validate(&module) {
             panic!("{e}\n---\n{module}");
         }

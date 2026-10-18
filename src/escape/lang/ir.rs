@@ -76,6 +76,32 @@ pub struct Var {
     /// Made in `perturbinit:` or `perturbloop:`: a temporary of the
     /// perturbation equations, which see no other section's variables.
     pub perturb: bool,
+    /// An array's dimensions, the first the slowest (UF's static arrays:
+    /// constant sizes); empty for a scalar. Its elements are `ty`, read
+    /// and written by a flattened index ([`IExprKind::Elem`],
+    /// [`IStmt::SetElem`]), zero until written.
+    pub dims: Vec<u32>,
+}
+
+impl Var {
+    /// A scalar of no section's (the passes' own temporaries).
+    pub fn temp(name: impl Into<String>, ty: Ty) -> Var {
+        Var { name: name.into(), ty, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() }
+    }
+
+    pub fn is_array(&self) -> bool {
+        !self.dims.is_empty()
+    }
+
+    /// Elements: 1 for a scalar.
+    pub fn len(&self) -> usize {
+        self.dims.iter().map(|&d| d as usize).product()
+    }
+
+    /// Floats the variable takes packed: its elements', two for a complex.
+    pub fn floats(&self) -> usize {
+        self.len() * self.ty.floats()
+    }
 }
 
 /// The predefined symbols a program reads or writes.
@@ -256,6 +282,9 @@ pub enum IExprKind {
     /// picks, by its cancellation-free form (`delta::user_diff_forms`):
     /// the derived perturbation equations', never the checker's.
     UserDiff(FuncId, Box<IExpr>, Box<IExpr>),
+    /// An array variable's element at a flattened index (an int, clamped
+    /// to the array: UF stops the render past it, the GPU cannot).
+    Elem(VarId, Box<IExpr>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -271,6 +300,9 @@ pub enum Place {
 #[derive(Clone, Debug)]
 pub enum IStmt {
     Assign(Place, IExpr),
+    /// `var[index] = value`: an array's element, at a flattened index
+    /// clamped as [`IExprKind::Elem`] reads it.
+    SetElem { var: VarId, index: IExpr, value: IExpr },
     If { arms: Vec<(IExpr, Vec<IStmt>)>, otherwise: Vec<IStmt> },
     While { cond: IExpr, body: Vec<IStmt> },
     Repeat { body: Vec<IStmt>, cond: IExpr },
@@ -392,13 +424,14 @@ impl Program {
     pub fn state_floats(&self) -> usize {
         self.state
             .iter()
-            .map(|&v| if self.vars[v].stored_real { 1 } else { self.vars[v].ty.floats() })
+            .map(|&v| if self.vars[v].stored_real { 1 } else { self.vars[v].floats() })
             .sum()
     }
 
-    /// Floats the packed globals take: two for a complex, one otherwise.
+    /// Floats the packed globals take: two for a complex, one otherwise,
+    /// an array's for each of its elements.
     pub fn global_floats(&self) -> usize {
-        self.globals.iter().map(|&v| self.vars[v].ty.floats()).sum()
+        self.globals.iter().map(|&v| self.vars[v].floats()).sum()
     }
 
     /// Whether any section reads `p`.
@@ -406,7 +439,7 @@ impl Program {
         fn e(x: &IExpr, p: Predef) -> bool {
             match &x.kind {
                 IExprKind::Predef(q) => *q == p,
-                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) => e(a, p),
+                IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::UserDeriv(_, a) | IExprKind::UserJac(_, a, _) | IExprKind::Elem(_, a) => e(a, p),
                 IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) | IExprKind::UserDiff(_, a, b) => e(a, p) || e(b, p),
                 _ => false,
             }
@@ -414,6 +447,7 @@ impl Program {
         fn s(st: &[IStmt], p: Predef) -> bool {
             st.iter().any(|x| match x {
                 IStmt::Assign(_, v) => e(v, p),
+                IStmt::SetElem { index, value, .. } => e(index, p) || e(value, p),
                 IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),
                 IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
             })

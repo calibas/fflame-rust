@@ -280,6 +280,10 @@ fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
             slots_of_expr(e, out);
             out.extend(place_slot(*place));
         }
+        IStmt::SetElem { index, value, .. } => {
+            slots_of_expr(index, out);
+            slots_of_expr(value, out);
+        }
         IStmt::If { arms, otherwise } => {
             for (c, b) in arms {
                 slots_of_expr(c, out);
@@ -293,6 +297,10 @@ fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
         }
     }
 }
+
+/// Why a program with arrays does not convert yet (plan, item 3, step
+/// 3b).
+const ARRAYS: &str = "its arrays do not convert to Rhai yet";
 
 /// Which of the formula's functions is being printed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -707,6 +715,7 @@ impl<'p> Printer<'p> {
 
     fn stmt(&mut self, st: &IStmt) -> R<()> {
         match st {
+            IStmt::SetElem { .. } => return Err(ARRAYS.to_string()),
             IStmt::Assign(place, e) => {
                 let slot = place_slot(*place).ok_or_else(|| format!("a formula writes no {place:?}"))?;
                 if self.is_local(slot) && !self.declared.contains(&slot) {
@@ -797,6 +806,7 @@ impl<'p> Printer<'p> {
             K::Float(x) => float_p(*x)?,
             K::Complex(re, im) => P::atom(format!("complex({}, {})", float(*re)?, float(*im)?)),
             K::Var(v) => P::atom(self.var_ref(*v)?),
+            K::Elem(..) => return Err(ARRAYS.to_string()),
             K::Param(i) => P::atom(format!("p.{}", self.param[*i])),
             K::Predef(q) => self.predef(*q)?,
             K::Convert(a) => self.convert(a, e.ty)?,
