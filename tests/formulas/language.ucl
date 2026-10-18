@@ -123,3 +123,21 @@ final:
 Unlabelled {
   #index = cabs(#z) * 0.1 + #numiter * 0.01
 }
+
+Ring {
+; A colouring's arrays: weights built once per image, the last three
+; magnitudes carried across iterations.
+global:
+  float w[3]
+  w[0] = 0.5
+  w[1] = 0.3
+  w[2] = 0.2
+init:
+  float last[3]
+loop:
+  last[2] = last[1]
+  last[1] = last[0]
+  last[0] = cabs(#z)
+final:
+  #index = (last[0] * w[0] + last[1] * w[1] + last[2] * w[2]) * 0.1
+}

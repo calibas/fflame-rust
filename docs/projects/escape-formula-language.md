@@ -1638,9 +1638,9 @@ Each item is ticked here when done; findings go in as they are made.
        are arrays': sized by a parameter or a predefined symbol 160
        entries (74 formulas, 86 colourings), a size not a constant
        integer expression 28, an array past 256 floats 20 colourings;
-       17 formulas and 2 colourings compile and stop converting to Rhai
-       (3b). So 3f's sizes from parameters reach the most of what is
-       left of arrays.
+       17 formulas and 2 colourings compiled and stopped converting to
+       Rhai (converting since, 3b). So 3f's sizes from parameters reach
+       the most of what is left of arrays.
      - **3b.** Rhai arrays (a literal, a sized constructor, `a[i]`,
        `a.len()`, `p.name[i]` from `prepare`), and UF arrays converted
        to Rhai. **The Rhai half done 2026-10-17**: `[a, b]`, `array(n,
@@ -1648,8 +1648,15 @@ Each item is ticked here when done; findings go in as they are made.
        field or `prepare` value an array, `let b = a` and UF's `x = y`
        copying whole (`Checker::copy_array`); one dimension (arrays of
        arrays refused). A Rhai formula with every form runs as its UF
-       twin. The conversion of UF arrays to Rhai comes after 3e (Origami
-       needs the dialect, not the conversion).
+       twin. **The conversion done 2026-10-17** (`lang::to_rhai`): an
+       array declared as `array(n, zero)`, a global one built in
+       `prepare` and read as `p.k[i]`, a carried one a state field, the
+       checker's element loop for `x = y` printed back as `s.prev =
+       s.last` (`Printer::copy_of`), a two-dimensional one flattened as
+       the checker flattens it (`m[1, 2]` of `[2, 3]` is `m[5]`). The
+       library again converts every compiling entry (2026-10-17): 9,268
+       of 9,268 formulas and 728 of 728 colourings convert, compile back
+       and run as the original; deep zoom kept 3,425 of 3,425.
      - **3c.** 32-bit integers as UF's (wrapping `+ - *` in the
        interpreter, as the GPU's), and Rhai's bit operations (`^ & |
        << >>`, logical shifts on the 32-bit pattern), bit-exact with
@@ -1676,7 +1683,7 @@ Each item is ticked here when done; findings go in as they are made.
        for every pattern, the flip and a terrain.
      - **3f.** For the library: dynamic arrays (`setLength`, `length`)
        and arrays sized by a parameter or `#maxiter`, within the space
-       left; whole-array assignment.
+       left. (Whole-array assignment came with 3b.)
 4. [ ] **The cheap UF items**: parameters past 64 floats (31 formulas, 47
    colourings stop there first); colouring state past 32 floats (31);
    the smaller mismatches, triaged by message (about 150 entries: used

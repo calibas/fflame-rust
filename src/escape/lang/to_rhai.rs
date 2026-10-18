@@ -245,6 +245,10 @@ enum Slot {
 fn slots_of_expr(e: &IExpr, out: &mut Vec<Slot>) {
     match &e.kind {
         IExprKind::Var(v) => out.push(Slot::Var(*v)),
+        IExprKind::Elem(v, a) => {
+            out.push(Slot::Var(*v));
+            slots_of_expr(a, out);
+        }
         IExprKind::Predef(Predef::Z) => out.push(Slot::Z),
         IExprKind::Predef(Predef::Index) => out.push(Slot::Index),
         IExprKind::Predef(Predef::Solid) => out.push(Slot::Solid),
@@ -282,9 +286,10 @@ fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
             slots_of_expr(e, out);
             out.extend(place_slot(*place));
         }
-        IStmt::SetElem { index, value, .. } => {
+        IStmt::SetElem { var, index, value } => {
             slots_of_expr(index, out);
             slots_of_expr(value, out);
+            out.push(Slot::Var(*var));
         }
         IStmt::If { arms, otherwise } => {
             for (c, b) in arms {
@@ -299,10 +304,6 @@ fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
         }
     }
 }
-
-/// Why a program with arrays does not convert yet (plan, item 3, step
-/// 3b).
-const ARRAYS: &str = "its arrays do not convert to Rhai yet";
 
 /// Why a program with creases does not convert (a Rhai formula's own:
 /// UF has none).
@@ -569,7 +570,7 @@ impl<'p> Printer<'p> {
             .iter()
             .map(|&g| {
                 let name = self.global[g].clone().unwrap_or_default();
-                let value = if self.declared.contains(&Slot::Var(g)) { self.var[g].clone() } else { zero(p.vars[g].ty).to_string() };
+                let value = if self.declared.contains(&Slot::Var(g)) { self.var[g].clone() } else { self.slot_zero(Slot::Var(g)) };
                 field(&name, value)
             })
             .collect();
@@ -588,7 +589,7 @@ impl<'p> Printer<'p> {
         }
         for v in 0..p.vars.len() {
             if self.state[v] {
-                let value = if self.declared.contains(&Slot::Var(v)) { self.var[v].clone() } else { zero(p.vars[v].ty).to_string() };
+                let value = if self.declared.contains(&Slot::Var(v)) { self.var[v].clone() } else { self.slot_zero(Slot::Var(v)) };
                 fields.push(field(&self.var[v], value));
             }
         }
@@ -668,6 +669,19 @@ impl<'p> Printer<'p> {
         }
     }
 
+    /// A slot's value before anything is written: its type's zero, an
+    /// array's elements' (`array(n, 0.0)`; UF's arrays flattened to one
+    /// dimension, as their indices are).
+    fn slot_zero(&self, s: Slot) -> String {
+        match s {
+            Slot::Var(v) if self.p.vars[v].is_array() => {
+                let var = &self.p.vars[v];
+                format!("array({}, {})", var.len(), zero(var.ty))
+            }
+            other => zero(self.slot_decl(other).1).to_string(),
+        }
+    }
+
     fn slot_decl(&self, s: Slot) -> (String, Ty) {
         match s {
             Slot::Z => ("z".into(), Ty::Complex),
@@ -709,19 +723,63 @@ impl<'p> Printer<'p> {
             }
         }
         for s in hoisted {
-            let (name, ty) = self.slot_decl(s);
-            self.line(&format!("let {name} = {};", zero(ty)));
+            let name = self.slot_decl(s).0;
+            let value = self.slot_zero(s);
+            self.line(&format!("let {name} = {value};"));
             self.declared.insert(s);
         }
-        for st in stmts {
-            self.stmt(st)?;
+        self.stmts(stmts)
+    }
+
+    /// Statements in order, a whole-array copy as Rhai writes it.
+    fn stmts(&mut self, stmts: &[IStmt]) -> R<()> {
+        let mut i = 0;
+        while i < stmts.len() {
+            if let Some((dst, src)) = stmts.get(i + 1).and_then(|next| self.copy_of(&stmts[i], next)) {
+                let target = self.target(Slot::Var(dst))?;
+                let from = self.var_ref(src)?;
+                self.line(&format!("{target} = {from};"));
+                i += 2;
+            } else {
+                self.stmt(&stmts[i])?;
+                i += 1;
+            }
         }
         Ok(())
     }
 
+    /// A whole-array assignment, `dst = src`, as the checker writes it
+    /// (`Checker::copy_array`): its counter (named `copy N`, a name UF
+    /// cannot give) set to 0, then the loop over the elements.
+    fn copy_of(&self, first: &IStmt, then: &IStmt) -> Option<(VarId, VarId)> {
+        use IExprKind as K;
+        let IStmt::Assign(Place::Var(k), IExpr { kind: K::Int(0), .. }) = first else { return None };
+        let IStmt::While { cond, body } = then else { return None };
+        let is_k = |e: &IExpr| matches!(e.kind, K::Var(v) if v == *k);
+        let K::Binary(BinOp::Lt, a, n) = &cond.kind else { return None };
+        let [IStmt::SetElem { var: dst, index, value }, IStmt::Assign(Place::Var(k2), step)] = body.as_slice() else { return None };
+        let K::Elem(src, at) = &value.kind else { return None };
+        let K::Binary(BinOp::Add, b, one) = &step.kind else { return None };
+        let fits = self.p.vars[*k].name.starts_with("copy ")
+            && is_k(a)
+            && matches!(n.kind, K::Int(len) if len == self.p.vars[*dst].len() as i64)
+            && is_k(index)
+            && is_k(at)
+            && k2 == k
+            && is_k(b)
+            && matches!(one.kind, K::Int(1));
+        fits.then_some((*dst, *src))
+    }
+
     fn stmt(&mut self, st: &IStmt) -> R<()> {
         match st {
-            IStmt::SetElem { .. } => return Err(ARRAYS.to_string()),
+            IStmt::SetElem { var, index, value } => {
+                // Declared by `body` before its first statement.
+                let target = self.target(Slot::Var(*var))?;
+                let i = self.expr(index)?.0;
+                let v = self.loose(value)?;
+                self.line(&format!("{target}[{i}] = {v};"));
+            }
             IStmt::Assign(place, e) => {
                 let slot = place_slot(*place).ok_or_else(|| format!("a formula writes no {place:?}"))?;
                 if self.is_local(slot) && !self.declared.contains(&slot) {
@@ -767,7 +825,7 @@ impl<'p> Printer<'p> {
 
     fn block(&mut self, b: &[IStmt]) -> R<()> {
         self.depth += 1;
-        let r = b.iter().try_for_each(|s| self.stmt(s));
+        let r = self.stmts(b);
         self.depth -= 1;
         r
     }
@@ -812,7 +870,10 @@ impl<'p> Printer<'p> {
             K::Float(x) => float_p(*x)?,
             K::Complex(re, im) => P::atom(format!("complex({}, {})", float(*re)?, float(*im)?)),
             K::Var(v) => P::atom(self.var_ref(*v)?),
-            K::Elem(..) => return Err(ARRAYS.to_string()),
+            K::Elem(v, index) => {
+                let i = self.expr(index)?.0;
+                P::atom(format!("{}[{i}]", self.var_ref(*v)?))
+            }
             K::Param(i) => P::atom(format!("p.{}", self.param[*i])),
             K::Predef(q) => self.predef(*q)?,
             K::Convert(a) => self.convert(a, e.ty)?,
@@ -1313,6 +1374,32 @@ mod tests {
         assert_eq!(progs.len(), 1);
         let text = round_trip(&progs[0]);
         for line in ["floor(p.p1 * 2.5 + complex(0.5, 0.5))", "s.z.re == s.c.re", "s.z.re != 0.0", "if !ctx.julia {", "fn step(s, p, ctx) {"] {
+            assert!(text.contains(line), "no `{line}` in\n{text}");
+        }
+    }
+
+    /// Arrays (plan, item 3, step 3b): declared as `array(n, zero)`, a
+    /// global one built in `prepare` and read as the parameters', a
+    /// carried one a field of the state, a two-dimensional index
+    /// flattened as the checker flattens it, a whole-array copy as Rhai
+    /// writes it.
+    #[test]
+    fn arrays_convert() {
+        let progs = programs(
+            "A {\nglobal:\n float k[2]\n complex m[2, 3]\n k[1] = 0.5\n m[1, 2] = (0, 1)\ninit:\n z = 0\n complex last[2]\n complex prev[2]\n\
+             loop:\n prev = last\n last[1] = last[0]\n last[0] = z\n z = sqr(z) + #pixel + (prev[1] + m[1, 2]) * k[1] * 0.1\nbailout:\n |z| < 4\n}",
+            Dialect::UltraFractal,
+        );
+        let text = round_trip(&progs[0]);
+        for line in [
+            "let k = array(2, 0.0);",
+            "let m = array(6, complex(0.0, 0.0));",
+            "m[5] = complex(0.0, 1.0);",
+            "#{ k: k, m: m }",
+            "#{ z: z, last: array(2, complex(0.0, 0.0)), prev: array(2, complex(0.0, 0.0)) }",
+            "    s.prev = s.last;\n    s.last[1] = s.last[0];",
+            "(s.prev[1] + p.m[5]) * p.k[1] * 0.1",
+        ] {
             assert!(text.contains(line), "no `{line}` in\n{text}");
         }
     }

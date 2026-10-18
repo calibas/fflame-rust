@@ -223,3 +223,30 @@ Shape(XAXIS) {
   z = sqr(z) + c
   |z| < 4
 }
+
+Arrays {
+; Static arrays: a table built once per image, a two-dimensional one,
+; the last iterates carried in a ring, a whole-array copy.
+global:
+  float k[4]
+  int i = 0
+  while i < 4
+    k[i] = 1.0 / (i + 2)
+    i = i + 1
+  endwhile
+  complex m[2, 2]
+  m[0, 1] = (0.1, 0.2)
+  m[1, 0] = (-0.05, 0)
+init:
+  z = 0
+  complex last[3]
+  complex prev[3]
+loop:
+  prev = last
+  last[2] = last[1]
+  last[1] = last[0]
+  last[0] = z
+  z = sqr(z) + #pixel + (prev[2] * k[1] + m[0, 1] * k[3] + m[1, 0]) * 0.1
+bailout:
+  |z| < 4
+}
