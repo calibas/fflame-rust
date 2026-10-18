@@ -76,17 +76,22 @@ pub struct Var {
     /// Made in `perturbinit:` or `perturbloop:`: a temporary of the
     /// perturbation equations, which see no other section's variables.
     pub perturb: bool,
-    /// An array's dimensions, the first the slowest (UF's static arrays:
-    /// constant sizes); empty for a scalar. Its elements are `ty`, read
+    /// An array's dimensions, the first the slowest, at the settings it
+    /// was checked at; empty for a scalar. Its elements are `ty`, read
     /// and written by a flattened index ([`IExprKind::Elem`],
     /// [`IStmt::SetElem`]), zero until written.
     pub dims: Vec<u32>,
+    /// The dimensions as written: a literal each for a constant size, an
+    /// int expression of the parameters and `#maxiter` for one the
+    /// settings fix (UF counts those constants; plan, item 3, step 3f),
+    /// which `dims` holds folded. Empty for a scalar.
+    pub size: Vec<IExpr>,
 }
 
 impl Var {
     /// A scalar of no section's (the passes' own temporaries).
     pub fn temp(name: impl Into<String>, ty: Ty) -> Var {
-        Var { name: name.into(), ty, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() }
+        Var { name: name.into(), ty, span: Span::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() }
     }
 
     pub fn is_array(&self) -> bool {
@@ -442,7 +447,66 @@ impl Cycle {
     }
 }
 
+/// An array size's value: literals, parameters (`param` gives each its
+/// value, an int's rounded), `#maxiter`, the constants, arithmetic and the
+/// real built-ins (`round`, `trunc`, `sqr`, ...). `None` for anything
+/// else, which the checker refuses in a size.
+pub fn size_value(e: &IExpr, param: &dyn Fn(ParamId) -> f64, maxiter: u32) -> Option<f64> {
+    use IExprKind as K;
+    let v = |a: &IExpr| size_value(a, param, maxiter);
+    Some(match &e.kind {
+        K::Int(i) => *i as f64,
+        K::Float(x) => *x,
+        K::Bool(b) => f64::from(u8::from(*b)),
+        K::Param(id) => param(*id),
+        K::Predef(Predef::MaxIter) => f64::from(maxiter),
+        K::Predef(Predef::Pi) => std::f64::consts::PI,
+        K::Predef(Predef::E) => std::f64::consts::E,
+        K::Convert(a) => v(a)?,
+        K::Unary(UnOp::Neg, a) => -v(a)?,
+        K::Binary(op, a, b) => {
+            let (x, y) = (v(a)?, v(b)?);
+            match op {
+                BinOp::Add => x + y,
+                BinOp::Sub => x - y,
+                BinOp::Mul => x * y,
+                BinOp::Div => x / y,
+                BinOp::Pow => x.powf(y),
+                _ => return None,
+            }
+        }
+        K::PowInt(a, n) => v(a)?.powi(i32::try_from(*n).ok()?),
+        K::Modulus(a) => v(a)?.powi(2),
+        K::Call(b, a) => b.eval_f(v(a)?),
+        _ => return None,
+    })
+}
+
 impl Program {
+    /// Whether an array's size reads the settings (a parameter,
+    /// `#maxiter`): the program is checked again at each settings' sizes
+    /// (`custom::resolve`).
+    pub fn sized_by_settings(&self) -> bool {
+        self.vars.iter().any(|v| v.size.iter().any(|e| !matches!(e.kind, IExprKind::Int(_))))
+    }
+
+    /// Every array's dimensions at the settings: the parameters' values by
+    /// index (as `interp::ParamValues` holds them) and the iteration cap.
+    /// `None` where a size has no value.
+    pub fn sizes_at(&self, values: &[(f64, f64)], maxiter: u32) -> Option<Vec<i64>> {
+        let param = |id: ParamId| {
+            let x = values.get(id).map_or(self.params[id].default.0, |v| v.0);
+            if self.params[id].ty() == Ty::Int { x.round() } else { x }
+        };
+        let mut out = Vec::new();
+        for v in &self.vars {
+            for e in &v.size {
+                out.push(size_value(e, &param, maxiter)?.round() as i64);
+            }
+        }
+        Some(out)
+    }
+
     /// Floats the colouring's state takes.
     pub fn state_floats(&self) -> usize {
         self.state

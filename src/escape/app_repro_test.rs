@@ -3076,6 +3076,74 @@ mod tests {
         }
     }
 
+    /// Arrays sized by the settings (plan, item 3, step 3f): a formula
+    /// and a colouring whose tables are sized by a parameter and by
+    /// `#maxiter`, rendered at values other than their defaults (the
+    /// renderer compiles them at those sizes, `custom::resolve`), as the
+    /// built-ins they reduce to; and the same converted to Rhai. Each
+    /// term is zero only at the right size (at the default's a clamped
+    /// write lands on the element read:
+    /// `custom::tests::a_size_the_settings_fix_compiles_at_them`).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_arrays_sized_by_the_settings_render_at_their_sizes() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 112u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const MS: &str = "MS {\nglobal:\n float t[@n]\n int i = 0\n while i < @n\n  t[i] = i\n  i = i + 1\n endwhile\n\
+                          float u[trunc(#maxiter / 2)]\n u[trunc(#maxiter / 2) - 1] = 5\ninit:\n z = 0\n float h[@n + 1]\n int j = 0\n while j <= @n\n  h[j] = j\n  j = j + 1\n endwhile\n\
+                          loop:\n z = sqr(z) + #pixel + (t[2] - 2) + (h[3] - 3) + (u[#maxiter + 10] - 5)\nbailout:\n |z| < @bailout\n\
+                          default:\n int param n\n  default = 3\n endparam\n}";
+        const ECS: &str = "ECS(OUTSIDE) {\nglobal:\n float wt[@k]\n int i = 0\n while i < @k\n  wt[i] = i\n  i = i + 1\n endwhile\n\
+                           final:\n #index = #numiter * @scale + (wt[1] - 1)\ndefault:\n float param scale\n  default = 0.05\n endparam\n\
+                           int param k\n  default = 2\n endparam\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 200;
+        esc.bailout = 16.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+        let mut custom = with_custom(esc.clone(), Some((MS, "MS")), Some((ECS, "ECS")));
+        custom.formula_params.insert("n".into(), 7.0);
+        custom.coloring_params.insert("k".into(), 5.0);
+        let resolved = crate::escape::custom::resolve(&custom);
+        assert_ne!(resolved.formula, custom.formula, "the formula is compiled at its sizes");
+        assert_ne!(resolved.coloring, custom.coloring, "the colouring is compiled at its sizes");
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+        let d = differing(&built_in, &got);
+        println!("at their sizes, the formula and colouring differ from the built-ins on {:.3}% of pixels", d * 100.0);
+        assert!(d == 0.0, "at their sizes they differ on {:.3}%", d * 100.0);
+        // Converted to Rhai, at the same settings.
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        let mut rhai = custom.clone();
+        for (kind, text, entry) in [(EntryKind::Formula, MS, "MS"), (EntryKind::Coloring, ECS, "ECS")] {
+            let converted = crate::escape::custom::convert_to_rhai(text, entry, kind, CustomDialect::UltraFractal, "test").expect("converts");
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: entry.into(), source: converted };
+            match kind {
+                EntryKind::Formula => {
+                    rhai.formula = crate::escape::custom::name_of(kind, &src);
+                    rhai.custom_formula = Some(src);
+                }
+                EntryKind::Coloring => {
+                    rhai.coloring = crate::escape::custom::name_of(kind, &src);
+                    rhai.custom_coloring = Some(src);
+                }
+            }
+        }
+        let got = output_on(&device, &queue, &renderer, &rhai, w, h, false);
+        let d = differing(&built_in, &got);
+        println!("converted to Rhai, they differ on {:.3}%", d * 100.0);
+        assert!(d == 0.0, "converted to Rhai they differ on {:.3}%", d * 100.0);
+    }
+
     /// `#solid` leaves a pixel to the background on every path, and the
     /// environment (`#pixel`) reaches a colouring there too: a colouring
     /// solid exactly on the interior covers what escape count covers.

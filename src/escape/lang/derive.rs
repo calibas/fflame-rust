@@ -86,6 +86,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
                 global: false,
                 perturb: false,
                 dims: Vec::new(),
+                size: Vec::new(),
             });
         }
     }
@@ -98,6 +99,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
         global: false,
         perturb: false,
         dims: Vec::new(),
+        size: Vec::new(),
     });
     let dpix = pixel_unit(&mut out);
     let d = D { taint: &taint, dvar: &dvar, dz, dpix };
@@ -115,7 +117,7 @@ fn complex_derivative(p: &Program) -> Option<Program> {
 /// derivative's inhomogeneous term comes out in the mantissa's units
 /// (plan, phase 4, step 9d).
 fn pixel_unit(out: &mut Program) -> VarId {
-    out.vars.push(Var { name: "d_pixel".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
+    out.vars.push(Var { name: "d_pixel".to_string(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() });
     out.vars.len() - 1
 }
 
@@ -486,7 +488,7 @@ pub fn with_jacobian(p: &Program) -> Option<Program> {
     let mut out = p.clone();
     let mut dvar: Vec<Option<(VarId, VarId)>> = vec![None; p.vars.len()];
     let companion = |out: &mut Program, name: String| {
-        out.vars.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
+        out.vars.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() });
         out.vars.len() - 1
     };
     for (i, v) in p.vars.iter().enumerate() {
@@ -541,7 +543,7 @@ pub(crate) fn user_jac_forms() -> &'static UserJacForms {
         prog.vars.clear();
         prog.loop_body.clear();
         let var_of = |prog: &mut Program, name: &str| {
-            prog.vars.push(Var { name: name.into(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
+            prog.vars.push(Var { name: name.into(), ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() });
             prog.vars.len() - 1
         };
         let (a, ra, rb) = (var_of(&mut prog, "a"), var_of(&mut prog, "ra"), var_of(&mut prog, "rb"));
@@ -629,7 +631,7 @@ impl J<'_> {
         let mut temps = self.temps.borrow_mut();
         let id = self.base + temps.len();
         let name = format!("dj_{}", temps.len());
-        temps.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new() });
+        temps.push(Var { name, ty: Ty::Complex, span: Default::default(), stored_real: false, global: false, perturb: false, dims: Vec::new(), size: Vec::new() });
         self.prelude.borrow_mut().push(IStmt::Assign(Place::Var(id), e));
         var(id)
     }

@@ -32,6 +32,8 @@ struct Registry {
     /// Names whose embedded source failed to compile: not retried every
     /// frame. A new source is a new name.
     failed: HashSet<String>,
+    /// The first error of each of those that has one.
+    failed_why: HashMap<String, String>,
     /// The programs with `global:` values, which the renderer has the
     /// interpreter compute ([`globals`]).
     programs: HashMap<String, Arc<ir::Program>>,
@@ -53,6 +55,14 @@ struct Registry {
     alphas: HashMap<String, String>,
     /// Whether each formula's test has a biomorph ([`biomorph_ok`]).
     biomorph: HashMap<String, bool>,
+    /// The entries whose arrays are sized by the settings (a parameter,
+    /// `#maxiter`), checked at the defaults: [`resolve`] names a variant
+    /// for other values.
+    sized: HashMap<String, Arc<ir::Program>>,
+    /// Why an entry's arrays do not compile at the settings last resolved
+    /// (it renders at its default sizes), by the entry's name
+    /// ([`size_failure`]).
+    size_failures: HashMap<String, String>,
 }
 
 /// Everything a custom formula's reference orbit is a function of
@@ -445,6 +455,9 @@ fn compile_program(p: ir::Program, name: &str) -> Result<&'static FormulaDef, Ve
         r.formulas.insert(name.to_string(), def);
         r.biomorph.insert(name.to_string(), biomorph);
         let p = Arc::new(p);
+        if p.sized_by_settings() {
+            r.sized.insert(name.to_string(), p.clone());
+        }
         if p.degree.is_some() {
             r.degrees.insert(name.to_string(), p.clone());
         }
@@ -872,6 +885,112 @@ pub fn offers_nucleus(escape: &EscapeConfig) -> bool {
 /// variant that does not compile (which renders as the formula did).
 pub fn resolve(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
     use std::borrow::Cow;
+    let Some(sized) = resolve_coloring_sizes(escape) else {
+        return resolve_formula(escape);
+    };
+    Cow::Owned(resolve_formula(&sized).into_owned())
+}
+
+/// An entry's array sizes at a config's values (plan, item 3, step 3f),
+/// when they read the settings and differ from the defaults the entry
+/// was registered at: a hash of them, for the variant's name, and the
+/// settings to check it at.
+fn sizes_of(name: &str, values: &std::collections::BTreeMap<String, f32>, maxiter: u32) -> Option<(u64, lang::check::SizeSettings)> {
+    let base = registry().read().ok()?.sized.get(name)?.clone();
+    let defs = param_defs(&base);
+    let mut block = vec![0.0f32; defs.len() + base.funcs.len()];
+    super::pack_params(&defs, values, &mut block);
+    let params = lang::interp::ParamValues::from_slots(&base, &block);
+    let maxiter = maxiter.max(1);
+    let at = base.sizes_at(&params.values, maxiter)?;
+    let registered: Vec<i64> = base.vars.iter().filter(|v| v.is_array()).flat_map(|v| v.dims.iter().map(|&d| i64::from(d))).collect();
+    if at == registered {
+        return None;
+    }
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15;
+    for v in &at {
+        h = (h ^ *v as u64).wrapping_mul(0x0000_0100_0000_01b3).rotate_left(23);
+    }
+    let settings = lang::check::SizeSettings {
+        params: base.params.iter().zip(&params.values).map(|(p, v)| (p.name.clone(), v.0)).collect(),
+        maxiter: Some(maxiter),
+    };
+    Some((h, settings))
+}
+
+/// Compile `name` with `compile`, at `sizes` when the arrays are sized by
+/// the settings; a failure is logged once and remembered, with its first
+/// error.
+fn compile_once<T>(name: &str, what: &str, src: &CustomSource, sizes: Option<&lang::check::SizeSettings>, compile: impl FnOnce() -> Result<T, Vec<Diag>>) {
+    if registry().read().is_ok_and(|r| r.failed.contains(name)) {
+        return;
+    }
+    let result = match sizes {
+        Some(s) => lang::check::at_settings(s.clone(), compile),
+        None => compile(),
+    };
+    if let Err(diags) = result {
+        let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
+        log::warn!("Custom {what} `{}` ({name}) did not compile: {}", src.entry, msgs.join("; "));
+        let first = diags.iter().find(|d| d.severity == lang::Severity::Error).map_or_else(String::new, |d| d.message.clone());
+        if let Ok(mut r) = registry().write() {
+            r.failed.insert(name.to_string());
+            r.failed_why.insert(name.to_string(), first);
+        }
+    }
+}
+
+/// Note whether the variant `variant` of the entry `base`, at its
+/// arrays' sizes, compiled: what [`size_failure`] says.
+fn note_sizes(base: &str, variant: Option<&str>) {
+    if let Ok(mut r) = registry().write() {
+        let why = variant.filter(|v| r.failed.contains(*v)).map(|v| r.failed_why.get(v).cloned().unwrap_or_default());
+        match why {
+            Some(w) => {
+                r.size_failures.insert(base.to_string(), w);
+            }
+            None => {
+                r.size_failures.remove(base);
+            }
+        }
+    }
+}
+
+/// Why a config's custom formula or colouring does not compile at its
+/// arrays' sizes there (plan, item 3, step 3f), which leaves it at its
+/// default sizes: the panel says so. `None` when it does, or has no such
+/// arrays.
+pub fn size_failure(escape: &EscapeConfig) -> Option<String> {
+    resolve(escape);
+    let r = registry().read().ok()?;
+    [&escape.formula, &escape.coloring].iter().find_map(|n| r.size_failures.get(n.as_str()).cloned())
+}
+
+/// The config with its custom colouring at its arrays' sizes, when they
+/// read the settings and differ from the defaults.
+fn resolve_coloring_sizes(escape: &EscapeConfig) -> Option<EscapeConfig> {
+    let src = escape.custom_coloring.as_ref().filter(|_| escape.coloring.starts_with(PREFIX))?;
+    ensure(escape);
+    let Some((h, settings)) = sizes_of(&escape.coloring, &escape.coloring_params, escape.max_iter) else {
+        note_sizes(&escape.coloring, None);
+        return None;
+    };
+    let base = u64::from_str_radix(&escape.coloring[PREFIX.len()..], 16).unwrap_or(0);
+    let name = format!("{PREFIX}{:016x}", base.rotate_left(29) ^ h);
+    if coloring(&name).is_none() {
+        compile_once(&name, "colouring at its array sizes", src, Some(&settings), || compile_coloring(src, &name));
+    }
+    note_sizes(&escape.coloring, Some(&name));
+    coloring(&name)?;
+    let mut out = escape.clone();
+    out.coloring = name;
+    Some(out)
+}
+
+/// The formula half of [`resolve`]: its arrays' sizes, the damping and
+/// the biomorph.
+fn resolve_formula(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
+    use std::borrow::Cow;
     use crate::config::escape::BiomorphMode;
     let damped = escape.is_damped();
     let axis = match escape.biomorph {
@@ -879,33 +998,47 @@ pub fn resolve(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> {
         BiomorphMode::Re => Some(lang::modifiers::Axis::Re),
         BiomorphMode::Im => Some(lang::modifiers::Axis::Im),
     };
-    if !escape.formula.starts_with(PREFIX) || (!damped && axis.is_none()) {
+    if !escape.formula.starts_with(PREFIX) {
         return Cow::Borrowed(escape);
     }
     let Some(src) = escape.custom_formula.as_ref() else {
         return Cow::Borrowed(escape);
     };
     ensure(escape);
+    let sized = sizes_of(&escape.formula, &escape.formula_params, escape.max_iter);
+    if sized.is_none() {
+        note_sizes(&escape.formula, None);
+    }
+    if !damped && axis.is_none() && sized.is_none() {
+        return Cow::Borrowed(escape);
+    }
     // A test with no |z| has no biomorph: the variant leaves it.
     let axis = axis.filter(|_| biomorph_ok(escape));
     let mut out = escape.clone();
     out.damping_re = 1.0;
     out.damping_im = 0.0;
     out.biomorph = BiomorphMode::Off;
-    if !damped && axis.is_none() {
+    if !damped && axis.is_none() && sized.is_none() {
         return Cow::Owned(out);
     }
     let tag = u64::from(damped) | axis.map_or(0, |a| if a == lang::modifiers::Axis::Re { 2 } else { 4 });
     let base = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).unwrap_or(0);
-    let name = format!("{PREFIX}{:016x}", base.rotate_left(17) ^ tag.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    if formula(&name).is_none() && !registry().read().is_ok_and(|r| r.failed.contains(&name)) {
-        if let Err(diags) = compile_variant(src, &name, damped, axis) {
-            let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
-            log::warn!("Custom formula `{}` with damping or biomorph ({name}) did not compile: {}", src.entry, msgs.join("; "));
-            if let Ok(mut r) = registry().write() {
-                r.failed.insert(name.clone());
-            }
+    let sizes = sized.as_ref().map_or(0, |(h, _)| *h);
+    let name = if !damped && axis.is_none() {
+        format!("{PREFIX}{:016x}", base.rotate_left(29) ^ sizes)
+    } else {
+        format!("{PREFIX}{:016x}", (base.rotate_left(17) ^ tag.wrapping_mul(0x9E37_79B9_7F4A_7C15)) ^ sizes.rotate_left(7))
+    };
+    if formula(&name).is_none() {
+        let settings = sized.as_ref().map(|(_, s)| s);
+        if damped || axis.is_some() {
+            compile_once(&name, "formula with damping or biomorph", src, settings, || compile_variant(src, &name, damped, axis));
+        } else {
+            compile_once(&name, "formula at its array sizes", src, settings, || compile_formula(src, &name));
         }
+    }
+    if sized.is_some() {
+        note_sizes(&escape.formula, Some(&name));
     }
     if formula(&name).is_none() {
         return Cow::Borrowed(escape);
@@ -978,8 +1111,12 @@ pub fn compile_coloring(src: &CustomSource, name: &str) -> Result<&'static Color
         if c.ext_vec4s > 0 {
             r.accum_ext.insert(name.to_string(), c.ext_vec4s);
         }
+        let p = Arc::new(p);
+        if p.sized_by_settings() {
+            r.sized.insert(name.to_string(), p.clone());
+        }
         if !p.globals.is_empty() {
-            r.programs.insert(name.to_string(), Arc::new(p));
+            r.programs.insert(name.to_string(), p);
         }
     }
     Ok(def)
@@ -1075,6 +1212,63 @@ mod tests {
 
     fn src(text: &str, entry: &str) -> CustomSource {
         CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.to_string(), source: text.to_string() }
+    }
+
+    /// Arrays sized by the settings (plan, item 3, step 3f): the config's
+    /// values name a variant compiled at their sizes, the same one each
+    /// time; at the defaults the entry as registered. The variant runs
+    /// as the Mandelbrot it reduces to, where the registered sizes,
+    /// given the same values, do not (a clamped write lands on the
+    /// element read): what the GPU test renders.
+    #[test]
+    fn a_size_the_settings_fix_compiles_at_them() {
+        use lang::builtins::C64;
+        use lang::interp::{run, Env, ParamValues};
+        const MS: &str = "MS {\nglobal:\n float t[@n]\n int i = 0\n while i < @n\n  t[i] = i\n  i = i + 1\n endwhile\n\
+                          float u[trunc(#maxiter / 2)]\n u[trunc(#maxiter / 2) - 1] = 5\ninit:\n z = 0\n float h[@n + 1]\n int j = 0\n while j <= @n\n  h[j] = j\n  j = j + 1\n endwhile\n\
+                          loop:\n z = sqr(z) + #pixel + (t[2] - 2) + (h[3] - 3) + (u[#maxiter + 10] - 5)\nbailout:\n |z| < @bailout\n\
+                          default:\n int param n\n  default = 3\n endparam\n}";
+        let s = src(MS, "MS");
+        let mut esc = EscapeConfig { max_iter: 200, bailout: 16.0, ..EscapeConfig::default() };
+        esc.formula = name_of(EntryKind::Formula, &s);
+        esc.custom_formula = Some(s.clone());
+        esc.formula_params.insert("n".into(), 7.0);
+        let variant = resolve(&esc).formula.clone();
+        assert_ne!(variant, esc.formula);
+        assert_eq!(resolve(&esc).formula, variant, "the same variant each time");
+        let mut plain = esc.clone();
+        plain.formula_params.clear();
+        plain.max_iter = EscapeConfig::default().max_iter;
+        assert_eq!(resolve(&plain).formula, plain.formula, "at the defaults, the entry as registered");
+        // The registered sizes and the variant's, run at n = 7.
+        let base = check_entry(EntryKind::Formula, &s).unwrap();
+        let settings = lang::check::SizeSettings { params: [("n".to_string(), 7.0)].into_iter().collect(), maxiter: Some(200) };
+        let at = lang::check::at_settings(settings, || check_entry(EntryKind::Formula, &s)).unwrap();
+        let m = check_entry(EntryKind::Formula, &src("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}", "M")).unwrap();
+        let values = |p: &ir::Program| {
+            let mut v = ParamValues::defaults(p);
+            for (x, param) in v.values.iter_mut().zip(&p.params) {
+                x.0 = match param.name.as_str() {
+                    "n" => 7.0,
+                    "bailout" => 16.0,
+                    _ => x.0,
+                };
+            }
+            v
+        };
+        let env = Env::at(C64::new(-0.6, 0.3), 200);
+        let (want, got, stale) = (run(&m, &values(&m), None, &env), run(&at, &values(&at), None, &env), run(&base, &values(&base), None, &env));
+        assert_eq!((got.z, got.n), (want.z, want.n), "at its sizes, the Mandelbrot");
+        assert_ne!((stale.z, stale.n), (want.z, want.n), "at the registered sizes, not");
+        // Past the space at other values, the panel is told why; back at
+        // values that fit, it is not.
+        assert_eq!(size_failure(&esc), None);
+        let mut big = esc.clone();
+        big.formula_params.insert("n".into(), 200.0);
+        assert_eq!(resolve(&big).formula, big.formula, "no variant: the entry at its default sizes");
+        let why = size_failure(&big).expect("a reason");
+        assert!(why.contains("floats"), "{why}");
+        assert_eq!(size_failure(&esc), None);
     }
 
     /// Center on minibrot for custom formulas (phase 4, step 9c): the

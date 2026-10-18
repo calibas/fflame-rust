@@ -1575,7 +1575,11 @@ Each item is ticked here when done; findings go in as they are made.
    - Not twins: Origami (item 3); the fields, Weierstrass,
      Markus-Lyapunov and Standard Map FTLE (mode B: a third entry kind,
      later).
-3. [ ] **Arrays, and everything Origami needs** (decided 2026-10-17).
+3. [x] **Arrays, and everything Origami needs** (decided 2026-10-17;
+   done 2026-10-17, steps 3a-3f below. Sized by `#maxiter` became
+   allowed within the same 256 floats an array has, not refused as
+   planned; screen-sized arrays, per-pixel orbit buffers and dynamic
+   arrays are not done, by the library's measurement, 3f).
    - **Arrays in the language**, both dialects: global arrays (UF's
      `global:`, Rhai's `prepare`), computed on the CPU once per image as
      `global:` is now and read by index on the GPU; small fixed
@@ -1683,7 +1687,53 @@ Each item is ticked here when done; findings go in as they are made.
        for every pattern, the flip and a terrain.
      - **3f.** For the library: dynamic arrays (`setLength`, `length`)
        and arrays sized by a parameter or `#maxiter`, within the space
-       left. (Whole-array assignment came with 3b.)
+       left. (Whole-array assignment came with 3b.) **Measured first**
+       (2026-10-17, `scripts/uf_array_sizes.py`): of about 250 library
+       entries declaring a size that is not a literal, the reachable
+       ones are tables sized by a parameter or `#maxiter` (global or per
+       pixel, small); about 35 colourings size a `global:` array by the
+       screen (buddhabrots, attractors, flames: the whole render in
+       `global:`, millions of orbits, minutes in our interpreter per
+       change, and UF's own comments warn against them for disk
+       renders); 48 colourings keep every iterate per pixel
+       (`trace[#maxiter + 1]`), which needs the whole orbit in each GPU
+       thread (a `var<private>` table once cost enough occupancy to trip
+       the TDR watchdog; the chunked render's state holds 32 floats);
+       and every dynamic array is in an entry that `import`s (item 5).
+       **Done 2026-10-17 for parameters and `#maxiter`**: a size is a
+       constant expression of literals, parameters, `#maxiter`, `#pi`,
+       `#e` and the built-ins (UF's rule), folded at the settings
+       (`check::SizeSettings`, `check::at_settings`; `Var::size` keeps
+       it as written, `Var::dims` folded). The entry registers at its
+       defaults (its `maxiter`, else the panel's 256); `custom::resolve`
+       names a variant for other values (`sizes_of`), compiled on first
+       use, formula and colouring alike, with damping and biomorph. A
+       stride the settings fix is read as written, so the index means
+       the same at every size and Edit as Rhai prints the size and the
+       index as written (`array(2 * p.n, ...)`); Rhai's `array(n, v)`
+       takes such an `n`, and `len` is it. A `switch:` target's sizes
+       read the pair's parameters (`splice` remaps them; they were the
+       target's parameter numbers) and fold at the values those hold in
+       the pair. A variant that does not fit (past the 256 floats, say)
+       leaves the entry at its default sizes, and the Escape panel says
+       why (`custom::size_failure`). Found on the way: Rhai's tree keeps
+       what follows an index inside it (`a[i].re` is `Index(a, Dot(i,
+       re))`, without the `BREAK` flag `a[s.i]` has), and the lowering
+       read `i.re` as the index -- latent since 3b, reached by the
+       library's complex tables. Measured: the GPU renders a formula and
+       a colouring at non-default sizes (a parameter and `#maxiter`) as
+       the built-ins they reduce to, converted to Rhai too. **The
+       library after it** (2026-10-17): formulas 9,304 of 9,831 compile
+       (9,268), colourings 731 of 1,209 (728); every one converts to
+       Rhai, compiles back and runs as the original. First errors left
+       that are arrays': per-pixel orbit buffers 45 colourings (`this
+       array takes 514 floats`, at 256 iterations), screen-sized 47
+       entries, `global:` tables past the 256 floats about 20 (a bigger
+       `fdata` would reach them: item 4's budgets). Unknown functions
+       rose to 52 formulas as entries got past their arrays, UF's
+       `random(seed)` the most (item 4; its generator is UF's, not to be
+       guessed). **Not done**, by the measurement: screen-sized arrays,
+       per-pixel orbit buffers, dynamic arrays.
 4. [ ] **The cheap UF items**: parameters past 64 floats (31 formulas, 47
    colourings stop there first); colouring state past 32 floats (31);
    the smaller mismatches, triaged by message (about 150 entries: used
