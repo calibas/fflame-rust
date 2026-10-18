@@ -172,6 +172,18 @@ pub fn formula(p: &Program) -> String {
         "\nfn formula_same(a: FormulaState, b: FormulaState) -> bool {{\n    return {};\n}}\n",
         same.join("\n        && ")
     );
+    // A folding formula's paper (`FormulaFeature::Creases`): its height
+    // and gradient at the starting point, every variable a local.
+    if !p.creases.is_empty() {
+        g.ctx = Ctx::Creases;
+        body.push_str("\nfn formula_creases(pixel: vec2<f32>) -> vec3<f32> {\n    var crease_h: f32 = 0.0;\n    var crease_g: vec2<f32> = vec2<f32>(0.0, 0.0);\n");
+        for (i, v) in p.vars.iter().enumerate().filter(|(_, v)| !v.global && !v.perturb) {
+            let _ = writeln!(body, "    {};", var_decl(i, v));
+        }
+        g.stmts(&p.creases, 1, &mut body);
+        body.push_str("    return vec3<f32>(crease_h, crease_g);\n}\n");
+        g.ctx = Ctx::Formula;
+    }
     // UF's perturbation equations, for the perturbed path's scaled
     // rung: the start and the step of the pixel's deviation from the
     // reference, held in units of S (`w = dz / S`, the built-in tiers'
@@ -875,6 +887,9 @@ enum Ctx {
     /// The perturbation equations on the floatexp rung: values are
     /// `CFe2`; plain f32 code reads them through `cfe2_to_f32`.
     PerturbFe,
+    /// A formula's crease relief, `formula_creases(pixel)`: its variables
+    /// its own locals.
+    Creases,
 }
 
 struct Gen<'p> {
@@ -1041,7 +1056,7 @@ impl<'p> Gen<'p> {
     /// A formula's function, whose parameters are `fparam`'s and whose
     /// globals are in `fdata`.
     fn formula_side(&self) -> bool {
-        matches!(self.ctx, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe)
+        matches!(self.ctx, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases)
     }
 
     fn param_fn(&self) -> &'static str {
@@ -1136,6 +1151,8 @@ impl<'p> Gen<'p> {
                     Place::Index => "index".to_string(),
                     Place::Solid => "solid".to_string(),
                     Place::DZ => "dz".to_string(),
+                    Place::CreaseHeight => "crease_h".to_string(),
+                    Place::CreaseSlope => "crease_g".to_string(),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
@@ -1307,7 +1324,7 @@ impl<'p> Gen<'p> {
 
     fn predef(&mut self, p: Predef) -> String {
         match (p, self.ctx) {
-            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe) => "pixel".into(),
+            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases) => "pixel".into(),
             (Predef::Z, Ctx::PerturbFe) => "cfe2_to_f32(cfe2_ref(zm, zlo, ze))".into(),
             (Predef::DZ, Ctx::PerturbFe) => "cfe2_to_f32(w)".into(),
             (Predef::DPixel, Ctx::PerturbFe) => "cfe2_to_f32(d0)".into(),
@@ -1320,6 +1337,8 @@ impl<'p> Gen<'p> {
             (Predef::DPixel, _) => "d0".into(),
             (Predef::Pixel, _) => "esc_env_pixel".into(),
             (Predef::Z, Ctx::Formula) => "s.z".into(),
+            // Refused by the checker: the creases have the start alone.
+            (Predef::Z, Ctx::Creases) => "pixel".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
             (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
             // A colouring's init runs before the first iterate.
@@ -1346,6 +1365,13 @@ impl<'p> Gen<'p> {
             (Predef::IsMand, _) => "vec2<f32>(select(1.0, 0.0, (params.flags & 1u) != 0u), 0.0)".into(),
             (Predef::MagXMag, _) => "vec2<f32>(esc_env_magn, 1.0)".into(),
             (Predef::JuliaC, _) => "params.julia_c".into(),
+            // The panel's crease settings (`CreaseSettings::to_gpu`).
+            (Predef::CreaseDecay, _) => "params.crease.x".into(),
+            (Predef::CreasePattern, _) => "i32(round(params.crease.y))".into(),
+            (Predef::CreaseSign, _) => "params.crease.z".into(),
+            (Predef::CreaseReach, _) => "params.crease.w".into(),
+            (Predef::CreaseHeight, _) => "crease_h".into(),
+            (Predef::CreaseSlope, _) => "crease_g".into(),
             (Predef::RotSkew, _) => {
                 format!("vec2<f32>(degrees({}(params.rot_cs.y, params.rot_cs.x)), 0.0)", self.use_(Helper::Atan2))
             }
@@ -1872,6 +1898,10 @@ impl<'p> Gen<'p> {
     }
 
     fn call(&mut self, f: Builtin, a: &IExpr, ty: Ty) -> String {
+        // f32 already.
+        if f == Builtin::F32 {
+            return self.expr(a);
+        }
         use Builtin::*;
         let v = self.expr(a);
         // Fractint's round is floor(x + 0.5), halves always up.
@@ -1919,6 +1949,7 @@ impl<'p> Gen<'p> {
             };
         }
         let real = match f {
+            F32 => v,
             Sin if self.exact_near_zero => format!("{}({}({v}))", self.use_(Helper::FSin), self.use_(Helper::Reduce)),
             Sinh if self.exact_near_zero => format!("{}({v})", self.use_(Helper::FSinh)),
             Sqr => format!("{}({v})", self.use_(Helper::FSq)),
@@ -1965,6 +1996,8 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
+        // `Gen::call` passes the value through.
+        F32 => Helper::CIdent,
         Sqr => Helper::CSqr,
         Sqrt => Helper::CSqrt,
         Log => Helper::CLog,
@@ -2852,6 +2885,7 @@ struct HarnessParams {
     flags: u32,
     rot_cs: vec2<f32>,
     julia_c: vec2<f32>,
+    crease: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> params: HarnessParams;
 fn fparam(i: u32) -> f32 {

@@ -170,12 +170,42 @@ struct Shared<'e> {
     /// The perturbation equations' `#dz` and `#dpixel`.
     dz: C64,
     dpixel: C64,
+    /// The crease settings the creases section reads, and what it gives.
+    crease: [f64; 4],
+    crease_height: f64,
+    crease_slope: C64,
 }
 
 impl<'e> Shared<'e> {
     fn new(env: &'e Env) -> Self {
-        Shared { env, z: C64::ZERO, numiter: 0, pass: 0, index: 0.0, solid: false, dz: C64::ZERO, dpixel: C64::ZERO }
+        Shared {
+            env,
+            z: C64::ZERO,
+            numiter: 0,
+            pass: 0,
+            index: 0.0,
+            solid: false,
+            dz: C64::ZERO,
+            dpixel: C64::ZERO,
+            crease: [0.6, 0.0, 1.0, 0.0],
+            crease_height: 0.0,
+            crease_slope: C64::ZERO,
+        }
     }
+}
+
+/// A formula's crease relief at the starting point `p0`
+/// ([`Program::creases`]) with the panel's settings (decay, pattern,
+/// sign, reach: `CreaseSettings::to_gpu`'s row): the folded paper's
+/// height and gradient, as the GPU's `formula_creases`.
+pub fn creases(p: &Program, params: &ParamValues, env: &Env, p0: C64, settings: [f64; 4]) -> (f64, C64) {
+    let env = Env { pixel: p0, ..*env };
+    let mut m = Machine::new(p, params);
+    let mut sh = Shared::new(&env);
+    sh.crease = settings;
+    m.exec(&p.global_body, &mut sh);
+    m.exec(&p.creases, &mut sh);
+    (sh.crease_height, sh.crease_slope)
 }
 
 /// The result of running a formula, with or without a colouring.
@@ -587,6 +617,8 @@ impl<'p> Machine<'p> {
                         Place::Index => sh.index = v.as_f64(),
                         Place::Solid => sh.solid = v.as_bool(),
                         Place::DZ => sh.dz = v.as_c64(),
+                        Place::CreaseHeight => sh.crease_height = v.as_f64(),
+                        Place::CreaseSlope => sh.crease_slope = v.as_c64(),
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -726,6 +758,12 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::JuliaC => Value::Complex(env.julia_c),
         Predef::DZ => Value::Complex(sh.dz),
         Predef::DPixel => Value::Complex(sh.dpixel),
+        Predef::CreaseDecay => Value::Float(sh.crease[0]),
+        Predef::CreasePattern => Value::Int(sh.crease[1].round() as i32),
+        Predef::CreaseSign => Value::Float(sh.crease[2]),
+        Predef::CreaseReach => Value::Float(sh.crease[3]),
+        Predef::CreaseHeight => Value::Float(sh.crease_height),
+        Predef::CreaseSlope => Value::Complex(sh.crease_slope),
     }
 }
 

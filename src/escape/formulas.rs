@@ -926,7 +926,7 @@ pub(crate) fn origami_hash(x: u32) -> u32 {
     h
 }
 
-fn origami_derived_lines(params: &[f32]) -> Vec<f32> {
+pub(crate) fn origami_derived_lines(params: &[f32]) -> Vec<f32> {
     fn unit(x: u32) -> f32 {
         (origami_hash(x) >> 8) as f32 * (1.0 / 16_777_216.0)
     }

@@ -842,7 +842,8 @@ impl<'p> Deriver<'p> {
                 let two_ax = bin(BinOp::Mul, konst(2.0, ty), bin(BinOp::Mul, widen(ra, ty), widen(x.clone(), ty)));
                 bin(BinOp::Add, two_ax, call(Builtin::Sqr, x, ty))
             }
-            Builtin::Ident => x,
+            // The GPU's identity.
+            Builtin::Ident | Builtin::F32 => x,
             Builtin::Zero => zero_of(ty),
             Builtin::Conj | Builtin::Flip if complex => call(f, x, ty),
             Builtin::Real | Builtin::Imag if complex => call(f, x, ty),

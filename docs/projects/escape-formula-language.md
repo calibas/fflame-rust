@@ -1509,7 +1509,7 @@ Each item is ticked here when done; findings go in as they are made.
      pass-local values -- DaddyBrot's had 12,890 -- which locals would
      shrink for every formula with a derivative.
 2. [x] **Twins for the 14 built-ins without one** (done 2026-10-17:
-   every built-in formula but Origami has one).
+   every built-in formula but Origami has one; Origami's came with item 3).
    - First, in the language and tests (the first three done 2026-10-17:
      `perturb::settle_of` and `formula_settled` /
      `formula_perturb_settled`; `escaped` optional, `never_escapes`, the
@@ -1658,10 +1658,22 @@ Each item is ticked here when done; findings go in as they are made.
        `Shr` (`interp::bits`, the GPU's the same), and Origami's hash in
        a formula gives `formulas::origami_hash`'s bits, on the GPU too.
      - **3d.** The `creases` hook (`FormulaFeature::Creases` for a
-       program defining it).
+       program defining it). **Done 2026-10-17**: a Rhai `fn creases(p0,
+       p, ctx)` ending with `#{ height, slope }` lowers to the IR's
+       creases section (`Program::creases`, `Place::CreaseHeight` and
+       `CreaseSlope`, the settings `Predef::CreaseDecay` ..), which reads
+       its own variables, the parameters and the globals (no iterate, no
+       pass); the GPU's `formula_creases` and `interp::creases` run it.
      - **3e.** Origami's twin. Its lines are the built-in's in f32 on
        the CPU; `prepare` runs in f64, so they differ at the rounding
-       (measure, then decide).
+       (measure, then decide). **Done 2026-10-17**: measured, the f64
+       tables parted by whole units after the first few lines (each
+       folds through every earlier one), so the language took `f32` /
+       `to_f32` and the twin's `prepare` computes in f32 an operation at
+       a time: its table is the built-in's bit for bit at four seeds and
+       spreads. It renders as the built-in on every pixel at two views,
+       and its crease field matches the reference as the built-in's does
+       for every pattern, the flip and a terrain.
      - **3f.** For the library: dynamic arrays (`setLength`, `length`)
        and arrays sized by a parameter or `#maxiter`, within the space
        left; whole-array assignment.

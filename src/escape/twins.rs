@@ -16,7 +16,9 @@
 //! Littlewood's greedy digit is a branch on the iterate, so its twin
 //! deep-zooms where the built-in does not. The convergent ones (Magnet,
 //! Nova, Novaretti, Newton) test their settling, `|z - prev|^2` under
-//! the built-ins' 1e-12, which sets `converged` as theirs does.
+//! the built-ins' 1e-12, which sets `converged` as theirs does. Origami's
+//! builds its lines in `prepare` (an array, in f32 as the built-in's) and
+//! gives its paper's creases (`fn creases`).
 //!
 //! The sources are `assets/formulas/twins/*.rhai`; the GPU tests hold
 //! each to its built-in (`escape::app_repro_test`).
@@ -56,6 +58,9 @@ pub const TWINS: &[(&str, &str)] = &[
     ("nova", include_str!("../../assets/formulas/twins/nova.rhai")),
     ("novaretti", include_str!("../../assets/formulas/twins/novaretti.rhai")),
     ("newton", include_str!("../../assets/formulas/twins/newton.rhai")),
+    // Folded paper: its lines a table built per image, a fold a pass,
+    // its creases (item 3).
+    ("origami", include_str!("../../assets/formulas/twins/origami.rhai")),
 ];
 
 /// The twin of the built-in formula `name`, when it has one.
@@ -121,6 +126,24 @@ mod tests {
         }
         // A field has none (mode B; the order of work, item 2).
         assert!(source("weierstrass").is_none());
+    }
+
+    /// Origami's twin builds the built-in's line table bit for bit (item
+    /// 3, step 3e): its `prepare` computes in f32 an operation at a time
+    /// (`to_f32`), as `formulas::origami_derived_lines` does in Rust --
+    /// each line's endpoints fold through every earlier line, and in f64
+    /// the tables parted by whole units past the first few lines.
+    #[test]
+    fn origamis_lines_are_the_builtins() {
+        let p = rhai::program(source("origami").unwrap()).unwrap();
+        for (seed, spread) in [(7.0f32, 2.0f32), (8.0, 2.0), (123.0, 1.3), (511.0, 0.37)] {
+            let mut params = ParamValues::defaults(&p);
+            params.values[0].0 = f64::from(seed);
+            params.values[1].0 = f64::from(spread);
+            let ours = super::super::lang::interp::globals(&p, &params, &Env::at(C64::ZERO, 32));
+            let theirs = crate::escape::formulas::origami_derived_lines(&[seed, spread]);
+            assert_eq!(ours, theirs, "seed {seed}, spread {spread}");
+        }
     }
 
     /// Every twin deep-zooms by derived equations on both planes: a power

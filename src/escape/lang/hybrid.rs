@@ -418,6 +418,8 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
     out.perturb_when = None;
     out.degree = None;
     out.bailout = None;
+    // Folds composed with other maps fold no one paper.
+    out.creases.clear();
     out.state.clear();
     out.dz_var = None;
     out.dzq_var = None;

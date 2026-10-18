@@ -260,7 +260,7 @@ impl BigMachine {
                         Place::Var(id) => self.vars[*id] = v,
                         Place::Z => self.z = self.to_c(v),
                         // A formula writes neither; the checker keeps it so.
-                        Place::Index | Place::Solid | Place::DZ => {}
+                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -448,6 +448,10 @@ impl BigMachine {
             Predef::NumIter => BigValue::Int(0),
             Predef::Index => BigValue::Float(BigFloat::zero(self.n)),
             Predef::Solid => BigValue::Bool(false),
+            // The creases section's, which no orbit runs.
+            Predef::CreasePattern => BigValue::Int(0),
+            Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => BigValue::Float(BigFloat::zero(self.n)),
+            Predef::CreaseSlope => BigValue::Complex(BigComplex::zero(self.n)),
         }
     }
 
@@ -634,6 +638,7 @@ impl BigMachine {
             Recip => cdiv(&one, z)?,
             Ident => z.clone(),
             Zero => BigComplex::zero(n),
+            F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

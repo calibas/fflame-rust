@@ -367,6 +367,20 @@ fn escaped(s, p) {
   `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`.
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
+- **`fn creases(p0, p, ctx)`**, optional: a folding formula's paper,
+  its height and gradient at the starting point `p0`, ending with `#{
+  height: h, slope: complex(gx, gy) }`. It reads its own variables, the
+  parameters, `prepare`'s values and the panel's crease settings,
+  `ctx.crease_decay`, `ctx.crease_pattern` (0 valley, 1 alternate, 2
+  random), `ctx.crease_sign` (the flip, -1 or 1) and `ctx.crease_reach`
+  (in paper sizes: 0 for the 2D relief, a terrain's levels off). A
+  formula with it offers the Creases relief field and terrain source
+  (`FormulaFeature::Creases`; the GPU's `formula_creases`). Origami's
+  twin is the example.
+- **`to_f32(x)`** (UF `f32`): the value rounded to f32, the GPU's
+  precision. On the GPU the identity; in `prepare`, which runs on the CPU
+  in f64, it lets a table be computed as f32 code computes it, an
+  operation at a time.
 - **Arrays**, of one dimension: a literal `[a, b, c]`, `array(n, v)`
   (n a constant int, each element `v`), `a[i]` read and written (an int
   index, clamped), `a.len()`. A state field may be one (`s.hist[i] =
@@ -452,7 +466,7 @@ fn escaped(s, p) {
   Exponential, Sine / Cosine, Lambda Sine, Collatz, Tetration --
   Feather and McMullen, Barnsley, Kaliset, Ducks and Lattès, and the
   convergent Magnet, Nova, Novaretti and Newton (every function and
-  scheme) -- every built-in formula but Origami -- each a Rhai formula
+  scheme), and Origami -- every built-in formula -- each a Rhai formula
   that renders as its built-in.
   - Each keeps its built-in's parameters by name, reads the panel's
     Bailout through its `bailout` parameter and the Julia toggle
@@ -589,10 +603,18 @@ fn escaped(s, p) {
     and the built-in's sharp (Feather's twin at its suite view, zoom 30:
     219 of 439 right, now 439). One reference and nothing carried; the
     others test their own way.
-  - **Origami** has no twin: it needs a table built once per image (its
-    64 fold lines, each folded through the ones before, `derived_data`),
-    an integer hash for the seed's lines, and its crease relief
-    (`formula_creases`), none of which a formula can express yet.
+  - **Origami** (item 3, step 3e): `prepare` builds its 64 fold lines
+    (an array, each line's endpoints two hashed points folded through the
+    lines before it), `step` folds once a pass by `ctx.pass`, and `fn
+    creases` gives the paper's height and gradient, so the Creases relief
+    field and terrain source draw it. It renders as the built-in on every
+    pixel (two seeds and spreads, `position_map`), and its crease field
+    matches the reference as the built-in's does, for every pattern, the
+    flip and a terrain's reach. Its line table is the built-in's bit for
+    bit (`origamis_lines_are_the_builtins`): the built-in builds it on the
+    CPU in f32, and each line folds through every earlier one, so `prepare`
+    computes in f32 an operation at a time (`to_f32`) -- in f64 the tables
+    parted by whole units after the first few lines.
 - **UF and Fractint formulas and colourings convert** (`lang/to_rhai.rs`;
   the Formula Editor's Edit as Rhai, `custom::convert_to_rhai`): the
   checked program is printed in these shapes, the file opened left as
