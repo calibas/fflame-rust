@@ -476,8 +476,9 @@ fn escaped(s, p) {
     palette index the transform's `direct_color` blends in
     (`WritesColor`).
 
-  Example: `assets/formulas/variation-whorl.rhai`; the hooks' twins of
-  `blur` and `macmillan` are in `variations::custom`'s tests.
+  Examples: `assets/formulas/variation-whorl.rhai`, and
+  `variation-scatter.rhai` for `rand()` and a colour; the hooks' twins
+  of `blur` and `macmillan` are in `variations::custom`'s tests.
 - **`rand()`** anywhere else -- a formula, a colouring, a variation
   `vary` inlines there -- draws a stream of the pixel's own, seeded by
   its place on the screen (`uf_draw`; the interpreter draws the same
