@@ -3534,9 +3534,12 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // `ifs_token` is in here for the same reason it is in the band
         // key: the flame is an input to the walk that does not live in
         // the escape config.
+        // The lens and the transformations move the points iterated, in
+        // every mode.
+        let maps = super::lens::maps_identity(escape, &crate::variations::global_registry());
         if super::ifs::get_ifs(&escape.formula).is_some() {
             return format!(
-                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}",
+                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}|{maps}",
                 escape.formula,
                 Self::walk_params_key(escape),
                 escape.center_re,
@@ -3597,7 +3600,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             String::new()
         };
         format!(
-            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}|{:?}",
+            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}|{:?}|{maps}",
             escape.formula,
             escape.formula_params,
             escape.center_re,
@@ -3835,7 +3838,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.height,
             orbit_tag,
             orbit_done,
-        ) + format!("|{:?}|{:?}{}", escape.palette_map, escape.layer, self.palette_in_loop_key(escape)).as_str()
+        ) + format!(
+            "|{:?}|{:?}{}|{}",
+            escape.palette_map,
+            escape.layer,
+            self.palette_in_loop_key(escape),
+            super::lens::maps_identity(escape, &crate::variations::global_registry()),
+        )
+        .as_str()
     }
 
     /// The palette, for a colouring that samples it inside the loop

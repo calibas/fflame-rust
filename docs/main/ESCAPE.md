@@ -1588,7 +1588,9 @@ finishing pass — `z`, `dz`, `n`, the classification and the
 accumulator: 32 bytes, 40 with a wide accumulator. When the next frame's
 **iteration identity** is unchanged (formula, params, view, `max_iter`,
 bailout, damping, the compiled derivative and interior flags, the sample
-offset, and the colouring itself where it takes part in the iteration —
+offset, the lens and the transformations with their amounts
+(`lens::maps_identity`; they move the points iterated), and the
+colouring itself where it takes part in the iteration —
 an accumulator, period detection, `PaletteInLoop`, `TextureInLoop`), the
 frame is one recolour dispatch over the records. Palette, colouring and
 relief edits at depth cost a fraction of a millisecond instead of a
@@ -1596,7 +1598,11 @@ re-iteration. A pixel count past the device's binding limit turns the
 records off and renders uncached. Mode B writes no records; mode D does,
 and for a solid the cached path is its relight.
 `recolor_cache_is_invisible_and_invalidates_correctly` holds a cache hit
-bit-identical to a fresh render.
+bit-identical to a fresh render; `editing_the_maps_reiterates` holds
+every lens and transformation edit to a re-iteration matching a fresh
+render (keyed without them, such an edit recoloured the old records and
+the view did not change until something else did). A banded pass's key
+(`chunk_key_for`) carries the maps too.
 
 ### Memory, device loss and the web
 
