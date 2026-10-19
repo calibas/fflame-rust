@@ -168,7 +168,7 @@ impl App {
                                 .iter()
                                 .zip(update_config.solid_shading.lights.iter())
                                 .any(|(a, b)| {
-                                    a.enabled != b.enabled
+                                    a.directional_on() != b.directional_on()
                                         || a.azimuth != b.azimuth
                                         || a.elevation != b.elevation
                                         || (a.intensity > 0.0) != (b.intensity > 0.0)

@@ -83,7 +83,7 @@ struct TerrainParamsGpu {
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
     /// two per light (direction and power, colour), [20] the sky, [21]
     /// the colour by the height.
-    fdata: [[f32; 4]; 28],
+    fdata: [[f32; 4]; 32],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -695,7 +695,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 28>,
+    fdata: array<vec4<f32>, 32>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -1574,11 +1574,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(o)) * 1.0e-6;
             let start = p + n * bias;
             for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-                let ld = ifs_light_dir(li);
+                // Toward the light from here, no further than it.
+                let la = ifs_light_at(li, p);
+                let ld = la.dir;
                 if (dot(n, ld) <= 0.0) {
                     continue;
                 }
-                let s = hf_trace(start, ld, 1.0e30, params.misc.y);
+                let s = hf_trace(start, ld, min(la.dist, 1.0e30), params.misc.y);
                 steps = steps + s.steps;
                 sun[li] = select(s.soft, 0.0, s.hit);
             }
@@ -1852,7 +1854,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // one the true surface faces away from unshadowed: it stays dark.
     let nb = surf_bump(n, p, foot);
     for (var li = 0u; li < min(ifs_light_count(), 4u); li = li + 1u) {
-        if (dot(n, ifs_light_dir(li)) <= 0.0) {
+        if (dot(n, ifs_light_at(li, p).dir) <= 0.0) {
             sun[li] = 0.0;
         }
     }
@@ -1860,7 +1862,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // tilted normal faces over what the true one does, a micro-occlusion.
     // Exactly 1 without a texture.
     let sky = (0.5 + 0.5 * nb.z) / max(0.5 + 0.5 * n.z, 1.0e-3);
-    let rgb = ifs_rig(albedo.rgb, nb, nz_ao.y * clamp(sky, 0.0, 2.0), sun, dir, t);
+    let rgb = ifs_rig(albedo.rgb, nb, nz_ao.y * clamp(sky, 0.0, 2.0), sun, dir, t, p);
     // The fog: the ground's coverage fading with view depth past its
     // start (fdata[7].x its density, .y its start), so it melts into
     // the background exactly.
@@ -1987,8 +1989,8 @@ fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
     return pt_surface(o, d, hf_trace(o, d, 1.0e30, 0.0), travelled);
 }
 
-fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
-    return !hf_trace(o, d, 1.0e30, 0.0).hit;
+fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> bool {
+    return !hf_trace(o, d, min(t_end, 1.0e30), 0.0).hit;
 }
 
 // One sample of the pixel: (radiance times coverage, coverage). The
@@ -2283,7 +2285,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 28]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 32]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -2307,6 +2309,25 @@ fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [
     let mut n = 0usize;
     for l in shading.lights.iter() {
         if any && (!l.enabled || l.intensity <= 0.0) {
+            continue;
+        }
+        // A headlamp rides with the camera (lights-in-the-fractal, L5); a
+        // point has no place here yet -- the terrain's world is the view's,
+        // its origin and its scale moving with it -- and is off.
+        if any && l.kind == crate::config::LightKind::Point {
+            continue;
+        }
+        if any && l.kind == crate::config::LightKind::Headlamp {
+            let lift = l.lift as f64 * cam.distance;
+            let pos = [cam.eye[0] + cam.up[0] * lift, cam.eye[1] + cam.up[1] * lift, cam.eye[2] + cam.up[2] * lift];
+            let (kind, extra) = super::ifs::light_extra(l, l.reach as f64 * cam.distance);
+            out[11 + n * 2] = [pos[0] as f32, pos[1] as f32, pos[2] as f32, l.intensity.max(0.0)];
+            out[12 + n * 2] = [l.color[0], l.color[1], l.color[2], kind];
+            out[28 + n] = extra;
+            n += 1;
+            if n == 4 {
+                break;
+            }
             continue;
         }
         let (az, el) = if any { (l.azimuth, l.elevation) } else { DEFAULT_SUN };
@@ -3928,7 +3949,7 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 28];
+        let mut fdata = [[0.0f32; 4]; 32];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
@@ -4366,8 +4387,9 @@ mod tests {
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, three vec4s (the tile's), twenty-two vec4s.
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 448);
+        // 8 words, three vec4s (eye, misc, tile), and the 32 vec4s of
+        // `fdata` (the lights' third slots at 28..32).
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 512);
     }
 
     #[test]
@@ -5031,6 +5053,119 @@ pub(crate) mod gpu_tests {
         let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
         println!("sunlit plane: path against lit, worst {worst:.2e}");
         assert!(worst < 1e-4, "{worst}");
+    }
+
+    /// A flat plane under a headlamp, nothing else (lights-in-the-fractal,
+    /// L5): each pixel is its closed form -- albedo times the lamp's
+    /// colour and power, its falloff `1 / (1 + (d / reach)^2)` over the
+    /// distance from the lamp (lifted above the eye), the cone's soft edge
+    /// about the view, and the cosine at the plane.
+    #[test]
+    fn a_headlamp_on_a_plane_is_its_closed_form() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.0;
+        shading.ssao_strength = 0.0;
+        let l = &mut shading.lights[0];
+        l.enabled = true;
+        l.kind = crate::config::LightKind::Headlamp;
+        l.intensity = 2.0;
+        l.color = [1.0, 0.5, 0.25];
+        l.reach = 0.6;
+        l.cone = 18.0;
+        l.lift = 0.1;
+        let light = *l;
+        let cam = camera([32.0, 32.0, 0.0], 0.7, 0.3, 20.0, 0.6);
+        let mut v = view(cam.clone());
+        v.shading = shading;
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, w, h);
+
+        let lamp: Vec<f64> = (0..3).map(|k| cam.eye[k] + cam.up[k] * light.lift as f64 * cam.distance).collect();
+        let reach = light.reach as f64 * cam.distance;
+        let (outer, inner) = ((light.cone as f64).to_radians().cos(), (light.cone as f64 * 0.9).to_radians().cos());
+        let (mut lit, mut worst) = (0, 0.0f64);
+        for py in 0..h {
+            for px in 0..w {
+                let d = ray(&cam, px, py, w, h);
+                let t = -cam.eye[2] / d[2];
+                let p: Vec<f64> = (0..3).map(|k| cam.eye[k] + d[k] * t).collect();
+                let to: Vec<f64> = (0..3).map(|k| lamp[k] - p[k]).collect();
+                let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                let ld: Vec<f64> = to.iter().map(|x| x / dist).collect();
+                let c = -(ld[0] * cam.forward[0] + ld[1] * cam.forward[1] + ld[2] * cam.forward[2]);
+                let s = ((c - outer) / (inner - outer)).clamp(0.0, 1.0);
+                let cone = s * s * (3.0 - 2.0 * s);
+                let q = dist / reach;
+                let e = light.intensity as f64 / (1.0 + q * q) * cone * ld[2].max(0.0);
+                let got = out[(py * w + px) as usize];
+                for k in 0..3 {
+                    let want = albedo[k] as f64 * light.color[k] as f64 * e;
+                    worst = worst.max((got[k] as f64 - want).abs());
+                }
+                if e > 1.0e-3 {
+                    lit += 1;
+                }
+            }
+        }
+        println!("headlamp on a plane: {lit} lit pixels of {}, worst error {worst:.2e}", w * h);
+        assert!(lit > (w * h / 8) as usize && lit < (w * h) as usize, "the cone should light part of the frame: {lit}");
+        assert!(worst < 2.0e-4, "{worst}");
+    }
+
+    /// The headlamp in the path tracer is the lit tier's: a flat plane
+    /// under it alone, no environment, a light of no size -- the two
+    /// alike to the path tracer's jitter across a pixel.
+    #[test]
+    fn a_headlamp_lit_plane_is_the_lit_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.0;
+        shading.ssao_strength = 0.0;
+        let l = &mut shading.lights[0];
+        l.enabled = true;
+        l.kind = crate::config::LightKind::Headlamp;
+        l.intensity = 2.0;
+        l.reach = 0.6;
+        l.cone = 180.0;
+        l.lift = 0.1;
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.7, 0.3, 20.0, 0.6));
+        v.shading = shading;
+        v.softness = 1.0e6;
+        r.render(&device, &queue, &v);
+        let lit = read_output(&device, &queue, &r, w, h);
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &PathSettings { bounces: 0, environment: [0.0; 3], clamp: 1.0e30, seed: 1, ..PathSettings::default() }, 16, 16);
+        let path = read_output(&device, &queue, &r, w, h);
+        let (mut sum, mut worst) = (0.0f64, 0.0f32);
+        for (a, b) in lit.iter().zip(&path) {
+            for k in 0..3 {
+                let d = (a[k] - b[k]).abs() / a[k].max(1.0e-3);
+                worst = worst.max(d);
+                sum += d as f64;
+            }
+        }
+        let mean = sum / (3 * lit.len()) as f64;
+        println!("headlamp-lit plane: path against lit, mean {mean:.2e}, worst {worst:.2e}");
+        assert!(mean < 2.0e-3 && worst < 2.0e-2, "mean {mean}, worst {worst}");
     }
 
     /// One material, every tier's (docs/archive/projects/materials.md): under a

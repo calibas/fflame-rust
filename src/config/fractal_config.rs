@@ -859,10 +859,81 @@ fn default_surface_thickness() -> f32 {
     super::defaults::DEFAULT_SURFACE_THICKNESS
 }
 
-/// One directional light for the solid-rendering shade pass. Direction is
-/// camera-space: azimuth/elevation in DEGREES, where (0°, 0°) is a
+/// What a light is (docs/projects/lights-in-the-fractal.md, L2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightKind {
+    /// From a direction, at infinity: the azimuth and the elevation.
+    #[default]
+    Directional,
+    /// From a position in the world, its power falling off with the
+    /// distance: mode D's solids.
+    Point,
+    /// Attached to the camera, aimed down the view: a spot at the eye
+    /// (lifted by `lift`), its reach in camera distances so it scales
+    /// with the zoom.
+    Headlamp,
+}
+
+impl LightKind {
+    pub const ALL: [LightKind; 3] = [LightKind::Directional, LightKind::Point, LightKind::Headlamp];
+
+    fn is_directional(k: &LightKind) -> bool {
+        *k == LightKind::Directional
+    }
+
+    /// The kind as a track or a parameter carries it: 0, 1, 2.
+    pub fn index(self) -> u32 {
+        match self {
+            LightKind::Directional => 0,
+            LightKind::Point => 1,
+            LightKind::Headlamp => 2,
+        }
+    }
+
+    pub fn from_index(i: u32) -> LightKind {
+        match i {
+            1 => LightKind::Point,
+            2 => LightKind::Headlamp,
+            _ => LightKind::Directional,
+        }
+    }
+}
+
+/// A light's reach, as it ships: one world unit for a point, one camera
+/// distance for a headlamp.
+pub const DEFAULT_LIGHT_REACH: f32 = 1.0;
+/// A headlamp's cone half-angle as it ships, in degrees; 180 is no cone.
+pub const DEFAULT_LIGHT_CONE: f32 = 40.0;
+
+fn default_light_reach() -> f32 {
+    DEFAULT_LIGHT_REACH
+}
+
+fn is_default_light_reach(v: &f32) -> bool {
+    *v == DEFAULT_LIGHT_REACH
+}
+
+fn default_light_cone() -> f32 {
+    DEFAULT_LIGHT_CONE
+}
+
+fn is_default_light_cone(v: &f32) -> bool {
+    *v == DEFAULT_LIGHT_CONE
+}
+
+fn is_origin(v: &[f64; 3]) -> bool {
+    *v == [0.0; 3]
+}
+
+/// One light for the solid-rendering shade pass and the escape engine's
+/// 3D views. A **directional** light's direction is camera-space for a
+/// flame and mode D -- azimuth/elevation in DEGREES, where (0°, 0°) is a
 /// headlight from the viewer, azimuth swings around the vertical axis and
-/// elevation tilts up.
+/// elevation tilts up -- and world-fixed for a terrain. A **point** sits
+/// at `position` in the world; a **headlamp** rides with the camera
+/// (lights-in-the-fractal, L2). The kinds past directional are
+/// skip-if-default, so a file from before them reads as it did.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SolidLight {
     pub enabled: bool,
@@ -870,6 +941,27 @@ pub struct SolidLight {
     pub elevation: f32,
     pub intensity: f32,
     pub color: [f32; 3],
+    #[serde(default, skip_serializing_if = "LightKind::is_directional")]
+    pub kind: LightKind,
+    /// A point's position in the world (mode D's coordinates).
+    #[serde(default, skip_serializing_if = "is_origin")]
+    pub position: [f64; 3],
+    /// The falloff's length: at distance `d` the light's power is
+    /// `1 / (1 + (d / reach)^2)` of its intensity -- the inverse square
+    /// far off, finite at the light, half at `reach`. World units for a
+    /// point, camera distances (the eye's distance to its target) for a
+    /// headlamp.
+    #[serde(default = "default_light_reach", skip_serializing_if = "is_default_light_reach")]
+    pub reach: f32,
+    /// A headlamp's cone half-angle in degrees (180: none), its edge
+    /// softened over the outer tenth.
+    #[serde(default = "default_light_cone", skip_serializing_if = "is_default_light_cone")]
+    pub cone: f32,
+    /// How far above the eye a headlamp sits, in camera distances. At the
+    /// eye every shadow falls behind what casts it, out of sight; a little
+    /// lift shows them.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub lift: f32,
 }
 
 impl Default for SolidLight {
@@ -880,7 +972,46 @@ impl Default for SolidLight {
             elevation: 40.0,
             intensity: 1.0,
             color: [1.0, 1.0, 1.0],
+            kind: LightKind::Directional,
+            position: [0.0; 3],
+            reach: DEFAULT_LIGHT_REACH,
+            cone: DEFAULT_LIGHT_CONE,
+            lift: 0.0,
         }
+    }
+}
+
+/// Set one of a light's f32 parameters by its path name, clamped as the
+/// panel clamps it; None for a name that is not one. Shared by the
+/// manager and the exporter, so a track renders in the video as it plays
+/// in the app. The position (`x`, `y`, `z`) is f64 and set apart.
+pub(crate) fn set_light_param(l: &mut SolidLight, param: &str, v: f32) -> Option<()> {
+    match param {
+        "azimuth" => l.azimuth = v,
+        "elevation" => l.elevation = v,
+        "intensity" => l.intensity = v,
+        "color_r" => l.color[0] = v,
+        "color_g" => l.color[1] = v,
+        "color_b" => l.color[2] = v,
+        "kind" => l.kind = LightKind::from_index(v.round().max(0.0) as u32),
+        "reach" => l.reach = if v.is_finite() { v.max(0.0) } else { DEFAULT_LIGHT_REACH },
+        "cone" => l.cone = if v.is_finite() { v.clamp(1.0, 180.0) } else { DEFAULT_LIGHT_CONE },
+        "lift" => l.lift = if v.is_finite() { v } else { 0.0 },
+        _ => return None,
+    }
+    Some(())
+}
+
+impl SolidLight {
+    /// On, and lighting anything.
+    pub fn lights(&self) -> bool {
+        self.enabled && self.intensity > 0.0
+    }
+
+    /// On as a directional light: what the 3D flame's shade pass draws,
+    /// whose lights are screen-space and have no world to sit in.
+    pub fn directional_on(&self) -> bool {
+        self.enabled && self.kind == LightKind::Directional
     }
 }
 

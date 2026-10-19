@@ -774,15 +774,17 @@ fn apply_config_value(
         }
         (ConfigPath::SolidLightParam { index, param }, ConfigValue::Float(v)) => {
             if let Some(light) = config.solid_shading.lights.get_mut(*index) {
-                match param.as_str() {
-                    "azimuth" => light.azimuth = *v,
-                    "elevation" => light.elevation = *v,
-                    "intensity" => light.intensity = *v,
-                    "color_r" => light.color[0] = *v,
-                    "color_g" => light.color[1] = *v,
-                    "color_b" => light.color[2] = *v,
-                    _ => {}
+                match ["x", "y", "z"].iter().position(|a| a == param) {
+                    Some(axis) => light.position[axis] = *v as f64,
+                    None => {
+                        let _ = crate::config::fractal_config::set_light_param(light, param, *v);
+                    }
                 }
+            }
+        }
+        (ConfigPath::SolidLightParam { index, param }, ConfigValue::Double(v)) => {
+            if let (Some(light), Some(axis)) = (config.solid_shading.lights.get_mut(*index), ["x", "y", "z"].iter().position(|a| a == param)) {
+                light.position[axis] = *v;
             }
         }
 

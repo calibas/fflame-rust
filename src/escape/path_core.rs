@@ -10,8 +10,9 @@
 //!   surface reaches -- `o` already off the surface by that surface's
 //!   bias, `travelled` the path's length so far -- its normal on the
 //!   side that ray sees;
-//! - `pt_scene_visible(o, d, travelled)`: whether a shadow ray from a
-//!   surface gets away;
+//! - `pt_scene_visible(o, d, t_end, travelled)`: whether a shadow ray
+//!   from a surface gets away, or gets as far as `t_end` (a light in the
+//!   world: lights-in-the-fractal);
 //! - `pt_sample(px, py)`: one sample of a pixel, as (radiance times
 //!   coverage, coverage) -- the camera ray and the first surface are the
 //!   geometry's, since what coverage and fog mean differs between them,
@@ -596,12 +597,15 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         var first_diffuse = 0.0;
         var first_white = 0.0;
         for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-            let ld = pt_cone(ifs_light_dir(li), pt.misc.w);
+            // A point or a headlamp from where this surface is, its power
+            // fallen off with the distance (the rig's `ifs_light_at`).
+            let la = ifs_light_at(li, p);
+            let ld = pt_cone(la.dir, pt.misc.w);
             let ndl = dot(n, ld);
             if (ndl > 0.0 && (!bumped || dot(ng, ld) > 0.0)) {
                 var vis = 1.0;
                 if (pt.misc.z > 0.0) {
-                    vis = mix(1.0, select(0.0, 1.0, pt_scene_visible(start, ld, travelled)), clamp(pt.misc.z, 0.0, 1.0));
+                    vis = mix(1.0, select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled)), clamp(pt.misc.z, 0.0, 1.0));
                 }
                 var spec = 0.0;
                 var diff = 1.0;
@@ -611,7 +615,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                     spec = 3.141592654 * pt_ggx_d(max(dot(n, hv), 0.0), a2) * pt_g1(ndl, a2) * pt_g1(nv, a2) * fr / (4.0 * ndl * nv);
                     diff = 1.0 - fr;
                 }
-                let light = ifs_light_color(li) * (ifs_light_power(li) * ndl * vis);
+                let light = ifs_light_color(li) * (ifs_light_power(li) * la.gain * ndl * vis);
                 radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + vec3<f32>(spec));
                 // The highlight, the lit tier's very term (materials.md
                 // §4.1): Blinn-Phong on the direct light, unnormalised and
@@ -626,10 +630,10 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 if (shine_weight > 0.0) {
                     let hb = normalize(ld + v);
                     shine = shine_weight * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
-                    radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * vis * shine);
+                    radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * la.gain * vis * shine);
                 }
                 if (bounce == 0u) {
-                    let lum = dot(ifs_light_color(li), vec3<f32>(0.2126, 0.7152, 0.0722)) * ifs_light_power(li) * vis;
+                    let lum = dot(ifs_light_color(li), vec3<f32>(0.2126, 0.7152, 0.0722)) * ifs_light_power(li) * la.gain * vis;
                     first_diffuse = first_diffuse + lum * ndl * ifs_diffuse() * diff;
                     first_white = first_white + lum * (ndl * spec + shine);
                 }

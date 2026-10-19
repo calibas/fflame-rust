@@ -686,7 +686,9 @@ impl ShadePass {
                 el.sin(),
                 el.cos() * az.cos(),
             ];
-            let intensity = if l.enabled { l.intensity.max(0.0) } else { 0.0 };
+            // The splat pass lights in screen space: a point or a headlamp
+            // has no world to sit in here, and is off.
+            let intensity = if l.directional_on() { l.intensity.max(0.0) } else { 0.0 };
             lights[i] = ShadeLight {
                 dir_intensity: [dir[0], dir[1], dir[2], intensity],
                 color: [l.color[0], l.color[1], l.color[2], 0.0],

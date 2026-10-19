@@ -2148,7 +2148,8 @@ impl FlameRenderer {
         let rows = crate::renderer::shade_pass::effective_camera_rows(
             camera_rotation_x, camera_rotation_y, camera_bank);
         for (i, l) in self.solid_shading.lights.iter().enumerate().take(4) {
-            if !(l.enabled && l.intensity > 0.0) {
+            // A point or a headlamp has no world to sit in here.
+            if !(l.directional_on() && l.intensity > 0.0) {
                 continue;
             }
             let az = l.azimuth.to_radians();

@@ -1768,4 +1768,182 @@ mod tests {
         d.solid_shading.shading_strength = 1.0;
         assert_eq!(env, crate::escape::path_core::path_settings(&d, 1.0).environment, "the default rig's ambient reached the path tracer");
     }
+
+    /// The lit tier's settled picture of `c`, from a fresh renderer.
+    fn lit_picture(device: &Device, queue: &Queue, c: &FractalConfig, palette: &TextureView, w: u32, h: u32) -> Vec<[f32; 4]> {
+        let mut c = c.clone();
+        c.escape.solid_tier = RenderTier::Lit;
+        let mut r = renderer_for(device, &c, w, h);
+        loop {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            let settled = r.render(device, queue, &mut enc, &c.escape, palette, 1);
+            queue.submit(std::iter::once(enc.finish()));
+            if settled {
+                break;
+            }
+        }
+        let out = read_texture(device, queue, &r.output_texture, w, h);
+        r.destroy();
+        out
+    }
+
+    /// A point light far off with a reach past everything is the
+    /// directional light it approaches (lights-in-the-fractal, L3): the
+    /// same picture, shadows and all, to the light's angle across the
+    /// solid. Puts the position where the shader looks for it -- an
+    /// offset from the target -- and measures the direction from it.
+    #[test]
+    fn a_far_point_light_is_a_directional_one() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.cam_target_x = "1".to_string();
+        c.escape.cam_target_y = "1".to_string();
+        c.escape.cam_target_z = "1".to_string();
+        c.escape.formula_params.insert("shadow".to_string(), 1.0);
+        let (az, el) = (30.0f32, 35.0f32);
+        c.solid_shading.lights[0].enabled = true;
+        c.solid_shading.lights[0].azimuth = az;
+        c.solid_shading.lights[0].elevation = el;
+        c.solid_shading.lights[0].color = [1.0, 0.6, 0.3];
+        let sun = lit_picture(&device, &queue, &c, &palette, w, h);
+
+        // The same direction in the world, as `pack_rig3` turns it.
+        let (right, up, forward) = crate::escape::ifs::solid_frame(c.escape.cam_pitch as f64, c.escape.cam_yaw as f64, c.escape.cam_bank as f64, c.escape.rotation as f64);
+        let (a, e) = ((az as f64).to_radians(), (el as f64).to_radians());
+        let k = [e.cos() * a.sin(), e.sin(), e.cos() * a.cos()];
+        let dir: Vec<f64> = (0..3).map(|i| right[i] * k[0] + up[i] * k[1] - forward[i] * k[2]).collect();
+        let far = 1.0e4;
+        let l = &mut c.solid_shading.lights[0];
+        l.kind = crate::config::LightKind::Point;
+        l.position = [1.0 + dir[0] * far, 1.0 + dir[1] * far, 1.0 + dir[2] * far];
+        l.reach = 1.0e9;
+        let point = lit_picture(&device, &queue, &c, &palette, w, h);
+
+        let (mut n, mut worst) = (0, 0.0f32);
+        for (p, q) in sun.iter().zip(&point) {
+            if p[3] < 1.0 || p[0] <= 1.0e-3 {
+                continue;
+            }
+            n += 1;
+            for k in 0..3 {
+                worst = worst.max((p[k] - q[k]).abs() / p[k].max(1.0e-3));
+            }
+        }
+        println!("  far point against a directional light: {n} lit pixels, worst relative difference {worst:.2e}");
+        assert!(n > 200, "only {n} lit pixels");
+        assert!(worst < 5.0e-3, "{worst}");
+    }
+
+    /// Inside the sponge's central cavity, lit by a headlamp alone
+    /// (lights-in-the-fractal, L3): the lamp sits at the eye, so it sees
+    /// what the eye sees and casts no shadow in sight -- shadows on is
+    /// shadows off. A shadow ray that did not stop at the light would
+    /// meet the wall behind the eye from every wall in view, and the
+    /// cavity would go black.
+    #[test]
+    fn a_headlamp_lights_the_inside_of_a_sponge() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.flame = sponge();
+        // The sponge is [0, 1]^3 (its maps are `(p + (i, j, k)) / 3`) and
+        // its cavity the middle third; the eye a tenth of the frame's
+        // radius from the cavity's centre, inside it.
+        c.escape.cam_target_x = "0.5".to_string();
+        c.escape.cam_target_y = "0.5".to_string();
+        c.escape.cam_target_z = "0.5".to_string();
+        c.escape.zoom_log2 = 5.0;
+        let l = &mut c.solid_shading.lights[0];
+        l.enabled = true;
+        l.kind = crate::config::LightKind::Headlamp;
+        l.cone = 180.0;
+        l.reach = 4.0;
+        let mean = |img: &[[f32; 4]]| img.iter().map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / img.len() as f64;
+        c.escape.formula_params.insert("shadow".to_string(), 0.0);
+        let open = mean(&lit_picture(&device, &queue, &c, &palette, w, h));
+        c.escape.formula_params.insert("shadow".to_string(), 1.0);
+        let shadowed = mean(&lit_picture(&device, &queue, &c, &palette, w, h));
+        println!("  inside the sponge by a headlamp: shadows off {open:.4}, on {shadowed:.4}");
+        assert!(open > 0.05, "the headlamp lit nothing: {open}");
+        assert!(shadowed > 0.97 * open, "the headlamp's own shadows darken what it sees: {shadowed} against {open}");
+
+        // And the lamp's cone: narrowed, the frame's edge goes dark while
+        // its centre stays lit.
+        c.solid_shading.lights[0].cone = 10.0;
+        let spot = lit_picture(&device, &queue, &c, &palette, w, h);
+        let at = |x: u32, y: u32| { let p = spot[(y * w + x) as usize]; p[0] + p[1] + p[2] };
+        let centre = at(w / 2, h / 2);
+        let corner = at(2, 2) + at(w - 3, 2) + at(2, h - 3) + at(w - 3, h - 3);
+        println!("  a 10-degree cone: centre {centre:.4}, corners {corner:.4}");
+        assert!(centre > 0.05 && corner == 0.0, "the cone: centre {centre}, corners {corner}");
+    }
+
+    /// A point light in the path tracer is the lit tier's (lights-in-the-
+    /// fractal, L4): with no bounces, no shadows and a light of no size,
+    /// the two light the cube alike -- to the path tracer's jitter across
+    /// a pixel, over which the light's distance changes.
+    #[test]
+    fn a_point_lit_solid_is_the_lit_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.cam_target_x = "1".to_string();
+        c.escape.cam_target_y = "1".to_string();
+        c.escape.cam_target_z = "1".to_string();
+        c.escape.formula_params.insert("shadow".to_string(), 0.0);
+        c.escape.formula_params.insert("shadow_sharpness".to_string(), 1.0e4);
+        c.escape.path.bounces = 0;
+        let l = &mut c.solid_shading.lights[0];
+        l.enabled = true;
+        l.kind = crate::config::LightKind::Point;
+        l.position = [3.5, 2.5, 4.0];
+        l.reach = 3.0;
+        l.intensity = 2.0;
+        l.color = [1.0, 0.5, 0.25];
+        let lit = lit_picture(&device, &queue, &c, &palette, w, h);
+        c.escape.solid_tier = RenderTier::PathTraced;
+        let mut r = renderer_for(&device, &c, w, h);
+        r.render_solid_still(&device, &queue, &c, &palette, 16, || { wait(&device); true });
+        let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+        r.destroy();
+        let at = |x: u32, y: u32| lit[(y * w + x) as usize];
+        let (mut n, mut worst, mut sum) = (0, 0.0f32, 0.0f64);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let (p, q) = (at(x, y), path[(y * w + x) as usize]);
+                // A face's inside, as the sunlit test takes it: covered,
+                // lit, and its neighbours on the same face (the normal's).
+                let flat = (0..9u32).all(|i| {
+                    let o = at(x + i % 3 - 1, y + i / 3 - 1);
+                    (0..3).all(|k| (p[k] - o[k]).abs() < 0.05 * p[k].max(1.0e-3))
+                });
+                if p[3] < 1.0 || q[3] < 1.0 || !flat || p[0] <= 1.0e-3 {
+                    continue;
+                }
+                n += 1;
+                for k in 0..3 {
+                    let d = (p[k] - q[k]).abs() / p[k].max(1.0e-3);
+                    worst = worst.max(d);
+                    sum += d as f64;
+                }
+            }
+        }
+        let mean = sum / (3 * n.max(1)) as f64;
+        println!("  point-lit cube: {n} face pixels, path against lit: mean {mean:.2e}, worst {worst:.2e}");
+        assert!(n > 200, "only {n} face pixels");
+        assert!(mean < 2.0e-3 && worst < 2.0e-2, "mean {mean}, worst {worst}");
+    }
 }

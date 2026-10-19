@@ -6957,6 +6957,61 @@ fn ifs_gloss() -> f32 { return params.fdata[3].w; }
 fn ifs_rough() -> f32 { return params.fdata[4].w; }
 fn ifs_glow() -> f32 { return params.fdata[5].w; }
 
+// The lights' kinds (lights-in-the-fractal, L2). A light's first slot
+// holds the direction TO it (directional) or its position (a point, a
+// headlamp; in mode D an offset from the target, as every position
+// there is); its kind rides in the w of its colour -- 0 directional, 1 a
+// point, 2 a spot down the view -- and fdata[28 + i] holds its reach in
+// the world's units and its cone's outer and inner cosines.
+fn ifs_light_kind(i: u32) -> u32 { return u32(params.fdata[12u + i * 2u].w + 0.5); }
+fn ifs_light_pos(i: u32) -> vec3<f32> { return params.fdata[11u + i * 2u].xyz; }
+
+struct IfsLightAt {
+    // Toward the light, a unit vector.
+    dir: vec3<f32>,
+    // How far it is: past anything for a directional light.
+    dist: f32,
+    // The share of its power that reaches: the falloff and the cone, 1
+    // for a directional light.
+    gain: f32,
+};
+
+// Light i as a point p sees it.
+fn ifs_light_at(i: u32, p: vec3<f32>) -> IfsLightAt {
+    var l: IfsLightAt;
+    l.dir = ifs_light_dir(i);
+    l.dist = 3.0e38;
+    l.gain = 1.0;
+    let kind = ifs_light_kind(i);
+    if (kind == 0u) {
+        return l;
+    }
+    // Scaled before it is squared: at a deep zoom an offset's square is
+    // below f32's range.
+    let to = ifs_light_pos(i) - p;
+    let m = max(max(abs(to.x), abs(to.y)), abs(to.z));
+    if (!(m > 0.0)) {
+        // At the light itself: from the eye's side.
+        l.dir = -ifs_forward();
+        l.dist = 0.0;
+        return l;
+    }
+    let u = to / m;
+    let lu = length(u);
+    l.dir = u / lu;
+    l.dist = m * lu;
+    let x = params.fdata[28u + i];
+    // 1 / (1 + (d / reach)^2): the inverse square far off, finite at the
+    // light, half at the reach -- a ratio first, as above.
+    let q = l.dist / max(x.x, 1.0e-30);
+    l.gain = 1.0 / (1.0 + q * q);
+    if (kind == 2u) {
+        // The headlamp's cone about the view, softened at its edge.
+        l.gain = l.gain * smoothstep(x.y, x.z, dot(-l.dir, ifs_forward()));
+    }
+    return l;
+}
+
 fn ifs_coat_d(nh: f32, a2: f32) -> f32 {
     let k = nh * nh * (a2 - 1.0) + 1.0;
     return a2 / (3.141592654 * k * k);
@@ -6972,7 +7027,9 @@ fn ifs_coat_fresnel(f0: f32, c: f32) -> f32 {
     return f0 + (1.0 - f0) * m2 * m2 * m;
 }
 
-fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32) -> vec3<f32> {
+// `p` is the surface's position, in the geometry's frame: what a point
+// light's direction, distance and falloff are measured from.
+fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32, p: vec3<f32>) -> vec3<f32> {
     let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
     let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
     let v = -dir;
@@ -6989,12 +7046,13 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     lit_rgb = lit_rgb + albedo * max(ifs_glow(), 0.0);
     let lights = ifs_light_count();
     for (var li = 0u; li < lights; li = li + 1u) {
-        let ld = ifs_light_dir(li);
+        let la = ifs_light_at(li, p);
+        let ld = la.dir;
         let ndotl = max(dot(n, ld), 0.0);
         if (ndotl <= 0.0) {
             continue;
         }
-        let lcol = ifs_light_color(li) * ifs_light_power(li);
+        let lcol = ifs_light_color(li) * (ifs_light_power(li) * la.gain);
         let s = mix(1.0, sun[li], shadow_amount);
         var diff = 1.0;
         if (f0 > 0.0) {
@@ -7462,7 +7520,9 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sun = unpack4x8unorm(g.z);
     let dir = ifs_ray(gid.x, gid.y);
 
-    let rgb = ifs_rig(albedo, n, nz_ao.y, sun, dir, t);
+    // The surface's position, as the walk found it: the eye (an offset
+    // from the target) along the ray.
+    let rgb = ifs_rig(albedo, n, nz_ao.y, sun, dir, t, params.fdata[2].xyz + dir * t);
     textureStore(out_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(rgb, 1.0));
     textureStore(height_tex, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(shade.t, height, 0.0, 0.0));
 }"#;
@@ -7954,7 +8014,9 @@ fn ifs_ao(p: vec3<f32>, n: vec3<f32>, reach: f32) -> f32 {
 // geometry rather than a blur applied to a hard answer. Inigo
 // Quilez's formulation, which is the standard one for distance
 // fields.
-fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32) -> f32 {
+// `t_end` is the light's distance (past everything for a directional
+// light): nothing beyond it can shadow.
+fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32, t_end: f32) -> f32 {
     // The ray leaves at the bounding sphere: past it every point is
     // provably outside the set, so there is nothing left to occlude.
     // `p` is an offset from the target, so the ball's centre is a
@@ -7965,7 +8027,7 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32)
     if (!(disc > 0.0)) {
         return 1.0;
     }
-    let t_max = -b + sqrt(disc);
+    let t_max = min(-b + sqrt(disc), t_end);
 
     // Two different epsilons, and the RELATIONSHIP between them is the
     // whole behaviour of this function.
@@ -8158,11 +8220,13 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (fparam(3u) > 0.0) {
                 let lights = ifs_light_count();
                 for (var li = 0u; li < lights; li = li + 1u) {
-                    let ld = ifs_light_dir(li);
-                    if (dot(n, ld) <= 0.0) {
+                    // Toward the light from this point, and no further
+                    // than it: a point or a headlamp sits in the world.
+                    let la = ifs_light_at(li, p);
+                    if (dot(n, la.dir) <= 0.0) {
                         continue;
                     }
-                    sun[li] = ifs_shadow(p + n * eps0 * 2.0, ld, fparam(4u), eps0 * 4.0, max_steps);
+                    sun[li] = ifs_shadow(p + n * eps0 * 2.0, la.dir, fparam(4u), eps0 * 4.0, max_steps, la.dist);
                 }
             }
 
@@ -8479,7 +8543,9 @@ fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
 // and calling a hit at a tenth of that (or a ten-thousandth of the
 // ball), so it clears the surface it left. The distance to the hit,
 // or -1.
-fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> f32 {
+// Where a ray from o first meets the solid, no further than `t_end`; -1
+// for nowhere.
+fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> f32 {
     let span = pt_ifs_ball(o, d);
     if (span.y < span.x) {
         return -1.0;
@@ -8489,7 +8555,7 @@ fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> f32 {
     var t = max(e0 * 4.0, span.x);
     let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
     for (var i = 0u; i < max_steps; i = i + 1u) {
-        if (t > span.y) {
+        if (t > span.y || t > t_end) {
             break;
         }
         let dist = ifs_distance_at(o + d * t, eps);
@@ -8502,7 +8568,7 @@ fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> f32 {
 }
 
 fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
-    let t = pt_ifs_leave(o, d, travelled);
+    let t = pt_ifs_leave(o, d, 3.0e38, travelled);
     if (t < 0.0) {
         var out: PtHit;
         out.hit = false;
@@ -8511,8 +8577,8 @@ fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
     return pt_ifs_surface(o + d * t, t, travelled + t);
 }
 
-fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
-    return pt_ifs_leave(o, d, travelled) < 0.0;
+fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> bool {
+    return pt_ifs_leave(o, d, t_end, travelled) < 0.0;
 }
 
 // One sample of the pixel: the camera's ray sphere-traced as the walk

@@ -27,7 +27,7 @@ pub use delta::{
     TransformKind, TransformRef, UpdateType,
     json_to_config_value,
 };
-pub use fractal_config::{FractalConfig, SolidLight, SolidShadingSettings, CURRENT_CONFIG_VERSION};
+pub use fractal_config::{FractalConfig, LightKind, SolidLight, SolidShadingSettings, CURRENT_CONFIG_VERSION};
 pub use manager::{ConfigError, ConfigManager, EditingTarget, UpdateAction};
 #[cfg(feature = "web-app")]
 pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};

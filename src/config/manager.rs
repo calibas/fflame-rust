@@ -2751,6 +2751,13 @@ impl ConfigManager {
             }
             ConfigPath::SolidLightParam { index, param } => {
                 let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                // A point's position is f64, as the world it sits in.
+                match param.as_str() {
+                    "x" => return Ok(ConfigValue::Double(l.position[0])),
+                    "y" => return Ok(ConfigValue::Double(l.position[1])),
+                    "z" => return Ok(ConfigValue::Double(l.position[2])),
+                    _ => {}
+                }
                 let v = match param.as_str() {
                     "azimuth" => l.azimuth,
                     "elevation" => l.elevation,
@@ -2758,6 +2765,10 @@ impl ConfigManager {
                     "color_r" => l.color[0],
                     "color_g" => l.color[1],
                     "color_b" => l.color[2],
+                    "kind" => l.kind.index() as f32,
+                    "reach" => l.reach,
+                    "cone" => l.cone,
+                    "lift" => l.lift,
                     _ => return Err(ConfigError::InvalidIndex),
                 };
                 Ok(v.into())
@@ -4564,16 +4575,20 @@ impl ConfigManager {
             }
             ConfigPath::SolidLightParam { index, param } => {
                 let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
-                let v: f32 = value.try_into()?;
-                match param.as_str() {
-                    "azimuth" => l.azimuth = v,
-                    "elevation" => l.elevation = v,
-                    "intensity" => l.intensity = v,
-                    "color_r" => l.color[0] = v,
-                    "color_g" => l.color[1] = v,
-                    "color_b" => l.color[2] = v,
-                    _ => return Err(ConfigError::InvalidIndex),
+                if let Some(axis) = ["x", "y", "z"].iter().position(|a| a == param) {
+                    // f64 from a Double (the panel, Place at camera), f32
+                    // from a Float (a track's keyframe).
+                    l.position[axis] = match value {
+                        ConfigValue::Double(d) => d,
+                        other => {
+                            let v: f32 = other.try_into()?;
+                            v as f64
+                        }
+                    };
+                    return Ok(());
                 }
+                let v: f32 = value.try_into()?;
+                crate::config::fractal_config::set_light_param(l, param, v).ok_or(ConfigError::InvalidIndex)?;
             }
             ConfigPath::FarDensityFadeStart => {
                 self.current.far_density_fade_start = value.try_into()?;
