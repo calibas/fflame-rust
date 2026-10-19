@@ -210,6 +210,18 @@ shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical
    sees**: a procedural studio (a ground, one to three soft panels or a
    sun disc) as well as the uniform and gradient skies. An HDRI waits on
    the user (it reopens 2026-10-02's decision to skip image files).
+
+   **Done 2026-10-19** (TERRAIN.md, *The studio*): Studio light, a
+   softbox overhead and behind, two strips, a front fill, walls and
+   floor, Sky light its brightness, the camera's frame for a solid and
+   the world's for a terrain. Both tiers: the path tracer's escaped
+   bounces see it; the lit tier has closed forms -- the horizon-clipped
+   irradiance (within 1.3%) and a cone-overlap reflection blended to the
+   irradiance as the coat roughens (within 5% in the mean; a flat face
+   at a light's edge a third to a half off). Spherical Gaussians were
+   tried and dropped (8% off in the mean, twice the softbox at its
+   centre). The first layout tilted the softbox toward the camera, which
+   no top face seen from above mirrors; it sits behind the subject now.
 5. **Light size** apart from the lit tier's shadow sharpness: broad
    highlights on polished surfaces.
 6. **AgX** as a highlight mode beside Filmic (the Narkowicz ACES fit, which

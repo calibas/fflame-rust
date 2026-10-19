@@ -701,6 +701,7 @@ pub(super) fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
                 denoise: ConfigPath::SimPathDenoise,
                 sky: ConfigPath::SimPathSky,
                 zenith: ConfigPath::SimPathZenith,
+                studio: ConfigPath::SimPathStudio,
             },
             ConfigPath::SimTerrainTier,
             config.sim.terrain.tier,

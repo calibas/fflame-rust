@@ -1452,6 +1452,7 @@ pub(crate) struct PathPaths {
     pub denoise: ConfigPath,
     pub sky: ConfigPath,
     pub zenith: ConfigPath,
+    pub studio: ConfigPath,
 }
 
 /// The escape view's: a terrain's and a solid's.
@@ -1464,6 +1465,7 @@ pub(crate) fn escape_path_paths() -> PathPaths {
         denoise: ConfigPath::EscapePathDenoise,
         sky: ConfigPath::EscapePathSky,
         zenith: ConfigPath::EscapePathZenith,
+        studio: ConfigPath::EscapePathStudio,
         focus: ConfigPath::EscapePathFocus,
     }
 }
@@ -1566,11 +1568,16 @@ pub(crate) fn show_sky(
             ui.label(t!("escape_panel.path_zenith"));
         }
     });
-    if tier == RenderTier::Lit {
+    let mut studio = pt.studio;
+    if ui.checkbox(&mut studio, t!("lighting.studio")).on_hover_text(t!("lighting.studio_tip")).changed() {
+        let _ = config_manager.update_param(paths.studio.clone(), studio.into());
+    }
+    // The sky's light, which the lit tier does not trace -- but for the
+    // studio's, which it lights by too. The lens is the View panel's
+    // Depth of Field ([`show_path_dof`]).
+    if tier == RenderTier::Lit && !pt.studio {
         return;
     }
-    // The sky's light, which the lit tier does not trace. The lens is the
-    // View panel's Depth of Field ([`show_path_dof`]).
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.terrain_environment"));
         let mut v = pt.environment;

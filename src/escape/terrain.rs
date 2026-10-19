@@ -82,8 +82,8 @@ struct TerrainParamsGpu {
     /// Mode D's rig slots: [2].w the FOV, [3] forward, [4] right, [5]
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
     /// two per light (direction and power, colour), [20] the sky, [21]
-    /// the colour by the height.
-    fdata: [[f32; 4]; 32],
+    /// the colour by the height, [32] the studio (`ifs_studio`).
+    fdata: [[f32; 4]; 36],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -695,7 +695,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 32>,
+    fdata: array<vec4<f32>, 36>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -2227,6 +2227,8 @@ pub struct TerrainView {
     /// A gradient sky's zenith, as a ray that meets nothing sees it
     /// (`path_core::sky_seen`); None for the background alone.
     pub sky: Option<[f32; 3]>,
+    /// The studio's brightness (`path_core::studio_level`; 0, none).
+    pub studio: f32,
     /// The height map's curve (`TerrainCurve::code`) and whether the land
     /// is inverted (docs/archive/terrain/terrain-height.md, H2).
     pub curve: u32,
@@ -2288,7 +2290,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 32]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 36]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -3957,7 +3959,7 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 32];
+        let mut fdata = [[0.0f32; 4]; 36];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
@@ -3971,6 +3973,8 @@ impl TerrainRenderer {
             fdata[3 + k][3] = view.material[k];
         }
         fdata[10][3] = view.material[3];
+        // The studio, the world's with z up (`ifs_studio`).
+        fdata[32] = [view.studio, 1.0, 0.0, 0.0];
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -4436,9 +4440,10 @@ mod tests {
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, three vec4s (eye, misc, tile), and the 32 vec4s of
-        // `fdata` (the lights' third slots at 28..32).
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 512);
+        // 8 words, three vec4s (eye, misc, tile), and the 36 vec4s of
+        // `fdata` (the lights' third slots at 28..32, the studio at 32).
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 576);
+        assert!(WALK_COMMON.contains("fdata: array<vec4<f32>, 36>"));
     }
 
     #[test]
@@ -4692,6 +4697,7 @@ pub(crate) mod gpu_tests {
             samples_per_axis: 1,
             far: 1.0e30,
             sky: None,
+            studio: 0.0,
             curve: 0,
             invert: false,
             range: None,
@@ -5261,6 +5267,51 @@ pub(crate) mod gpu_tests {
         let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs() / a[k].abs().max(1.0))).fold(0.0f32, f32::max);
         println!("coated sunlit plane: path against lit, worst {worst:.2e} (the material moved the lit tier by {moved:.3})");
         assert!(worst < 1e-3, "{worst}");
+    }
+
+    /// The studio (3d-look-and-tools P4) on a terrain, the world's with z
+    /// up, under it alone (no lights, no ambient): a flat plane's diffuse
+    /// is the path tracer's to the integral (it sees the whole upper
+    /// studio: 2%); a metal's reflection, on rolling ground whose normals
+    /// sweep the studio, the lit tier's approximation of it (15%) -- a
+    /// flat plane reflects one direction, here at the softbox's edge,
+    /// where the approximation is half off. Off, the studio adds nothing.
+    #[test]
+    fn a_plane_under_the_studio_is_lit_alike() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.specular = 0.0;
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.8, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        let mean = |px: &[[f32; 4]]| px.iter().filter(|p| p[3] > 0.0).map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / px.len() as f64;
+        r.render(&device, &queue, &v);
+        assert!(mean(&read_output(&device, &queue, &r, w, h)) < 1.0e-6, "no light, no studio: dark");
+        v.studio = 1.0;
+        for (material, mat, tolerance) in [("diffuse", [0.0f32, 0.5, 0.0, 0.0], 0.02), ("metal", [0.0, 0.4, 0.0, 1.0], 0.15)] {
+            if material == "metal" {
+                let hills: Vec<f32> = (0..n * m).map(|k| 2.0 * ((k % n) as f32 * 0.25).sin() * ((k / n) as f32 * 0.25).cos()).collect();
+                r.set_tile(&device, &queue, n, m, &hills, &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+            }
+            v.material = mat;
+            r.render(&device, &queue, &v);
+            let lit = mean(&read_output(&device, &queue, &r, w, h));
+            r.reset_path();
+            let s = PathSettings { bounces: 1, environment: [0.0; 3], studio: 1.0, gloss: mat[0], roughness: mat[1], ..PathSettings::default() };
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            let path = mean(&read_output(&device, &queue, &r, w, h));
+            let ratio = lit / path.max(1.0e-12);
+            println!("plane under the studio, {material}: path {path:.4}, lit over path {ratio:.4}");
+            assert!(path > 0.0 && (ratio - 1.0).abs() < tolerance, "{material}: {ratio}");
+        }
     }
 
     /// The path tracer weights the highlight by the shading strength, as

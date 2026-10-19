@@ -2053,6 +2053,7 @@ impl ConfigManager {
             ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
             ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
             ConfigPath::SimPathSky => Ok(config.sim.terrain.path.sky_gradient.into()),
+            ConfigPath::SimPathStudio => Ok(config.sim.terrain.path.studio.into()),
             ConfigPath::SimPathZenith => Ok(ConfigValue::ColorRgb(config.sim.terrain.path.zenith)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
             ConfigPath::SimViewCenterX => Ok(ConfigValue::Float(config.sim.view.center_x)),
@@ -2205,6 +2206,7 @@ impl ConfigManager {
             ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
             ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
             ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
+            ConfigPath::EscapePathStudio => Ok(config.escape.path.studio.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainCurve => Ok(ConfigValue::String(config.escape.terrain.curve.as_str().to_string())),
@@ -3473,6 +3475,10 @@ impl ConfigManager {
                 let v: bool = value.try_into()?;
                 self.current.sim.terrain.path.sky_gradient = v;
             }
+            ConfigPath::SimPathStudio => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.studio = v;
+            }
             ConfigPath::SimPathZenith => {
                 let v: [f32; 3] = value.try_into()?;
                 self.current.sim.terrain.path.zenith = v.map(|c| c.clamp(0.0, 1.0));
@@ -3884,6 +3890,10 @@ impl ConfigManager {
             ConfigPath::EscapePathSky => {
                 let v: bool = value.try_into()?;
                 self.current.escape.path.sky_gradient = v;
+            }
+            ConfigPath::EscapePathStudio => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.studio = v;
             }
             ConfigPath::EscapePathZenith => {
                 let v: [f32; 3] = value.try_into()?;

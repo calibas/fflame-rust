@@ -2340,6 +2340,14 @@ pub struct PathTraceConfig {
     pub sky_gradient: bool,
     #[serde(default = "default_path_zenith", skip_serializing_if = "is_default_path_zenith")]
     pub zenith: [f32; 3],
+    /// The studio (3d-look-and-tools P4): reflections and bounces see a
+    /// lit studio -- an overhead softbox, two strips behind, dim walls and
+    /// floor -- in place of the sky's light, while the camera still sees
+    /// the background or the gradient. Sky light is its brightness. A
+    /// solid's turns with the camera, as its lights do; a terrain's is
+    /// the world's. Off by default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub studio: bool,
 }
 
 /// A clear sky's blue overhead.
@@ -2380,6 +2388,7 @@ impl Default for PathTraceConfig {
             denoise: false,
             sky_gradient: false,
             zenith: default_path_zenith(),
+            studio: false,
         }
     }
 }
