@@ -140,6 +140,30 @@ Gates: the panel lays out in every view with every section; each setting
 is drawn in exactly one place (a test over the panels' paths); the Escape
 panel no longer draws the shadow parameters.
 
+**Done 2026-10-19.** `ui/lighting_panel.rs` (was `solid_panel.rs`), in
+the Window menu after View (desktop and compact); its sections by view
+are tabled in UI.md, *The Lighting & Material panel*. The View panel's
+section became a button that opens it. The Escape panel leaves a
+solid's `escape::ifs::LIGHTING_PARAMS` out of its list, and a terrain's
+texture and lake, and says where they went; a plane's relief keeps its
+texture. Step 3: an untouched rig's rows show what the first change
+makes it, and that change takes the rig over with the 3D look's values
+(`render_mode::rig_taken_over`) -- which also fixed P2's entry look
+swinging a terrain's sun from the default (135°, 30°) to light 0's
+stored (35°, 40°). Step 4, reviewed: with the 3D settings out of the
+Escape panel, every remaining same-named control (the relief's Shadows,
+Highlights, Ambient, Elevation, Softness; a terrain's Softness) sits
+under a section that says whose it is, so nothing was renamed; the
+tier's row is now "Render tier" (it read "Rendering" inside Rendering).
+The gate is the text the panels draw (egui's shapes, in a test): a
+solid's shadow parameters in this panel and not the Escape panel's, a
+terrain's texture and lake likewise, the rig not in the View panel
+(`a_solids_light_is_drawn_in_the_lighting_panel_alone`,
+`a_terrains_surface_is_drawn_in_the_lighting_panel`,
+`the_first_change_takes_an_untouched_rig_over`). Left: the background
+colour is drawn in Colors and in Sky by design (it is a 2D picture's
+backdrop too), and the Textures panel keeps its Relief bump shortcut.
+
 ## P4. Materials: metallic and polished
 
 "Some renders, I think mostly from Blender, are shiny in a way I'm unable to
@@ -242,7 +266,7 @@ compensation, the environment, AgX).
 
 1. [x] P1 syntax highlighting.
 2. [x] P2 the 3D look and Lit toward Path traced, 2026-10-19.
-3. [ ] P3 the Lighting & Material panel.
+3. [x] P3 the Lighting & Material panel, 2026-10-19.
 4. [ ] P4 materials (after P7's research).
 5. [ ] P5 flame variations in solids, Orbit colouring.
 6. [ ] P6 fly mode.

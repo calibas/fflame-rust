@@ -337,6 +337,12 @@ pub fn render_escape_content(
         if program && matches!(p.name, "bailout" | "bailout.re" | "bailout.im") {
             continue;
         }
+        // A solid's shadows and occlusion are the Lighting & Material
+        // panel's (3d-look-and-tools P3): formula parameters in the file,
+        // drawn with the rest of the light.
+        if ifs_def.is_some() && crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name) {
+            continue;
+        }
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
         let slow = crate::escape::is_slow_param(owner, p.name);
         if param_control(ui, &mut v, p, "formula", slow) {
@@ -369,6 +375,10 @@ pub fn render_escape_content(
                 }
             }
         }
+    }
+
+    if ifs_def.is_some_and(|d| d.parameters.iter().any(|p| crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name))) {
+        ui.label(egui::RichText::new(t!("escape_panel.lighting_elsewhere")).small().weak());
     }
 
     // ---- Julia toggle ----
@@ -1118,12 +1128,16 @@ pub fn render_escape_content(
                     ConfigPath::EscapeShadingHighlightBlend,
                 );
             });
-            // The surface texture: the relief's and the 3D terrain's alike,
-            // so it is offered whenever either draws.
+            // The surface texture: the relief's and the 3D terrain's alike.
+            // A terrain's is the Lighting & Material panel's Surface (P3).
             ui.separator();
-            ui.add_enabled_ui(sh.enabled || esc.terrain_active(), |ui| {
-                surface_texture_controls(ui, config_manager, &esc, &sh);
-            });
+            if esc.terrain_active() {
+                ui.label(egui::RichText::new(t!("escape_panel.texture_elsewhere")).small().weak());
+            } else {
+                ui.add_enabled_ui(sh.enabled, |ui| {
+                    surface_texture_controls(ui, config_manager, &esc, &sh);
+                });
+            }
         });
 
     // ---- Iteration controls, shown only where the shader reads them ----
@@ -1270,7 +1284,7 @@ fn param_slider<'a>(
 /// so a live drag would overshoot: a small whole-number range is a
 /// dropdown, anything else commits when the drag ends
 /// (`slow_controls`).
-fn param_control(
+pub(crate) fn param_control(
     ui: &mut egui::Ui,
     v: &mut f32,
     p: &'static crate::escape::EscapeParamDef,
@@ -1459,7 +1473,9 @@ pub(crate) fn escape_path_paths() -> PathPaths {
 /// (escape's are shared by a terrain and a solid, each with its own tier;
 /// a simulation's terrain keeps its own), written through `paths`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn show_path_tracing(
+/// The render tier and the path tracer's sampling: the Lighting &
+/// Material panel's Rendering section.
+pub(crate) fn show_render_tier(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     pt: &crate::config::escape::PathTraceConfig,
@@ -1488,21 +1504,6 @@ pub(crate) fn show_path_tracing(
             .response
             .on_hover_text(t!("escape_panel.terrain_tier_tip"));
     });
-    // The sky, which every tier draws: the background alone, or a
-    // gradient from it at the horizon to the zenith's colour.
-    ui.horizontal(|ui| {
-        let mut on = pt.sky_gradient;
-        if ui.checkbox(&mut on, t!("escape_panel.path_sky")).on_hover_text(t!("escape_panel.path_sky_tip")).changed() {
-            let _ = config_manager.update_param(paths.sky.clone(), on.into());
-        }
-        if pt.sky_gradient {
-            let mut rgb = pt.zenith;
-            if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.path_zenith_tip")).changed() {
-                let _ = config_manager.update_param(paths.zenith.clone(), ConfigValue::ColorRgb(rgb));
-            }
-            ui.label(t!("escape_panel.path_zenith"));
-        }
-    });
     if tier == RenderTier::Lit {
         return;
     }
@@ -1530,19 +1531,53 @@ pub(crate) fn show_path_tracing(
     if ui.checkbox(&mut denoise, t!("escape_panel.path_denoise")).on_hover_text(t!("escape_panel.path_denoise_tip")).changed() {
         let _ = config_manager.update_param(paths.denoise.clone(), denoise.into());
     }
-    let mut row = |ui: &mut egui::Ui, label: &str, tip: &str, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>| {
-        ui.horizontal(|ui| {
-            ui.label(t!(label));
-            let mut v = value;
-            if ui.add(egui::Slider::new(&mut v, range)).on_hover_text(t!(tip)).changed() {
-                let _ = config_manager.update_param(path, v.into());
+}
+
+/// The sky, which every tier draws -- the background colour alone, or a
+/// gradient from it at the horizon to the zenith's colour -- and its
+/// light, the path tracer's: the Lighting & Material panel's Sky section.
+/// The background is the Colors panel's too (a 2D picture's backdrop).
+pub(crate) fn show_sky(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    background: [f32; 3],
+    pt: &crate::config::escape::PathTraceConfig,
+    paths: &PathPaths,
+    tier: crate::config::escape::RenderTier,
+) {
+    use crate::config::escape::RenderTier;
+    ui.horizontal(|ui| {
+        let mut rgb = background;
+        if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("lighting.sky_colour_tip")).changed() {
+            let _ = config_manager.update_param(ConfigPath::BackgroundColor, rgb.into());
+        }
+        ui.label(t!("lighting.sky_colour"));
+    });
+    ui.horizontal(|ui| {
+        let mut on = pt.sky_gradient;
+        if ui.checkbox(&mut on, t!("escape_panel.path_sky")).on_hover_text(t!("escape_panel.path_sky_tip")).changed() {
+            let _ = config_manager.update_param(paths.sky.clone(), on.into());
+        }
+        if pt.sky_gradient {
+            let mut rgb = pt.zenith;
+            if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.path_zenith_tip")).changed() {
+                let _ = config_manager.update_param(paths.zenith.clone(), ConfigValue::ColorRgb(rgb));
             }
-        });
-    };
-    // The sky's light. The material is the picture's, every tier's
-    // (the Lighting & Material section's); the lens is the View panel's
-    // Depth of Field ([`show_path_dof`]).
-    row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", paths.environment.clone(), pt.environment, 0.0..=4.0);
+            ui.label(t!("escape_panel.path_zenith"));
+        }
+    });
+    if tier == RenderTier::Lit {
+        return;
+    }
+    // The sky's light, which the lit tier does not trace. The lens is the
+    // View panel's Depth of Field ([`show_path_dof`]).
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.terrain_environment"));
+        let mut v = pt.environment;
+        if ui.add(egui::Slider::new(&mut v, 0.0..=4.0)).on_hover_text(t!("escape_panel.terrain_environment_tip")).changed() {
+            let _ = config_manager.update_param(paths.environment.clone(), v.into());
+        }
+    });
 }
 
 /// The path tracer's lens: its aperture and where it focuses (0 is sharp
@@ -1799,24 +1834,9 @@ fn show_terrain_section(
                     });
             });
             if t.interior == TerrainInterior::Lake {
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.terrain_lake_tint"));
-                    let mut rgb = t.lake_tint;
-                    if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.terrain_lake_tint_tip")).changed() {
-                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb(rgb));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.terrain_lake_roughness"));
-                    let mut v = t.lake_roughness;
-                    if ui
-                        .add(egui::Slider::new(&mut v, 0.02..=1.0).logarithmic(true))
-                        .on_hover_text(t!("escape_panel.terrain_lake_roughness_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainLakeRoughness, v.into());
-                    }
-                });
+                // Its tint and roughness are a material: the Lighting &
+                // Material panel's Surface (3d-look-and-tools P3).
+                ui.label(egui::RichText::new(t!("escape_panel.lake_elsewhere")).small().weak());
             }
             // How finely it is sampled. The camera, far and haze, the
             // lighting and the path tracer are the View panel's
@@ -3243,7 +3263,7 @@ mod tests {
 /// The surface texture (docs/projects/surface-textures.md): its kind,
 /// strength and scale, and where on the slope it applies. One set for the
 /// 2D relief and the 3D terrain.
-fn surface_texture_controls(
+pub(crate) fn surface_texture_controls(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     esc: &crate::config::escape::EscapeConfig,

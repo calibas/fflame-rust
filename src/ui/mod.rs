@@ -30,7 +30,7 @@ mod random_generator;
 mod scripts_panel;
 pub mod response;
 mod settings;
-mod solid_panel;
+mod lighting_panel;
 mod subflames;
 // `pub(crate)` for tests only: the animation exporter checks that it
 // applies every target this module offers, and that check has to
@@ -1534,6 +1534,7 @@ impl EguiLayer {
         let mut open_preset_library = false;
         let mut open_random_generator = false;
         let mut open_formula_editor = false;
+        let mut open_lighting_panel = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -1793,6 +1794,7 @@ impl EguiLayer {
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
                         open_formula_editor: &mut open_formula_editor,
+                        open_lighting_panel: &mut open_lighting_panel,
 
                         // UI state
                         paused,
@@ -2543,6 +2545,7 @@ impl EguiLayer {
             open_preset_library,
             open_random_generator,
             open_formula_editor,
+            open_lighting_panel,
             fractal_viewport_size,
             fly_mouse_drag,
             fly_mode_toggle_requested,

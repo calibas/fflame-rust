@@ -11,6 +11,7 @@ pub fn render_view_content(
     fly_mode_toggle_requested: &mut bool,
     deep_zoom: &super::DeepZoom,
     escape_aa: Option<super::EscapeAa>,
+    open_lighting_panel: &mut bool,
 ) {
     // Clone config to avoid borrow conflicts
     let config = config_manager.active_config().clone();
@@ -60,8 +61,9 @@ pub fn render_view_content(
         _ => {}
     }
 
-    // ── Every 3D view's: what lies between the eye and the picture, its
-    // focus, and how it is lit and what it is made of.
+    // ── Every 3D view's: what lies between the eye and the picture, and
+    // its focus. How it is lit and what it is made of is the Lighting &
+    // Material panel's (3d-look-and-tools P3).
     if kind.is_3d() {
         egui::CollapsingHeader::new(t!("view.atmosphere").as_ref())
             .default_open(false)
@@ -69,9 +71,13 @@ pub fn render_view_content(
         egui::CollapsingHeader::new(t!("view.depth_of_field").as_ref())
             .default_open(false)
             .show(ui, |ui| super::view_controls::depth_of_field_3d(ui, config_manager));
-        egui::CollapsingHeader::new(t!("view.lighting_material").as_ref())
-            .default_open(false)
-            .show(ui, |ui| super::view_controls::lighting_3d(ui, config_manager));
+        if ui
+            .button(t!("view.open_lighting_panel").as_ref())
+            .on_hover_text(t!("view.open_lighting_panel_tip"))
+            .clicked()
+        {
+            *open_lighting_panel = true;
+        }
     }
     if !matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d) {
         return;
@@ -283,13 +289,13 @@ mod tests {
             for _ in 0..2 {
                 let _ = ctx.run_ui(Default::default(), |ui| {
                     egui::CentralPanel::default().show_inside(ui, |ui| {
-                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None);
+                        let mut open = false;
+                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None, &mut open);
                         ui.separator();
                         use super::super::view_controls as vc;
                         vc::atmosphere_3d(ui, &mut manager);
                         vc::depth_of_field_3d(ui, &mut manager);
-                        vc::lighting_3d(ui, &mut manager);
-                        super::super::solid_panel::render_solid_panel_content(ui, &mut manager);
+                        super::super::lighting_panel::render_lighting_panel_content(ui, &mut manager);
                     });
                 });
             }

@@ -662,7 +662,7 @@ pub fn atmosphere_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
 /// The path tracer's settings, their paths, and the tier for a 3D view
 /// other than a flame.
 #[cfg(feature = "engine-escape")]
-type PathOf = (
+pub(super) type PathOf = (
     crate::config::escape::PathTraceConfig,
     super::escape_panel::PathPaths,
     ConfigPath,
@@ -671,7 +671,7 @@ type PathOf = (
 );
 
 #[cfg(feature = "engine-escape")]
-fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
+pub(super) fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
     use crate::camera::gesture::{self, ViewKind};
     match gesture::view_kind(config) {
         ViewKind::Solid => Some((
@@ -728,75 +728,5 @@ pub fn depth_of_field_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) 
         } else {
             super::escape_panel::show_path_dof(ui, config_manager, &pt, &paths);
         }
-    }
-}
-
-/// How a 3D view is lit and what its surfaces are made of: the render
-/// tier and the path tracer (samples, sky, material), a terrain's shadows
-/// and occlusion, and the lights and the lit tier's shading -- the Solid
-/// Lighting panel's (camera-unification C5: in the View panel for now,
-/// its own panel if it grows enough).
-pub fn lighting_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
-    use crate::camera::gesture::{self, ViewKind};
-    let config = config_manager.active_config().clone();
-    let kind = gesture::view_kind(&config);
-    #[cfg(feature = "engine-escape")]
-    if let Some((pt, paths, tier_path, tier, id)) = path_of(&config) {
-        super::escape_panel::show_path_tracing(ui, config_manager, &pt, &paths, tier_path, tier, id);
-        ui.separator();
-    }
-    match kind {
-        #[cfg(feature = "terrain")]
-        ViewKind::EscapeTerrain => {
-            let t = &config.escape.terrain;
-            terrain_shadows(
-                ui,
-                config_manager,
-                [t.shadow, t.shadow_sharpness, t.occlusion],
-                t.tier,
-                [ConfigPath::EscapeTerrainShadow, ConfigPath::EscapeTerrainShadowSharpness, ConfigPath::EscapeTerrainOcclusion],
-                0.05,
-                &t!("escape_panel.terrain_occlusion_tip"),
-            );
-            ui.separator();
-        }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
-        ViewKind::SimTerrain => {
-            let t = &config.sim.terrain;
-            terrain_shadows(
-                ui,
-                config_manager,
-                [t.shadow, t.shadow_sharpness, t.occlusion],
-                t.tier,
-                [ConfigPath::SimTerrainShadow, ConfigPath::SimTerrainShadowSharpness, ConfigPath::SimTerrainOcclusion],
-                0.2,
-                &t!("sim_panel.terrain_occlusion_tip"),
-            );
-            ui.separator();
-        }
-        _ => {}
-    }
-    super::solid_panel::lighting_rig(ui, config_manager, kind);
-}
-
-/// A terrain's traced shadows and its occlusion: `[shadow, sharpness,
-/// occlusion]` and their paths. Occlusion is the lit tier's stand-in for
-/// the sky the path tracer traces, so it hides when only that runs.
-#[cfg(feature = "terrain")]
-fn terrain_shadows(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    values: [f32; 3],
-    tier: crate::config::escape::RenderTier,
-    paths: [ConfigPath; 3],
-    occlusion_max: f32,
-    occlusion_tip: &str,
-) {
-    let [shadow, sharpness, occlusion] = values;
-    let [p_shadow, p_sharpness, p_occlusion] = paths;
-    float_row(ui, config_manager, &t!("escape_panel.terrain_shadow"), &t!("escape_panel.terrain_shadow_tip"), p_shadow, shadow, 0.0..=1.0, false);
-    float_row(ui, config_manager, &t!("escape_panel.terrain_shadow_sharpness"), &t!("escape_panel.terrain_shadow_sharpness_tip"), p_sharpness, sharpness, 1.0..=128.0, true);
-    if tier != crate::config::escape::RenderTier::PathTraced {
-        float_row(ui, config_manager, &t!("escape_panel.terrain_occlusion"), occlusion_tip, p_occlusion, occlusion, 0.0..=occlusion_max, false);
     }
 }
