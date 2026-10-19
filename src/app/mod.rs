@@ -2986,6 +2986,13 @@ impl App {
                         }
                     }
                 }
+                // The path tracer's call: short while the user is at it, so
+                // the UI keeps about twenty frames a second; the export's
+                // once nothing has been touched for two seconds and nothing
+                // plays, which fills the card (`IDLE_FRAME_MS`).
+                let idle = !self.animation_controller.is_playing()
+                    && self.last_input_time.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(2));
+                let frame_ms = if idle { crate::escape::renderer::IDLE_FRAME_MS } else { crate::escape::renderer::VIEWPORT_FRAME_MS };
                 if solid_tier != crate::config::escape::RenderTier::Lit
                     && !self.escape_dirty
                     && escape.trace_solid_viewport(
@@ -2993,6 +3000,7 @@ impl App {
                         &self.gpu.queue,
                         &final_config,
                         renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                        frame_ms,
                     )
                 {
                     self.window.request_redraw();
