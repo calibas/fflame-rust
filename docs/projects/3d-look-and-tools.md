@@ -249,6 +249,15 @@ shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical
    and gives the contrast back. Clip stays the default.
 7. Presets showing it: a polished Mandelbulb, a metal KIFS.
 
+   **Done 2026-10-19:** Gold Mandelbulb (the power-4 bulb, metallic,
+   roughness 0.3, a gold palette), Chrome Octahedron (the KIFS
+   octahedron, metallic, roughness 0.1, a silver palette), Lacquered
+   Mandelbox and Lacquered Julia (gloss 0.06 over their own palettes) --
+   each under Studio light with AgX Punchy. A metal takes its colour
+   from the palette, so these carry bright gold and silver ones; the
+   chrome Mandelbox was tried and left out (its flat faces mirror the
+   studio's dark walls).
+
 ## P5. Flame variations in solids, and orbit modifications for colouring
 
 "I'd like the flame variation shapes and also orbit modifications for
