@@ -390,7 +390,8 @@ marked for review):
   `floor`, as functions or methods; a vector in a state map; a `PARAMS`
   entry `vec3(...)` as three float parameters `name.x`, `.y`, `.z`.
   Refused at first, with the reason: a helper returning a vector, and
-  an `if` used as a vector value (assign in each arm instead).
+  an `if` used as a vector value (assign in each arm instead) -- both
+  built 2026-10-19 (item 9).
   **Done 2026-10-18** (`src/escape/lang/rhai/vec.rs`): measured, a
   formula using every vector operation, a vector state field and a
   vector parameter runs as the same arithmetic written in numbers on
@@ -638,7 +639,24 @@ hillshade the part to check.
 9. [x] **B** (the user, 2026-10-18): the vector type (B1), 3D variations
    (B2), solids written in Rhai (B3). **Done 2026-10-18**, as B's steps
    above. Left: the KIFS Menger's Rhai twin; a solid's `prepare` and
-   function parameters; vector-valued helpers and `if` values.
+   function parameters; vector-valued helpers and `if` values. **The
+   leftovers done 2026-10-19:** a helper may give a vector and an `if`
+   may be one (`block_gives_vec` reads which from the body, its
+   parameters bound by their arguments' kinds; three locals set in each
+   arm); a function parameter of a vector is taken part by part (the
+   real part of `f` of each); a solid's `prepare` runs on the CPU and
+   its values follow the Ball Radius in its parameter block (mode D's
+   `fdata` is the walk's), its function parameters' choices after its
+   parameters. The KIFS Menger's twin uses all four
+   (`assets/formulas/solid-kifs-menger.rhai`, an example now): its walk
+   gives the f64 twin's distance at 400 points (0 apart), and on the GPU
+   it covers the built-in's pixels exactly (0 of 25,600 apart; the
+   Mandelbox and the Mandelbulb still 0). A vector-valued helper, `if`
+   and `else if`, a function of a vector and a prepared vector run as
+   the arithmetic written in numbers on 400 pixels (1e-12). Found on the
+   way: a function parameter named as a built-in's parameter takes its
+   value when a config switches between them (the twin's test cloned
+   the built-in KIFS's `fold = 3`).
 10. [x] **A4** (the user, 2026-10-18): the icosahedral and dodecahedral
    folds, the 2D KIFS formula. Done, as A4 above.
 11. [x] **C4** (the user, 2026-10-18): transformations for escape-time,

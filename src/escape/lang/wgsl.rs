@@ -345,12 +345,10 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
 /// first `colour_depth` iterations the closest approach of `z` (the trap),
 /// the running derivative `dr` if the state has one (the level), and its
 /// `address` field if it has one. The parameters read `fparam` from slot
-/// `base` on (the template's own come first); `colour_depth` is at
-/// `depth_slot`.
+/// `base` on (the template's own come first), its function parameters'
+/// choices after them; `colour_depth` is at `depth_slot`, the ball after
+/// it, and what `prepare` computes (the globals) from `depth_slot + 2`.
 pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, String> {
-    if !p.funcs.is_empty() {
-        return Err("a solid's function parameters are a later step".into());
-    }
     let find = |name: &str| p.vars.iter().position(|v| v.name == name && !v.global && !v.is_array());
     let (Some(zx), Some(zy), Some(zz)) = (find("s_z__x"), find("s_z__y"), find("s_z__z")) else {
         return Err("the state needs `z`, the iterate, a vector".into());
@@ -358,9 +356,10 @@ pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, Stri
     let dr = find("s_dr");
     let address = find("s_address");
     let mut g = Gen::new(p, Ctx::Formula, "ufs_");
-    for k in g.slots.iter_mut() {
+    for k in g.slots.iter_mut().chain(g.func_slots.iter_mut()) {
         *k += base;
     }
+    g.global_base = Some(depth_slot + 2);
     let mut body = String::from("struct SolidState {\n");
     for (i, v) in p.vars.iter().enumerate() {
         if !v.global && !v.perturb {
@@ -1313,6 +1312,9 @@ struct Gen<'p> {
     /// on true values take them of a deviation; the GPU's own sin may
     /// err by 2^-11 absolutely).
     exact_near_zero: bool,
+    /// A solid's globals (`prepare`): in its parameter block from this
+    /// slot, after its parameters, where mode D's `fdata` is the walk's.
+    global_base: Option<usize>,
 }
 
 impl<'p> Gen<'p> {
@@ -1345,6 +1347,7 @@ impl<'p> Gen<'p> {
             user_diff: (false, false),
             user_jac: false,
             exact_near_zero: false,
+            global_base: None,
         }
     }
 
@@ -1483,7 +1486,9 @@ impl<'p> Gen<'p> {
     /// `fdata`, a colouring's parameter block after its parameters.
     fn global(&self, v: VarId, k: usize) -> String {
         let slot = |k: usize| {
-            if self.formula_side() {
+            if let Some(b) = self.global_base {
+                format!("fparam({}u)", b + k)
+            } else if self.formula_side() {
                 format!("fdata4({}u).{}", k / 4, ["x", "y", "z", "w"][k % 4])
             } else {
                 format!("cparam({}u)", self.p.param_slots() + k)
@@ -1506,6 +1511,16 @@ impl<'p> Gen<'p> {
         let Some(k) = self.global_slots[v] else {
             return format!("{}[{clamped}]", self.var(v));
         };
+        // A solid's, from its parameter block.
+        if let Some(b) = self.global_base {
+            let at = |o: &str| format!("fparam(u32({} + {o}))", b + k);
+            return match var.ty {
+                Ty::Complex => format!("vec2<f32>({}, {})", at(&format!("2 * {clamped}")), at(&format!("2 * {clamped} + 1"))),
+                Ty::Float => at(&clamped),
+                Ty::Int => format!("i32(round({}))", at(&clamped)),
+                Ty::Bool => format!("({} != 0.0)", at(&clamped)),
+            };
+        }
         let read = self.use_(if self.formula_side() { Helper::GArrF } else { Helper::GArrC });
         let at = if self.formula_side() { k } else { self.p.param_slots() + k };
         match var.ty {

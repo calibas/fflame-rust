@@ -519,7 +519,12 @@ fn escaped(s, p) {
   runs), `fn distance(s, p)` the estimate after the last one; `INFO`
   has `title` and `radius`. It renders in mode D ("Use as solid"; see
   *Mode D*). The position is `#pixel` and `#pixelz`, the estimate
-  `#index` in `final:`; no `prepare` or function parameters yet.
+  `#index` in `final:`. `fn prepare(p)` computes values once per picture
+  (UF's `global:`), read as `p.name` -- the CPU runs it
+  (`custom::globals`) and puts them in the solid's parameter block after
+  its Ball Radius, since mode D's `fdata` is the walk's -- and function
+  parameters (`function: "sin"`) are menus as a formula's. Example:
+  `assets/formulas/solid-kifs-menger.rhai`, which uses both.
 - **Vectors** (`rhai/vec.rs`; the KIFS plan, B1): `vec3(x, y, z)` (or
   `vec3(s)`), its parts `v.x`, `v.y`, `v.z` read and set, `+`, `-`, `*`
   and `/` (by a number, or part by part), `dot`, `cross`, `length`,
@@ -530,8 +535,14 @@ fn escaped(s, p) {
   scalars, so nothing past it knows vectors exist, and deep zoom derives
   through vector code as through any other. `min`, `max` and `clamp` of
   numbers come with them (a temporary and an `if`; not in `escaped`).
-  Refused: a helper ending with a vector, an `if` used as a vector
-  value.
+  A helper may give a vector (its body inlined; `let`s, an `if` at its
+  end, other helpers), and an `if` may be one, `else if`s too (three
+  locals set in each arm); whether a call or an `if` is a vector is read
+  from its body, its parameters bound by their arguments' kinds
+  (`block_gives_vec`). A function parameter of a vector, `p.f(v)`, is
+  taken part by part, each part the real part of `f` of it. A vector
+  `prepare` gives is read as `p.name` as any. `escaped` stays one test:
+  a helper there may give a vector from `let`s, not from an `if`.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to
@@ -1256,8 +1267,14 @@ reads). The walk around the program (`lang::wgsl::solid`) is the
 built-ins' shape, coloured by "Colouring solids" from the state: the
 closest approach of `z` over the first `colour_depth` iterations (the
 trap), its `dr` (the level), its `address` field if it has one.
-Example: `assets/formulas/solid-mandelbox.rhai`, pixel for pixel the
-built-in Mandelbox under the trap colouring.
+After them come what its `prepare` computes, run on the CPU each frame
+(`custom::globals`, its parameters read from slot 7). Its function
+parameters' choices follow its own parameters, as a formula's do.
+Examples: `assets/formulas/solid-mandelbox.rhai`, pixel for pixel the
+built-in Mandelbox under the trap colouring, and
+`assets/formulas/solid-kifs-menger.rhai`, the KIFS Menger written with
+`prepare`, a function parameter and vector helpers, covering the
+built-in's pixels exactly (`rhai_solids_render_as_the_builtins`).
 
 **KIFS (Solid)** ([escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md),
 A1) takes its folds from Syntopia's "Folding Space" (2011): the

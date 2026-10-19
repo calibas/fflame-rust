@@ -15,8 +15,10 @@
 //! `normalize`, `abs`, `floor`, `min`, `max`, `clamp`, as functions or as
 //! methods. `min`, `max` and `clamp` of numbers come with them: a
 //! temporary and an `if`, which the derivation passes take as any `if`.
-//! Refused, with the reason: a helper returning a vector, and an `if`
-//! used as a vector value (assign the vector in each arm).
+//! A helper may give a vector, and an `if` may be one, each arm's value
+//! three locals set in it; a function parameter of a vector (`p.f(v)`)
+//! is taken part by part, each part the real part of the function of it
+//! (the KIFS plan, B's leftovers).
 
 use super::*;
 
@@ -44,6 +46,17 @@ pub(super) enum Owner {
 /// The name of a vector field's or parameter's part `i`.
 pub(super) fn part(name: &str, i: usize) -> String {
     format!("{name}__{}", AXES[i])
+}
+
+/// What the vector probe binds a name it has not lowered to: a vector,
+/// or a number. Only their kinds are read.
+fn vec_marker() -> Binding {
+    let z = || mk(ExprKind::Float(0.0), Span::default());
+    Binding::VecValue(Box::new([z(), z(), z()]))
+}
+
+fn num_marker() -> Binding {
+    Binding::Value(mk(ExprKind::Float(0.0), Span::default()))
 }
 
 fn bin(op: BinOp, a: ast::Expr, b: ast::Expr, span: Span) -> ast::Expr {
@@ -79,10 +92,16 @@ impl Lowerer<'_> {
                 .iter()
                 .any(|f| *f == part(name, 0))
                 .then(|| [0, 1, 2].map(|i| self.field_target(scope.which, &part(name, i), span))),
-            Owner::Params => self
-                .param_vecs
-                .contains(name)
-                .then(|| AXES.map(|a| mk(ExprKind::Param(format!("{name}_{a}")), span))),
+            Owner::Params => {
+                if self.param_vecs.contains(name) {
+                    Some(AXES.map(|a| mk(ExprKind::Param(format!("{name}_{a}")), span)))
+                } else if self.prepared.contains_key(&part(name, 0)) {
+                    // A vector `prepare` gave (B's leftovers).
+                    Some([0, 1, 2].map(|i| mk(ExprKind::Name(prepared_name(&part(name, i))), span)))
+                } else {
+                    None
+                }
+            }
             // A 3D variation's accumulator (B2).
             Owner::Ctx => (self.three && name == "accum").then(|| {
                 let accum = || mk(ExprKind::Predef("accum".into()), span);
@@ -108,6 +127,10 @@ impl Lowerer<'_> {
                     Expr::Property(prop, _) if self.named_vector(&owner, prop.2.as_str(), scope, Span::default()).is_some() => {
                         rest.is_none_or(member_is_vec)
                     }
+                    // `p.f(v)`: a function parameter of a vector.
+                    Expr::MethodCall(f, _) if matches!(owner, Owner::Params) && rest.is_none() => {
+                        f.args.len() == 1 && self.is_vec(&f.args[0], scope)
+                    }
                     _ => false,
                 }
             }
@@ -117,7 +140,7 @@ impl Lowerer<'_> {
                     return matches!(n, "+" | "-" | "*" | "/") && f.args.iter().any(|a| self.is_vec(a, scope));
                 }
                 if self.fns.contains_key(n) {
-                    return false;
+                    return self.helper_gives_vec(n, &f.args, scope);
                 }
                 match n {
                     "vec3" | "cross" | "normalize" => true,
@@ -125,12 +148,9 @@ impl Lowerer<'_> {
                     _ => false,
                 }
             }
-            // An `if` as a value, by its first arm's (refused as a vector).
+            // An `if` as a value, by its first arm's.
             Expr::Stmt(b) => match b.statements() {
-                [Stmt::If(fc, _)] => match fc.body.statements().last().and_then(final_value) {
-                    Some(Final::Expr(x)) => self.is_vec(x, scope),
-                    _ => false,
-                },
+                [Stmt::If(fc, _)] => self.block_gives_vec(&fc.body, scope),
                 _ => false,
             },
             _ => false,
@@ -165,6 +185,16 @@ impl Lowerer<'_> {
                         Expr::Dot(b2, _, _) => (&b2.lhs, Some(&b2.rhs)),
                         r => (r, None),
                     };
+                    // `p.f(v)`: the function of each part, its real part.
+                    if let (Owner::Params, Expr::MethodCall(f, fp), None) = (&owner, first, rest) {
+                        if f.args.len() == 1 && self.is_vec(&f.args[0], scope) {
+                            let v = self.vexpr(&f.args[0], scope)?;
+                            let span = self.pos.span(*fp);
+                            let name = f.name.to_string();
+                            let v = self.hold3(v, "part");
+                            return Ok(v.map(|c| call1("real", mk(ExprKind::Call { name: name.clone(), args: vec![c], user: true }, span), span)));
+                        }
+                    }
                     let Expr::Property(prop, pp) = first else { return self.err(e.position(), VECTOR_WANTED) };
                     let Some(v) = self.named_vector(&owner, prop.2.as_str(), scope, self.pos.span(*pp)) else {
                         return self.err(e.position(), VECTOR_WANTED);
@@ -179,23 +209,217 @@ impl Lowerer<'_> {
                     Val::S(_) => self.err(e.position(), VECTOR_WANTED),
                 }
             }
-            Expr::FnCall(f, p) => {
-                let n = f.name.as_str();
-                if self.fns.contains_key(n) {
-                    return self.err(*p, format!("`{n}` is a helper, and a helper gives a number: write the vector in place, or a helper per part"));
-                }
-                let mut args = Vec::new();
-                for a in f.args.iter() {
-                    args.push(self.arg(a, scope)?);
-                }
-                match self.vfunc(n, args, *p)? {
-                    Val::V(v) => Ok(v),
-                    Val::S(_) => self.err(*p, VECTOR_WANTED),
-                }
-            }
-            Expr::Stmt(..) => self.err(e.position(), "an `if` as a vector value: assign the vector in each arm instead"),
+            Expr::FnCall(f, p) => self.vcall(f, *p, scope),
+            Expr::Stmt(b) => match b.statements() {
+                [Stmt::If(fc, p)] => self.vec_if_value(fc, *p, scope),
+                _ => self.err(e.position(), VECTOR_WANTED),
+            },
             _ => self.err(e.position(), VECTOR_WANTED),
         }
+    }
+
+    /// A call giving a vector: a helper of the script's, inlined, or a
+    /// function of vectors.
+    fn vcall(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope) -> R<V3> {
+        let n = f.name.as_str();
+        if let Some(def) = self.fns.get(n).cloned() {
+            if matches!(n, "start" | "step" | "escaped" | "distance" | "finish" | "prepare" | "init" | "variation" | "variation3") {
+                return self.err(p, format!("`{n}` is the entry's own, not a helper to call"));
+            }
+            let mut vals = Vec::new();
+            for a in f.args.iter() {
+                vals.push(self.arg(a, scope)?);
+            }
+            if def.params.len() != vals.len() {
+                return self.err(p, format!("`{n}` takes {}", def.params.len()));
+            }
+            if self.depth > 32 {
+                return self.err(p, "helpers call each other too deep (recursion?)");
+            }
+            let mut inner = Scope::new(Fn3::Helper, Vec::new());
+            for (param, a) in def.params.iter().zip(vals) {
+                match a {
+                    Val::S(a) => inner.bind(param, Binding::Value(a)),
+                    Val::V(v) => inner.bind(param, Binding::VecValue(Box::new(v))),
+                }
+            }
+            self.depth += 1;
+            let r = if self.pure { self.pure_vec_body(&def.body, &mut inner) } else { self.vec_value_block(&def.body, &mut inner).map(|(body, v)| {
+                self.pending.extend(body);
+                v
+            }) };
+            self.depth -= 1;
+            return r;
+        }
+        let mut args = Vec::new();
+        for a in f.args.iter() {
+            args.push(self.arg(a, scope)?);
+        }
+        match self.vfunc(n, args, p)? {
+            Val::V(v) => Ok(v),
+            Val::S(_) => self.err(p, VECTOR_WANTED),
+        }
+    }
+
+    /// Whether the helper `name`, called with `args`, gives a vector: its
+    /// parameters bound by their arguments' kinds, its body read as
+    /// [`Self::block_gives_vec`] reads one.
+    fn helper_gives_vec(&self, name: &str, args: &[Expr], scope: &Scope) -> bool {
+        let Some(def) = self.fns.get(name) else { return false };
+        if def.params.len() != args.len() || self.probe.get() > 32 {
+            return false;
+        }
+        let mut inner = Scope::new(Fn3::Helper, Vec::new());
+        for (param, a) in def.params.iter().zip(args.iter()) {
+            inner.bind(param, if self.is_vec(a, scope) { vec_marker() } else { num_marker() });
+        }
+        self.probe.set(self.probe.get() + 1);
+        let r = self.block_gives_vec(&def.body, &inner);
+        self.probe.set(self.probe.get() - 1);
+        r
+    }
+
+    /// Whether a block ends in a vector: its `let`s bound by their values'
+    /// kinds, in a scope of its own, then its last value read.
+    pub(super) fn block_gives_vec(&self, b: &StmtBlock, scope: &Scope) -> bool {
+        let stmts = b.statements();
+        let Some((last, rest)) = stmts.split_last() else { return false };
+        let mut inner = scope.clone();
+        inner.blocks.push(HashMap::new());
+        for st in rest {
+            if let Stmt::Var(x, _, _) = st {
+                let (ident, value, _) = &**x;
+                let marker = if self.is_vec(value, &inner) { vec_marker() } else { num_marker() };
+                inner.bind(&ident.name, marker);
+            }
+        }
+        match final_value(last) {
+            Some(Final::Expr(x)) => self.is_vec(x, &inner),
+            Some(Final::Call(f, _)) => {
+                let n = f.name.as_str();
+                if self.fns.contains_key(n) {
+                    self.helper_gives_vec(n, &f.args, &inner)
+                } else {
+                    match n {
+                        "vec3" | "cross" | "normalize" => true,
+                        "abs" | "floor" | "min" | "max" | "clamp" | "+" | "-" | "*" | "/" => f.args.iter().any(|a| self.is_vec(a, &inner)),
+                        _ => false,
+                    }
+                }
+            }
+            Some(Final::If(fc, _)) => self.block_gives_vec(&fc.body, &inner),
+            None => false,
+        }
+    }
+
+    /// A block that ends in a vector: its statements (with what they left
+    /// pending) and the vector, as [`Lowerer::value_block`] for numbers.
+    fn vec_value_block(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<(Vec<ast::Stmt>, V3)> {
+        let outer = std::mem::take(&mut self.pending);
+        scope.blocks.push(HashMap::new());
+        let r = (|| {
+            let stmts = b.statements();
+            let Some((last, rest)) = stmts.split_last() else { return self.err(b.position(), "each arm ends with its value") };
+            let mut out = Vec::new();
+            for st in rest {
+                self.stmt(st, scope, &mut out)?;
+            }
+            let Some(f) = final_value(last) else { return self.err(last.position(), "each arm ends with its value") };
+            let v = self.final_vec(f, scope)?;
+            // Held, so a part read twice is not computed twice, and the
+            // arm's statements are all before its value is taken.
+            let v = self.hold3(v, "part");
+            self.flush(&mut out);
+            Ok((out, v))
+        })();
+        scope.blocks.pop();
+        self.pending = outer;
+        r
+    }
+
+    /// A helper inlined into `escaped`: its `let`s substituted, then the
+    /// vector.
+    fn pure_vec_body(&mut self, b: &StmtBlock, scope: &mut Scope) -> R<V3> {
+        let stmts = b.statements();
+        let Some((last, lets)) = stmts.split_last() else { return self.err(b.position(), "the function ends with its value") };
+        scope.blocks.push(HashMap::new());
+        let r = (|| {
+            for st in lets {
+                match st {
+                    Stmt::Var(x, _, _) => {
+                        let (ident, value, _) = &**x;
+                        let v = self.arg(value, scope)?;
+                        match v {
+                            Val::V(v) => scope.bind(&ident.name, Binding::VecValue(Box::new(v))),
+                            Val::S(s) => scope.bind(&ident.name, Binding::Value(s)),
+                        }
+                    }
+                    Stmt::Noop(_) => {}
+                    other => return self.err(other.position(), "`escaped` is one test: here only `let`s, then the value"),
+                }
+            }
+            let Some(f) = final_value(last) else { return self.err(last.position(), "the function ends with its value") };
+            self.final_vec(f, scope)
+        })();
+        scope.blocks.pop();
+        r
+    }
+
+    /// A block's last value, as a vector.
+    fn final_vec(&mut self, f: Final, scope: &mut Scope) -> R<V3> {
+        match f {
+            Final::Expr(e) => self.vexpr(e, scope),
+            Final::Call(c, p) => self.vcall(c, p, scope),
+            Final::If(fc, p) => self.vec_if_value(fc, p, scope),
+        }
+    }
+
+    /// An `if` as a vector value: three locals set in each arm, its
+    /// statements left pending -- [`Lowerer::if_value`] for vectors.
+    fn vec_if_value(&mut self, fc: &FlowControl, p: Position, scope: &mut Scope) -> R<V3> {
+        if self.pure {
+            return self.err(p, "`escaped` is one test: write the `if` as a comparison, or move it to `step`");
+        }
+        let span = self.pos.span(p);
+        let mut arms: Vec<(Option<ast::Expr>, Vec<ast::Stmt>, V3)> = Vec::new();
+        let mut cur = fc;
+        let mut conds_pending = Vec::new();
+        loop {
+            let cond = self.expr(&cur.expr, scope)?;
+            if !arms.is_empty() && !self.pending.is_empty() {
+                return self.err(cur.expr.position(), "an `else if` condition holds no `if` value or helper with statements");
+            }
+            conds_pending.append(&mut self.pending);
+            let (body, value) = self.vec_value_block(&cur.body, scope)?;
+            arms.push((Some(cond), body, value));
+            match cur.branch.statements() {
+                [Stmt::If(inner, _)] => cur = &**inner,
+                [] => return self.err(p, "an `if` used as a value needs its `else`"),
+                _ => {
+                    let (body, value) = self.vec_value_block(&cur.branch, scope)?;
+                    arms.push((None, body, value));
+                    break;
+                }
+            }
+        }
+        let names = self.vec_local("if");
+        self.pending.extend(conds_pending);
+        for n in &names {
+            self.pending.push(ast::Stmt::Decl { ty: TypeName::Float, name: n.clone(), init: None, dims: None, span });
+        }
+        let mut lowered = Vec::new();
+        let mut otherwise = None;
+        for (cond, mut body, value) in arms {
+            for (n, c) in names.iter().zip(value) {
+                body.push(assign(mk(ExprKind::Name(n.clone()), span), c, span));
+            }
+            match cond {
+                Some(c) => lowered.push((c, body)),
+                None => otherwise = Some(body),
+            }
+        }
+        self.pending.push(ast::Stmt::If { arms: lowered, otherwise, span });
+        Ok(names.map(|n| mk(ExprKind::Name(n), span)))
     }
 
     /// `.rhs` of the vector `v`: a part, a method, or a chain of them.
@@ -676,12 +900,86 @@ fn escaped(s, p) { s.z.norm_sqr() > p.bailout }
         };
         let ok_test = "s.z.norm_sqr() > p.bailout";
         assert!(msg("s.z = s.w;", ok_test).contains("a vector where a number is wanted"));
-        assert!(msg("let u = half(s.w);", ok_test).contains("helper gives a number"));
-        assert!(msg("let u = if s.z.re > 0.0 { s.w } else { -s.w };", ok_test).contains("assign the vector in each arm"));
+        assert!(msg("s.z = s.z + half(s.w);", ok_test).contains("a vector where a number is wanted"));
+        // `escaped` is one test: a helper ending in an `if` is not one.
+        assert!(msg("s.z = s.z * s.z + s.c;", "length(if s.z.re > 0.0 { s.w } else { -s.w }) > p.bailout").contains("`escaped` is one test"));
+        assert!(msg("let u = if s.z.re > 0.0 { s.w };", ok_test).contains("needs its `else`"));
         assert!(msg("let u = vec3(1.0, 2.0);", ok_test).contains("does not take 2"));
         assert!(msg("let r = length(2.0);", ok_test).contains("of a complex number"));
         assert!(msg("s.w.q = 1.0;", ok_test).contains("`.x`, `.y` and `.z`"));
         assert!(msg("s.z = s.z + s.c;", "max(s.z.re, 1.0) > p.bailout").contains("not `escaped`"));
+    }
+
+    /// Helpers that give vectors -- with `let`s, ending in an `if`, calling
+    /// one another, in `escaped` too -- `if`s and `else if`s as vector
+    /// values, a function parameter of a vector, and a vector `prepare`
+    /// gives, run as the same arithmetic written in numbers (B's leftovers).
+    const VECTOR_VALUES: &str = r#"
+const PARAMS = #{ bailout: 16.0, dir: #{ value: vec3(0.6, -0.3, 0.9), caption: "Direction" }, f: #{ function: "sin" } };
+fn prepare(p) { #{ axis: normalize(p.dir), gain: length(p.dir) } }
+fn reflect(v, n) {
+    let d = dot(v, n);
+    v - n * (2.0 * d)
+}
+fn folded(v, n) {
+    let r = reflect(v, n);
+    if dot(v, n) < 0.0 { r } else { v }
+}
+fn grow(v) { folded(v, vec3(1.0, 0.0, 0.0)) * 1.1 }
+fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel, w: vec3(pixel.re, pixel.im, 0.3) } }
+fn step(s, p) {
+    let a = folded(s.w, p.axis);
+    let b = if a.x > 0.5 { grow(a) } else if a.y > 0.0 { a * 0.5 } else { -a };
+    s.w = p.f(b) + vec3(0.0, 0.0, 0.1 * p.gain);
+    s.z = s.z * s.z + s.c + complex(s.w.x, s.w.y) * 0.05;
+    s
+}
+fn escaped(s, p) { s.z.norm_sqr() + length(reflect(s.w, vec3(1.0, 0.0, 0.0))) * 0.0 > p.bailout }
+"#;
+
+    /// The same arithmetic, written in numbers.
+    const VECTOR_VALUES_PARTS: &str = r#"
+const PARAMS = #{ bailout: 16.0, dx: 0.6, dy: -0.3, dz: 0.9, f: #{ function: "sin" } };
+fn prepare(p) {
+    let l = sqrt(p.dx * p.dx + p.dy * p.dy + p.dz * p.dz);
+    #{ ax: p.dx / l, ay: p.dy / l, az: p.dz / l, gain: l }
+}
+fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel, wx: pixel.re, wy: pixel.im, wz: 0.3 } }
+fn step(s, p) {
+    let d = s.wx * p.ax + s.wy * p.ay + s.wz * p.az;
+    let ax = if d < 0.0 { s.wx - p.ax * (2.0 * d) } else { s.wx };
+    let ay = if d < 0.0 { s.wy - p.ay * (2.0 * d) } else { s.wy };
+    let az = if d < 0.0 { s.wz - p.az * (2.0 * d) } else { s.wz };
+    let gx = if ax < 0.0 { ax - 2.0 * ax } else { ax };
+    let bx = if ax > 0.5 { gx * 1.1 } else if ay > 0.0 { ax * 0.5 } else { -ax };
+    let by = if ax > 0.5 { ay * 1.1 } else if ay > 0.0 { ay * 0.5 } else { -ay };
+    let bz = if ax > 0.5 { az * 1.1 } else if ay > 0.0 { az * 0.5 } else { -az };
+    s.wx = p.f(complex(bx, 0.0)).re;
+    s.wy = p.f(complex(by, 0.0)).re;
+    s.wz = p.f(complex(bz, 0.0)).re + 0.1 * p.gain;
+    s.z = s.z * s.z + s.c + complex(s.wx, s.wy) * 0.05;
+    s
+}
+fn escaped(s, p) { s.z.norm_sqr() > p.bailout }
+"#;
+
+    #[test]
+    fn vector_values_run_as_their_parts_written_out() {
+        let (v, n) = (compiled(VECTOR_VALUES), compiled(VECTOR_VALUES_PARTS));
+        let (pv, pn) = (ParamValues::defaults(&v), ParamValues::defaults(&n));
+        let mut escaped = 0;
+        for i in 0..20 {
+            for j in 0..20 {
+                let px = C64::new(-2.2 + 3.0 * i as f64 / 19.0, -1.5 + 3.0 * j as f64 / 19.0);
+                let (a, b) = (run(&v, &pv, None, &Env::at(px, 150)), run(&n, &pn, None, &Env::at(px, 150)));
+                assert_eq!((a.n, a.escaped), (b.n, b.escaped), "at {px:?}");
+                assert!((a.z.re - b.z.re).abs() < 1e-12 && (a.z.im - b.z.im).abs() < 1e-12, "at {px:?}: {:?} against {:?}", a.z, b.z);
+                escaped += usize::from(a.escaped);
+            }
+        }
+        assert!(escaped > 20 && escaped < 400, "the view holds both: {escaped}");
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::escape::lang::wgsl::validate_formula(&crate::escape::lang::wgsl::formula(&v)).expect("valid WGSL");
     }
 
     /// A helper takes a vector; `escaped` reads a vector's length; a

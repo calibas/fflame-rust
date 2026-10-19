@@ -29,6 +29,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("variation-whorl.rhai", include_str!("../../assets/formulas/variation-whorl.rhai")),
     ("variation-scatter.rhai", include_str!("../../assets/formulas/variation-scatter.rhai")),
     ("solid-mandelbox.rhai", include_str!("../../assets/formulas/solid-mandelbox.rhai")),
+    ("solid-kifs-menger.rhai", include_str!("../../assets/formulas/solid-kifs-menger.rhai")),
     ("kifs-2d.rhai", include_str!("../../assets/formulas/kifs-2d.rhai")),
     ("whorled-mandelbrot.rhai", include_str!("../../assets/formulas/whorled-mandelbrot.rhai")),
     ("examples.ufm", include_str!("../../assets/formulas/examples.ufm")),
