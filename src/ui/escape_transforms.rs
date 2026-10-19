@@ -53,7 +53,7 @@ fn stage_tip(stage: TransformStage) -> String {
 /// The list written whole, plus -- when a variation of the user's is
 /// now used -- its source carried in the flame, one undo step.
 fn write_list(config_manager: &mut ConfigManager, list: &[EscapeTransform], description: &str) {
-    let mut changes = vec![(ConfigPath::EscapeTransforms, ConfigValue::String(serde_json::to_string(list).unwrap_or_default()))];
+    let mut changes = vec![(ConfigPath::EscapeTransforms, ConfigValue::String(crate::config::escape::transforms_to_wire(list)))];
     #[cfg(feature = "engine-escape")]
     if let Some(carry) = crate::variations::custom::carry_change(config_manager.active_config(), list.iter().map(|t| t.variation.as_str())) {
         changes.push(carry);
@@ -65,13 +65,13 @@ fn write_list(config_manager: &mut ConfigManager, list: &[EscapeTransform], desc
 /// an undo of a first edit never writes a 0 the user did not see (the
 /// lens's `lens_choice` for the same reason).
 fn entry(stage: TransformStage, variation: &str, amount: f32) -> EscapeTransform {
-    let mut params = std::collections::BTreeMap::new();
+    let mut t = EscapeTransform::new(stage, variation, amount);
     if let Some(info) = crate::variations::global_registry().get(variation) {
         for p in &info.parameters {
-            params.insert(p.name.clone(), p.default_value);
+            t.params.insert(p.name.clone(), p.default_value);
         }
     }
-    EscapeTransform { stage, variation: variation.to_string(), amount, params }
+    t
 }
 
 /// The section: each transformation's stage, variation, amount and
@@ -101,7 +101,11 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                             // The variation.
                             if let Some(name) = variation_picker(ui, i, &t.variation) {
                                 let mut l = list.clone();
-                                l[i] = entry(t.stage, &name, t.amount);
+                                // The same transformation, as a flame
+                                // transform keeps its id through a
+                                // variation change: a track on its
+                                // amount stays on it.
+                                l[i] = EscapeTransform { id: t.id, ..entry(t.stage, &name, t.amount) };
                                 edit = Some((l, "history.action.escape_transform_variation"));
                             }
                             if ui.small_button("\u{2191}").on_hover_text(t!("escape_transforms.up")).clicked() && i > 0 {

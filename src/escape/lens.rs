@@ -1072,7 +1072,7 @@ mod gpu_tests {
     }
 
     fn transform(stage: crate::config::escape::TransformStage, variation: &str) -> crate::config::escape::EscapeTransform {
-        crate::config::escape::EscapeTransform { stage, variation: variation.to_string(), amount: 1.0, params: std::collections::BTreeMap::new() }
+        crate::config::escape::EscapeTransform::new(stage, variation, 1.0)
     }
 
     /// Pixels a channel more than 2 levels apart.

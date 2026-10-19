@@ -169,6 +169,9 @@ pub enum TargetBinding {
     ColorEffect(u64),
     /// References `config.density_effects[index]` (FractalConfig-level).
     DensityEffect(u64),
+    /// References `config.escape.transforms[index]` (FractalConfig-level;
+    /// the KIFS plan, C4).
+    EscapeTransform(u64),
 }
 
 /// Full binding state for a Track. Runtime-only; never serialized.
@@ -179,7 +182,7 @@ pub struct TrackBinding {
     pub flame: Option<u64>,
     /// The list-item the track's `target` resolves to. `None` for
     /// non-list paths (View, Color, Tone, Rendering — anything not
-    /// indexed into one of the six tracked lists).
+    /// indexed into one of the seven tracked lists).
     pub target: Option<TargetBinding>,
     /// The bound subflame or item is gone (`rebind_one` could not find
     /// its id). A broken track's `target` still holds the old index,
@@ -401,7 +404,7 @@ impl Animation {
         }
     }
 
-    /// After a structural change to one of the six tracked lists,
+    /// After a structural change to one of the seven tracked lists,
     /// walk every track and rewrite its `target` / `flame_target`
     /// indices to keep pointing at the same item the `bound` IDs name.
     ///
@@ -437,7 +440,7 @@ impl Animation {
 
 /// Resolve a `(flame_target, target_path)` pair to the runtime
 /// binding it should carry. Returns `Default` when:
-/// - the path doesn't reference any of the six tracked lists
+/// - the path doesn't reference any of the seven tracked lists
 ///   (so there's nothing to bind to — e.g. `Zoom`)
 /// - or the path *does* reference a list but the index / flame is
 ///   out of range (track is broken; binding stays empty until the
@@ -529,6 +532,10 @@ pub fn resolve_track_binding(
         | ConfigPath::DensityEffectParam { index, .. } => {
             config.density_effects.get(*index).map(|e| TargetBinding::DensityEffect(e.id))
         }
+        // Escape transformations (FractalConfig-level)
+        ConfigPath::EscapeTransformAmount { index } | ConfigPath::EscapeTransformParam { index, .. } => {
+            config.escape.transforms.get(*index).map(|t| TargetBinding::EscapeTransform(t.id))
+        }
         // Everything else (View, Color, Tone, Rendering, Xaos,
         // SoloTransform, …) doesn't index a tracked list.
         _ => None,
@@ -580,11 +587,16 @@ fn rebind_one(track: &mut Track, config: &FractalConfig) {
         TargetBinding::Final(id) => flame.final_transforms.iter().position(|t| t.id == id),
         TargetBinding::ColorEffect(id) => config.color_effects.iter().position(|e| e.id == id),
         TargetBinding::DensityEffect(id) => config.density_effects.iter().position(|e| e.id == id),
+        TargetBinding::EscapeTransform(id) => config.escape.transforms.iter().position(|t| t.id == id),
     };
 
     match new_index {
         Some(new_index) => {
-            if let Some(rewritten) = rewrite_path_index(&track.target, new_index) {
+            let rewritten = match target_binding {
+                TargetBinding::EscapeTransform(_) => rewrite_escape_transform_index(&track.target, new_index),
+                _ => rewrite_path_index(&track.target, new_index),
+            };
+            if let Some(rewritten) = rewritten {
                 track.target = rewritten;
             }
             track.bound.broken = false;
@@ -609,6 +621,18 @@ fn rewrite_path_index(path: &str, new_index: usize) -> Option<String> {
     let prefix = &path[..dot1];
     let rest = &after_prefix[dot2_rel + 1..];
     Some(format!("{}.{}.{}", prefix, new_index, rest))
+}
+
+/// The same for an escape transformation's path, whose index is its
+/// third segment (`Escape.Transform.{index}.{rest}`): rebuilt from the
+/// parsed path, so the key's shape is the path's own business.
+fn rewrite_escape_transform_index(path: &str, new_index: usize) -> Option<String> {
+    use crate::config::ConfigPath;
+    match ConfigPath::from_string_key(path)? {
+        ConfigPath::EscapeTransformAmount { .. } => Some(ConfigPath::EscapeTransformAmount { index: new_index }.to_string_key()),
+        ConfigPath::EscapeTransformParam { param, .. } => Some(ConfigPath::EscapeTransformParam { index: new_index, param }.to_string_key()),
+        _ => None,
+    }
 }
 
 impl Track {
@@ -860,6 +884,71 @@ mod tests {
         let values = controller.evaluate_at_time(0.0);
         crate::animation::export::apply_animation_values(&mut config, &values);
         assert_eq!(config.flame.transforms[1].weight, 9.0);
+    }
+
+    /// A track on an escape transformation follows it, through the
+    /// panel's own path: a move rebinds the track to the new index, a
+    /// removal breaks it, and the undo of each brings it back -- the
+    /// list's undo values carry the ids.
+    #[test]
+    fn a_track_follows_its_escape_transformation() {
+        use crate::config::escape::{transforms_to_wire, EscapeTransform, TransformStage};
+        use crate::config::{ConfigManager, ConfigPath, ConfigValue};
+
+        let mut config = FractalConfig::default();
+        config.escape.transforms = vec![
+            EscapeTransform::new(TransformStage::Plane, "sinusoidal", 1.0),
+            EscapeTransform::new(TransformStage::Iteration, "curl", 0.5),
+        ];
+        let mut manager = ConfigManager::new(config);
+        let mut anim = Animation::new("Maps".into(), 1.0);
+        anim.add_track(Track::constant("Escape.Transform.1.Amount".into(), serde_json::json!(0.25)));
+        anim.add_track(Track::constant("Escape.Transform.1.Param.c1".into(), serde_json::json!(0.75)));
+        anim.bind_to_config(manager.active_config());
+        let write = |manager: &mut ConfigManager, list: &[EscapeTransform]| {
+            manager.clear_pending_actions();
+            manager
+                .update_batch(vec![(ConfigPath::EscapeTransforms, ConfigValue::String(transforms_to_wire(list)))], "edit".into())
+                .unwrap();
+            assert!(manager.get_pending_actions().structural_changed, "a list edit is structural");
+        };
+
+        // Move the bound one up.
+        let mut moved = manager.active_config().escape.transforms.clone();
+        moved.swap(0, 1);
+        write(&mut manager, &moved);
+        anim.rebind_targets(manager.active_config());
+        assert_eq!(anim.tracks[0].target, "Escape.Transform.0.Amount");
+        assert_eq!(anim.tracks[1].target, "Escape.Transform.0.Param.c1");
+        assert!(!anim.tracks[0].bound.broken);
+
+        // Undo the move: back to index 1.
+        manager.clear_pending_actions();
+        manager.undo().unwrap();
+        assert!(manager.get_pending_actions().structural_changed, "an undo of a list edit is structural");
+        anim.rebind_targets(manager.active_config());
+        assert_eq!(anim.tracks[0].target, "Escape.Transform.1.Amount");
+
+        // Remove it: the tracks break, and write to nothing.
+        let removed = vec![manager.active_config().escape.transforms[0].clone()];
+        write(&mut manager, &removed);
+        anim.rebind_targets(manager.active_config());
+        assert!(anim.tracks.iter().all(|t| t.bound.broken));
+        let mut controller = AnimationController::new();
+        controller.load(anim.clone());
+        let values = controller.evaluate_at_time(0.0);
+        assert!(values.is_empty(), "a broken track applied: {values:?}");
+
+        // Undo the removal: they un-break and apply to it.
+        manager.undo().unwrap();
+        anim.rebind_targets(manager.active_config());
+        assert!(anim.tracks.iter().all(|t| !t.bound.broken));
+        controller.load(anim);
+        let mut c = manager.active_config().clone();
+        crate::animation::export::apply_animation_values(&mut c, &controller.evaluate_at_time(0.0));
+        assert_eq!(c.escape.transforms[1].amount, 0.25);
+        assert_eq!(c.escape.transforms[1].params.get("c1"), Some(&0.75));
+        assert_eq!(c.escape.transforms[0].amount, 1.0, "the other is left alone");
     }
 
     #[test]

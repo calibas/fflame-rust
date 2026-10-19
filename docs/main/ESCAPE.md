@@ -1396,8 +1396,13 @@ transformed: a distance colouring under Plane or Iteration is not a
 distance. A variation that draws random numbers (julian's root, the
 blurs) draws per point, which as a Plane or Iteration map is noise.
 Paths: `EscapeTransforms` (the list, one undo step per structural edit),
-`EscapeTransformAmount { index }`, `EscapeTransformParam { index, param }`
-(animatable). Mode B's fields and mode D keep the lens alone.
+`EscapeTransformAmount { index }`, `EscapeTransformParam { index, param }`.
+The last two are offered as animation targets ("Transformation 2
+(Curl): C1"), and a track follows its transformation through a move or a
+removal by a session id (`EscapeTransform::id`, never in a file; the
+list's value carries it, `transforms_to_wire`) -- a variation change
+keeps the id, as a flame transform's does (ANIMATION.md, *Binding*).
+Mode B's fields and mode D keep the lens alone.
 
 Gates (`escape::lens` GPU tests): a Plane `linear` is the identity and a
 mirror draws the mirrored half (6 of 9,216 pixels apart, the f32 offset

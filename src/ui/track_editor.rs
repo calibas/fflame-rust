@@ -173,6 +173,7 @@ pub fn is_track_broken(config: &FractalConfig, track: &crate::animation::Track) 
         TargetBinding::Final(id) => flame.final_transforms.iter().any(|t| t.id == id),
         TargetBinding::ColorEffect(id) => config.color_effects.iter().any(|e| e.id == id),
         TargetBinding::DensityEffect(id) => config.density_effects.iter().any(|e| e.id == id),
+        TargetBinding::EscapeTransform(id) => config.escape.transforms.iter().any(|t| t.id == id),
     };
     !found
 }

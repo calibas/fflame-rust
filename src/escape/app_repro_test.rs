@@ -11532,12 +11532,7 @@ fn main() {
             queue.submit(std::iter::once(enc.finish()));
             pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
         };
-        let transform = |stage, variation: &str, amount: f32| EscapeTransform {
-            stage,
-            variation: variation.to_string(),
-            amount,
-            params: Default::default(),
-        };
+        let transform = |stage, variation: &str, amount: f32| EscapeTransform::new(stage, variation, amount);
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.center_re = "-0.6".to_string();
         esc.center_im = "0.1".to_string();

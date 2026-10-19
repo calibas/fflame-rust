@@ -1280,8 +1280,8 @@ impl FractalConfig {
     }
 
     /// Walk every list-item (transforms in all three pools on Main and
-    /// every subflame, every subflame itself, and every color/density
-    /// effect) and assign a fresh session-local ID to anything whose
+    /// every subflame, every subflame itself, every color/density
+    /// effect and every escape transformation) and assign a fresh session-local ID to anything whose
     /// `id` is the zero sentinel. Idempotent — items that already have
     /// a non-zero ID are left alone.
     ///
@@ -1298,6 +1298,11 @@ impl FractalConfig {
         for effect in &mut self.color_effects {
             if effect.id == 0 {
                 effect.id = crate::scene::transforms::next_id();
+            }
+        }
+        for t in &mut self.escape.transforms {
+            if t.id == 0 {
+                t.id = crate::scene::transforms::next_id();
             }
         }
     }

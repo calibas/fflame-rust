@@ -178,11 +178,15 @@ it.
 ### Binding: tracks follow their items
 
 A track's key names an item by **index**, and indices move when a
-transform, subflame or effect is added, deleted or reordered. Each
-track therefore carries a runtime-only `TrackBinding` (never
-serialized): the session id of the subflame it targets and of the list
-item its key indexes (`TargetBinding::Transform | Linked | Final |
-ColorEffect | DensityEffect`).
+transform, subflame, effect or escape transformation is added, deleted
+or reordered. Each track therefore carries a runtime-only `TrackBinding`
+(never serialized): the session id of the subflame it targets and of the
+list item its key indexes (`TargetBinding::Transform | Linked | Final |
+ColorEffect | DensityEffect | EscapeTransform`). An escape
+transformation's list is written whole (`ConfigPath::EscapeTransforms`),
+so its value carries each entry's id (`config::escape::transforms_to_wire`;
+a file never does): an undo or redo of a move or a removal brings back
+the same ids, and the setter reports the change as structural.
 
 - `Animation::bind_to_config` resolves every track's ids. It runs after
   an animation is loaded, after a config is loaded with an animation
@@ -272,7 +276,7 @@ The picker groups targets by category and filters by the current mode:
 | Tone Mapping | always | exposure, gamma, threshold, brightness, vibrancy, saturation, hue shift, density scale, levels |
 | Rendering | flame modes; 3D adds projection and depth weighting | blend factor, solo transform, perspective, depth-density compensation, far-density fade |
 | Effects | when the config has effects | each effect's Enabled and parameters |
-| Escape | Escape mode | zoom (log2), rotation, iterations, bailout, Julia seed, damping, the active formula's and colouring's parameters; then, as they apply, the solid or terrain camera, terrain and path-tracer controls, palette-map pivot, contrast, colouring layer, texture overlay, relief, and the lens amount and parameters |
+| Escape | Escape mode | zoom (log2), rotation, iterations, bailout, Julia seed, damping, the active formula's and colouring's parameters; then, as they apply, the solid or terrain camera, terrain and path-tracer controls, palette-map pivot, contrast, colouring layer, texture overlay, relief, the lens amount and parameters, and each transformation's amount and parameters (mode A) |
 | Simulation | Simulation mode | steps, dt (when a layer has one), view and warp rates, matte, each layer's model parameters, each colour layer's parameters, opacity and matte, coupling strengths, the terrain camera and ground |
 | Xaos, Transform *n*, Linked *n*, Final *n* | wherever the flame is drawn: flame modes, an escape IFS formula, a simulation with `use_transforms` | weights, colour, opacity, affine and post-affine (raw and as origin/rotation/scale), active variations and their parameters |
 
