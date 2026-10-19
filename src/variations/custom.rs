@@ -181,6 +181,26 @@ pub fn carried(source: &str) -> Option<CustomSource> {
     Some(crate::escape::custom::with_called_variations(EntryKind::Transform, src))
 }
 
+/// When a config comes to use any of `names` that is a variation of the
+/// user's its flame does not carry yet (a lens or a transformation picked
+/// in the escape panel; the KIFS plan, C4), the change that carries it:
+/// the flame's list with the source added.
+pub fn carry_change<'a>(config: &crate::config::FractalConfig, names: impl IntoIterator<Item = &'a str>) -> Option<(crate::config::ConfigPath, crate::config::ConfigValue)> {
+    let mut list = config.flame.custom_variations.clone();
+    let mut added = false;
+    for name in names {
+        let custom = crate::variations::global_registry().get(name).is_some_and(|v| v.provenance == Provenance::Custom);
+        if !custom || list.iter().any(|s| s.entry == name) {
+            continue;
+        }
+        if let Some(src) = source_of(name).as_deref().and_then(carried) {
+            list.push(src);
+            added = true;
+        }
+    }
+    added.then(|| (crate::config::ConfigPath::FlameCustomVariations, crate::config::ConfigValue::String(serde_json::to_string(&list).unwrap_or_default())))
+}
+
 /// The registered custom variations' sources, by name, as last
 /// registered: what [`ensure`] compares against.
 fn registered() -> &'static Mutex<HashMap<String, String>> {

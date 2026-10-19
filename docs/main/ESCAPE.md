@@ -32,7 +32,8 @@ here, with deep zoom by perturbation to effectively unlimited depth.
 - [src/escape/ifs.rs](../../src/escape/ifs.rs) — mode D: 3 distance functions, 5 colourings
 - [src/escape/assembler.rs](../../src/escape/assembler.rs) — WGSL assembly, every template
 - [src/escape/renderer.rs](../../src/escape/renderer.rs) — `EscapeRenderer`
-- [src/escape/lens.rs](../../src/escape/lens.rs) — the camera lens
+- [src/escape/lens.rs](../../src/escape/lens.rs) — the camera lens and the transformations' maps flame
+- [src/ui/escape_transforms.rs](../../src/ui/escape_transforms.rs) — the Transformations section
 - `fixedpoint.rs`, `bigfloat.rs`, `reference.rs`, `bla.rs`, `nucleus.rs`,
   `orbit_store.rs` in `src/escape/` — deep zoom
 - [src/escape/presets.rs](../../src/escape/presets.rs) — generated presets
@@ -1361,6 +1362,49 @@ Design record: [ifs-distance-rendering.md](../archive/escape-time/ifs-distance-r
 the measure colouring, [ifs-measure-by-inverse-walk.md](../archive/projects/ifs-measure-by-inverse-walk.md).
 
 ---
+
+## Transformations
+
+Flame variations applied to the fractal rather than the camera (the
+KIFS plan, C4; [escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md)),
+`EscapeConfig::transforms`, edited in the Escape panel's
+Transformations section for mode A's formulas. Each is a variation (any
+registered one with a 2D body, built-in or the user's -- the flame
+carries a user's source), an amount (0 none, 1 the variation, blended
+as the lens's) and its parameters, at one of three stages:
+
+| stage | acts on | as UF's | deep zoom |
+| --- | --- | --- | --- |
+| Plane | the sample point, in the fractal's coordinates, before the formula | a transformation | off: the view keeps the direct path |
+| Orbit | each orbit value the colouring accumulates (trap and average colourings), not the final `z` an escape count reads | trap position | on: the colouring reads the full `z` on both paths |
+| Iteration | the iterate after every step (a program formula's state too) | a transform plug-in in the formula | off |
+
+They share the lens's maps flame (`escape::lens`): the lens, then each
+transformation, one transform each, in group 2, so a browser's
+storage-buffer count does not grow. `map_slots` places them;
+`maps_glue` gives `esc_lens`, `esc_plane`, `esc_orbit` and `esc_iter`,
+each its stage's slots in order, `q = mix(q, flame_map(k, q, seed),
+weight)`, the amount riding in the transform's weight (a drag recompiles
+nothing; the key, `lens_key`, holds each map's stage, variation and
+parameters). The templates take them by line substitution, so a shader
+without them is byte-identical: Plane rewrites `esc_run`'s entry (the
+relief's neighbour orbits are mapped too), Orbit wraps
+`coloring_accum`'s arguments, Iteration follows the step. A Plane or
+Iteration transformation at a non-zero amount makes `perturb_tier`
+`None` (`EscapeConfig::transforms_absolute`). The derivative is not
+transformed: a distance colouring under Plane or Iteration is not a
+distance. A variation that draws random numbers (julian's root, the
+blurs) draws per point, which as a Plane or Iteration map is noise.
+Paths: `EscapeTransforms` (the list, one undo step per structural edit),
+`EscapeTransformAmount { index }`, `EscapeTransformParam { index, param }`
+(animatable). Mode B's fields and mode D keep the lens alone.
+
+Gates (`escape::lens` GPU tests): a Plane `linear` is the identity and a
+mirror draws the mirrored half (6 of 9,216 pixels apart, the f32 offset
+of a mirrored pixel); an Orbit translation equals the trap colouring's
+point moved (0 apart); an Iteration halving equals the halving written
+into the step, for a built-in and a program formula (0 apart); Orbit
+keeps deep zoom, Plane drops it.
 
 ## The pipeline
 

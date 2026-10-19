@@ -50,6 +50,8 @@ mod variation_params;
 mod view;
 mod view_controls;
 mod escape_panel;
+/// The escape panel's Transformations (the KIFS plan, C4).
+mod escape_transforms;
 mod sim_panel;
 pub mod slow_controls;
 mod textures_panel;

@@ -298,6 +298,66 @@ colouring reads through; a transform plugged into any formula without
 editing it. Rhai variations would serve all three. Not planned until
 the user says.
 
+C4's steps (planned 2026-10-18, the user's go-ahead; decisions marked):
+- **C4a, the model.** `EscapeConfig::transforms`, a list of
+  `EscapeTransform { stage, variation, amount, params }`, skip-if-empty;
+  the stage one of **Plane** (the sample point, in the fractal's
+  coordinates, before the formula -- UF's transformation), **Orbit**
+  (each orbit value the colouring accumulates -- UF's trap position)
+  and **Iteration** (`z` after every step of the formula). Any
+  registered variation with a 2D body, built-in or the user's (whose
+  source the flame carries). Paths: `EscapeTransforms` (the list, one
+  undo step per structural edit), `EscapeTransformAmount { index }` and
+  `EscapeTransformParam { index, param }` (animatable).
+- **C4b, one maps flame.** The lens's one-transform flame becomes the
+  escape view's maps flame (`escape::lens`): the lens, then each
+  transform, one transform each, in group 2 as now, so a browser's
+  storage-buffer count does not grow; the glue gives `esc_lens`,
+  `esc_plane`, `esc_orbit` and `esc_iter`, each the stage's slots in
+  order, `p = mix(p, flame_map(k, p, seed), weight)` -- the amount in
+  the transform's weight as the lens's, so a drag recompiles nothing.
+  *Decision*: the **amount blends toward the identity** as the lens's
+  does (0 none, 1 the variation), where UF's transformations have none.
+- **C4c, the templates**, by line substitution so a shader without
+  transforms stays byte-identical: Plane rewrites `esc_run`'s entry
+  (`pixel = esc_plane(pixel_in)`, so the relief's neighbour orbits and
+  the terrain's samples are mapped too); Orbit wraps the colouring's
+  accumulation (`coloring_accum(esc_orbit(z), esc_orbit(z_before), ..)`,
+  on the direct and the perturbed path alike: the colouring reads the
+  full `z` there); Iteration follows the step (`z = esc_iter(z)`).
+  *Decisions*: **Orbit reaches only what the colouring accumulates per
+  iteration** -- trap and average colourings -- not the final `z` an
+  escape count or a smooth colouring reads, which is UF's trap
+  position; **Plane and Iteration keep the direct path** (a
+  transformed absolute coordinate is not a perturbation of the
+  reference's), so with either deep zoom stops at the direct path's
+  limit; the derivative is not transformed, so a distance colouring
+  under Plane or Iteration is not a distance. Mode A only: mode B's
+  fields and mode D keep the lens alone (later).
+- **C4d, the panel**: a Transformations section in the escape panel
+  (mode A formulas): each entry's stage, variation (the lens's picker),
+  amount and parameters (`render_variation_params` through a
+  `TransformTarget`), remove and move; Add. A user's variation picked
+  here is carried in the flame's `custom_variations`, as the lens's
+  now is too.
+- **C4e, gates**: without transforms, the shaders byte-identical; a
+  Plane `linear` at 1 is the identity; a Plane transform renders as the
+  formula run at the mapped point in the interpreter (escape counts on
+  the GPU against the interpreter); an Orbit translation equals the
+  trap colouring's own centre moved; an Iteration transform equals the
+  formula with the map written into its step (a Rhai twin); Plane and
+  Iteration turn deep zoom off, Orbit keeps it.
+  **Done 2026-10-18**, as above (ESCAPE.md, *Transformations*). The
+  gate for Plane against the interpreter became a mirror's exact
+  geometry instead (the mapped point is the mirrored pixel's); the rest
+  as planned. Measured: Plane `linear` 0 pixels apart; the mirror 6 of
+  9,216 (the mirrored pixel's f32 offset); Orbit 0; Iteration 0 for a
+  built-in and a program formula. Also: the lens picker now carries a
+  user's variation's source too (`variations::custom::carry_change`),
+  and the Formula Editor keeps a source a transformation uses. Not
+  done: mode B and mode D, clipping (UF's `#solid` from a
+  transformation), the colouring's own start reading the Orbit map.
+
 **C3, maybe.** A built-in WGSL variation as a step in a formula,
 direct path only, the program marked so every CPU path refuses it.
 Decided after C1, by whether the Rhai versions cover what is wanted.
@@ -581,5 +641,7 @@ hillshade the part to check.
    function parameters; vector-valued helpers and `if` values.
 10. [x] **A4** (the user, 2026-10-18): the icosahedral and dodecahedral
    folds, the 2D KIFS formula. Done, as A4 above.
-11. [ ] C3 and C4 as the user wants them; the UF review's missing maps
+11. [x] **C4** (the user, 2026-10-18): transformations for escape-time,
+   Plane, Orbit and Iteration. Done, as C4 above.
+12. [ ] C3 as the user wants it; the UF review's missing maps
    (uf-transforms-review.md) as Rhai variations, the user's pick.

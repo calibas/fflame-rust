@@ -5081,6 +5081,12 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// path's f32 mush at the threshold, which is how Phoenix came to
     /// render one flat colour past zoom 48.
     pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
+        // A Plane or Iteration transformation (the KIFS plan, C4) moves an
+        // absolute coordinate, which no perturbation of the reference's
+        // orbit follows: such a view stays on the direct path.
+        if escape.transforms_absolute() {
+            return None;
+        }
         let resolved = super::custom::resolve(escape);
         let escape = resolved.as_ref();
         // A custom formula with UF's perturbation equations, on both
