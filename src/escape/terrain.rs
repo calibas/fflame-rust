@@ -1946,11 +1946,13 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     // lake's roughness, over the tint.
     out.f0 = pt.mat.x;
     out.rough = pt.mat.y;
+    out.metal = ifs_metallic();
     var lake = false;
     if (hf_lake_cell(ps.x, ps.y)) {
         n = vec3<f32>(0.0, 0.0, 1.0);
         out.f0 = 0.02;
         out.rough = pt.mat.w;
+        out.metal = 0.0;
         lake = true;
     }
     let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
@@ -2234,8 +2236,8 @@ pub struct TerrainView {
     pub range: Option<[f32; 2]>,
     /// The material the lit tier reads as the path tracer does
     /// (camera-unification C7): the coat's reflectance and roughness,
-    /// and the glow (`path_core::lit_material`).
-    pub material: [f32; 3],
+    /// the glow and the metallic (`path_core::lit_material`).
+    pub material: [f32; 4],
     /// The surface texture's bump (docs/projects/surface-textures.md);
     /// off for a simulation's terrain.
     pub surface: super::surface::SurfaceTexture,
@@ -3964,10 +3966,11 @@ impl TerrainRenderer {
         // The surface texture (surface-textures.md), 22..28.
         fdata[22..28].copy_from_slice(&view.surface.to_fdata());
         // The material, in the w of the camera's rows (`ifs_gloss`,
-        // `ifs_rough`, `ifs_glow`).
+        // `ifs_rough`, `ifs_glow`), and the metallic in the fog row's.
         for k in 0..3 {
             fdata[3 + k][3] = view.material[k];
         }
+        fdata[10][3] = view.material[3];
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -4692,7 +4695,7 @@ pub(crate) mod gpu_tests {
             curve: 0,
             invert: false,
             range: None,
-            material: [0.0, 0.5, 0.0],
+            material: [0.0, 0.5, 0.0, 0.0],
             surface: crate::escape::surface::SurfaceTexture::off(),
         }
     }
@@ -5246,7 +5249,7 @@ pub(crate) mod gpu_tests {
             r.render(&device, &queue, &v);
             read_output(&device, &queue, &r, w, h)
         };
-        v.material = [gloss, roughness, glow];
+        v.material = [gloss, roughness, glow, 0.0];
         r.render(&device, &queue, &v);
         let lit = read_output(&device, &queue, &r, w, h);
         let moved = lit.iter().zip(&plain).flat_map(|(a, b)| (0..3).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
@@ -5342,6 +5345,22 @@ pub(crate) mod gpu_tests {
                 println!("coat {gloss}/{roughness}, channel {k}: mean {mean:.4} against {}", l[k]);
                 assert!(mean <= l[k] as f64 * 1.005, "no energy from nowhere: {mean}");
                 assert!(mean >= l[k] as f64 * (1.0 - tolerance), "{gloss}/{roughness} channel {k}: {mean}");
+            }
+        }
+        // A white metal (3d-look-and-tools P4) under the same sky reflects
+        // it at any roughness: what single scattering loses is given back
+        // (`coat_energy`).
+        for roughness in [0.3f32, 0.7, 1.0] {
+            let s = PathSettings { bounces: 2, environment: l, gloss: 0.0, roughness, ..PathSettings::default() };
+            v.material = [0.0, roughness, 0.0, 1.0];
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 512, 64);
+            let out = read_output(&device, &queue, &r, w, h);
+            let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.0).collect();
+            for k in 0..3 {
+                let mean = hit.iter().map(|p| p[k] as f64).sum::<f64>() / hit.len() as f64;
+                println!("metal at roughness {roughness}, channel {k}: mean {mean:.4} against {}", l[k]);
+                assert!((mean / l[k] as f64 - 1.0).abs() < 0.03, "metal {roughness} channel {k}: {mean}");
             }
         }
     }

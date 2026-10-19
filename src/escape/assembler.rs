@@ -7013,6 +7013,10 @@ fn ifs_sky_seen(d: vec3<f32>) -> vec4<f32> {
 fn ifs_gloss() -> f32 { return params.fdata[3].w; }
 fn ifs_rough() -> f32 { return params.fdata[4].w; }
 fn ifs_glow() -> f32 { return params.fdata[5].w; }
+// How much of the surface is metal (3d-look-and-tools P4), in the w of
+// the fog's row: its coat takes the albedo's colour, and nothing
+// scatters under it.
+fn ifs_metallic() -> f32 { return clamp(params.fdata[10].w, 0.0, 1.0); }
 
 // The lights' kinds (lights-in-the-fractal, L2). A light's first slot
 // holds the direction TO it (directional) or its position (a point, a
@@ -7050,6 +7054,15 @@ fn ifs_coat_fresnel(f0: f32, c: f32) -> f32 {
     return f0 + (1.0 - f0) * m2 * m2 * m;
 }
 
+// Schlick's Fresnel on a coloured reflectance: a metal's.
+fn ifs_coat_fresnel3(f0: vec3<f32>, c: f32) -> vec3<f32> {
+    let m = clamp(1.0 - c, 0.0, 1.0);
+    let m2 = m * m;
+    return f0 + (vec3<f32>(1.0, 1.0, 1.0) - f0) * (m2 * m2 * m);
+}
+
+//__COAT_ENERGY__
+
 // `p` is the surface's position, in the geometry's frame: what a point
 // light's direction, distance and falloff are measured from.
 fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32, p: vec3<f32>) -> vec3<f32> {
@@ -7059,13 +7072,21 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     // The coat, as the path tracer's direct light evaluates it: GGX,
     // Smith's masking, Schlick's Fresnel, the diffuse taking what the
     // Fresnel does not -- and, for the sky the path tracer's bounces
-    // see, the ambient reflected by the coat at this view.
+    // see, the ambient reflected by the coat at this view. A metal's
+    // (P4) reflectance is the albedo's colour, with nothing under it; and
+    // either is given back what single scattering loses.
     let f0 = clamp(ifs_gloss(), 0.0, 1.0);
-    let r2 = max(clamp(ifs_rough(), 0.02, 1.0), 0.01);
+    let metal = ifs_metallic();
+    let coated = f0 > 0.0 || metal > 0.0;
+    let f0c = mix(vec3<f32>(f0, f0, f0), albedo, metal);
+    let rough = clamp(ifs_rough(), 0.02, 1.0);
+    let r2 = max(rough, 0.01);
     let a2 = max(r2 * r2, 1.0e-4) * max(r2 * r2, 1.0e-4);
     let nv = max(dot(n, v), 1.0e-4);
+    let energy = ifs_coat_energy(f0c, nv, rough);
     let coat_v = select(0.0, ifs_coat_fresnel(f0, nv), f0 > 0.0);
-    var lit_rgb = albedo * (ifs_ambient() * ao * (1.0 - coat_v)) + vec3<f32>(ifs_ambient() * ao * coat_v);
+    let refl_v = select(vec3<f32>(0.0, 0.0, 0.0), ifs_coat_fresnel3(f0c, nv), coated);
+    var lit_rgb = albedo * (ifs_ambient() * ao * ((1.0 - metal) * (1.0 - coat_v))) + refl_v * (ifs_ambient() * ao);
     lit_rgb = lit_rgb + albedo * max(ifs_glow(), 0.0);
     let lights = ifs_light_count();
     for (var li = 0u; li < lights; li = li + 1u) {
@@ -7078,12 +7099,12 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
         let lcol = ifs_light_color(li) * (ifs_light_power(li) * la.gain);
         let s = mix(1.0, sun[li], shadow_amount);
         var diff = 1.0;
-        if (f0 > 0.0) {
+        if (coated) {
             let hc = normalize(ld + v);
-            let fr = ifs_coat_fresnel(f0, max(dot(v, hc), 0.0));
-            let coat = 3.141592654 * ifs_coat_d(max(dot(n, hc), 0.0), a2) * ifs_coat_g1(ndotl, a2) * ifs_coat_g1(nv, a2) * fr / (4.0 * ndotl * nv);
-            lit_rgb = lit_rgb + lcol * (coat * ndotl * s);
-            diff = 1.0 - fr;
+            let vh = max(dot(v, hc), 0.0);
+            let dg = 3.141592654 * ifs_coat_d(max(dot(n, hc), 0.0), a2) * ifs_coat_g1(ndotl, a2) * ifs_coat_g1(nv, a2) / (4.0 * ndotl * nv);
+            lit_rgb = lit_rgb + lcol * ifs_coat_fresnel3(f0c, vh) * energy * (dg * ndotl * s);
+            diff = (1.0 - metal) * select(1.0, 1.0 - ifs_coat_fresnel(f0, vh), f0 > 0.0);
         }
         // The direct light's own occluder is its shadow ray; the occlusion
         // estimate stands in for the sky's and the bounces' light, which
@@ -8372,6 +8393,7 @@ fn ifs_rig(lens: Option<&str>, placed: bool) -> String {
         .trim()
         .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
         .replace("//__IFS_LIGHT_AT__", light_at(placed))
+        .replace("//__COAT_ENERGY__", &super::path_core::coat_energy_wgsl("ifs_coat_"))
 }
 
 /// The rig's `ifs_light_at`: with points and headlamps, or directional.
@@ -8397,6 +8419,7 @@ pub(crate) fn ifs_rig_jittered(placed: bool) -> String {
             "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",
         )
         .replace("//__IFS_LIGHT_AT__", light_at(placed))
+        .replace("//__COAT_ENERGY__", &super::path_core::coat_energy_wgsl("ifs_coat_"))
 }
 
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
@@ -8596,6 +8619,7 @@ fn pt_ifs_surface(p: vec3<f32>, t: f32, dist: f32) -> PtHit {
     out.bias = eps * 2.0;
     out.f0 = pt.mat.x;
     out.rough = pt.mat.y;
+    out.metal = ifs_metallic();
     return out;
 }
 

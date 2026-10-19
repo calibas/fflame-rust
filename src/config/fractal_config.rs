@@ -1067,6 +1067,13 @@ pub struct SolidShadingSettings {
     pub gloss: f32,
     pub roughness: f32,
     pub glow: f32,
+    /// How much of the surface is metal (3d-look-and-tools P4, the
+    /// metallic workflow): its coat's reflectance head on is the albedo's
+    /// colour, `mix(gloss, albedo, metallic)`, and nothing scatters under
+    /// it (the diffuse times `1 - metallic`). 0, the default, is the
+    /// dielectric coat alone. A material, like the coat: not the rig.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub metallic: f32,
 }
 
 impl Default for SolidShadingSettings {
@@ -1091,6 +1098,7 @@ impl Default for SolidShadingSettings {
             gloss: 0.0,
             roughness: 0.5,
             glow: 0.0,
+            metallic: 0.0,
         }
     }
 }
@@ -1106,7 +1114,7 @@ impl SolidShadingSettings {
     /// switch that sun off.
     pub fn rig_untouched(&self) -> bool {
         let d = SolidShadingSettings::default();
-        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, ..self.clone() } == d
+        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, metallic: d.metallic, ..self.clone() } == d
     }
 
     /// Whether the shade pass should run at all.

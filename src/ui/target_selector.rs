@@ -848,6 +848,7 @@ fn lighting_items(config: &FractalConfig) -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SolidShininess, "Shininess"),
         // The material's coat and glow: every tier's (materials.md).
         TargetItem::new(ConfigPath::SolidGloss, "Gloss"),
+        TargetItem::new(ConfigPath::SolidMetallic, "Metallic"),
         TargetItem::new(ConfigPath::SolidRoughness, "Roughness"),
         TargetItem::new(ConfigPath::SolidGlow, "Glow"),
         TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),

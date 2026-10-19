@@ -279,14 +279,39 @@ is the default key light. The solid presets carry the same.
 **The material** (`path_core::lit_material`) is the same in every tier:
 - **Gloss** (0 to 1): a clear coat's reflectance head on. 0, the default,
   is no coat; 0.04 is a dielectric's.
+- **Metallic** (0 to 1; 2026-10-19): how much of the surface is metal.
+  The coat's reflectance head on is `mix(gloss, albedo, metallic)`, a
+  colour, and the diffuse is times `1 - metallic`: a metal reflects in its
+  own colour with nothing under it. A coat exists where Gloss or Metallic
+  is above 0. In the fog row's w (`ifs_metallic`, `fdata[10].w`) for the
+  rig's shaders; `metallic` in the 3D flame's shade pass.
 - **Roughness** (0.02 to 1): the coat's GGX roughness (alpha is its
   square).
 - **Glow:** the albedo's own light.
 
-Both tiers evaluate the coat alike on the direct light: GGX's
-distribution, Smith's masking and Schlick's Fresnel, the diffuse taking
-what the Fresnel does not. The lit tier's coat also reflects the ambient,
-standing in for the sky the path tracer's bounces see.
+Every tier evaluates the coat alike on the direct light -- both escape
+and simulation tiers and the 3D flame's shade pass: GGX's distribution,
+Smith's separable masking and Schlick's Fresnel (per channel for a
+metal), the diffuse taking what the Fresnel does not. The lit tiers'
+coat also reflects the ambient, standing in for the sky the path
+tracer's bounces see. The path tracer's bounce picks the coat's lobe by
+its Fresnel at the view, leaning to it by the metallic (wholly at 1).
+
+**Energy compensation.** One scattering off GGX's microfacets loses the
+light that bounces between them: a white metal at roughness 0.7 under a
+uniform sky returned 69% of it (measured), and at roughness 1 the
+integral says about a third. The coat's
+lobe is scaled by `1 + F0 (1 / E - 1)` (Kulla and Conty 2017; Turquin
+2019), E its directional albedo at reflectance 1, in every tier
+(`ifs_coat_energy`, `coat_energy`). E is a 16-term fit to the coat's own
+integral (`path_core::COAT_ESS_FIT`, `coat_energy_wgsl` generates the
+WGSL for every shader): the compensation within 1.6% from cos 0.2 up and
+-11% to +5% at a glance (`the_coat_albedo_fit_is_the_integral`). Karis's
+EnvBRDFApprox, fitted to height-correlated masking, was up to half off
+for ours. Under a uniform sky a white metal now returns it within 0.5%
+at roughness 0.3 to 1 (`the_coat_and_the_glow`); a metal's direct light
+is the lit tier's and the path tracer's alike within 0.3% on the sponge
+and the Mandelbulb (`a_metal_is_lit_alike_in_both_tiers`).
 
 A picture saved before the material moved kept its coat and glow in a
 path tracer's settings. `lift_path_material` lifts them into
