@@ -31,6 +31,7 @@ plans that build it say what is next.
 | Flame variations | yes (C1, 2D; the hooks -- draws, accumulator, state, colour -- C2; 3D needs the vector type, B) | yes (`Flame::custom_variations`) | as the `plugin` category, `Provenance::Custom`; local plug-in *files* are still WGSL JSON | no (downloads are WGSL JSON) |
 | Escape formulas | yes | yes (`EscapeConfig::custom_formula`, one) | the Formula Editor's library (`formula_store`) | no |
 | Escape colourings | yes | yes (`custom_coloring`, one) | the library | no |
+| Mode-D solids | yes (B3: `start`, `step`, `escaped`, `distance` over a vector state) | yes (as the custom formula) | the library | no |
 | Simulation models and colourings | no (31 built-in models, 13 colourings) | -- | -- | -- |
 | Effects | no (WGSL JSON plug-ins and downloads) | -- | WGSL JSON | WGSL JSON |
 | Animation tracks | no (keyframes and signals: `TrackSource`) | -- | -- | -- |
