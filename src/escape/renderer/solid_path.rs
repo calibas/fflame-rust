@@ -1673,4 +1673,99 @@ mod tests {
         wait(&device);
         r.destroy();
     }
+
+    /// Ambient in the path tracer (lights-in-the-fractal, L1). It read
+    /// none before, so the slider did nothing once a view was path
+    /// traced (measured: a sponge's mean 114.66 at Ambient 0, 0.5 and 1
+    /// alike). Now the ambient is light the bounces bring back from
+    /// every direction:
+    /// - the cube, convex so every bounce gets away, lit by the ambient
+    ///   alone, path traces to the lit tier's `albedo x ambient` on each
+    ///   face -- exactly, one bounce being the whole of it;
+    /// - the sponge's path-traced light rises with it in proportion, its
+    ///   holes occluding some;
+    /// - an untouched rig adds none, so a picture path traced under the
+    ///   default rig is unchanged.
+    #[test]
+    fn the_path_tracer_sees_the_ambient() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+
+        // The cube under the ambient alone: no lights, a black sky, and
+        // no occlusion estimate in the lit tier (an open face has none).
+        let mut c = cube_config();
+        c.solid_shading.ambient = 0.5;
+        c.escape.path.bounces = 1;
+        c.escape.solid_tier = RenderTier::Lit;
+        let mut r = renderer_for(&device, &c, w, h);
+        loop {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+            queue.submit(std::iter::once(enc.finish()));
+            if settled {
+                break;
+            }
+        }
+        let lit = read_texture(&device, &queue, &r.output_texture, w, h);
+        r.render_solid_still(&device, &queue, &c, &palette, 4, || { wait(&device); true });
+        let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+        let at = |x: u32, y: u32| lit[(y * w + x) as usize];
+        let (mut n, mut worst) = (0, 0.0f32);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let (p, q) = (at(x, y), path[(y * w + x) as usize]);
+                let flat = (0..9u32).all(|i| {
+                    let o = at(x + i % 3 - 1, y + i / 3 - 1);
+                    (0..4).all(|k| (p[k] - o[k]).abs() < 1e-4)
+                });
+                if p[3] < 1.0 || q[3] < 1.0 || !flat || p[0] <= 0.0 {
+                    continue;
+                }
+                n += 1;
+                for k in 0..3 {
+                    worst = worst.max((p[k] - q[k]).abs() / p[k].max(1e-3));
+                }
+            }
+        }
+        println!("  cube under the ambient: {n} face pixels, worst relative difference {worst:.2e}");
+        assert!(n > 10, "only {n} face pixels");
+        assert!(worst < 1e-3, "the path tracer's ambient is not the lit tier's: {worst}");
+        r.destroy();
+
+        // The sponge, path traced: its light rises with the ambient, in
+        // proportion (the light is linear in it).
+        let mut c = cube_config();
+        c.flame = sponge();
+        c.solid_shading.lights[0].enabled = true;
+        c.solid_shading.lights[0].intensity = 0.3;
+        c.escape.path.bounces = 2;
+        let mut r = renderer_for(&device, &c, w, h);
+        let mut light = |a: f32| {
+            c.solid_shading.ambient = a;
+            r.render_solid_still(&device, &queue, &c, &palette, 16, || { wait(&device); true });
+            let img = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            img.iter().map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / img.len() as f64
+        };
+        let (none, some, more) = (light(0.0), light(0.2), light(0.4));
+        r.destroy();
+        println!("  sponge path traced at ambient 0 / 0.2 / 0.4: {none:.4} / {some:.4} / {more:.4}");
+        assert!(some > none * 1.05, "the ambient added nothing: {none} -> {some}");
+        let (d1, d2) = (some - none, more - some);
+        assert!((d1 - d2).abs() < 0.1 * d1, "not in proportion: +{d1} then +{d2}");
+
+        // An untouched rig: no ambient in the path tracer.
+        let untouched = crate::config::SolidShadingSettings::default();
+        assert!(untouched.rig_untouched() && untouched.ambient > 0.0);
+        assert_eq!(crate::escape::path_core::path_ambient(&untouched), 0.0);
+        let mut d = FractalConfig::default();
+        d.background_color = [0.2, 0.3, 0.4];
+        let env = crate::escape::path_core::path_settings(&d, 1.0).environment;
+        d.solid_shading.ambient = 0.0;
+        d.solid_shading.shading_strength = 1.0;
+        assert_eq!(env, crate::escape::path_core::path_settings(&d, 1.0).environment, "the default rig's ambient reached the path tracer");
+    }
 }
