@@ -198,6 +198,9 @@ struct Shared<'e> {
     accum: C64,
     weight: f64,
     vcolor: Option<f64>,
+    /// A 3D variation's point's and accumulator's third parts (B2).
+    pixel_z: f64,
+    accum_z: f64,
 }
 
 impl<'e> Shared<'e> {
@@ -206,6 +209,8 @@ impl<'e> Shared<'e> {
             accum: C64::ZERO,
             weight: 1.0,
             vcolor: None,
+            pixel_z: 0.0,
+            accum_z: 0.0,
             pixel: env.pixel,
             env,
             z: C64::ZERO,
@@ -259,6 +264,20 @@ impl<'p> VariationRun<'p> {
         let prog = self.m.prog;
         self.m.exec(&prog.transform, &mut sh);
         (sh.pixel, sh.vcolor)
+    }
+
+    /// A 3D variation's call (`fn variation3`, B2): the point for `v`,
+    /// and the colour it wrote if it writes one.
+    pub fn call3(&mut self, v: [f64; 3], accum: [f64; 3], weight: f64) -> ([f64; 3], Option<f64>) {
+        let mut sh = Shared::new(&self.env);
+        sh.pixel = C64::new(v[0], v[1]);
+        sh.pixel_z = v[2];
+        sh.accum = C64::new(accum[0], accum[1]);
+        sh.accum_z = accum[2];
+        sh.weight = weight;
+        let prog = self.m.prog;
+        self.m.exec(&prog.transform, &mut sh);
+        ([sh.pixel.re, sh.pixel.im, sh.pixel_z], sh.vcolor)
     }
 }
 
@@ -711,6 +730,7 @@ impl<'p> Machine<'p> {
                         Place::CreaseSlope => sh.crease_slope = v.as_c64(),
                         Place::Pixel => sh.pixel = v.as_c64(),
                         Place::Color => sh.vcolor = Some(v.as_f64()),
+                        Place::PixelZ => sh.pixel_z = v.as_f64(),
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -839,6 +859,8 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::Accum => Value::Complex(sh.accum),
         Predef::Weight => Value::Float(sh.weight),
         Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(0.0)),
+        Predef::PixelZ => Value::Float(sh.pixel_z),
+        Predef::AccumZ => Value::Float(sh.accum_z),
         Predef::Center => Value::Complex(env.center),
         Predef::Magn => Value::Float(env.magn),
         Predef::X => Value::Int(env.x),

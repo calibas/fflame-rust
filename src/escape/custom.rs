@@ -166,7 +166,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
         return lang::rhai::with_variations(&carried_variations(src), || match kind {
             EntryKind::Formula => lang::rhai::program(&src.source),
             EntryKind::Coloring => lang::rhai::coloring(&src.source),
-            EntryKind::Transform => lang::rhai::transformation(&src.source),
+            EntryKind::Transform => lang::rhai::transformation_any(&src.source),
         });
     }
     if src.dialect == CustomDialect::Hybrid {

@@ -47,14 +47,21 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
             .map(|x| x.render(source))
             .unwrap_or_else(|| "it does not compile".to_string())
     };
-    let p = lang::rhai::transformation(source).map_err(|d| first(&d))?;
+    // Its 2D function, its 3D one (B2), or both.
+    let (two, three) = (lang::rhai::has_function(source, "variation"), lang::rhai::has_function(source, "variation3"));
+    if !two && !three {
+        return Err("a variation has `fn variation(z, p)`, or `fn variation3(v, p)` for 3D".to_string());
+    }
+    let p2 = if two { Some(lang::rhai::transformation(source).map_err(|d| first(&d))?) } else { None };
+    let p3 = if three { Some(lang::rhai::transformation3(source).map_err(|d| first(&d))?) } else { None };
+    let p = p2.as_ref().or(p3.as_ref()).expect("a program");
     let name = lang::rhai::variation_name(source)
         .ok_or_else(|| "a variation names itself: `const INFO = #{ name: \"my_swirl\" }`".to_string())?;
     check_name(&name)?;
-    if !p.funcs.is_empty() {
+    if p2.iter().chain(p3.iter()).any(|p| !p.funcs.is_empty()) {
         return Err("a variation's function parameters are a later step".to_string());
     }
-    let wgsl = lang::wgsl::variation(&p, &name)?;
+    let wgsl = lang::wgsl::variation(p2.as_ref(), p3.as_ref(), &name)?;
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_variation(&wgsl).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
 
@@ -110,7 +117,8 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
         "id": format!("custom:{name}"),
         "name": name,
         "display_name": p.name,
-        "category": "plugin",
+        // A 3D function alone is a 3D variation only.
+        "category": if two { "plugin" } else { "only_3d" },
         "version": 1,
         "phase": "normal",
         "parameters": parameters,
@@ -502,7 +510,8 @@ mod tests {
         let params = ParamValues::defaults(&p);
         let mut run = VariationRun::new(&p, &params, 7);
         let (a, b) = (1.6f64, 0.4f64);
-        let (mut xa, mut x, mut y) = (0.1f64, 0.1f64, 0.1f64);
+        let (mut xa, mut y) = (0.1f64, 0.1f64);
+        let mut x: f64;
         for i in 0..50 {
             let accum = C64::new(0.3 * (i as f64).sin(), -0.2);
             let weight = 0.75;
@@ -582,6 +591,142 @@ mod tests {
         assert!(compiled("s.z = vary(\"rhai_blur\", s.z * s.z + s.c);").is_ok(), "a drawing variation draws the formula's stream");
         let e = compiled("s.z = vary(\"rhai_macmillan\", s.z);").err().map(|d| d[0].message.clone()).unwrap_or_default();
         assert!(e.contains("keeps state"), "{e}");
+    }
+
+    // ---- 3D variations (B2) -------------------------------------------------
+
+    /// Twins of 3D built-ins, written as `variation3` alone (3D only).
+    pub(crate) const TWINS_3D: &[(&str, &str)] = &[
+        (
+            "spherical3D",
+            "const INFO = #{ title: \"Spherical 3D (Rhai)\", name: \"rhai_spherical3d\" };\n\
+             fn variation3(v, p) {\n    let t = max(dot(v, v), 1e-30);\n    v * (1.0 / t)\n}\n",
+        ),
+        (
+            "hemisphere",
+            "const INFO = #{ title: \"Hemisphere (Rhai)\", name: \"rhai_hemisphere\" };\n\
+             fn variation3(v, p) {\n    let t = 1.0 / sqrt(v.x * v.x + v.y * v.y + 1.0);\n    vec3(v.x * t, v.y * t, t)\n}\n",
+        ),
+        (
+            "zcone",
+            "const INFO = #{ title: \"Z Cone (Rhai)\", name: \"rhai_zcone\" };\n\
+             fn variation3(v, p) {\n    vec3(0.0, 0.0, sqrt(v.x * v.x + v.y * v.y))\n}\n",
+        ),
+    ];
+
+    /// A `variation3` alone makes a 3D variation only, its z kept as the
+    /// built-in 3D variations keep theirs; with `variation` too, each
+    /// body is its own; the hooks reach the 3D body (a vector accumulator,
+    /// state, a colour), and its WGSL validates.
+    #[test]
+    fn a_3d_variation_compiles_to_its_own_body() {
+        for (builtin, src) in TWINS_3D {
+            let dl = compile(src).unwrap_or_else(|e| panic!("{builtin}: {e}"));
+            assert_eq!(dl.category, "only_3d", "{builtin}");
+            assert!(dl.shader_2d.is_none());
+            assert_eq!(dl.features, ["always_z"]);
+            let name = format!("rhai_{}", builtin.to_lowercase());
+            assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains(&format!("fn variation_{name}(p: vec3<f32>) -> vec3<f32>"))), "{builtin}");
+        }
+        let both = "const INFO = #{ name: \"rhai_both_test\" };\nfn variation(z, p) { z * 0.5 }\nfn variation3(v, p) { v * 0.25 }\n";
+        let dl = compile(both).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(dl.category, "plugin");
+        assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("cv_rhai_both_test_variation_2d")));
+        assert!(dl.shader_3d.as_deref().is_some_and(|s| s.contains("cv_rhai_both_test_variation_3d") && !s.contains("p.xy), p.z)")));
+        let hooked = "const PARAMS = #{ k: 0.1 };\nconst INFO = #{ name: \"rhai_hooked3_test\" };\nfn init(p) { #{ last: vec3(0.0) } }\n\
+                      fn variation3(v, p, ctx) {\n    let w = (v + this.last) * 0.5 + ctx.accum * p.k;\n    this.last = v;\n    \
+                      #{ z: w, color: clamp(length(w), 0.0, 1.0) }\n}\n";
+        let dl = compile(hooked).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(dl.features, ["needs_accum", "writes_color", "always_z"]);
+        assert_eq!(dl.state_count, 3);
+        let s3 = dl.shader_3d.as_deref().unwrap();
+        assert!(s3.contains("accum: vec3<f32>, xform_id: u32, variation_id: u32, vc: ptr<function, f32>"), "{s3}");
+        assert!(s3.contains("accum3.z"), "{s3}");
+        // A 3D variation only is not a formula's to call.
+        let e = lang::rhai::with_variations(&[("rhai_spherical3d".into(), TWINS_3D[0].1.into())], || {
+            lang::rhai::program("const PARAMS = #{ bailout: 4.0 };\nfn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                                 fn step(s, p) { s.z = vary(\"rhai_spherical3d\", s.z); s }\nfn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n")
+        });
+        assert!(e.is_err_and(|d| d[0].message.contains("3D variation only")));
+    }
+
+    /// The 3D twins run as the built-ins' formulas, and a hooked 3D
+    /// variation keeps its state and reads its vector accumulator.
+    #[test]
+    fn the_3d_twins_run_as_their_formulas() {
+        use crate::escape::lang::interp::{ParamValues, VariationRun};
+        let at = |builtin: &str, v: [f64; 3]| {
+            let src = TWINS_3D.iter().find(|(n, _)| *n == builtin).unwrap().1;
+            let p = lang::rhai::transformation3(src).unwrap();
+            let params = ParamValues::defaults(&p);
+            VariationRun::new(&p, &params, 1).call3(v, [0.0; 3], 1.0).0
+        };
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-12);
+        for v in [[0.3f64, -0.7, 0.2], [-1.2, 0.4, 0.9], [2.0, 1.5, -0.5]] {
+            let [x, y, z] = v;
+            let t = (x * x + y * y + z * z).max(1e-30);
+            assert!(close(at("spherical3D", v), [x / t, y / t, z / t]));
+            let h = 1.0 / (x * x + y * y + 1.0).sqrt();
+            assert!(close(at("hemisphere", v), [x * h, y * h, h]));
+            assert!(close(at("zcone", v), [0.0, 0.0, (x * x + y * y).sqrt()]));
+        }
+        let hooked = "const PARAMS = #{ k: 0.1 };\nconst INFO = #{ name: \"rhai_hooked3_test\" };\nfn init(p) { #{ last: vec3(0.0) } }\n\
+                      fn variation3(v, p, ctx) {\n    let w = (v + this.last) * 0.5 + ctx.accum * p.k;\n    this.last = v;\n    \
+                      #{ z: w, color: clamp(length(w), 0.0, 1.0) }\n}\n";
+        let p = lang::rhai::transformation3(hooked).unwrap();
+        let params = ParamValues::defaults(&p);
+        let mut run = VariationRun::new(&p, &params, 1);
+        let mut last = [0.0f64; 3];
+        for i in 0..10 {
+            let v = [0.1 * i as f64, -0.2, 0.3 + 0.05 * i as f64];
+            let accum = [0.5, -0.25, 1.0];
+            let want: Vec<f64> = (0..3).map(|k| (v[k] + last[k]) * 0.5 + accum[k] * 0.1).collect();
+            let (got, color) = run.call3(v, accum, 1.0);
+            assert!(close(got, [want[0], want[1], want[2]]), "call {i}: {got:?} against {want:?}");
+            let len = (want[0] * want[0] + want[1] * want[1] + want[2] * want[2]).sqrt();
+            assert!(color.is_some_and(|c| (c - len.clamp(0.0, 1.0)).abs() < 1e-12));
+            last = v;
+        }
+    }
+
+    /// **The 3D twins render as the built-ins in a 3D flame** (B2's
+    /// gate), by density over replicates, seen from a pitched camera so
+    /// the depth the variations make shows.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_3d_twins_render_as_the_builtins() {
+        use crate::renderer::density_gates::{compare_blocks, print_compared, render_blocks, Run};
+        const N: u32 = 256;
+        let (device, queue) = device();
+        let run = Run::default();
+        let flame = |v: &str, carries: Option<CustomSource>| {
+            let mut cfg = flame_with(v, carries);
+            cfg.render_mode = RenderMode::ThreeD;
+            cfg.preserve_z = true;
+            cfg.camera_rotation_x = 0.7;
+            cfg.camera_rotation_y = 0.4;
+            cfg
+        };
+        let mut failures = Vec::new();
+        for (builtin, src) in TWINS_3D {
+            let name = format!("rhai_{}", builtin.to_lowercase());
+            let carried = CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source: src.to_string(), variations: Vec::new() };
+            let reference = render_blocks(&device, &queue, &flame(builtin, None), N, &run);
+            let twin = render_blocks(&device, &queue, &flame(&name, Some(carried)), N, &run);
+            let c = compare_blocks(&twin.density, &reference.density, &reference.density);
+            print_compared(&format!("{name} against {builtin}"), &c);
+            let (_, _, mx, _, my, _, z) = c.pooled[0];
+            if mx <= 0.0 {
+                failures.push(format!("{name}: drew nothing"));
+            }
+            if z.abs() > 4.0 && (mx / my - 1.0).abs() > 0.005 {
+                failures.push(format!("{name}: the whole view's density is {:.4} of the built-in's", mx / my));
+            }
+            if c.worst_dense > 0.05 || c.worst_middle > 0.15 {
+                failures.push(format!("{name}: a block is {:.3} off (dense), {:.3} (middle)", c.worst_dense, c.worst_middle));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     // ---- the GPU gates ----------------------------------------------------

@@ -879,7 +879,7 @@ impl Checker {
             // Rhai's `rand()` (C2a), and a variation's context and colour
             // (C2b, C2d).
             "draw" if self.internal => Predef::Draw,
-            "accum" | "weight" | "vcolor" if self.internal => {
+            "accum" | "weight" | "vcolor" | "pixelz" | "accumz" if self.internal => {
                 if self.kind != EntryKind::Transform {
                     self.error(span, format!("`{name}` is a flame variation's"));
                     return None;
@@ -887,6 +887,8 @@ impl Checker {
                 match name {
                     "accum" => Predef::Accum,
                     "weight" => Predef::Weight,
+                    "pixelz" => Predef::PixelZ,
+                    "accumz" => Predef::AccumZ,
                     _ => Predef::VarColor,
                 }
             }
@@ -939,7 +941,7 @@ impl Checker {
             return None;
         }
         // A variation sees its point and nothing of an image or an orbit.
-        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor) {
+        if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
@@ -1291,7 +1293,7 @@ impl Checker {
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
                     Predef::CreaseHeight | Predef::CreaseSlope => true,
-                    Predef::Pixel | Predef::VarColor => self.section == SectionKind::Transform,
+                    Predef::Pixel | Predef::VarColor | Predef::PixelZ => self.section == SectionKind::Transform,
                     _ => false,
                 };
                 if !ok {
@@ -1311,6 +1313,7 @@ impl Checker {
                     Predef::CreaseSlope => (Place::CreaseSlope, Ty::Complex),
                     Predef::Pixel => (Place::Pixel, Ty::Complex),
                     Predef::VarColor => (Place::Color, Ty::Float),
+                    Predef::PixelZ => (Place::PixelZ, Ty::Float),
                     _ => (Place::Solid, Ty::Bool),
                 })
             }
@@ -1912,6 +1915,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::CreaseSlope => IExprKind::Predef(Predef::CreaseSlope),
         Place::Pixel => IExprKind::Predef(Predef::Pixel),
         Place::Color => IExprKind::Predef(Predef::VarColor),
+        Place::PixelZ => IExprKind::Predef(Predef::PixelZ),
     })
 }
 
