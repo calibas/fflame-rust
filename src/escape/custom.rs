@@ -1560,6 +1560,65 @@ mod tests {
         assert!(check_entry(EntryKind::Coloring, &src).is_ok());
     }
 
+    /// **The 2D KIFS example draws the Sierpinski carpet** (the KIFS plan,
+    /// A4): every point in a hole of the carpet on [-1, 1]^2 -- the first
+    /// level whose base-3 digits are both 1 -- escapes, three to five
+    /// steps after that level (the hole's centre, by hand: four steps for
+    /// the first level's), each level one step later on average; and a
+    /// point of the carpet stays. Checked against the carpet's own digits,
+    /// not the formula's arithmetic.
+    #[test]
+    fn the_kifs_2d_example_draws_the_carpet() {
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        let (_, text) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "kifs-2d.rhai").expect("the example");
+        let p = lang::rhai::program(text).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
+        let params = ParamValues::defaults(&p);
+        // The hole level of a point, and how far it lies from a hole's
+        // edge at that level (in units of the level's cell).
+        let hole = |x: f64, y: f64| -> Option<(u32, f64)> {
+            let (mut u, mut v) = ((x + 1.0) / 2.0, (y + 1.0) / 2.0);
+            for k in 1..=6 {
+                let (du, dv) = ((u * 3.0).floor(), (v * 3.0).floor());
+                let (fu, fv) = (u * 3.0 - du, v * 3.0 - dv);
+                if du == 1.0 && dv == 1.0 {
+                    return Some((k, fu.min(1.0 - fu).min(fv).min(1.0 - fv)));
+                }
+                (u, v) = (fu, fv);
+            }
+            None
+        };
+        let (mut judged, mut agree) = (0, 0);
+        let mut by_level = std::collections::BTreeMap::new();
+        for i in 0..121 {
+            for j in 0..121 {
+                let (x, y) = (-1.0 + 2.0 * (i as f64 + 0.37) / 121.0, -1.0 + 2.0 * (j as f64 + 0.61) / 121.0);
+                let Some((k, margin)) = hole(x, y) else { continue };
+                if margin < 0.05 {
+                    continue;
+                }
+                let r = run(&p, &params, None, &Env::at(C64::new(x, y), 60));
+                assert!(r.escaped, "a point in a level-{k} hole, ({x}, {y}), stayed");
+                judged += 1;
+                agree += usize::from((k + 3..=k + 5).contains(&r.n));
+                by_level.entry(k).or_insert_with(Vec::new).push(r.n);
+            }
+        }
+        let mut means = Vec::new();
+        for (k, ns) in &by_level {
+            let mean = ns.iter().sum::<u32>() as f64 / ns.len() as f64;
+            println!("level {k}: {} points, escaping after {}..={} steps, {mean:.2} on average", ns.len(), ns.iter().min().unwrap(), ns.iter().max().unwrap());
+            means.push(mean);
+        }
+        assert!(judged > 2000, "{judged} points judged");
+        assert_eq!(agree, judged, "a point escaped outside three to five steps after its hole's level");
+        for w in means.windows(2) {
+            assert!((0.6..=1.4).contains(&(w[1] - w[0])), "the levels' means: {means:?}");
+        }
+        // A point of the carpet -- a corner, the maps' fixed point -- stays.
+        assert!(!run(&p, &params, None, &Env::at(C64::new(1.0, 1.0), 60)).escaped);
+    }
+
     /// Every entry of the example files compiles, as the kind its file
     /// holds, and validates.
     #[test]
