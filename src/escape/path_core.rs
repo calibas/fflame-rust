@@ -86,7 +86,8 @@ impl Default for PathSettings {
 /// geometry whose target is `target` world units from the eye:
 /// - the environment is the background colour brought into the
 ///   accumulator's units (`shown`) -- so the sky and an albedo-1 surface
-///   it lights read as the background does, times Sky light;
+///   it lights read as the background does, times Sky light -- plus the
+///   rig's ambient ([`path_ambient`]);
 /// - a sample's radiance is clamped at ten times the brightest light
 ///   (the environment and the glow count as lights);
 /// - the lens is in the target's terms, so it keeps its look as the
@@ -104,8 +105,9 @@ pub fn path_settings_from(
     target: f32,
     lake_roughness: f32,
 ) -> PathSettings {
-    let env = shown(config, config.background_color).map(|c| t.environment * c);
-    let sky = t.sky_gradient.then(|| shown(config, t.zenith).map(|c| t.environment * c));
+    let ambient = path_ambient(&config.solid_shading);
+    let env = shown(config, config.background_color).map(|c| t.environment * c + ambient);
+    let sky = t.sky_gradient.then(|| shown(config, t.zenith).map(|c| t.environment * c + ambient));
     let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
     let brightest = lights
         .max(1.0)
@@ -126,6 +128,25 @@ pub fn path_settings_from(
         lake_roughness,
         denoise: t.denoise,
         sky,
+    }
+}
+
+/// The rig's ambient as the path tracer sees it (lights-in-the-fractal,
+/// L1): uniform light from every direction, beside the sky, that a
+/// bounce ray which gets away brings back. An open Lambert surface it
+/// lights reads `albedo x ambient`, the lit tier's own term, and the
+/// geometry occludes it where the lit tier multiplies by its occlusion
+/// estimate. Before, the path tracer read no ambient at all, and the
+/// slider did nothing once a view was path traced.
+///
+/// None from an untouched rig: its default ambient is the lit tier's
+/// stand-in for the sky the path tracer traces, and every picture path
+/// traced under the default rig stays as it was.
+pub fn path_ambient(shading: &crate::config::SolidShadingSettings) -> f32 {
+    if shading.rig_untouched() {
+        0.0
+    } else {
+        shading.ambient.max(0.0)
     }
 }
 

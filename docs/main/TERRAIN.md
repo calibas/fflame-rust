@@ -182,6 +182,15 @@ fully lit colour (1). The path tracer lights a touched rig fully at any
 strength. The highlight is weighted by the strength in both tiers: at 0
 neither draws it, at 1 both draw it whole.
 
+**Ambient** is light from every direction. The lit tier adds
+`albedo x ambient x occlusion`; the path tracer adds the ambient to the
+sky its bounces see (`path_core::path_ambient`), so an open surface gets
+the same `albedo x ambient` and the geometry occludes it. An untouched
+rig adds none to the path tracer: its default ambient stands in for the
+sky there. At 0 bounces the path tracer has no ambient, as it has no sky.
+(Until 2026-10-19 the path tracer read no ambient, and the slider did
+nothing in a path-traced view; `the_path_tracer_sees_the_ambient`.)
+
 **The material** (`path_core::lit_material`) is the same in every tier:
 - **Gloss** (0 to 1): a clear coat's reflectance head on. 0, the default,
   is no coat; 0.04 is a dielectric's.
