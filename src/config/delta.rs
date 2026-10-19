@@ -640,6 +640,12 @@ pub enum ConfigPath {
     /// One parameter of the lens variation, keyed by name like
     /// `EscapeFormulaParam`.
     EscapeLensParam { param: String },
+    /// The transformations (the KIFS plan, C4), as JSON: a structural
+    /// edit -- add, remove, move, a stage or a variation -- is one step.
+    EscapeTransforms,
+    /// A transformation's amount, and one of its variation's parameters.
+    EscapeTransformAmount { index: usize },
+    EscapeTransformParam { index: usize, param: String },
 
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
@@ -1325,6 +1331,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeLens => write!(f, "Lens"),
             ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
             ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
+            ConfigPath::EscapeTransforms => write!(f, "Transformations"),
+            ConfigPath::EscapeTransformAmount { index } => write!(f, "Transformation {} Amount", index + 1),
+            ConfigPath::EscapeTransformParam { index, param } => write!(f, "Transformation {} → {param}", index + 1),
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -1787,6 +1796,15 @@ impl ConfigPath {
             ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
                 "history.param.escape_lens_param",
                 vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeTransforms => I18nKey::simple("history.param.escape_transforms"),
+            ConfigPath::EscapeTransformAmount { index } => I18nKey::with_params(
+                "history.param.escape_transform_amount",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::EscapeTransformParam { index, param } => I18nKey::with_params(
+                "history.param.escape_transform_param",
+                vec![("index", (index + 1).to_string()), ("param", param.clone())],
             ),
 
             // Transforms
@@ -3224,7 +3242,10 @@ impl ConfigPath {
             | ConfigPath::EscapeLayerWeight
             | ConfigPath::EscapeLens
             | ConfigPath::EscapeLensAmount
-            | ConfigPath::EscapeLensParam { .. } => UpdateType::EscapeRerender,
+            | ConfigPath::EscapeLensParam { .. }
+            | ConfigPath::EscapeTransforms
+            | ConfigPath::EscapeTransformAmount { .. }
+            | ConfigPath::EscapeTransformParam { .. } => UpdateType::EscapeRerender,
 
             // Simulation: split by how much of the run survives. This
             // grouping is the whole reason there are three update types
@@ -3770,6 +3791,9 @@ impl ConfigPath {
             ConfigPath::EscapeLens => "Escape.Lens".to_string(),
             ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
             ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
+            ConfigPath::EscapeTransforms => "Escape.Transforms".to_string(),
+            ConfigPath::EscapeTransformAmount { index } => format!("Escape.Transform.{index}.Amount"),
+            ConfigPath::EscapeTransformParam { index, param } => format!("Escape.Transform.{index}.Param.{param}"),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
@@ -3963,6 +3987,19 @@ impl ConfigPath {
                     return Some(path(param.to_string()));
                 }
             }
+            // A transformation's amount or parameter (C4): its index,
+            // then what follows.
+            if let Some(t) = rest.strip_prefix("Transform.") {
+                let (index, what) = t.split_once('.')?;
+                let index: usize = index.parse().ok()?;
+                if what == "Amount" {
+                    return Some(ConfigPath::EscapeTransformAmount { index });
+                }
+                if let Some(param) = what.strip_prefix("Param.").filter(|p| !p.is_empty()) {
+                    return Some(ConfigPath::EscapeTransformParam { index, param: param.to_string() });
+                }
+                return None;
+            }
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Formula"] => return Some(ConfigPath::EscapeFormula),
@@ -4076,6 +4113,7 @@ impl ConfigPath {
                 ["Layer", "Weight"] => return Some(ConfigPath::EscapeLayerWeight),
                 ["Lens"] => return Some(ConfigPath::EscapeLens),
                 ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
+                ["Transforms"] => return Some(ConfigPath::EscapeTransforms),
                 _ => return None,
             }
         }
@@ -4856,7 +4894,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeLayerParam { .. }
         | ConfigPath::EscapeLayerWeight
         | ConfigPath::EscapeLensAmount
-        | ConfigPath::EscapeLensParam { .. } => {
+        | ConfigPath::EscapeLensParam { .. }
+        | ConfigPath::EscapeTransformAmount { .. }
+        | ConfigPath::EscapeTransformParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         // Rounded: a keyframe is stored, and interpolated, as an f64, and
@@ -5032,8 +5072,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // The lens NAME is a choice, not a quantity: there is no
         // meaning to a value part-way between two variations, so it
         // cannot carry an animation track. Its amount and its
-        // parameters can, and do.
-        | ConfigPath::EscapeLens => None,
+        // parameters can, and do. So with the transformations (C4).
+        | ConfigPath::EscapeLens
+        | ConfigPath::EscapeTransforms => None,
         // Selectors and the deep-zoom center strings are structural /
         // exact — not animatable (centers deliberately: see the plan's
         // open questions on center-path animation).
@@ -5402,6 +5443,8 @@ mod tests {
             ConfigPath::EscapeColoringParam { param: "center.im".into() },
             ConfigPath::EscapeLayerParam { param: "offset.re".into() },
             ConfigPath::EscapeLensParam { param: "c1".into() },
+            ConfigPath::EscapeTransformAmount { index: 2 },
+            ConfigPath::EscapeTransformParam { index: 0, param: "a.re".into() },
             ConfigPath::SimModelParam { param: "feed".into() },
             ConfigPath::SimColoringParam { param: "tint.re".into() },
         ];

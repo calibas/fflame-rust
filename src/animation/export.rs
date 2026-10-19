@@ -904,6 +904,18 @@ fn apply_config_value(
         (ConfigPath::EscapeLensParam { param }, ConfigValue::Float(v)) => {
             config.escape.lens_params.insert(param.clone(), *v);
         }
+        // A transformation's amount and parameters (C4), as the lens's.
+        (ConfigPath::EscapeTransformAmount { index }, ConfigValue::Float(v)) => {
+            let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
+            if let Some(t) = config.escape.transforms.get_mut(*index) {
+                t.amount = if v.is_finite() { v.clamp(-lim, lim) } else { 0.0 };
+            }
+        }
+        (ConfigPath::EscapeTransformParam { index, param }, ConfigValue::Float(v)) => {
+            if let Some(t) = config.escape.transforms.get_mut(*index) {
+                t.params.insert(param.clone(), *v);
+            }
+        }
         (ConfigPath::EscapeFormulaParam { param }, ConfigValue::Float(v)) => {
             // `name.r` / `name.angle` write a complex parameter's parts.
             #[cfg(feature = "engine-escape")]

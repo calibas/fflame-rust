@@ -387,7 +387,12 @@ impl FormulaEditorPanel {
             .flame
             .custom_variations
             .iter()
-            .filter(|s| s.entry == name || crate::variations::custom::used_by(&config.flame, &s.entry) || config.escape.lens == s.entry)
+            .filter(|s| {
+                s.entry == name
+                    || crate::variations::custom::used_by(&config.flame, &s.entry)
+                    || config.escape.lens == s.entry
+                    || config.escape.transforms.iter().any(|t| t.variation == s.entry)
+            })
             .cloned()
             .collect();
         let src = crate::variations::custom::carried(&source)

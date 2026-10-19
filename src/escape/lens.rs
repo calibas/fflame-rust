@@ -232,11 +232,51 @@ pub const LENS_GROUP: u32 = 2;
 /// shader is better off without the machinery than with a no-op in it.
 /// Either sign is a lens; they bulge opposite ways.
 pub fn is_active(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
-    // Zero is the identity in either direction, so it is "no lens".
-    // Negative is a lens, and a useful one.
-    !escape.lens.is_empty()
-        && escape.lens_amount != 0.0
-        && registry.get(&escape.lens).is_some()
+    lens_on(escape, registry) || escape.transforms.iter().any(|t| map_usable(registry, &t.variation))
+}
+
+/// Whether the lens itself is on: a lens variation at a non-zero
+/// amount. Zero is the identity in either direction, so it is "no lens";
+/// negative is a lens, and a useful one.
+fn lens_on(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
+    !escape.lens.is_empty() && escape.lens_amount != 0.0 && registry.get(&escape.lens).is_some()
+}
+
+/// Whether a variation can be a map of the escape view: registered, with
+/// a 2D body (not `only_3d`).
+fn map_usable(registry: &VariationRegistry, name: &str) -> bool {
+    registry.get(name).is_some_and(|v| v.category != crate::variations::VariationCategory::Only3D)
+}
+
+/// Where each map sits in the maps flame (the KIFS plan, C4): the lens,
+/// then the transformations by stage, in order -- a transform index each.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MapSlots {
+    pub lens: Option<u32>,
+    pub plane: Vec<u32>,
+    pub orbit: Vec<u32>,
+    pub iterate: Vec<u32>,
+}
+
+/// The maps flame's slots for this config. A transformation whose
+/// variation is unknown is left out (an unknown name renders as none).
+pub fn map_slots(escape: &EscapeConfig, registry: &VariationRegistry) -> MapSlots {
+    use crate::config::escape::TransformStage;
+    let mut slots = MapSlots::default();
+    let mut k = 0u32;
+    if lens_on(escape, registry) {
+        slots.lens = Some(0);
+        k = 1;
+    }
+    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+        match t.stage {
+            TransformStage::Plane => slots.plane.push(k),
+            TransformStage::Orbit => slots.orbit.push(k),
+            TransformStage::Iteration => slots.iterate.push(k),
+        }
+        k += 1;
+    }
+    slots
 }
 
 /// The one-transform flame that describes the lens.
@@ -252,6 +292,46 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
     if !is_active(escape, registry) {
         return None;
     }
+    let mut flame = Flame::new();
+    flame.name = "escape maps".to_string();
+    flame.transforms.clear();
+    if lens_on(escape, registry) {
+        flame.transforms.push(lens_transform(escape, registry)?);
+    }
+    // The transformations (C4): one transform each, the amount in the
+    // weight as the lens's, but not negated -- 1 is the variation.
+    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+        let info = registry.get(&t.variation)?;
+        let mut x = identity_transform();
+        x.weight = t.amount.clamp(-LENS_AMOUNT_LIMIT, LENS_AMOUNT_LIMIT);
+        x.set_variation(&t.variation, 1.0);
+        for p in &info.parameters {
+            if let Some(v) = t.params.get(&p.name) {
+                x.set_variation_param(&t.variation, &p.name, *v);
+            }
+        }
+        flame.transforms.push(x);
+    }
+    Some(flame)
+}
+
+/// A transform with the identity affine and no variation.
+fn identity_transform() -> Transform {
+    let mut t = Transform::new();
+    t.a = 1.0;
+    t.b = 0.0;
+    t.e = 0.0;
+    t.c = 0.0;
+    t.d = 1.0;
+    t.f = 0.0;
+    t.g = 0.0;
+    t.variations.clear();
+    t.variation_order.clear();
+    t
+}
+
+/// The lens's transform: its variation at its amount.
+fn lens_transform(escape: &EscapeConfig, registry: &VariationRegistry) -> Option<Transform> {
     let info = registry.get(&escape.lens)?;
 
     // The IDENTITY, in this engine's convention. `apply_affine` is
@@ -290,12 +370,7 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
             t.set_variation_param(&escape.lens, &p.name, *v);
         }
     }
-
-    let mut flame = Flame::new();
-    flame.name = "escape lens".to_string();
-    flame.transforms.clear();
-    flame.transforms.push(t);
-    Some(flame)
+    Some(t)
 }
 
 /// The pipeline's identity, for the shader cache key.
@@ -309,33 +384,69 @@ pub fn lens_key(escape: &EscapeConfig, registry: &VariationRegistry) -> String {
     if !is_active(escape, registry) {
         return String::new();
     }
-    let mut key = escape.lens.clone();
-    for (k, v) in &escape.lens_params {
-        key.push_str(&format!(",{k}={v}"));
+    let mut key = String::new();
+    if lens_on(escape, registry) {
+        key.push_str(&escape.lens);
+        for (k, v) in &escape.lens_params {
+            key.push_str(&format!(",{k}={v}"));
+        }
+    }
+    // Each transformation's stage, variation and parameters; not its
+    // amount, which rides in a buffer as the lens's.
+    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+        key.push_str(&format!("|{:?}:{}", t.stage, t.variation));
+        for (k, v) in &t.params {
+            key.push_str(&format!(",{k}={v}"));
+        }
     }
     key
 }
 
-/// The WGSL glue: `esc_lens`, over `build_layer_map_at`'s output.
-///
-/// The seed is derived from the point rather than passed in, so every
-/// call site keeps a one-argument lens and a variation that draws from
-/// the RNG still varies across the frame instead of displacing the
-/// whole picture by one constant.
-pub const LENS_GLUE: &str = r#"
-// The camera lens: a variation on the normalised screen offset, in
-// the half-height-one convention. `mix` toward the identity is the
-// amount, which rides in the transform's weight.
-fn esc_lens(n: vec2<f32>) -> vec2<f32> {
-    let seed = bitcast<u32>(n.x) * 7919u + bitcast<u32>(n.y) * 104729u;
-    let mapped = flame_map(0u, n, seed);
-    return mix(n, mapped, transforms[0].weight);
+/// The maps' glue (C4): `esc_lens` for the lens's slot, and for each
+/// stage with maps a function applying them in order, each blended
+/// toward the identity by its transform's weight.
+pub fn maps_glue(slots: &MapSlots) -> String {
+    let mut out = String::from(
+        "\n// The escape view's maps (the lens and the transformations): a\n\
+         // variation each, blended toward the identity by its weight. The\n\
+         // seed is the point's own, so a variation that draws varies.\n\
+         fn esc_map_seed(p: vec2<f32>) -> u32 {\n    return bitcast<u32>(p.x) * 7919u + bitcast<u32>(p.y) * 104729u;\n}\n",
+    );
+    if let Some(k) = slots.lens {
+        out.push_str(&format!(
+            "\n// The camera lens: a variation on the normalised screen offset, in\n\
+             // the half-height-one convention.\n\
+             fn esc_lens(n: vec2<f32>) -> vec2<f32> {{\n    let mapped = flame_map({k}u, n, esc_map_seed(n));\n    return mix(n, mapped, transforms[{k}u].weight);\n}}\n"
+        ));
+    }
+    for (name, list, what) in [
+        ("esc_plane", &slots.plane, "the sample point, in the fractal's coordinates"),
+        ("esc_orbit", &slots.orbit, "an orbit value the colouring reads"),
+        ("esc_iter", &slots.iterate, "the iterate, after a step"),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n// The transformations of {what}, in order.\nfn {name}(p: vec2<f32>) -> vec2<f32> {{\n    var q = p;\n"));
+        for k in list {
+            out.push_str(&format!("    q = mix(q, flame_map({k}u, q, esc_map_seed(q)), transforms[{k}u].weight);\n"));
+        }
+        out.push_str("    return q;\n}\n");
+    }
+    out
 }
-"#;
 
-/// Everything the shader needs for this lens, or `None` for no lens.
+/// Whether a maps block defines a stage's function (`esc_lens`,
+/// `esc_plane`, `esc_orbit`, `esc_iter`).
+pub fn has_stage(src: Option<&str>, function: &str) -> bool {
+    src.is_some_and(|s| s.contains(&format!("fn {function}(")))
+}
+
+/// Everything the shader needs for this lens and these transformations,
+/// or `None` for neither.
 pub fn lens_source(escape: &EscapeConfig, registry: &VariationRegistry) -> Option<String> {
     let flame = lens_flame(escape, registry)?;
+    let slots = map_slots(escape, registry);
     let builder = crate::shader_builder_v2::ShaderBuilder::new(registry.clone());
     let mut src = builder.build_layer_map_at(&flame, LENS_GROUP);
     // The layer map moves the flame's BINDINGS to our group, but not
@@ -352,7 +463,7 @@ pub fn lens_source(escape: &EscapeConfig, registry: &VariationRegistry) -> Optio
     for name in ["palette_texture", "palette_sampler", "ff_atan2"] {
         src = src.replace(name, &format!("lens_{name}"));
     }
-    src.push_str(LENS_GLUE);
+    src.push_str(&maps_glue(&slots));
     Some(src)
 }
 
@@ -435,9 +546,11 @@ impl LensGpu {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             })
         };
-        let transforms = make("Escape Lens Transforms", bytemuck::cast_slice(&transforms[..1]));
+        // Every map's row (the lens and the transformations, C4).
+        let rows = flame.transforms.len().clamp(1, transforms.len());
+        let transforms = make("Escape Lens Transforms", bytemuck::cast_slice(&transforms[..rows]));
         let variation_params =
-            make("Escape Lens Variation Params", bytemuck::cast_slice(&vparams[..1]));
+            make("Escape Lens Variation Params", bytemuck::cast_slice(&vparams[..rows]));
         let flame_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Escape Lens Flame Params"),
             contents: bytemuck::bytes_of(
@@ -486,8 +599,9 @@ impl LensGpu {
         use crate::gpu::buffers::{pack_gpu_transforms, pack_gpu_variation_params};
         let transforms = pack_gpu_transforms(flame, crate::scene::transforms::RenderMode::TwoD);
         let vparams = pack_gpu_variation_params(flame);
-        queue.write_buffer(&self.transforms, 0, bytemuck::cast_slice(&transforms[..1]));
-        queue.write_buffer(&self.variation_params, 0, bytemuck::cast_slice(&vparams[..1]));
+        let rows = flame.transforms.len().clamp(1, transforms.len());
+        queue.write_buffer(&self.transforms, 0, bytemuck::cast_slice(&transforms[..rows]));
+        queue.write_buffer(&self.variation_params, 0, bytemuck::cast_slice(&vparams[..rows]));
         // Referenced so the buffers outlive the bind group; nothing
         // else writes them.
         let _ = (&self.flame_params, &self.attachments, &self.subflame_meta);
@@ -926,6 +1040,167 @@ mod gpu_tests {
     /// -> packed variation params -> get_param -> the picture. A
     /// parameter that only reached the config would leave the slider
     /// looking functional and doing nothing.
+    // ---- transformations (the KIFS plan, C4) -------------------------------
+
+    /// A Rhai variation the config carries, by name and body.
+    fn carried(name: &str, body: &str) -> crate::config::escape::CustomSource {
+        crate::config::escape::CustomSource {
+            dialect: crate::config::escape::CustomDialect::Rhai,
+            entry: name.to_string(),
+            source: format!("const INFO = #{{ name: \"{name}\" }};\nfn variation(z, p) {{\n    {body}\n}}\n"),
+            variations: Vec::new(),
+        }
+    }
+
+    fn transform(stage: crate::config::escape::TransformStage, variation: &str) -> crate::config::escape::EscapeTransform {
+        crate::config::escape::EscapeTransform { stage, variation: variation.to_string(), amount: 1.0, params: std::collections::BTreeMap::new() }
+    }
+
+    /// Pixels a channel more than 2 levels apart.
+    fn apart(a: &[u8], b: &[u8]) -> usize {
+        a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.abs_diff(*q) > 2)).count()
+    }
+
+    /// **The Plane transformations** (C4's gate): `linear` at 1 is the
+    /// identity; a mirror across the imaginary axis draws the right half
+    /// of the plain picture on both sides; and with the
+    /// lens on too, the lens still leads the flame.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn a_plane_transformation_maps_the_sample_point() {
+        use crate::config::escape::TransformStage::Plane;
+        let (device, queue) = device();
+        let mut plain = config("", 1.0);
+        plain.escape.center_re = "0".to_string();
+        plain.escape.center_im = "0".to_string();
+        plain.escape.zoom_log2 = 0.5;
+        let base = render(&device, &queue, &plain);
+
+        let mut identity = plain.clone();
+        identity.escape.transforms = vec![transform(Plane, "linear")];
+        assert_eq!(apart(&base, &render(&device, &queue, &identity)), 0, "a Plane linear at 1 is not the identity");
+
+        let mut mirror = plain.clone();
+        mirror.flame.custom_variations = vec![carried("rhai_mirror_test", "complex(abs(z.re), z.im)")];
+        mirror.escape.transforms = vec![transform(Plane, "rhai_mirror_test")];
+        let m = render(&device, &queue, &mirror);
+        let (w, h) = (W as usize, H as usize);
+        let px = |img: &[u8], x: usize, y: usize| img[(y * w + x) * 4..(y * w + x) * 4 + 4].to_vec();
+        let mut wrong = 0;
+        for y in 0..h {
+            for x in 0..w {
+                // The right half as it was; the left half its mirror.
+                let source = if x >= w / 2 { x } else { w - 1 - x };
+                wrong += usize::from(px(&m, x, y) != px(&base, source, y));
+            }
+        }
+        assert!(differing(&m, &base) > (w * h) / 10, "the mirror changed little");
+        // A mirrored pixel's offset is its partner's negated up to an f32
+        // rounding ((x + 1/2) / w against (w - x - 1/2) / w), so an orbit
+        // on an escape boundary may part: a few pixels, no more.
+        println!("  the mirror: {wrong}/{} pixels not the mirrored right half", w * h);
+        assert!(wrong * 200 <= w * h, "{wrong} pixels are not the mirrored right half");
+
+        // The lens and a Plane linear together: the lens's picture.
+        let mut lensed = config("eyefish", 1.0);
+        let only_lens = render(&device, &queue, &lensed);
+        lensed.escape.transforms = vec![transform(Plane, "linear")];
+        assert_eq!(apart(&only_lens, &render(&device, &queue, &lensed)), 0, "a Plane linear moved the lens's picture");
+    }
+
+    /// **The Orbit transformations** (C4's gate): a trap colouring at a
+    /// point draws what the same colouring at the origin draws when every
+    /// orbit value is moved by minus the point first -- UF's trap
+    /// position; and an Orbit transformation keeps deep zoom, where a
+    /// Plane one does not.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn an_orbit_transformation_moves_what_the_colouring_reads() {
+        use crate::config::escape::{CustomDialect, CustomSource, TransformStage::Orbit};
+        let (device, queue) = device();
+        let trap = |point: (f64, f64)| {
+            let src = format!(
+                "const PARAMS = #{{ point: complex({:.3}, {:.3}) }};\nconst INFO = #{{ title: \"Trap Test\" }};\n\
+                 fn start(z, p) {{ #{{ closest: 1e10 }} }}\n\
+                 fn step(s, z, p) {{\n    let d = (z - p.point).abs();\n    if d < s.closest {{\n        s.closest = d;\n    }}\n    s\n}}\n\
+                 fn finish(s, z, p) {{ s.closest.sqrt() * 2.0 }}\n",
+                point.0, point.1
+            );
+            CustomSource { dialect: CustomDialect::Rhai, entry: "Trap Test".into(), source: src, variations: Vec::new() }
+        };
+        let with = |src: CustomSource| {
+            let mut c = config("", 1.0);
+            c.escape.coloring = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &src);
+            c.escape.custom_coloring = Some(src);
+            c
+        };
+        let at_point = render(&device, &queue, &with(trap((0.3, -0.2))));
+        let mut moved = with(trap((0.0, 0.0)));
+        moved.flame.custom_variations = vec![carried("rhai_shift_test", "z - complex(0.3, -0.2)")];
+        moved.escape.transforms = vec![transform(Orbit, "rhai_shift_test")];
+        let got = render(&device, &queue, &moved);
+        let n = (W * H) as usize;
+        let d = apart(&at_point, &got);
+        println!("  the trap at (0.3, -0.2) against the orbit moved: {d}/{n} pixels apart");
+        assert!(differing(&at_point, &render(&device, &queue, &with(trap((0.0, 0.0))))) > n / 10, "moving the trap changed little");
+        assert!(d * 200 <= n, "{d}/{n} pixels apart");
+
+        // Deep zoom: Orbit keeps the perturbation tier; Plane drops it.
+        let mut e = crate::config::escape::EscapeConfig::default();
+        assert!(crate::escape::EscapeRenderer::perturb_tier(&e).is_some());
+        e.transforms = vec![transform(Orbit, "linear")];
+        assert!(crate::escape::EscapeRenderer::perturb_tier(&e).is_some(), "an Orbit transformation dropped deep zoom");
+        e.transforms = vec![transform(crate::config::escape::TransformStage::Plane, "linear")];
+        assert!(crate::escape::EscapeRenderer::perturb_tier(&e).is_none(), "a Plane transformation kept deep zoom");
+        e.transforms[0].amount = 0.0;
+        assert!(crate::escape::EscapeRenderer::perturb_tier(&e).is_some(), "a Plane transformation at 0 dropped deep zoom");
+    }
+
+    /// **The Iteration transformations** (C4's gate): the Mandelbrot with
+    /// `z` halved after every step renders as a Rhai formula whose step
+    /// halves it; and a program formula's iterate is transformed too.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn an_iteration_transformation_follows_the_step() {
+        use crate::config::escape::{CustomDialect, CustomSource, TransformStage::Iteration};
+        let (device, queue) = device();
+        let halved = |mut c: FractalConfig| {
+            c.flame.custom_variations = vec![carried("rhai_half_test", "z * 0.5")];
+            c.escape.transforms = vec![transform(Iteration, "rhai_half_test")];
+            c
+        };
+        let rhai = |step: &str| {
+            let src = format!(
+                "const PARAMS = #{{ bailout: 4.0 }};\nconst INFO = #{{ title: \"Halved\" }};\n\
+                 fn start(pixel, p) {{ #{{ z: complex(0.0, 0.0), c: pixel }} }}\n\
+                 fn step(s, p) {{\n    s.z = {step};\n    s\n}}\n\
+                 fn escaped(s, p) {{ s.z.norm_sqr() > p.bailout }}\n"
+            );
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: "Halved".into(), source: src, variations: Vec::new() };
+            let mut c = config("", 1.0);
+            c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            c.escape.custom_formula = Some(src);
+            c
+        };
+        let mut plain = config("", 1.0);
+        plain.escape.zoom_log2 = -1.0;
+        let mut written = rhai("(s.z * s.z + s.c) * 0.5");
+        written.escape.zoom_log2 = -1.0;
+        let want = render(&device, &queue, &written);
+        let n = (W * H) as usize;
+        let builtin = render(&device, &queue, &halved(plain.clone()));
+        let d = apart(&want, &builtin);
+        println!("  the Mandelbrot halved each step against the step written out: {d}/{n} pixels apart");
+        assert!(differing(&builtin, &render(&device, &queue, &plain)) > n / 10, "halving changed little");
+        assert!(d * 200 <= n, "built-in: {d}/{n} pixels apart");
+        // A program formula, its state's iterate halved.
+        let mut program = rhai("s.z * s.z + s.c");
+        program.escape.zoom_log2 = -1.0;
+        let d = apart(&want, &render(&device, &queue, &halved(program)));
+        println!("  the Rhai Mandelbrot halved each step: {d}/{n} pixels apart");
+        assert!(d * 200 <= n, "program: {d}/{n} pixels apart");
+    }
+
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn a_lens_parameter_reaches_the_picture() {

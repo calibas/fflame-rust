@@ -2322,6 +2322,20 @@ impl ConfigManager {
                 .or_else(|| Self::escape_param_default(config, EscapeParamOf::Lens, param))
                 .unwrap_or(0.0)
                 .into()),
+            ConfigPath::EscapeTransforms => Ok(ConfigValue::String(serde_json::to_string(&config.escape.transforms).unwrap_or_default())),
+            ConfigPath::EscapeTransformAmount { index } => {
+                Ok(config.escape.transforms.get(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.amount.into())
+            }
+            ConfigPath::EscapeTransformParam { index, param } => {
+                let t = config.escape.transforms.get(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?;
+                // An absent parameter reads as its variation's default.
+                let default = || {
+                    crate::variations::global_registry()
+                        .get(&t.variation)
+                        .and_then(|v| v.parameters.iter().find(|p| p.name == *param).map(|p| p.default_value))
+                };
+                Ok(t.params.get(param).copied().or_else(default).unwrap_or(0.0).into())
+            }
 
             // Transforms
             ConfigPath::TransformCount => {
@@ -4092,6 +4106,20 @@ impl ConfigManager {
             ConfigPath::EscapeLensParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.lens_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeTransforms => {
+                let s: String = value.try_into()?;
+                self.current.escape.transforms =
+                    if s.is_empty() { Vec::new() } else { serde_json::from_str(&s).map_err(|_| ConfigError::TypeMismatch)? };
+            }
+            ConfigPath::EscapeTransformAmount { index } => {
+                let v: f32 = value.try_into()?;
+                let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
+                self.current.escape.transforms.get_mut(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.amount = v.clamp(-lim, lim);
+            }
+            ConfigPath::EscapeTransformParam { index, param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.transforms.get_mut(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.params.insert(param.clone(), v);
             }
 
             // Transforms

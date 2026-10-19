@@ -1203,6 +1203,12 @@ pub fn render_escape_content(
 
     // ---- Coloring ----
     show_coloring_section(ui, config_manager, &esc, field, ifs_def);
+
+    // ---- Transformations (the KIFS plan, C4): mode A's formulas ----
+    if field.is_none() && ifs_def.is_none() {
+        ui.separator();
+        super::escape_transforms::show_transforms_section(ui, config_manager);
+    }
 }
 
 /// A starting `scale` for a coloring, from the iteration cap.
@@ -2067,8 +2073,12 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
                     });
                 });
             if let Some(name) = pick {
-                let _ = config_manager
-                    .update_batch(lens_choice(&name), "history.param.escape_lens".to_string());
+                let mut changes = lens_choice(&name);
+                // A variation of the user's: the flame carries its source.
+                if let Some(carry) = crate::variations::custom::carry_change(config_manager.active_config(), [name.as_str()]) {
+                    changes.push(carry);
+                }
+                let _ = config_manager.update_batch(changes, "history.param.escape_lens".to_string());
             }
 
             if current.is_empty() {
@@ -2929,6 +2939,38 @@ mod tests {
         assert!(crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Program));
         let _ = manager.undo();
         assert_eq!(manager.config().escape.formula, "burning_ship", "one undo step");
+    }
+
+    /// The Transformations section (the KIFS plan, C4) lays out with one
+    /// of each stage -- a variation with parameters, one without, one the
+    /// registry does not know -- and its paths edit the config: the list
+    /// as one undo step, an amount and a parameter by index.
+    #[test]
+    fn the_transformations_lay_out_and_edit() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let t = |stage, variation: &str| EscapeTransform { stage, variation: variation.into(), amount: 0.5, params: Default::default() };
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.transforms = vec![t(TransformStage::Plane, "julian"), t(TransformStage::Orbit, "spherical"), t(TransformStage::Iteration, "no_such_variation")];
+        let _ = lay_out(config.clone());
+
+        let mut manager = ConfigManager::new(crate::config::FractalConfig::default());
+        let list = serde_json::to_string(&config.escape.transforms).unwrap();
+        manager.update_batch(vec![(ConfigPath::EscapeTransforms, ConfigValue::String(list))], "add".into()).unwrap();
+        assert_eq!(manager.config().escape.transforms.len(), 3);
+        manager.update_param(ConfigPath::EscapeTransformAmount { index: 1 }, 0.25f32.into()).unwrap();
+        manager.update_param(ConfigPath::EscapeTransformParam { index: 0, param: "power".into() }, 5.0f32.into()).unwrap();
+        let esc = &manager.config().escape;
+        assert_eq!(esc.transforms[1].amount, 0.25);
+        assert_eq!(esc.transforms[0].params.get("power"), Some(&5.0));
+        // An unset parameter reads as its variation's default.
+        let dist = manager.get_value(&ConfigPath::EscapeTransformParam { index: 0, param: "dist".into() }).unwrap();
+        assert_eq!(dist, ConfigValue::Float(1.0));
+        assert!(manager.update_param(ConfigPath::EscapeTransformAmount { index: 7 }, 1.0f32.into()).is_err(), "no transformation 7");
+        let _ = manager.undo();
+        let _ = manager.undo();
+        let _ = manager.undo();
+        assert!(manager.config().escape.transforms.is_empty(), "the list was one undo step");
     }
 
     #[test]

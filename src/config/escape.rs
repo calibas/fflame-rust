@@ -167,6 +167,15 @@ pub struct EscapeConfig {
     #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
     pub lens_amount: f32,
 
+    /// Transformations (the KIFS plan, C4): variations applied to the
+    /// sample point in the fractal's coordinates (`Plane`, UF's
+    /// transformations), to each orbit value the colouring accumulates
+    /// (`Orbit`, UF's trap position), or to `z` after every step
+    /// (`Iteration`), in order within each stage. They share the lens's
+    /// maps flame (`escape::lens`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transforms: Vec<EscapeTransform>,
+
 
     /// Where a solid render looks: the point the camera orbits and
     /// approaches, as exact decimal strings.
@@ -1808,6 +1817,47 @@ pub const LENS_AMOUNT_LIMIT: f32 = 5.0;
 /// A lens at full strength. One rather than zero so that choosing a
 /// lens shows it: a default of nothing would look like a broken
 /// picker.
+/// Where an escape-time transformation acts (the KIFS plan, C4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransformStage {
+    /// The sample point, in the fractal's coordinates, before the
+    /// formula: the picture warped as the fractal is, zoom with it.
+    #[default]
+    Plane,
+    /// Each orbit value the colouring accumulates (trap and average
+    /// colourings), not the final `z` an escape count reads.
+    Orbit,
+    /// `z` after every step of the formula: a change to the fractal.
+    Iteration,
+}
+
+impl TransformStage {
+    pub const ALL: [TransformStage; 3] = [TransformStage::Plane, TransformStage::Orbit, TransformStage::Iteration];
+}
+
+/// One escape-time transformation: a variation at a stage, its amount
+/// (0 the identity, 1 the variation, as the lens's) and its parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EscapeTransform {
+    #[serde(default)]
+    pub stage: TransformStage,
+    pub variation: String,
+    #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
+    pub amount: f32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+}
+
+impl EscapeConfig {
+    /// Whether a transformation moves an absolute coordinate -- the
+    /// sample point or the iterate -- which the perturbation path cannot
+    /// follow (C4).
+    pub fn transforms_absolute(&self) -> bool {
+        self.transforms.iter().any(|t| t.stage != TransformStage::Orbit && t.amount != 0.0)
+    }
+}
+
 fn default_lens_amount() -> f32 {
     1.0
 }
@@ -2627,6 +2677,7 @@ impl Default for EscapeConfig {
             lens: String::new(),
             lens_params: BTreeMap::new(),
             lens_amount: default_lens_amount(),
+            transforms: Vec::new(),
             supersample: 1,
             downsample: DownsampleMode::Box,
             reference_period: None,

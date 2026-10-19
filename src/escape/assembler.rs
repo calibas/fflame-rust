@@ -1301,6 +1301,18 @@ fn program_step(z_before: bool, derivative: bool) -> Vec<String> {
     out
 }
 
+/// The colouring's accumulation of one orbit value: `z` (the path's
+/// name for it) and `z_before`, through the Orbit transformations when
+/// there are any (C4) -- what a trap colouring measures is moved, as
+/// UF's trap position moves it.
+fn accum_call(z: &str, c: &str, maps: Option<&str>) -> String {
+    if crate::escape::lens::has_stage(maps, "esc_orbit") {
+        format!("        accum_state = coloring_accum(esc_orbit({z}), esc_orbit(z_before), {c}, accum_state);")
+    } else {
+        format!("        accum_state = coloring_accum({z}, z_before, {c}, accum_state);")
+    }
+}
+
 fn program_escape_test() -> String {
     "        if (!formula_bailout(fs, pixel)) {\n\
      \x20           escaped = true;\n\
@@ -6025,18 +6037,12 @@ pub fn assemble_perturbed_full(
             }
             "//__ACCUM_UPDATE__" => {
                 if needs_accum && !late {
-                    out.push(
-                        "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
-                            .to_string(),
-                    );
+                    out.push(accum_call("z_full", "c_f32", lens));
                 }
             }
             "//__ACCUM_UPDATE_LATE__" => {
                 if needs_accum && late {
-                    out.push(
-                        "        accum_state = coloring_accum(z_full, z_before, c_f32, accum_state);"
-                            .to_string(),
-                    );
+                    out.push(accum_call("z_full", "c_f32", lens));
                 }
             }
             _ => out.push(line.to_string()),
@@ -8630,7 +8636,7 @@ fn lens_prelude(out: &mut Vec<String>, lens: Option<&str>) {
 /// `d` is a y-flipped WORLD offset. Half of the vertical span takes it
 /// to the half-height-one convention the lens is written in, and back.
 fn lens_apply_span(out: &mut Vec<String>, lens: Option<&str>) {
-    if lens.is_some() {
+    if crate::escape::lens::has_stage(lens, "esc_lens") {
         out.push("    let lens_h = max(abs(params.span.y) * 0.5, 1e-30);".to_string());
         out.push("    d = esc_lens(d / lens_h) * lens_h;".to_string());
     }
@@ -8641,7 +8647,7 @@ fn lens_apply_span(out: &mut Vec<String>, lens: Option<&str>) {
 /// Half the height is the same half-height-one scale, reached without
 /// a span.
 fn lens_apply_pixels(out: &mut Vec<String>, lens: Option<&str>) {
-    if lens.is_some() {
+    if crate::escape::lens::has_stage(lens, "esc_lens") {
         out.push("    let lens_h = max(f32(params.height) * 0.5, 1e-30);".to_string());
         out.push("    dpx = esc_lens(dpx / lens_h) * lens_h;".to_string());
     }
@@ -8652,7 +8658,7 @@ fn lens_apply_pixels(out: &mut Vec<String>, lens: Option<&str>) {
 /// put in and taken back out by hand -- otherwise a lens circle would
 /// come out an ellipse on a non-square image.
 fn lens_apply_uv(out: &mut Vec<String>, lens: Option<&str>, var: &str) {
-    if lens.is_some() {
+    if crate::escape::lens::has_stage(lens, "esc_lens") {
         out.push(
             "    let lens_a = f32(params.width) / f32(max(params.height, 1u));".to_string(),
         );
@@ -8853,13 +8859,19 @@ pub fn assemble_layered(
             }
             "//__ACCUM_UPDATE__" => {
                 if needs_accum && !late {
-                    out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
+                    out.push(accum_call("z", "c", lens));
                 }
             }
             "//__ACCUM_UPDATE_LATE__" => {
                 if needs_accum && late {
-                    out.push("        accum_state = coloring_accum(z, z_before, c, accum_state);".to_string());
+                    out.push(accum_call("z", "c", lens));
                 }
+            }
+            // The Plane transformations (C4): the sample point mapped as
+            // every orbit starts, so the relief's neighbours are too.
+            "fn esc_run(pixel: vec2<f32>) -> EscRun {" if crate::escape::lens::has_stage(lens, "esc_plane") => {
+                out.push("fn esc_run(pixel_in: vec2<f32>) -> EscRun {".to_string());
+                out.push("    let pixel = esc_plane(pixel_in);".to_string());
             }
             "//__CONVERGE_TEST__" => {
                 if convergent {
@@ -8983,9 +8995,20 @@ pub fn assemble_layered(
                     out.push(format!("    var z_prev = {init};"));
                 }
             }
-            "//__STEP__" if program => out.extend(program_step(convergent || needs_accum, needs_derivative)),
+            "//__STEP__" if program => {
+                out.extend(program_step(convergent || needs_accum, needs_derivative));
+                // The Iteration transformations (C4), on the state the
+                // program carries.
+                if crate::escape::lens::has_stage(lens, "esc_iter") {
+                    out.push("        fs.z = esc_iter(fs.z);".to_string());
+                    out.push("        z = fs.z;".to_string());
+                }
+            }
             "//__STEP__" => {
                 out.extend(step_lines(formula, damped, convergent || needs_accum, needs_derivative));
+                if crate::escape::lens::has_stage(lens, "esc_iter") {
+                    out.push("        z = esc_iter(z);".to_string());
+                }
             }
             _ => out.push(
                 line.replace("PARAM_PLANE_SEED", param_seed)
