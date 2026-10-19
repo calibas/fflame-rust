@@ -23,10 +23,10 @@ struct ShadeLight {
 }
 
 /// `shaders/shade.wgsl` with the coat's albedo fit spliced in at
-/// `//__COAT_ENERGY__` (`escape::path_core::coat_energy_wgsl`, the path
+/// `//__COAT_ENERGY__` (`renderer::coat::coat_energy_wgsl`, the path
 /// tracer's and the rig's own text).
 fn shade_wgsl() -> String {
-    include_str!("../../shaders/shade.wgsl").replace("//__COAT_ENERGY__", &crate::escape::path_core::coat_energy_wgsl("coat_"))
+    include_str!("../../shaders/shade.wgsl").replace("//__COAT_ENERGY__", &crate::renderer::coat::coat_energy_wgsl("coat_"))
 }
 
 /// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 4 camera

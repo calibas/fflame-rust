@@ -8525,7 +8525,7 @@ fn ifs_rig(lens: Option<&str>, placed: bool) -> String {
         .trim()
         .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
         .replace("//__IFS_LIGHT_AT__", light_at(placed))
-        .replace("//__COAT_ENERGY__", &super::path_core::coat_energy_wgsl("ifs_coat_"))
+        .replace("//__COAT_ENERGY__", &crate::renderer::coat::coat_energy_wgsl("ifs_coat_"))
 }
 
 /// The rig's `ifs_light_at`: with points and headlamps, or directional.
@@ -8551,7 +8551,7 @@ pub(crate) fn ifs_rig_jittered(placed: bool) -> String {
             "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",
         )
         .replace("//__IFS_LIGHT_AT__", light_at(placed))
-        .replace("//__COAT_ENERGY__", &super::path_core::coat_energy_wgsl("ifs_coat_"))
+        .replace("//__COAT_ENERGY__", &crate::renderer::coat::coat_energy_wgsl("ifs_coat_"))
 }
 
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
