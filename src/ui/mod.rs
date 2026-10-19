@@ -19,7 +19,7 @@ pub mod render_mode;
 pub mod visibility;
 mod palette_editor;
 pub mod render_progress;
-mod rhai_highlight;
+mod code_highlight;
 mod palette_library;
 mod panel_viewer;
 /// Shared viewport pan entry (drag semantics; routes to escape-mode

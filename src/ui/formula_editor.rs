@@ -700,13 +700,25 @@ impl FormulaEditorPanel {
         // the panel scroll to the editor's cursor, and carry the entries
         // and the file controls out of view.
         let mut changed = false;
+        // Highlighted in its language, as the Scripts panel highlights Rhai.
+        let lang = match self.dialect {
+            CustomDialect::Rhai => super::code_highlight::Lang::Rhai,
+            _ => super::code_highlight::Lang::Formula,
+        };
+        let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+        let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+            let mut job = super::code_highlight::highlight_lang(buf.as_str(), font_id.clone(), lang);
+            job.wrap.max_width = wrap_width;
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
         egui::ScrollArea::vertical().id_salt("formula_editor_scroll").max_height(360.0).show(ui, |ui| {
             let editor = ui.add(
                 egui::TextEdit::multiline(&mut self.text)
                     .id_salt("formula_editor_source")
                     .code_editor()
                     .desired_rows(16)
-                    .desired_width(f32::INFINITY),
+                    .desired_width(f32::INFINITY)
+                    .layouter(&mut layouter),
             );
             super::vkb_sync_opts(ui, &editor, &self.text, "multiline");
             changed = editor.changed();
