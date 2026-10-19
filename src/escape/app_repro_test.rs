@@ -11487,6 +11487,115 @@ fn main() {
         escape.destroy();
     }
 
+    /// The lens and the transformations move the points iterated, so an
+    /// edit of either re-iterates: with one renderer kept across the
+    /// edits, as the app keeps it, each step's picture is a fresh
+    /// render's and differs from the step before. Keyed without them, the
+    /// recolour cache answered every such edit with the old records
+    /// recoloured, and the view changed only when something else did.
+    /// The same config again still recolours.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn editing_the_maps_reiterates() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("maps") });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("maps tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+        };
+        let transform = |stage, variation: &str, amount: f32| EscapeTransform {
+            stage,
+            variation: variation.to_string(),
+            amount,
+            params: Default::default(),
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 200;
+        esc.coloring = "smooth".to_string();
+        let mut steps: Vec<(&str, crate::config::escape::EscapeConfig)> = Vec::new();
+        esc.lens = "eyefish".to_string();
+        esc.lens_amount = 1.0;
+        steps.push(("pick a lens", esc.clone()));
+        esc.lens_amount = 0.5;
+        steps.push(("the lens's amount", esc.clone()));
+        esc.transforms.push(transform(TransformStage::Plane, "sinusoidal", 1.0));
+        steps.push(("add a Plane transformation", esc.clone()));
+        esc.transforms[0].amount = 0.5;
+        steps.push(("its amount", esc.clone()));
+        esc.transforms[0] = transform(TransformStage::Plane, "curl", 0.5);
+        steps.push(("another variation", esc.clone()));
+        esc.transforms[0].params.insert("c1".to_string(), 0.4);
+        steps.push(("a parameter", esc.clone()));
+        esc.transforms[0].stage = TransformStage::Iteration;
+        steps.push(("another stage", esc.clone()));
+        // Order matters within a stage; each stage applies its own.
+        esc.transforms.push(transform(TransformStage::Iteration, "sinusoidal", 0.5));
+        steps.push(("a second", esc.clone()));
+        esc.transforms.swap(0, 1);
+        steps.push(("their order", esc.clone()));
+        esc.transforms.clear();
+        steps.push(("remove them", esc.clone()));
+        // Orbit, under a colouring that reads the orbit.
+        esc.coloring = "orbit_trap".to_string();
+        steps.push(("a trap colouring", esc.clone()));
+        esc.transforms.push(transform(TransformStage::Orbit, "swirl", 1.0));
+        steps.push(("add an Orbit transformation", esc.clone()));
+        esc.transforms[0].amount = 0.5;
+        steps.push(("its amount", esc.clone()));
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_direct = true;
+        let mut plain = steps[0].1.clone();
+        plain.lens.clear();
+        let mut before = settle(&mut escape, &plain);
+        for (what, esc) in &steps {
+            let cached = settle(&mut escape, esc);
+            assert_ne!(escape.last_path, "recolor", "{what}: recoloured the old records");
+            assert!(cached != before, "{what}: the picture did not change");
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            fresh.force_direct = true;
+            assert!(cached == settle(&mut fresh, esc), "{what}: differs from a fresh render");
+            fresh.destroy();
+            before = cached;
+        }
+        let again = settle(&mut escape, &steps.last().unwrap().1);
+        assert_eq!(escape.last_path, "recolor", "the same config again re-iterated");
+        assert!(again == before, "the same config again changed the picture");
+        escape.destroy();
+    }
+
     /// Equalize spends the palette evenly over the frame: with a grey
     /// ramp and one turn, every tenth of the palette covers about a tenth
     /// of the drawn pixels, where Auto range leaves the smooth count

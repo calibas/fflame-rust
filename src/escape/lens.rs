@@ -402,6 +402,25 @@ pub fn lens_key(escape: &EscapeConfig, registry: &VariationRegistry) -> String {
     key
 }
 
+/// Everything the maps put into a picture: [`lens_key`] and the amounts
+/// it leaves to the buffer. What caches an iteration's output keys on
+/// -- the recolour records, a pass banded over frames -- since a map
+/// moves the points iterated: keyed without it, an edit of the lens or
+/// a transformation was answered with the old records recoloured.
+pub fn maps_identity(escape: &EscapeConfig, registry: &VariationRegistry) -> String {
+    let mut key = lens_key(escape, registry);
+    if key.is_empty() {
+        return key;
+    }
+    if lens_on(escape, registry) {
+        key.push_str(&format!("|a{}", escape.lens_amount));
+    }
+    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+        key.push_str(&format!("|a{}", t.amount));
+    }
+    key
+}
+
 /// The maps' glue (C4): `esc_lens` for the lens's slot, and for each
 /// stage with maps a function applying them in order, each blended
 /// toward the identity by its transform's weight.
