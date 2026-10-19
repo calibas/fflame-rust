@@ -21,6 +21,8 @@ which rewrites the references in code comments too).
 | [uf-transforms-review.md](uf-transforms-review.md) | Reviewed 2026-10-18: Ultra Fractal's 192 transformation classes against our variations -- what is covered, what is missing and worth writing as Rhai variations, what UF has that a variation cannot. |
 | [rhai-plugins.md](rhai-plugins.md) | The direction (2026-10-18): every plug-in a Rhai script -- variations, formulas, simulation rules, colourings -- carried in the `.fflame` and downloadable, parameters animatable; scripts as animation tracks. The design rules the scripting work keeps. |
 | [lights-in-the-fractal.md](lights-in-the-fractal.md) | Planned 2026-10-19: point lights and a headlamp for solids and terrains, in both tiers; Ambient in the path tracer (it did nothing there). |
+| [3d-look-and-tools.md](3d-look-and-tools.md) | Planned 2026-10-19: the user's list -- formula syntax highlighting (done), the 3D look and Lit matching Path traced, a Lighting & Material panel, metallic materials, flame variations in solids, fly-mode collisions and speed, path-tracing research. |
+| [path-tracing-research.md](path-tracing-research.md) | Researched 2026-10-19, nothing decided: what is wrong with the path tracer's denoiser and sampling, options ranked for speed and quality, gates, the order proposed. |
 
 ## Paused
 
