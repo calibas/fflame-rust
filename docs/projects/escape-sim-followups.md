@@ -134,6 +134,39 @@ the Menger and the tetrahedron at 64+ samples, and the
 5. **A lower default sample count for solids,** leaning on the
    denoiser.
 
+**Tried 2026-10-19** (`path_quality_against_a_reference`: a preset path
+traced at 320x180, the time a sample takes as a still renders it, and
+the RMSE over the solid's pixels against a 1024-sample reference of the
+tracer as it was, rendered on a seed of its own -- the first measurements
+shared the reference's stream and flattered the baseline). Repeat runs
+move a sample's time about 5%.
+
+| Candidate | Menger: ms a sample, RMSE at 64 | Tetrahedron | Verdict |
+|---|---|---|---|
+| As it was | 155.5, 1.7% (0.9% at 256) | 57.7, 3.5% (1.8% at 256) | |
+| 4. One light by power past the first surface | 147.6, 2.3% | | No: half the samples again for the noise |
+| 2. Bounce rays hit at 0.4 of a pixel | 121.1, 2.0%, bias +0.40% | | No: biased |
+| 2. ... at ten times the tight hit, capped there | 132.4, 1.7% | 46.4, 4.4%, bias +1.34% | No: light leaks past the tetrahedron's thin walls |
+| 3. Over-relaxed (ω 1.5, 1.2) on top | 142.1, 142.7 | | No: slower; the sponge's tunnels fail the overlap often |
+| Each distance's precision from the last distance | 152.6, 1.7% (0.9%) | 58.4, 3.7% (2.2% at 256) | No: no faster, and the tetrahedron moves |
+
+**What the time is:** parallelism. A 1080p row of the Menger costs about
+11 ms, so a 40 ms call is three or four rows -- a few thousand threads,
+too few to fill the card, and each dispatch waits on its slowest pixel.
+Measured at 1920 (`menger_band_costs`): a sample takes 6.5 s in 40 ms
+calls, 6.2 in 100, 5.8 in 160, 4.9 in 250. **Done: candidate 1** --
+`IDLE_FRAME_MS`, the export's 250 ms call, once no input has come for two
+seconds and nothing plays (the app's `last_input_time`); any input goes
+back to 40 ms after the call in flight. No pixel changes. The lever left
+is the integrator's shape: a wavefront path tracer (a pass per bounce,
+the paths' state in a buffer) would fill the card within a short call,
+at the cost of a rewrite of `pt_path` and both geometries' sides.
+
+Found on the way: the lighting work (lights-in-the-fractal) had made a
+directional-only sample a fifth slower -- 130 ms to 158 -- by the
+positional light code's registers; fixed by compiling it in only when a
+light uses it (`4a8671ae`).
+
 **Measuring.** The ignored tests in
 [src/escape/renderer/solid_path.rs](../../src/escape/renderer/solid_path.rs):
 `menger_band_costs` (the lit walk for scale, bands, a sample at each

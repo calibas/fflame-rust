@@ -82,6 +82,15 @@ pub const VIEWPORT_FRAME_MS: f32 = 40.0;
 /// watchdog, long enough that a call's overhead is noise.
 pub const EXPORT_FRAME_MS: f32 = 250.0;
 
+/// The viewport's call once nothing has been touched for a while
+/// (escape-sim-followups, the solid path tracer's speed, 1): the
+/// export's. A call of a few rows leaves most of the GPU idle -- a 1080p
+/// row of the Menger is about 11 ms, and only bands of tens of rows fill
+/// the card -- so a sample took 6.5 s in 40 ms calls, 6.2 in 100, 5.8 in
+/// 160 and 4.9 in 250 (`menger_band_costs` at 1920). The UI redraws about
+/// four times a second meanwhile, which nobody is watching it do.
+pub const IDLE_FRAME_MS: f32 = EXPORT_FRAME_MS;
+
 /// The walk's band, as its model is calibrated: about 300 ms.
 const MODEL_BAND_MS: f32 = 300.0;
 
@@ -395,8 +404,10 @@ impl EscapeRenderer {
     /// section 8): Auto path traces once the walk has settled -- the
     /// caller asks only then -- and shows the path tracer's picture from
     /// [`PATH_SHOW_SAMPLES`]; Path Traced shows it from the first band.
-    /// True while there is more to do.
-    pub fn trace_solid_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, palette_view: &TextureView) -> bool {
+    /// A call has `frame_ms` of GPU time: [`VIEWPORT_FRAME_MS`] while the
+    /// user is at it, [`IDLE_FRAME_MS`] once they are not. True while
+    /// there is more to do.
+    pub fn trace_solid_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, palette_view: &TextureView, frame_ms: f32) -> bool {
         let tier = config.escape.solid_tier;
         if tier == RenderTier::Lit {
             self.show_solid_path(false);
@@ -406,7 +417,7 @@ impl EscapeRenderer {
         // One call on the GPU at a time (`SolidPath::busy`): until the
         // last is done, nothing new, and more to do.
         let busy = self.solid_path.as_ref().is_some_and(|p| p.busy());
-        let more = busy || self.trace_solid(device, queue, config, palette_view, target, VIEWPORT_FRAME_MS);
+        let more = busy || self.trace_solid(device, queue, config, palette_view, target, frame_ms);
         let show = tier == RenderTier::PathTraced || self.solid_path_samples() >= PATH_SHOW_SAMPLES.min(target);
         self.show_solid_path(show);
         more
@@ -500,6 +511,10 @@ impl EscapeRenderer {
         let eye = params.fdata[2];
         let distance = (eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
         let mut settings = path_core::path_settings(config, distance);
+        #[cfg(test)]
+        {
+            settings.seed = settings.seed.wrapping_add(self.path_seed_offset);
+        }
         let per_ray = 2.0 * (eye[3] * 0.5).tan() / h as f32;
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
@@ -1300,7 +1315,7 @@ mod tests {
         let mut longest = 0.0f32;
         while t0.elapsed().as_secs_f32() < 60.0 && r.solid_path_samples() < 2 {
             let t = std::time::Instant::now();
-            r.trace_solid_viewport(&device, &queue, &c, &palette);
+            r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS);
             wait(&device);
             longest = longest.max(t.elapsed().as_secs_f32() * 1000.0);
             frames += 1;
@@ -1418,6 +1433,74 @@ mod tests {
         r.destroy();
     }
 
+    /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
+    /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
+    /// the time a sample takes as a still renders it, and how far
+    /// `PT_SAMPLES` (64) samples are from a reference: the RMSE over the
+    /// pixels the solid covers, and the mean's bias. The reference is read
+    /// from `PT_REF` when that file exists, else rendered at
+    /// `PT_REF_SAMPLES` (1024) by the tracer as it is and written there, so
+    /// a candidate change is measured against the tracer before it.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn path_quality_against_a_reference() {
+        let (device, queue) = device().expect("gpu");
+        let (_pt, palette) = white_palette(&device, &queue);
+        let (w, h) = (320u32, 180u32);
+        let name = std::env::var("PT_PRESET").unwrap_or_else(|_| "Menger Sponge".to_string());
+        let samples: u32 = std::env::var("PT_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+        let mut c = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == name).expect("the preset");
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.escape.path.denoise = false;
+        let picture = |samples: u32, seed: u32| {
+            let mut r = renderer_for(&device, &c, w, h);
+            r.path_seed_offset = seed;
+            // Compiled and warm before the clock starts.
+            r.render_solid_still(&device, &queue, &c, &palette, 1, || { wait(&device); true });
+            r.reset_solid_path();
+            let t = std::time::Instant::now();
+            r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+            let ms = t.elapsed().as_secs_f64() * 1000.0 / samples as f64;
+            let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            r.destroy();
+            (out, ms)
+        };
+        let path = std::env::var("PT_REF").ok();
+        let reference: Vec<[f32; 4]> = match path.as_ref().and_then(|p| std::fs::read(p).ok()) {
+            Some(bytes) => bytemuck::cast_slice(&bytes).to_vec(),
+            None => {
+                let n: u32 = std::env::var("PT_REF_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
+                // A stream of its own: the samples measured are not in it.
+                let (r, ms) = picture(n, 7919);
+                println!("reference: {n} samples, {ms:.1} ms a sample");
+                if let Some(p) = &path {
+                    std::fs::write(p, bytemuck::cast_slice::<[f32; 4], u8>(&r)).expect("write the reference");
+                }
+                r
+            }
+        };
+        let (out, ms) = picture(samples, 0);
+        let (mut n, mut se, mut sum_o, mut sum_r) = (0usize, 0.0f64, 0.0f64, 0.0f64);
+        for (o, r) in out.iter().zip(&reference) {
+            if r[3] < 0.999 {
+                continue;
+            }
+            n += 1;
+            for k in 0..3 {
+                se += ((o[k] - r[k]) as f64).powi(2);
+                sum_o += o[k] as f64;
+                sum_r += r[k] as f64;
+            }
+        }
+        let rmse = (se / (3 * n.max(1)) as f64).sqrt();
+        let mean_r = sum_r / (3 * n.max(1)) as f64;
+        println!(
+            "{name}, {samples} samples: {ms:.1} ms a sample; RMSE {rmse:.4} ({:.1}% of the mean {mean_r:.4}), bias {:+.2}% over {n} pixels",
+            100.0 * rmse / mean_r.max(1e-12),
+            100.0 * (sum_o - sum_r) / sum_r.max(1e-12)
+        );
+    }
+
     /// Denoise asked for where the guides -- 32 bytes a pixel, bound
     /// whole -- exceed what one storage binding holds: the picture is
     /// path traced undenoised, with no validation error (the test
@@ -1478,7 +1561,7 @@ mod tests {
         c.background_color = [0.55, 0.62, 0.72];
         let mut r = renderer_for(&device, &c, 48, 32);
         let mut guard = 0;
-        while r.trace_solid_viewport(&device, &queue, &c, &palette) && guard < 400 {
+        while r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS) && guard < 400 {
             wait(&device);
             guard += 1;
         }
@@ -1487,11 +1570,11 @@ mod tests {
         let generation = |r: &EscapeRenderer| r.solid_path.as_ref().map(|p| p.generation).unwrap();
         // Nothing changed: it stays finished.
         let g0 = generation(&r);
-        assert!(!r.trace_solid_viewport(&device, &queue, &c, &palette));
+        assert!(!r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS));
         assert_eq!(generation(&r), g0);
         // The exposure: it starts over (and, this small, finishes again).
         c.exposure *= 2.0;
-        r.trace_solid_viewport(&device, &queue, &c, &palette);
+        r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS);
         wait(&device);
         assert_eq!(generation(&r), g0.wrapping_add(1), "started over");
         r.destroy();
@@ -1659,7 +1742,7 @@ mod tests {
         let mut c = cube_config();
         c.escape.path.samples = 64;
         let mut r = renderer_for(&device, &c, 48, 32);
-        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette));
+        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS));
         wait(&device);
         let p = r.solid_path.as_ref().expect("traced");
         assert!(!p.busy(), "done once the GPU is");
@@ -1667,10 +1750,10 @@ mod tests {
         assert!(sent > 0);
         // A call still out: the next frame sends nothing, and has more to do.
         p.clock.lock().unwrap().outstanding = 1;
-        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette));
+        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS));
         assert_eq!(r.solid_path.as_ref().unwrap().dispatched.len(), sent, "sent while a call was out");
         r.solid_path.as_ref().unwrap().clock.lock().unwrap().outstanding = 0;
-        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette));
+        assert!(r.trace_solid_viewport(&device, &queue, &c, &palette, VIEWPORT_FRAME_MS));
         assert!(r.solid_path.as_ref().unwrap().dispatched.len() > sent, "the next once it is in");
         wait(&device);
         r.destroy();

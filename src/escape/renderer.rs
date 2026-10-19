@@ -28,7 +28,7 @@ use super::assembler::{self, LAYER_PARAM_VEC4S, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
 mod solid_path;
-pub use solid_path::{EXPORT_FRAME_MS, VIEWPORT_FRAME_MS};
+pub use solid_path::{EXPORT_FRAME_MS, IDLE_FRAME_MS, VIEWPORT_FRAME_MS};
 
 /// Highest supersampling factor offered: 8x is 64 samples per display
 /// pixel. Whether a given view can actually have it is decided by the
@@ -945,6 +945,10 @@ pub struct EscapeRenderer {
     /// Test-only: with `force_perturbed`, use the floatexp rung.
     #[cfg(test)]
     pub(crate) force_floatexp: bool,
+    /// Test-only: added to the solid path tracer's seed, so a reference
+    /// is a stream of its own, not the samples it is measured against.
+    #[cfg(test)]
+    pub(crate) path_seed_offset: u32,
     /// Completion-time GPU cost, for a device with no timestamp
     /// queries (WebGPU exposes none by default). Written by a
     /// `Queue::on_submitted_work_done` callback, drained by
@@ -1912,6 +1916,8 @@ impl EscapeRenderer {
             force_direct: false,
             #[cfg(test)]
             force_floatexp: false,
+            #[cfg(test)]
+            path_seed_offset: 0,
             #[cfg(test)]
             force_budgeted: false,
             #[cfg(test)]
