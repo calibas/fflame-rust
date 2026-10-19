@@ -148,8 +148,8 @@ Every 3D view reads `FractalConfig::solid_shading`
 (`SolidShadingSettings`):
 - **The rig:** shading strength, ambient, diffuse, specular and shininess
   (the highlight), the occlusion strength (`ssao_strength`), and up to
-  four directional lights (`SolidLight`: azimuth, elevation, intensity,
-  colour).
+  four lights (`SolidLight`: a kind, intensity and colour, and the
+  kind's own settings -- *Kinds of light* below).
 - **The material:** `gloss`, `roughness` and `glow`.
 
 The splat-only settings (solid strength, surface thickness, SSAO radius,
@@ -161,6 +161,65 @@ normal smoothing, gap fill, shadow maps) are the 3D flame's alone.
 - **Terrains:** world-fixed, the 2D relief's light. Azimuth is
   counter-clockwise from east on the plane, elevation is above it
   (`terrain::light_direction`).
+
+### Kinds of light
+
+A `SolidLight` is one of three kinds (`LightKind`;
+[lights-in-the-fractal.md](../projects/lights-in-the-fractal.md)):
+
+| Kind | Where it is | Where it is offered |
+|---|---|---|
+| **Directional** | a direction at infinity: azimuth and elevation, in the spaces above | every 3D view |
+| **Point** | `position` in the world (mode D's coordinates, f64) | mode D's solids |
+| **Headlamp** | the camera's eye, lifted by `lift` camera distances, aimed down the view | solids and both terrains |
+
+A point's and a headlamp's power at distance `d` is
+`intensity / (1 + (d / reach)^2)`: the inverse square far off, finite at
+the light, half at the reach. A point's reach is in world units; a
+headlamp's is in **camera distances** (the eye's distance to its
+target), so the lamp keeps its reach as the camera zooms. A headlamp's
+`cone` is its beam's half-angle (180 lights all round), softened over
+the outer tenth. `visibility::light_kind` answers which view offers
+which kind; a kind a view does not offer is off there, and the panel
+says why. A terrain's world is the view's -- its origin and unit move
+with every pan and zoom -- so a light placed in it would not stay put;
+the 3D flame's splat pass lights in screen space, directional alone
+(`SolidLight::directional_on`).
+
+How it is drawn:
+- **GPU:** a light's first `vec4` holds its direction or its position
+  (in mode D an offset from the target, as every position there is), its
+  second `vec4`'s `w` its kind (0, 1, 2), and `fdata[28 + i]` its reach
+  in the world's units and its cone's cosines. The CPU places the
+  headlamp and turns its reach into world units (`ifs::pack_rig3`,
+  `terrain::pack_rig`; the terrain's `fdata` is 32 slots for it).
+- **The rig's** `ifs_light_at(i, p)` gives a light's direction, distance
+  and gain at a point -- the offset scaled before it is squared, for deep
+  views -- and `ifs_rig` takes the surface's position, which the relight
+  rebuilds as the eye plus the ray times the hit distance.
+- **Shadow rays stop at the light:** the walk's `ifs_shadow`, the
+  terrain walk's trace and both geometries' `pt_scene_visible` take the
+  light's distance as their end. A directional light's end is past
+  everything, so its numbers are as they were.
+- **The walk's key** holds each light's kind, position and lift beside
+  its direction (they decide the shadow rays); reach and cone only scale
+  what reaches, a relight.
+
+**The panel** (`solid_panel::lighting_rig`): each light's Kind;
+Directional, its Azimuth and Elevation; Point, its Position (dragged at
+the camera's scale), **Place at Camera** (the eye's position and a reach
+of the camera's distance -- fly inside, drop a light; a light first made
+a point is placed so), and Reach on a log scale about the camera's
+distance; Headlamp, its Reach, Cone and Lift; every light, Intensity.
+The animation picker offers each light's parameters by its kind.
+
+Gates: a point light far off with a reach past everything is the
+directional light it approaches; inside the sponge's central cavity a
+headlamp's shadows-on picture is its shadows-off one (98.5%; 0 if the
+shadow ray ran past the lamp) and a narrow cone darkens the frame's edge;
+a point-lit cube and a headlamp-lit plane path trace to their lit tiers;
+a headlamp-lit plane is its closed form to 4.1e-6
+(`renderer::solid_path` and `terrain` tests).
 
 **An untouched rig is a default light.** For a flame, an untouched rig
 (shading strength 0) means classic unlit colour. For a solid or a terrain
@@ -236,7 +295,8 @@ The View panel's **Lighting & Material** section
 - Rendering, the sky and the path tracer's settings;
 - a terrain's Shadows, Shadow sharpness and Occlusion reach;
 - the rig (`solid_panel::lighting_rig`): Shading Strength, Ambient,
-  Occlusion Strength, Light 1 to 4 with Azimuth, Elevation and Intensity;
+  Occlusion Strength, Light 1 to 4 with their Kind and its settings
+  (*Kinds of light*) and Intensity;
 - the Material block: Diffuse, Highlight, Highlight size, Gloss,
   Roughness, Glow.
 

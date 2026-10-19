@@ -830,15 +830,15 @@ fn get_view_items(config: &FractalConfig) -> Vec<TargetItem> {
         ]);
     }
     if config.render_mode == RenderMode::ThreeD || solid {
-        items.extend(lighting_items());
+        items.extend(lighting_items(config));
     }
     items
 }
 
 /// The Solid Lighting panel's animatable settings: the shade pass's, and
 /// what a solid's or a terrain's lit tier reads of them.
-fn lighting_items() -> Vec<TargetItem> {
-    vec![
+fn lighting_items(config: &FractalConfig) -> Vec<TargetItem> {
+    let mut items = vec![
         // Lighting (shade pass) — all animatable; lighting params don't
         // even reset accumulation (ShadingOnly).
         TargetItem::new(ConfigPath::ShadingStrength, "Shading Strength"),
@@ -853,13 +853,29 @@ fn lighting_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),
         TargetItem::new(ConfigPath::SsaoRadius, "SSAO Radius"),
         TargetItem::new(ConfigPath::SolidShadowStrength, "Shadow Strength"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "azimuth".to_string() }, "Light 1 Azimuth"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "elevation".to_string() }, "Light 1 Elevation"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "intensity".to_string() }, "Light 1 Intensity"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() }, "Light 2 Azimuth"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "elevation".to_string() }, "Light 2 Elevation"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "intensity".to_string() }, "Light 2 Intensity"),
-    ]
+    ];
+    // Each light by its kind (lights-in-the-fractal, L6): the first two
+    // always, as before, and any other that is on. A directional light's
+    // angles; a point's position and reach; a headlamp's reach, cone and
+    // lift; every light's intensity.
+    use crate::config::LightKind;
+    for (i, l) in config.solid_shading.lights.iter().enumerate() {
+        if i >= 2 && !l.enabled {
+            continue;
+        }
+        let params: &[(&str, &str)] = match l.kind {
+            LightKind::Directional => &[("azimuth", "Azimuth"), ("elevation", "Elevation")],
+            LightKind::Point => &[("x", "X"), ("y", "Y"), ("z", "Z"), ("reach", "Reach")],
+            LightKind::Headlamp => &[("reach", "Reach"), ("cone", "Cone"), ("lift", "Lift")],
+        };
+        for (param, label) in params.iter().chain(&[("intensity", "Intensity")]) {
+            items.push(TargetItem::new(
+                ConfigPath::SolidLightParam { index: i, param: param.to_string() },
+                &format!("Light {} {label}", i + 1),
+            ));
+        }
+    }
+    items
 }
 
 /// Get color parameter items
@@ -1396,6 +1412,29 @@ mod escape_target_tests {
             !pk.iter().any(|s| s.starts_with("Escape.Cam")),
             "the plane offers a camera it does not have: {pk:?}"
         );
+    }
+
+    /// Each light offers what its kind has: a directional light's angles,
+    /// a point's position and reach, a headlamp's reach, cone and lift
+    /// (lights-in-the-fractal, L6).
+    #[test]
+    fn each_light_offers_what_its_kind_has() {
+        use crate::config::LightKind;
+        let mut c = solid_config();
+        c.solid_shading.lights[2].enabled = true;
+        c.solid_shading.lights[2].kind = LightKind::Point;
+        c.solid_shading.lights[3].enabled = true;
+        c.solid_shading.lights[3].kind = LightKind::Headlamp;
+        let k: Vec<String> = super::all_items_for_test(&c).iter().map(|p| p.to_string_key()).collect();
+        for want in [
+            "SolidLight.0.azimuth", "SolidLight.1.intensity",
+            "SolidLight.2.x", "SolidLight.2.y", "SolidLight.2.z", "SolidLight.2.reach", "SolidLight.2.intensity",
+            "SolidLight.3.reach", "SolidLight.3.cone", "SolidLight.3.lift",
+        ] {
+            assert!(k.contains(&want.to_string()), "`{want}` is not offered: {k:?}");
+        }
+        assert!(!k.contains(&"SolidLight.2.azimuth".to_string()), "a point has no direction");
+        assert!(!k.contains(&"SolidLight.3.x".to_string()), "a headlamp's place is the camera's");
     }
 
     /// The lens follows the lens, the way the formula's parameters

@@ -328,6 +328,17 @@ terrains, and Reset sets it to 0.
 
 ---
 
+## The headlamp
+
+A light can ride with the camera (`LightKind::Headlamp`; TERRAIN.md,
+*Kinds of light*): it sits at the eye -- lifted by `lift` camera
+distances along the camera's up, so its shadows show -- and its beam is
+aimed down the view, `cone` degrees each side. Its reach is in camera
+distances, the eye's distance to its target, so it lights the same share
+of the view at any zoom; flying inside a solid, it lights what you look
+at. Offered in mode D and on both terrains. A point light can be dropped
+where the camera is with **Place at Camera** in the light's row.
+
 ## Fly mode
 
 One fly mode for every 3D camera (`camera::fly`):

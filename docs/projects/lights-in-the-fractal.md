@@ -176,10 +176,23 @@ distance -- fly inside, drop a light), Reach. Headlamp: Reach, Cone,
 Lift. All: Intensity, colour. The animation picker offers the new
 parameters.
 
+**Done 2026-10-19.** `visibility::light_kind` answers which view offers
+which kind; one it does not is greyed in the picker and said under the
+light. A light first made a point is placed at the camera. The reach of
+a point is a log slider about the camera's distance (its value shown
+unclamped past either end). The animation picker offers each light by
+its kind -- lights 1 and 2 always, as before, and any other that is on.
+Gates: the View panel lays out with a light of each kind in every view;
+each view offers its kinds; the exporter applies every light parameter
+offered as the app does.
+
 ### L7. Docs
 
 TERRAIN.md (*Lighting and material*), CAMERA.md (the headlamp), the
 animation targets, PR.md.
+
+**Done 2026-10-19:** TERRAIN.md *Kinds of light*, CAMERA.md *The
+headlamp*.
 
 ## Not in this plan
 
