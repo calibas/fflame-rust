@@ -143,7 +143,7 @@ mod tests {
     use super::*;
 
     /// The shaders a texture is made with, as of `TEXTURE_CACHE_VERSION`.
-    const PINNED_ENGINE: &str = "12fea98f09a37596";
+    const PINNED_ENGINE: &str = "4aae063f0dd69648";
 
     /// When this fails, the simulation's shaders or the tone map changed,
     /// and a cached texture may no longer be what its recipe makes. If
