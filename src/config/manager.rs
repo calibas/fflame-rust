@@ -1122,6 +1122,12 @@ impl ConfigManager {
             ConfigPath::SystemFlyInvertY => {
                 self.system_settings.fly_invert_y = new_value.try_into()?;
             }
+            ConfigPath::SystemFlyCollisions => {
+                self.system_settings.fly_collisions = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyProximity => {
+                self.system_settings.fly_proximity = new_value.try_into()?;
+            }
             ConfigPath::SystemFlyCameraMode => {
                 // String transport ("free_look" / "fps") so future
                 // modes (e.g. orbital) don't need a new value type.
@@ -2851,6 +2857,8 @@ impl ConfigManager {
             | ConfigPath::SystemFlySprintMultiplier
             | ConfigPath::SystemFlyInvertY
             | ConfigPath::SystemFlyCameraMode
+            | ConfigPath::SystemFlyCollisions
+            | ConfigPath::SystemFlyProximity
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemPngStripMetadata
@@ -4729,6 +4737,8 @@ impl ConfigManager {
             | ConfigPath::SystemFlySprintMultiplier
             | ConfigPath::SystemFlyInvertY
             | ConfigPath::SystemFlyCameraMode
+            | ConfigPath::SystemFlyCollisions
+            | ConfigPath::SystemFlyProximity
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemPngStripMetadata

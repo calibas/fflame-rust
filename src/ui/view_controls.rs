@@ -587,6 +587,15 @@ fn fly_controls(
             if ui.checkbox(&mut invert_y, t!("view.fly_invert_y").as_ref()).changed() {
                 let _ = config_manager.update_system_setting(ConfigPath::SystemFlyInvertY, invert_y.into());
             }
+            // A solid's surface, measured at the eye (P6).
+            let mut collisions = s.fly_collisions;
+            if ui.checkbox(&mut collisions, t!("view.fly_collisions").as_ref()).on_hover_text(t!("view.tooltip_fly_collisions")).changed() {
+                let _ = config_manager.update_system_setting(ConfigPath::SystemFlyCollisions, collisions.into());
+            }
+            let mut proximity = s.fly_proximity;
+            if ui.checkbox(&mut proximity, t!("view.fly_proximity").as_ref()).on_hover_text(t!("view.tooltip_fly_proximity")).changed() {
+                let _ = config_manager.update_system_setting(ConfigPath::SystemFlyProximity, proximity.into());
+            }
         });
 }
 

@@ -57,6 +57,40 @@ impl App {
         [w.max(1) as f32, h.max(1) as f32]
     }
 
+    /// Measure a solid's clearance at the eye on the GPU, collecting the
+    /// last measure that landed (`EscapeRenderer::probe_clearance`), when
+    /// the camera shown is a solid's and the flight uses it.
+    fn probe_fly_clearance(&mut self) {
+        #[cfg(feature = "engine-escape")]
+        {
+            let s = self.config_manager.system_settings();
+            if !(s.fly_collisions || s.fly_proximity) {
+                return;
+            }
+            let config = self.config_manager.active_config();
+            if crate::camera::gesture::view_kind(config) != crate::camera::gesture::ViewKind::Solid {
+                return;
+            }
+            if let Some(r) = self.escape_renderer.as_mut() {
+                r.poll_clearance(&self.gpu.device);
+                r.probe_clearance(&self.gpu.device, &self.gpu.queue, &config.escape);
+            }
+        }
+    }
+
+    /// The clearance the flight steps within: the last a solid's probe
+    /// measured, or None.
+    fn fly_clearance(&self) -> Option<crate::camera::fly::Clearance> {
+        #[cfg(feature = "engine-escape")]
+        {
+            let config = self.config_manager.active_config();
+            if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid {
+                return self.escape_renderer.as_ref().and_then(|r| r.clearance());
+            }
+        }
+        None
+    }
+
     /// Turn the camera by a fly-mode drag, about its eye
     /// (`camera::fly::look`).
     pub fn apply_fly_mouse_look(&mut self, drag_dx: f32, drag_dy: f32) {
@@ -88,6 +122,9 @@ impl App {
         if !self.fly_mode {
             return;
         }
+        // The surface's distance, measured while the mode is on, so a
+        // flight starts from a fresh one (a solid's; P6).
+        self.probe_fly_clearance();
         if self.fly_keys_held.is_empty() {
             self.fly_last_update = None;
             return;
@@ -117,7 +154,12 @@ impl App {
             world_up: settings.fly_camera_mode == FlyCameraMode::Fps,
         };
         let panel = self.fly_panel();
-        if let Some(edit) = crate::camera::fly::fly(self.config_manager.active_config(), thrust, (speed * dt) as f64, panel) {
+        let limits = crate::camera::fly::FlyLimits {
+            clearance: self.fly_clearance(),
+            collisions: settings.fly_collisions,
+            proximity: settings.fly_proximity,
+        };
+        if let Some(edit) = crate::camera::fly::fly(self.config_manager.active_config(), thrust, (speed * dt) as f64, panel, limits) {
             edit.apply(&mut self.config_manager);
         }
     }

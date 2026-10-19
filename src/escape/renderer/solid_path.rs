@@ -751,7 +751,7 @@ impl EscapeRenderer {
 
     /// Mode D's group 1: the maps, the chain, the geometry cache, the
     /// coarse pass, the transition graph and the reference.
-    fn ifs_bind_group(&self, device: &Device) -> BindGroup {
+    pub(super) fn ifs_bind_group(&self, device: &Device) -> BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Solid Path IFS"),
             layout: &self.ifs_bind_group_layout,
@@ -1642,6 +1642,83 @@ mod tests {
             println!("  {name}: mean with {with:.4}, without {without:.4}; two seeds apart at 16 samples with {noise_with:.4}, without {noise_without:.4}");
             assert!((with / without - 1.0).abs() < 0.03, "{name}: MIS moved the mean {with} from {without}");
             assert!(noise_with < noise_without, "{name}: MIS did not lower the noise");
+        }
+    }
+
+    /// Fly mode's clearance (3d-look-and-tools P6) is the solid's distance
+    /// at the eye: the quaternion Julia set at c = 0 is the unit ball,
+    /// whose estimate from any point outside is 0.5 r ln r exactly (the
+    /// iterates' log ratio does not depend on how many there were). The
+    /// probe reads it at the camera's eye, at two zooms, from the eye it
+    /// reports.
+    #[test]
+    fn the_clearance_probe_reads_the_solid_at_the_eye() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut c = cube_config();
+        c.escape.formula = "quaternion_julia_solid".to_string();
+        for p in ["cx", "cy", "cz", "cw"] {
+            c.escape.formula_params.insert(p.to_string(), 0.0);
+        }
+        for zoom in [0.0f64, 1.0] {
+            c.escape.zoom_log2 = zoom;
+            let mut r = renderer_for(&device, &c, 64, 48);
+            assert!(r.clearance().is_none(), "nothing measured yet");
+            r.probe_clearance(&device, &queue, &c.escape);
+            let mut got = None;
+            for _ in 0..200 {
+                wait(&device);
+                r.poll_clearance(&device);
+                got = r.clearance();
+                if got.is_some() {
+                    break;
+                }
+            }
+            r.destroy();
+            let cl = got.expect("the probe lands");
+            let rr = cl.eye.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let want = 0.5 * rr * rr.ln();
+            println!("  zoom {zoom}: eye at {rr:.4}, clearance {:.6}, 0.5 r ln r {want:.6}", cl.distance);
+            assert!(rr > 1.0, "the eye is outside the ball");
+            assert!((cl.distance / want - 1.0).abs() < 1.0e-3, "{} against {want}", cl.distance);
+        }
+    }
+
+    /// The clearance probe compiles and lands for every shipped solid --
+    /// IFS flames, KIFS, the Mandelbox, the Mandelbulb, the Julia set --
+    /// its layout holding only what each distance function reads: a
+    /// finite distance, positive from a camera outside the solid.
+    #[test]
+    fn the_clearance_probe_lands_for_every_shipped_solid() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let presets: Vec<FractalConfig> = serde_json::from_str::<Vec<serde_json::Value>>(crate::resources::presets::PRESETS_JSON)
+            .expect("the presets parse")
+            .into_iter()
+            .filter_map(|v| FractalConfig::from_json(&v.to_string()).ok())
+            .filter(|c| c.render_mode == RenderMode::Escape && crate::escape::ifs::formula_is_solid(&c.escape.formula))
+            .collect();
+        assert!(presets.len() >= 15, "{} solid presets", presets.len());
+        for c in &presets {
+            let mut r = renderer_for(&device, c, 32, 24);
+            r.probe_clearance(&device, &queue, &c.escape);
+            let mut got = None;
+            for _ in 0..200 {
+                wait(&device);
+                r.poll_clearance(&device);
+                got = r.clearance();
+                if got.is_some() {
+                    break;
+                }
+            }
+            r.destroy();
+            let cl = got.unwrap_or_else(|| panic!("{}: the probe never landed", c.flame.name));
+            println!("  {}: clearance {:.4}", c.flame.name, cl.distance);
+            assert!(cl.distance.is_finite() && cl.distance > 0.0, "{}: {}", c.flame.name, cl.distance);
         }
     }
 

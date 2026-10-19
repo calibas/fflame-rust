@@ -27,6 +27,18 @@
 //! one by `(forward' − forward)·D`; a flight moves it `D` a second at
 //! speed 1, so a flight feels the same at every zoom. A terrain's flight
 //! keeps the eye above the ground -- where an orbit's floor puts it.
+//!
+//! **A solid knows how far its surface is** (3d-look-and-tools P6): the
+//! solid's own distance estimate at the eye, measured on the GPU and read
+//! back without waiting (`EscapeRenderer::clearance`), a [`Clearance`].
+//! With **collisions** a step never takes the eye further than half that
+//! distance from where it was measured -- a sphere-traced step, safe in
+//! every direction, so the eye closes on a wall and stops short of it.
+//! With **proximity speed** a step is a share of that distance rather
+//! than of `D`, and the zoom follows it: `D` eases toward the distance,
+//! the eye held where it is (the target slides along the view), so
+//! flying into the surface is a deep zoom -- as deep as the solid's
+//! precision goes.
 
 use super::gesture::{view_kind, ViewKind};
 use super::quat::Quat;
@@ -330,10 +342,39 @@ fn pivot_moved(config: &FractalConfig, kind: ViewKind, v: [f64; 3], panel: [f32;
     }
 }
 
+/// How far the eye is from a solid's surface: the solid's distance
+/// estimate at `eye` (the world's), measured on the GPU.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clearance {
+    pub eye: [f64; 3],
+    pub distance: f64,
+}
+
+/// What a flight knows of the surface, and what it does with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FlyLimits {
+    /// The last measured clearance; None before one lands, or where
+    /// nothing measures one (the solid alone does).
+    pub clearance: Option<Clearance>,
+    /// Keep each step inside the clearance.
+    pub collisions: bool,
+    /// Size the step by the clearance, and the zoom with it.
+    pub proximity: bool,
+}
+
+/// The share of the clearance the eye may move from where it was measured
+/// before the next measure: half, so a step that lands keeps a margin.
+pub const CLEARANCE_FRACTION: f64 = 0.5;
+
+/// Under proximity speed, how far the zoom moves toward the clearance a
+/// step, in log2: a quarter of the way, so it eases rather than jumps.
+pub const ZOOM_FOLLOW: f64 = 0.25;
+
 /// Fly the 3D camera the viewport shows: `thrust` along its axes, `step`
 /// far -- `fly_move_speed · dt`, in world units for a flame and in
-/// distances to the target for the others.
-pub fn fly(config: &FractalConfig, thrust: Thrust, step: f64, panel: [f32; 2]) -> Option<CameraEdit> {
+/// distances to the target for the others (to the surface, under
+/// proximity speed) -- within `limits`.
+pub fn fly(config: &FractalConfig, thrust: Thrust, step: f64, panel: [f32; 2], limits: FlyLimits) -> Option<CameraEdit> {
     let kind = view_kind(config);
     let (conv, a, _) = flyer(config, kind)?;
     let f = conv.frame(a);
@@ -341,6 +382,15 @@ pub fn fly(config: &FractalConfig, thrust: Thrust, step: f64, panel: [f32; 2]) -
     let v: [f64; 3] = std::array::from_fn(|k| (thrust.right * f.right[k] + thrust.up * up[k] + thrust.forward * f.forward[k]) * step);
     if v == [0.0; 3] || !v.iter().all(|c| c.is_finite()) {
         return None;
+    }
+    #[cfg(not(feature = "engine-escape"))]
+    let _ = limits;
+    #[cfg(feature = "engine-escape")]
+    if kind == ViewKind::Solid && (limits.collisions || limits.proximity) {
+        if let Some(c) = limits.clearance {
+            let changes = solid_flight(config, v, f.forward, c, limits, panel);
+            return (!changes.is_empty()).then(|| CameraEdit::batch(changes, FLY));
+        }
     }
     let changes = match kind {
         ViewKind::Flame3d => vec![
@@ -351,6 +401,53 @@ pub fn fly(config: &FractalConfig, thrust: Thrust, step: f64, panel: [f32; 2]) -
         _ => pivot_moved(config, kind, v, panel, Some(f.forward)),
     };
     (!changes.is_empty()).then(|| CameraEdit::batch(changes, FLY))
+}
+
+/// A solid's flight within a measured clearance (P6): `v` in distances to
+/// the target, as every flight is, made a share of the clearance under
+/// proximity speed, then kept inside it under collisions; and under
+/// proximity the zoom eased toward the clearance, the eye held.
+#[cfg(feature = "engine-escape")]
+fn solid_flight(config: &FractalConfig, v: [f64; 3], forward: [f64; 3], c: Clearance, limits: FlyLimits, panel: [f32; 2]) -> Vec<(ConfigPath, ConfigValue)> {
+    let esc = &config.escape;
+    let registry = crate::variations::global_registry();
+    let Some(ifs3) = crate::escape::ifs::solid_analysis(config, &registry) else {
+        return Vec::new();
+    };
+    drop(registry);
+    let (m, e) = crate::escape::ifs::solid_distance(esc, &ifs3);
+    let d_target = m * (e as f64).exp2();
+    let eye = crate::escape::ifs::solid_camera(esc, &ifs3).eye;
+    let distance = c.distance.max(0.0);
+    // The step in the world's units: of the target's distance, or of the
+    // surface's.
+    let scale = if limits.proximity { distance } else { d_target };
+    let mut w: [f64; 3] = std::array::from_fn(|k| v[k] * scale);
+    if limits.collisions {
+        let gone = (0..3).map(|k| (eye[k] - c.eye[k]).powi(2)).sum::<f64>().sqrt();
+        // What is left, rounding's residue (a millionth of it) none.
+        let room = CLEARANCE_FRACTION * distance - gone;
+        let room = if room > 1.0e-6 * distance { room } else { 0.0 };
+        let len = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if len > room {
+            w = w.map(|x| x * room / len);
+        }
+    }
+    // The zoom toward the clearance, the eye held: the target slides along
+    // the view by what the distance to it changes.
+    let mut shift = 0.0;
+    let mut zoom = None;
+    if limits.proximity && distance > 0.0 && d_target > 0.0 {
+        let d_new = d_target * ((distance / d_target).ln() * ZOOM_FOLLOW).exp();
+        shift = d_new - d_target;
+        zoom = Some(esc.zoom_log2 - (d_new / d_target).log2());
+    }
+    let moved: [f64; 3] = std::array::from_fn(|k| (w[k] + forward[k] * shift) / d_target);
+    let mut out = if moved.iter().any(|x| *x != 0.0) { pivot_moved(config, ViewKind::Solid, moved, panel, Some(forward)) } else { Vec::new() };
+    if let Some(z) = zoom.filter(|z| z.is_finite() && *z != esc.zoom_log2) {
+        out.push((ConfigPath::EscapeZoomLog2, (z as f32).into()));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -370,6 +467,55 @@ mod tests {
 
     fn settings(free_look: bool) -> LookSettings {
         LookSettings { radians_per_pixel: 0.004, invert_y: false, free_look }
+    }
+
+    /// A solid's flight within a measured clearance (P6): with collisions
+    /// the eye never leaves half the clearance from where it was measured
+    /// -- a long step is cut to it, a step from an eye already that far is
+    /// nothing -- and without them it goes as before; with proximity the
+    /// step is a share of the clearance and the zoom eases toward it, the
+    /// eye held. Other cameras ignore a clearance.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn a_solid_flies_within_its_clearance() {
+        use crate::scene::transforms::RenderMode;
+        let mut c = FractalConfig::default();
+        c.render_mode = RenderMode::Escape;
+        c.escape.formula = "quaternion_julia_solid".to_string();
+        c.escape.cam_pitch = 0.3;
+        c.escape.cam_yaw = 0.5;
+        let eye0 = eye_of(&c);
+        let ahead = Thrust { forward: 1.0, ..Default::default() };
+        let moved = |c: &FractalConfig, e: &CameraEdit| dist(eye_of(&applied(c, e)), eye0);
+        let free = fly(&c, ahead, 0.5, PANEL, FlyLimits::default()).expect("a flight");
+        let d_target = moved(&c, &free) / 0.5;
+        // A wall 0.1 target-distances ahead: the eye stops at half of it.
+        let near = Clearance { eye: eye0, distance: 0.1 * d_target };
+        let limits = FlyLimits { clearance: Some(near), collisions: true, proximity: false };
+        let cut = fly(&c, ahead, 0.5, PANEL, limits).expect("a flight");
+        assert!((moved(&c, &cut) - 0.05 * d_target).abs() < 1.0e-6 * d_target, "cut to half the clearance: {}", moved(&c, &cut) / d_target);
+        // From an eye already half the clearance on: nowhere.
+        let far = Clearance { eye: std::array::from_fn(|k| eye0[k] - 0.05 * d_target * frame_of(&c).forward[k]), distance: 0.1 * d_target };
+        assert!(fly(&c, ahead, 0.5, PANEL, FlyLimits { clearance: Some(far), ..limits }).is_none(), "no room left");
+        // A short step inside the room is the step.
+        let short = fly(&c, ahead, 0.01, PANEL, limits).expect("a flight");
+        assert!((moved(&c, &short) - 0.01 * d_target).abs() < 1.0e-6 * d_target);
+        // Proximity: the step a share of the clearance, the zoom eased
+        // toward it, the eye where the step put it.
+        let prox = FlyLimits { clearance: Some(near), collisions: false, proximity: true };
+        let e = fly(&c, ahead, 0.2, PANEL, prox).expect("a flight");
+        let after = applied(&c, &e);
+        assert!((moved(&c, &e) - 0.2 * near.distance).abs() < 1.0e-6 * d_target, "{}", moved(&c, &e) / near.distance);
+        let want_zoom = c.escape.zoom_log2 - ZOOM_FOLLOW * (near.distance / d_target).log2();
+        assert!((after.escape.zoom_log2 - want_zoom).abs() < 1.0e-4, "{} against {want_zoom}", after.escape.zoom_log2);
+        assert!(after.escape.zoom_log2 > c.escape.zoom_log2, "nearer the surface, zoomed in");
+        // A flame ignores a clearance.
+        let mut flame = FractalConfig::default();
+        flame.render_mode = RenderMode::ThreeD;
+        flame.perspective_strength = 0.25;
+        let a = fly(&flame, ahead, 0.1, PANEL, FlyLimits::default()).expect("a flight");
+        let b = fly(&flame, ahead, 0.1, PANEL, limits).expect("a flight");
+        assert_eq!(a.changes, b.changes);
     }
 
     /// The four 3D cameras, each turned off its home pose.
@@ -546,7 +692,7 @@ mod tests {
                 (Thrust { up: 1.0, ..Default::default() }, f.up),
                 (Thrust { up: 1.0, world_up: true, ..Default::default() }, [0.0, 0.0, 1.0]),
             ] {
-                let after = applied(&c, &fly(&c, thrust, 0.1, PANEL).expect("a flight"));
+                let after = applied(&c, &fly(&c, thrust, 0.1, PANEL, FlyLimits::default()).expect("a flight"));
                 let moved: [f64; 3] = std::array::from_fn(|k| eye_of(&after)[k] - eye0[k]);
                 let along = dot(moved, axis);
                 let len = dist(moved, [0.0; 3]);
@@ -565,7 +711,7 @@ mod tests {
         rest.escape.cam_pitch = 0.02;
         let floor = crate::escape::footprint::terrain_camera(&rest.escape).eye[2];
         let down = Thrust { up: -1.0, world_up: true, ..Default::default() };
-        let after = applied(&c, &fly(&c, down, 50.0, PANEL).expect("a flight"));
+        let after = applied(&c, &fly(&c, down, 50.0, PANEL, FlyLimits::default()).expect("a flight"));
         let eye = crate::escape::footprint::terrain_camera(&after.escape).eye[2];
         assert!((eye - floor).abs() < 1e-5, "{eye} vs the floor {floor}");
     }
@@ -580,7 +726,7 @@ mod tests {
         c.escape.cam_target_y = "0.1".to_string();
         c.escape.cam_target_z = "-0.2".to_string();
         c.escape.zoom_log2 = 200.0;
-        let after = applied(&c, &fly(&c, Thrust { forward: 1.0, ..Default::default() }, 1.0, PANEL).expect("a flight"));
+        let after = applied(&c, &fly(&c, Thrust { forward: 1.0, ..Default::default() }, 1.0, PANEL, FlyLimits::default()).expect("a flight"));
         let moved = [&after.escape.cam_target_x, &after.escape.cam_target_y, &after.escape.cam_target_z];
         let before = [&c.escape.cam_target_x, &c.escape.cam_target_y, &c.escape.cam_target_z];
         assert!(moved.iter().zip(before).any(|(a, b)| *a != b), "the target moved: {moved:?}");

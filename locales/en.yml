@@ -597,6 +597,10 @@ view:
   fly_move_speed: "Move speed:"
   fly_sprint_multiplier: "Sprint multiplier:"
   fly_invert_y: "Invert Y axis"
+  fly_collisions: "Stop at surfaces"
+  tooltip_fly_collisions: "A solid: never fly into its surface. The solid's distance from the eye is measured on the GPU as you fly, and each step stays within half of it, so you close on a wall and stop just short."
+  fly_proximity: "Speed by distance"
+  tooltip_fly_proximity: "A solid: fly at a speed set by how far its surface is, not by the zoom, and let the zoom follow -- slowing and zooming in as you near a surface, so you can fly into its detail as deep as the solid's precision goes."
 
   # Depth Effects (collapsible section)
   deep_zoom: "Deep Zoom"
@@ -1243,6 +1247,8 @@ history:
     system_fly_move_speed: "System: Fly Move Speed"
     system_fly_sprint_multiplier: "System: Fly Sprint Multiplier"
     system_fly_invert_y: "System: Fly Invert Y"
+    system_fly_collisions: "System: Fly Stops at Surfaces"
+    system_fly_proximity: "System: Fly Speed by Distance"
     system_fly_camera_mode: "System: Fly Camera Mode"
     system_png_strip_metadata: "System: Strip PNG Metadata"
     system_show_help_on_startup: "System: Show Help on Startup"
