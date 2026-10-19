@@ -9,9 +9,67 @@
 //! escape-calibrated exposure. See `docs/archive/projects/ui-render-modes.md`
 //! section 3.1.
 
-use crate::config::delta::ConfigPath;
-use crate::config::manager::{ConfigError, ConfigManager};
+use crate::config::delta::{ConfigPath, ConfigValue, UpdateType};
+use crate::config::manager::{ConfigError, ConfigManager, EditingTarget};
+use crate::config::FractalConfig;
 use crate::scene::transforms::RenderMode;
+
+/// Whether a config draws a lit 3D surface of the escape or the
+/// simulation engine: a solid formula, or a terrain. A 3D flame is not
+/// one -- its look is the flame's own.
+pub fn surface_3d(config: &FractalConfig) -> bool {
+    match config.render_mode {
+        #[cfg(feature = "engine-escape")]
+        RenderMode::Escape => crate::escape::ifs::formula_is_solid(&config.escape.formula) || config.escape.terrain_active(),
+        #[cfg(feature = "engine-sim")]
+        RenderMode::Simulation => cfg!(feature = "terrain") && config.sim.terrain_active(),
+        _ => false,
+    }
+}
+
+/// The 3D look (docs/projects/3d-look-and-tools.md, P2), for a config
+/// that `after` enters a lit 3D view `before` did not draw: the tone map
+/// Linear at exposure 2 and gamma 1 -- the escape image is linear light
+/// and the tone map encodes sRGB itself, so gamma 1 is the one correct
+/// encode -- saturation 1 and no hue shift, none of which a flame's values
+/// suit; and, when the lighting rig is untouched (a flame's default, no
+/// lighting at all), the rig at full strength with no ambient. Nothing
+/// when it enters no such view, or was in one already.
+pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    use crate::config::defaults::{DEFAULT_HUE_SHIFT, DEFAULT_SATURATION, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
+    if surface_3d(before) || !surface_3d(after) {
+        return Vec::new();
+    }
+    let mut changes = vec![
+        (ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()),
+        (ConfigPath::Exposure, ESCAPE_EXPOSURE.into()),
+        (ConfigPath::Gamma, ESCAPE_GAMMA.into()),
+        (ConfigPath::Saturation, DEFAULT_SATURATION.into()),
+        (ConfigPath::HueShift, DEFAULT_HUE_SHIFT.into()),
+    ];
+    if after.solid_shading.rig_untouched() {
+        changes.push((ConfigPath::ShadingStrength, 1.0f32.into()));
+        changes.push((ConfigPath::SolidAmbient, 0.0f32.into()));
+    }
+    changes
+}
+
+/// `changes` as one undo step, with the 3D look ([`look_3d`]) when they
+/// take the config into a lit 3D view: the formula picker choosing a
+/// solid, a terrain switched on, a Rhai solid put to use.
+pub fn apply_with_look(
+    config_manager: &mut ConfigManager,
+    mut changes: Vec<(ConfigPath, ConfigValue)>,
+    description: &str,
+) -> Result<UpdateType, ConfigError> {
+    let before = config_manager.active_config().clone();
+    let mut after = before.clone();
+    for (path, value) in &changes {
+        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
+    }
+    changes.extend(look_3d(&before, &after));
+    config_manager.update_batch(changes, description.to_string())
+}
 
 /// Change the render mode.
 ///
@@ -57,6 +115,16 @@ pub fn switch_render_mode(
     let config = config_manager.active_config();
     if config.render_mode == mode {
         return Ok(());
+    }
+    // Into a lit 3D view (a solid, a terrain): its look, which includes
+    // the tone map's reset, in the same undo step.
+    let mut after = config.clone();
+    let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, &ConfigPath::RenderMode, mode.into());
+    let look = look_3d(config, &after);
+    if !look.is_empty() {
+        let mut changes = vec![(ConfigPath::RenderMode, mode.into())];
+        changes.extend(look);
+        return config_manager.update_batch(changes, "history.param.render_mode".to_string()).map(|_| ());
     }
     // Escape output has its own calibration; a simulation keeps the flame
     // defaults (`entry_tone_mapping`, shared with the script handles).
@@ -186,6 +254,66 @@ mod tests {
         let mut config = FractalConfig::default();
         config.render_mode = mode;
         ConfigManager::new(config)
+    }
+
+    /// Entering a lit 3D view gives it the 3D look (3d-look-and-tools P2),
+    /// one undo step: by the mode switch with a solid formula, by the
+    /// formula picker, by a terrain switched on. A touched rig is the
+    /// user's and stays; a view already 3D keeps what it has.
+    #[cfg(all(feature = "engine-escape", feature = "terrain"))]
+    #[test]
+    fn entering_a_3d_view_gives_it_the_3d_look() {
+        use crate::config::ConfigValue;
+        let looks_3d = |c: &FractalConfig, rig: bool| {
+            c.tonemap_mode == ToneMapMode::Linear
+                && c.exposure == 2.0
+                && c.gamma == 1.0
+                && c.saturation == 1.0
+                && c.hue_shift == 0.0
+                && (!rig || (c.solid_shading.shading_strength == 1.0 && c.solid_shading.ambient == 0.0))
+        };
+        // From a flame, its saturation a flame's, into Escape on a solid.
+        let mut flame = FractalConfig::default();
+        flame.saturation = 1.8;
+        flame.escape.formula = "mandelbulb_solid".to_string();
+        let mut m = ConfigManager::new(flame);
+        switch_render_mode(&mut m, RenderMode::Escape).expect("switch");
+        assert!(looks_3d(m.active_config(), true), "the mode switch into a solid");
+        m.undo().expect("undo");
+        assert_eq!(m.active_config().render_mode, RenderMode::TwoD);
+        assert_eq!(m.active_config().saturation, 1.8, "one undo step");
+
+        // The formula picker, from a plane.
+        let mut plane = FractalConfig::default();
+        plane.render_mode = RenderMode::Escape;
+        plane.exposure = 3.0;
+        let mut m = ConfigManager::new(plane.clone());
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("kifs_solid".into()))], "history.param.escape_formula").unwrap();
+        assert!(looks_3d(m.active_config(), true), "the picker");
+        // ... and from it to another solid: nothing.
+        let mut c = m.active_config().clone();
+        c.exposure = 3.0;
+        let mut m = ConfigManager::new(c);
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("mandelbox_solid".into()))], "history.param.escape_formula").unwrap();
+        assert_eq!(m.active_config().exposure, 3.0, "a solid to a solid keeps its look");
+
+        // A terrain switched on; a touched rig kept.
+        let mut touched = plane;
+        touched.solid_shading.shading_strength = 0.5;
+        touched.solid_shading.ambient = 0.3;
+        let mut m = ConfigManager::new(touched);
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeTerrainEnabled, true.into())], "history.param.escape_terrain_enabled").unwrap();
+        assert!(looks_3d(m.active_config(), false), "the terrain");
+        assert_eq!((m.active_config().solid_shading.shading_strength, m.active_config().solid_shading.ambient), (0.5, 0.3), "a touched rig stays");
+        // A plane is no 3D view: the picker choosing another plane changes nothing else.
+        let mut m = ConfigManager::new({
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.exposure = 3.0;
+            c
+        });
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("burning_ship".into()))], "history.param.escape_formula").unwrap();
+        assert_eq!(m.active_config().exposure, 3.0);
     }
 
     /// Every ordered pair of modes: the switch lands where it was told.

@@ -1433,6 +1433,52 @@ mod tests {
         r.destroy();
     }
 
+    /// The lit tier's occlusion darkens the ambient alone, not the direct
+    /// light (3d-look-and-tools P2): the path tracer has no counterpart
+    /// for an occluded direct light -- its shadow ray is the direct
+    /// light's only occluder -- and the lit tier's darkened lit crevices
+    /// the path tracer lights. The sponge, full occlusion strength, no
+    /// ambient, no shadows, no bounces: the lit tier's light over the
+    /// pixels both tiers cover is the path tracer's (to its jitter across
+    /// a pixel). With occlusion on the direct light it was 3.5% short.
+    #[test]
+    fn occlusion_leaves_the_direct_light_alone() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (192u32, 128u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.flame = sponge();
+        c.solid_shading.ssao_strength = 1.0;
+        c.solid_shading.lights[0].enabled = true;
+        c.solid_shading.lights[0].azimuth = 30.0;
+        c.solid_shading.lights[0].elevation = 35.0;
+        c.escape.formula_params.insert("shadow".to_string(), 0.0);
+        c.escape.formula_params.insert("shadow_sharpness".to_string(), 1.0e4);
+        c.escape.path.bounces = 0;
+        let lit = lit_picture(&device, &queue, &c, &palette, w, h);
+        c.escape.solid_tier = RenderTier::PathTraced;
+        let mut r = renderer_for(&device, &c, w, h);
+        r.render_solid_still(&device, &queue, &c, &palette, 16, || { wait(&device); true });
+        let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+        r.destroy();
+        let (mut n, mut sum_lit, mut sum_path) = (0usize, 0.0f64, 0.0f64);
+        for (p, q) in lit.iter().zip(&path) {
+            if p[3] < 1.0 || q[3] < 0.999 {
+                continue;
+            }
+            n += 1;
+            sum_lit += (p[0] + p[1] + p[2]) as f64;
+            sum_path += (q[0] + q[1] + q[2]) as f64;
+        }
+        let ratio = sum_lit / sum_path.max(1e-12);
+        println!("  occluded sponge: {n} pixels covered in both, lit over path {ratio:.4}");
+        assert!(n > 2000, "only {n} pixels");
+        assert!((ratio - 1.0).abs() < 0.01, "the lit tier's direct light is {ratio} of the path tracer's");
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far

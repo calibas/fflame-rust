@@ -192,6 +192,13 @@ through `switch_render_mode`. A script sets the mode in the config it
 returns, applying the same tone-map rule (`entry_tone_mapping`), and
 that config loads as a whole.
 
+Entering a lit 3D view (a solid formula, a terrain) from one that is not
+sets **the 3D look** (`look_3d`: Linear, exposure 2, gamma 1, saturation
+1, no hue shift, an untouched rig at strength 1 and ambient 0) in the
+same undo entry. Besides the mode switch, the Escape panel's formula
+picker and terrain switch, the Simulation panel's terrain switch and the
+Formula Editor's Use go through `apply_with_look`.
+
 Also in that module:
 
 - `layout_for(mode)` — the workspace and editor panel a mode wants.

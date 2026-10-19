@@ -7085,7 +7085,12 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
             lit_rgb = lit_rgb + lcol * (coat * ndotl * s);
             diff = 1.0 - fr;
         }
-        lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * diff * ndotl * ao * s);
+        // The direct light's own occluder is its shadow ray; the occlusion
+        // estimate stands in for the sky's and the bounces' light, which
+        // the path tracer occludes and the direct light it does not
+        // (3d-look-and-tools P2: it darkened lit crevices the path
+        // tracer lights).
+        lit_rgb = lit_rgb + albedo * lcol * (ifs_diffuse() * diff * ndotl * s);
         if (ifs_specular() > 0.0) {
             let hh = normalize(ld + v);
             let spec = pow(max(dot(n, hh), 0.0), max(ifs_shininess(), 1.0));

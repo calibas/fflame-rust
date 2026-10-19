@@ -76,6 +76,23 @@ when touched); a v4 file without `shadow` loads with 0.7; Lit against Path
 traced on both solids, before and after; the visual suite's lit solids and
 terrains move only as step 4 says.
 
+**Done 2026-10-19.** `ui::render_mode::look_3d` and `apply_with_look`
+(the mode switch, the formula picker, both terrain switches, the Formula
+Editor's Use; `entering_a_3d_view_gives_it_the_3d_look`). Shadows 0.98
+for the five solid defs (the Rhai template's comes from the Mandelbox's)
+and both terrains, config v5 keeping 0.7 for older files
+(`shadows_saved_before_v5_keep_their_default`). The 19 solid presets carry
+the look (Linear, 2.0, 1.0; strength 1, ambient 0; the def's shadow); on
+the contact sheet the side away from the light is dark, as ambient 0
+means -- a fill light is the user's to add. Step 4: occlusion on the
+ambient only. Lit minus Path traced at the defaults, mean over the
+surface (0-255): the Mandelbulb -23.4 to -17.9 (mean |d| 25.0 to 20.4),
+the Menger -10.0 to -8.8 (11.5 to 10.5). An indirect approximation (the
+albedo times the occluded share times the diffuse) widened the mean
+|d| and was left out; what remains is the path tracer's bounce light, which the
+lit tier does not model. Gate: `occlusion_leaves_the_direct_light_alone`
+(the sponge, no ambient: lit over path 1.0004 now, 0.965 before).
+
 ## P3. A Lighting & Material panel
 
 "Consolidate all Lighting, Material & Shadow settings. Shadow settings
@@ -224,7 +241,7 @@ compensation, the environment, AgX).
 ## Order of work
 
 1. [x] P1 syntax highlighting.
-2. [ ] P2 the 3D look and Lit toward Path traced.
+2. [x] P2 the 3D look and Lit toward Path traced, 2026-10-19.
 3. [ ] P3 the Lighting & Material panel.
 4. [ ] P4 materials (after P7's research).
 5. [ ] P5 flame variations in solids, Orbit colouring.

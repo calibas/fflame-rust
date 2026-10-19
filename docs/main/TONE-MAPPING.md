@@ -408,6 +408,14 @@ A config already on Linear or Density, or moving between the two
 non-flame modes, keeps its values. Under Linear the alpha is
 `coverage · density_scale`.
 
+**Entering a lit 3D view** (a solid, an escape or simulation terrain) from
+a view that draws none sets Linear, exposure 2.0 and gamma 1.0 whatever the
+tone map was, with saturation 1.0 and no hue shift
+(`ui::render_mode::look_3d`). The surface's colour is linear light and the
+tone map encodes sRGB itself, so gamma 1.0 is the one correct encode; a
+flame's saturation (the startup flames use 1.8 and 3.0) oversaturates a
+lit surface.
+
 **The Colors panel** in these modes (`Control` in
 [src/ui/visibility.rs](../../src/ui/visibility.rs)):
 

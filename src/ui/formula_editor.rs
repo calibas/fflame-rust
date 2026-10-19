@@ -345,7 +345,8 @@ impl FormulaEditorPanel {
                 }
             }
         }
-        match cm.update_batch(changes, description.to_string()) {
+        // A solid put to use from a plane: the 3D look with it.
+        match super::render_mode::apply_with_look(cm, changes, description) {
             Ok(_) => {
                 self.in_use.retain(|(k, _, _)| *k != kind);
                 self.in_use.push((kind, self.file.clone(), src.entry.clone()));

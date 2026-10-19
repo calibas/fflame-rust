@@ -1786,7 +1786,7 @@
         }
       ]
     },
-    "gamma": 2.2,
+    "gamma": 1.0,
     "levels_gamma": 0.5,
     "palette": {
       "locked": false,
@@ -1837,7 +1837,7 @@
     "preserve_z": false,
     "render_mode": "escape",
     "solid_shading": {
-      "ambient": 0.2,
+      "ambient": 0.0,
       "diffuse": 0.95,
       "gap_fill": 0,
       "lights": [
@@ -1895,7 +1895,8 @@
       "ssao_strength": 1.0
     },
     "tonemap_mode": "linear",
-    "version": 3
+    "version": 5,
+    "exposure": 2.0
   },
   {
     "escape": {
@@ -2335,7 +2336,7 @@
         }
       ]
     },
-    "gamma": 2.2,
+    "gamma": 1.0,
     "levels_gamma": 0.5,
     "palette": {
       "locked": false,
@@ -2386,7 +2387,7 @@
     "preserve_z": false,
     "render_mode": "escape",
     "solid_shading": {
-      "ambient": 0.2,
+      "ambient": 0.0,
       "diffuse": 0.95,
       "gap_fill": 0,
       "lights": [
@@ -2444,7 +2445,8 @@
       "ssao_strength": 1.0
     },
     "tonemap_mode": "linear",
-    "version": 3
+    "version": 5,
+    "exposure": 2.0
   },
   {
     "escape": {
@@ -2950,7 +2952,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 3
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3031,7 +3039,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3113,7 +3127,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3194,7 +3214,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3276,7 +3302,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3358,7 +3390,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3440,7 +3478,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3521,7 +3565,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3602,7 +3652,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3683,7 +3739,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3760,7 +3822,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3838,7 +3906,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3916,7 +3990,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -3994,7 +4074,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -4069,7 +4155,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -4143,7 +4235,13 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   },
   {
     "escape": {
@@ -4218,6 +4316,12 @@
     "preserve_z": false,
     "render_mode": "escape",
     "tonemap_mode": "linear",
-    "version": 4
+    "version": 5,
+    "exposure": 2.0,
+    "gamma": 1.0,
+    "solid_shading": {
+      "shading_strength": 1.0,
+      "ambient": 0.0
+    }
   }
 ]
