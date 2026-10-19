@@ -476,9 +476,18 @@ fn escaped(s, p) {
     palette index the transform's `direct_color` blends in
     (`WritesColor`).
 
+  A **3D variation** (B2) has `fn variation3(v, p[, ctx])`, its point a
+  vector, ending with a vector or `#{ z: v, color }`; `ctx.accum` is a
+  vector there. It is the 3D body (the 2D one is `fn variation`, or
+  without one the variation is `only_3d`) and keeps its z
+  (`always_z`, as the built-in 3D variations); a 2D-only variation's 3D
+  body passes `p.z` through. The program reads and writes the third
+  part as `Predef::PixelZ` beside `#pixel`.
+
   Examples: `assets/formulas/variation-whorl.rhai`, and
   `variation-scatter.rhai` for `rand()` and a colour; the hooks' twins
-  of `blur` and `macmillan` are in `variations::custom`'s tests.
+  of `blur` and `macmillan`, and the 3D twins of `spherical3D`,
+  `hemisphere` and `zcone`, are in `variations::custom`'s tests.
 - **`rand()`** anywhere else -- a formula, a colouring, a variation
   `vary` inlines there -- draws a stream of the pixel's own, seeded by
   its place on the screen (`uf_draw`; the interpreter draws the same

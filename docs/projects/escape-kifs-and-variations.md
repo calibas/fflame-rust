@@ -304,7 +304,15 @@ marked for review):
   passed through as now; only `variation3` makes the variation
   `only_3d`); `ctx.accum` a vector there, the result `v` or `#{ z: v,
   color }`. Gates: twins of 3D built-ins (`spherical3D`, `linear3D`,
-  `hemisphere`, `zcone`) by density in 3D flames.
+  `hemisphere`, `zcone`) by density in 3D flames. **Done 2026-10-18**:
+  `transformation3` lowers `variation3`, its point a vector local read
+  from `#pixel` and the new `#pixelz`, written back to both; the
+  emitter builds each body from the union of the hooks either needs.
+  *Decision*: a 3D body declares `always_z`, as our 3D built-ins do --
+  it computes its z, so `preserve_z = false` does not zero it. Measured:
+  the twins equal the built-ins' formulas in the interpreter (1e-12); on
+  the GPU, in a pitched 3D flame, by density, worst block |z| 4.0, none
+  past 5.
 - **B3, editable solids.** A solid entry: `fn start(pos, p)` returns
   the state (`z` a vector, `dr` the running derivative), `fn step(s,
   p)` one iteration, `fn escaped(s, p)` the bail, `fn distance(s, p)`

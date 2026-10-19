@@ -131,6 +131,29 @@ pub fn transformation(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Transform)
 }
 
+/// The program a transformation's 3D function compiles to (`fn
+/// variation3(v, p[, ctx])`, the KIFS plan, B2): its point a vector, read
+/// from and written to `#pixel` and `#pixelz`.
+pub fn transformation3(source: &str) -> Result<Program, Vec<Diag>> {
+    let lowered = lower_full(source, EntryKind::Transform, &[], true)?;
+    checked(lowered, EntryKind::Transform)
+}
+
+/// A transformation's 2D program, or its 3D one when it has only that:
+/// what checking it as written means.
+pub fn transformation_any(source: &str) -> Result<Program, Vec<Diag>> {
+    if has_function(source, "variation") || !has_function(source, "variation3") {
+        transformation(source)
+    } else {
+        transformation3(source)
+    }
+}
+
+/// Whether the script defines a function of that name.
+pub fn has_function(source: &str, name: &str) -> bool {
+    parse(source).is_ok_and(|(ast, _)| ast.iter_fn_def().any(|f| f.name == name))
+}
+
 /// The registry name a transformation gives itself (`INFO.name`), when
 /// it gives one.
 pub fn variation_name(source: &str) -> Option<String> {
@@ -231,7 +254,7 @@ fn checked(lowered: Lowered, kind: EntryKind) -> Result<Program, Vec<Diag>> {
 pub fn kind_of(source: &str) -> Option<EntryKind> {
     let (ast, _) = parse(source).ok()?;
     let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
-    if has("variation") {
+    if has("variation") || has("variation3") {
         Some(EntryKind::Transform)
     } else if has("finish") {
         Some(EntryKind::Coloring)
@@ -295,6 +318,11 @@ pub fn lower_as(source: &str, kind: EntryKind) -> Result<Lowered, Vec<Diag>> {
 /// [`lower_as`], with functions besides the source's own to call as
 /// helpers (a script's, `program_from_fn`).
 fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) -> Result<Lowered, Vec<Diag>> {
+    lower_full(source, kind, extra, false)
+}
+
+/// [`lower_with`]; `three` lowers a transformation's 3D function.
+fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], three: bool) -> Result<Lowered, Vec<Diag>> {
     let (ast, pos) = parse(source)?;
     let mut l = Lowerer {
         coloring: kind == EntryKind::Coloring,
@@ -313,6 +341,7 @@ fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) 
         fresh: 0,
         variations: Vec::new(),
         param_vecs: HashSet::new(),
+        three,
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -484,6 +513,8 @@ struct Lowerer<'s> {
     /// The vector parameters (B1), each three float parameters
     /// `name_x`, `name_y`, `name_z`.
     param_vecs: HashSet<String>,
+    /// Lowering a transformation's 3D function, `variation3` (B2).
+    three: bool,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -703,7 +734,13 @@ impl<'s> Lowerer<'s> {
     /// a flame blends in (C2d). `this.name` reads and sets the state
     /// `init` returns (`fields`).
     fn transform_section(&mut self, span: Span, fields: Vec<String>) -> R<Section> {
+        if self.three {
+            return self.transform_section3(span, fields);
+        }
         let Some(f) = self.fns.get("variation").cloned() else {
+            if self.fns.contains_key("variation3") {
+                return self.err(Position::NONE, "a 3D variation only: it has `fn variation3`, not `fn variation(z, p)`");
+            }
             return self.err(Position::NONE, "a transformation has `fn variation(z, p)`");
         };
         if f.params.is_empty() || f.params.len() > 3 {
@@ -757,6 +794,70 @@ impl<'s> Lowerer<'s> {
             body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
         }
         body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// A transformation's 3D function as its section (B2): `variation3(v,
+    /// p[, ctx])`, the point `v` a vector local set from `#pixel` and
+    /// `#pixelz`, the last value -- a vector, or `#{ z: v, color }` --
+    /// written back to them; `ctx.accum` a vector.
+    fn transform_section3(&mut self, span: Span, fields: Vec<String>) -> R<Section> {
+        let Some(f) = self.fns.get("variation3").cloned() else {
+            return self.err(Position::NONE, "a 3D transformation has `fn variation3(v, p)`");
+        };
+        if f.params.is_empty() || f.params.len() > 3 {
+            return self.err(f.body.position(), "`variation3(v)`, `variation3(v, p)` or `variation3(v, p, ctx)`");
+        }
+        let mut scope = Scope::new(Fn3::Variation, fields);
+        let names = self.vec_local(&f.params[0]);
+        let pixel = || mk(ExprKind::Predef("pixel".into()), span);
+        let part = |name: &str| mk(ExprKind::Call { name: name.into(), args: vec![pixel()], user: false }, span);
+        let inits = [part("real"), part("imag"), mk(ExprKind::Predef("pixelz".into()), span)];
+        let mut body: Vec<ast::Stmt> = names
+            .iter()
+            .zip(inits)
+            .map(|(n, init)| ast::Stmt::Decl { ty: TypeName::Float, name: n.clone(), init: Some(init), dims: None, span })
+            .collect();
+        scope.bind(&f.params[0], Binding::VecLocal(names));
+        if let Some(p) = f.params.get(1) {
+            scope.bind(p, Binding::Params);
+        }
+        if let Some(c) = f.params.get(2) {
+            scope.bind(c, Binding::Ctx);
+        }
+        const RESULT: &str = "`variation3` ends with the new point, a vector, or `#{ z: v, color: index }`";
+        let stmts = f.body.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
+        for st in rest {
+            self.stmt(st, &mut scope, &mut body)?;
+        }
+        let mut color = None;
+        let value = match final_value(last) {
+            Some(Final::Expr(Expr::Map(m, mp))) => {
+                let mut point = None;
+                for (k, v) in &m.0 {
+                    match k.name.as_str() {
+                        "z" => point = Some(self.vexpr(v, &mut scope)?),
+                        "color" => color = Some(self.expr(v, &mut scope)?),
+                        o => return self.err(k.pos, format!("a variation's result has `z` and `color`, not `{o}`")),
+                    }
+                }
+                match point {
+                    Some(v) => v,
+                    None => return self.err(*mp, "the result needs `z`, the new point"),
+                }
+            }
+            Some(Final::Expr(x)) => self.vexpr(x, &mut scope)?,
+            _ => return self.err(last.position(), RESULT),
+        };
+        self.flush(&mut body);
+        let at = self.pos.span(last.position());
+        if let Some(c) = color {
+            body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
+        }
+        let [x, y, z] = value;
+        body.push(assign(mk(ExprKind::Predef("pixel".into()), at), mk(ExprKind::Complex(Box::new(x), Box::new(y)), at), at));
+        body.push(assign(mk(ExprKind::Predef("pixelz".into()), at), z, at));
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -2327,7 +2428,7 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
                 "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" => TypeName::Int,
-                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" => TypeName::Float,
+                "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),

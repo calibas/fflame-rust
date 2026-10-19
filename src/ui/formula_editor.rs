@@ -163,7 +163,7 @@ impl FormulaEditorPanel {
         let checked = match kind {
             EntryKind::Formula => lang::rhai::program(&text),
             EntryKind::Coloring => lang::rhai::coloring(&text),
-            EntryKind::Transform => lang::rhai::transformation(&text),
+            EntryKind::Transform => lang::rhai::transformation_any(&text),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),

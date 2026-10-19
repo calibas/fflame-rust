@@ -83,7 +83,11 @@ impl Lowerer<'_> {
                 .param_vecs
                 .contains(name)
                 .then(|| AXES.map(|a| mk(ExprKind::Param(format!("{name}_{a}")), span))),
-            Owner::Ctx => None,
+            // A 3D variation's accumulator (B2).
+            Owner::Ctx => (self.three && name == "accum").then(|| {
+                let accum = || mk(ExprKind::Predef("accum".into()), span);
+                [call1("real", accum(), span), call1("imag", accum(), span), mk(ExprKind::Predef("accumz".into()), span)]
+            }),
         }
     }
 

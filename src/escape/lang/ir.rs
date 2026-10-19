@@ -178,13 +178,18 @@ pub enum Predef {
     /// What a flame variation writes as its colour (C2d): the palette
     /// index the transform's `direct_color` blends in (`WritesColor`).
     VarColor,
+    /// A 3D variation's point's third part, read and written beside
+    /// `#pixel` (`fn variation3`, the KIFS plan, B2), and its context's
+    /// accumulator's.
+    PixelZ,
+    AccumZ,
 }
 
 impl Predef {
     pub fn ty(self) -> Ty {
         match self {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
-            Predef::Draw | Predef::Weight | Predef::VarColor => Ty::Float,
+            Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index | Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => Ty::Float,
             Predef::CreaseSlope => Ty::Complex,
@@ -336,6 +341,8 @@ pub enum Place {
     Pixel,
     /// A flame variation's colour ([`Predef::VarColor`]).
     Color,
+    /// A 3D variation's point's third part ([`Predef::PixelZ`]).
+    PixelZ,
 }
 
 #[derive(Clone, Debug)]

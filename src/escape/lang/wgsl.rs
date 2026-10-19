@@ -87,7 +87,8 @@ pub struct ColoringWgsl {
 /// [`VariationShape`]'s. Its helpers are prefixed with the name, so two of
 /// them never define one twice.
 pub struct VariationWgsl {
-    pub wgsl_2d: String,
+    /// None for a 3D variation only (`only_3d`).
+    pub wgsl_2d: Option<String>,
     pub wgsl_3d: String,
     /// The `Feature`s it declares, by their wire names.
     pub features: Vec<&'static str>,
@@ -173,7 +174,7 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
         slots += if var.ty == Ty::Complex { 2 } else { 1 };
     }
     Ok(VariationShape {
-        accum: p.reads(Predef::Accum),
+        accum: p.reads(Predef::Accum) || p.reads(Predef::AccumZ),
         ids: !p.params.is_empty() || !state.is_empty() || p.reads(Predef::Weight),
         rng: p.reads(Predef::Draw),
         color: writes_color(&p.transform),
@@ -182,33 +183,101 @@ pub fn variation_shape(p: &Program) -> Result<VariationShape, String> {
     })
 }
 
-/// [`VariationWgsl`] for a checked transformation and its registry name.
-pub fn variation(p: &Program, name: &str) -> Result<VariationWgsl, String> {
-    let shape = variation_shape(p)?;
+/// [`VariationWgsl`] for a checked transformation's 2D program, its 3D
+/// one (`fn variation3`, B2), or both, and its registry name. Each body
+/// takes what either needs -- the shader builder calls a variation by its
+/// features -- and without a 3D program the 3D body runs the 2D one on
+/// `p.xy`, passing `p.z` through.
+pub fn variation(p2: Option<&Program>, p3: Option<&Program>, name: &str) -> Result<VariationWgsl, String> {
+    let s2 = p2.map(variation_shape).transpose()?;
+    let s3 = p3.map(variation_shape).transpose()?;
+    let (main, own) = match (p2, &s2, p3, &s3) {
+        (Some(p), Some(s), _, _) | (None, _, Some(p), Some(s)) => (p, s.clone()),
+        _ => return Err("a variation has `fn variation(z, p)` or `fn variation3(v, p)`".into()),
+    };
+    // What both bodies take: what either needs.
+    let shapes: Vec<&VariationShape> = s2.iter().chain(s3.iter()).collect();
+    let union = VariationShape {
+        accum: shapes.iter().any(|s| s.accum),
+        ids: shapes.iter().any(|s| s.ids),
+        rng: shapes.iter().any(|s| s.rng),
+        color: shapes.iter().any(|s| s.color),
+        state: own.state.clone(),
+        state_slots: shapes.iter().map(|s| s.state_slots).max().unwrap_or(0),
+    };
     let prefix: &'static str = Box::leak(format!("cv_{name}_").into_boxed_str());
-    let mut g = Gen::new(p, Ctx::Variation, prefix);
-    // What it takes besides the point, in the builder's order.
     let (mut sig, mut args, mut args3) = (String::new(), String::new(), String::new());
-    if shape.accum {
+    if union.accum {
         sig.push_str(", accum: vec2<f32>");
         args.push_str(", accum");
         args3.push_str(", accum.xy");
     }
-    if shape.ids {
+    if union.ids {
         sig.push_str(", xform_id: u32, variation_id: u32");
         args.push_str(", xform_id, variation_id");
         args3.push_str(", xform_id, variation_id");
     }
-    if shape.rng {
+    if union.rng {
         sig.push_str(", rng: ptr<function, RngState>");
         args.push_str(", rng");
         args3.push_str(", rng");
     }
-    if shape.color {
+    if union.color {
         sig.push_str(", vc: ptr<function, f32>");
         args.push_str(", vc");
         args3.push_str(", vc");
     }
+    let sig3 = sig.replace("accum: vec2<f32>", "accum: vec3<f32>");
+    let inner2 = format!("{prefix}variation_2d");
+    let inner3 = format!("{prefix}variation_3d");
+    let module2 = match (p2, &s2) {
+        (Some(p), Some(s)) => Some(variation_module(p, s, &sig, false, prefix)),
+        _ => None,
+    };
+    let wgsl_2d = module2
+        .as_ref()
+        .map(|m| format!("{m}\nfn variation_{name}(p: vec2<f32>{sig}) -> vec2<f32> {{\n    return {inner2}(p{args});\n}}\n"));
+    let wgsl_3d = match (p3, &s3) {
+        (Some(p), Some(s)) => {
+            let m = variation_module(p, s, &sig.replace("accum: vec2<f32>", "accum3: vec3<f32>"), true, prefix);
+            format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return {inner3}(p{args});\n}}\n")
+        }
+        _ => {
+            let m = module2.clone().unwrap_or_default();
+            format!("{m}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner2}(p.xy{args3}), p.z);\n}}\n")
+        }
+    };
+    let mut features = Vec::new();
+    if union.rng {
+        features.push("needs_rng");
+    }
+    if union.accum {
+        features.push("needs_accum");
+    }
+    if union.color {
+        features.push("writes_color");
+    }
+    if union.needs_transform(main) {
+        features.push("needs_transform");
+    }
+    // A 3D body writes its z, as the built-in 3D variations do.
+    if p3.is_some() {
+        features.push("always_z");
+    }
+    Ok(VariationWgsl {
+        wgsl_2d,
+        wgsl_3d,
+        features,
+        state_count: union.state_slots as usize,
+        state_init: (!union.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id);")),
+    })
+}
+
+/// One body of a flame variation, as a module: the inner function (2D, or
+/// 3D with the point's third part beside `#pixel`), the state's load and
+/// store, `init`'s function, and the helpers, all prefixed.
+fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, prefix: &'static str) -> String {
+    let mut g = Gen::new(p, Ctx::Variation, prefix);
     let decls = |out: &mut String| {
         for (i, v) in p.vars.iter().enumerate() {
             let _ = writeln!(out, "    {};", var_decl(i, v));
@@ -216,7 +285,7 @@ pub fn variation(p: &Program, name: &str) -> Result<VariationWgsl, String> {
     };
     // The state: loaded at the start, stored at the end.
     let load = |g: &Gen, out: &mut String| {
-        for &(v, k) in &shape.state {
+        for &(v, k) in &own.state {
             let get = |k: u32| format!("get_state(xform_id, variation_id, {k}u)");
             let value = match p.vars[v].ty {
                 Ty::Complex => format!("vec2<f32>({}, {})", get(k), get(k + 1)),
@@ -228,7 +297,7 @@ pub fn variation(p: &Program, name: &str) -> Result<VariationWgsl, String> {
         }
     };
     let store = |g: &Gen, out: &mut String| {
-        for &(v, k) in &shape.state {
+        for &(v, k) in &own.state {
             let name = g.var(v);
             let mut set = |k: u32, x: String| {
                 let _ = writeln!(out, "    set_state(xform_id, variation_id, {k}u, {x});");
@@ -244,45 +313,29 @@ pub fn variation(p: &Program, name: &str) -> Result<VariationWgsl, String> {
             }
         }
     };
-    let mut body = format!("fn uf_variation_2d(p: vec2<f32>{sig}) -> vec2<f32> {{\n    var pixel = p;\n");
+    let mut body = if three {
+        let mut b = format!("fn uf_variation_3d(p: vec3<f32>{sig}) -> vec3<f32> {{\n    var pixel = p.xy;\n    var pixel_z = p.z;\n");
+        if own.accum {
+            b.push_str("    let accum = accum3.xy;\n");
+        }
+        b
+    } else {
+        format!("fn uf_variation_2d(p: vec2<f32>{sig}) -> vec2<f32> {{\n    var pixel = p;\n")
+    };
     decls(&mut body);
     load(&g, &mut body);
     g.stmts(&p.transform, 1, &mut body);
     store(&g, &mut body);
-    body.push_str("    return pixel;\n}\n");
+    body.push_str(if three { "    return vec3<f32>(pixel, pixel_z);\n}\n" } else { "    return pixel;\n}\n" });
     // `init`: the state a thread starts with.
-    if !shape.state.is_empty() {
+    if !own.state.is_empty() {
         body.push_str("\nfn uf_variation_init(xform_id: u32, variation_id: u32) {\n");
         decls(&mut body);
         g.stmts(&p.init, 1, &mut body);
         store(&g, &mut body);
         body.push_str("}\n");
     }
-    // The name goes in after the helpers' prefix: `uf_` inside it would
-    // be renamed.
-    let module = g.finish("", body);
-    let inner = format!("{prefix}variation_2d");
-    let sig3 = sig.replace("accum: vec2<f32>", "accum: vec3<f32>");
-    let mut features = Vec::new();
-    if shape.rng {
-        features.push("needs_rng");
-    }
-    if shape.accum {
-        features.push("needs_accum");
-    }
-    if shape.color {
-        features.push("writes_color");
-    }
-    if shape.needs_transform(p) {
-        features.push("needs_transform");
-    }
-    Ok(VariationWgsl {
-        wgsl_2d: format!("{module}\nfn variation_{name}(p: vec2<f32>{sig}) -> vec2<f32> {{\n    return {inner}(p{args});\n}}\n"),
-        wgsl_3d: format!("{module}\nfn variation_{name}(p: vec3<f32>{sig3}) -> vec3<f32> {{\n    return vec3<f32>({inner}(p.xy{args3}), p.z);\n}}\n"),
-        features,
-        state_count: shape.state_slots as usize,
-        state_init: (!shape.state.is_empty()).then(|| format!("        {prefix}variation_init(xform_id, variation_id);")),
-    })
+    g.finish("", body)
 }
 
 /// The WGSL of a formula program.
@@ -1363,6 +1416,7 @@ impl<'p> Gen<'p> {
                     Place::CreaseSlope => "crease_g".to_string(),
                     Place::Pixel => "pixel".to_string(),
                     Place::Color => "(*vc)".to_string(),
+                    Place::PixelZ => "pixel_z".to_string(),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
@@ -1579,6 +1633,10 @@ impl<'p> Gen<'p> {
             (Predef::Accum, _) => "accum".into(),
             (Predef::Weight, _) => "transforms[xform_id].variations[variation_id]".into(),
             (Predef::VarColor, _) => "(*vc)".into(),
+            // A 3D variation's (B2): the point's and the accumulator's
+            // third parts.
+            (Predef::PixelZ, _) => "pixel_z".into(),
+            (Predef::AccumZ, _) => "accum3.z".into(),
             (Predef::Center, _) => "esc_env_center".into(),
             (Predef::Magn, _) => "esc_env_magn".into(),
             (Predef::X, _) => "esc_env_px.x".into(),
@@ -3180,7 +3238,9 @@ pub fn validate_variation(w: &VariationWgsl) -> Result<(), String> {
          fn rng_nextf(rng: ptr<function, RngState>) -> f32 {\n    return f32((*rng).state);\n}\n\
          struct StubTransform {\n    variations: array<f32, 4>,\n}\n\
          var<private> transforms: array<StubTransform, 2>;\n";
-    validate_module(&format!("{GET_PARAM}{}", w.wgsl_2d))?;
+    if let Some(w2) = &w.wgsl_2d {
+        validate_module(&format!("{GET_PARAM}{w2}"))?;
+    }
     validate_module(&format!("{GET_PARAM}{}", w.wgsl_3d))
 }
 

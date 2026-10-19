@@ -517,6 +517,11 @@ function takes the point, and the ids when it has parameters (as
   `ctx.weight` without parameters declares `NeedsTransform` for the
   ids. The function takes them in `variation_call`'s order. Gate:
   `the_hooked_twins_render_as_the_builtins` (`blur`, `macmillan`).
+- **3D**: `fn variation3(v, p)` is the 3D body, its point a vector; alone
+  it makes the variation `only_3d` (no 2D body, kept out of the lens
+  menu). Either body takes the hooks either needs, and a 3D body
+  declares `AlwaysZ`. Gate: `the_3d_twins_render_as_the_builtins`
+  (`spherical3D`, `hemisphere`, `zcone`, in a pitched 3D flame).
 - Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
