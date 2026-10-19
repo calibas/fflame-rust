@@ -49,6 +49,20 @@ pub enum HighlightMode {
     /// gentle highlight roll-off, hue-preserving.
     #[serde(rename = "filmic", alias = "Filmic")]
     Filmic,
+    /// AgX (Troy Sobotka's, Blender's view transform since 4.0; Benjamin
+    /// Wrensch's minimal fit of it): the scene's light through a log
+    /// encoding and a sigmoid in a wider gamut, so bright colours roll
+    /// toward white without the hue skew a per-channel curve gives them
+    /// (3d-look-and-tools P4): Filmic's Narkowicz fit is per channel, so a
+    /// bright colour's channels saturate apart and its hue slides toward
+    /// yellow, cyan or magenta.
+    #[serde(rename = "agx", alias = "AgX")]
+    AgX,
+    /// AgX with its Punchy look (Wrensch's: a power of 1.35 and
+    /// saturation 1.4 in AgX's own space): the base's roll-off with more
+    /// contrast and colour, as Blender's AgX looks offer.
+    #[serde(rename = "agx_punchy", alias = "AgXPunchy")]
+    AgXPunchy,
 }
 
 impl Default for HighlightMode {
@@ -56,6 +70,55 @@ impl Default for HighlightMode {
         // Preserve existing visual regression baselines.
         Self::Clip
     }
+}
+
+impl HighlightMode {
+    /// The tonemap shader's `highlight_mode` (`shaders/tonemap.wgsl`).
+    pub fn shader_code(self) -> u32 {
+        match self {
+            HighlightMode::Clip => 0,
+            HighlightMode::MaxNorm => 1,
+            HighlightMode::Reinhard => 2,
+            HighlightMode::Filmic => 3,
+            HighlightMode::AgX => 4,
+            HighlightMode::AgXPunchy => 5,
+        }
+    }
+}
+
+/// AgX as the tonemap applies it (`highlight_mode` 4, or 5 with the
+/// Punchy look), on the CPU: the scene-referred colour to the display's,
+/// encoded (about gamma 2.2).
+#[cfg(test)]
+pub(crate) fn agx_display(rgb: [f32; 3], punchy: bool) -> [f32; 3] {
+    // Column-major, as the shader's mat3x3 (and the GLSL it comes from).
+    const INSET: [[f32; 3]; 3] = [
+        [0.842479062253094, 0.0423282422610123, 0.0423756549057051],
+        [0.0784335999999992, 0.878468636469772, 0.0784336],
+        [0.0792237451477643, 0.0791661274605434, 0.879142973793104],
+    ];
+    const OUTSET: [[f32; 3]; 3] = [
+        [1.19687900512017, -0.0528968517574562, -0.0529716355144438],
+        [-0.0980208811401368, 1.15190312990417, -0.0980434501171241],
+        [-0.0990297440797205, -0.0989611768448433, 1.15107367264116],
+    ];
+    let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| [0, 1, 2].map(|i| m[0][i] * v[0] + m[1][i] * v[1] + m[2][i] * v[2]);
+    let (min_ev, max_ev) = (-12.47393f32, 4.026069f32);
+    let v = mul(&INSET, rgb.map(|c| c.max(0.0)));
+    let v = v.map(|c| (c.max(1.0e-10).log2().clamp(min_ev, max_ev) - min_ev) / (max_ev - min_ev));
+    let v = v.map(|x| {
+        let x2 = x * x;
+        let x4 = x2 * x2;
+        15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232
+    });
+    let v = if punchy {
+        let p = v.map(|c| c.max(0.0).powf(1.35));
+        let luma = 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+        p.map(|c| luma + 1.4 * (c - luma))
+    } else {
+        v
+    };
+    mul(&OUTSET, v).map(|c| c.clamp(0.0, 1.0))
 }
 
 /// A single control point on the tone curve
@@ -305,6 +368,35 @@ impl ToneCurve {
 mod tests {
     use super::*;
 
+    /// AgX's shape (`agx_display`): rising, greys grey, black black, the
+    /// scene's middle grey a little under the display's middle, white at
+    /// 16 and above, and a bright saturated colour's channels kept in
+    /// order -- its hue -- where Clip saturates them apart.
+    #[test]
+    fn agx_rolls_off_keeping_hue() {
+        let grey = |x: f32| agx_display([x, x, x], false);
+        let mut last = -1.0f32;
+        for i in 0..200 {
+            let x = 1.0e-4 * 1.08f32.powi(i);
+            let g = grey(x);
+            assert!((g[0] - g[1]).abs() < 2.0e-3 && (g[1] - g[2]).abs() < 2.0e-3, "a grey stays grey at {x}: {g:?}");
+            assert!(g[0] >= last - 1.0e-6, "rising at {x}");
+            last = g[0];
+        }
+        assert!(grey(0.0)[0] < 0.01, "{:?}", grey(0.0));
+        let mid = grey(0.18)[0];
+        println!("agx: 0.18 to {mid:.3}, 1 to {:.3}, 16 to {:.3}", grey(1.0)[0], grey(16.0)[0]);
+        assert!((0.35..0.55).contains(&mid), "{mid}");
+        assert!(grey(16.0)[0] > 0.97);
+        let orange = agx_display([8.0, 4.0, 0.5], false);
+        assert!(orange[0] > orange[1] && orange[1] > orange[2], "{orange:?}");
+        // Punchy: more contrast about the middle, more colour, greys grey.
+        let punchy = |x: f32| agx_display([x, x, x], true);
+        assert!(punchy(0.05)[0] < grey(0.05)[0] && (punchy(0.05)[0] - punchy(0.05)[2]).abs() < 2.0e-3);
+        let (o, p) = (agx_display([1.0, 0.3, 0.1], false), agx_display([1.0, 0.3, 0.1], true));
+        assert!(p[0] - p[2] > o[0] - o[2], "punchy saturates: {o:?} {p:?}");
+    }
+
     #[test]
     fn test_linear_curve() {
         let curve = ToneCurve::linear();
@@ -364,5 +456,86 @@ mod tests {
         let lut = curve.generate_lut();
         // LUT is now f16 (2 bytes per component): 256 pixels × 4 components × 2 bytes
         assert_eq!(lut.len(), 256 * 4 * 2);
+    }
+}
+
+/// AgX (`HighlightMode::AgX`) in the tonemap shader is the curve on the
+/// CPU (`agx_display`): an escape picture's grey ramp, Linear at exposure
+/// 1 and gamma 1, read back -- each pixel's scene value recovered from the
+/// same render under Clip (the output encode undone), and its AgX pixel
+/// the curve of it, to the 8-bit rounding.
+#[cfg(all(test, feature = "engine-escape"))]
+mod agx_gpu_tests {
+    use super::*;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("agx tests"),
+            required_features: adapter.features() & wgpu::Features::CLEAR_TEXTURE,
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .ok()
+    }
+
+    #[test]
+    fn agx_in_the_tonemap_is_the_curve() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 300;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        config.highlight_mode = HighlightMode::Clip;
+        let clip = render(&config);
+        for (mode, punchy) in [(HighlightMode::AgX, false), (HighlightMode::AgXPunchy, true)] {
+            config.highlight_mode = mode;
+            let agx = render(&config);
+            let (mut n, mut worst) = (0usize, 0.0f32);
+            for (c, a) in clip.chunks_exact(4).zip(agx.chunks_exact(4)) {
+                if c[0] < 16 || c[0] > 240 {
+                    continue;
+                }
+                let x = (c[0] as f32 / 255.0).powf(2.2);
+                let want = agx_display([x, x, x], punchy);
+                for k in 0..3 {
+                    worst = worst.max((a[k] as f32 - want[k] * 255.0).abs());
+                }
+                n += 1;
+            }
+            println!("agx {mode:?}: {n} ramp pixels, worst {worst:.2} levels from the curve");
+            assert!(n > 1000, "the ramp is in the frame: {n}");
+            assert!(worst <= 3.0, "{mode:?}: {worst}");
+        }
     }
 }

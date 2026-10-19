@@ -440,6 +440,37 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let e = 0.14;
         color = (color * (a * color + vec3<f32>(b))) / (color * (c * color + vec3<f32>(d)) + vec3<f32>(e));
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    } else if (tonemap_params.highlight_mode == 4u || tonemap_params.highlight_mode == 5u) {
+        // AgX (Troy Sobotka; Benjamin Wrensch's minimal fit): into a wider
+        // gamut, a log2 encoding over [-12.47, 4.03] stops, a sigmoid, and
+        // back -- display-referred, encoded about gamma 2.2, so decoded
+        // here for the output encode below to restore. Bright colours roll
+        // toward white keeping their hue (`HighlightMode::AgX`).
+        let inset = mat3x3<f32>(
+            vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
+            vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
+            vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104),
+        );
+        let outset = mat3x3<f32>(
+            vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
+            vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
+            vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116),
+        );
+        let min_ev = -12.47393;
+        let max_ev = 4.026069;
+        var v = inset * color;
+        v = (clamp(log2(max(v, vec3<f32>(1.0e-10))), vec3<f32>(min_ev), vec3<f32>(max_ev)) - vec3<f32>(min_ev)) / (max_ev - min_ev);
+        let v2 = v * v;
+        let v4 = v2 * v2;
+        v = 15.5 * v4 * v2 - 40.14 * v4 * v + 31.96 * v4 - 6.868 * v2 * v + 0.4298 * v2 + 0.1191 * v - vec3<f32>(0.00232);
+        // The Punchy look (5): a power of 1.35 and saturation 1.4 in AgX's
+        // own space, before it goes back.
+        if (tonemap_params.highlight_mode == 5u) {
+            v = pow(max(v, vec3<f32>(0.0)), vec3<f32>(1.35));
+            let luma = dot(v, vec3<f32>(0.2126, 0.7152, 0.0722));
+            v = vec3<f32>(luma) + 1.4 * (v - vec3<f32>(luma));
+        }
+        color = pow(clamp(outset * v, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(2.2));
     } else {
         // Clip: per-channel clamp (Apophysis/JWildfire compatible).
         color = min(color, vec3<f32>(1.0));

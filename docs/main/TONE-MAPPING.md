@@ -77,8 +77,8 @@ changes the compute shader, so it restarts accumulation.
 3. **HSV**: hue shift, then saturation, skipped when both are neutral.
 4. **Exposure**, for Logarithmic. Linear applied it in step 2; Density
    used it as its sensitivity.
-5. **Highlights**: negative channels to 0, then Clip, MaxNorm, Reinhard
-   or Filmic brings the colour into [0, 1].
+5. **Highlights**: negative channels to 0, then Clip, MaxNorm, Reinhard,
+   Filmic, AgX or AgX Punchy brings the colour into [0, 1].
 6. **Tone curve**, if enabled and the pixel was hit.
 7. **Alpha**: the mode's alpha blended with a linear alpha, then capped
    by Levels when they are on.
@@ -242,6 +242,11 @@ included. Every mode first sets negative channels to 0.
 | MaxNorm | 1 | if the largest channel exceeds 1, divide all three by it: the hue is exact and the brightest channel lands on 1 |
 | Reinhard | 2 | scale by `(L / (1 + L)) / L`, where `L` is Rec. 709 luminance, then `min(c, 1)`. It compresses every value, not only those above 1. |
 | Filmic | 3 | the ACES fit of Narkowicz, `x(2.51x + 0.03) / (x(2.43x + 0.59) + 0.14)` per channel, clamped to [0, 1] |
+| AgX | 4 | AgX (Troy Sobotka's, Blender's view transform; Benjamin Wrensch's minimal fit): into a wider gamut (the inset matrix), a log2 encoding clamped to [-12.47, 4.03] stops and normalised, a sixth-order sigmoid, and back (the outset), clamped and decoded by 2.2 for the output encode to restore. Bright colours roll toward white keeping their hue; scene middle grey 0.18 lands at 0.497 on the display. Added 2026-10-19 (3d-look-and-tools P4). |
+| AgX Punchy | 5 | AgX with Wrensch's Punchy look before the outset: a power of 1.35 and saturation 1.4 about Rec. 709 luminance -- more contrast and colour, the same roll-off |
+
+AgX's curve has a CPU twin (`tonemap::agx_display`); the shader is it to
+the 8-bit rounding on a grey ramp (`agx_in_the_tonemap_is_the_curve`).
 
 ## The tone curve
 
@@ -513,7 +518,7 @@ means the control is read only by the logarithmic branch.
 | Saturation | `saturation` | 0–3 | 1.0 | all modes |
 | Hue Shift | `hue_shift` | −360–360 | 0 | all modes |
 | Tone Map Mode | `tonemap_mode` | Linear, Logarithmic, Density | Logarithmic | |
-| Highlight Clipping | `highlight_mode` | Clip, MaxNorm, Reinhard, Filmic | Clip | all modes |
+| Highlight Clipping | `highlight_mode` | Clip, MaxNorm, Reinhard, Filmic, AgX, AgX Punchy | Clip | all modes |
 | Alpha Blend Low | `alpha_blend_low` | 0–1 | 0.3 | Log, Density |
 | Alpha Blend High | `alpha_blend_high` | 0–1 | 0.8 | Log, Density |
 | Density Scale | `density_scale` | 0.01–10 | 1.0 | all modes |

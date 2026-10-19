@@ -2722,12 +2722,7 @@ impl FlameRenderer {
         // 3. Update density and background
         self.density_scale = config.density_scale;
         self.white_level = config.white_level;
-        self.highlight_mode = match config.highlight_mode {
-            crate::scene::tonemap::HighlightMode::Clip => 0,
-            crate::scene::tonemap::HighlightMode::MaxNorm => 1,
-            crate::scene::tonemap::HighlightMode::Reinhard => 2,
-            crate::scene::tonemap::HighlightMode::Filmic => 3,
-        };
+        self.highlight_mode = config.highlight_mode.shader_code();
         self.background_color = config.background_color;
         // The depth fog's target, which every per-frame GpuParams write
         // (compute_pass, update_iterations, ...) and the shade pass read.
@@ -3591,12 +3586,7 @@ impl FlameRenderer {
         // update_background_color → update_tonemap_state) don't reset
         // white_level / highlight_mode back to their defaults on the next refresh.
         self.white_level = white_level;
-        self.highlight_mode = match highlight_mode {
-            crate::scene::tonemap::HighlightMode::Clip => 0,
-            crate::scene::tonemap::HighlightMode::MaxNorm => 1,
-            crate::scene::tonemap::HighlightMode::Reinhard => 2,
-            crate::scene::tonemap::HighlightMode::Filmic => 3,
-        };
+        self.highlight_mode = highlight_mode.shader_code();
 
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,

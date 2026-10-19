@@ -233,8 +233,20 @@ shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical
    no top face seen from above mirrors; it sits behind the subject now.
 5. **Light size** apart from the lit tier's shadow sharpness: broad
    highlights on polished surfaces.
+
+   **Left for the user (2026-10-19):** a light's size is its shadow
+   sharpness in both tiers now (`light_radius`), so the penumbra and the
+   highlight agree; parting them would give a polished surface a broad
+   highlight under a sharp shadow -- a look, not a light. Lower Shadow
+   sharpness gives both. A decision, not built.
 6. **AgX** as a highlight mode beside Filmic (the Narkowicz ACES fit, which
    skews hue in highlights).
+
+   **Done 2026-10-19:** AgX and AgX Punchy (Wrensch's look: more
+   contrast and colour), highlight modes 4 and 5 (TONE-MAPPING.md); the
+   shader is the CPU curve to 1.1 levels on a grey ramp. Base AgX reads
+   muted on the presets' saturated palettes; Punchy keeps the roll-off
+   and gives the contrast back. Clip stays the default.
 7. Presets showing it: a polished Mandelbulb, a metal KIFS.
 
 ## P5. Flame variations in solids, and orbit modifications for colouring
