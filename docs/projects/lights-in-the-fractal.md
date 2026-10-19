@@ -105,6 +105,11 @@ headlamp (eye + lift x up) and converts its reach. The terrain's
 Paths: `SolidLightParam { index, param }` with the new params `kind`,
 `x`, `y`, `z`, `reach`, `cone`, `lift`; animatable as the others.
 
+**Done 2026-10-19**, as above. The position is f64 and travels as
+`ConfigValue::Double` (a track's keyframe as a Float); the f32 params
+share one setter with the exporter (`set_light_param`). The 3D flame's
+shade pass draws directional lights alone (`SolidLight::directional_on`).
+
 ### L3. Mode D, the lit tier
 
 - The walk: a Point's or a Headlamp's shadow ray goes toward the light
@@ -117,6 +122,20 @@ Paths: `SolidLightParam { index, param }` with the new params `kind`,
   direction (they decide the shadow rays). The headlamp moves with the
   camera, which re-walks anyway.
 
+**Done 2026-10-19.** `ifs_light_at` in the rig's shared text gives a
+light's direction, distance and gain at a point (the offset scaled
+before it is squared, for deep views); `ifs_rig` takes the surface's
+position. A directional light's numbers are unchanged -- its gain is 1
+and its shadow ray's end past the ball -- and the escape, solid and
+simulation visual suites pass unchanged (125, 6, 107). Gates: a point
+light far off with a reach past everything is the directional light it
+approaches (worst relative difference 1.9e-3, its angle across the
+cube); inside the sponge's cavity a headlamp's shadows-on picture is
+98.5% of shadows-off -- and 0 with the shadow ray not stopped at the
+lamp, which is what the gate is for -- and a 10-degree cone leaves the
+corners black (`a_far_point_light_is_a_directional_one`,
+`a_headlamp_lights_the_inside_of_a_sponge`).
+
 ### L4. Mode D, the path tracer
 
 - A Point or a Headlamp is sampled over its angular radius about the
@@ -124,12 +143,29 @@ Paths: `SolidLightParam { index, param }` with the new params `kind`,
   (`pt_scene_visible_to`, each geometry's bounded visibility); the same
   falloff and cone as the rig.
 
+**Done 2026-10-19**, as `pt_scene_visible(o, d, t_end, travelled)` in
+both geometries. Gate: a point-lit cube path traces to the lit tier's
+picture (mean relative difference 4.5e-4, worst 5.8e-3 -- the path
+tracer's jitter across a pixel, over which the light's distance changes;
+`a_point_lit_solid_is_the_lit_tiers`).
+
 ### L5. Terrains
 
 The same three kinds on the escape and the simulation terrains: the
 packing (world positions in the terrain's world, the headlamp from its
 camera), the terrain walk's bounded shadow march, its path tracer's
 bounded visibility.
+
+**The headlamp done 2026-10-19; a point light deferred.** The terrain's
+world is the current view's -- its unit the view width, its origin the
+eye's ground point -- so both move with every pan and zoom, and a light
+"in the world" there needs a frame of its own first (the plane's
+coordinates and a height in some fixed unit). A point light on a terrain
+is off, and the panel says so. The terrain's `fdata` grew to 32 slots.
+Gates: a flat plane under a headlamp is its closed form to 4.1e-6, and
+the path tracer's is the lit tier's (mean 1.6e-4;
+`a_headlamp_on_a_plane_is_its_closed_form`,
+`a_headlamp_lit_plane_is_the_lit_tiers`).
 
 ### L6. The panel
 

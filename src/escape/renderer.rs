@@ -4307,6 +4307,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut k = format!("{}", s.rig_untouched());
         for l in &s.lights {
             k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
+            // Where a point or a headlamp is decides its shadow rays; its
+            // reach and its cone only scale what reaches (a relight).
+            if l.kind != crate::config::LightKind::Directional {
+                k.push_str(&format!(":{:?}:{:?}:{}", l.kind, l.position, l.lift));
+            }
         }
         k
     }

@@ -6255,6 +6255,33 @@ fn pack_rig3(
         if any && (!l.enabled || l.intensity <= 0.0) {
             continue;
         }
+        // A point or a headlamp (lights-in-the-fractal, L2): its
+        // position as an offset from the target, as every position the
+        // shader holds is -- in f64 until then, since a light and the
+        // target are near each other in a deep view.
+        if any && l.kind != crate::config::LightKind::Directional {
+            let (pos, reach) = if l.kind == crate::config::LightKind::Point {
+                (
+                    [l.position[0] - cam.target[0], l.position[1] - cam.target[1], l.position[2] - cam.target[2]],
+                    l.reach as f64,
+                )
+            } else {
+                let lift = l.lift as f64 * cam.distance;
+                (
+                    [cam.eye_rel[0] + cam.up[0] * lift, cam.eye_rel[1] + cam.up[1] * lift, cam.eye_rel[2] + cam.up[2] * lift],
+                    l.reach as f64 * cam.distance,
+                )
+            };
+            let (kind, extra) = light_extra(l, reach);
+            out[11 + n * 2] = [pos[0] as f32, pos[1] as f32, pos[2] as f32, l.intensity.max(0.0)];
+            out[12 + n * 2] = [l.color[0], l.color[1], l.color[2], kind];
+            out[28 + n] = extra;
+            n += 1;
+            if n == 4 {
+                break;
+            }
+            continue;
+        }
         let (az, el) = if any {
             (l.azimuth.to_radians() as f64, l.elevation.to_radians() as f64)
         } else {
@@ -6286,6 +6313,19 @@ fn pack_rig3(
         }
     }
     out[7][2] = n as f32;
+}
+
+/// A point's or a headlamp's kind and its `fdata[28 + i]` (the rig's
+/// `ifs_light_at`): (its reach in the world's units, its cone's outer
+/// and inner cosines, 0). A headlamp without a cone (180 degrees) is a
+/// point at the eye; with one, its edge softens over the outer tenth.
+pub(crate) fn light_extra(l: &crate::config::SolidLight, reach: f64) -> (f32, [f32; 4]) {
+    if l.kind == crate::config::LightKind::Headlamp && l.cone < 180.0 {
+        let outer = (l.cone.clamp(1.0, 180.0) as f64).to_radians();
+        (2.0, [reach as f32, outer.cos() as f32, (outer * 0.9).cos() as f32, 0.0])
+    } else {
+        (1.0, [reach as f32, -1.0, -1.0, 0.0])
+    }
 }
 
 fn normalize3(v: [f64; 3]) -> [f64; 3] {
@@ -7018,6 +7058,7 @@ mod tests {
                 elevation: 35.0,
                 intensity: 1.0,
                 color: [1.0, 1.0, 1.0],
+                ..Default::default()
             };
             c.solid_shading.lights[1] = crate::config::SolidLight {
                 enabled: true,
@@ -7025,6 +7066,7 @@ mod tests {
                 elevation: 10.0,
                 intensity: 0.35,
                 color: [1.0, 1.0, 1.0],
+                ..Default::default()
             };
 
             c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
