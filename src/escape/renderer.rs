@@ -4626,9 +4626,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     ) {
         let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
         let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
-        let key = format!("ifs_relight|{}", coloring.name);
+        let placed = self.solid_lighting.0.placed_lights();
+        let key = format!("ifs_relight|{}{}", coloring.name, if placed { "|placed" } else { "" });
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_ifs_relight(coloring);
+            let source = assembler::assemble_ifs_relight_rig(coloring, None, placed);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -7895,16 +7896,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 .as_ref()
                 .is_some_and(|p| p.rows.iter().any(|r| r.kind == 7.0));
             let stag = if sums { "|sum" } else { "" };
+            // Points and headlamps compiled in, or not (`assembler::ifs_rig`).
+            let placed = self.solid_lighting.0.placed_lights();
+            let ptag = if placed { "|placed" } else { "" };
             let key =
-                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}", def.name, coloring.name);
+                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}{ptag}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
-                let source = assembler::assemble_ifs_with_lens(
+                let source = assembler::assemble_ifs_rig(
                     def,
                     coloring,
                     beam,
                     lens_src.as_deref(),
                     delta,
                     sums,
+                    placed,
                 );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),

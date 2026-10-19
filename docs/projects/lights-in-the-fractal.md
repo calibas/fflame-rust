@@ -122,6 +122,14 @@ shade pass draws directional lights alone (`SolidLight::directional_on`).
   direction (they decide the shadow rays). The headlamp moves with the
   camera, which re-walks anyway.
 
+**Found after (2026-10-19): it cost the path tracer a fifth unused.**
+The positional half of `ifs_light_at` raised the solid path tracer's
+register use, so a directional-only Menger sample went from 130 ms to
+158 at 320x180. Now it is compiled in only when a light that lights is a
+point or a headlamp (`placed_lights`; mode D's pipeline keys, the
+terrain's lazily built variants): 128-131 ms again. The first such light
+recompiles.
+
 **Done 2026-10-19.** `ifs_light_at` in the rig's shared text gives a
 light's direction, distance and gain at a point (the offset scaled
 before it is squared, for deep views); `ifs_rig` takes the surface's

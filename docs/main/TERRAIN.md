@@ -197,6 +197,16 @@ How it is drawn:
   and gain at a point -- the offset scaled before it is squared, for deep
   views -- and `ifs_rig` takes the surface's position, which the relight
   rebuilds as the eye plus the ray times the hit distance.
+- **Compiled in only when used:** unless a light that lights is a point
+  or a headlamp (`SolidShadingSettings::placed_lights`), the rig's
+  `ifs_light_at` is the directional one (`assembler::ifs_rig`). The
+  positional code costs registers wherever it sits: the Menger's path-
+  traced sample took 158 ms at 320x180 with it present and unused,
+  against 130 without -- the beam's lesson (`IFS_MAX_BEAM`) again. Mode
+  D's walk, relight and path pipelines carry it in their keys; a
+  terrain builds its placed-light walk, relight and path tracer the
+  first time a view has such a light (`TerrainRenderer::ensure_placed`).
+  The first point or headlamp is a recompile.
 - **Shadow rays stop at the light:** the walk's `ifs_shadow`, the
   terrain walk's trace and both geometries' `pt_scene_visible` take the
   light's distance as their end. A directional light's end is past

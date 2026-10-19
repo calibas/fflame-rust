@@ -6914,6 +6914,63 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// `ifs_light_at` for a rig of directional lights alone: the direction,
+/// no distance, full power. Compiled in place of
+/// [`IFS_LIGHT_AT_PLACED`] unless a light is a point or a headlamp,
+/// because that one's code costs registers wherever it sits: the solid
+/// path tracer's sample took a fifth longer with it there and unused
+/// (130 ms against 158 on the Menger at 320x180) -- the beam's lesson
+/// (`IFS_MAX_BEAM`) again.
+const IFS_LIGHT_AT_DIRECTIONAL: &str = r#"
+// Light i as a point p sees it: every light directional here.
+fn ifs_light_at(i: u32, p: vec3<f32>) -> IfsLightAt {
+    var l: IfsLightAt;
+    l.dir = ifs_light_dir(i);
+    l.dist = 3.0e38;
+    l.gain = 1.0;
+    return l;
+}
+"#;
+
+/// `ifs_light_at` with points and headlamps (lights-in-the-fractal, L2).
+const IFS_LIGHT_AT_PLACED: &str = r#"
+// Light i as a point p sees it.
+fn ifs_light_at(i: u32, p: vec3<f32>) -> IfsLightAt {
+    var l: IfsLightAt;
+    l.dir = ifs_light_dir(i);
+    l.dist = 3.0e38;
+    l.gain = 1.0;
+    let kind = ifs_light_kind(i);
+    if (kind == 0u) {
+        return l;
+    }
+    // Scaled before it is squared: at a deep zoom an offset's square is
+    // below f32's range.
+    let to = ifs_light_pos(i) - p;
+    let m = max(max(abs(to.x), abs(to.y)), abs(to.z));
+    if (!(m > 0.0)) {
+        // At the light itself: from the eye's side.
+        l.dir = -ifs_forward();
+        l.dist = 0.0;
+        return l;
+    }
+    let u = to / m;
+    let lu = length(u);
+    l.dir = u / lu;
+    l.dist = m * lu;
+    let x = params.fdata[28u + i];
+    // 1 / (1 + (d / reach)^2): the inverse square far off, finite at the
+    // light, half at the reach -- a ratio first, as above.
+    let q = l.dist / max(x.x, 1.0e-30);
+    l.gain = 1.0 / (1.0 + q * q);
+    if (kind == 2u) {
+        // The headlamp's cone about the view, softened at its edge.
+        l.gain = l.gain * smoothstep(x.y, x.z, dot(-l.dir, ifs_forward()));
+    }
+    return l;
+}
+"#;
+
 /// The lighting rig and the geometry packing, spliced into both the walk
 /// template and the relight template at `//__IFS_RIG__` so the two cannot
 /// drift. That they are one text is the basis of the cache being exact.
@@ -6976,41 +7033,7 @@ struct IfsLightAt {
     gain: f32,
 };
 
-// Light i as a point p sees it.
-fn ifs_light_at(i: u32, p: vec3<f32>) -> IfsLightAt {
-    var l: IfsLightAt;
-    l.dir = ifs_light_dir(i);
-    l.dist = 3.0e38;
-    l.gain = 1.0;
-    let kind = ifs_light_kind(i);
-    if (kind == 0u) {
-        return l;
-    }
-    // Scaled before it is squared: at a deep zoom an offset's square is
-    // below f32's range.
-    let to = ifs_light_pos(i) - p;
-    let m = max(max(abs(to.x), abs(to.y)), abs(to.z));
-    if (!(m > 0.0)) {
-        // At the light itself: from the eye's side.
-        l.dir = -ifs_forward();
-        l.dist = 0.0;
-        return l;
-    }
-    let u = to / m;
-    let lu = length(u);
-    l.dir = u / lu;
-    l.dist = m * lu;
-    let x = params.fdata[28u + i];
-    // 1 / (1 + (d / reach)^2): the inverse square far off, finite at the
-    // light, half at the reach -- a ratio first, as above.
-    let q = l.dist / max(x.x, 1.0e-30);
-    l.gain = 1.0 / (1.0 + q * q);
-    if (kind == 2u) {
-        // The headlamp's cone about the view, softened at its edge.
-        l.gain = l.gain * smoothstep(x.y, x.z, dot(-l.dir, ifs_forward()));
-    }
-    return l;
-}
+//__IFS_LIGHT_AT__
 
 fn ifs_coat_d(nh: f32, a2: f32) -> f32 {
     let k = nh * nh * (a2 - 1.0) + 1.0;
@@ -8292,12 +8315,17 @@ pub fn assemble_ifs_relight_with_lens(
     coloring: &IfsColoringDef,
     lens: Option<&str>,
 ) -> String {
+    assemble_ifs_relight_rig(coloring, lens, false)
+}
+
+/// The same, its rig with points and headlamps when `placed`.
+pub fn assemble_ifs_relight_rig(coloring: &IfsColoringDef, lens: Option<&str>, placed: bool) -> String {
     let mut out = Vec::new();
     for line in IFS_RELIGHT_TEMPLATE.lines() {
         match line.trim() {
             "//__PALETTE_MAP__" => out.push(PALETTE_MAP_WGSL.trim().to_string()),
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
-            "//__IFS_RIG__" => out.push(ifs_rig(lens)),
+            "//__IFS_RIG__" => out.push(ifs_rig(lens, placed)),
             _ => out.push(line.to_string()),
         }
     }
@@ -8330,13 +8358,24 @@ pub const IFS_MAX_BEAM: u32 = 8;
 /// the planar walk had it. The RELIGHT pass splices the same rig, and
 /// takes the same lens for the same reason: its shading is computed
 /// from a ray it rebuilds, and an unlensed ray against a lensed walk
-/// lights the wrong surface.
-fn ifs_rig(lens: Option<&str>) -> String {
+/// lights the wrong surface. `placed` compiles points and headlamps in
+/// ([`IFS_LIGHT_AT_DIRECTIONAL`] says why not always).
+fn ifs_rig(lens: Option<&str>, placed: bool) -> String {
     let mut apply = Vec::new();
     lens_apply_uv(&mut apply, lens, "uv");
     IFS_RIG
         .trim()
         .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
+        .replace("//__IFS_LIGHT_AT__", light_at(placed))
+}
+
+/// The rig's `ifs_light_at`: with points and headlamps, or directional.
+fn light_at(placed: bool) -> &'static str {
+    if placed {
+        IFS_LIGHT_AT_PLACED.trim()
+    } else {
+        IFS_LIGHT_AT_DIRECTIONAL.trim()
+    }
 }
 
 /// The rig for the terrain passes (`super::terrain`), which light with
@@ -8345,11 +8384,14 @@ fn ifs_rig(lens: Option<&str>) -> String {
 /// terrain's sub-pixel jitter: its antialiasing is accumulation, where
 /// mode D's is a supersampled grid.
 #[cfg(feature = "terrain")]
-pub(crate) fn ifs_rig_jittered() -> String {
-    IFS_RIG.trim().replace(
-        "//__LENS_APPLY_RAY__",
-        "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",
-    )
+pub(crate) fn ifs_rig_jittered(placed: bool) -> String {
+    IFS_RIG
+        .trim()
+        .replace(
+            "//__LENS_APPLY_RAY__",
+            "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",
+        )
+        .replace("//__IFS_LIGHT_AT__", light_at(placed))
 }
 
 pub fn assemble_ifs(def: &IfsDef, coloring: &IfsColoringDef, beam: u32) -> String {
@@ -8395,6 +8437,20 @@ pub fn assemble_ifs_with_lens(
     lens: Option<&str>,
     delta: bool,
     sums: bool,
+) -> String {
+    assemble_ifs_rig(def, coloring, beam, lens, delta, sums, false)
+}
+
+/// The same, its rig with points and headlamps when `placed`.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_ifs_rig(
+    def: &IfsDef,
+    coloring: &IfsColoringDef,
+    beam: u32,
+    lens: Option<&str>,
+    delta: bool,
+    sums: bool,
+    placed: bool,
 ) -> String {
     // A SUM row's inverse is a Newton solve over the kernel's forward
     // body (`ifs-general.md` D3), which only a flame that HAS one
@@ -8470,7 +8526,7 @@ pub fn assemble_ifs_with_lens(
                 }
             }
             "//__IFS_COLORING__" => out.push(coloring.wgsl.trim().to_string()),
-            "//__IFS_RIG__" => out.push(ifs_rig(lens)),
+            "//__IFS_RIG__" => out.push(ifs_rig(lens, placed)),
             "const IFS_MAX_BEAM: u32 = 8u;" => {
                 out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
             }
@@ -8553,9 +8609,12 @@ fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> f32 {
     let e0 = pt_ifs_eps(travelled);
     let eps = max(min(ifs_radius() * 1.0e-4, e0 * 0.4), 1.0e-30);
     var t = max(e0 * 4.0, span.x);
+    // The ball's exit or the light, whichever is nearer: one bound, so the
+    // march's every step tests one number.
+    let t_stop = min(span.y, t_end);
     let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
     for (var i = 0u; i < max_steps; i = i + 1u) {
-        if (t > span.y || t > t_end) {
+        if (t > t_stop) {
             break;
         }
         let dist = ifs_distance_at(o + d * t, eps);
@@ -8636,8 +8695,9 @@ pub fn assemble_ifs_path(
     beam: u32,
     lens: Option<&str>,
     sums: bool,
+    placed: bool,
 ) -> String {
-    let walk = assemble_ifs_with_lens(def, coloring, beam, lens, false, sums);
+    let walk = assemble_ifs_rig(def, coloring, beam, lens, false, sums, placed);
     let cut = walk
         .find("@compute @workgroup_size(8, 8, 1)\nfn escape_main")
         .expect("the solid template ends in the walk's entry point");
@@ -10462,8 +10522,8 @@ mod lens_tests {
                 if crate::escape::ifs::get_ifs_coloring(col.name, def).name != col.name {
                     continue;
                 }
-                let plain = assemble_ifs_path(def, col, 4, None, false);
-                let lensed = assemble_ifs_path(def, col, 4, Some(&src), false);
+                let plain = assemble_ifs_path(def, col, 4, None, false, false);
+                let lensed = assemble_ifs_path(def, col, 4, Some(&src), false, false);
                 let what = format!("path {} / {}", def.name, col.name);
                 assert!(!plain.contains("fn escape_main"), "{what}: the walk's entry point survived");
                 assert!(!plain.contains("esc_lens("), "{what}: lens glue without a lens");
