@@ -1479,6 +1479,57 @@ mod tests {
         assert!((ratio - 1.0).abs() < 0.01, "the lit tier's direct light is {ratio} of the path tracer's");
     }
 
+    /// A metal (3d-look-and-tools P4) is the same in both tiers: its
+    /// direct light, the coat in the albedo's colour with nothing under
+    /// it, given back what single scattering loses, is the lit tier's and
+    /// the path tracer's alike -- on the sponge and on the Mandelbulb,
+    /// whose curve sweeps the lobe. No ambient, no shadows, no bounces:
+    /// the lit tier's light over the pixels both cover is the path
+    /// tracer's to its jitter across a pixel and a light's cone.
+    #[test]
+    fn a_metal_is_lit_alike_in_both_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (192u32, 128u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut sponge_config = cube_config();
+        sponge_config.flame = sponge();
+        let mut bulb = cube_config();
+        bulb.escape.formula = "mandelbulb_solid".to_string();
+        for (name, mut c) in [("sponge", sponge_config), ("bulb", bulb)] {
+            c.solid_shading.lights[0].enabled = true;
+            c.solid_shading.lights[0].azimuth = 30.0;
+            c.solid_shading.lights[0].elevation = 35.0;
+            c.solid_shading.metallic = 1.0;
+            c.solid_shading.roughness = 0.6;
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            c.escape.formula_params.insert("shadow_sharpness".to_string(), 1.0e4);
+            c.escape.path.bounces = 0;
+            let lit = lit_picture(&device, &queue, &c, &palette, w, h);
+            c.escape.solid_tier = RenderTier::PathTraced;
+            let mut r = renderer_for(&device, &c, w, h);
+            r.render_solid_still(&device, &queue, &c, &palette, 16, || { wait(&device); true });
+            let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            r.destroy();
+            let (mut n, mut sum_lit, mut sum_path) = (0usize, 0.0f64, 0.0f64);
+            for (p, q) in lit.iter().zip(&path) {
+                if p[3] < 1.0 || q[3] < 0.999 {
+                    continue;
+                }
+                n += 1;
+                sum_lit += (p[0] + p[1] + p[2]) as f64;
+                sum_path += (q[0] + q[1] + q[2]) as f64;
+            }
+            let ratio = sum_lit / sum_path.max(1e-12);
+            println!("  metal {name}: {n} pixels covered in both, lit over path {ratio:.4}, path mean {:.4}", sum_path / n.max(1) as f64 / 3.0);
+            assert!(n > 2000, "only {n} pixels");
+            assert!(sum_path > 0.0, "the metal is lit");
+            assert!((ratio - 1.0).abs() < 0.02, "{name}: the lit tier's metal is {ratio} of the path tracer's");
+        }
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far

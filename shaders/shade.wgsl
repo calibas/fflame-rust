@@ -146,7 +146,8 @@ struct ShadeParams {
     gloss: f32,
     roughness: f32,
     glow: f32,
-    _pad_mat: f32,
+    // How much of it is metal (3d-look-and-tools P4).
+    metallic: f32,
 
     lights: array<ShadeLight, 4>,
 }
@@ -302,6 +303,17 @@ fn coat_fresnel(f0: f32, c: f32) -> f32 {
     let m2 = m * m;
     return f0 + (1.0 - f0) * m2 * m2 * m;
 }
+
+// Schlick's Fresnel on a coloured reflectance: a metal's.
+fn coat_fresnel3(f0: vec3<f32>, c: f32) -> vec3<f32> {
+    let m = clamp(1.0 - c, 0.0, 1.0);
+    let m2 = m * m;
+    return f0 + (vec3<f32>(1.0, 1.0, 1.0) - f0) * (m2 * m2 * m);
+}
+
+// `coat_ess` and `coat_energy`, generated from the path tracer's fit
+// (`escape::path_core::coat_energy_wgsl`), spliced here at load.
+//__COAT_ENERGY__
 
 @compute @workgroup_size(8, 8, 1)
 fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -510,13 +522,20 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // evaluated as the path tracer's direct light is (GGX, Smith, Schlick;
     // the diffuse taking what the Fresnel does not), the coat reflecting
     // the ambient sky at this view; and the glow.
+    // A metal's (P4) reflectance is the albedo's colour, with nothing
+    // under it; either is given back what single scattering loses.
     let v = normalize(-pos);
     let f0 = clamp(sp.gloss, 0.0, 1.0);
+    let metal = clamp(sp.metallic, 0.0, 1.0);
+    let coated = f0 > 0.0 || metal > 0.0;
+    let f0c = mix(vec3<f32>(f0, f0, f0), albedo, metal);
     let rough = clamp(sp.roughness, 0.02, 1.0);
     let a2 = max(rough * rough, 1.0e-4) * max(rough * rough, 1.0e-4);
     let nv = max(dot(n, v), 1.0e-4);
+    let energy = coat_energy(f0c, nv, rough);
     let coat_v = select(0.0, coat_fresnel(f0, nv), f0 > 0.0);
-    var lit = albedo * (sp.ambient * ao * (1.0 - coat_v)) + vec3<f32>(sp.ambient * ao * coat_v);
+    let refl_v = select(vec3<f32>(0.0, 0.0, 0.0), coat_fresnel3(f0c, nv), coated);
+    var lit = albedo * (sp.ambient * ao * ((1.0 - metal) * (1.0 - coat_v))) + refl_v * (sp.ambient * ao);
     lit = lit + albedo * max(sp.glow, 0.0);
     let p1_shadows = sp.shadow_count > 0u && sp.shadow_strength > 0.0;
     var p1_wpos = vec3<f32>(0.0);
@@ -536,12 +555,12 @@ fn shade_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             shadow = mix(1.0, shadow_map_factor(p1_wpos, dir_to_world(l), u32(li)), sp.shadow_strength);
         }
         var diff = 1.0;
-        if (f0 > 0.0 && ndotl > 0.0) {
+        if (coated && ndotl > 0.0) {
             let hc = normalize(l + v);
-            let fr = coat_fresnel(f0, max(dot(v, hc), 0.0));
-            let coat = 3.141592654 * coat_d(max(dot(n, hc), 0.0), a2) * coat_g1(ndotl, a2) * coat_g1(nv, a2) * fr / (4.0 * ndotl * nv);
-            lit = lit + lcol * (coat * ndotl * shadow);
-            diff = 1.0 - fr;
+            let vh = max(dot(v, hc), 0.0);
+            let dg = 3.141592654 * coat_d(max(dot(n, hc), 0.0), a2) * coat_g1(ndotl, a2) * coat_g1(nv, a2) / (4.0 * ndotl * nv);
+            lit = lit + lcol * coat_fresnel3(f0c, vh) * energy * (dg * ndotl * shadow);
+            diff = (1.0 - metal) * select(1.0, 1.0 - coat_fresnel(f0, vh), f0 > 0.0);
         }
         lit = lit + albedo * lcol * (sp.diffuse * diff * ndotl * ao * shadow);
         if (sp.specular > 0.0 && ndotl > 0.0) {

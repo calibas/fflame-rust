@@ -867,7 +867,7 @@ pub struct EscapeRenderer {
     solid_sky: Option<[f32; 3]>,
     /// The solid's material, the lit tier's as the path tracer's: the
     /// coat's reflectance and roughness, and the glow.
-    solid_material: [f32; 3],
+    solid_material: [f32; 4],
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -1892,7 +1892,7 @@ impl EscapeRenderer {
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
             solid_sky: None,
-            solid_material: [0.0, 0.5, 0.0],
+            solid_material: [0.0, 0.5, 0.0, 0.0],
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -4289,7 +4289,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// and roughness and the glow, which the lit tier reads as the path
     /// tracer does. Applied by the relight, so a change needs no walk.
     /// True when it changed.
-    pub fn set_solid_material(&mut self, material: [f32; 3]) -> bool {
+    pub fn set_solid_material(&mut self, material: [f32; 4]) -> bool {
         if self.solid_material == material {
             return false;
         }
@@ -8158,10 +8158,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         fdata[20] = [z[0], z[1], z[2], 1.0];
                     }
                     // The material, in the w of the camera's rows
-                    // (`ifs_gloss`, `ifs_rough`, `ifs_glow`).
+                    // (`ifs_gloss`, `ifs_rough`, `ifs_glow`), and the
+                    // metallic in the fog row's (`ifs_metallic`).
                     for k in 0..3 {
                         fdata[3 + k][3] = self.solid_material[k];
                     }
+                    fdata[10][3] = self.solid_material[3];
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.

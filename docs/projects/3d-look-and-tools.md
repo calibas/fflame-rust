@@ -181,7 +181,8 @@ workflow, energy-conserving GGX, a lit environment (an HDRI or a studio)
 and AgX.
 
 Steps, each gated on the Mandelbulb (curved: it sweeps the environment and
-shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical:
+shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical
+(the coat's code is skipped exactly as before when neither is set):
 1. **Metallic** (a skip-if-default `metallic`): the coat's reflectance a
    colour, `mix(vec3(gloss), albedo, metallic)`, the diffuse times
    `1 - metallic`; both tiers. The lit tier reflects the environment
@@ -189,6 +190,20 @@ shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical:
 2. **Energy compensation** (Kulla and Conty 2017; Turquin 2019): an
    analytic estimate of the lobe's lost energy (Karis 2014's
    EnvBRDFApprox), no table, so rough metals keep their brightness.
+
+   **Steps 1-2 done 2026-10-19.** Karis's fit was up to 47% off for our
+   separable Smith masking (it is fitted to the height-correlated form),
+   so the albedo is a 16-term fit to our coat's own integral
+   (`path_core::COAT_ESS_FIT`), generated into every shader. Fitted from
+   cos 0.25 and clamped there it gave a rough metal 24% too much at a
+   glance; fitted over the whole range, the compensation is within 1.6%
+   from cos 0.2 up and -11% to +5% at a glance. A white metal under a
+   uniform sky: 69% of it at roughness 0.7 before, 100.2% after. The
+   lit tier's metal is the path tracer's within 0.3% on the sponge and
+   the Mandelbulb. Metallic is in every tier, the 3D flame's shade pass
+   included; the lit tier reflects only the ambient (step 4's
+   environment is the path tracer's), so a metal there reads dark under
+   ambient 0, as it does in the path tracer under a black sky.
 3. **MIS** (research V1): bounces that escape into a light add it, by the
    power heuristic; polished surfaces reflect the lights.
 4. **The environment bounces see, apart from the backdrop the camera

@@ -2738,6 +2738,7 @@ impl ConfigManager {
             ConfigPath::SolidGloss => Ok(config.solid_shading.gloss.into()),
             ConfigPath::SolidRoughness => Ok(config.solid_shading.roughness.into()),
             ConfigPath::SolidGlow => Ok(config.solid_shading.glow.into()),
+            ConfigPath::SolidMetallic => Ok(config.solid_shading.metallic.into()),
             ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
             ConfigPath::SolidSpecular => Ok(config.solid_shading.specular.into()),
             ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
@@ -4550,6 +4551,10 @@ impl ConfigManager {
             ConfigPath::SolidRoughness => {
                 let v: f32 = value.try_into()?;
                 self.current.solid_shading.roughness = if v.is_finite() { v.clamp(0.02, 1.0) } else { 0.5 };
+            }
+            ConfigPath::SolidMetallic => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.metallic = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
             }
             ConfigPath::SolidGlow => {
                 let v: f32 = value.try_into()?;

@@ -759,6 +759,7 @@ fn apply_config_value(
         (ConfigPath::SolidGloss, ConfigValue::Float(v)) => config.solid_shading.gloss = v.clamp(0.0, 1.0),
         (ConfigPath::SolidRoughness, ConfigValue::Float(v)) => config.solid_shading.roughness = v.clamp(0.02, 1.0),
         (ConfigPath::SolidGlow, ConfigValue::Float(v)) => config.solid_shading.glow = v.clamp(0.0, 16.0),
+        (ConfigPath::SolidMetallic, ConfigValue::Float(v)) => config.solid_shading.metallic = v.clamp(0.0, 1.0),
         (ConfigPath::SsaoStrength, ConfigValue::Float(v)) => config.solid_shading.ssao_strength = *v,
         (ConfigPath::SsaoRadius, ConfigValue::Float(v)) => config.solid_shading.ssao_radius = *v,
         (ConfigPath::NormalSmoothing, ConfigValue::Float(v)) => {

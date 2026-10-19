@@ -170,11 +170,77 @@ fn shown(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
 }
 
 /// A picture's material (docs/archive/projects/materials.md): the coat -- its
-/// reflectance at normal incidence and its roughness -- and the albedo's
-/// glow, beside the lights, which every tier reads.
-pub fn lit_material(config: &FractalConfig) -> [f32; 3] {
+/// reflectance at normal incidence and its roughness -- the albedo's glow,
+/// and how much of it is metal (P4), beside the lights, which every tier
+/// reads. The rig's shaders read the first three in the w of the camera's
+/// rows and the metallic in the fog row's (`ifs_metallic`).
+pub fn lit_material(config: &FractalConfig) -> [f32; 4] {
     let s = &config.solid_shading;
-    [s.gloss.clamp(0.0, 1.0), s.roughness.clamp(0.02, 1.0), s.glow.max(0.0)]
+    [s.gloss.clamp(0.0, 1.0), s.roughness.clamp(0.02, 1.0), s.glow.max(0.0), s.metallic.clamp(0.0, 1.0)]
+}
+
+/// The coat's directional albedo at reflectance 1 -- the share of the
+/// light one scattering off its microfacets keeps, seen at cos `mu`, at
+/// roughness `r` -- for the coat as every tier evaluates it: GGX, Smith's
+/// separable masking, sampled by the visible normals (3d-look-and-tools
+/// P4). Karis's EnvBRDFApprox, fitted to height-correlated masking, was
+/// up to half off for ours. A fit, `1 - r^3 P(mu, r)` with P's terms
+/// `COAT_ESS_FIT[i][j]` of `mu^i r^j`, to the integral over the whole
+/// range of mu (`the_coat_albedo_fit_is_the_integral`): the compensation
+/// `1 / E` within 1.6% from mu = 0.2 up, and from -11% to +5% at a glance,
+/// where the albedo dips at low roughness as no small polynomial follows.
+/// (Fitted from mu = 0.25 and clamped there, it gave a rough metal 24% too
+/// much at a glance, where its albedo rises again.)
+pub(crate) const COAT_ESS_FIT: [[f32; 4]; 4] = [
+    [12.567384, -44.989223, 55.380245, -22.600027],
+    [-21.612877, 109.279373, -158.189835, 71.258842],
+    [-13.835137, -2.0193479, 52.886459, -37.669228],
+    [22.578863, -59.14378, 48.020164, -11.221471],
+];
+
+/// [`COAT_ESS_FIT`]'s albedo, as the shaders evaluate it.
+#[cfg(test)]
+pub(crate) fn coat_ess(mu: f32, r: f32) -> f32 {
+    let m = mu.clamp(0.0, 1.0);
+    let q = r.clamp(0.0, 1.0);
+    let row = |c: [f32; 4]| ((c[3] * q + c[2]) * q + c[1]) * q + c[0];
+    let [c0, c1, c2, c3] = COAT_ESS_FIT.map(row);
+    (1.0 - q * q * q * (((c3 * m + c2) * m + c1) * m + c0)).min(1.0)
+}
+
+/// The coat's albedo ([`coat_ess`]) and the energy it gives back, in
+/// WGSL -- `{prefix}ess` and `{prefix}energy` -- from the one fit, so no
+/// shader's copy can drift: the rig's (`ifs_coat_`, spliced at
+/// `//__COAT_ENERGY__`, which both tiers of every escape and simulation
+/// 3D view read) and the 3D flame's shade pass's (`coat_`).
+pub(crate) fn coat_energy_wgsl(prefix: &str) -> String {
+    let c = COAT_ESS_FIT;
+    let row = |k: usize| format!("(({:?} * q + {:?}) * q + {:?}) * q + {:?}", c[k][3], c[k][2], c[k][1], c[k][0]);
+    format!(
+        r#"// The coat's directional albedo at reflectance 1, seen at cos `mu` at
+// roughness `r` (`escape::path_core::coat_ess`, a fit to the integral).
+fn {prefix}ess(mu: f32, r: f32) -> f32 {{
+    let m = clamp(mu, 0.0, 1.0);
+    let q = clamp(r, 0.0, 1.0);
+    let c0 = {r0};
+    let c1 = {r1};
+    let c2 = {r2};
+    let c3 = {r3};
+    return min(1.0 - q * q * q * (((c3 * m + c2) * m + c1) * m + c0), 1.0);
+}}
+
+// What single scattering loses to the light bouncing between the
+// microfacets, given back (Kulla and Conty 2017; Turquin 2019): the
+// coat's lobe times 1 + F0 (1 / E - 1), so a rough metal keeps its
+// brightness.
+fn {prefix}energy(f0: vec3<f32>, mu: f32, r: f32) -> vec3<f32> {{
+    return vec3<f32>(1.0, 1.0, 1.0) + f0 * (1.0 / max({prefix}ess(mu, r), 0.05) - 1.0);
+}}"#,
+        r0 = row(0),
+        r1 = row(1),
+        r2 = row(2),
+        r3 = row(3),
+    )
 }
 
 /// A gradient sky's zenith as a camera ray sees it, in the
@@ -336,11 +402,18 @@ fn pt_first(h: PtHit, d: vec3<f32>) {
     // was divided by nothing and multiplied back by nothing: flat black,
     // and on a near-black the hue of whichever channel was not zero. No
     // coat, the albedo exactly.
+    // A metal's (P4) reflects in its own colour, and nothing is under it.
+    let c = max(dot(h.n, -d), 0.0);
     var f = 0.0;
+    var fc = vec3<f32>(0.0, 0.0, 0.0);
     if (h.f0 > 0.0) {
-        f = pt_fresnel(h.f0, max(dot(h.n, -d), 0.0));
+        f = pt_fresnel(h.f0, c);
+        fc = vec3<f32>(f, f, f);
     }
-    pt_g_albedo = h.albedo.rgb * (1.0 - f) + vec3<f32>(f, f, f);
+    if (h.metal > 0.0) {
+        fc = ifs_coat_fresnel3(mix(vec3<f32>(h.f0, h.f0, h.f0), h.albedo.rgb, h.metal), c);
+    }
+    pt_g_albedo = h.albedo.rgb * ((1.0 - h.metal) * (1.0 - f)) + fc;
     pt_g_normal = h.n;
     pt_g_t = h.t;
 }
@@ -537,9 +610,11 @@ struct PtHit {
     // How far off the surface a ray leaving it starts.
     bias: f32,
     // Its coat: reflectance at normal incidence (0, none) and roughness
-    // -- the config's, or a material's own (a terrain's lake).
+    // -- the config's, or a material's own (a terrain's lake) -- and how
+    // much of it is metal (P4; the rig's `ifs_metallic`, a lake's none).
     f0: f32,
     rough: f32,
+    metal: f32,
     // The TRUE normal, on the same side, where a surface texture tilts the
     // shading normal `n` (surface-textures.md): the next ray leaves along
     // it, and no light or bounce passes under it. Zero where there is no
@@ -579,11 +654,18 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         // Its glow.
         radiance = radiance + through * albedo * pt.mat.z;
         // The coat: Lambert under a gloss of reflectance f0 at normal
-        // incidence, the diffuse taking what the coat's Fresnel does not.
+        // incidence, the diffuse taking what the coat's Fresnel does not;
+        // a metal's (P4) reflectance the albedo's colour, with nothing
+        // under it; and either given back what single scattering loses
+        // (`ifs_coat_energy`).
         let f0 = h.f0;
+        let metal = h.metal;
+        let coated = f0 > 0.0 || metal > 0.0;
+        let f0c = mix(vec3<f32>(f0, f0, f0), albedo, metal);
         let a2 = max(h.rough * h.rough, 1.0e-4) * max(h.rough * h.rough, 1.0e-4);
         let v = -d;
         let nv = max(dot(n, v), 1.0e-4);
+        let energy = ifs_coat_energy(f0c, nv, h.rough);
         // Every light, each sampled over its angular size. Picking one a
         // surface (by power) would save shadow rays, but a face only one
         // light reaches then reads all of it or none, sample to sample:
@@ -607,16 +689,17 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 if (pt.misc.z > 0.0) {
                     vis = mix(1.0, select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled)), clamp(pt.misc.z, 0.0, 1.0));
                 }
-                var spec = 0.0;
+                var spec = vec3<f32>(0.0, 0.0, 0.0);
                 var diff = 1.0;
-                if (f0 > 0.0) {
+                if (coated) {
                     let hv = normalize(ld + v);
-                    let fr = pt_fresnel(f0, max(dot(v, hv), 0.0));
-                    spec = 3.141592654 * pt_ggx_d(max(dot(n, hv), 0.0), a2) * pt_g1(ndl, a2) * pt_g1(nv, a2) * fr / (4.0 * ndl * nv);
-                    diff = 1.0 - fr;
+                    let vh = max(dot(v, hv), 0.0);
+                    let dg = 3.141592654 * pt_ggx_d(max(dot(n, hv), 0.0), a2) * pt_g1(ndl, a2) * pt_g1(nv, a2) / (4.0 * ndl * nv);
+                    spec = ifs_coat_fresnel3(f0c, vh) * energy * dg;
+                    diff = (1.0 - metal) * select(1.0, 1.0 - pt_fresnel(f0, vh), f0 > 0.0);
                 }
                 let light = ifs_light_color(li) * (ifs_light_power(li) * la.gain * ndl * vis);
-                radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + vec3<f32>(spec));
+                radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + spec);
                 // The highlight, the lit tier's very term (materials.md
                 // §4.1): Blinn-Phong on the direct light, unnormalised and
                 // without the cosine, so both tiers draw it alike. Not a
@@ -633,9 +716,12 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                     radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * la.gain * vis * shine);
                 }
                 if (bounce == 0u) {
+                    // A metal's reflection is the albedo's colour: shaped by
+                    // it, as the diffuse is, where a coat's is white.
                     let lum = dot(ifs_light_color(li), vec3<f32>(0.2126, 0.7152, 0.0722)) * ifs_light_power(li) * la.gain * vis;
-                    first_diffuse = first_diffuse + lum * ndl * ifs_diffuse() * diff;
-                    first_white = first_white + lum * (ndl * spec + shine);
+                    let spec_lum = dot(spec, vec3<f32>(0.2126, 0.7152, 0.0722));
+                    first_diffuse = first_diffuse + lum * ndl * (ifs_diffuse() * diff + spec_lum * metal);
+                    first_white = first_white + lum * (ndl * spec_lum * (1.0 - metal) + shine);
                 }
             }
         }
@@ -659,8 +745,10 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         // sampling leaves the albedo times what the coat lets through.
         var nd = vec3<f32>(0.0, 0.0, 1.0);
         // Without a coat, no draw to choose a lobe: Lambert's samples are
-        // the same stream they were before the coat existed.
-        let p_spec = select(0.0, clamp(pt_fresnel(f0, nv), 0.1, 0.9), f0 > 0.0);
+        // the same stream they were before the coat existed. A metal
+        // leans the choice to the coat, wholly at 1, where nothing is
+        // under it.
+        let p_spec = select(0.0, mix(clamp(select(0.0, pt_fresnel(f0, nv), f0 > 0.0), 0.1, 0.9), 1.0, metal), coated);
         if (p_spec > 0.0 && pt_rand() < p_spec) {
             let frame = pt_frame(n);
             let vl = transpose(frame) * v;
@@ -671,13 +759,13 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             if (nl <= 0.0) {
                 break;
             }
-            through = through * (pt_fresnel(f0, max(dot(v, hv), 0.0)) * pt_g1(nl, a2) / p_spec);
+            through = through * ifs_coat_fresnel3(f0c, max(dot(v, hv), 0.0)) * energy * (pt_g1(nl, a2) / p_spec);
         } else {
             nd = pt_cosine(n);
             // No coat at all at reflectance 0: Schlick's term alone would
             // still take (1 - cos)^5 of a glance.
             let coat = select(0.0, pt_fresnel(f0, nv), f0 > 0.0);
-            through = through * albedo * ((1.0 - coat) / (1.0 - p_spec));
+            through = through * albedo * ((1.0 - metal) * (1.0 - coat) / (1.0 - p_spec));
         }
         // A tilted normal can send a bounce under the true surface: it has
         // nowhere to go.
@@ -1505,6 +1593,93 @@ impl PathSum {
         if let Some((ts, _)) = self.denoiser.as_ref().and_then(|d| d.textures.as_ref()) {
             for (t, _) in ts {
                 t.destroy();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The coat's albedo at reflectance 1, integrated as the path tracer
+    /// samples it: half-vectors of the visible normals (Heitz 2018), each
+    /// worth Smith's masking of the light (`pt_path`'s throughput at F =
+    /// 1), in f64.
+    fn coat_albedo(mu: f64, r: f64, samples: u32) -> f64 {
+        let alpha = (r * r).max(1.0e-4);
+        let a2 = alpha * alpha;
+        let g1 = |x: f64| 2.0 * x / (x + (a2 + (1.0 - a2) * x * x).sqrt());
+        let v = [(1.0 - mu * mu).max(0.0).sqrt(), 0.0, mu];
+        let vh = {
+            let h = [alpha * v[0], alpha * v[1], v[2]];
+            let l = (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt();
+            [h[0] / l, h[1] / l, h[2] / l]
+        };
+        let lensq = vh[0] * vh[0] + vh[1] * vh[1];
+        let t1 = if lensq > 0.0 { [-vh[1] / lensq.sqrt(), vh[0] / lensq.sqrt(), 0.0] } else { [1.0, 0.0, 0.0] };
+        let t2 = [vh[1] * t1[2] - vh[2] * t1[1], vh[2] * t1[0] - vh[0] * t1[2], vh[0] * t1[1] - vh[1] * t1[0]];
+        // A low-discrepancy pair (the golden ratio's and the plastic
+        // number's sequences): the same estimate every run.
+        let (mut sum, g) = (0.0f64, 1.324_717_957_244_746);
+        for i in 0..samples {
+            let u0 = (0.5 + i as f64 / g).fract();
+            let u1 = (0.5 + i as f64 / (g * g)).fract();
+            let rr = u0.sqrt();
+            let phi = std::f64::consts::TAU * u1;
+            let p1 = rr * phi.cos();
+            let s = 0.5 * (1.0 + vh[2]);
+            let p2 = (1.0 - s) * (1.0 - p1 * p1).max(0.0).sqrt() + s * rr * phi.sin();
+            let pz = (1.0 - p1 * p1 - p2 * p2).max(0.0).sqrt();
+            let nh = [0, 1, 2].map(|k| p1 * t1[k] + p2 * t2[k] + pz * vh[k]);
+            let h = [alpha * nh[0], alpha * nh[1], nh[2].max(0.0)];
+            let hl = (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt();
+            let h = h.map(|c| c / hl);
+            let vdh = v[0] * h[0] + v[1] * h[1] + v[2] * h[2];
+            let lz = 2.0 * vdh * h[2] - v[2];
+            if lz > 0.0 {
+                sum += g1(lz);
+            }
+        }
+        sum / samples as f64
+    }
+
+    /// The fit the shaders compensate the coat's energy by
+    /// (`COAT_ESS_FIT`) is the coat's own albedo: its compensation,
+    /// `1 / E`, within 2% from mu = 0.2 up, and never more than 6% too
+    /// much at a glance (energy from nowhere); at a glance it may give
+    /// back too little, which is only the loss as before.
+    #[test]
+    fn the_coat_albedo_fit_is_the_integral() {
+        let mut worst_bulk = 0.0f64;
+        let mut worst_gain = f64::MIN;
+        for r in [0.05, 0.15, 0.3, 0.5, 0.7, 0.85, 1.0] {
+            for mu in [0.02, 0.08, 0.2, 0.35, 0.5, 0.7, 0.9, 1.0] {
+                let e = coat_albedo(mu, r, 200_000);
+                let gain = e / (coat_ess(mu as f32, r as f32) as f64).max(0.05) - 1.0;
+                if mu >= 0.2 {
+                    worst_bulk = worst_bulk.max(gain.abs());
+                }
+                worst_gain = worst_gain.max(gain);
+            }
+        }
+        println!("compensation error from mu 0.2 up {worst_bulk:.4}, most gained at a glance {worst_gain:+.4}");
+        assert!(worst_bulk < 0.02, "{worst_bulk}");
+        assert!(worst_gain < 0.06, "{worst_gain}");
+        // And the integral is what the fit was made from: a rough metal
+        // loses most of its light to single scattering's masking.
+        assert!((coat_albedo(1.0, 1.0, 200_000) - 0.306).abs() < 0.01);
+    }
+
+    /// The WGSL is the fit: generated from it, it names its functions by
+    /// the prefix, and holds every coefficient.
+    #[test]
+    fn the_coat_energy_wgsl_is_the_fit() {
+        let w = coat_energy_wgsl("ifs_coat_");
+        assert!(w.contains("fn ifs_coat_ess(") && w.contains("fn ifs_coat_energy(") && w.contains("ifs_coat_ess(mu, r)"));
+        for row in COAT_ESS_FIT {
+            for c in row {
+                assert!(w.contains(&format!("{c:?}")), "{c:?}");
             }
         }
     }
