@@ -61,6 +61,9 @@ pub struct PathSettings {
     /// A gradient sky's zenith radiance, the environment's at the
     /// horizon (None: the environment is uniform).
     pub sky: Option<[f32; 3]>,
+    /// The studio's brightness ([`studio_level`]; 0, none): the
+    /// environment is then the studio's, plus the ambient.
+    pub studio: f32,
 }
 
 impl Default for PathSettings {
@@ -79,6 +82,7 @@ impl Default for PathSettings {
             lake_roughness: 0.05,
             denoise: false,
             sky: None,
+            studio: 0.0,
         }
     }
 }
@@ -107,13 +111,24 @@ pub fn path_settings_from(
     lake_roughness: f32,
 ) -> PathSettings {
     let ambient = path_ambient(&config.solid_shading);
-    let env = shown(config, config.background_color).map(|c| t.environment * c + ambient);
-    let sky = t.sky_gradient.then(|| shown(config, t.zenith).map(|c| t.environment * c + ambient));
+    // The studio's light stands in for the sky's (the camera still sees
+    // the sky): the environment is the ambient alone, and the studio is
+    // added in the shader (`ifs_studio`).
+    let studio = studio_level(t, config);
+    let (env, sky) = if studio > 0.0 {
+        ([ambient; 3], None)
+    } else {
+        (
+            shown(config, config.background_color).map(|c| t.environment * c + ambient),
+            t.sky_gradient.then(|| shown(config, t.zenith).map(|c| t.environment * c + ambient)),
+        )
+    };
     let lights: f32 = config.solid_shading.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum();
     let brightest = lights
         .max(1.0)
         .max(env.iter().cloned().fold(0.0, f32::max))
-        .max(sky.map_or(0.0, |z| z.iter().cloned().fold(0.0, f32::max)));
+        .max(sky.map_or(0.0, |z| z.iter().cloned().fold(0.0, f32::max)))
+        .max(studio * STUDIO_PEAK);
     let target = target.max(1.0e-30);
     let material = lit_material(config);
     PathSettings {
@@ -129,8 +144,24 @@ pub fn path_settings_from(
         lake_roughness,
         denoise: t.denoise,
         sky,
+        studio,
     }
 }
+
+/// The studio's brightness in the accumulator's units: Sky light, so that
+/// a radiance of 1 reads white at any exposure, as the background's does
+/// (`shown` of white). 0 when the studio is off.
+pub fn studio_level(t: &crate::config::escape::PathTraceConfig, config: &FractalConfig) -> f32 {
+    if t.studio {
+        t.environment.max(0.0) / config.exposure.max(1.0e-6)
+    } else {
+        0.0
+    }
+}
+
+/// The studio's brightest radiance (its softbox's), for the firefly
+/// clamp: a glint of it is no firefly.
+const STUDIO_PEAK: f32 = 2.0;
 
 /// The rig's ambient as the path tracer sees it (lights-in-the-fractal,
 /// L1): uniform light from every direction, beside the sky, that a
@@ -375,6 +406,12 @@ struct PtParams {
 // sky's -- the horizon's below and at the horizon, the zenith's
 // overhead, by the rig's own profile (`ifs_sky_t`).
 fn pt_sky(d: vec3<f32>) -> vec3<f32> {
+    // The studio (P4), in place of the sky's light: the ambient in
+    // `env`, and the studio's radiance unblurred.
+    let studio = ifs_studio_level();
+    if (studio > 0.0) {
+        return pt.env.rgb + vec3<f32>(studio * ifs_studio(ifs_studio_frame(d)));
+    }
     if (pt.sky.w > 0.5) {
         return mix(pt.env.rgb, pt.sky.rgb, ifs_sky_t(d));
     }

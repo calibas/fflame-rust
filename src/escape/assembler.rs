@@ -7063,6 +7063,128 @@ fn ifs_coat_fresnel3(f0: vec3<f32>, c: f32) -> vec3<f32> {
 
 //__COAT_ENERGY__
 
+// The studio (3d-look-and-tools P4), fdata[32]: x its brightness (0,
+// none), y its frame -- 0 the camera's (a solid's, turning with it as its
+// lights do), 1 the world's with z up (a terrain's). Reflections and
+// bounces see it in place of the sky's light; the camera still sees the
+// background. Neutral white: an overhead softbox a little behind the
+// subject (what a top face seen from above mirrors), two strips behind to
+// either side (the rims), a dim fill panel behind the camera, dim walls,
+// a darker floor.
+fn ifs_studio_level() -> f32 { return max(params.fdata[32].x, 0.0); }
+
+// A direction in the studio's frame: x right, y up, z toward the front.
+fn ifs_studio_frame(d: vec3<f32>) -> vec3<f32> {
+    if (params.fdata[32].y > 0.5) {
+        return vec3<f32>(d.x, d.z, -d.y);
+    }
+    return vec3<f32>(dot(d, ifs_right()), dot(d, ifs_up()), -dot(d, ifs_forward()));
+}
+
+// A round light of angular radius `r` about `c`, its edge soft over
+// 0.06 radians: 1 inside it.
+fn ifs_studio_cap(s: vec3<f32>, c: vec3<f32>, r: f32) -> f32 {
+    let a = acos(clamp(dot(s, c), -1.0, 1.0));
+    return 1.0 - smoothstep(max(r - 0.03, 0.0), r + 0.03, a);
+}
+
+// The studio's lights: (direction, angular radius) -- the softbox, the
+// two strips, the fill -- their radiance, and the walls' and the floor's.
+const STUDIO_WALLS: f32 = 0.06;
+const STUDIO_FLOOR: f32 = 0.02;
+const STUDIO_LIGHTS: u32 = 4u;
+fn ifs_studio_light(i: u32) -> vec4<f32> {
+    if (i == 0u) {
+        return vec4<f32>(normalize(vec3<f32>(0.0, 1.0, -0.3)), 0.65);
+    }
+    if (i == 3u) {
+        return vec4<f32>(normalize(vec3<f32>(0.0, 0.35, 1.0)), 0.8);
+    }
+    let side = select(-1.0, 1.0, i == 2u);
+    return vec4<f32>(normalize(vec3<f32>(side, 0.25, -0.35)), 0.22);
+}
+fn ifs_studio_power(i: u32) -> f32 {
+    if (i == 0u) {
+        return 2.0;
+    }
+    return select(1.2, 0.35, i == 3u);
+}
+
+// Its radiance toward `s`, as a ray sees it.
+fn ifs_studio(s: vec3<f32>) -> f32 {
+    var l = mix(STUDIO_FLOOR, STUDIO_WALLS, smoothstep(-0.03, 0.03, s.y));
+    for (var i = 0u; i < STUDIO_LIGHTS; i = i + 1u) {
+        let c = ifs_studio_light(i);
+        l = l + ifs_studio_power(i) * ifs_studio_cap(s, c.xyz, c.w);
+    }
+    return l;
+}
+
+// A round light's irradiance over pi, its radiance 1, its centre at cos
+// `cos_t` from the normal and its angular radius's sine squared `sin2`:
+// clipped by the surface's horizon where it straddles it (Lagarde and de
+// Rousiers 2014, the sphere light's illuminance). The solid angle times
+// the cosine was 8% high for the softbox and gave a face beside it half
+// its light.
+fn ifs_studio_cap_irradiance(cos_t: f32, sin2: f32) -> f32 {
+    if (cos_t * cos_t > sin2) {
+        return sin2 * max(cos_t, 0.0);
+    }
+    let sin_t = sqrt(max(1.0 - cos_t * cos_t, 1.0e-12));
+    let x = sqrt(1.0 / sin2 - 1.0);
+    let y = -x * cos_t / sin_t;
+    let s = sin_t * sqrt(max(1.0 - y * y, 0.0));
+    return max((cos_t * acos(clamp(y, -1.0, 1.0)) - x * s) * sin2 + atan(s / x), 0.0) / 3.141592654;
+}
+
+// What it lights a surface facing `n` (in its frame) with, over pi -- a
+// white Lambertian surface's radiance: the walls above and the floor
+// below each a half-space's share, each light its clipped irradiance.
+// Within 1.3% of the integral the path tracer's bounces estimate.
+fn ifs_studio_diffuse(n: vec3<f32>) -> f32 {
+    var e = STUDIO_WALLS * 0.5 * (1.0 + n.y) + STUDIO_FLOOR * 0.5 * (1.0 - n.y);
+    for (var i = 0u; i < STUDIO_LIGHTS; i = i + 1u) {
+        let c = ifs_studio_light(i);
+        let s = sin(c.w);
+        e = e + ifs_studio_power(i) * ifs_studio_cap_irradiance(dot(n, c.xyz), s * s);
+    }
+    return e;
+}
+
+// What a coat of roughness `rough` reflects of the studio toward the eye,
+// in the lit tier, which traces no rays (`n`, `v` in the studio's frame;
+// the share of the reflection the coat keeps -- its Fresnel -- is the
+// caller's). The lobe as a cone of radius 0.5 alpha about the mirror
+// direction, and each light's share of it: its radiance where the cone is
+// inside it, its solid angle over the cone's where the cone is wider,
+// smoothed across the edge; blended, as the coat roughens, to the
+// irradiance about the lobe's dominant direction (Lagarde and de Rousiers
+// 2014). Fitted to the path tracer's integral (3d-look-and-tools P4):
+// within 5% in the mean at every roughness. A flat face reflects one
+// direction, and near a light's edge can be a third to a half off;
+// spherical Gaussians, tried first, were 8% off in the mean and twice the
+// softbox's radiance at its centre.
+fn ifs_studio_reflect(n: vec3<f32>, v: vec3<f32>, rough: f32) -> f32 {
+    let alpha = rough * rough;
+    let nv = max(dot(n, v), 1.0e-4);
+    let r = 2.0 * nv * n - v;
+    let sigma = min(0.5 * alpha, 1.5) + 0.01;
+    var cone = mix(STUDIO_FLOOR, STUDIO_WALLS, smoothstep(-sigma - 0.03, sigma + 0.03, r.y));
+    for (var i = 0u; i < STUDIO_LIGHTS; i = i + 1u) {
+        let c = ifs_studio_light(i);
+        let d = acos(clamp(dot(r, c.xyz), -1.0, 1.0));
+        let keep = (1.0 - cos(c.w)) / (1.0 - cos(max(c.w, sigma)));
+        cone = cone + ifs_studio_power(i) * keep * (1.0 - smoothstep(abs(c.w - sigma), c.w + sigma + 0.03, d));
+    }
+    let t = smoothstep(0.2, 1.0, rough);
+    var wide = 0.0;
+    if (t > 0.0) {
+        let s = (1.0 - rough) * (sqrt(1.0 - rough) + rough);
+        wide = ifs_studio_diffuse(normalize(n + (r - n) * s));
+    }
+    return mix(cone, wide, t);
+}
+
 // `p` is the surface's position, in the geometry's frame: what a point
 // light's direction, distance and falloff are measured from.
 fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32, p: vec3<f32>) -> vec3<f32> {
@@ -7087,6 +7209,16 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     let coat_v = select(0.0, ifs_coat_fresnel(f0, nv), f0 > 0.0);
     let refl_v = select(vec3<f32>(0.0, 0.0, 0.0), ifs_coat_fresnel3(f0c, nv), coated);
     var lit_rgb = albedo * (ifs_ambient() * ao * ((1.0 - metal) * (1.0 - coat_v))) + refl_v * (ifs_ambient() * ao);
+    // The studio (P4), as the path tracer's bounces see it: its light on
+    // the diffuse, and the coat's reflection of it blurred by the
+    // roughness -- both occluded as the ambient is.
+    let studio = ifs_studio_level();
+    if (studio > 0.0) {
+        lit_rgb = lit_rgb + albedo * (studio * ao * ((1.0 - metal) * (1.0 - coat_v)) * ifs_studio_diffuse(ifs_studio_frame(n)));
+        if (coated) {
+            lit_rgb = lit_rgb + refl_v * (studio * ao * ifs_studio_reflect(ifs_studio_frame(n), ifs_studio_frame(v), rough));
+        }
+    }
     lit_rgb = lit_rgb + albedo * max(ifs_glow(), 0.0);
     let lights = ifs_light_count();
     for (var li = 0u; li < lights; li = li + 1u) {

@@ -515,6 +515,8 @@ impl EscapeRenderer {
         {
             settings.seed = settings.seed.wrapping_add(self.path_seed_offset);
         }
+        // The studio the bounces see, the config's (as the lit tier's).
+        params.fdata[32][0] = settings.studio;
         let per_ray = 2.0 * (eye[3] * 0.5).tan() / h as f32;
         let param = |name: &str, fallback: f32| {
             escape.formula_params.get(name).copied().unwrap_or_else(|| {
@@ -975,6 +977,7 @@ mod tests {
         r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
         r.set_solid_sky(crate::escape::path_core::sky_seen(&c.escape.path, c));
         r.set_solid_material(crate::escape::path_core::lit_material(c));
+        r.set_solid_studio(crate::escape::path_core::studio_level(&c.escape.path, c));
         r
     }
 
@@ -1527,6 +1530,62 @@ mod tests {
             assert!(n > 2000, "only {n} pixels");
             assert!(sum_path > 0.0, "the metal is lit");
             assert!((ratio - 1.0).abs() < 0.02, "{name}: the lit tier's metal is {ratio} of the path tracer's");
+        }
+    }
+
+    /// The studio (3d-look-and-tools P4) lights both tiers alike: no
+    /// lights, no ambient, the studio alone, one bounce -- the lit tier's
+    /// closed forms (its lights' clipped irradiance, the coat's
+    /// reflection by roughness) against what the path tracer's bounces
+    /// see. The cube is convex, so nothing occludes the studio: its
+    /// diffuse is the integral (2%); a flat face reflects one direction,
+    /// often near a light's edge, so a metal's is loose (35%). The
+    /// Mandelbulb at the default occlusion strength (0.6), which stands in
+    /// for the studio its recesses hide: 15%.
+    #[test]
+    fn the_studio_lights_both_tiers_alike() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (192u32, 128u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut bulb = cube_config();
+        bulb.escape.formula = "mandelbulb_solid".to_string();
+        bulb.solid_shading.ssao_strength = 0.6;
+        for (name, base) in [("cube", cube_config()), ("bulb", bulb)] {
+            for (material, metallic, roughness) in [("diffuse", 0.0f32, 0.5f32), ("metal 0.3", 1.0, 0.3), ("metal 0.7", 1.0, 0.7)] {
+                let mut c = base.clone();
+                c.escape.path.studio = true;
+                c.escape.path.bounces = 1;
+                c.solid_shading.metallic = metallic;
+                c.solid_shading.roughness = roughness;
+                c.escape.solid_tier = RenderTier::Lit;
+                let lit = lit_picture(&device, &queue, &c, &palette, w, h);
+                c.escape.solid_tier = RenderTier::PathTraced;
+                let mut r = renderer_for(&device, &c, w, h);
+                r.render_solid_still(&device, &queue, &c, &palette, 64, || { wait(&device); true });
+                let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                r.destroy();
+                let (mut n, mut sum_lit, mut sum_path) = (0usize, 0.0f64, 0.0f64);
+                for (p, q) in lit.iter().zip(&path) {
+                    if p[3] < 1.0 || q[3] < 0.999 {
+                        continue;
+                    }
+                    n += 1;
+                    sum_lit += (p[0] + p[1] + p[2]) as f64;
+                    sum_path += (q[0] + q[1] + q[2]) as f64;
+                }
+                let ratio = sum_lit / sum_path.max(1e-12);
+                println!("  studio {name} {material}: {n} pixels, path mean {:.4}, lit over path {ratio:.4}", sum_path / n.max(1) as f64 / 3.0);
+                let tolerance = match (name, metallic > 0.0) {
+                    ("cube", false) => 0.02,
+                    ("cube", true) => 0.35,
+                    _ => 0.15,
+                };
+                assert!(n > 2000 && sum_path > 0.0, "{name} {material}: {n} pixels");
+                assert!((ratio - 1.0).abs() < tolerance, "{name} {material}: the lit tier's studio is {ratio} of the path tracer's");
+            }
         }
     }
 

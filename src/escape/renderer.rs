@@ -868,6 +868,8 @@ pub struct EscapeRenderer {
     /// The solid's material, the lit tier's as the path tracer's: the
     /// coat's reflectance and roughness, and the glow.
     solid_material: [f32; 4],
+    /// The studio's brightness (`path_core::studio_level`; 0, none).
+    solid_studio: f32,
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -1893,6 +1895,7 @@ impl EscapeRenderer {
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
             solid_sky: None,
             solid_material: [0.0, 0.5, 0.0, 0.0],
+            solid_studio: 0.0,
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -4294,6 +4297,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return false;
         }
         self.solid_material = material;
+        true
+    }
+
+    /// The studio's brightness (3d-look-and-tools P4; 0, none), which the
+    /// lit tier lights by as the path tracer's bounces see it. Applied by
+    /// the relight, so a change needs no walk. True when it changed.
+    pub fn set_solid_studio(&mut self, studio: f32) -> bool {
+        if self.solid_studio == studio {
+            return false;
+        }
+        self.solid_studio = studio;
         true
     }
 
@@ -8164,6 +8178,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         fdata[3 + k][3] = self.solid_material[k];
                     }
                     fdata[10][3] = self.solid_material[3];
+                    // The studio, in the camera's frame (`ifs_studio`).
+                    fdata[32] = [self.solid_studio, 0.0, 0.0, 0.0];
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.

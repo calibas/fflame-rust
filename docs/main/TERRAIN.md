@@ -313,6 +313,53 @@ at roughness 0.3 to 1 (`the_coat_and_the_glow`); a metal's direct light
 is the lit tier's and the path tracer's alike within 0.3% on the sponge
 and the Mandelbulb (`a_metal_is_lit_alike_in_both_tiers`).
 
+### The studio
+
+A polished or metal surface shows what it reflects, and under a dark
+uniform sky that is nothing: a metal reads black. **Studio light** (the
+path block's `studio`, 2026-10-19) lights the scene from a procedural
+photo studio in place of the sky's light, while the camera still sees
+the background or the gradient (`ifs_studio` in the rig):
+- an overhead **softbox** a little behind the subject (radius 0.65 rad,
+  radiance 2) -- what a top face seen from above mirrors;
+- two **strips** behind to either side (0.22 rad, 1.2) -- the rims;
+- a dim **fill** panel behind the camera (0.8 rad, 0.35);
+- **walls** at 0.06 and a **floor** at 0.02, neutral white throughout.
+
+Its brightness is Sky light over the exposure (`path_core::studio_level`),
+so a radiance of 1 reads white at any exposure, as the background does.
+Its frame: a solid's turns with the camera, as its lights do (`fdata[32].y`
+0: x right, y up, z toward the viewer); a terrain's is the world's with z
+up (1). In `fdata[32]` for both tiers (the terrain's uniform grew from 32
+vec4s to 36).
+
+- **The path tracer:** a bounce that escapes sees the studio plus the
+  ambient (`pt_sky`; the environment is then the ambient alone).
+- **The lit tier** traces no rays, so it has closed forms, each
+  occluded as the ambient is:
+  - the diffuse: the walls and floor each a half-space's share, each
+    light's irradiance clipped by the surface's horizon (Lagarde and de
+    Rousiers 2014) -- within 1.3% of the integral. Solid angle times
+    cosine was 8% high for the softbox and gave a face beside it half its
+    light;
+  - the coat's reflection (`ifs_studio_reflect`), times its Fresnel at
+    the view: the lobe as a cone of radius 0.5 alpha about the mirror
+    direction, each light's share of it (its radiance where the cone is
+    inside it, its solid angle over the cone's where the cone is wider,
+    smoothed across the edge), blended toward the irradiance about the
+    lobe's dominant direction as the coat roughens. Fitted to the path
+    tracer's integral: within 5% in the mean at every roughness. A flat
+    face reflects a single direction and can be a third to a half off
+    near a light's edge (a Menger's top face, a flat terrain). Spherical
+    Gaussians, tried first, were 8% off in the mean and twice the
+    softbox's radiance at its centre.
+
+Measured against the path tracer (`the_studio_lights_both_tiers_alike`,
+`a_plane_under_the_studio_is_lit_alike`): the cube's diffuse 1.001, its
+metals 1.11 and 0.87; the Mandelbulb at the default occlusion 0.97, 1.06
+and 1.04; a flat plane's diffuse 0.999; rolling ground's metal 0.986.
+Off, neither tier takes the studio's code path.
+
 A picture saved before the material moved kept its coat and glow in a
 path tracer's settings. `lift_path_material` lifts them into
 `solid_shading` on load. The old paths (`Escape.Path.Gloss`,
@@ -405,6 +452,7 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 | `denoise` | off | Denoise | filter the noise (below) |
 | `sky_gradient` | off | Gradient sky | the background alone, or a gradient to `zenith` overhead |
 | `zenith` | (0.22, 0.40, 0.72) | Zenith | the sky's colour straight up, picked in sRGB |
+| `studio` | off | Studio light | light from a photo studio in place of the sky's, Sky light its brightness (*The studio*) |
 
 `path_core::path_settings_from` turns the block into a pass's
 `PathSettings`:
