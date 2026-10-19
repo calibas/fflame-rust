@@ -951,6 +951,13 @@ pub struct EscapeRenderer {
     /// is a stream of its own, not the samples it is measured against.
     #[cfg(test)]
     pub(crate) path_seed_offset: u32,
+    /// Test-only: the solid path tracer without multiple importance
+    /// sampling, to measure it against.
+    #[cfg(test)]
+    pub(crate) path_no_mis: bool,
+    /// Test-only: no firefly clamp, to measure an estimator's bias.
+    #[cfg(test)]
+    pub(crate) path_no_clamp: bool,
     /// Completion-time GPU cost, for a device with no timestamp
     /// queries (WebGPU exposes none by default). Written by a
     /// `Queue::on_submitted_work_done` callback, drained by
@@ -1921,6 +1928,10 @@ impl EscapeRenderer {
             force_floatexp: false,
             #[cfg(test)]
             path_seed_offset: 0,
+            #[cfg(test)]
+            path_no_mis: false,
+            #[cfg(test)]
+            path_no_clamp: false,
             #[cfg(test)]
             force_budgeted: false,
             #[cfg(test)]

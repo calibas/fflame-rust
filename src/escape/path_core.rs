@@ -64,6 +64,9 @@ pub struct PathSettings {
     /// The studio's brightness ([`studio_level`]; 0, none): the
     /// environment is then the studio's, plus the ambient.
     pub studio: f32,
+    /// Multiple importance sampling of the coat and the lights (P4; on):
+    /// off only to measure it against.
+    pub mis: bool,
 }
 
 impl Default for PathSettings {
@@ -83,6 +86,7 @@ impl Default for PathSettings {
             denoise: false,
             sky: None,
             studio: 0.0,
+            mis: true,
         }
     }
 }
@@ -145,6 +149,7 @@ pub fn path_settings_from(
         denoise: t.denoise,
         sky,
         studio,
+        mis: true,
     }
 }
 
@@ -324,7 +329,7 @@ impl PathParamsGpu {
                 settings.emission.max(0.0),
                 settings.lake_roughness.clamp(0.02, 1.0),
             ],
-            lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), 0.0, 0.0],
+            lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), if settings.mis { 1.0 } else { 0.0 }, 0.0],
             band: [band.0, band.1, u32::from(settings.denoise), 0],
             sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
         }
@@ -390,7 +395,8 @@ struct PtParams {
     // the albedo's own glow, w: a terrain lake's roughness.
     mat: vec4<f32>,
     // x: the lens's radius (0: a pinhole), y: the focal plane's view
-    // depth.
+    // depth; z: 1 for multiple importance sampling of the coat and the
+    // lights (`pt_path`).
     lens: vec4<f32>,
     // x: the dispatch's first row, y: its rows (a band, for a geometry
     // whose sample would outlast the GPU's watchdog over a whole frame),
@@ -632,6 +638,37 @@ fn pt_vndf(v: vec3<f32>, alpha: f32) -> vec3<f32> {
     return normalize(vec3<f32>(alpha * nh.x, alpha * nh.y, max(nh.z, 0.0)));
 }
 
+// Multiple importance sampling of the coat and the lights (Veach and
+// Guibas 1995; 3d-look-and-tools P4). A polished coat's peak is narrower
+// than a light's cone: the lights' samples rarely land in it -- speckle --
+// and the coat's bounces that do meet a light saw only the sky. Now a
+// bounce by the coat's lobe that escapes inside a directional light's
+// cone adds the light, and both estimates of the coat's share of it are
+// weighted by the power heuristic. The diffuse stays the lights' alone
+// (nothing to gain: its density never nears a light's), and a point or a
+// headlamp has no area to meet. Off at shadow strength 0, where the
+// lights reach through the solid and a bounce cannot see them do so.
+//
+// A light's direction's density, sampled uniformly over its cone.
+fn pt_light_pdf() -> f32 {
+    return 1.0 / (6.283185307 * max(1.0 - pt.misc.w, 1.0e-7));
+}
+
+// The power heuristic's weight of an estimate of density `a` against one
+// of density `b`.
+fn pt_power_weight(a: f32, b: f32) -> f32 {
+    let a2 = a * a;
+    return a2 / max(a2 + b * b, 1.0e-30);
+}
+
+// The density of the coat's bounce toward `l` -- its lobe chosen at
+// `p_spec`, then the visible normals' (Heitz 2018: G1(v) D(h) / 4 n.v).
+fn pt_coat_pdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, a2: f32, p_spec: f32) -> f32 {
+    let nv = max(dot(n, v), 1.0e-4);
+    let h = normalize(v + l);
+    return p_spec * pt_g1(nv, a2) * pt_ggx_d(max(dot(n, h), 0.0), a2) / (4.0 * nv);
+}
+
 // A surface a ray reached: the geometry's answer.
 struct PtHit {
     hit: bool,
@@ -703,6 +740,16 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         let v = -d;
         let nv = max(dot(n, v), 1.0e-4);
         let energy = ifs_coat_energy(f0c, nv, h.rough);
+        // The bounce's lobe choice: the coat's at its Fresnel at this view.
+        // Without a coat, no draw to choose a lobe: Lambert's samples are
+        // the same stream they were before the coat existed. A metal
+        // leans the choice to the coat, wholly at 1, where nothing is
+        // under it.
+        let p_spec = select(0.0, mix(clamp(select(0.0, pt_fresnel(f0, nv), f0 > 0.0), 0.1, 0.9), 1.0, metal), coated);
+        // Whether the coat's direct light is weighted against its bounces
+        // (above): only when there is a bounce from here to meet a light.
+        let mis = pt.lens.z > 0.5 && p_spec > 0.0 && pt.misc.z > 0.0 && bounce < pt.bounces;
+        let shadow_strength = clamp(pt.misc.z, 0.0, 1.0);
         // Every light, each sampled over its angular size. Picking one a
         // surface (by power) would save shadow rays, but a face only one
         // light reaches then reads all of it or none, sample to sample:
@@ -723,8 +770,10 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             let ndl = dot(n, ld);
             if (ndl > 0.0 && (!bumped || dot(ng, ld) > 0.0)) {
                 var vis = 1.0;
+                var seen = 1.0;
                 if (pt.misc.z > 0.0) {
-                    vis = mix(1.0, select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled)), clamp(pt.misc.z, 0.0, 1.0));
+                    seen = select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled));
+                    vis = mix(1.0, seen, shadow_strength);
                 }
                 var spec = vec3<f32>(0.0, 0.0, 0.0);
                 var diff = 1.0;
@@ -737,6 +786,18 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 }
                 let light = ifs_light_color(li) * (ifs_light_power(li) * la.gain * ndl * vis);
                 radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + spec);
+                // The coat's share, weighted against its bounces where a
+                // bounce can meet this light: the part of it that reaches
+                // (`seen`) by the power heuristic, the part a partial
+                // shadow strength lets through the solid -- which no bounce
+                // sees -- whole. Their sum is `vis`; what it takes from
+                // the coat's share added above.
+                var spec_vis = vis;
+                if (mis && ifs_light_kind(li) == 0u) {
+                    let w = pt_power_weight(pt_light_pdf(), pt_coat_pdf(n, v, ld, a2, p_spec));
+                    spec_vis = w * seen + (1.0 - shadow_strength) * (1.0 - seen);
+                    radiance = radiance + through * ifs_light_color(li) * spec * (ifs_light_power(li) * la.gain * ndl * (spec_vis - vis));
+                }
                 // The highlight, the lit tier's very term (materials.md
                 // §4.1): Blinn-Phong on the direct light, unnormalised and
                 // without the cosine, so both tiers draw it alike. Not a
@@ -778,14 +839,13 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             break;
         }
         // The bounce: the gloss's lobe by the visible normals, chosen by
-        // the coat's Fresnel at this view; else Lambert's, whose cosine
-        // sampling leaves the albedo times what the coat lets through.
+        // the coat's Fresnel at this view (`p_spec`); else Lambert's, whose
+        // cosine sampling leaves the albedo times what the coat lets
+        // through.
         var nd = vec3<f32>(0.0, 0.0, 1.0);
-        // Without a coat, no draw to choose a lobe: Lambert's samples are
-        // the same stream they were before the coat existed. A metal
-        // leans the choice to the coat, wholly at 1, where nothing is
-        // under it.
-        let p_spec = select(0.0, mix(clamp(select(0.0, pt_fresnel(f0, nv), f0 > 0.0), 0.1, 0.9), 1.0, metal), coated);
+        // The coat's bounce's density toward where it went, for the
+        // lights it may meet (0: Lambert's, or no weighting).
+        var coat_pdf = 0.0;
         if (p_spec > 0.0 && pt_rand() < p_spec) {
             let frame = pt_frame(n);
             let vl = transpose(frame) * v;
@@ -797,6 +857,9 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 break;
             }
             through = through * ifs_coat_fresnel3(f0c, max(dot(v, hv), 0.0)) * energy * (pt_g1(nl, a2) / p_spec);
+            if (mis) {
+                coat_pdf = pt_coat_pdf(n, v, nd, a2, p_spec);
+            }
         } else {
             nd = pt_cosine(n);
             // No coat at all at reflectance 0: Schlick's term alone would
@@ -821,6 +884,18 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         h = pt_scene_next(o, d, travelled);
         if (!h.hit) {
             radiance = radiance + through * pt_sky(d);
+            // The lights it meets: a directional light's radiance over its
+            // cone (its irradiance pi I spread over the cone's solid
+            // angle), weighted against the lights' own samples of it.
+            if (coat_pdf > 0.0) {
+                let pl = pt_light_pdf();
+                let w = pt_power_weight(coat_pdf, pl);
+                for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
+                    if (ifs_light_kind(li) == 0u && dot(d, ifs_light_dir(li)) >= pt.misc.w) {
+                        radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * 3.141592654 * pl * w);
+                    }
+                }
+            }
             break;
         }
     }
