@@ -3302,6 +3302,13 @@ pub fn get_ifs(name: &str) -> Option<&'static IfsDef> {
     })
 }
 
+/// A solid's formula parameters that are its light's rather than its
+/// shape's -- Shadows, Shadow Sharpness, Occlusion Reach -- drawn by the
+/// Lighting & Material panel, not the Escape panel's parameter list
+/// (3d-look-and-tools P3). Every solid def has them, the Rhai template's
+/// included.
+pub const LIGHTING_PARAMS: &[&str] = &["shadow", "shadow_sharpness", "occlusion"];
+
 /// The solids the user wrote (the KIFS plan, B3), compiled by
 /// `escape::custom::compile_solid` under their `custom-` names: found by
 /// [`get_ifs`] as the built-ins are, never listed beside them.

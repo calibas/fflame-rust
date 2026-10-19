@@ -1146,6 +1146,11 @@ impl App {
             let ctx = &self.egui_layer.ctx;
             self.workspace.open_panel(PanelType::FormulaEditor, ctx);
         }
+        if ui_response.open_lighting_panel {
+            use crate::ui::workspace::PanelType;
+            let ctx = &self.egui_layer.ctx;
+            self.workspace.open_panel(PanelType::SolidLighting, ctx);
+        }
     }
 
     /// Handle preset selection from Preset Library panel

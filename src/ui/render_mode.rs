@@ -33,7 +33,7 @@ pub fn surface_3d(config: &FractalConfig) -> bool {
 /// and the tone map encodes sRGB itself, so gamma 1 is the one correct
 /// encode -- saturation 1 and no hue shift, none of which a flame's values
 /// suit; and, when the lighting rig is untouched (a flame's default, no
-/// lighting at all), the rig at full strength with no ambient. Nothing
+/// lighting at all), the rig taken over ([`rig_taken_over`]). Nothing
 /// when it enters no such view, or was in one already.
 pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
     use crate::config::defaults::{DEFAULT_HUE_SHIFT, DEFAULT_SATURATION, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
@@ -48,9 +48,32 @@ pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath
         (ConfigPath::HueShift, DEFAULT_HUE_SHIFT.into()),
     ];
     if after.solid_shading.rig_untouched() {
-        changes.push((ConfigPath::ShadingStrength, 1.0f32.into()));
-        changes.push((ConfigPath::SolidAmbient, 0.0f32.into()));
+        changes.extend(rig_taken_over(after));
     }
+    changes
+}
+
+/// What an untouched lighting rig becomes when a lit 3D view takes it
+/// over -- on entry (the 3D look) and at the Lighting & Material panel's
+/// first change of it: full strength and no ambient (3d-look-and-tools
+/// P2), the rest as stored, and on a terrain light 0 where the untouched
+/// rig's sun was (`DEFAULT_SUN`; light 0 ships at mode D's key light), so
+/// taking the rig over does not swing the sun.
+pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    #[allow(unused_mut)]
+    let mut changes = vec![(ConfigPath::ShadingStrength, 1.0f32.into()), (ConfigPath::SolidAmbient, 0.0f32.into())];
+    #[cfg(feature = "terrain")]
+    {
+        use crate::camera::gesture::{view_kind, ViewKind};
+        if matches!(view_kind(config), ViewKind::EscapeTerrain | ViewKind::SimTerrain) {
+            let (azimuth, elevation) = crate::escape::terrain::DEFAULT_SUN;
+            let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
+            changes.push((light("azimuth"), azimuth.into()));
+            changes.push((light("elevation"), elevation.into()));
+        }
+    }
+    #[cfg(not(feature = "terrain"))]
+    let _ = config;
     changes
 }
 
@@ -305,6 +328,18 @@ mod tests {
         apply_with_look(&mut m, vec![(ConfigPath::EscapeTerrainEnabled, true.into())], "history.param.escape_terrain_enabled").unwrap();
         assert!(looks_3d(m.active_config(), false), "the terrain");
         assert_eq!((m.active_config().solid_shading.shading_strength, m.active_config().solid_shading.ambient), (0.5, 0.3), "a touched rig stays");
+        // An untouched rig on a terrain: light 0 takes the default sun's
+        // place, so the sun does not swing.
+        let mut m = ConfigManager::new({
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c
+        });
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeTerrainEnabled, true.into())], "history.param.escape_terrain_enabled").unwrap();
+        let c = m.active_config();
+        assert!(looks_3d(c, true), "an untouched terrain");
+        assert_eq!((c.solid_shading.lights[0].azimuth, c.solid_shading.lights[0].elevation), crate::escape::terrain::DEFAULT_SUN);
+        assert!(c.solid_shading.lights[0].enabled);
         // A plane is no 3D view: the picker choosing another plane changes nothing else.
         let mut m = ConfigManager::new({
             let mut c = FractalConfig::default();

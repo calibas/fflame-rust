@@ -442,14 +442,15 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Performance, "menu.window_performance"),
     row(PanelType::Rendering, "menu.window_rendering"),
     row(PanelType::View, "menu.window_view"),
+    // Every lit 3D view's lighting, shadows, material and surface
+    // (3d-look-and-tools P3; it was the View panel's Lighting & Material
+    // section from camera-unification C5 until then).
+    row(PanelType::SolidLighting, "menu.window_solid_lighting"),
     row(PanelType::Escape, "menu.window_escape"),
     row(PanelType::Simulation, "menu.window_simulation"),
     row(PanelType::Textures, "menu.window_textures"),
     row(PanelType::FormulaEditor, "menu.window_formula_editor"),
     row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
-    // No Solid Lighting row: its controls are the View panel's Lighting
-    // & Material section (camera-unification C5). The panel type stays
-    // so a saved layout that docks it still loads, and draws that section.
     row(PanelType::Transforms, "menu.window_transforms"),
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
     row(PanelType::Colors, "menu.window_colors"),
@@ -483,6 +484,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::TriangleEditor,
     PanelType::Colors,
     PanelType::View,
+    PanelType::SolidLighting,
     PanelType::Rendering,
     PanelType::FractalBrowser,
     PanelType::Variations,
@@ -773,7 +775,7 @@ mod tests {
     }
 
     /// The flame modes offer everything except what is not theirs:
-    /// Solid & Lighting is 3D alone, and Textures go into an escape-time
+    /// Lighting & Material is 3D alone, and Textures go into an escape-time
     /// fractal (sim-textures plan: escape first).
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
