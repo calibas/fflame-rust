@@ -194,7 +194,7 @@ shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical
    **Steps 1-2 done 2026-10-19.** Karis's fit was up to 47% off for our
    separable Smith masking (it is fitted to the height-correlated form),
    so the albedo is a 16-term fit to our coat's own integral
-   (`path_core::COAT_ESS_FIT`), generated into every shader. Fitted from
+   (`renderer::coat::COAT_ESS_FIT`), generated into every shader. Fitted from
    cos 0.25 and clamped there it gave a rough metal 24% too much at a
    glance; fitted over the whole range, the compensation is within 1.6%
    from cos 0.2 up and -11% to +5% at a glance. A white metal under a
@@ -305,6 +305,13 @@ Steps:
    goes (the IFS flame solids' seeded walk; f32 for the others).
 4. Terrains: the same from a probe straight down and the frustum's.
 
+**Steps 1-3 done 2026-10-19** (CAMERA.md, *A solid's surface*): the probe
+is the walk's shader to its entry point with a one-thread entry; it lands
+for all 23 shipped solids and reads the Julia ball's exact estimate to
+1e-6. Collisions on by default (they change how a flight into a solid
+ends: it stops); proximity speed off. Step 4, terrains, not built: a
+terrain keeps its floor, and its probe measures only the ground in view.
+
 ## P7. Path tracing: research and plan
 
 "Anything to speed up or improve the quality of Path Tracing is something we
@@ -324,7 +331,7 @@ compensation, the environment, AgX).
 1. [x] P1 syntax highlighting.
 2. [x] P2 the 3D look and Lit toward Path traced, 2026-10-19.
 3. [x] P3 the Lighting & Material panel, 2026-10-19.
-4. [ ] P4 materials (after P7's research).
+4. [x] P4 materials, 2026-10-19 (step 5, light size, left for the user).
 5. [ ] P5 flame variations in solids, Orbit colouring.
-6. [ ] P6 fly mode.
+6. [~] P6 fly mode: solids done 2026-10-19; terrains (step 4) not built.
 7. [x] P7 research written up (alongside), 2026-10-19.

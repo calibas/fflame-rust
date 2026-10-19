@@ -27,6 +27,7 @@ use crate::config::escape::EscapeConfig;
 use super::assembler::{self, LAYER_PARAM_VEC4S, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
+mod clearance;
 mod solid_path;
 pub use solid_path::{EXPORT_FRAME_MS, IDLE_FRAME_MS, VIEWPORT_FRAME_MS};
 
@@ -935,6 +936,8 @@ pub struct EscapeRenderer {
     pipelines: HashMap<String, ComputePipeline>,
     /// Mode D's path tracer (heightfield plan T3c), made on first use.
     solid_path: Option<solid_path::SolidPath>,
+    /// Fly mode's clearance probe (P6), made on its first use.
+    clearance: Option<clearance::ClearanceProbe>,
     /// Test-only: force the perturbed path regardless of zoom so the
     /// direct/perturbed agreement test can render the SAME shallow
     /// view both ways.
@@ -1999,6 +2002,7 @@ impl EscapeRenderer {
             chunk_key: None,
             timestamps: None,
             solid_path: None,
+            clearance: None,
             gpu_ms_per_iter: None,
             gpu_ms_per_iter_cold: None,
             gpu_regime: None,
@@ -9065,6 +9069,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// Free GPU memory explicitly — on WebGPU `Drop` frees nothing.
     /// Idempotent; safe once no submitted work references the texture.
     pub fn destroy(&self) {
+        if let Some(p) = &self.clearance {
+            p.destroy();
+        }
         self.output_texture.destroy();
         self.params_buffer.destroy();
         self.perturb_params_buffer.destroy();

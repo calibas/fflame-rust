@@ -400,6 +400,37 @@ speed by `fly_sprint_multiplier`.
 In fly mode the wheel sets the speed: `view_scroll` multiplies
 `fly_move_speed` by the wheel factor, clamped to 0.05..20.
 
+### A solid's surface (2026-10-19)
+
+A solid knows how far its surface is: its own distance estimate at the
+eye, `ifs_distance_at` -- every solid kind, Rhai ones included, at the
+render's precision. While fly mode is on, `App::update_fly_camera` has
+the escape renderer measure it every frame (`probe_clearance`: the walk's
+shader to its entry point, and one thread writing one float at binding
+7) and read it back without waiting (`poll_clearance`), as the terrain's
+nearest-ground probe is read. The last measure that landed is a
+`fly::Clearance`: the eye it stood at (the world's, f64) and the distance.
+`fly::fly` takes it in `FlyLimits`:
+- **Collisions** (`fly_collisions`, on): a step never takes the eye
+  further than half the clearance (`CLEARANCE_FRACTION`) from where it
+  was measured -- a sphere-traced step, safe in every direction. The eye
+  closes on a wall in ever smaller steps and stops short of it; moving
+  away, each new measure lets it go further.
+- **Proximity speed** (`fly_proximity`, off): a step is a share of the
+  clearance rather than of the distance to the target, and the zoom
+  eases a quarter of the way (`ZOOM_FOLLOW`, in log2) toward the
+  clearance each step, the eye held where the step put it: the target
+  slides along the view by what its distance changes. Flying into the
+  surface slows and zooms in -- a deep zoom, as deep as the solid's
+  precision goes (the IFS flame solids' seeded walk; f32 elsewhere).
+
+Without a measure yet, or in any other camera, a flight is as above. A
+terrain keeps its floor and has no clearance yet (P6 step 4, not built).
+Gates: `the_clearance_probe_reads_the_solid_at_the_eye` (the Julia set at
+c = 0 is the unit ball, its estimate 0.5 r ln r exactly: within 1e-6),
+`the_clearance_probe_lands_for_every_shipped_solid`,
+`a_solid_flies_within_its_clearance`.
+
 ### Settings
 
 Device preferences in `SystemSettings` (`src/storage/settings.rs`), not
@@ -412,6 +443,8 @@ Device preferences in `SystemSettings` (`src/storage/settings.rs`), not
 | `fly_move_speed` | 1.0 | Move speed (0.05..20); the wheel in fly mode | |
 | `fly_sprint_multiplier` | 3.0 | Sprint multiplier (1..20) | |
 | `fly_invert_y` | false | Invert Y axis | every orbit |
+| `fly_collisions` | true | Stop at surfaces | a solid's flight |
+| `fly_proximity` | false | Speed by distance | a solid's flight |
 
 ---
 

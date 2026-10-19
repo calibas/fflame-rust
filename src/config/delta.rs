@@ -666,6 +666,9 @@ pub enum ConfigPath {
     SystemFlySprintMultiplier,
     SystemFlyInvertY,
     SystemFlyCameraMode,
+    /// Fly mode's collisions and proximity speed (3d-look-and-tools P6).
+    SystemFlyCollisions,
+    SystemFlyProximity,
     SystemExportWidth,
     SystemExportHeight,
     SystemPngStripMetadata,
@@ -1420,6 +1423,8 @@ impl Display for ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => write!(f, "System: Fly Move Speed"),
             ConfigPath::SystemFlySprintMultiplier => write!(f, "System: Fly Sprint Multiplier"),
             ConfigPath::SystemFlyInvertY => write!(f, "System: Fly Invert Y"),
+            ConfigPath::SystemFlyCollisions => write!(f, "System: Fly Collisions"),
+            ConfigPath::SystemFlyProximity => write!(f, "System: Fly Proximity Speed"),
             ConfigPath::SystemFlyCameraMode => write!(f, "System: Fly Camera Mode"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
@@ -2166,6 +2171,8 @@ impl ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => I18nKey::simple("history.param.system_fly_move_speed"),
             ConfigPath::SystemFlySprintMultiplier => I18nKey::simple("history.param.system_fly_sprint_multiplier"),
             ConfigPath::SystemFlyInvertY => I18nKey::simple("history.param.system_fly_invert_y"),
+            ConfigPath::SystemFlyCollisions => I18nKey::simple("history.param.system_fly_collisions"),
+            ConfigPath::SystemFlyProximity => I18nKey::simple("history.param.system_fly_proximity"),
             ConfigPath::SystemFlyCameraMode => I18nKey::simple("history.param.system_fly_camera_mode"),
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
@@ -3380,7 +3387,7 @@ impl ConfigPath {
             // Read by the frame loop each frame; orbits persist, so how
             // the work is sliced changes nothing to reset.
             ConfigPath::SystemFrameGovernor | ConfigPath::SystemManualWorkgroups => UpdateType::None,
-            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode | ConfigPath::SystemFlyCollisions | ConfigPath::SystemFlyProximity => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
             // Nothing to re-render: it only changes what a future
             // export writes into the file.
@@ -3866,6 +3873,8 @@ impl ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => "System.FlyMoveSpeed".to_string(),
             ConfigPath::SystemFlySprintMultiplier => "System.FlySprintMultiplier".to_string(),
             ConfigPath::SystemFlyInvertY => "System.FlyInvertY".to_string(),
+            ConfigPath::SystemFlyCollisions => "System.FlyCollisions".to_string(),
+            ConfigPath::SystemFlyProximity => "System.FlyProximity".to_string(),
             ConfigPath::SystemFlyCameraMode => "System.FlyCameraMode".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
@@ -4457,6 +4466,8 @@ impl ConfigPath {
                 "FlyMoveSpeed" => return Some(ConfigPath::SystemFlyMoveSpeed),
                 "FlySprintMultiplier" => return Some(ConfigPath::SystemFlySprintMultiplier),
                 "FlyInvertY" => return Some(ConfigPath::SystemFlyInvertY),
+                "FlyCollisions" => return Some(ConfigPath::SystemFlyCollisions),
+                "FlyProximity" => return Some(ConfigPath::SystemFlyProximity),
                 "FlyCameraMode" => return Some(ConfigPath::SystemFlyCameraMode),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
@@ -4706,6 +4717,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemFlyMoveSpeed
         | ConfigPath::SystemFlySprintMultiplier
         | ConfigPath::SystemFlyInvertY
+        | ConfigPath::SystemFlyCollisions
+        | ConfigPath::SystemFlyProximity
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
         | ConfigPath::LevelsGamma
@@ -5753,6 +5766,8 @@ mod tests {
             ConfigPath::SystemFlySprintMultiplier,
             ConfigPath::SystemFlyInvertY,
             ConfigPath::SystemFlyCameraMode,
+            ConfigPath::SystemFlyCollisions,
+            ConfigPath::SystemFlyProximity,
             ConfigPath::SystemExportWidth,
             ConfigPath::SystemExportHeight,
             ConfigPath::SystemPngStripMetadata,
