@@ -376,8 +376,9 @@ impl Checker {
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
                 (EntryKind::Coloring, SectionKind::Init | SectionKind::Loop | SectionKind::Final) => true,
-                // A solid: its start, step, bail and distance (B3).
-                (EntryKind::Solid, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout | SectionKind::Final) => true,
+                // A solid: its start, step, bail and distance (B3), and
+                // what `prepare` computes once (B's leftovers).
+                (EntryKind::Solid, SectionKind::Global | SectionKind::Init | SectionKind::Loop | SectionKind::Bailout | SectionKind::Final) => true,
                 _ => false,
             };
             if !allowed {

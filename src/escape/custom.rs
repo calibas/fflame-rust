@@ -37,6 +37,10 @@ struct Registry {
     /// The programs with `global:` values, which the renderer has the
     /// interpreter compute ([`globals`]).
     programs: HashMap<String, Arc<ir::Program>>,
+    /// A solid's parameter block: where its own parameters start (after
+    /// the template's), and where its globals do (after its parameters,
+    /// its colour depth and its ball).
+    solid_globals: HashMap<String, (usize, usize)>,
     /// The colourings keeping more than four floats: the `vec4`s of
     /// state past the first ([`accum_ext`]).
     accum_ext: HashMap<String, usize>,
@@ -419,8 +423,16 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     let template = super::ifs::template_parameters();
     let own = param_defs(&p);
     let depth_slot = template.len() + own.len();
-    if depth_slot + 2 > 64 {
-        return Err(fail(format!("a solid's parameters take {} slots; it has {}", 64 - template.len() - 2, own.len())));
+    // Its parameters, their colour depth and ball, then what `prepare`
+    // computes: one block of 64.
+    let globals: usize = p.globals.iter().map(|&v| p.vars[v].floats()).sum();
+    if depth_slot + 2 + globals > 64 {
+        return Err(fail(format!(
+            "a solid's parameters and `prepare` values take {} slots; it has {} and {}",
+            64 - template.len() - 2,
+            own.len(),
+            globals
+        )));
     }
     let wgsl = lang::wgsl::solid(&p, template.len(), depth_slot).map_err(fail)?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -460,6 +472,13 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     };
     let def: &'static super::ifs::IfsDef = Box::leak(Box::new(def));
     super::ifs::register_custom_solid(def);
+    // Its `prepare`, which the renderer has the interpreter compute.
+    if !p.globals.is_empty() {
+        if let Ok(mut r) = registry().write() {
+            r.solid_globals.insert(name.to_string(), (template.len(), depth_slot + 2));
+            r.programs.insert(name.to_string(), Arc::new(p));
+        }
+    }
     Ok(def)
 }
 
@@ -1244,8 +1263,17 @@ pub fn accum_ext(name: &str) -> usize {
 /// the last answer per name is kept and reused while nothing it read
 /// has changed.
 pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(usize, Vec<f32>)> {
-    let p = registry().read().ok()?.programs.get(name)?.clone();
-    let at = if p.kind == EntryKind::Coloring { p.param_slots() } else { 0 };
+    let (p, base, at) = {
+        let r = registry().read().ok()?;
+        let p = r.programs.get(name)?.clone();
+        let (base, at) = match p.kind {
+            EntryKind::Coloring => (0, p.param_slots()),
+            EntryKind::Solid => *r.solid_globals.get(name)?,
+            _ => (0, 0),
+        };
+        (p, base, at)
+    };
+    let block = block.get(base..).unwrap_or_default();
     // Everything `global:` can read: the parameters and the image.
     let mut key: Vec<u64> = block.iter().map(|v| u64::from(v.to_bits())).collect();
     key.extend([

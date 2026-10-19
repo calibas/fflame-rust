@@ -8077,6 +8077,22 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut lparams = [[0.0f32; 4]; LAYER_PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
+        // What a custom entry's `global:` (`prepare`) reads of the image.
+        let image = super::lang::interp::Env {
+            pixel: super::lang::builtins::C64::ZERO,
+            maxiter: escape.max_iter.max(1),
+            center: super::lang::builtins::C64::new(cx, cy),
+            // As the shader's `esc_env_magn`.
+            magn: 4.0 / span_y,
+            x: 0,
+            y: 0,
+            width: self.width as i32,
+            height: self.height as i32,
+            random: super::lang::builtins::C64::ZERO,
+            julia: escape.julia,
+            julia_c: super::lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
+            rotation: f64::from(escape.rotation),
+        };
         // The smooth count's log base: the formula's degree in mode A, 2
         // elsewhere.
         let mut degree = 2.0f32;
@@ -8096,6 +8112,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // other value is the user's and is left alone.
             if coloring.name == "ifs_measure" && cparams[0][1] <= 0.0 {
                 cparams[0][1] = self.measure_auto_scale(escape).unwrap_or(1.0);
+            }
+            // A Rhai solid's `prepare`: its values after its parameters.
+            if let Some((at, values)) = super::custom::globals(def.name, fparams.as_flattened(), &image) {
+                for (slot, v) in fparams.as_flattened_mut().iter_mut().skip(at).zip(values) {
+                    *slot = v;
+                }
             }
             if def.solid {
                 if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
@@ -8182,21 +8204,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // A custom entry's `global:` values (escape::lang), computed
             // on the CPU from the image and the parameters as packed: a
             // formula's into `fdata`, a colouring's after its parameters.
-            let image = super::lang::interp::Env {
-                pixel: super::lang::builtins::C64::ZERO,
-                maxiter: escape.max_iter.max(1),
-                center: super::lang::builtins::C64::new(cx, cy),
-                // As the shader's `esc_env_magn`.
-                magn: 4.0 / span_y,
-                x: 0,
-                y: 0,
-                width: self.width as i32,
-                height: self.height as i32,
-                random: super::lang::builtins::C64::ZERO,
-                julia: escape.julia,
-                julia_c: super::lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
-                rotation: f64::from(escape.rotation),
-            };
             if let Some((at, values)) = super::custom::globals(&formula.name, fparams.as_flattened(), &image) {
                 for (slot, v) in fdata.as_flattened_mut().iter_mut().skip(at).zip(values) {
                     *slot = v;

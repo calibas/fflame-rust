@@ -243,6 +243,8 @@ pub fn solid(p: &Program, params: &ParamValues, pos: [f64; 3], levels: u32) -> f
     let mut m = Machine::new(p, params);
     let mut sh = Shared::new(&env);
     sh.pixel_z = pos[2];
+    // `prepare`, once: what the walk reads of it (B's leftovers).
+    m.exec(&p.global_body, &mut sh);
     m.exec(&p.init, &mut sh);
     for _ in 0..levels {
         m.exec(&p.loop_body, &mut sh);

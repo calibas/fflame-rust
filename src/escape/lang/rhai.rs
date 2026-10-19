@@ -367,6 +367,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         param_vecs: HashSet::new(),
         three,
         solid: kind == EntryKind::Solid,
+        probe: std::cell::Cell::new(0),
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -543,10 +544,14 @@ struct Lowerer<'s> {
     /// Lowering a solid (B3): its `z` is a vector of its own, not the
     /// formula's iterate.
     solid: bool,
+    /// How deep [`Lowerer::is_vec`] has looked into helpers, against a
+    /// helper that calls itself.
+    probe: std::cell::Cell<usize>,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
 /// block last.
+#[derive(Clone)]
 struct Scope {
     blocks: Vec<HashMap<String, Binding>>,
     which: Fn3,
@@ -754,10 +759,6 @@ impl<'s> Lowerer<'s> {
                 state_fields = scope.fields.clone();
                 sections.push(Section { kind: SectionKind::Init, span, body, last_is_bailout: false, labelled: true });
             }
-        }
-        if kind == EntryKind::Solid && self.fns.contains_key("prepare") {
-            let f = &self.fns["prepare"];
-            return self.err(f.body.position(), "a solid has no `prepare` yet: compute its values in `start`");
         }
         match kind {
             EntryKind::Formula => sections.extend(self.formula_sections(span, &mut default)?),
@@ -1925,8 +1926,13 @@ impl<'s> Lowerer<'s> {
                 match st {
                     Stmt::Var(x, _, _) => {
                         let (ident, value, _) = &**x;
-                        let v = self.expr(value, scope)?;
-                        scope.bind(&ident.name, Binding::Value(v));
+                        if self.is_vec(value, scope) {
+                            let v = self.vexpr(value, scope)?;
+                            scope.bind(&ident.name, Binding::VecValue(Box::new(v)));
+                        } else {
+                            let v = self.expr(value, scope)?;
+                            scope.bind(&ident.name, Binding::Value(v));
+                        }
                     }
                     Stmt::Noop(_) => {}
                     other => return self.err(other.position(), "`escaped` is one test: here only `let`s, then the value"),
@@ -2236,11 +2242,9 @@ impl<'s> Lowerer<'s> {
                     Val::V(v) => inner.bind(param, Binding::VecValue(Box::new(v))),
                 }
             }
-            // A helper gives a number (B1).
-            if let Some(Final::Expr(x)) = def.body.statements().last().and_then(final_value) {
-                if self.is_vec(x, &inner) {
-                    return self.err(p, format!("`{name}` ends with a vector, and a helper gives a number: write the vector in place, or a helper per part"));
-                }
+            // A helper giving a vector, where a number is wanted.
+            if self.block_gives_vec(&def.body, &inner) {
+                return self.err(p, format!("`{name}` gives a vector where a number is wanted: take a part (`.x`), `length` or `dot`"));
             }
             self.depth += 1;
             let r = if self.pure { self.pure_body(&def.body, &mut inner) } else { self.helper_body(&def.body, &mut inner) };

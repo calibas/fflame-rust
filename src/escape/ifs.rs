@@ -14578,20 +14578,66 @@ fn distance(s, p) {
 }
 "#;
 
+    /// The KIFS Menger written as a Rhai solid (B's leftovers): its fold a
+    /// function parameter of a vector (`abs`, part by part; not named
+    /// `fold`, which the built-in's config carries as its fold type), its mirrors a
+    /// helper giving a vector whose arms are vector `if` values, its ball
+    /// and shift what `prepare` computes once -- a vector among them --
+    /// and the sponge's middle layer a vector `if`. As the built-in's
+    /// fold 3 at scale 3 and offset (1, 1, 1).
+    const RHAI_MENGER: &str = r#"
+const PARAMS = #{
+    scale: 3.0,
+    offset: #{ value: vec3(1.0, 1.0, 1.0), caption: "Offset" },
+    mirror: #{ function: "abs", caption: "Mirror" },
+};
+const INFO = #{ title: "KIFS Menger (Rhai)", radius: 1.7320508 };
+fn prepare(p) {
+    #{ radius: max(length(p.offset), 1e-3), shift: p.offset * (p.scale - 1.0) }
+}
+// The parts in descending order: the three diagonal mirrors.
+fn sorted(v) {
+    let a = if v.x < v.y { vec3(v.y, v.x, v.z) } else { v };
+    let b = if a.x < a.z { vec3(a.z, a.y, a.x) } else { a };
+    if b.y < b.z { vec3(b.x, b.z, b.y) } else { b }
+}
+fn start(pos, p) { #{ z: pos, k: 0, out: false } }
+fn step(s, p) {
+    let z = sorted(p.mirror(s.z)) * p.scale - p.shift;
+    // The sponge: the middle layer's cubes move back up.
+    s.z = if z.z < -0.5 * p.shift.z { vec3(z.x, z.y, z.z + p.shift.z) } else { z };
+    s.k += 1;
+    if length(s.z) > p.radius {
+        s.out = true;
+    }
+    s
+}
+fn escaped(s, p) { length(s.z) > 1000.0 * p.radius }
+fn distance(s, p) {
+    if s.out { max(length(s.z) - p.radius, 0.0) * p.scale ** (-s.k.to_float()) } else { 0.0 }
+}
+"#;
+
     /// **A solid written in Rhai walks as the built-in** (B3's gate, on
-    /// the CPU): the Mandelbox's and the Mandelbulb's Rhai twins, run by
-    /// the interpreter, give the f64 twins' distances at points in and
-    /// around their balls; and each compiles to a walk that validates.
+    /// the CPU): the Mandelbox's, the Mandelbulb's and the KIFS Menger's
+    /// Rhai twins, run by the interpreter, give the f64 twins' distances at
+    /// points in and around their balls; and each compiles to a walk that
+    /// validates.
     #[test]
     fn rhai_solids_walk_as_the_builtins() {
         use crate::escape::lang::interp::{solid, ParamValues};
-        let cases: [(&str, &str, Solid); 2] = [("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))), ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0)))];
+        let cases: [(&str, &str, Solid); 3] = [
+            ("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))),
+            ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0))),
+            ("kifs-menger", RHAI_MENGER, Solid::Kifs(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]))),
+        ];
         for (what, src, twin) in cases {
             let p = crate::escape::lang::rhai::solid(src).unwrap_or_else(|d| panic!("{what}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
             let params = ParamValues::defaults(&p);
             let levels = match &twin {
                 Solid::Box(b) => b.levels,
                 Solid::Bulb(b) => b.levels,
+                Solid::Kifs(k) => k.levels,
                 _ => unreachable!(),
             };
             let mut rng = XorShift(0x5EED_0000 + what.len() as u64);
@@ -14605,15 +14651,17 @@ fn distance(s, p) {
             println!("{what}: the Rhai walk's distance against the twin's, worst relative difference {worst:.2e}");
             assert!(worst < 1e-9, "{what}: {worst}");
             let base = template_parameters().len();
-            let wgsl = crate::escape::lang::wgsl::solid(&p, base, base + p.params.len()).expect("a walk");
+            let wgsl = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("a walk");
             crate::escape::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
         }
     }
 
     /// **A solid written in Rhai renders as the built-in** (B3's gate, on
-    /// the GPU): the Rhai twins of the Mandelbox and the Mandelbulb, carried
-    /// as the config's custom formula and registered as mode-D entries,
-    /// cover the pixels the built-ins cover, the same camera and ball.
+    /// the GPU): the Rhai twins of the Mandelbox, the Mandelbulb and the
+    /// KIFS Menger -- the last with its `prepare` computed on the CPU and
+    /// its function parameter -- carried as the config's custom formula and
+    /// registered as mode-D entries, cover the pixels the built-ins cover,
+    /// the same camera and ball.
     #[test]
     #[ignore = "needs a GPU"]
     fn rhai_solids_render_as_the_builtins() {
@@ -14621,7 +14669,11 @@ fn distance(s, p) {
         use crate::escape::lang::EntryKind;
         const N: u32 = 160;
         let (device, queue) = device();
-        let cases: [(&str, &str, Solid); 2] = [("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))), ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0)))];
+        let cases: [(&str, &str, Solid); 3] = [
+            ("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))),
+            ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0))),
+            ("kifs-menger", RHAI_MENGER, Solid::Kifs(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]))),
+        ];
         let mut failures = Vec::new();
         for (what, src, solid) in cases {
             let cfg = solid.config("ifs_level");
