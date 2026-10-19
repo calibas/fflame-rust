@@ -776,7 +776,7 @@ pub fn lighting_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
         }
         _ => {}
     }
-    super::solid_panel::lighting_rig(ui, config_manager, matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d));
+    super::solid_panel::lighting_rig(ui, config_manager, kind);
 }
 
 /// A terrain's traced shadows and its occlusion: `[shadow, sharpness,

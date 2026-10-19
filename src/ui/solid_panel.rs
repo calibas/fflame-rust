@@ -31,8 +31,10 @@ pub fn render_solid_panel_content(
 pub fn lighting_rig(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    flame: bool,
+    view: crate::camera::gesture::ViewKind,
 ) {
+    use crate::camera::gesture::ViewKind;
+    let flame = matches!(view, ViewKind::Flame2d | ViewKind::Flame3d);
     // Clone config to avoid borrow conflicts (same pattern as view.rs).
     let config = config_manager.active_config().clone();
 
@@ -142,6 +144,9 @@ pub fn lighting_rig(
             }
         }
 
+        // A solid's camera, for a point light's placing and its scale:
+        // where the eye is, and how far from its target.
+        let eye = if view == ViewKind::Solid && shading.lights.iter().any(|l| l.enabled) { solid_eye(&config) } else { None };
         for li in 0..4usize {
             let light = shading.lights[li];
             ui.horizontal(|ui| {
@@ -151,6 +156,9 @@ pub fn lighting_rig(
                         ConfigPath::SolidLightEnabled { index: li },
                         enabled.into()
                     );
+                }
+                if !flame && light.enabled {
+                    light_kind_picker(ui, config_manager, li, &light, view, eye);
                 }
                 let mut col = light.color;
                 if ui.color_edit_button_rgb(&mut col).changed() {
@@ -165,25 +173,12 @@ pub fn lighting_rig(
                 }
             });
             if light.enabled {
-                let light_sliders: [(&str, &str, f32, std::ops::RangeInclusive<f32>, f64); 3] = [
-                    ("azimuth", "view.light_azimuth", light.azimuth, -180.0..=180.0, 1.0),
-                    ("elevation", "view.light_elevation", light.elevation, -90.0..=90.0, 1.0),
-                    ("intensity", "view.light_intensity", light.intensity, 0.0..=4.0, 0.01),
-                ];
-                for (param, label, value, range, step) in light_sliders {
-                    let mut v = value;
-                    let response = ui.add(
-                        super::VkbSlider::new(&mut v, range)
-                            .text(t!(label).as_ref())
-                            .step_by(step)
-                    );
-                    if response.changed() {
-                        let _ = config_manager.update_param(
-                            ConfigPath::SolidLightParam { index: li, param: param.into() },
-                            v.into()
-                        );
-                    }
+                // What this view does with the light's kind: a kind it does
+                // not offer is said, and the light is off here.
+                if let super::visibility::Vis::Grey(why) = super::visibility::light_kind(light.kind, view) {
+                    ui.label(egui::RichText::new(t!(why)).small().weak());
                 }
+                light_controls(ui, config_manager, li, &light, eye);
             }
         }
     }
@@ -209,4 +204,148 @@ pub fn lighting_rig(
         slider(ui, config_manager, ConfigPath::SolidGlow, "view.material_glow", "view.material_glow_tip", shading.glow, 0.0..=4.0, 0.01);
         ui.add_space(6.0);
     }
+}
+
+/// A solid's eye in the world and its distance to the target -- where a
+/// point light is placed, and the scale its controls move in. None where
+/// the config renders no solid.
+fn solid_eye(config: &crate::config::FractalConfig) -> Option<([f64; 3], f64)> {
+    #[cfg(feature = "engine-escape")]
+    {
+        let registry = crate::variations::global_registry();
+        let ifs3 = crate::escape::ifs::solid_analysis(config, &registry)?;
+        let cam = crate::escape::ifs::solid_camera(&config.escape, &ifs3);
+        Some((cam.eye, cam.distance))
+    }
+    #[cfg(not(feature = "engine-escape"))]
+    {
+        let _ = config;
+        None
+    }
+}
+
+fn light_kind_label(kind: crate::config::LightKind) -> String {
+    use crate::config::LightKind;
+    match kind {
+        LightKind::Directional => t!("view.light_kind_directional").to_string(),
+        LightKind::Point => t!("view.light_kind_point").to_string(),
+        LightKind::Headlamp => t!("view.light_kind_headlamp").to_string(),
+    }
+}
+
+/// The light's position and reach set to the camera's eye and distance,
+/// as changes: Place at Camera, and a light first made a point.
+fn at_camera(li: usize, eye: ([f64; 3], f64)) -> Vec<(ConfigPath, crate::config::ConfigValue)> {
+    let mut changes: Vec<(ConfigPath, crate::config::ConfigValue)> = ["x", "y", "z"]
+        .iter()
+        .enumerate()
+        .map(|(k, axis)| (ConfigPath::SolidLightParam { index: li, param: axis.to_string() }, crate::config::ConfigValue::Double(eye.0[k])))
+        .collect();
+    changes.push((ConfigPath::SolidLightParam { index: li, param: "reach".into() }, (eye.1 as f32).into()));
+    changes
+}
+
+/// A light's kind (lights-in-the-fractal, L6): each the view offers, and
+/// the ones it does not, greyed with the reason. A light first made a
+/// point is placed at the camera, so it lights where you are.
+fn light_kind_picker(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    li: usize,
+    light: &crate::config::SolidLight,
+    view: crate::camera::gesture::ViewKind,
+    eye: Option<([f64; 3], f64)>,
+) {
+    use crate::config::LightKind;
+    let mut pick = None;
+    egui::ComboBox::from_id_salt(("light_kind", li))
+        .selected_text(light_kind_label(light.kind))
+        .show_ui(ui, |ui| {
+            for kind in LightKind::ALL {
+                let vis = super::visibility::light_kind(kind, view);
+                let r = ui.add_enabled(vis.is_show(), egui::Button::selectable(light.kind == kind, light_kind_label(kind)));
+                let r = match vis {
+                    super::visibility::Vis::Grey(why) => r.on_disabled_hover_text(t!(why)),
+                    _ => r,
+                };
+                if r.clicked() && light.kind != kind {
+                    pick = Some(kind);
+                }
+            }
+        })
+        .response
+        .on_hover_text(t!("view.light_kind_tip"));
+    if let Some(kind) = pick {
+        let mut changes = vec![(ConfigPath::SolidLightParam { index: li, param: "kind".into() }, (kind.index() as f32).into())];
+        if kind == LightKind::Point && light.position == [0.0; 3] {
+            if let Some(eye) = eye {
+                changes.extend(at_camera(li, eye));
+            }
+        }
+        let _ = config_manager.update_batch(changes, "history.action.solid_light_kind".to_string());
+    }
+}
+
+/// A light's own controls, by its kind, and its intensity.
+fn light_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    li: usize,
+    light: &crate::config::SolidLight,
+    eye: Option<([f64; 3], f64)>,
+) {
+    use crate::config::LightKind;
+    let param = |p: &str| ConfigPath::SolidLightParam { index: li, param: p.to_string() };
+    let slider = |ui: &mut egui::Ui, config_manager: &mut ConfigManager, p: &str, label: &str, tip: &str, value: f32, range: std::ops::RangeInclusive<f32>, log: bool| {
+        let mut v = value;
+        let mut s = super::VkbSlider::new(&mut v, range).text(t!(label).as_ref()).logarithmic(log);
+        if log {
+            s = s.clamping(egui::SliderClamping::Never);
+        } else {
+            s = s.step_by(0.01);
+        }
+        let r = ui.add(s);
+        let r = if tip.is_empty() { r } else { r.on_hover_text(t!(tip)) };
+        if r.changed() {
+            let _ = config_manager.update_param(param(p), v.into());
+        }
+    };
+    match light.kind {
+        LightKind::Directional => {
+            slider(ui, config_manager, "azimuth", "view.light_azimuth", "", light.azimuth, -180.0..=180.0, false);
+            slider(ui, config_manager, "elevation", "view.light_elevation", "", light.elevation, -90.0..=90.0, false);
+        }
+        LightKind::Point => {
+            // The position in f64, dragged at the camera's scale.
+            let speed = eye.map_or(0.01, |e| e.1 * 0.005);
+            ui.horizontal(|ui| {
+                ui.label(t!("view.light_position")).on_hover_text(t!("view.light_position_tip"));
+                let mut moved = None;
+                for (k, axis) in ["x", "y", "z"].iter().enumerate() {
+                    let mut v = light.position[k];
+                    if ui.add(egui::DragValue::new(&mut v).speed(speed).max_decimals(12).prefix(format!("{} ", axis.to_uppercase()))).changed() {
+                        moved = Some((k, v));
+                    }
+                }
+                if let Some((k, v)) = moved {
+                    let _ = config_manager.update_param(param(["x", "y", "z"][k]), crate::config::ConfigValue::Double(v));
+                }
+            });
+            if let Some(eye) = eye {
+                if ui.button(t!("view.light_place_at_camera")).on_hover_text(t!("view.light_place_at_camera_tip")).clicked() {
+                    let _ = config_manager.update_batch(at_camera(li, eye), "history.action.solid_light_place".to_string());
+                }
+            }
+            // The reach on a log scale about the camera's distance, so it
+            // spans the scales a deep view moves through.
+            let d = eye.map_or(1.0, |e| e.1 as f32).max(1.0e-30);
+            slider(ui, config_manager, "reach", "view.light_reach", "view.light_reach_point_tip", light.reach, d * 1.0e-3..=d * 1.0e3, true);
+        }
+        LightKind::Headlamp => {
+            slider(ui, config_manager, "reach", "view.light_reach", "view.light_reach_headlamp_tip", light.reach, 0.02..=50.0, true);
+            slider(ui, config_manager, "cone", "view.light_cone", "view.light_cone_tip", light.cone, 1.0..=180.0, false);
+            slider(ui, config_manager, "lift", "view.light_lift", "view.light_lift_tip", light.lift, 0.0..=1.0, false);
+        }
+    }
+    slider(ui, config_manager, "intensity", "view.light_intensity", "", light.intensity, 0.0..=4.0, false);
 }

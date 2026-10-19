@@ -264,6 +264,13 @@ mod tests {
         let mut lit = config.clone();
         lit.solid_shading.shading_strength = 0.5;
         lit.solid_shading.lights[1].enabled = true;
+        // A light of each kind (lights-in-the-fractal, L6): the kind
+        // picker and each kind's controls, offered or said to be off.
+        lit.solid_shading.lights[2].enabled = true;
+        lit.solid_shading.lights[2].kind = crate::config::LightKind::Point;
+        lit.solid_shading.lights[2].position = [0.1, 0.2, 0.3];
+        lit.solid_shading.lights[3].enabled = true;
+        lit.solid_shading.lights[3].kind = crate::config::LightKind::Headlamp;
         lit.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
         lit.escape.terrain.tier = crate::config::escape::RenderTier::PathTraced;
         lit.sim.terrain.tier = crate::config::escape::RenderTier::PathTraced;

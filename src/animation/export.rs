@@ -2969,6 +2969,13 @@ mod escape_export_tests {
         terrain.render_mode = RenderMode::Escape;
         terrain.escape.terrain.enabled = true;
         configs.push(terrain);
+        // A solid lit by a point and a headlamp: their parameters.
+        let mut placed = solid();
+        placed.solid_shading.lights[0].enabled = true;
+        placed.solid_shading.lights[0].kind = crate::config::LightKind::Point;
+        placed.solid_shading.lights[1].enabled = true;
+        placed.solid_shading.lights[1].kind = crate::config::LightKind::Headlamp;
+        configs.push(placed);
         let mut transformed = FractalConfig::default();
         transformed.render_mode = RenderMode::Escape;
         transformed.escape.transforms = vec![crate::config::escape::EscapeTransform::new(

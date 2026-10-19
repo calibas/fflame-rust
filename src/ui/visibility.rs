@@ -65,6 +65,25 @@ const LINEAR_ONLY: &str = "visibility.linear_only";
 const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 /// Focused Rendering plans in the plane.
 const TWO_D_ONLY: &str = "visibility.two_d_only";
+const LIGHT_FLAME: &str = "visibility.light_flame";
+const POINT_LIGHT_TERRAIN: &str = "visibility.point_light_terrain";
+
+/// Whether a view offers a kind of light (lights-in-the-fractal, L6): a
+/// directional light everywhere; a point where the world holds still --
+/// mode D's solids (a terrain's world is the view's, moving with every
+/// pan and zoom); a headlamp in every escape and simulation 3D view. The
+/// 3D flame's shade pass lights in screen space, directional alone.
+pub fn light_kind(kind: crate::config::LightKind, view: crate::camera::gesture::ViewKind) -> Vis {
+    use crate::camera::gesture::ViewKind;
+    use crate::config::LightKind;
+    match (kind, view) {
+        (LightKind::Directional, _) => Vis::Show,
+        (LightKind::Point, ViewKind::Solid) => Vis::Show,
+        (LightKind::Headlamp, ViewKind::Solid | ViewKind::EscapeTerrain | ViewKind::SimTerrain) => Vis::Show,
+        (LightKind::Point, ViewKind::EscapeTerrain | ViewKind::SimTerrain) => Vis::Grey(POINT_LIGHT_TERRAIN),
+        _ => Vis::Grey(LIGHT_FLAME),
+    }
+}
 
 /// Whether the loaded config renders a SOLID SURFACE.
 ///
@@ -492,6 +511,25 @@ pub fn label_key_of(p: PanelType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each view's kinds of light: a point where the world holds still
+    /// (a solid), a headlamp in every escape and simulation 3D view, and
+    /// a flame's shade pass directional alone.
+    #[test]
+    fn each_view_offers_its_kinds_of_light() {
+        use crate::camera::gesture::ViewKind;
+        use crate::config::LightKind;
+        for view in [ViewKind::Flame2d, ViewKind::Flame3d, ViewKind::EscapePlane, ViewKind::Solid, ViewKind::EscapeTerrain, ViewKind::Sim2d, ViewKind::SimTerrain] {
+            assert!(light_kind(LightKind::Directional, view).is_show(), "{view:?}");
+        }
+        assert!(light_kind(LightKind::Point, ViewKind::Solid).is_show());
+        assert!(!light_kind(LightKind::Point, ViewKind::EscapeTerrain).is_show());
+        assert!(!light_kind(LightKind::Point, ViewKind::Flame3d).is_show());
+        for view in [ViewKind::Solid, ViewKind::EscapeTerrain, ViewKind::SimTerrain] {
+            assert!(light_kind(LightKind::Headlamp, view).is_show(), "{view:?}");
+        }
+        assert!(!light_kind(LightKind::Headlamp, ViewKind::Flame3d).is_show());
+    }
     use rust_i18n::t;
 
     /// Every panel this build knows about, so the tests below cannot
