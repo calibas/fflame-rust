@@ -2915,6 +2915,11 @@ mod escape_export_tests {
         dressed.escape.texture_overlay.enabled = true;
         dressed.escape.palette_map.transfer = crate::config::escape::TransferCurve::Log;
         dressed.escape.layer.coloring = "smooth".into();
+        // And transformations, one with parameters.
+        dressed.escape.transforms = vec![
+            crate::config::escape::EscapeTransform::new(crate::config::escape::TransformStage::Plane, "sinusoidal", 1.0),
+            crate::config::escape::EscapeTransform::new(crate::config::escape::TransformStage::Iteration, "curl", 0.5),
+        ];
         for base in [solid(), FractalConfig::default(), terrain, dressed] {
             for item in crate::ui::target_selector::escape_items_for_test(&base) {
                 // Two probes, because a count target reads an integer.
@@ -2962,6 +2967,14 @@ mod escape_export_tests {
         terrain.render_mode = RenderMode::Escape;
         terrain.escape.terrain.enabled = true;
         configs.push(terrain);
+        let mut transformed = FractalConfig::default();
+        transformed.render_mode = RenderMode::Escape;
+        transformed.escape.transforms = vec![crate::config::escape::EscapeTransform::new(
+            crate::config::escape::TransformStage::Orbit,
+            "curl",
+            0.5,
+        )];
+        configs.push(transformed);
         let mut sim = FractalConfig::default();
         sim.render_mode = RenderMode::Simulation;
         sim.sim.terrain.enabled = true;

@@ -1838,8 +1838,15 @@ impl TransformStage {
 
 /// One escape-time transformation: a variation at a stage, its amount
 /// (0 the identity, 1 the variation, as the lens's) and its parameters.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscapeTransform {
+    /// Session-local identity, so an animation track follows its
+    /// transformation through a move or a removal, as a flame
+    /// transform's or an effect's does (`crate::scene::transforms::next_id`).
+    /// Never in a file; the list's undo values carry it
+    /// ([`transforms_to_wire`]).
+    #[serde(skip)]
+    pub id: u64,
     #[serde(default)]
     pub stage: TransformStage,
     pub variation: String,
@@ -1847,6 +1854,57 @@ pub struct EscapeTransform {
     pub amount: f32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, f32>,
+}
+
+// Equality ignores the runtime-only `id`, as `EffectInstance`'s does.
+impl PartialEq for EscapeTransform {
+    fn eq(&self, other: &Self) -> bool {
+        self.stage == other.stage && self.variation == other.variation && self.amount == other.amount && self.params == other.params
+    }
+}
+
+impl EscapeTransform {
+    /// A transformation with a fresh id and no parameters set.
+    pub fn new(stage: TransformStage, variation: &str, amount: f32) -> Self {
+        Self { id: crate::scene::transforms::next_id(), stage, variation: variation.to_string(), amount, params: BTreeMap::new() }
+    }
+}
+
+/// The transformation list as `ConfigPath::EscapeTransforms` carries it:
+/// the file's JSON with each entry's `id` too, so an undo or redo of a
+/// structural edit brings back the same ids and a track bound to one
+/// keeps it.
+pub fn transforms_to_wire(list: &[EscapeTransform]) -> String {
+    let entries: Vec<serde_json::Value> = list
+        .iter()
+        .map(|t| {
+            let mut v = serde_json::to_value(t).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("id".to_string(), t.id.into());
+            }
+            v
+        })
+        .collect();
+    serde_json::to_string(&entries).unwrap_or_default()
+}
+
+/// [`transforms_to_wire`]'s inverse. An entry without an id (a script's,
+/// a file's) or repeating one already read gets a fresh one.
+pub fn transforms_from_wire(s: &str) -> Result<Vec<EscapeTransform>, serde_json::Error> {
+    if s.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries: Vec<serde_json::Value> = serde_json::from_str(s)?;
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .map(|v| {
+            let id = v.get("id").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let mut t: EscapeTransform = serde_json::from_value(v)?;
+            t.id = if id != 0 && seen.insert(id) { id } else { crate::scene::transforms::next_id() };
+            Ok(t)
+        })
+        .collect()
 }
 
 impl EscapeConfig {
@@ -3239,5 +3297,40 @@ mod tests {
         assert!(json.contains("escape"), "touched escape must serialize");
         let back = crate::config::FractalConfig::from_json(&json).unwrap();
         assert_eq!(back.escape, config.escape);
+    }
+}
+
+#[cfg(test)]
+mod transform_id_tests {
+    use super::*;
+
+    /// The id rides the list's wire form and nothing else: a file never
+    /// holds it, a round trip keeps it, and an entry without one or
+    /// repeating one gets a fresh one.
+    #[test]
+    fn a_transformations_id_rides_the_wire_and_never_the_file() {
+        let a = EscapeTransform::new(TransformStage::Plane, "julian", 0.5);
+        let b = EscapeTransform::new(TransformStage::Orbit, "swirl", 1.0);
+        assert_ne!(a.id, b.id);
+        let list = vec![a.clone(), b.clone()];
+        let back = transforms_from_wire(&transforms_to_wire(&list)).unwrap();
+        assert_eq!(back.iter().map(|t| t.id).collect::<Vec<_>>(), vec![a.id, b.id]);
+        assert_eq!(back, list);
+
+        let file = serde_json::to_string(&list).unwrap();
+        assert!(!file.contains("\"id\""), "a file holds the id: {file}");
+        let read = transforms_from_wire(&file).unwrap();
+        assert!(read.iter().all(|t| t.id != 0) && read[0].id != read[1].id, "fresh ids for a file's entries");
+
+        let twice = transforms_to_wire(&[a.clone(), a.clone()]);
+        let read = transforms_from_wire(&twice).unwrap();
+        assert_eq!(read[0].id, a.id);
+        assert_ne!(read[1].id, a.id, "a repeated id is replaced");
+        assert!(transforms_from_wire("").unwrap().is_empty());
+
+        // Equality is the content's, as an effect's.
+        let mut c = a.clone();
+        c.id = 0;
+        assert_eq!(c, a);
     }
 }

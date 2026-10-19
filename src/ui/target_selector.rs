@@ -509,6 +509,27 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             }
         }
     }
+
+    // The transformations (the KIFS plan, C4), where they render -- mode
+    // A, as the panel shows them: each one's amount and its variation's
+    // parameters, named by place and variation. A track follows its
+    // transformation through a move or a removal by id
+    // (`TargetBinding::EscapeTransform`).
+    if crate::escape::fields::get_field(&esc.formula).is_none() && ifs.is_none() {
+        let registry = crate::variations::global_registry();
+        for (i, t) in esc.transforms.iter().enumerate() {
+            let info = registry.get(&t.variation);
+            let name = info.map_or(t.variation.clone(), |v| v.display_name.clone());
+            let label = format!("Transformation {} ({name})", i + 1);
+            items.push(TargetItem::new(ConfigPath::EscapeTransformAmount { index: i }, &format!("{label}: Amount")));
+            for p in info.map(|v| v.parameters.as_slice()).unwrap_or_default() {
+                items.push(TargetItem::new(
+                    ConfigPath::EscapeTransformParam { index: i, param: p.name.clone() },
+                    &format!("{label}: {}", p.display_name),
+                ));
+            }
+        }
+    }
     items
 }
 
@@ -1392,6 +1413,28 @@ mod escape_target_tests {
         let k = keys(&c);
         assert!(k.contains(&"Escape.LensAmount".to_string()), "{k:?}");
         assert!(k.contains(&"Escape.LensParam.c1".to_string()), "{k:?}");
+    }
+
+    /// Each transformation offers its amount and its variation's
+    /// parameters, by its place in the list, where it renders: not under
+    /// mode D, whose panel does not show them.
+    #[test]
+    fn each_transformation_is_offered() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        assert!(!keys(&c).iter().any(|s| s.starts_with("Escape.Transform.")));
+        c.escape.transforms = vec![
+            EscapeTransform::new(TransformStage::Plane, "sinusoidal", 1.0),
+            EscapeTransform::new(TransformStage::Orbit, "curl", 1.0),
+        ];
+        let k = keys(&c);
+        for want in ["Escape.Transform.0.Amount", "Escape.Transform.1.Amount", "Escape.Transform.1.Param.c1", "Escape.Transform.1.Param.c2"] {
+            assert!(k.contains(&want.to_string()), "`{want}` is not offered: {k:?}");
+        }
+        assert!(!k.iter().any(|s| s.starts_with("Escape.Transform.0.Param.")), "sinusoidal has no parameters");
+        c.escape.formula = "ifs_flame".to_string();
+        assert!(!keys(&c).iter().any(|s| s.starts_with("Escape.Transform.")), "offered under mode D");
     }
 
     /// A camera-target track carries a NUMBER and lands as the decimal

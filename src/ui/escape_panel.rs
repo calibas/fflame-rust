@@ -2948,7 +2948,7 @@ mod tests {
     #[test]
     fn the_transformations_lay_out_and_edit() {
         use crate::config::escape::{EscapeTransform, TransformStage};
-        let t = |stage, variation: &str| EscapeTransform { stage, variation: variation.into(), amount: 0.5, params: Default::default() };
+        let t = |stage, variation: &str| EscapeTransform::new(stage, variation, 0.5);
         let mut config = crate::config::FractalConfig::default();
         config.render_mode = RenderMode::Escape;
         config.escape.transforms = vec![t(TransformStage::Plane, "julian"), t(TransformStage::Orbit, "spherical"), t(TransformStage::Iteration, "no_such_variation")];

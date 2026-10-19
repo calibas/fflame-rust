@@ -2322,7 +2322,7 @@ impl ConfigManager {
                 .or_else(|| Self::escape_param_default(config, EscapeParamOf::Lens, param))
                 .unwrap_or(0.0)
                 .into()),
-            ConfigPath::EscapeTransforms => Ok(ConfigValue::String(serde_json::to_string(&config.escape.transforms).unwrap_or_default())),
+            ConfigPath::EscapeTransforms => Ok(ConfigValue::String(crate::config::escape::transforms_to_wire(&config.escape.transforms))),
             ConfigPath::EscapeTransformAmount { index } => {
                 Ok(config.escape.transforms.get(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.amount.into())
             }
@@ -4109,8 +4109,11 @@ impl ConfigManager {
             }
             ConfigPath::EscapeTransforms => {
                 let s: String = value.try_into()?;
-                self.current.escape.transforms =
-                    if s.is_empty() { Vec::new() } else { serde_json::from_str(&s).map_err(|_| ConfigError::TypeMismatch)? };
+                self.current.escape.transforms = crate::config::escape::transforms_from_wire(&s).map_err(|_| ConfigError::TypeMismatch)?;
+                // The list changed shape: tracks on a transformation
+                // follow it by id (`Animation::rebind_targets`), on an
+                // edit, an undo and a redo alike.
+                self.pending_actions.structural_changed = true;
             }
             ConfigPath::EscapeTransformAmount { index } => {
                 let v: f32 = value.try_into()?;
