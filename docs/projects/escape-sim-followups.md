@@ -145,8 +145,10 @@ resets the display driver for the whole desktop.
 
 ## Known gaps, not fixed in PR #129
 
-- The video's deep-zoom memory check looks only at the base config, not
-  at each frame's zoom.
+- ~~The video's deep-zoom memory check looks only at the base config, not
+  at each frame's zoom.~~ Fixed 2026-10-19: every frame is checked at its
+  own zoom, and only the frames that render perturbed (EXPORT.md, *What a
+  frame is*).
 - No PNG input for `export` (a PNG's embedded config); flame-only
   metadata fields are written for escape and simulation pictures.
 - Browser exports don't generate texture layers, for a 2D or a terrain

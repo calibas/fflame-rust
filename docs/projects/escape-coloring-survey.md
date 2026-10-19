@@ -419,8 +419,12 @@ Read from the code, not reproduced by render, except where noted.
      about 3× here.
    - Left as it is. R9 is where a better-founded normalisation would go.
 8. **The tone curve crushes the darkest values, flames included**
-   (measured while testing item 3; not fixed, since it moves every
-   render's dark pixels).
+   (measured while testing item 3). **Fixed 2026-10-19**: the shader
+   reads the LUT at `(255x + 0.5)/256`, and the identity curve is the
+   curve off to a byte (`the_identity_tone_curve_changes_nothing`; 15
+   levels off before). Two visual baselines moved (the sparse-dot
+   `circle_rand` and `pointgrid` smoke tests, their faint dots no longer
+   floored), and the texture cache's version with it.
    - The curve is on by default (`use_curve`), and its 256-entry LUT
      holds `f(i/255)` in texel `i`. `tonemap.wgsl` samples it at
      `u = x` with linear filtering, which reads texel position
@@ -910,14 +914,16 @@ Read from the code, not reproduced by render, except where noted.
      the palette's generation and its mapping into the iteration's and
      the chunked render's identity; every other colouring's keys are
      unchanged.
-     *Open:* the combination sweep
-     (`every_formula_coloring_combination_dispatches`) fails for it.
-     At the probe's home view and 64 iterations, it lights only 146
-     pixels on McMullen and 150 on Collatz, of 12,288, against the 2%
-     every pairing must reach. It fails the same way at the commit that
-     added it. Whether that is the shape being sparse on those
-     formulas (techmatt's trap paints only near misses, on black) or a
-     fault has not been looked into.
+     **Settled 2026-10-19:** the combination sweep
+     (`every_formula_coloring_combination_dispatches`) failed for it:
+     at the probe's home view and 64 iterations it lit only about 150
+     pixels on McMullen and Collatz, of 12,288, against the 2% every
+     pairing must reach. It is the shape being sparse there, not a
+     fault: an f64 port of techmatt's trace through each formula's own
+     step paints 146 and 150 pixels, and the render agrees with it on
+     all 12,288 within two levels, worst 0.6
+     (`direct_traps_paint_what_the_trace_paints_on_mcmullen_and_collatz`).
+     The sweep exempts those two pairings and cites it.
 
      *Measured:* nine cases against an f64 port of techmatt's `trace`
      through a grey ramp: every shape, every blend, both orders and

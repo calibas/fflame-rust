@@ -254,10 +254,15 @@ curve passes through every point without overshooting.
 `generate_lut` samples it at `x = i/255` into a 256-entry `Rgba16Float`
 texture (the value in R). The shader reads it through a linear-filtering
 sampler once per channel, sampling unconditionally and choosing after,
-because a browser requires `textureSample` in uniform control flow. The
-curve is applied when `use_curve` is on and the pixel's `count` exceeds
-0.001. `use_curve` defaults to on with the identity curve, so by default
-it changes nothing.
+because a browser requires `textureSample` in uniform control flow. Texel
+`i`'s centre is at `u = (i + 0.5)/256`, so `f(x)` is read at
+`(255x + 0.5)/256`. The curve is applied when `use_curve` is on and the
+pixel's `count` exceeds 0.001. `use_curve` defaults to on with the
+identity curve, so by default it changes nothing
+(`the_identity_tone_curve_changes_nothing`: to a byte). Until 2026-10-19
+the shader read it at `u = x`, half a texel off, and even the identity
+took about 0.002 off every channel near black: bytes below 15 came out
+0, 25 came out 21.
 
 In the Colors panel's *Tone Curve* section: an enable box; presets Linear,
 S-Curve, Brighten Shadows and Darken Highlights; and an editor where

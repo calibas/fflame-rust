@@ -1933,6 +1933,10 @@ pub async fn export_animation(
         );
     }
     animation.bind_to_config(&export_config.config);
+    // The deep-zoom check below walks every frame on a controller of its
+    // own: signal smoothing keeps state, and this one's must start clean.
+    #[cfg(feature = "engine-escape")]
+    let probe_animation = animation.clone();
     controller.load(animation);
     // The video steps one frame at a time. Signal smoothing is scaled
     // by the step, and the controller's is 1/60 s until something
@@ -1964,29 +1968,37 @@ pub async fn export_animation(
     // past zoom 14 is mush -- so a whole export would come out
     // quietly wrong. Refuse it up front instead, with the size that
     // would work.
+    //
+    // Every frame, as the loop below will render it: a zoom track takes a
+    // video past the floatexp threshold, where the state grows, and a
+    // frame short of the perturbation threshold renders direct and needs
+    // none. Checked on the base config alone, a video that only deepened
+    // later passed and then failed, and one that never went deep was
+    // refused for a state it would never allocate.
     #[cfg(feature = "engine-escape")]
     if export_config.config.render_mode == crate::scene::transforms::RenderMode::Escape {
-        let ss = crate::escape::EscapeRenderer::affordable_supersample(
-            &device,
-            export_config.width,
-            export_config.height,
-            export_config.config.escape.supersample,
-        );
-        let (rw, rh) = (
-            export_config.width.saturating_mul(ss),
-            export_config.height.saturating_mul(ss),
-        );
-        if !crate::escape::EscapeRenderer::perturb_state_fits_at(
-            &device,
-            &export_config.config.escape,
-            rw,
-            rh,
-        ) {
+        let mut probe = AnimationController::new();
+        probe.load(probe_animation);
+        probe.set_step(1.0 / export_config.fps.max(1) as f64);
+        let frames = (0..total_frames).map(|frame| {
+            let time = export_config.frame_time(frame);
+            let values = if has_signals {
+                probe.evaluate_at_time_with_signals(time, Some(&signal_manager))
+            } else {
+                probe.evaluate_at_time(time)
+            };
+            let mut c = export_config.config.clone();
+            apply_animation_values(&mut c, &values);
+            (frame, c.escape)
+        });
+        if let Some((frame, (rw, rh))) = deep_zoom_misfit(&device, export_config.width, export_config.height, frames) {
             return Err(AnimationExportError::InvalidConfig(format!(
-                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame. \
-                 Export at a smaller size (or lower the antialiasing): past the \
-                 perturbation threshold every pixel carries its own iteration \
-                 state, and there is no way to render this size without it."
+                "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame \
+                 (frame {} is the first that needs it). Export at a smaller size \
+                 (or lower the antialiasing): past the perturbation threshold \
+                 every pixel carries its own iteration state, and there is no \
+                 way to render this size without it.",
+                frame + 1
             )));
         }
     }
@@ -2506,6 +2518,37 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
     args
 }
 
+
+/// The first frame whose deep-zoom state does not fit the device, and the
+/// render size it was asked at: of the frames that render perturbed --
+/// each at its own zoom, so past the floatexp threshold with the larger
+/// state -- the first whose per-pixel state is past the device's buffer
+/// limits. A frame short of the perturbation threshold renders direct and
+/// carries none. None when every frame fits.
+#[cfg(feature = "engine-escape")]
+pub(crate) fn deep_zoom_misfit(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    frames: impl IntoIterator<Item = (u32, crate::config::escape::EscapeConfig)>,
+) -> Option<(u32, (u32, u32))> {
+    for (frame, escape) in frames {
+        // A config carrying its formula as source registers it first, as a
+        // render does, so its tier is known.
+        crate::escape::custom::ensure(&escape);
+        let ss = crate::escape::EscapeRenderer::affordable_supersample(device, width, height, escape.supersample);
+        let (rw, rh) = (width.saturating_mul(ss), height.saturating_mul(ss));
+        if !crate::escape::EscapeRenderer::wants_perturbation(&escape, rh) {
+            continue;
+        }
+        let resolved = crate::escape::custom::resolve(&escape);
+        if !crate::escape::EscapeRenderer::perturb_state_fits_at(device, resolved.as_ref(), rw, rh) {
+            return Some((frame, (rw, rh)));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2878,6 +2921,60 @@ mod tests {
 mod escape_export_tests {
     use super::*;
     use crate::config::{ConfigPath, FractalConfig};
+
+    /// The video's deep-zoom check looks at every frame, at its own zoom
+    /// (escape-sim-followups, *Known gaps*). On the base config alone it
+    /// both passed a video that deepened past the floatexp threshold --
+    /// whose state is larger -- and refused one that never went deep
+    /// enough to carry any. Phoenix, whose state grows past the threshold
+    /// (its history rides the deep rung's own slots), sized against this
+    /// device's own limits: a width whose shallower state fits and whose
+    /// floatexp state does not.
+    #[test]
+    fn the_deep_zoom_check_reads_every_frame() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
+        let at = |zoom: f64| {
+            let mut e = crate::config::escape::EscapeConfig::default();
+            e.formula = "phoenix".to_string();
+            e.zoom_log2 = zoom;
+            e
+        };
+        let fits = |zoom: f64, w: u32| crate::escape::EscapeRenderer::perturb_state_fits_at(&device, &at(zoom), w, 256);
+        // The widest frame whose floatexp state fits, by bisection; one
+        // more pixel across does not, and its shallower state must.
+        let (mut lo, mut hi) = (1u32, 1u32 << 24);
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2;
+            if fits(60.0, mid) { lo = mid } else { hi = mid }
+        }
+        let w = hi;
+        assert!(!fits(60.0, w) && fits(30.0, w), "the floatexp state is the larger: {w}");
+
+        // A ramp from zoom 0 to 60, a frame a step: the first frame that
+        // does not fit is the first past the floatexp threshold.
+        let ramp = (0..=60u32).map(|i| (i, at(i as f64)));
+        let misfit = deep_zoom_misfit(&device, w, 256, ramp);
+        let first = (0..=60u32).find(|&i| i as f64 > crate::escape::renderer::PERTURB_FLOATEXP_ZOOM).unwrap();
+        assert_eq!(misfit, Some((first, (w, 256))), "the first frame past the floatexp threshold");
+        // The base config alone (zoom 0) said it fit.
+        assert!(fits(0.0, w));
+
+        // A video too wide for even the shallower state, that never goes
+        // deep: every frame renders direct, and it is not refused -- the
+        // base config's check refused it.
+        let wide = w * 4;
+        assert!(!fits(0.0, wide), "the base config's check would refuse it");
+        let shallow = (0..=10u32).map(|i| (i, at(i as f64)));
+        assert_eq!(deep_zoom_misfit(&device, wide, 256, shallow), None);
+    }
 
     fn solid() -> FractalConfig {
         let mut c = FractalConfig::default();

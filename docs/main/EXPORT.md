@@ -569,6 +569,20 @@ rather than a call in a `for`:
   CPU-starved encoder never stalls the GPU and memory cannot grow
   without bound.
 
+**A deep-zoom video is checked frame by frame before it starts**
+(`deep_zoom_misfit`). A perturbed frame keeps per-pixel state, and past
+the device's buffer limits that allocation is a validation error that
+would hang the export, while the renderer declining the perturbed path
+would render mush. So every frame's config is built as the loop will
+build it (on a controller of its own, since signal smoothing keeps
+state), and the export is refused at the first frame that renders
+perturbed and whose state does not fit, naming it. A frame short of the
+perturbation threshold renders direct and needs none; past the floatexp
+threshold Phoenix's state grows. Until 2026-10-19 only the base config
+was checked: a video that deepened later passed and then failed, and a
+large one that never went deep was refused
+(`the_deep_zoom_check_reads_every_frame`).
+
 ### Device features
 
 The export device requests `FLOAT32_FILTERABLE` and `TIMESTAMP_QUERY`

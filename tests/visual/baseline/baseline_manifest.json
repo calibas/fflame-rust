@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "99036143",
+  "git_hash": "2bf0d82f",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -1151,8 +1151,8 @@
       "sha256": "7120c40534fe0cbc80e126a60f2c9c7a5a039b9b6f555317b7b6de2213808fd4"
     },
     "variations-circle_rand_misc-smoke.png": {
-      "bytes": 34737,
-      "sha256": "7bf5e6003c509e42e9785e971def44c1741c09f1049b673bc692d4f475a02cca"
+      "bytes": 35146,
+      "sha256": "89879c9337dd9fd36b6d783b3a5c90dd7dd6467a8f3bc34edc1afd768f32a21d"
     },
     "variations-circlecrop-exblur-smoke.png": {
       "bytes": 443,
@@ -1375,8 +1375,8 @@
       "sha256": "e33c512393d6f00e1d9881bbdc7a2adf0495a1e6a749ec5fe02fad2cdf7e2a3e"
     },
     "variations-pointgrid_misc-smoke.png": {
-      "bytes": 34622,
-      "sha256": "0479749cf370bbfe32a662ca5d3a2002eb0734cafb3eacc05956cf27d0474f4f"
+      "bytes": 34902,
+      "sha256": "68bebc5437fb7c9e3f3d5d67581791f24fbb2ee7d1b09e2cf9efea9b51c172bf"
     },
     "variations-popcorn2_3d-smoke.png": {
       "bytes": 633,
