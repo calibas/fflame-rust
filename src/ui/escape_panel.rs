@@ -190,7 +190,9 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != d.name
                     {
-                        let _ = config_manager.update_batch(
+                        // A solid from a plane: the 3D look with it.
+                        let _ = super::render_mode::apply_with_look(
+                            config_manager,
                             vec![
                                 (
                                     ConfigPath::EscapeFormula,
@@ -201,7 +203,7 @@ pub fn render_escape_content(
                                     ConfigValue::String(d.default_coloring.to_string()),
                                 ),
                             ],
-                            "history.param.escape_formula".to_string(),
+                            "history.param.escape_formula",
                         );
                     }
                 }
@@ -1587,7 +1589,12 @@ fn show_terrain_section(
                 .on_hover_text(t!("escape_panel.terrain_tip"))
                 .changed()
             {
-                let _ = config_manager.update_param(ConfigPath::EscapeTerrainEnabled, enabled.into());
+                // On, from a plane: the 3D look with it.
+                let _ = super::render_mode::apply_with_look(
+                    config_manager,
+                    vec![(ConfigPath::EscapeTerrainEnabled, enabled.into())],
+                    "history.param.escape_terrain_enabled",
+                );
             }
             if solid {
                 ui.label(egui::RichText::new(t!("escape_panel.terrain_solid")).small().weak());

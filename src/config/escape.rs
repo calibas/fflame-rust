@@ -2532,8 +2532,10 @@ fn default_terrain_haze() -> f32 {
 fn is_default_terrain_haze(v: &f32) -> bool {
     *v == default_terrain_haze()
 }
+/// 0.98 since config v5 (3d-look-and-tools P2; 0.7 before, which the
+/// migration keeps for files that omitted it).
 fn default_terrain_shadow() -> f32 {
-    0.7
+    0.98
 }
 fn is_default_terrain_shadow(v: &f32) -> bool {
     *v == default_terrain_shadow()

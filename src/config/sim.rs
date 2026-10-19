@@ -1074,8 +1074,9 @@ fn is_default_sim_tiling(v: &SimTiling) -> bool {
 fn is_default_sim_terrain_tier(v: &super::escape::RenderTier) -> bool {
     *v == super::escape::RenderTier::default()
 }
+/// 0.98 since config v5, as the escape terrain's.
 fn default_sim_terrain_shadow() -> f32 {
-    0.7
+    0.98
 }
 fn is_default_sim_terrain_shadow(v: &f32) -> bool {
     *v == default_sim_terrain_shadow()

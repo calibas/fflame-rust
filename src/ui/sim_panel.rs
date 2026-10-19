@@ -689,7 +689,12 @@ fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager,
                 .on_hover_text(t!("sim_panel.terrain_tip"))
                 .changed()
             {
-                let _ = config_manager.update_param(ConfigPath::SimTerrainEnabled, enabled.into());
+                // On, from the 2D picture: the 3D look with it.
+                let _ = super::render_mode::apply_with_look(
+                    config_manager,
+                    vec![(ConfigPath::SimTerrainEnabled, enabled.into())],
+                    "history.param.sim_terrain_enabled",
+                );
             }
             if !t.enabled {
                 return;

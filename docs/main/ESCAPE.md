@@ -1508,6 +1508,15 @@ explains why restoring on exit is worse. In Escape the tone-map mode
 selector is greyed out and the tone-map presets are hidden
 (`ui::visibility::Control`): every preset is Log-calibrated.
 
+A lit 3D view -- a solid, a terrain -- gets more when it is entered from
+a view that is not one (`ui::render_mode::look_3d`, 2026-10-19): Linear,
+exposure 2.0, gamma 1.0, saturation 1.0 and no hue shift whatever the
+tone map was, and an untouched lighting rig set to strength 1.0 and
+ambient 0.0. The mode switch, the formula picker, the terrain switches
+and the Formula Editor's Use apply it with their change, one undo step
+(`apply_with_look`); a view already 3D, or a touched rig, keeps its own.
+The solid presets carry the same look.
+
 ---
 
 ## The renderer

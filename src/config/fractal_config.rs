@@ -66,7 +66,7 @@ fn lift_path_material(value: &mut serde_json::Value) {
 /// default change, so an absent field there always meant 1.0. Older
 /// files keep loading at 0.5: before the change an absent field was the
 /// old default, which that change deliberately moved to the new one.
-pub const CURRENT_CONFIG_VERSION: u32 = 4;
+pub const CURRENT_CONFIG_VERSION: u32 = 5;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -1536,6 +1536,39 @@ impl FractalConfig {
                         obj.entry("levels_gamma").or_insert(serde_json::json!(1.0));
                     }
                 }
+                // v4 -> v5: the Shadows of a solid (its `shadow` formula
+                // parameter) and of the escape and simulation terrains
+                // rose from 0.7 to 0.98 (docs/projects/3d-look-and-tools.md,
+                // P2). A file saved before omitted 0.7 as the default, so
+                // absent means 0.7 there. A solid is told by its formula's
+                // name, or a Rhai one by its carried source's `distance`.
+                4 => {
+                    if let Some(esc) = obj.get_mut("escape").and_then(|e| e.as_object_mut()) {
+                        let formula = esc.get("formula").and_then(|f| f.as_str()).unwrap_or_default().to_string();
+                        let builtin_solid = matches!(
+                            formula.as_str(),
+                            "ifs_flame_3d" | "quaternion_julia_solid" | "kifs_solid" | "mandelbox_solid" | "mandelbulb_solid"
+                        );
+                        let rhai_solid = formula.starts_with("custom-")
+                            && esc
+                                .get("custom_formula")
+                                .and_then(|c| c.get("source"))
+                                .and_then(|s| s.as_str())
+                                .is_some_and(|s| s.contains("fn distance"));
+                        if builtin_solid || rhai_solid {
+                            let params = esc.entry("formula_params").or_insert_with(|| serde_json::json!({}));
+                            if let Some(m) = params.as_object_mut() {
+                                m.entry("shadow").or_insert(serde_json::json!(0.7));
+                            }
+                        }
+                        if let Some(t) = esc.get_mut("terrain").and_then(|t| t.as_object_mut()) {
+                            t.entry("shadow").or_insert(serde_json::json!(0.7));
+                        }
+                    }
+                    if let Some(t) = obj.get_mut("sim").and_then(|s| s.get_mut("terrain")).and_then(|t| t.as_object_mut()) {
+                        t.entry("shadow").or_insert(serde_json::json!(0.7));
+                    }
+                }
                 other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -1981,6 +2014,30 @@ mod tests {
         let json = r#"{"render_mode": "3d", "flame": {"name": "test", "transforms": [], "render_mode": "2d"}}"#;
         let c = FractalConfig::from_json(json).expect("loads");
         assert_eq!(c.render_mode, RenderMode::TwoD, "a flame mode in an unversioned file still migrates");
+    }
+
+    /// Shadows rose to 0.98 in v5 (3d-look-and-tools P2): a v4 file that
+    /// omitted them as the default 0.7 keeps 0.7 -- a solid's formula
+    /// parameter, the escape terrain's, the simulation terrain's -- and a
+    /// v5 file without them has 0.98.
+    #[test]
+    fn shadows_saved_before_v5_keep_their_default() {
+        let v4 = r#"{"version": 4, "render_mode": "escape", "flame": {"name": "t", "transforms": []},
+            "escape": {"formula": "mandelbulb_solid", "terrain": {"enabled": false}},
+            "sim": {"terrain": {"enabled": false}}}"#;
+        let c = FractalConfig::from_json(v4).expect("loads");
+        assert_eq!(c.escape.formula_params.get("shadow"), Some(&0.7), "a solid's");
+        assert_eq!(c.escape.terrain.shadow, 0.7, "the escape terrain's");
+        assert_eq!(c.sim.terrain.shadow, 0.7, "the simulation terrain's");
+        // A plane's formula gains no shadow.
+        let plane = r#"{"version": 4, "render_mode": "escape", "flame": {"name": "t", "transforms": []}, "escape": {"formula": "mandelbrot"}}"#;
+        assert!(FractalConfig::from_json(plane).unwrap().escape.formula_params.get("shadow").is_none());
+        let v5 = r#"{"version": 5, "render_mode": "escape", "flame": {"name": "t", "transforms": []},
+            "escape": {"formula": "mandelbulb_solid", "terrain": {"enabled": false}}}"#;
+        let c = FractalConfig::from_json(v5).expect("loads");
+        assert!(c.escape.formula_params.get("shadow").is_none(), "the def's default, 0.98");
+        assert_eq!(c.escape.terrain.shadow, 0.98);
+        assert_eq!(c.sim.terrain.shadow, 0.98);
     }
 
     #[test]

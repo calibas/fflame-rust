@@ -260,6 +260,22 @@ sky there. At 0 bounces the path tracer has no ambient, as it has no sky.
 (Until 2026-10-19 the path tracer read no ambient, and the slider did
 nothing in a path-traced view; `the_path_tracer_sees_the_ambient`.)
 
+**Occlusion** darkens the ambient only. A direct light's occluder is its
+shadow ray, in both tiers; the occlusion estimate stands in for the sky
+and the bounces the path tracer traces. Until 2026-10-19 it darkened the
+lit tier's direct light as well, which the path tracer has no
+counterpart for: the lit tier's recesses came out darker than the path
+tracer's (the sponge's direct light 3.5% short in all,
+`occlusion_leaves_the_direct_light_alone`). An indirect-light
+approximation -- the albedo times the occluded share -- was measured and
+left out: it moved the lit tier further from the path tracer.
+
+**The 3D look.** A view entered as a solid or a terrain from one that is
+neither (`ui::render_mode::look_3d`; UI.md) gets Linear tone mapping at
+exposure 2.0 and gamma 1.0, saturation 1.0, and, when the rig is
+untouched, strength 1.0 and ambient 0.0 -- a touched rig whose light 0
+is the default key light. The solid presets carry the same.
+
 **The material** (`path_core::lit_material`) is the same in every tier:
 - **Gloss** (0 to 1): a clear coat's reflectance head on. 0, the default,
   is no coat; 0.04 is a dielectric's.
@@ -725,7 +741,7 @@ Lit tier:
   through the same ground (`hf_trace` with a softness). The ray measures
   how close it passed the surface relative to its distance, a penumbra
   as mode D's shadow rays measure one: **Shadow sharpness** (default 12)
-  is the inverse of the light's size. **Shadows** (default 0.7) is how
+  is the inverse of the light's size. **Shadows** (default 0.98; 0.7 before config v5) is how
   dark a shadow goes; 0 traces no shadow rays. The ray starts off the
   surface by a bias that grows with the distance from the origin and the
   eye, or the surface shadows itself in speckles.
@@ -1056,7 +1072,7 @@ animatable (`Escape.Terrain.*`):
 | `softness` | 0 | Softness (Escape) |
 | `far`, `haze` | 8, 1 | Far, Haze (View: Atmosphere) |
 | `tier` | Auto | Rendering (View: Lighting & Material) |
-| `shadow`, `shadow_sharpness`, `occlusion` | 0.7, 12, 0.006 | Shadows, Shadow sharpness, Occlusion reach (View) |
+| `shadow`, `shadow_sharpness`, `occlusion` | 0.98, 12, 0.006 | Shadows, Shadow sharpness, Occlusion reach (View) |
 | `target_lift` | 0 | Target lift (View: 3D Camera) |
 
 The camera angles are mode D's (`cam_pitch`, `cam_yaw`, `cam_bank`,
@@ -1126,7 +1142,7 @@ path tracer reads `sim.terrain.path` (`Sim.Path.*`).
 
 `SimTerrainConfig` (`sim.terrain`, `Sim.Terrain.*`): `enabled`, `layer`,
 `channel`, `softness` (1), `height` (0.1) and `tiling` in the Simulation
-panel; `far` (8) and `haze` (1), `tier` (Auto), `shadow` (0.7),
+panel; `far` (8) and `haze` (1), `tier` (Auto), `shadow` (0.98),
 `shadow_sharpness` (12), `occlusion` (0.02), the camera and the path
 block in the View panel.
 

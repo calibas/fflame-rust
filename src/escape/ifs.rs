@@ -848,7 +848,7 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a shadowed surface goes. 0 skips the shadow march \
@@ -1900,7 +1900,7 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
@@ -2214,7 +2214,7 @@ pub static IFS_KIFS: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
@@ -2629,7 +2629,7 @@ pub static IFS_MANDELBOX: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
@@ -2908,7 +2908,7 @@ pub static IFS_MANDELBULB: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
@@ -7048,7 +7048,9 @@ mod tests {
             // frame at 1080p against 20. Both are one click away for
             // a still.
             c.solid_shading.shading_strength = 1.0;
-            c.solid_shading.ambient = 0.2;
+            // No ambient: the 3D look (docs/projects/3d-look-and-tools.md,
+            // P2) -- shadows are dark, as the path tracer draws them.
+            c.solid_shading.ambient = 0.0;
             c.solid_shading.diffuse = 0.95;
             c.solid_shading.specular = 0.0;
             c.solid_shading.ssao_strength = 1.0;
@@ -7070,7 +7072,7 @@ mod tests {
             };
 
             c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
-            c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            c.exposure = crate::config::defaults::ESCAPE_EXPOSURE;
             // Not the default gamma of 4, which is a curve for
             // DENSITY. A solid render is not an accumulation being
             // rescued from the dark; it is already an image, and the
@@ -7081,8 +7083,10 @@ mod tests {
             // lifts the darks until the shading is gone: at gamma 4
             // the eightfold drop from a lit surface to the ambient
             // floor lands inside two deciles of output, which is a
-            // sponge with no shadows in its holes.
-            c.gamma = 2.2;
+            // sponge with no shadows in its holes. And not 2.2 either:
+            // the tone map encodes sRGB itself after the gamma, so 1 is
+            // the one encode (the 3D look, 3d-look-and-tools P2).
+            c.gamma = crate::config::defaults::ESCAPE_GAMMA;
             c
         })
         .collect()
@@ -7106,6 +7110,20 @@ mod tests {
             .chain(super::gpu_tests::quaternion_presets())
             .chain(super::gpu_tests::kifs_presets())
             .chain(super::gpu_tests::box_bulb_presets())
+            // Every solid in the 3D look (3d-look-and-tools P2): what the
+            // panel gives one entered from a plane.
+            .map(|mut c| {
+                if formula_is_solid(&c.escape.formula) {
+                    let flat = c.clone();
+                    let mut plane = c.clone();
+                    plane.escape.formula = "mandelbrot".to_string();
+                    for (path, value) in crate::ui::render_mode::look_3d(&plane, &flat) {
+                        let _ = crate::config::ConfigManager::apply_value_detached(&mut c, crate::config::EditingTarget::Main, &path, value);
+                    }
+                    c.solid_shading.ambient = 0.0;
+                }
+                c
+            })
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -9288,6 +9306,13 @@ mod gpu_tests {
             if let Some(f) = fov {
                 c.escape.cam_fov = f;
             }
+            // The tone the colour test below was calibrated in. The
+            // preset's 3D look (exposure 2, gamma 1, no ambient) draws
+            // the top face's low addresses -- violet between the blue
+            // start and the next stop, rightly -- blue enough to pass.
+            c.exposure = 1.0;
+            c.gamma = 2.2;
+            c.solid_shading.ambient = 0.2;
             c.palette.stops[0].color = [0.0, 0.0, 1.0];
             let job = crate::renderer::RenderJob::new(&c, w, h);
             let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
