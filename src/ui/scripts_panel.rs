@@ -1200,7 +1200,7 @@ impl ScriptsPanel {
                 // it is bound here rather than inline.
                 let font_id = egui::TextStyle::Monospace.resolve(ui.style());
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let mut job = super::rhai_highlight::highlight(buf.as_str(), font_id.clone());
+                    let mut job = super::code_highlight::highlight(buf.as_str(), font_id.clone());
                     job.wrap.max_width = wrap_width;
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
