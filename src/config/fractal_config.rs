@@ -1113,6 +1113,14 @@ impl SolidShadingSettings {
     pub fn active(&self) -> bool {
         self.shading_strength > 0.0
     }
+
+    /// Whether any light that lights is a point or a headlamp: the 3D
+    /// views compile their rig's `ifs_light_at` for those only when so,
+    /// since its code costs the path tracer a fifth even when unused
+    /// (`assembler::ifs_rig`).
+    pub fn placed_lights(&self) -> bool {
+        !self.rig_untouched() && self.lights.iter().any(|l| l.lights() && l.kind != LightKind::Directional)
+    }
 }
 
 fn is_default_surface_thickness(v: &f32) -> bool {

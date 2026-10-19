@@ -696,9 +696,11 @@ impl EscapeRenderer {
         let lens_src = crate::escape::lens::lens_source(escape, &registry);
         let lens_id = crate::escape::lens::lens_key(escape, &registry);
         let sums = self.ifs.as_ref().is_some_and(|p| p.rows.iter().any(|r| r.kind == 7.0));
-        let key = format!("ifs_path|{}|{}|b{beam}|{lens_id}|{sums}", def.name, coloring.name);
+        // Points and headlamps compiled in, or not (`assembler::ifs_rig`).
+        let placed = self.solid_lighting.0.placed_lights();
+        let key = format!("ifs_path|{}|{}|b{beam}|{lens_id}|{sums}|{placed}", def.name, coloring.name);
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_ifs_path(def, coloring, beam, lens_src.as_deref(), sums);
+            let source = assembler::assemble_ifs_path(def, coloring, beam, lens_src.as_deref(), sums, placed);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),

@@ -2133,11 +2133,12 @@ fn hf_lookup(q: vec2<f32>) -> HfLook {
 }
 "#;
 
-/// The walk's WGSL, assembled.
-pub fn assemble_walk() -> String {
+/// The walk's WGSL, assembled; `placed` compiles points and headlamps
+/// into the rig (`assembler::ifs_rig`).
+pub fn assemble_walk(placed: bool) -> String {
     format!(
         "{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered(placed)),
         WALK_WGSL.replace(
             "//__HF_HELPERS__",
             &HF_HELPERS_WGSL
@@ -2148,10 +2149,10 @@ pub fn assemble_walk() -> String {
 }
 
 /// The relight's WGSL, assembled.
-pub fn assemble_relight() -> String {
+pub fn assemble_relight(placed: bool) -> String {
     format!(
         "{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered(placed)),
         RELIGHT_WGSL
             .replace("//__HF_GROUND__", GROUND_WGSL)
             .replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
@@ -2168,10 +2169,10 @@ fn surface_wgsl() -> String {
 /// The path tracer's WGSL, assembled: the rig's accessors and camera, the
 /// shared core (`path_core`), the ground's functions, the albedo's
 /// lookup, and the height field's side of the integrator.
-pub fn assemble_path() -> String {
+pub fn assemble_path(placed: bool) -> String {
     format!(
         "{}\n{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered(placed)),
         super::path_core::PT_CORE_WGSL.replace("//__LENS_APPLY_RAY__", ""),
         PATH_WGSL
             .replace(
@@ -2472,6 +2473,10 @@ pub struct TerrainRenderer {
     albedo_mip_pipeline: ComputePipeline,
     path_layout: BindGroupLayout,
     path_pipeline: ComputePipeline,
+    /// The walk, the relight and the path tracer with points and
+    /// headlamps compiled into their rig, built when a view first has one
+    /// (`assembler::ifs_rig`: their code costs registers unused).
+    placed: Option<[ComputePipeline; 3]>,
     /// The path tracer's per-pixel sum, and the samples in it.
     path: PathSum,
     sampler: Sampler,
@@ -2723,10 +2728,10 @@ impl TerrainRenderer {
         };
         let pipeline = |label: &str, layout: &BindGroupLayout, src: String| entry(label, layout, &src, "main");
         let build_pipeline = pipeline("Terrain Build", &build_layout, assemble_build());
-        let walk_src = assemble_walk();
+        let walk_src = assemble_walk(false);
         let walk_pipeline = entry("Terrain Walk", &walk_layout, &walk_src, "main");
         let probe_pipeline = entry("Terrain Probe", &walk_layout, &walk_src, "probe_main");
-        let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
+        let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight(false));
         let filter_pipeline = entry("Terrain Section Raw", &filter_layout, INGEST_WGSL, "filter_main");
         let soften_pipeline = entry("Terrain Section Soften", &filter_layout, INGEST_WGSL, "soften_main");
         let store_pipeline = entry("Terrain Section Store", &filter_layout, INGEST_WGSL, "store_main");
@@ -2748,7 +2753,7 @@ impl TerrainRenderer {
             ..Default::default()
         });
         let surface_dummy = Self::create_surface_image(device, 1, 1);
-        let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path());
+        let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path(false));
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Terrain Albedo"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -2808,6 +2813,7 @@ impl TerrainRenderer {
             albedo_mip_pipeline,
             path_layout,
             path_pipeline,
+            placed: None,
             path,
             sampler,
             atlas: None,
@@ -4011,7 +4017,43 @@ impl TerrainRenderer {
 
     /// Render the view: walk if anything the walk reads changed, then
     /// relight. Submits its own work.
+    /// Build the walk, the relight and the path tracer with points and
+    /// headlamps compiled into their rig, the first time a view has one.
+    fn ensure_placed(&mut self, device: &Device, placed: bool) {
+        if !placed || self.placed.is_some() {
+            return;
+        }
+        let make = |label: &str, layout: &BindGroupLayout, src: &str| {
+            let module = device.create_shader_module(ShaderModuleDescriptor { label: Some(label), source: ShaderSource::Wgsl(src.into()) });
+            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[Some(layout)], immediate_size: 0 });
+            device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        self.placed = Some([
+            make("Terrain Walk (placed lights)", &self.walk_layout, &assemble_walk(true)),
+            make("Terrain Relight (placed lights)", &self.relight_layout, &assemble_relight(true)),
+            make("Terrain Path (placed lights)", &self.path_layout, &assemble_path(true)),
+        ]);
+    }
+
+    /// The walk (0), the relight (1) or the path tracer (2) for a view:
+    /// with points and headlamps compiled in when it has one.
+    fn rig_pipeline(&self, placed: bool, k: usize) -> &ComputePipeline {
+        match (&self.placed, placed) {
+            (Some(p), true) => &p[k],
+            _ => [&self.walk_pipeline, &self.relight_pipeline, &self.path_pipeline][k],
+        }
+    }
+
     pub fn render(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
+        let placed = view.shading.placed_lights();
+        self.ensure_placed(device, placed);
         let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
         let key = format!("{}|{:?}{:?}", walk_key(view, self.out_w, self.out_h, ground.version), self.frame, self.origin);
         let walk = self.walked.as_deref() != Some(key.as_str()) || self.count_steps;
@@ -4037,7 +4079,7 @@ impl TerrainRenderer {
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Walk"), timestamp_writes: None });
-            pass.set_pipeline(&self.walk_pipeline);
+            pass.set_pipeline(self.rig_pipeline(placed, 0));
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
@@ -4059,7 +4101,7 @@ impl TerrainRenderer {
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Relight"), timestamp_writes: None });
-            pass.set_pipeline(&self.relight_pipeline);
+            pass.set_pipeline(self.rig_pipeline(placed, 1));
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
@@ -4106,6 +4148,8 @@ impl TerrainRenderer {
         if self.ground.is_none() || self.atlas.is_none() {
             return;
         }
+        let placed = view.shading.placed_lights();
+        self.ensure_placed(device, placed);
         // The denoiser's guides start with the sum; the pass gathers them
         // only where they fit (`set_guided`).
         if self.path.set_guided(device, settings.denoise) {
@@ -4148,7 +4192,7 @@ impl TerrainRenderer {
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
             {
                 let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Path"), timestamp_writes: None });
-                pass.set_pipeline(&self.path_pipeline);
+                pass.set_pipeline(self.rig_pipeline(placed, 2));
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(gx, gy, 1);
             }
@@ -4378,9 +4422,11 @@ mod tests {
     fn the_terrain_shaders_validate() {
         validate(INGEST_WGSL, "ingest");
         validate(&assemble_build(), "build");
-        validate(&assemble_walk(), "walk");
-        validate(&assemble_relight(), "relight");
-        validate(&assemble_path(), "path");
+        for placed in [false, true] {
+            validate(&assemble_walk(placed), "walk");
+            validate(&assemble_relight(placed), "relight");
+            validate(&assemble_path(placed), "path");
+        }
         validate(super::super::path_core::PATH_RESOLVE_WGSL, "path resolve");
         validate(super::super::path_core::PATH_DENOISE_WGSL, "path denoise");
     }
