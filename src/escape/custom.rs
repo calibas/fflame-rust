@@ -119,6 +119,7 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         EntryKind::Formula => b"formula",
         EntryKind::Coloring => b"coloring",
         EntryKind::Transform => b"transform",
+        EntryKind::Solid => b"solid",
     });
     eat(match src.dialect {
         CustomDialect::UltraFractal => b"uf",
@@ -167,6 +168,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
             EntryKind::Formula => lang::rhai::program(&src.source),
             EntryKind::Coloring => lang::rhai::coloring(&src.source),
             EntryKind::Transform => lang::rhai::transformation_any(&src.source),
+            EntryKind::Solid => lang::rhai::solid(&src.source),
         });
     }
     if src.dialect == CustomDialect::Hybrid {
@@ -188,6 +190,7 @@ pub fn check_entry(kind: EntryKind, src: &CustomSource) -> Result<ir::Program, V
     let (program, d) = match kind {
         EntryKind::Formula => lang::switch::check_formula(&file, entry, dialect(src.dialect)),
         EntryKind::Coloring | EntryKind::Transform => lang::check::check(entry, kind, dialect(src.dialect)),
+        EntryKind::Solid => return Err(vec![Diag::error(lang::Span::default(), "a solid is written in Rhai")]),
     };
     diags.extend(d);
     match program {
@@ -227,6 +230,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
     let (program, diags) = match kind {
         EntryKind::Formula => lang::switch::check_formula(&file, e, d),
         EntryKind::Coloring | EntryKind::Transform => lang::check::check(e, kind, d),
+        EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
     };
     let program = match program {
         Some(p) if !lang::has_errors(&diags) => p,
@@ -257,6 +261,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::to_rhai::formula(&program, &header)?,
         EntryKind::Coloring => lang::to_rhai::coloring(&program, &header)?,
         EntryKind::Transform => return Err("a transformation does not convert to Rhai yet".to_string()),
+        EntryKind::Solid => return Err("a solid is written in Rhai".to_string()),
     };
     // What it printed must compile back: one that does not is the
     // converter's bug, not the user's to fix.
@@ -264,6 +269,7 @@ pub fn convert_to_rhai(text: &str, entry: &str, kind: EntryKind, from: CustomDia
         EntryKind::Formula => lang::rhai::program(&rhai),
         EntryKind::Coloring => lang::rhai::coloring(&rhai),
         EntryKind::Transform => lang::rhai::transformation(&rhai),
+        EntryKind::Solid => lang::rhai::solid(&rhai),
     };
     back.map_err(|d| format!("the conversion does not compile ({})", d.first().map(|x| x.render(&rhai)).unwrap_or_default()))?;
     Ok(rhai)
@@ -391,6 +397,70 @@ pub fn compile_formula(src: &CustomSource, name: &str) -> Result<&'static Formul
         return Ok(def);
     }
     compile_program(check_entry(EntryKind::Formula, src)?, name)
+}
+
+/// Why a checked solid does not compile to its walk, if it does not (the
+/// editor's check, before it is used).
+pub fn solid_error(p: &ir::Program) -> Option<String> {
+    let base = super::ifs::template_parameters().len();
+    lang::wgsl::solid(p, base, base + param_defs(p).len()).err()
+}
+
+/// Compile a Rhai solid (the KIFS plan, B3) and register it under `name`
+/// as a mode-D entry: the template's parameters, the solid's own from
+/// slot 7, its colour depth and its ball (`INFO.radius`, a parameter the
+/// panel can move), and its walk (`lang::wgsl::solid`).
+pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::ifs::IfsDef, Vec<Diag>> {
+    if let Some(def) = super::ifs::get_ifs(name) {
+        return Ok(def);
+    }
+    let fail = |m: String| vec![Diag::error(lang::Span::default(), m)];
+    let p = check_entry(EntryKind::Solid, src)?;
+    let template = super::ifs::template_parameters();
+    let own = param_defs(&p);
+    let depth_slot = template.len() + own.len();
+    if depth_slot + 2 > 64 {
+        return Err(fail(format!("a solid's parameters take {} slots; it has {}", 64 - template.len() - 2, own.len())));
+    }
+    let wgsl = lang::wgsl::solid(&p, template.len(), depth_slot).map_err(fail)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    lang::wgsl::validate_solid(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
+    let radius = lang::rhai::info_number(&src.source, "radius").unwrap_or(2.0).max(1e-3);
+    let mut parameters: Vec<EscapeParamDef> = template.to_vec();
+    parameters.extend(own);
+    parameters.push(EscapeParamDef {
+        name: "colour_depth",
+        display_name: "Colour Depth",
+        default: 3.0,
+        min: 1.0,
+        max: 12.0,
+        tooltip: "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
+                  running derivative and the address. Raise it when zoomed in.",
+        choices: &[],
+    });
+    parameters.push(EscapeParamDef {
+        name: "radius",
+        display_name: "Ball Radius",
+        default: radius as f32,
+        min: 0.01,
+        max: (radius * 4.0).max(4.0) as f32,
+        tooltip: "The ball the set lies in, which the march starts from (INFO.radius). Too small cuts the solid; too \
+                  large spends steps on empty space.",
+        choices: &[],
+    });
+    let def = super::ifs::IfsDef {
+        name: leak(name.to_string()),
+        display_name: leak(p.name.clone()),
+        solid: true,
+        needs_flame: false,
+        default_coloring: "ifs_trap",
+        parameters: Box::leak(parameters.into_boxed_slice()),
+        presets: &[],
+        wgsl: leak(wgsl),
+    };
+    let def: &'static super::ifs::IfsDef = Box::leak(Box::new(def));
+    super::ifs::register_custom_solid(def);
+    Ok(def)
 }
 
 /// Compile a formula entry as the panel's damping and biomorph modify it
@@ -1218,18 +1288,21 @@ pub fn ensure(escape: &EscapeConfig) {
             continue;
         }
         let known = match kind {
-            EntryKind::Formula => formula(name).is_some(),
+            // A solid is a formula's choice too (B3).
+            EntryKind::Formula => formula(name).is_some() || super::ifs::get_ifs(name).is_some(),
             EntryKind::Coloring => coloring(name).is_some(),
             // An escape config carries no transformation.
-            EntryKind::Transform => true,
+            EntryKind::Transform | EntryKind::Solid => true,
         };
         if known || registry().read().is_ok_and(|r| r.failed.contains(name)) {
             continue;
         }
+        let solid = kind == EntryKind::Formula && src.dialect == CustomDialect::Rhai && lang::rhai::kind_of(&src.source) == Some(EntryKind::Solid);
         let result = match kind {
+            EntryKind::Formula if solid => compile_solid(src, name).map(|_| ()),
             EntryKind::Formula => compile_formula(src, name).map(|_| ()),
             EntryKind::Coloring => compile_coloring(src, name).map(|_| ()),
-            EntryKind::Transform => Ok(()),
+            EntryKind::Transform | EntryKind::Solid => Ok(()),
         };
         if let Err(diags) = result {
             let msgs: Vec<String> = diags.iter().map(|d| d.render(&src.source)).collect();
@@ -1507,6 +1580,7 @@ mod tests {
                 let name = name_of(kind, &src);
                 let compiled = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
+                    EntryKind::Solid => compile_solid(&src, &name).map(|_| ()),
                     EntryKind::Coloring | EntryKind::Transform => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = compiled {
@@ -1528,7 +1602,7 @@ mod tests {
                 let name = name_of(kind, &src);
                 let ok = match kind {
                     EntryKind::Formula => compile_formula(&src, &name).map(|_| ()),
-                    EntryKind::Coloring | EntryKind::Transform => compile_coloring(&src, &name).map(|_| ()),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => compile_coloring(&src, &name).map(|_| ()),
                 };
                 if let Err(d) = ok {
                     panic!("{file} / {}: {:?}", e.name, d.iter().map(|x| x.render(&src.source)).collect::<Vec<_>>());

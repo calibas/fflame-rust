@@ -235,6 +235,26 @@ pub fn transform(p: &Program, params: &ParamValues, z: C64) -> C64 {
     VariationRun::new(p, params, 1).call(z, C64::ZERO, 1.0).0
 }
 
+/// A solid's estimate at `pos` (the KIFS plan, B3): `start`, then `step`
+/// while `escaped` has not, at most `levels` times, then `distance` --
+/// the walk mode D runs, in f64.
+pub fn solid(p: &Program, params: &ParamValues, pos: [f64; 3], levels: u32) -> f64 {
+    let env = Env::at(C64::new(pos[0], pos[1]), levels);
+    let mut m = Machine::new(p, params);
+    let mut sh = Shared::new(&env);
+    sh.pixel_z = pos[2];
+    m.exec(&p.init, &mut sh);
+    for _ in 0..levels {
+        m.exec(&p.loop_body, &mut sh);
+        let go = p.bailout.as_ref().is_none_or(|b| m.eval(b, &sh).as_bool());
+        if !go {
+            break;
+        }
+    }
+    m.exec(&p.final_body, &mut sh);
+    sh.index
+}
+
 /// A transformation run as a flame runs it (the KIFS plan, C1, C2): call
 /// after call, its state (`init`, run once) kept between calls and its
 /// draws from one stream, as a thread's are.

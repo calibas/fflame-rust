@@ -50,6 +50,12 @@ pub enum EntryKind {
     /// to a point with parameters -- a flame variation's shape (the KIFS
     /// plan, C1). Written in Rhai as `fn variation(z, p)`.
     Transform,
+    /// A distance-estimated solid (the KIFS plan, B3), Rhai only: `fn
+    /// start(pos, p)`, `fn step(s, p)`, `fn escaped(s, p)` and `fn
+    /// distance(s, p)` over a vector state, compiled to mode D's walk.
+    /// The position is `#pixel` and `#pixelz`; `distance` writes the
+    /// estimate as `#index` in `final:`.
+    Solid,
 }
 
 /// A byte range in the source text.

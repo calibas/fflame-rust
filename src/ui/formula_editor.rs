@@ -46,6 +46,8 @@ struct EntryRow {
     as_formula: Vec<String>,
     as_coloring: Vec<String>,
     as_transform: Vec<String>,
+    /// As a solid (B3): Rhai only.
+    as_solid: Vec<String>,
 }
 
 impl EntryRow {
@@ -54,6 +56,7 @@ impl EntryRow {
             EntryKind::Formula => &self.as_formula,
             EntryKind::Coloring => &self.as_coloring,
             EntryKind::Transform => &self.as_transform,
+            EntryKind::Solid => &self.as_solid,
         }
     }
 }
@@ -164,6 +167,7 @@ impl FormulaEditorPanel {
             EntryKind::Formula => lang::rhai::program(&text),
             EntryKind::Coloring => lang::rhai::coloring(&text),
             EntryKind::Transform => lang::rhai::transformation_any(&text),
+            EntryKind::Solid => lang::rhai::solid(&text),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),
@@ -184,13 +188,33 @@ impl FormulaEditorPanel {
             Err(_) => lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
         };
         let is = |key: &str| vec![t!(key).to_string()];
-        let (as_formula, as_coloring, as_transform) = match kind {
-            EntryKind::Formula => (errors, is("formula_editor.rhai_is_formula"), is("formula_editor.rhai_is_formula")),
-            EntryKind::Coloring => (is("formula_editor.rhai_is_coloring"), errors, is("formula_editor.rhai_is_coloring")),
-            EntryKind::Transform => (is("formula_editor.rhai_is_transform"), is("formula_editor.rhai_is_transform"), errors),
+        // A solid's walk too (B3).
+        if kind == EntryKind::Solid {
+            if let Some(e) = checked.as_ref().ok().and_then(custom::solid_error) {
+                errors.push(e);
+            }
+        }
+        let not = |key: &str| (is(key), is(key), is(key), is(key));
+        let (as_formula, as_coloring, as_transform, as_solid) = match kind {
+            EntryKind::Formula => {
+                let n = not("formula_editor.rhai_is_formula");
+                (errors, n.1, n.2, n.3)
+            }
+            EntryKind::Coloring => {
+                let n = not("formula_editor.rhai_is_coloring");
+                (n.0, errors, n.2, n.3)
+            }
+            EntryKind::Transform => {
+                let n = not("formula_editor.rhai_is_transform");
+                (n.0, n.1, errors, n.3)
+            }
+            EntryKind::Solid => {
+                let n = not("formula_editor.rhai_is_solid");
+                (n.0, n.1, n.2, errors)
+            }
         };
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform }];
+        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid }];
         self.checked = Some(text);
     }
 
@@ -228,7 +252,7 @@ impl FormulaEditorPanel {
                 let check = |kind| {
                     let (p, d) = match kind {
                         EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
-                        EntryKind::Coloring | EntryKind::Transform => lang::check::check(e, kind, dialect),
+                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => lang::check::check(e, kind, dialect),
                     };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
@@ -257,6 +281,7 @@ impl FormulaEditorPanel {
                     // A UF transformation as a variation is a later step
                     // (UF support is paused): it shows its errors alone.
                     as_transform: if transform { check(EntryKind::Transform) } else { vec![t!("formula_editor.not_a_transform").to_string()] },
+                    as_solid: vec![t!("formula_editor.solid_rhai_only").to_string()],
                 }
             })
             .collect();
@@ -277,6 +302,7 @@ impl FormulaEditorPanel {
         let compiled = match kind {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
             EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
+            EntryKind::Solid => custom::compile_solid(&src, &name).map(|_| ()),
             EntryKind::Transform => return,
         };
         if let Err(d) = compiled {
@@ -286,7 +312,8 @@ impl FormulaEditorPanel {
         }
         let escape = &cm.config().escape;
         let (current, path_src, path_name, description) = match kind {
-            EntryKind::Formula => (
+            // A solid is the formula's choice (B3).
+            EntryKind::Formula | EntryKind::Solid => (
                 escape.custom_formula.as_ref(),
                 ConfigPath::EscapeCustomFormula,
                 ConfigPath::EscapeFormula,
@@ -324,6 +351,7 @@ impl FormulaEditorPanel {
                 self.in_use.push((kind, self.file.clone(), src.entry.clone()));
                 self.status = Some(match kind {
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
+                    EntryKind::Solid => t!("formula_editor.using_solid", entry = src.entry),
                     EntryKind::Coloring | EntryKind::Transform => t!("formula_editor.using_coloring", entry = src.entry),
                 }
                 .to_string());
@@ -414,7 +442,7 @@ impl FormulaEditorPanel {
             }
             let escape = &cm.config().escape;
             let (carried, name) = match kind {
-                EntryKind::Formula => (escape.custom_formula.as_ref(), &escape.formula),
+                EntryKind::Formula | EntryKind::Solid => (escape.custom_formula.as_ref(), &escape.formula),
                 EntryKind::Coloring | EntryKind::Transform => (escape.custom_coloring.as_ref(), &escape.coloring),
             };
             let Some(carried) = carried else { continue };
@@ -609,9 +637,10 @@ impl FormulaEditorPanel {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(&row.name);
                 let order = match row.likely {
-                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform],
-                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula, EntryKind::Transform],
-                    EntryKind::Transform => [EntryKind::Transform, EntryKind::Formula, EntryKind::Coloring],
+                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform, EntryKind::Solid],
+                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula, EntryKind::Transform, EntryKind::Solid],
+                    EntryKind::Transform => [EntryKind::Transform, EntryKind::Formula, EntryKind::Coloring, EntryKind::Solid],
+                    EntryKind::Solid => [EntryKind::Solid, EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform],
                 };
                 for kind in order {
                     // A flame mode uses variations; the escape mode,
@@ -625,6 +654,7 @@ impl FormulaEditorPanel {
                         EntryKind::Coloring => t!("formula_editor.use_coloring"),
                         EntryKind::Transform if flame_mode => t!("formula_editor.use_variation"),
                         EntryKind::Transform => t!("formula_editor.use_lens"),
+                        EntryKind::Solid => t!("formula_editor.use_solid"),
                     };
                     // The kind it is not is offered only when it compiles
                     // as that too; the kind it is shows its errors.

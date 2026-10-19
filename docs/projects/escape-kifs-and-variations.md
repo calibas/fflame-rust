@@ -323,6 +323,20 @@ marked for review):
   over the first `colour_depth` iterations; an `address` field if the
   state has one). Gates: Rhai twins of the KIFS Menger, the Mandelbox
   and the Mandelbulb, coverage pixel for pixel against the built-ins.
+  **Done 2026-10-18** for the Mandelbox and the Mandelbulb (the KIFS
+  Menger's twin is left: the built-in's eight folds and two rotations
+  are a long source, and the other two exercise every part). A new
+  `EntryKind::Solid`; `lang::wgsl::solid` writes the program over a
+  `SolidState` and the walk around it; `compile_solid` registers an
+  `IfsDef` the user's `custom-` name finds (`ifs::get_ifs`). Decisions to
+  review: **the ball is `INFO.radius`, and a panel parameter** (Ball
+  Radius) -- a user's set has no formula for its ball; **the estimate is
+  `#index`** in `final:`, not a new symbol; **no address colouring unless
+  the state has an `address` field**. Measured: the Rhai walks give the
+  f64 twins' distances at 400 points each (the Mandelbox exactly, the
+  Mandelbulb to 4e-13); on the GPU, coverage equal on all 25,600 pixels
+  for both; the Rhai Mandelbox under the trap colouring pixel for pixel
+  the built-in's (0 of 172,800).
 
 ## D. Decided: the field fractals stay in mode B
 

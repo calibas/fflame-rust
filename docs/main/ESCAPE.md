@@ -510,6 +510,15 @@ fn escaped(s, p) {
   and `name_of` hashes them, so a changed variation is a changed entry.
   A built-in variation is refused (C3, maybe). Example:
   `assets/formulas/whorled-mandelbrot.rhai`.
+- **A Rhai solid** (the KIFS plan, B3; `EntryKind::Solid`, a file with
+  `fn distance`): `fn start(pos, p)` returns the state from the point
+  being measured -- `z`, the iterate, a vector, and `dr`, the running
+  derivative, read by the colourings -- `fn step(s, p)` is one
+  iteration, `fn escaped(s, p)` the stop (without it every iteration
+  runs), `fn distance(s, p)` the estimate after the last one; `INFO`
+  has `title` and `radius`. It renders in mode D ("Use as solid"; see
+  *Mode D*). The position is `#pixel` and `#pixelz`, the estimate
+  `#index` in `final:`; no `prepare` or function parameters yet.
 - **Vectors** (`rhai/vec.rs`; the KIFS plan, B1): `vec3(x, y, z)` (or
   `vec3(s)`), its parts `v.x`, `v.y`, `v.z` read and set, `+`, `-`, `*`
   and `/` (by a number, or part by part), `dot`, `cross`, `length`,
@@ -1235,6 +1244,19 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `kifs_solid` | KIFS (Solid) | Knighty's kaleidoscopic IFS: rotate, fold (tetrahedral, cubic, octahedral or Menger), rotate, `z = s z − o (s − 1)`. Solid; needs no flame; default `ifs_level` |
 | `mandelbox_solid` | Mandelbox (Solid) | Lowe's box fold, sphere fold and scale, `z = s fold(z) + c`, the point or a Julia constant; the distance `0.95 |z| / |dr|`. Solid; needs no flame; default `ifs_trap` |
 | `mandelbulb_solid` | Mandelbulb (Solid) | White and Nylander's power in spherical coordinates, `z = zⁿ + c`, the point or a Julia constant; Hart's estimate times the Step Factor. Solid; needs no flame; default `ifs_trap` |
+
+**Solids written in Rhai** (the KIFS plan, B3; the formula language's
+solid entry) register beside these under their `custom-` names
+(`escape::custom::compile_solid`, found by `ifs::get_ifs`, never
+listed): the template's seven parameters, the solid's own from slot 7,
+then Colour Depth and **Ball Radius** (`INFO.radius`, the ball the march
+starts from; a parameter the panel can move, which `standalone_radius`
+reads). The walk around the program (`lang::wgsl::solid`) is the
+built-ins' shape, coloured by "Colouring solids" from the state: the
+closest approach of `z` over the first `colour_depth` iterations (the
+trap), its `dr` (the level), its `address` field if it has one.
+Example: `assets/formulas/solid-mandelbox.rhai`, pixel for pixel the
+built-in Mandelbox under the trap colouring.
 
 **KIFS (Solid)** ([escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md),
 A1) takes its folds from Syntopia's "Folding Space" (2011): the

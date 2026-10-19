@@ -3104,6 +3104,10 @@ pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeCon
         let c = julia().then(constant);
         return mandelbulb_radius(value("power").unwrap_or(8.0), c);
     }
+    // A user's solid gives its ball as a parameter (B3).
+    if let Some(r) = value("radius") {
+        return r.max(1e-3);
+    }
     value("bailout").unwrap_or(2.0).max(1e-3)
 }
 
@@ -3241,7 +3245,32 @@ pub static IFS_COLORINGS: &[&IfsColoringDef] =
 /// Look up a mode-D distance function by name. `None` = the name
 /// belongs to another mode (or is unknown).
 pub fn get_ifs(name: &str) -> Option<&'static IfsDef> {
-    IFS_DEFS.iter().find(|f| f.name == name).copied()
+    IFS_DEFS.iter().find(|f| f.name == name).copied().or_else(|| {
+        custom_solids().read().ok().and_then(|c| c.iter().find(|f| f.name == name).copied())
+    })
+}
+
+/// The solids the user wrote (the KIFS plan, B3), compiled by
+/// `escape::custom::compile_solid` under their `custom-` names: found by
+/// [`get_ifs`] as the built-ins are, never listed beside them.
+fn custom_solids() -> &'static std::sync::RwLock<Vec<&'static IfsDef>> {
+    static S: std::sync::OnceLock<std::sync::RwLock<Vec<&'static IfsDef>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Register a user's solid; one of the same name is replaced.
+pub fn register_custom_solid(def: &'static IfsDef) {
+    if let Ok(mut c) = custom_solids().write() {
+        c.retain(|f| f.name != def.name);
+        c.push(def);
+    }
+}
+
+/// The parameters every solid starts with, the template's (levels,
+/// beam, steps, shadow, shadow sharpness, occlusion, slice): a user's
+/// solid takes them as the built-ins do, its own from slot 7.
+pub fn template_parameters() -> &'static [EscapeParamDef] {
+    &IFS_MANDELBOX.parameters[..7]
 }
 
 /// Resolve the coloring for a mode-D render, falling back to the
@@ -14301,6 +14330,136 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let job = crate::renderer::RenderJob::new(&cfg, n, n);
         let out = pollster::block_on(crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress)).expect("render");
         out.rgba_data.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).collect()
+    }
+
+    // ---- solids written in Rhai (the KIFS plan, B3) -------------------------
+
+    /// The Mandelbox written as a Rhai solid: Lowe's folds, Syntopia's
+    /// estimate at 0.95, as the built-in.
+    const RHAI_BOX: &str = r#"
+const PARAMS = #{ scale: 2.0, min_radius: 0.5, fixed_radius: 1.0, fold_limit: 1.0 };
+const INFO = #{ title: "Mandelbox (Rhai)", radius: 13.86 };
+fn start(pos, p) { #{ z: pos, c: pos, dr: 1.0 } }
+fn step(s, p) {
+    let lim = p.fold_limit;
+    let z = clamp(s.z, -lim, lim) * 2.0 - s.z;
+    let r2 = dot(z, z);
+    let fr2 = p.fixed_radius * p.fixed_radius;
+    let mr2 = max(min(p.min_radius * p.min_radius, fr2), 1e-6);
+    let t = 1.0;
+    if r2 < mr2 {
+        t = fr2 / mr2;
+    } else if r2 < fr2 {
+        t = fr2 / r2;
+    }
+    s.z = z * t * p.scale + s.c;
+    s.dr = s.dr * t * abs(p.scale) + 1.0;
+    s
+}
+fn escaped(s, p) { length(s.z) > 100.0 }
+fn distance(s, p) { 0.95 * length(s.z) / abs(s.dr) }
+"#;
+
+    /// The Mandelbulb written as a Rhai solid: White and Nylander's power,
+    /// Hart's estimate, zero where the orbit never left the ball (2^(1/7)
+    /// at power 8), as the built-in.
+    const RHAI_BULB: &str = r#"
+const PARAMS = #{ power: 8.0, step_factor: 1.0 };
+const INFO = #{ title: "Mandelbulb (Rhai)", radius: 1.1040895 };
+fn start(pos, p) { #{ z: pos, c: pos, dr: 1.0, out: false } }
+fn step(s, p) {
+    let n = p.power;
+    let r = length(s.z);
+    let theta = acos(clamp(s.z.z / max(r, 1e-30), -1.0, 1.0));
+    let phi = atan2(s.z.y, s.z.x);
+    let rn1 = 0.0;
+    let rn = 0.0;
+    if r > 0.0 {
+        rn1 = r ** (n - 1.0);
+        rn = r ** n;
+    }
+    s.dr = rn1 * n * s.dr + 1.0;
+    let th = theta * n;
+    let ph = phi * n;
+    s.z = vec3(sin(th) * cos(ph), sin(ph) * sin(th), cos(th)) * rn + s.c;
+    if length(s.z) > 1.1040895 {
+        s.out = true;
+    }
+    s
+}
+fn escaped(s, p) { length(s.z) > 64.0 }
+fn distance(s, p) {
+    let r = length(s.z);
+    if s.out { p.step_factor * max(0.5 * ln(r) * r / max(s.dr, 1e-30), 0.0) } else { 0.0 }
+}
+"#;
+
+    /// **A solid written in Rhai walks as the built-in** (B3's gate, on
+    /// the CPU): the Mandelbox's and the Mandelbulb's Rhai twins, run by
+    /// the interpreter, give the f64 twins' distances at points in and
+    /// around their balls; and each compiles to a walk that validates.
+    #[test]
+    fn rhai_solids_walk_as_the_builtins() {
+        use crate::escape::lang::interp::{solid, ParamValues};
+        let cases: [(&str, &str, Solid); 2] = [("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))), ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0)))];
+        for (what, src, twin) in cases {
+            let p = crate::escape::lang::rhai::solid(src).unwrap_or_else(|d| panic!("{what}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+            let params = ParamValues::defaults(&p);
+            let levels = match &twin {
+                Solid::Box(b) => b.levels,
+                Solid::Bulb(b) => b.levels,
+                _ => unreachable!(),
+            };
+            let mut rng = XorShift(0x5EED_0000 + what.len() as u64);
+            let radius = twin.radius();
+            let mut worst = 0.0f64;
+            for _ in 0..400 {
+                let pos = rng.in_ball([0.0; 3], radius * 1.2, false);
+                let (want, got) = (twin.distance(pos), solid(&p, &params, pos, levels));
+                worst = worst.max((want - got).abs() / want.abs().max(1e-6));
+            }
+            println!("{what}: the Rhai walk's distance against the twin's, worst relative difference {worst:.2e}");
+            assert!(worst < 1e-9, "{what}: {worst}");
+            let base = template_parameters().len();
+            let wgsl = crate::escape::lang::wgsl::solid(&p, base, base + p.params.len()).expect("a walk");
+            crate::escape::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
+        }
+    }
+
+    /// **A solid written in Rhai renders as the built-in** (B3's gate, on
+    /// the GPU): the Rhai twins of the Mandelbox and the Mandelbulb, carried
+    /// as the config's custom formula and registered as mode-D entries,
+    /// cover the pixels the built-ins cover, the same camera and ball.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn rhai_solids_render_as_the_builtins() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        const N: u32 = 160;
+        let (device, queue) = device();
+        let cases: [(&str, &str, Solid); 2] = [("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))), ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0)))];
+        let mut failures = Vec::new();
+        for (what, src, solid) in cases {
+            let cfg = solid.config("ifs_level");
+            let builtin = solid_gpu_coverage(&device, &queue, &cfg, N);
+            let mut twin = cfg.clone();
+            let source = CustomSource { dialect: CustomDialect::Rhai, entry: what.to_string(), source: src.to_string(), variations: Vec::new() };
+            twin.escape.formula = crate::escape::custom::name_of(EntryKind::Solid, &source);
+            twin.escape.custom_formula = Some(source);
+            twin.escape.formula_params.insert("radius".to_string(), standalone_radius(solid.def(), &cfg.escape) as f32);
+            let got = solid_gpu_coverage(&device, &queue, &twin, N);
+            assert!(get_ifs(&twin.escape.formula).is_some_and(|d| d.solid), "{what}: not registered as a solid");
+            let covered = builtin.iter().filter(|b| **b).count();
+            let (differ, on_edges) = coverage_mismatch(&builtin, &got, N);
+            println!("{what}: the built-in covers {covered} of {} pixels; the Rhai twin differs on {differ}, {on_edges} of them at an edge", N * N);
+            if covered < (N * N / 20) as usize {
+                failures.push(format!("{what}: the view shows too little ({covered})"));
+            }
+            if differ > (N * N / 400) as usize || differ > on_edges {
+                failures.push(format!("{what}: {differ} pixels apart, {on_edges} at an edge"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// Pixels where two coverages differ, and how many of those have a
