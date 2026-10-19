@@ -362,6 +362,7 @@ impl Checker {
                     EntryKind::Formula => kind = SectionKind::Init,
                     EntryKind::Coloring => kind = SectionKind::Final,
                     EntryKind::Transform => kind = SectionKind::Transform,
+                    EntryKind::Solid => kind = SectionKind::Init,
                 }
             }
             let allowed = match (self.kind, kind) {
@@ -375,6 +376,8 @@ impl Checker {
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
                 (EntryKind::Coloring, SectionKind::Init | SectionKind::Loop | SectionKind::Final) => true,
+                // A solid: its start, step, bail and distance (B3).
+                (EntryKind::Solid, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout | SectionKind::Final) => true,
                 _ => false,
             };
             if !allowed {
@@ -382,6 +385,7 @@ impl Checker {
                     EntryKind::Formula => "a formula",
                     EntryKind::Coloring => "a colouring",
                     EntryKind::Transform => "a transformation",
+                    EntryKind::Solid => "a solid",
                 };
                 self.error(s.span, format!("{what} has no `{}:` section", kind.label()));
                 continue;
@@ -410,6 +414,12 @@ impl Checker {
             EntryKind::Transform => {
                 if !has(SectionKind::Transform) {
                     self.error(entry.span, "a transformation needs a `transform:` section");
+                    return None;
+                }
+            }
+            EntryKind::Solid => {
+                if !has(SectionKind::Loop) || !has(SectionKind::Final) {
+                    self.error(entry.span, "a solid needs `step` and `distance`");
                     return None;
                 }
             }
@@ -879,6 +889,8 @@ impl Checker {
             // Rhai's `rand()` (C2a), and a variation's context and colour
             // (C2b, C2d).
             "draw" if self.internal => Predef::Draw,
+            // A solid's position's third part (B3).
+            "pixelz" if self.internal && self.kind == EntryKind::Solid => Predef::PixelZ,
             "accum" | "weight" | "vcolor" | "pixelz" | "accumz" if self.internal => {
                 if self.kind != EntryKind::Transform {
                     self.error(span, format!("`{name}` is a flame variation's"));
@@ -941,11 +953,17 @@ impl Checker {
             return None;
         }
         // A variation sees its point and nothing of an image or an orbit.
+        // A solid sees its position and its own state (B3); the
+        // estimate it gives is `#index`, in `final:`.
+        if self.kind == EntryKind::Solid && !matches!(p, Predef::Pixel | Predef::PixelZ | Predef::Pi | Predef::E | Predef::Index) {
+            self.error(span, format!("a solid reads its position, `#pi` and `#e`, not `#{name}`"));
+            return None;
+        }
         if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ) {
             self.error(span, format!("a transformation reads `#pixel`, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
-        let colouring = self.kind == EntryKind::Coloring;
+        let colouring = self.kind == EntryKind::Coloring || (self.kind == EntryKind::Solid && p == Predef::Index);
         if matches!(p, Predef::Index | Predef::Solid | Predef::NumIter) {
             if !colouring {
                 self.error(span, format!("`#{name}` is a colouring's"));

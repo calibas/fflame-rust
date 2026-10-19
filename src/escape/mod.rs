@@ -216,6 +216,7 @@ pub enum ColoringFeature {
 /// parameters, minus the type zoo — everything is a float slot in v1
 /// (integers and small enums ride as floats the way variation
 /// `Integer`/`Enum` params ride their buffer).
+#[derive(Clone)]
 pub struct EscapeParamDef {
     /// Key inside `EscapeConfig::formula_params` / `coloring_params`.
     pub name: &'static str,

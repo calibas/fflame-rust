@@ -338,6 +338,134 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
     g.finish("", body)
 }
 
+/// A solid's WGSL (the KIFS plan, B3): its program as `solid_init(pixel,
+/// pixel_z)`, `solid_step`, `solid_go` and `solid_distance` over a
+/// `SolidState`, and mode D's `ifs_walk3` around them -- the walk the
+/// built-in solids write by hand, coloured by "Colouring solids": over the
+/// first `colour_depth` iterations the closest approach of `z` (the trap),
+/// the running derivative `dr` if the state has one (the level), and its
+/// `address` field if it has one. The parameters read `fparam` from slot
+/// `base` on (the template's own come first); `colour_depth` is at
+/// `depth_slot`.
+pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, String> {
+    if !p.funcs.is_empty() {
+        return Err("a solid's function parameters are a later step".into());
+    }
+    let find = |name: &str| p.vars.iter().position(|v| v.name == name && !v.global && !v.is_array());
+    let (Some(zx), Some(zy), Some(zz)) = (find("s_z__x"), find("s_z__y"), find("s_z__z")) else {
+        return Err("the state needs `z`, the iterate, a vector".into());
+    };
+    let dr = find("s_dr");
+    let address = find("s_address");
+    let mut g = Gen::new(p, Ctx::Formula, "ufs_");
+    for k in g.slots.iter_mut() {
+        *k += base;
+    }
+    let mut body = String::from("struct SolidState {\n");
+    for (i, v) in p.vars.iter().enumerate() {
+        if !v.global && !v.perturb {
+            let _ = writeln!(body, "    v{i}: {},", var_ty(v));
+        }
+    }
+    body.push_str("}\n\n");
+    body.push_str("fn solid_init(pixel: vec2<f32>, pixel_z: f32) -> SolidState {\n    var s: SolidState;\n");
+    g.stmts(&p.init, 1, &mut body);
+    body.push_str("    return s;\n}\n\n");
+    body.push_str("fn solid_step(s_in: SolidState, pixel: vec2<f32>, pixel_z: f32) -> SolidState {\n    var s = s_in;\n");
+    g.stmts(&p.loop_body, 1, &mut body);
+    body.push_str("    return s;\n}\n\n");
+    let test = p.bailout.as_ref().map_or_else(|| "true".to_string(), |b| g.expr(b));
+    let _ = write!(body, "fn solid_go(s: SolidState, pixel: vec2<f32>, pixel_z: f32) -> bool {{\n    return {test};\n}}\n\n");
+    // Its locals are the state's fields: a copy it may set.
+    body.push_str("fn solid_distance(s_in: SolidState, pixel: vec2<f32>, pixel_z: f32) -> f32 {\n    var s = s_in;\n    var index = 0.0;\n");
+    g.stmts(&p.final_body, 1, &mut body);
+    body.push_str("    return index;\n}\n\n");
+    let z = format!("vec3<f32>({}, {}, {})", g.var(zx), g.var(zy), g.var(zz));
+    let spread = dr.map(|v| format!("            spread = f32({});\n", g.var(v))).unwrap_or_default();
+    let addr = address.map(|v| format!("            address = fract(f32({}));\n", g.var(v))).unwrap_or_default();
+    let _ = write!(
+        body,
+        "fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {{
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 256.0));
+    let depth = u32(clamp(round(fparam({depth_slot}u)), 1.0, 12.0));
+    let radius = ifs_radius();
+    let pos = delta + ifs_target_offset();
+    var s = solid_init(pos.xy, pos.z);
+    // The colourings read the start of the orbit (\"Colouring solids\").
+    var trap_r = 1.0e30;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var spread = 1.0;
+    var address = 0.0;
+    var k = 0u;
+    var escape_k = -1;
+    loop {{
+        if (k >= levels) {{
+            break;
+        }}
+        s = solid_step(s, pos.xy, pos.z);
+        k = k + 1u;
+        let z = {z};
+        let r = length(z);
+        if (k <= depth) {{
+{spread}            if (r < trap_r) {{
+                trap_r = r;
+                let a = abs(z) / radius;
+                trap_p = vec2<f32>(max(max(a.x, a.y), a.z), min(min(a.x, a.y), a.z));
+            }}
+{addr}        }}
+        if (escape_k < 0 && r > radius) {{
+            escape_k = i32(k);
+        }}
+        if (!solid_go(s, pos.xy, pos.z)) {{
+            break;
+        }}
+    }}
+    res.point = trap_p;
+    res.address = address;
+    res.color = address;
+    res.level = log2(max(abs(spread), 1.0));
+    res.distance = solid_distance(s, pos.xy, pos.z);
+    if (escape_k >= 0) {{
+        res.escaped = 1u;
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    }} else {{
+        res.depth = levels;
+    }}
+    return res;
+}}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {{
+    return ifs_walk3(delta, eps).distance;
+}}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {{
+    return ifs_walk3(delta, 0.0);
+}}
+"
+    );
+    Ok(g.finish("", body))
+}
+
+/// [`validate_formula`] for a solid's walk, against the mode-D template's
+/// `IfsResult`, `fparam`, ball and target.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_solid(wgsl: &str) -> Result<(), String> {
+    const STUBS: &str = "struct IfsResult {\n    distance: f32,\n    level: f32,\n    address: f32,\n    color: f32,\n    point: vec2<f32>,\n    escaped: u32,\n    depth: u32,\n}\n\
+        fn fparam(i: u32) -> f32 {\n    return f32(i);\n}\n\
+        fn ifs_radius() -> f32 {\n    return 2.0;\n}\n\
+        fn ifs_target_offset() -> vec3<f32> {\n    return vec3<f32>(0.0, 0.0, 0.0);\n}\n";
+    validate_module(&format!("{STUBS}{wgsl}"))
+}
+
 /// The WGSL of a formula program.
 pub fn formula(p: &Program) -> String {
     let mut g = Gen::new(p, Ctx::Formula, "uff_");
@@ -3810,7 +3938,7 @@ fn step(s, p) {
             for e in &parsed.entries {
                 let (p, d) = match kind {
                     EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
-                    EntryKind::Coloring | EntryKind::Transform => check(e, kind, dialect),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => check(e, kind, dialect),
                 };
                 let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
                 match p {
@@ -3846,7 +3974,7 @@ fn step(s, p) {
                         let back = super::super::rhai::coloring(&text);
                         (text, back)
                     }
-                    EntryKind::Transform => unreachable!("the test files hold no transformations"),
+                    EntryKind::Transform | EntryKind::Solid => unreachable!("the test files hold no transformations or solids"),
                 };
                 let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
@@ -3870,7 +3998,7 @@ fn step(s, p) {
                     None => Ok(()),
                 }),
                 EntryKind::Coloring => validate_coloring(&coloring(p)),
-                EntryKind::Transform => unreachable!("the test files hold no transformations"),
+                EntryKind::Transform | EntryKind::Solid => unreachable!("the test files hold no transformations or solids"),
             };
             if let Err(e) = checked {
                 panic!("{file} / {name}: {e}");

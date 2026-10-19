@@ -131,6 +131,28 @@ pub fn transformation(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Transform)
 }
 
+/// The program a Rhai solid compiles to (`fn start(pos, p)`, `step`,
+/// `escaped`, `distance`; the KIFS plan, B3).
+pub fn solid(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::Solid)
+}
+
+/// A number field of a script's `INFO` (a solid's `radius`).
+pub fn info_number(source: &str, key: &str) -> Option<f64> {
+    let (ast, _) = parse(source).ok()?;
+    ast.statements().iter().find_map(|st| {
+        let Stmt::Var(x, _, _) = st else { return None };
+        let (ident, value, _) = &**x;
+        let Expr::Map(m, _) = value else { return None };
+        (ident.name.as_str() == "INFO").then_some(())?;
+        m.0.iter().find(|(k, _)| k.name.as_str() == key).and_then(|(_, v)| match v {
+            Expr::FloatConstant(f, _) => Some(**f),
+            Expr::IntegerConstant(i, _) => Some(*i as f64),
+            _ => None,
+        })
+    })
+}
+
 /// The program a transformation's 3D function compiles to (`fn
 /// variation3(v, p[, ctx])`, the KIFS plan, B2): its point a vector, read
 /// from and written to `#pixel` and `#pixelz`.
@@ -256,6 +278,8 @@ pub fn kind_of(source: &str) -> Option<EntryKind> {
     let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
     if has("variation") || has("variation3") {
         Some(EntryKind::Transform)
+    } else if has("distance") {
+        Some(EntryKind::Solid)
     } else if has("finish") {
         Some(EntryKind::Coloring)
     } else if has("escaped") || has("step") {
@@ -342,6 +366,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         variations: Vec::new(),
         param_vecs: HashSet::new(),
         three,
+        solid: kind == EntryKind::Solid,
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -515,6 +540,9 @@ struct Lowerer<'s> {
     param_vecs: HashSet<String>,
     /// Lowering a transformation's 3D function, `variation3` (B2).
     three: bool,
+    /// Lowering a solid (B3): its `z` is a vector of its own, not the
+    /// formula's iterate.
+    solid: bool,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -600,6 +628,8 @@ impl<'s> Lowerer<'s> {
             "a colouring"
         } else if self.transform {
             "a transformation"
+        } else if kind == EntryKind::Solid {
+            "a solid"
         } else {
             "a formula"
         };
@@ -634,6 +664,8 @@ impl<'s> Lowerer<'s> {
             "Colouring"
         } else if self.transform {
             "Variation"
+        } else if kind == EntryKind::Solid {
+            "Solid"
         } else {
             "Formula"
         }
@@ -652,6 +684,13 @@ impl<'s> Lowerer<'s> {
                     _ => return self.err(*p, "`name` is a string"),
                 },
                 o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title` and `name`, not `{o}`")),
+                // A solid's ball: the set lies within this radius
+                // (`info_number`, read apart).
+                "radius" if kind == EntryKind::Solid => match v {
+                    Expr::FloatConstant(..) | Expr::IntegerConstant(..) => {}
+                    _ => return self.err(*p, "`radius` is a number"),
+                },
+                o if kind == EntryKind::Solid => return self.err(*p, format!("a solid's `INFO` has `title` and `radius`, not `{o}`")),
                 "center" | "magn" | "maxiter" | "angle" if !self.coloring => {
                     let value = self.literal(v)?;
                     default.items.push(Setting { name: name.clone(), value: SettingValue::Expr(value), span: self.pos.span(*p) });
@@ -716,10 +755,15 @@ impl<'s> Lowerer<'s> {
                 sections.push(Section { kind: SectionKind::Init, span, body, last_is_bailout: false, labelled: true });
             }
         }
+        if kind == EntryKind::Solid && self.fns.contains_key("prepare") {
+            let f = &self.fns["prepare"];
+            return self.err(f.body.position(), "a solid has no `prepare` yet: compute its values in `start`");
+        }
         match kind {
             EntryKind::Formula => sections.extend(self.formula_sections(span, &mut default)?),
             EntryKind::Coloring => sections.extend(self.coloring_sections(span)?),
             EntryKind::Transform => sections.push(self.transform_section(span, state_fields)?),
+            EntryKind::Solid => sections.extend(self.solid_sections(span)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
@@ -795,6 +839,73 @@ impl<'s> Lowerer<'s> {
         }
         body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// A solid's functions as its sections (B3): `start(pos, p)` the init,
+    /// its map the state (`z` a vector, the iterate; `dr` the running
+    /// derivative, read by the colourings if present), `step(s, p)` the
+    /// loop, `escaped(s, p)` the bail negated (without it the walk runs
+    /// every iteration), `distance(s, p)` the estimate, `#index` in
+    /// `final:`.
+    fn solid_sections(&mut self, span: Span) -> R<Vec<Section>> {
+        let get = |l: &Self, name: &str| l.fns.get(name).cloned();
+        let (Some(start), Some(step), Some(distance)) = (get(self, "start"), get(self, "step"), get(self, "distance")) else {
+            return Err(Diag::error(Span::default(), "a solid has `fn start(pos, p)`, `fn step(s, p)` and `fn distance(s, p)`"));
+        };
+        // start: the position a vector, its map the state.
+        if start.params.is_empty() || start.params.len() > 2 {
+            return self.err(start.body.position(), "`start(pos, p)`");
+        }
+        let mut scope = Scope::new(Fn3::Start, Vec::new());
+        let pixel = || mk(ExprKind::Predef("pixel".into()), span);
+        let part = |name: &str| mk(ExprKind::Call { name: name.into(), args: vec![pixel()], user: false }, span);
+        let pos = [part("real"), part("imag"), mk(ExprKind::Predef("pixelz".into()), span)];
+        scope.bind(&start.params[0], Binding::VecValue(Box::new(pos)));
+        if let Some(p) = start.params.get(1) {
+            scope.bind(p, Binding::Params);
+        }
+        let mut init = Vec::new();
+        self.state_body(&start.body, &mut scope, &mut init)?;
+        let fields = scope.fields.clone();
+        if !fields.iter().any(|f| *f == vec::part("z", 0)) {
+            return self.err(start.body.position(), "the state needs `z`, the iterate, a vector: `#{ z: pos, dr: 1.0 }`");
+        }
+        let with = |l: &Self, f: &ScriptFuncDef, what: &str| -> R<Scope> {
+            if f.params.is_empty() || f.params.len() > 2 {
+                return l.err(f.body.position(), format!("`{what}(s, p)`"));
+            }
+            let mut scope = Scope::new(if what == "step" { Fn3::Step } else { Fn3::Finish }, fields.clone());
+            scope.bind(&f.params[0], Binding::State);
+            if let Some(p) = f.params.get(1) {
+                scope.bind(p, Binding::Params);
+            }
+            Ok(scope)
+        };
+        let mut scope = with(self, &step, "step")?;
+        let mut lp = Vec::new();
+        self.state_body(&step.body, &mut scope, &mut lp)?;
+        let go = match get(self, "escaped") {
+            Some(escaped) => {
+                let mut scope = with(self, &escaped, "escaped")?;
+                scope.which = Fn3::Escaped;
+                self.pure = true;
+                let test = self.pure_body(&escaped.body, &mut scope);
+                self.pure = false;
+                let test = test?;
+                let tspan = test.span;
+                mk(ExprKind::Unary(UnOp::Not, Box::new(test)), tspan)
+            }
+            None => mk(ExprKind::Bool(true), span),
+        };
+        let mut scope = with(self, &distance, "distance")?;
+        let mut fin = Vec::new();
+        self.result_body(&distance.body, &mut scope, &mut fin)?;
+        Ok(vec![
+            Section { kind: SectionKind::Init, span, body: init, last_is_bailout: false, labelled: true },
+            Section { kind: SectionKind::Loop, span, body: lp, last_is_bailout: false, labelled: true },
+            Section { kind: SectionKind::Bailout, span, body: vec![ast::Stmt::Expr(go)], last_is_bailout: false, labelled: true },
+            Section { kind: SectionKind::Final, span, body: fin, last_is_bailout: false, labelled: true },
+        ])
     }
 
     /// A transformation's 3D function as its section (B2): `variation3(v,
@@ -1461,7 +1572,7 @@ impl<'s> Lowerer<'s> {
             mk(ExprKind::Predef(f.into()), span)
         } else if which == Fn3::Prepare {
             mk(ExprKind::Name(prepared_name(f)), span)
-        } else if f == "z" && !self.coloring && !self.transform {
+        } else if f == "z" && !self.coloring && !self.transform && !self.solid {
             mk(ExprKind::Predef("z".into()), span)
         } else {
             mk(ExprKind::Name(field_name(f)), span)
