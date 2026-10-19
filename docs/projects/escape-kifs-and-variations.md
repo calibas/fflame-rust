@@ -538,5 +538,9 @@ hillshade the part to check.
    along a pixel's orbit, the screen, and a function menu -- a shared
    function-menu helper for Rhai variations would cover much of jlb.ulb.
    Which of these to write is the user's call.
-9. [ ] B (the vector type) for 3D variations and editable solids; A4
-   and C3 as wanted.
+9. [x] **B** (the user, 2026-10-18): the vector type (B1), 3D variations
+   (B2), solids written in Rhai (B3). **Done 2026-10-18**, as B's steps
+   above. Left: the KIFS Menger's Rhai twin; a solid's `prepare` and
+   function parameters; vector-valued helpers and `if` values.
+10. [ ] A4, C3 and C4 as the user wants them; the UF review's missing
+   maps (uf-transforms-review.md) as Rhai variations, the user's pick.
