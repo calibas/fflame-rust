@@ -447,9 +447,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Apply tone curve to fractal color only (not background)
     // Sample curve LUT unconditionally (WebGPU requires textureSample in uniform control flow)
-    let curve_r = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.r, 0.5)).r;
-    let curve_g = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.g, 0.5)).r;
-    let curve_b = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.b, 0.5)).r;
+    // The LUT holds f(i/255) in texel i (`ToneCurve::generate_lut`), and
+    // texel i's centre is at u = (i + 0.5)/256, so f(x) is read at
+    // (255x + 0.5)/256. Read at u = x it was half a texel off, and even
+    // the identity curve floored the darkest values to black
+    // (`the_identity_tone_curve_changes_nothing`).
+    let lut_u = (color * 255.0 + vec3<f32>(0.5)) / 256.0;
+    let curve_r = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(lut_u.r, 0.5)).r;
+    let curve_g = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(lut_u.g, 0.5)).r;
+    let curve_b = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(lut_u.b, 0.5)).r;
 
     // Only apply curve where there's significant fractal density
     let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;

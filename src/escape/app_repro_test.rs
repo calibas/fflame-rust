@@ -9699,6 +9699,59 @@ fn main() {
         }
     }
 
+    /// The identity tone curve changes nothing. Its LUT holds `f(i/255)`
+    /// in texel `i`, and the tonemap sampled it at `u = x` with linear
+    /// filtering -- half a texel off, so even the identity returned
+    /// `x + (x - 0.5)/255`: about 0.002 off every channel near black,
+    /// palette bytes below 15 floored to 0, 25 read as 21 (the colouring
+    /// survey, §6 item 8). Sampled at `(255x + 0.5)/256`, through a
+    /// black-to-white ramp the curve on is the curve off to a byte.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_identity_tone_curve_changes_nothing() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 300;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.tonemap_curve = crate::scene::tonemap::ToneCurve::linear();
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        config.use_curve = true;
+        let on = render(&config);
+        config.use_curve = false;
+        let off = render(&config);
+        let (mut worst, mut worst_at, mut dark) = (0i32, 0u8, 0usize);
+        for (a, b) in on.chunks_exact(4).zip(off.chunks_exact(4)) {
+            if b[0] < 40 {
+                dark += 1;
+            }
+            for k in 0..3 {
+                let d = (a[k] as i32 - b[k] as i32).abs();
+                if d > worst {
+                    worst = d;
+                    worst_at = b[k];
+                }
+            }
+        }
+        println!("identity curve: worst {worst} levels (where the curve off reads {worst_at}), {dark} dark pixels");
+        assert!(dark > 500, "the ramp's dark end is in the frame: {dark}");
+        assert!(worst <= 1, "the identity curve moved a pixel {worst} levels (at {worst_at})");
+    }
+
     /// The shader's curves are the ones `TransferCurve::shape` and
     /// `PaletteCurve::apply` define -- the panel's tooltips describe
     /// those, and nothing else would catch a WGSL constant typed wrong.
@@ -9720,12 +9773,6 @@ fn main() {
         config.exposure = 1.0;
         config.gamma = 1.0;
         config.levels_enabled = false;
-        // The tone curve's LUT is sampled half a texel off, which
-        // takes about 0.002 off every channel in linear light even
-        // when the curve is the identity: it floors the darkest
-        // palette entries to black. Off, so this measures the palette
-        // map alone.
-        config.use_curve = false;
         config.background_color = [0.0, 0.0, 0.0];
         let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
         config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
@@ -12679,6 +12726,106 @@ fn main() {
                 assert!(painted > n / 20, "{name}: only {painted} pixels painted");
                 assert!(agree * 100 >= n * 98, "{name}: only {agree} of {n} pixels agree with techmatt's trace");
             }
+        }
+    }
+
+    /// Direct orbit traps on McMullen and Collatz paint what techmatt's
+    /// trace paints: at the formula x colouring sweep's view (the plane
+    /// about 0, 64 iterations, the colouring's defaults -- a Screen ring),
+    /// an f64 port of the trace through each formula's own step, against
+    /// the render through a grey ramp. The sweep found these two pairings
+    /// lighting about 150 pixels of 12,288 and left open whether that was
+    /// the shape being sparse or a fault; this settles it per pixel.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_traps_paint_what_the_trace_paints_on_mcmullen_and_collatz() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "0".to_string();
+        config.escape.center_im = "0".to_string();
+        config.escape.max_iter = 64;
+        config.escape.supersample = 1;
+        config.escape.coloring = "direct_traps".to_string();
+        let bailout = config.escape.bailout as f64;
+        let span_y = 4.0;
+        let span_x = span_y * w as f64 / h as f64;
+        // The colouring's defaults: a ring of radius 1, threshold 0.0597,
+        // opacity 0.45, Screen, from black, linear key.
+        let (thr, op) = (0.0597f64, 0.45f64);
+        let mul = |a: [f64; 2], b: [f64; 2]| [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+        let pow = |z: [f64; 2], p: f64| {
+            let (r, t) = (z[0].hypot(z[1]), z[1].atan2(z[0]));
+            let rp = r.powf(p);
+            [rp * (p * t).cos(), rp * (p * t).sin()]
+        };
+        type Step = Box<dyn Fn([f64; 2], [f64; 2]) -> ([f64; 2], bool)>;
+        let cases: [(&str, Step); 2] = [
+            ("mcmullen", Box::new(move |z: [f64; 2], c: [f64; 2]| {
+                let z = if z[0] * z[0] + z[1] * z[1] < 1e-20 { [1e20, 0.0] } else {
+                    let a = pow(z, 2.0);
+                    let b = mul(c, pow(z, -3.0));
+                    [a[0] + b[0], a[1] + b[1]]
+                };
+                (z, z[0] * z[0] + z[1] * z[1] > bailout)
+            })),
+            ("collatz", Box::new(move |z: [f64; 2], _c: [f64; 2]| {
+                let pi = std::f64::consts::PI;
+                let (x, y) = (pi * z[0], pi * z[1]);
+                let cz = [x.cos() * y.cosh(), -x.sin() * y.sinh()];
+                let t = mul([2.0 + 5.0 * z[0], 5.0 * z[1]], cz);
+                let z = [0.25 * (2.0 + 7.0 * z[0] - t[0]), 0.25 * (7.0 * z[1] - t[1])];
+                (z, z[1].abs() > bailout)
+            })),
+        ];
+        for (name, step) in cases {
+            let mut c = config.clone();
+            c.escape.formula = name.to_string();
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data;
+            let (mut agree, mut painted, mut lit_cpu, mut lit_gpu, mut worst) = (0usize, 0usize, 0usize, 0usize, 0.0f64);
+            for (i, p) in out.chunks_exact(4).enumerate() {
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let pc = [((px + 0.5) / w as f64 - 0.5) * span_x, -(((py + 0.5) / h as f64 - 0.5) * span_y)];
+                let mut z = pc;
+                let mut col = 0.0f64;
+                let mut hits = 0;
+                for _ in 0..64 {
+                    let (next, escaped) = step(z, pc);
+                    z = next;
+                    let d = (z[0].hypot(z[1]) - 1.0).abs();
+                    if d < thr {
+                        hits += 1;
+                        let key = (d / thr).clamp(0.0, 1.0);
+                        let sample = key.powf(2.2);
+                        let alpha = op * (1.0 - key);
+                        let screened = 1.0 - (1.0 - col) * (1.0 - sample);
+                        col = screened * alpha + col * (1.0 - alpha);
+                    }
+                    if escaped {
+                        break;
+                    }
+                }
+                painted += usize::from(hits > 0);
+                let want = col.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0;
+                lit_cpu += usize::from(want > 8.0);
+                lit_gpu += usize::from(p[0] > 8);
+                let e = (p[0] as f64 - want).abs();
+                worst = worst.max(e);
+                agree += usize::from(e <= 2.0);
+            }
+            let n = (w * h) as usize;
+            println!("{name}: {agree}/{n} within two levels, worst {worst:.1}; the trace paints {painted} and lights {lit_cpu}, the render lights {lit_gpu}");
+            assert!(agree * 100 >= n * 98, "{name}: only {agree} of {n} pixels agree with the trace");
         }
     }
 
@@ -16658,7 +16805,13 @@ fn main() {
                 // settle time can exceed the probe's 64 iterations —
                 // verified visually instead (novaretti-period corpus).
                 let period_on_nonescaping = non_escaping && c.name == "period";
-                if (!non_escaping || colors_interior) && !period_on_nonescaping {
+                // Direct orbit traps paint only the iterates that pass near
+                // the trap, and at this view McMullen's and Collatz's pass
+                // the ring on about 150 pixels: sparse by design, pixel for
+                // pixel what techmatt's trace paints
+                // (`direct_traps_paint_what_the_trace_paints_on_mcmullen_and_collatz`).
+                let sparse_traps = c.name == "direct_traps" && matches!(f.name, "mcmullen" | "collatz");
+                if (!non_escaping || colors_interior) && !period_on_nonescaping && !sparse_traps {
                     assert!(
                         lit > (128 * 96) / 50,
                         "{} x {} lit only {lit} pixels",
