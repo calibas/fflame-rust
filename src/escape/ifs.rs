@@ -2252,11 +2252,12 @@ pub static IFS_KIFS: IfsDef = IfsDef {
             display_name: "Fold",
             default: 3.0,
             min: 0.0,
-            max: 3.0,
+            max: 5.0,
             tooltip: "How each iteration folds space into one piece of it: the tetrahedron's three plane \
                       folds (the Sierpinski tetrahedron), each axis's mirror (cubic), the mirrors and \
-                      the diagonal ones (octahedral), or those with the sponge's correction (Menger).",
-            choices: &["Tetrahedral", "Cubic", "Octahedral", "Menger"],
+                      the diagonal ones (octahedral), those with the sponge's correction (Menger), or \
+                      the mirrors of the icosahedron or the dodecahedron (golden-ratio planes).",
+            choices: &["Tetrahedral", "Cubic", "Octahedral", "Menger", "Icosahedral", "Dodecahedral"],
         },
         EscapeParamDef {
             name: "scale",
@@ -2402,7 +2403,18 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
     res.depth = 0u;
 
     let levels = u32(clamp(fparam(0u), 1.0, 64.0));
-    let fold = u32(clamp(round(fparam(7u)), 0.0, 3.0));
+    let fold = u32(clamp(round(fparam(7u)), 0.0, 5.0));
+    // The icosahedral and dodecahedral mirrors (the KIFS plan, A4), as
+    // Syntopia's Fragmentarium examples Icosahedron.frag and
+    // Dodecahedron.frag (2010) write them after Knighty's kaleidoscopic
+    // IFS, with the golden ratio exact where their slider holds 1.618.
+    let phi = 1.618033988749895;
+    let ico_n1 = normalize(vec3<f32>(-phi, phi - 1.0, 1.0));
+    let ico_n2 = normalize(vec3<f32>(1.0, -phi, phi + 1.0));
+    let ico_n3 = vec3<f32>(0.0, 0.0, -1.0);
+    let dod_n1 = normalize(vec3<f32>(-1.0, phi - 1.0, 1.0 / (phi - 1.0)));
+    let dod_n2 = normalize(vec3<f32>(phi - 1.0, 1.0 / (phi - 1.0), -1.0));
+    let dod_n3 = normalize(vec3<f32>(1.0 / (phi - 1.0), -1.0, phi - 1.0));
     let s = clamp(fparam(8u), 1.1, 4.0);
     let o = vec3<f32>(fparam(9u), fparam(10u), fparam(11u));
     let a1 = vec3<f32>(fparam(12u), fparam(13u), fparam(14u));
@@ -2442,7 +2454,47 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         // The fold, and which of its three mirrors fired: a base-8
         // digit of the address.
         var digit = 0u;
-        if (fold == 0u) {
+        if (fold == 4u) {
+            // The icosahedral fold: once, into the group's fundamental
+            // domain (abs, then n1, n2, n3, n2), then each iteration abs
+            // and n1 -- each mirror reflecting a point on its positive
+            // side. The digit: how many signs abs flipped, and n1.
+            if (k == 0u) {
+                z = abs(z);
+                z = z - 2.0 * max(dot(z, ico_n1), 0.0) * ico_n1;
+                z = z - 2.0 * max(dot(z, ico_n2), 0.0) * ico_n2;
+                z = z - 2.0 * max(dot(z, ico_n3), 0.0) * ico_n3;
+                z = z - 2.0 * max(dot(z, ico_n2), 0.0) * ico_n2;
+            }
+            digit = u32(z.x < 0.0) + u32(z.y < 0.0) + u32(z.z < 0.0);
+            z = abs(z);
+            let t = dot(z, ico_n1);
+            if (t > 0.0) {
+                z = z - 2.0 * t * ico_n1;
+                digit = digit + 4u;
+            }
+        } else if (fold == 5u) {
+            // The dodecahedral fold: three passes of its three mirrors,
+            // each reflecting a point on its negative side. The digit:
+            // which mirrors the first pass fired.
+            for (var round_ = 0u; round_ < 3u; round_ = round_ + 1u) {
+                let t1 = dot(z, dod_n1);
+                if (t1 < 0.0) {
+                    z = z - 2.0 * t1 * dod_n1;
+                    digit = digit | select(0u, 1u, round_ == 0u);
+                }
+                let t2 = dot(z, dod_n2);
+                if (t2 < 0.0) {
+                    z = z - 2.0 * t2 * dod_n2;
+                    digit = digit | select(0u, 2u, round_ == 0u);
+                }
+                let t3 = dot(z, dod_n3);
+                if (t3 < 0.0) {
+                    z = z - 2.0 * t3 * dod_n3;
+                    digit = digit | select(0u, 4u, round_ == 0u);
+                }
+            }
+        } else if (fold == 0u) {
             if (z.x + z.y < 0.0) {
                 z = vec3<f32>(-z.y, -z.x, z.z);
                 digit = digit | 1u;
@@ -13354,17 +13406,64 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             [cz * z[0] - sz * z[1], sz * z[0] + cz * z[1], z[2]]
         }
 
-        /// One iteration: rotate, fold, rotate, scale about the offset.
-        pub(super) fn step(&self, z: [f64; 3]) -> [f64; 3] {
-            self.step_digit(z).0
+        /// One iteration -- the `k`th, from 0 -- rotate, fold, rotate,
+        /// scale about the offset.
+        pub(super) fn step(&self, z: [f64; 3], k: u32) -> [f64; 3] {
+            self.step_digit(z, k).0
         }
 
-        /// One iteration and its address digit: which of the fold's three
+        /// The icosahedral and dodecahedral mirrors, as the walk's (A4).
+        fn mirrors() -> ([[f64; 3]; 3], [[f64; 3]; 3]) {
+            let phi = (1.0 + 5f64.sqrt()) / 2.0;
+            let unit = |v: [f64; 3]| {
+                let n = norm3(v);
+                v.map(|x| x / n)
+            };
+            let ico = [unit([-phi, phi - 1.0, 1.0]), unit([1.0, -phi, phi + 1.0]), [0.0, 0.0, -1.0]];
+            let dod = [unit([-1.0, phi - 1.0, 1.0 / (phi - 1.0)]), unit([phi - 1.0, 1.0 / (phi - 1.0), -1.0]), unit([1.0 / (phi - 1.0), -1.0, phi - 1.0])];
+            (ico, dod)
+        }
+
+        /// `z` reflected in the plane through the origin normal to `n`.
+        fn reflect(z: [f64; 3], n: [f64; 3], t: f64) -> [f64; 3] {
+            [z[0] - 2.0 * t * n[0], z[1] - 2.0 * t * n[1], z[2] - 2.0 * t * n[2]]
+        }
+
+        /// One iteration and its address digit: which of the fold's
         /// mirrors fired.
-        fn step_digit(&self, z: [f64; 3]) -> ([f64; 3], u32) {
+        fn step_digit(&self, z: [f64; 3], k: u32) -> ([f64; 3], u32) {
             let mut z = Self::rotate(self.a1, z);
             let mut digit = 0;
-            if self.fold == 0 {
+            let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let (ico, dod) = Self::mirrors();
+            if self.fold == 4 {
+                if k == 0 {
+                    z = z.map(f64::abs);
+                    for n in [ico[0], ico[1], ico[2], ico[1]] {
+                        let t = dot(z, n).max(0.0);
+                        z = Self::reflect(z, n, t);
+                    }
+                }
+                digit = u32::from(z[0] < 0.0) + u32::from(z[1] < 0.0) + u32::from(z[2] < 0.0);
+                z = z.map(f64::abs);
+                let t = dot(z, ico[0]);
+                if t > 0.0 {
+                    z = Self::reflect(z, ico[0], t);
+                    digit += 4;
+                }
+            } else if self.fold == 5 {
+                for pass in 0..3 {
+                    for (bit, n) in dod.iter().enumerate() {
+                        let t = dot(z, *n);
+                        if t < 0.0 {
+                            z = Self::reflect(z, *n, t);
+                            if pass == 0 {
+                                digit |= 1 << bit;
+                            }
+                        }
+                    }
+                }
+            } else if self.fold == 0 {
                 if z[0] + z[1] < 0.0 {
                     z = [-z[1], -z[0], z[2]];
                     digit |= 1;
@@ -13408,7 +13507,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let (mut z, mut k, mut escaped) = (p, 0u32, false);
             let (mut trap_r, mut trap_k, mut place) = (f64::INFINITY, 0u32, 0.125);
             while k < self.levels {
-                let (next, digit) = self.step_digit(z);
+                let (next, digit) = self.step_digit(z, k);
                 z = next;
                 if k >= self.skip && k < self.skip + 8 {
                     out.address += f64::from(digit) * place;
@@ -13445,7 +13544,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let radius = self.radius();
             let (mut z, mut k, mut escaped) = (p, 0u32, false);
             while k < self.levels {
-                z = self.step(z);
+                z = self.step(z, k);
                 k += 1;
                 let r = norm3(z);
                 escaped |= r > radius;
@@ -13464,8 +13563,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         pub(super) fn bounded(&self, p: [f64; 3], m: u32) -> bool {
             let radius = self.radius();
             let mut z = p;
-            for _ in 0..m {
-                z = self.step(z);
+            for k in 0..m {
+                z = self.step(z, k);
                 if norm3(z) > radius {
                     return false;
                 }
@@ -14157,7 +14256,50 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             ("turned-tetrahedron", turned(Kifs::new(0, 2.0, [1.0, 1.0, 1.0]), [12.0, 0.0, 25.0], [0.0, 18.0, 0.0])),
             ("turned-octahedral", turned(Kifs::new(2, 2.3, [1.0, 0.8, 0.4]), [0.0, 0.0, 30.0], [20.0, 0.0, 0.0])),
             ("turned-menger", turned(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]), [8.0, 0.0, 0.0], [0.0, 10.0, 0.0])),
+            // The sources' own defaults (A4).
+            ("icosahedron", Kifs::new(4, 2.0, [0.850650808, 0.525731112, 0.0])),
+            ("dodecahedron", Kifs::new(5, 2.617924, [1.0, 1.0, 1.0])),
         ]
+    }
+
+    /// **The golden folds are the icosahedron's mirrors** (A4): every
+    /// plane of each fold maps an icosahedron's twelve vertices onto
+    /// themselves, so the fold keeps the group's symmetry -- the
+    /// dodecahedral fold's the icosahedron (0, +-1, +-phi) and its cyclic
+    /// turns, the icosahedral fold's its mirror image (0, +-phi, +-1) and
+    /// turns (the two sources use the two orientations); and the
+    /// icosahedral fold's three meet at H3's Coxeter angles, pi/2, pi/3
+    /// and pi/5, so its prefold lands in the fundamental domain. Checked
+    /// here, not taken from the source.
+    #[test]
+    fn the_golden_folds_are_the_icosahedrons_mirrors() {
+        let phi = (1.0 + 5f64.sqrt()) / 2.0;
+        let icosahedron = |swap: bool| {
+            let mut vertices = Vec::new();
+            for a in [-1.0, 1.0] {
+                for b in [-phi, phi] {
+                    let (a, b) = if swap { (b, a) } else { (a, b) };
+                    vertices.extend([[0.0, a, b], [a, b, 0.0], [b, 0.0, a]]);
+                }
+            }
+            vertices
+        };
+        let (ico, dod) = Kifs::mirrors();
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        for (which, n) in ico.iter().map(|n| ("icosahedral", n)).chain(dod.iter().map(|n| ("dodecahedral", n))) {
+            let vertices = icosahedron(which == "icosahedral");
+            assert!((norm3(*n) - 1.0).abs() < 1e-12);
+            for v in &vertices {
+                let r = Kifs::reflect(*v, *n, dot(*v, *n));
+                let hit = vertices.iter().any(|w| norm3([r[0] - w[0], r[1] - w[1], r[2] - w[2]]) < 1e-12);
+                assert!(hit, "the {which} mirror {n:?} sends {v:?} to {r:?}, no vertex");
+            }
+        }
+        let angle = |a: [f64; 3], b: [f64; 3]| std::f64::consts::PI - dot(a, b).clamp(-1.0, 1.0).acos();
+        let pi = std::f64::consts::PI;
+        assert!((angle(ico[0], ico[1]) - pi / 2.0).abs() < 1e-12);
+        assert!((angle(ico[0], ico[2]) - pi / 3.0).abs() < 1e-12);
+        assert!((angle(ico[1], ico[2]) - pi / 5.0).abs() < 1e-12);
     }
 
     /// The gates' sets: the KIFS's, and the Mandelbox and the Mandelbulb
@@ -14621,6 +14763,40 @@ fn distance(s, p) {
         }
     }
 
+    /// The golden folds' candidates (A4): each fold at its source's
+    /// defaults and two variations, under the level, trap and address
+    /// colourings, for picking presets.
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/golden-*.png"]
+    fn render_golden_kifs_candidates() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        let turned = |mut k: Kifs, a1: [f64; 3], a2: [f64; 3]| {
+            k.a1 = a1;
+            k.a2 = a2;
+            k
+        };
+        let ico = [0.850650808, 0.525731112, 0.0];
+        let cases = [
+            ("ico", Kifs::new(4, 2.0, ico)),
+            ("ico-s25", Kifs::new(4, 2.5, ico)),
+            ("ico-turned", turned(Kifs::new(4, 2.0, ico), [0.0, 0.0, 12.0], [0.0, 8.0, 0.0])),
+            ("dod", Kifs::new(5, 2.617924, [1.0, 1.0, 1.0])),
+            ("dod-s22", Kifs::new(5, 2.2, [1.0, 1.0, 1.0])),
+            ("dod-turned", turned(Kifs::new(5, 2.617924, [1.0, 1.0, 1.0]), [0.0; 3], [0.0, 0.0, 15.0])),
+        ];
+        for (name, k) in cases {
+            for coloring in ["ifs_level", "ifs_trap", "ifs_address"] {
+                let cfg = k.config(coloring);
+                let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+                let path = dir.join(format!("golden-{name}-{}.png", &coloring[4..]));
+                image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+            }
+        }
+    }
+
     /// The Mandelbox and Mandelbulb presets (the KIFS plan A2, A3),
     /// picked from two rounds of rendered candidates under each
     /// colouring and inspected before they ship
@@ -14668,6 +14844,10 @@ fn distance(s, p) {
             named("KIFS Turned", turned(3, 3.0, [1.0, 1.0, 1.0], [8.0, 0.0, 0.0], [0.0, 10.0, 0.0]), "ifs_address", 0.1),
             named("KIFS Bloom", turned(2, 2.0, [1.0, 0.3, 0.0], [0.0; 3], [0.0, 0.0, 25.0]), "ifs_level", 0.1),
             named("KIFS Columns", turned(1, 2.2, [1.0, 1.0, 1.0], [0.0, 30.0, 0.0], [0.0; 3]), "ifs_level", 0.1),
+            // The golden folds (A4), picked from `render_golden_kifs_candidates`.
+            named("KIFS Icosahedron", Kifs::new(4, 2.0, [0.850650808, 0.525731112, 0.0]), "ifs_level", 0.0),
+            named("KIFS Icosahedral Flake", Kifs::new(4, 2.5, [0.850650808, 0.525731112, 0.0]), "ifs_address", 0.0),
+            named("KIFS Dodecahedron", Kifs::new(5, 2.617924, [1.0, 1.0, 1.0]), "ifs_level", 0.0),
         ]
     }
 
@@ -15976,8 +16156,8 @@ fn distance(s, p) {
             );
         }
         assert_eq!(
-            seen, 24,
-            "expected 24 mode-D presets (four classical, two flame solids, three julia, one blob, one quaternion,              six KIFS, four Mandelbox, three Mandelbulb), found {seen}"
+            seen, 27,
+            "expected 27 mode-D presets (four classical, two flame solids, three julia, one blob, one quaternion,              nine KIFS, four Mandelbox, three Mandelbulb), found {seen}"
         );
     }
 

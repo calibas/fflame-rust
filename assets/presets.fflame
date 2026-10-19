@@ -3448,6 +3448,249 @@
       "cam_yaw": 0.9,
       "center_im": "0",
       "center_re": "-0.5",
+      "coloring": "ifs_level",
+      "formula": "kifs_solid",
+      "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
+        "fold": 4.0,
+        "levels": 12.0,
+        "offset_x": 0.8506508,
+        "offset_y": 0.5257311,
+        "offset_z": 0.0,
+        "rot1_x": 0.0,
+        "rot1_y": 0.0,
+        "rot1_z": 0.0,
+        "rot2_x": 0.0,
+        "rot2_y": 0.0,
+        "rot2_z": 0.0,
+        "scale": 2.0
+      },
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "KIFS Icosahedron",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_address",
+      "formula": "kifs_solid",
+      "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
+        "fold": 4.0,
+        "levels": 12.0,
+        "offset_x": 0.8506508,
+        "offset_y": 0.5257311,
+        "offset_z": 0.0,
+        "rot1_x": 0.0,
+        "rot1_y": 0.0,
+        "rot1_z": 0.0,
+        "rot2_x": 0.0,
+        "rot2_y": 0.0,
+        "rot2_z": 0.0,
+        "scale": 2.5
+      },
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "KIFS Icosahedral Flake",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
+      "coloring": "ifs_level",
+      "formula": "kifs_solid",
+      "formula_params": {
+        "address_symmetry": 1.0,
+        "colour_depth": 3.0,
+        "fold": 5.0,
+        "levels": 12.0,
+        "offset_x": 1.0,
+        "offset_y": 1.0,
+        "offset_z": 1.0,
+        "rot1_x": 0.0,
+        "rot1_y": 0.0,
+        "rot1_z": 0.0,
+        "rot2_x": 0.0,
+        "rot2_y": 0.0,
+        "rot2_z": 0.0,
+        "scale": 2.617924
+      },
+      "max_iter": 256
+    },
+    "flame": {
+      "name": "KIFS Dodecahedron",
+      "transforms": []
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "tonemap_mode": "linear",
+    "version": 4
+  },
+  {
+    "escape": {
+      "bailout": 10000.0,
+      "cam_yaw": 0.9,
+      "center_im": "0",
+      "center_re": "-0.5",
       "coloring": "ifs_trap",
       "formula": "mandelbox_solid",
       "formula_params": {

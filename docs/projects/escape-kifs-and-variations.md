@@ -132,6 +132,43 @@ presets are picked.
 **A4, later.** Icosahedral and dodecahedral folds (normals from a cited
 source, not derived here); the 2D KIFS as a Rhai formula in mode A,
 which the language can already state (Kaliset is its cousin).
+**Done 2026-10-18** (the user's call):
+- **The folds** (KIFS Fold 4 and 5) as Syntopia's Fragmentarium examples
+  `Icosahedron.frag` and `Dodecahedron.frag` (2010) write them, after
+  Knighty's kaleidoscopic IFS (fractalforums.com, "Kaleidoscopic
+  (escape time) IFS"). Icosahedral: normals `(-phi, phi-1, 1)`, `(1,
+  -phi, phi+1)`, `(0, 0, -1)`, normalised; a prefold once, into the
+  fundamental domain (abs, then n1, n2, n3, n2), then each iteration
+  abs and n1, a mirror reflecting a point on its positive side.
+  Dodecahedral: `(-1, phi-1, 1/(phi-1))` and its cyclic turns; each
+  iteration three passes of the three, reflecting a point on its
+  negative side. *Decision*: **the golden ratio exact**, where the
+  sources' slider holds 1.618 -- only then are the planes the group's
+  mirrors. Checked, not taken on trust
+  (`the_golden_folds_are_the_icosahedrons_mirrors`): each fold's planes
+  map an icosahedron's twelve vertices onto themselves, and the
+  icosahedral fold's three meet at H3's angles, pi/2, pi/3, pi/5 (the
+  two sources use the icosahedron's two orientations, mirror images).
+  The rotations keep our order (before the fold, after it), so with
+  turns the walk is ours, not the sources'; at none it is theirs. The
+  estimate stays the strict lower bound. The address digit: the
+  icosahedral fold's signs flipped and its n1; the dodecahedral's first
+  pass's three mirrors. Both joined every KIFS gate: the bound, the
+  ball, the colours settling, every mode-D combination compiling, the
+  GPU's coverage the twin's (0 pixels apart for both). Presets, from
+  `render_golden_kifs_candidates`: KIFS Icosahedron (the source's
+  defaults, level), KIFS Icosahedral Flake (scale 2.5, address), KIFS
+  Dodecahedron (the source's defaults, level). The orbit trap is busy
+  on the dodecahedral folds; it settles (the gate), so that is the
+  geometry, not the camera.
+- **The 2D KIFS** as `assets/formulas/kifs-2d.rhai`, in the library:
+  fold (Square, Diagonal, or Carpet -- the sponge's correction in 2D),
+  turn, scale about the offset; the Sierpinski carpet at the defaults.
+  Checked against the carpet's own base-3 digits
+  (`the_kifs_2d_example_draws_the_carpet`): every point in a hole
+  escapes, three to five steps after its hole's level, one step later
+  per level on average (4.52, 5.44, 6.52, 7.52, 8.47, 9.41); a corner
+  stays.
 
 Not in A: deep zoom (the walk is `delta + target_offset` in f32,
 §8.11's Q3), and editing the walk (B).
@@ -542,5 +579,7 @@ hillshade the part to check.
    (B2), solids written in Rhai (B3). **Done 2026-10-18**, as B's steps
    above. Left: the KIFS Menger's Rhai twin; a solid's `prepare` and
    function parameters; vector-valued helpers and `if` values.
-10. [ ] A4, C3 and C4 as the user wants them; the UF review's missing
-   maps (uf-transforms-review.md) as Rhai variations, the user's pick.
+10. [x] **A4** (the user, 2026-10-18): the icosahedral and dodecahedral
+   folds, the 2D KIFS formula. Done, as A4 above.
+11. [ ] C3 and C4 as the user wants them; the UF review's missing maps
+   (uf-transforms-review.md) as Rhai variations, the user's pick.

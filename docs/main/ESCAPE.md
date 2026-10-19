@@ -1241,7 +1241,7 @@ in plane units it underflows f32 at zooms the walk still resolves.
 | `ifs_flame` | Flame Attractor (Distance) | the loaded flame's attractor, by inverse iteration. Planar; needs a qualifying flame; default colouring `ifs_distance` |
 | `ifs_flame_3d` | Flame Attractor (Solid) | the same in three dimensions, sphere-traced. Solid; needs a qualifying flame; default `ifs_address` |
 | `quaternion_julia_solid` | Quaternion Julia (Solid) | `q ↦ qⁿ + c` on a 3D slice, by the Hart–Sandin–Kauffman distance estimate. Solid; needs no flame; default `ifs_level` |
-| `kifs_solid` | KIFS (Solid) | Knighty's kaleidoscopic IFS: rotate, fold (tetrahedral, cubic, octahedral or Menger), rotate, `z = s z − o (s − 1)`. Solid; needs no flame; default `ifs_level` |
+| `kifs_solid` | KIFS (Solid) | Knighty's kaleidoscopic IFS: rotate, fold (tetrahedral, cubic, octahedral, Menger, icosahedral or dodecahedral), rotate, `z = s z − o (s − 1)`. Solid; needs no flame; default `ifs_level` |
 | `mandelbox_solid` | Mandelbox (Solid) | Lowe's box fold, sphere fold and scale, `z = s fold(z) + c`, the point or a Julia constant; the distance `0.95 |z| / |dr|`. Solid; needs no flame; default `ifs_trap` |
 | `mandelbulb_solid` | Mandelbulb (Solid) | White and Nylander's power in spherical coordinates, `z = zⁿ + c`, the point or a Julia constant; Hart's estimate times the Step Factor. Solid; needs no flame; default `ifs_trap` |
 
