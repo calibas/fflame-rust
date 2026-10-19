@@ -206,6 +206,15 @@ shows the Fresnel rise) and the Menger, gloss 0 / metallic 0 bit-identical
    ambient 0, as it does in the path tracer under a black sky.
 3. **MIS** (research V1): bounces that escape into a light add it, by the
    power heuristic; polished surfaces reflect the lights.
+
+   **Done 2026-10-19** (TERRAIN.md, *Multiple importance sampling*): the
+   coat's lobe only, directional lights only, off at shadow strength 0.
+   It was worth more than noise: the lights' samples of a polished peak
+   are a thousand times the light, and the firefly clamp clipped them --
+   a polished metal under one light read 0.068 of a true 0.42; with MIS
+   0.376 (the clamp still trims the rest). Unbiased within 0.3% against
+   no MIS without the clamp; noise 4.7 times lower polished, 1.9 at
+   roughness 0.3.
 4. **The environment bounces see, apart from the backdrop the camera
    sees**: a procedural studio (a ground, one to three soft panels or a
    sun disc) as well as the uniform and gradient skies. An HDRI waits on

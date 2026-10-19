@@ -108,7 +108,9 @@ sponge's flat faces hide what the filter and the materials do on a curve.
   light's cone (and short of a point light) adds the light's radiance,
   each estimate weighted by the power heuristic. Nearly free for
   directional lights: the bounce is the shadow ray. The Blinn-Phong
-  highlight stays out (it is not a sampled lobe). Part of P4.
+  highlight stays out (it is not a sampled lobe). Part of P4. **Built
+  2026-10-19** for the coat's lobe (TERRAIN.md); it also undid most of
+  item 5's clamp darkening (0.068 of a true 0.42 before, 0.376 after).
 - **V2. Adaptive sampling (M; as Cycles).** Odd samples also summed apart;
   the error |A - B| / sqrt(luminance) (Dammertz et al. 2010); a pixel stops
   after a minimum count and an unconverged one wakes its neighbours;

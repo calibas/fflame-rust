@@ -514,6 +514,10 @@ impl EscapeRenderer {
         #[cfg(test)]
         {
             settings.seed = settings.seed.wrapping_add(self.path_seed_offset);
+            settings.mis = !self.path_no_mis;
+            if self.path_no_clamp {
+                settings.clamp = 1.0e30;
+            }
         }
         // The studio the bounces see, the config's (as the lit tier's).
         params.fdata[32][0] = settings.studio;
@@ -1586,6 +1590,58 @@ mod tests {
                 assert!(n > 2000 && sum_path > 0.0, "{name} {material}: {n} pixels");
                 assert!((ratio - 1.0).abs() < tolerance, "{name} {material}: the lit tier's studio is {ratio} of the path tracer's");
             }
+        }
+    }
+
+    /// Multiple importance sampling of the coat and the lights
+    /// (3d-look-and-tools P4) keeps the picture and lowers its noise: a
+    /// polished metal Mandelbulb -- its curve sweeps the light's
+    /// reflection, where a sponge's flat faces never mirror it -- under one
+    /// light, shadows full and partial, no firefly clamp (which clips the
+    /// lights' own samples of a polished peak, a thousand times the light,
+    /// and so biases the estimate without MIS low: 0.068 against 0.376).
+    /// With MIS at 256 samples, without at 4096, the mean is the same (it
+    /// is unbiased: 3%); at 16, two seeds apart differ less with it.
+    #[test]
+    fn mis_keeps_the_picture_and_lowers_its_noise() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (128u32, 96u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut bulb = cube_config();
+        bulb.escape.formula = "mandelbulb_solid".to_string();
+        // A light broad enough (0.5 rad) that its reflection stays under the
+        // firefly clamp, which would bias both estimates and differently.
+        bulb.escape.formula_params.insert("shadow_sharpness".to_string(), 1.0);
+        for (name, base, shadow, roughness) in [("bulb", bulb.clone(), 1.0f32, 0.12f32), ("bulb, shadows 0.7", bulb.clone(), 0.7, 0.12), ("bulb, rougher", bulb, 1.0, 0.3)] {
+            let mut c = base;
+            c.solid_shading.lights[0].enabled = true;
+            c.solid_shading.lights[0].azimuth = 30.0;
+            c.solid_shading.lights[0].elevation = 35.0;
+            c.solid_shading.metallic = 1.0;
+            c.solid_shading.roughness = roughness;
+            c.escape.formula_params.insert("shadow".to_string(), shadow);
+            c.escape.path.bounces = 1;
+            let shot = |mis: bool, seed: u32, samples: u32| {
+                let mut r = renderer_for(&device, &c, w, h);
+                r.path_no_mis = !mis;
+                r.path_no_clamp = true;
+                r.path_seed_offset = seed;
+                r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+                let px = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                r.destroy();
+                px
+            };
+            let mean = |px: &[[f32; 4]]| px.iter().map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / px.len() as f64;
+            let apart = |a: &[[f32; 4]], b: &[[f32; 4]]| a.iter().zip(b).map(|(p, q)| (0..3).map(|k| (p[k] - q[k]).abs() as f64).sum::<f64>()).sum::<f64>() / a.len() as f64;
+            let (with, without) = (mean(&shot(true, 0, 256)), mean(&shot(false, 0, 4096)));
+            let noise_with = apart(&shot(true, 1, 16), &shot(true, 2, 16));
+            let noise_without = apart(&shot(false, 1, 16), &shot(false, 2, 16));
+            println!("  {name}: mean with {with:.4}, without {without:.4}; two seeds apart at 16 samples with {noise_with:.4}, without {noise_without:.4}");
+            assert!((with / without - 1.0).abs() < 0.03, "{name}: MIS moved the mean {with} from {without}");
+            assert!(noise_with < noise_without, "{name}: MIS did not lower the noise");
         }
     }
 

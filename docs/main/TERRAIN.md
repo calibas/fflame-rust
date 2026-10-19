@@ -489,10 +489,31 @@ the escape terrain, `sim.terrain.path` for a simulation's.
    2018), chosen with the coat's Fresnel probability; otherwise
    cosine-weighted Lambert. Russian roulette from the second bounce.
 5. **A ray that escapes** sees the sky: the environment, or the gradient
-   by the rig's profile (`ifs_sky_t`).
+   by the rig's profile (`ifs_sky_t`), or the studio (*The studio*).
+   One that left by the coat's lobe and escapes inside a directional
+   light's cone also meets the light (below).
 
 A hole (albedo alpha 0) ends the path. Past the first surface it sees the
 sky through the hole.
+
+**Multiple importance sampling** (Veach and Guibas 1995; 2026-10-19). A
+polished coat's peak is narrower than a light's cone, so the lights' own
+samples rarely land in it, and when they do they are worth a thousand
+times the light and the firefly clamp clips them: a polished metal under
+one light read 0.068 against the truth's 0.42 (`mis_keeps_the_picture_and_lowers_its_noise`).
+Now a bounce by the coat's lobe that escapes inside a directional
+light's cone adds the light's radiance -- its irradiance pi I spread over
+the cone's solid angle (`pt_light_pdf`) -- and the coat's share of each
+estimate is weighted by the power heuristic against the other's density
+(`pt_coat_pdf`: the lobe's choice times the visible normals' G1(v) D(h)
+/ 4 n.v). The diffuse stays the lights' alone (its density never nears
+a light's), a point or a headlamp has no area to meet, and at shadow
+strength 0 -- the lights reaching through the solid, where no bounce can
+see them do so -- it is off. Under a partial shadow strength the part of
+a light that reaches is weighted and the part let through the solid is
+whole. Unbiased: with and without (and no clamp) within 0.3%; the noise
+at 16 samples 4.7 times lower on a polished metal, 1.9 at roughness 0.3.
+Gloss 0 and metallic 0 take no part.
 
 ### Random numbers and reproducibility
 
