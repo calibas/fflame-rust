@@ -246,6 +246,21 @@ is the `Feature` a built-in declares, so the shader builder has one path):
   twin by density; accum: a `pVarTP` reader; colour: a direct-colour
   variation), and the escape stream against the interpreter.
 
+**C4, proposed (2026-10-18): transformations for escape-time beyond
+the lens.** The user asked what UF does. Its transformations run once
+per pixel before the formula, rewriting `#pixel` in the fractal's
+coordinates and able to mark it solid (clipping), and a layer stacks
+them; and the same `Transform` classes transform whole orbits as
+plug-in parameters -- the trap colourings' "Trap Position" moves every
+orbit value before the trap distance is measured (`common.ulb`'s own
+documentation; [uf-transforms-review.md](uf-transforms-review.md)).
+Ours: the lens (one variation on the screen offset), `vary` (inside a
+formula, edited in). Missing: a stack of variations on the sample
+point in fractal coordinates, with a clip; an orbit transform a
+colouring reads through; a transform plugged into any formula without
+editing it. Rhai variations would serve all three. Not planned until
+the user says.
+
 **C3, maybe.** A built-in WGSL variation as a step in a formula,
 direct path only, the program marked so every CPU path refuses it.
 Decided after C1, by whether the Rhai versions cover what is wanted.
@@ -262,6 +277,44 @@ anyway) -- and a solid entry kind compiling to `ifs_walk3`, its running
 scale tracked by the program or derived. Not easy, by that list; it is
 the same vector type C needs for 3D variations, so it is built once,
 for both, after C1.
+
+B's steps (planned 2026-10-18, the user's go-ahead; the decisions are
+marked for review):
+- **B1, `vec3` in the Rhai dialect, split into scalars by the lowering.**
+  *Decision*: the IR, the interpreter, the WGSL emitter and the
+  derivation passes stay scalar -- a vector local is three float locals,
+  a vector field three fields, `dot(a, b)` a sum of products -- so
+  nothing past `rhai.rs` changes and deep zoom derives through vector
+  code as through any other (a GPU thread runs scalar code anyway; the
+  `Ty` machinery is matched in some 180 places). The surface:
+  `vec3(x, y, z)`; `v.x`, `v.y`, `v.z`, read and set; `+`, `-`, unary
+  `-`; `*` and `/` by a number (a vector times a vector componentwise);
+  `dot`, `cross`, `length`, `normalize`, `abs`, `min`, `max`, `clamp`,
+  `floor`, as functions or methods; a vector in a state map; a `PARAMS`
+  entry `vec3(...)` as three float parameters `name.x`, `.y`, `.z`.
+  Refused at first, with the reason: a helper returning a vector, and
+  an `if` used as a vector value (assign in each arm instead).
+  **Done 2026-10-18** (`src/escape/lang/rhai/vec.rs`): measured, a
+  formula using every vector operation, a vector state field and a
+  vector parameter runs as the same arithmetic written in numbers on
+  400 pixels (1e-12), and its WGSL validates. `min`, `max` and `clamp`
+  of numbers came with it (a temporary and an `if`).
+- **B2, 3D variations.** `fn variation3(v, p[, ctx])`, a vector point,
+  compiles to the 3D body (the 2D one from `fn variation`, or `z`
+  passed through as now; only `variation3` makes the variation
+  `only_3d`); `ctx.accum` a vector there, the result `v` or `#{ z: v,
+  color }`. Gates: twins of 3D built-ins (`spherical3D`, `linear3D`,
+  `hemisphere`, `zcone`) by density in 3D flames.
+- **B3, editable solids.** A solid entry: `fn start(pos, p)` returns
+  the state (`z` a vector, `dr` the running derivative), `fn step(s,
+  p)` one iteration, `fn escaped(s, p)` the bail, `fn distance(s, p)`
+  the estimate after the last iteration, `INFO.radius` the ball the set
+  lies in. It compiles to mode D's `ifs_walk3`, registered as custom
+  formulas are and carried in the config; the template colours it by
+  "Colouring solids" (the closest approach and the running derivative
+  over the first `colour_depth` iterations; an `address` field if the
+  state has one). Gates: Rhai twins of the KIFS Menger, the Mandelbox
+  and the Mandelbulb, coverage pixel for pixel against the built-ins.
 
 ## D. Decided: the field fractals stay in mode B
 

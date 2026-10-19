@@ -106,7 +106,11 @@ use super::builtins::Builtin;
 use super::ir::{Cycle, Program, Ty};
 use super::{Diag, EntryKind, Span};
 use ::rhai::{ASTFlags, Engine, Expr, FlowControl, FnCallExpr, OptimizationLevel, Position, ScriptFuncDef, Stmt, StmtBlock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Vectors (the KIFS plan, B1), split into scalars here.
+mod vec;
+use vec::Val;
 
 type R<T> = Result<T, Diag>;
 
@@ -308,6 +312,7 @@ fn lower_with(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)]) 
         names: Vec::new(),
         fresh: 0,
         variations: Vec::new(),
+        param_vecs: HashSet::new(),
     };
     for (name, def) in extra {
         l.fns.insert(name.clone(), def.clone());
@@ -415,6 +420,10 @@ enum Binding {
     /// read as the value the call gives it, or its default; the label
     /// says what it is, for a name it lacks.
     ParamMap(HashMap<String, ast::Expr>, &'static str),
+    /// A vector local, its three float locals (B1).
+    VecLocal([String; 3]),
+    /// A vector substituted where read: a helper's vector argument.
+    VecValue(Box<vec::V3>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -472,6 +481,9 @@ struct Lowerer<'s> {
     fresh: usize,
     /// The variations `vary` inlined, `(name, source)`.
     variations: Vec<(String, String)>,
+    /// The vector parameters (B1), each three float parameters
+    /// `name_x`, `name_y`, `name_z`.
+    param_vecs: HashSet<String>,
 }
 
 /// One function's scope: Rhai names to what they stand for, innermost
@@ -1073,6 +1085,12 @@ impl<'s> Lowerer<'s> {
             return Ok(());
         }
         let Some(value) = value else { return self.err(p, "a parameter needs its `value`") };
+        // A vector: three float parameters (B1).
+        if let Expr::FnCall(fc, _) = value {
+            if fc.name.as_str() == "vec3" {
+                return self.vec_param(name, fc, settings, span, out);
+            }
+        }
         let lit = self.literal(value)?;
         let ty = match &lit.kind {
             ExprKind::Int(_) => TypeName::Int,
@@ -1269,13 +1287,21 @@ impl<'s> Lowerer<'s> {
                 // read the state before any of them is set.
                 let mut values = Vec::new();
                 for (k, x) in &m.0 {
+                    // A vector: three fields, its parts (B1).
+                    if self.is_vec(x, scope) {
+                        let parts = self.vexpr(x, scope)?;
+                        for (i, c) in parts.into_iter().enumerate() {
+                            values.push((vec::part(k.name.as_str(), i), k.pos, c, true));
+                        }
+                        continue;
+                    }
                     let v = self.expr(x, scope)?;
-                    values.push((k.name.to_string(), k.pos, v));
+                    values.push((k.name.to_string(), k.pos, v, false));
                 }
                 self.flush(out);
                 let mut temps = Vec::new();
-                for (f, p, v) in values {
-                    let ty = self.ty_of(&v);
+                for (f, p, v, is_part) in values {
+                    let ty = if is_part { TypeName::Float } else { self.ty_of(&v) };
                     if scope.which.builds() {
                         self.declare_field(&f, ty, v, p, scope, out)?;
                     } else {
@@ -1316,6 +1342,7 @@ impl<'s> Lowerer<'s> {
         match target.kind {
             ExprKind::Name(name) => {
                 self.types.insert(name.clone(), ty);
+                let f = f.replace("__", ".");
                 let written = if scope.which == Fn3::Prepare { format!("p.{f}") } else { format!("s.{f}") };
                 self.names.push((name.clone(), written));
                 self.decl(ty, name, v, span, out);
@@ -1354,6 +1381,17 @@ impl<'s> Lowerer<'s> {
                         return self.state_value(value, scope, out);
                     }
                 }
+                // A vector: three float locals (B1).
+                if self.is_vec(value, scope) {
+                    let parts = self.vexpr(value, scope)?;
+                    self.flush(out);
+                    let names = self.vec_local(&ident.name);
+                    for (n, c) in names.iter().zip(parts) {
+                        out.push(ast::Stmt::Decl { ty: TypeName::Float, name: n.clone(), init: Some(c), dims: None, span });
+                    }
+                    scope.bind(&ident.name, Binding::VecLocal(names));
+                    return Ok(());
+                }
                 let v = self.expr(value, scope)?;
                 self.flush(out);
                 let ty = self.ty_of(&v);
@@ -1364,6 +1402,10 @@ impl<'s> Lowerer<'s> {
             }
             Stmt::Assignment(x) => {
                 let (op, be) = &**x;
+                let syntax = op.get_op_assignment_info().map(|(.., syntax)| syntax);
+                if self.vec_assign(&be.lhs, &be.rhs, syntax, scope, out)? {
+                    return Ok(());
+                }
                 if let Some((f, fp)) = self.new_field(&be.lhs, scope) {
                     if op.get_op_assignment_info().is_some() {
                         return self.err(fp, format!("`{f}` is not in the state yet: set it with `=`"));
@@ -1697,6 +1739,9 @@ impl<'s> Lowerer<'s> {
 
     fn expr(&mut self, e: &Expr, scope: &mut Scope) -> R<ast::Expr> {
         let span = self.pos.span(e.position());
+        if self.is_vec(e, scope) {
+            return self.err(e.position(), vec::NUMBER_WANTED);
+        }
         Ok(match e {
             Expr::IntegerConstant(v, _) => mk(ExprKind::Int(*v), span),
             Expr::FloatConstant(v, _) => mk(ExprKind::Float(**v), span),
@@ -1709,8 +1754,17 @@ impl<'s> Lowerer<'s> {
                 Some(Binding::State) => return self.err(*p, "the state is read by its fields, `s.z`"),
                 Some(Binding::Params) | Some(Binding::ParamMap(..)) => return self.err(*p, "the parameters are read by name, `p.power`"),
                 Some(Binding::Ctx) => return self.err(*p, "the context is read by its fields, `ctx.julia`"),
+                Some(Binding::VecLocal(_) | Binding::VecValue(_)) => return self.err(*p, vec::NUMBER_WANTED),
                 None => return self.err(*p, format!("`{}` is not declared", v.1)),
             },
+            // A part of a vector, or a number of it: `v.x`, `v.length()`.
+            Expr::Dot(be, _, _) if self.is_vec(&be.lhs, scope) => {
+                let v = self.vexpr(&be.lhs, scope)?;
+                match self.member(v, &be.rhs, scope)? {
+                    Val::S(s) => s,
+                    Val::V(_) => return self.err(e.position(), vec::NUMBER_WANTED),
+                }
+            }
             Expr::Dot(be, _, _) => {
                 let base = self.base(&be.lhs, scope)?;
                 self.chain(base, &be.rhs, scope)?
@@ -1789,6 +1843,29 @@ impl<'s> Lowerer<'s> {
     /// `base.rhs`, where `rhs` is a property, a method call or a further
     /// chain.
     fn chain(&mut self, base: Base, rhs: &Expr, scope: &mut Scope) -> R<ast::Expr> {
+        // A vector field or parameter, then a part of it or a number of
+        // it: `s.z.x`, `p.c.length()` (B1).
+        let owner = match &base {
+            Base::State => Some(vec::Owner::State),
+            Base::Params => Some(vec::Owner::Params),
+            Base::Ctx => Some(vec::Owner::Ctx),
+            _ => None,
+        };
+        if let Some(owner) = owner {
+            let (first, rest) = match rhs {
+                Expr::Dot(be, _, _) => (&be.lhs, Some(&be.rhs)),
+                r => (r, None),
+            };
+            if let Expr::Property(prop, pp) = first {
+                if let Some(v) = self.named_vector(&owner, prop.2.as_str(), scope, self.pos.span(*pp)) {
+                    let Some(rest) = rest else { return self.err(*pp, vec::NUMBER_WANTED) };
+                    return match self.member(v, rest, scope)? {
+                        Val::S(s) => Ok(s),
+                        Val::V(_) => self.err(rhs.position(), vec::NUMBER_WANTED),
+                    };
+                }
+            }
+        }
         match rhs {
             Expr::Dot(be, _, _) => {
                 let first = self.chain(base, &be.lhs, scope)?;
@@ -1929,23 +2006,46 @@ impl<'s> Lowerer<'s> {
             if matches!(name, "start" | "step" | "escaped" | "finish" | "prepare" | "perturb_start" | "perturb_step" | "perturb_when" | "degree" | "creases" | "variation" | "vary") {
                 return self.err(p, format!("`{name}` is the formula's own, not a helper to call"));
             }
+            // A vector argument binds as one (B1).
+            let mut vals = Vec::new();
             for a in f.args.iter() {
-                args.push(self.expr(a, scope)?);
+                vals.push(self.arg(a, scope)?);
             }
-            if def.params.len() != args.len() {
+            if def.params.len() != vals.len() {
                 return self.err(p, format!("`{name}` takes {}", def.params.len()));
             }
             if self.depth > 32 {
                 return self.err(p, "helpers call each other too deep (recursion?)");
             }
             let mut inner = Scope::new(Fn3::Helper, Vec::new());
-            for (param, a) in def.params.iter().zip(args) {
-                inner.bind(param, Binding::Value(a));
+            for (param, a) in def.params.iter().zip(vals) {
+                match a {
+                    Val::S(a) => inner.bind(param, Binding::Value(a)),
+                    Val::V(v) => inner.bind(param, Binding::VecValue(Box::new(v))),
+                }
+            }
+            // A helper gives a number (B1).
+            if let Some(Final::Expr(x)) = def.body.statements().last().and_then(final_value) {
+                if self.is_vec(x, &inner) {
+                    return self.err(p, format!("`{name}` ends with a vector, and a helper gives a number: write the vector in place, or a helper per part"));
+                }
             }
             self.depth += 1;
             let r = if self.pure { self.pure_body(&def.body, &mut inner) } else { self.helper_body(&def.body, &mut inner) };
             self.depth -= 1;
             return r;
+        }
+        // Numbers of vectors (`dot`, `length`), and the functions that came
+        // with them (`min`, `max`, `clamp` of numbers) (B1).
+        if matches!(name, "vec3" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp") || f.args.iter().any(|a| self.is_vec(a, scope)) {
+            let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
+            for a in f.args.iter() {
+                vals.push(self.arg(a, scope)?);
+            }
+            return match self.vfunc(name, vals, p)? {
+                Val::S(s) => Ok(s),
+                Val::V(_) => self.err(p, vec::NUMBER_WANTED),
+            };
         }
         for a in f.args.iter() {
             args.push(self.expr(a, scope)?);

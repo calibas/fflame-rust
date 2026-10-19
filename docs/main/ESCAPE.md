@@ -501,6 +501,18 @@ fn escaped(s, p) {
   and `name_of` hashes them, so a changed variation is a changed entry.
   A built-in variation is refused (C3, maybe). Example:
   `assets/formulas/whorled-mandelbrot.rhai`.
+- **Vectors** (`rhai/vec.rs`; the KIFS plan, B1): `vec3(x, y, z)` (or
+  `vec3(s)`), its parts `v.x`, `v.y`, `v.z` read and set, `+`, `-`, `*`
+  and `/` (by a number, or part by part), `dot`, `cross`, `length`,
+  `normalize`, `abs`, `floor`, `min`, `max`, `clamp` -- as functions or
+  methods; a vector in a state map or as a helper's argument; a
+  `PARAMS` entry `vec3(...)` as three float parameters, `name_x`,
+  `name_y`, `name_z`. The lowering splits each vector into three
+  scalars, so nothing past it knows vectors exist, and deep zoom derives
+  through vector code as through any other. `min`, `max` and `clamp` of
+  numbers come with them (a temporary and an `if`; not in `escaped`).
+  Refused: a helper ending with a vector, an `if` used as a vector
+  value.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to
