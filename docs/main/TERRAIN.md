@@ -304,7 +304,7 @@ integral says about a third. The coat's
 lobe is scaled by `1 + F0 (1 / E - 1)` (Kulla and Conty 2017; Turquin
 2019), E its directional albedo at reflectance 1, in every tier
 (`ifs_coat_energy`, `coat_energy`). E is a 16-term fit to the coat's own
-integral (`path_core::COAT_ESS_FIT`, `coat_energy_wgsl` generates the
+integral (`renderer::coat::COAT_ESS_FIT`, `coat_energy_wgsl` generates the
 WGSL for every shader): the compensation within 1.6% from cos 0.2 up and
 -11% to +5% at a glance (`the_coat_albedo_fit_is_the_integral`). Karis's
 EnvBRDFApprox, fitted to height-correlated masking, was up to half off

@@ -1,3 +1,4 @@
+pub mod coat;
 pub mod compute_kernel;
 pub mod effect_chain;
 pub mod histogram;

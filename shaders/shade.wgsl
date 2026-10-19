@@ -312,7 +312,7 @@ fn coat_fresnel3(f0: vec3<f32>, c: f32) -> vec3<f32> {
 }
 
 // `coat_ess` and `coat_energy`, generated from the path tracer's fit
-// (`escape::path_core::coat_energy_wgsl`), spliced here at load.
+// (`renderer::coat::coat_energy_wgsl`), spliced here at load.
 //__COAT_ENERGY__
 
 @compute @workgroup_size(8, 8, 1)
