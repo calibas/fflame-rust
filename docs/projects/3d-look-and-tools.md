@@ -369,8 +369,19 @@ Steps:
 is the walk's shader to its entry point with a one-thread entry; it lands
 for all 23 shipped solids and reads the Julia ball's exact estimate to
 1e-6. Collisions on by default (they change how a flight into a solid
-ends: it stops); proximity speed off. Step 4, terrains, not built: a
-terrain keeps its floor, and its probe measures only the ground in view.
+ends: it stops); proximity speed off.
+
+**Step 4 done 2026-10-19** (CAMERA.md, *A terrain's ground*), as a floor
+rather than the frustum's sphere: the terrain probe also casts one ray
+straight down from above the slab, and with collisions the eye stays the
+orbit floor's height above the ground under it -- down into valleys the
+old floor (the relief's top) kept it out of, and over a simulation's
+ground taller than half a field unit, which it flew through. A hill flown
+into is climbed a probe later, not stopped at: a stop needs a sphere,
+and neither the in-view nearest nor the height below bounds the distance
+in every direction. Proximity paces by the height above the ground; the
+zoom does not follow over a terrain. Measured: the probe's ground is the
+analytic cone's bilinear surface to 1e-6, from inside the cone too.
 
 ## P7. Path tracing: research and plan
 
@@ -393,5 +404,5 @@ compensation, the environment, AgX).
 3. [x] P3 the Lighting & Material panel, 2026-10-19.
 4. [x] P4 materials, 2026-10-19 (step 5, light size, left for the user).
 5. [x] P5 flame variations in solids (step 1) and Orbit colouring for solids (step 2), both 2026-10-19.
-6. [~] P6 fly mode: solids done 2026-10-19; terrains (step 4) not built.
+6. [x] P6 fly mode: solids and terrains, 2026-10-19.
 7. [x] P7 research written up (alongside), 2026-10-19.

@@ -866,6 +866,14 @@ pub use super::path_core::PATH_SHOW_SAMPLES;
 
 
 impl EscapeTerrain {
+    /// The ground's height under the eye at the last probe, in current
+    /// widths (fly mode's floor, 3d-look-and-tools P6): the frame probes
+    /// it with the nearest ground in view. None before one lands, or where
+    /// no ground lies under the eye.
+    pub fn ground_under_eye(&self) -> Option<f32> {
+        self.terrain.ground_under_eye()
+    }
+
     pub fn new(device: &Device, out_w: u32, out_h: u32) -> Self {
         EscapeTerrain {
             footprint: EscapeRenderer::new(device, SECTION_SAMPLES, SECTION_SAMPLES),

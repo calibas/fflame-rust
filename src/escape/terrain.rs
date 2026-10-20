@@ -1600,7 +1600,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // of the frame -- each block's last row and column, so the frame's bottom
 // row, where the nearest ground usually is, is traced -- its hit distance
 // into word 0 of the buffer bound in the stats' place, by atomicMin (a
-// positive float's bits order as its value).
+// positive float's bits order as its value). And the ground's height under
+// the eye into word 1, for fly mode's floor (3d-look-and-tools P6): one
+// ray straight down from above the slab, so an eye inside a hill finds
+// the hill's top; the word left at its no-ground mark where none lies
+// under the eye.
 @compute @workgroup_size(8, 8, 1)
 fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let px = min(gid.x * 8u + 7u, params.width - 1u);
@@ -1615,6 +1619,14 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h = hf_trace(o, d, tmax, 0.0);
     if (h.hit && h.t > 0.0) {
         atomicMin(&hf_stats[0], bitcast<u32>(h.t));
+    }
+    if (gid.x == 0u && gid.y == 0u) {
+        let lift = params.fdata[0].z * 1.0e-3;
+        let start = vec3<f32>(o.xy, max(o.z, hf_slab_top) + lift);
+        let down = hf_trace(start, vec3<f32>(0.0, 0.0, -1.0), start.z - hf_slab_floor + lift, 0.0);
+        if (down.hit) {
+            atomicStore(&hf_stats[1], bitcast<u32>(start.z - down.t));
+        }
     }
 }
 "#;
@@ -2269,6 +2281,9 @@ struct NearRead {
     landed: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
     key: Option<String>,
     last: Option<f32>,
+    /// The ground's height under the eye at the last probe; None where no
+    /// ground lay under it.
+    ground: Option<f32>,
 }
 
 /// The range's ordered encoding undone: `hf_unordered`.
@@ -3428,7 +3443,7 @@ impl TerrainRenderer {
             return;
         }
         self.write_params(queue, view);
-        queue.write_buffer(&self.near, 0, &u32::MAX.to_le_bytes());
+        queue.write_buffer(&self.near, 0, bytemuck::cast_slice(&[u32::MAX; 2]));
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Terrain Probe"),
             layout: &self.walk_layout,
@@ -3446,7 +3461,7 @@ impl TerrainRenderer {
         let stage = self.near_read.stage.get_or_insert_with(|| {
             device.create_buffer(&BufferDescriptor {
                 label: Some("Terrain Nearest Readback"),
-                size: 4,
+                size: 8,
                 usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -3458,7 +3473,7 @@ impl TerrainRenderer {
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(self.frame.0.div_ceil(64), self.frame.1.div_ceil(64), 1);
         }
-        enc.copy_buffer_to_buffer(&self.near, 0, stage, 0, 4);
+        enc.copy_buffer_to_buffer(&self.near, 0, stage, 0, 8);
         queue.submit(std::iter::once(enc.finish()));
         let landed = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         let flag = landed.clone();
@@ -3481,9 +3496,9 @@ impl TerrainRenderer {
             return;
         }
         if let (1, Some(stage)) = (state, self.near_read.stage.as_ref()) {
-            let bits = {
+            let (bits, ground) = {
                 let data = stage.slice(..).get_mapped_range();
-                u32::from_le_bytes(data[0..4].try_into().unwrap())
+                (u32::from_le_bytes(data[0..4].try_into().unwrap()), u32::from_le_bytes(data[4..8].try_into().unwrap()))
             };
             stage.unmap();
             let t = f32::from_bits(bits);
@@ -3491,6 +3506,10 @@ impl TerrainRenderer {
             if bits != u32::MAX && t.is_finite() && t > 0.0 {
                 self.near_read.last = Some(t);
             }
+            // No ground under the eye is none: the floor is then the
+            // flight's own (`camera::fly`).
+            let g = f32::from_bits(ground);
+            self.near_read.ground = (ground != u32::MAX && g.is_finite()).then_some(g);
         }
         self.near_read.landed = None;
     }
@@ -3499,6 +3518,13 @@ impl TerrainRenderer {
     /// last probe that struck any.
     pub fn nearest_hit(&self) -> Option<f32> {
         self.near_read.last
+    }
+
+    /// The ground's height under the eye at the last probe, in the
+    /// world's units (fly mode's floor, 3d-look-and-tools P6): None before
+    /// one lands, or where no ground lies under the eye.
+    pub fn ground_under_eye(&self) -> Option<f32> {
+        self.near_read.ground
     }
 
     /// Whether a probe is in flight.
@@ -4814,6 +4840,52 @@ pub(crate) mod gpu_tests {
             assert!(worst_t < 1e-4 * n as f64, "{kind}: t off by {worst_t}");
             assert!(worst_n < 3e-3, "{kind}: normal off by {worst_n}");
             assert!(disagree * 1000 < (w * hgt) as usize, "{kind}: {disagree} disagreements");
+        }
+    }
+
+    /// The probe's ground under the eye (fly mode's floor,
+    /// 3d-look-and-tools P6) is the surface's height there -- the bilinear
+    /// surface the trace walks -- from an eye above the ground, from one
+    /// inside a hill (the probe looks down from above the slab), and none
+    /// from an eye past a ground that does not repeat.
+    #[test]
+    fn the_probe_finds_the_ground_under_the_eye() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (n, m) = (257usize, 193usize);
+        let h = terrain("cone", n, m);
+        let mut r = TerrainRenderer::new(&device, 64, 48);
+        r.set_tile(&device, &queue, n as u32, m as u32, &h, &vec![[1.0; 4]; n * m]);
+        let surface = |x: f64, y: f64| {
+            let a = (x.floor() as usize).min(n - 2);
+            let b = (y.floor() as usize).min(m - 2);
+            let (u, v) = (x - a as f64, y - b as f64);
+            let hh = |i: usize, j: usize| h[j * n + i] as f64;
+            (hh(a, b) * (1.0 - u) + hh(a + 1, b) * u) * (1.0 - v) + (hh(a, b + 1) * (1.0 - u) + hh(a + 1, b + 1) * u) * v
+        };
+        let rel = camera([0.0; 3], 0.5, 0.6, 50.0, 0.9).eye_rel;
+        for (name, eye) in [("above", [110.3, 90.6, 60.0]), ("inside", [127.2, 95.4, 20.0]), ("past the edge", [-40.0, -30.0, 60.0])] {
+            let cam = camera([eye[0] - rel[0], eye[1] - rel[1], eye[2] - rel[2]], 0.5, 0.6, 50.0, 0.9);
+            r.probe_nearest(&device, &queue, &view(cam));
+            for _ in 0..1000 {
+                if !r.probe_in_flight() {
+                    break;
+                }
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                r.poll_nearest(&device);
+            }
+            assert!(!r.probe_in_flight(), "{name}: the probe landed");
+            let got = r.ground_under_eye();
+            let inside = eye[0] >= 0.0 && eye[0] <= (n - 1) as f64 && eye[1] >= 0.0 && eye[1] <= (m - 1) as f64;
+            let want = inside.then(|| surface(cam.eye[0], cam.eye[1]));
+            println!("  {name}: the eye at {:?}, the ground {got:?}, the surface {want:?}", cam.eye);
+            match (got, want) {
+                (Some(g), Some(s)) => assert!((g as f64 - s).abs() < 1.0e-3, "{name}: {g} against {s}"),
+                (None, None) => {}
+                _ => panic!("{name}: {got:?} against {want:?}"),
+            }
         }
     }
 

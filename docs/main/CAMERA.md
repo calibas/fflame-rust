@@ -321,7 +321,8 @@ It is held above −90°. For an unlifted target this is exactly the old
 clamp; a lifted target orbits below the horizon, down to looking straight
 up. A pitch already under the floor, typed or flown there, is a floor of
 its own: an orbit never snaps it up. Fly mode keeps the eye above the
-same floor by raising the lift.
+same floor by raising the lift -- or, with collisions, above the ground
+under the eye (*A terrain's ground*, below).
 
 The View panel's 3D Camera section has a Target lift row for both
 terrains, and Reset sets it to 0.
@@ -395,7 +396,8 @@ speed by `fly_sprint_multiplier`.
 - **The other cameras** fly in distances to their target a second, so a
   flight feels the same at every zoom. Mode D's steps are fixed-point
   adds to its decimal target, so it flies at any depth.
-- **A terrain's eye** is kept above the orbit's floor.
+- **A terrain's eye** is kept above the orbit's floor, or above the
+  ground (*A terrain's ground*).
 
 In fly mode the wheel sets the speed: `view_scroll` multiplies
 `fly_move_speed` by the wheel factor, clamped to 0.05..20.
@@ -424,12 +426,43 @@ nearest-ground probe is read. The last measure that landed is a
   surface slows and zooms in -- a deep zoom, as deep as the solid's
   precision goes (the IFS flame solids' seeded walk; f32 elsewhere).
 
-Without a measure yet, or in any other camera, a flight is as above. A
-terrain keeps its floor and has no clearance yet (P6 step 4, not built).
+Without a measure yet, or in any other camera, a flight is as above.
 Gates: `the_clearance_probe_reads_the_solid_at_the_eye` (the Julia set at
 c = 0 is the unit ball, its estimate 0.5 r ln r exactly: within 1e-6),
 `the_clearance_probe_lands_for_every_shipped_solid`,
 `a_solid_flies_within_its_clearance`.
+
+### A terrain's ground (2026-10-19)
+
+The orbit's floor keeps an escape terrain's eye above the relief's top --
+never down into a valley -- and a simulation terrain's above half a field
+unit, through any taller ground. The terrain's probe of the nearest ground
+in view (`TerrainRenderer::probe_nearest`) now measures the ground under
+the eye too: one ray straight down from above the relief's slab, so an
+eye inside a hill finds the hill's top, its height into the probe's
+second word (`ground_under_eye`; None where no ground lies under the
+eye). The escape terrain's frame probes every changed view already; the
+simulation terrain's probes while fly mode uses it (`probe_ground`, before
+the frame's render: the probe writes the view's uniform). `fly::fly` takes
+the height as `FlyLimits::ground`, in the terrain's world units (current
+widths; cells), and its pivot (`Floor`):
+- **Collisions**: the floor is the ground under the eye rather than
+  where the target rests -- the eye stays `sin 0.02` distances above it
+  (`FLOOR_PITCH`, the orbit floor's own height). It flies down into a
+  valley; it climbs a hill flown into, a probe later (the ground is the
+  last measured, at the eye's place then). No ground measured, or
+  collisions off: the orbit's floor.
+- **Proximity speed**: the step in heights of the eye above the ground
+  rather than in distances to the target (the floor's height at least),
+  so it slows as it nears the ground. The zoom does not follow over a
+  terrain.
+
+Gates: `the_probe_finds_the_ground_under_the_eye` (the bilinear surface's
+height on the analytic cone, from above and from inside it, to 1e-6;
+none past a ground's edge), `a_terrain_flies_above_its_ground` (a dive
+stops over the valley measured, at the orbit's floor without a measure or
+without collisions; a simulation's hill raises the floor; proximity paces
+by the height).
 
 ### Settings
 
@@ -443,8 +476,8 @@ Device preferences in `SystemSettings` (`src/storage/settings.rs`), not
 | `fly_move_speed` | 1.0 | Move speed (0.05..20); the wheel in fly mode | |
 | `fly_sprint_multiplier` | 3.0 | Sprint multiplier (1..20) | |
 | `fly_invert_y` | false | Invert Y axis | every orbit |
-| `fly_collisions` | true | Stop at surfaces | a solid's flight |
-| `fly_proximity` | false | Speed by distance | a solid's flight |
+| `fly_collisions` | true | Stop at surfaces | a solid's flight, a terrain's floor |
+| `fly_proximity` | false | Speed by distance | a solid's flight, a terrain's pace |
 
 ---
 
