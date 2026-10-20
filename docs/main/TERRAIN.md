@@ -676,6 +676,23 @@ unclamped samples): the denoised error averaged 0.866 of the raw, from
 most of what remains is the colouring's sub-pixel variation, which no
 filter of the light reaches.
 
+**Specular and diffuse apart** (D5), where the material has a coat or a
+metal: a sample's specular share -- its first surface's coat and metal
+terms of the direct light, and all a first bounce brings back when it
+took the coat's lobe (`pt_spec`; the Blinn-Phong highlight stays with the
+diffuse, being no lobe a bounce samples) -- is gathered with the guides,
+each share with its own luminance moment. `prepare` demodulates both by
+the same albedo, `atrous` filters each by its own noise, the specular's
+passes reaching by the roughness (none below 0.1, as the diffuse's from
+0.5) but whole while samples are few (at least `4 / n`), and `finish`
+adds them back; the neighbourhood clamp and the confidence bound act on
+the whole. A polished reflection is the view's own, not its neighbours':
+filtered with the diffuse it blotched. Measured: never more than 2.3%
+worse than not splitting, up to 7.7% better, the glossy Mandelbulb's
+coarse error 14-15% lower at 16 and 64 samples; a matte surface is the
+same picture. The guides are 48 bytes a pixel (`GUIDE_BYTES`); the two
+specular lights are textures of their own, made only when split.
+
 Two lights may differ by four of the noise's standard deviations and
 still be averaged (`DENOISE_SIGMA`). Past 8 samples (`DENOISE_FULL`) that
 width narrows as `sqrt(8 / n)`, so as samples gather the filter stops

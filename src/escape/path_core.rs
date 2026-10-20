@@ -49,6 +49,9 @@ pub struct PathSettings {
     /// alone) and its roughness.
     pub gloss: f32,
     pub roughness: f32,
+    /// How much of the surface is metal (P4): the shaders read it from
+    /// the rig (`ifs_metallic`); here for the denoiser (D5).
+    pub metallic: f32,
     /// The albedo's own glow.
     pub emission: f32,
     /// The lens's radius (0: a pinhole) and the focal plane's view
@@ -101,6 +104,7 @@ impl Default for PathSettings {
             seed: 1,
             gloss: 0.0,
             roughness: 0.5,
+            metallic: 0.0,
             emission: 0.0,
             aperture: 0.0,
             focus: 1.0,
@@ -167,6 +171,7 @@ pub fn path_settings_from(
         seed: 1,
         gloss: material[0],
         roughness: material[1],
+        metallic: material[3],
         emission: material[2],
         aperture: t.aperture * target,
         focus: if t.focus > 0.0 { t.focus } else { 1.0 } * target,
@@ -336,6 +341,10 @@ impl PathParamsGpu {
     }
 }
 
+/// The denoiser's guides' bytes a pixel: three vec4s (`PT_CORE_WGSL`'s
+/// `pt_guide`).
+pub(crate) const GUIDE_BYTES: u64 = 48;
+
 /// Workgroups in a row of a list's dispatch: `main`'s `PT_LIST_ROW`.
 pub(crate) const LIST_ROW: u32 = 1024;
 
@@ -363,9 +372,10 @@ pub(crate) fn light_radius(sharpness: f32) -> f32 {
 pub(crate) const PT_CORE_WGSL: &str = r#"
 @group(0) @binding(8) var<storage, read_write> pt_sum: array<vec4<f32>>;
 @group(0) @binding(9) var<uniform> pt: PtParams;
-// The denoiser's guides, two a pixel, summed with the samples weighted
-// by their coverage: (albedo, the light's luminance squared) and
-// (normal, distance). Written only when `pt.band.z`'s first bit asks.
+// The denoiser's guides, three a pixel, summed with the samples weighted
+// by their coverage: (albedo, the diffuse share's luminance squared),
+// (normal, distance) and (the specular share, its luminance squared;
+// `pt_spec`). Written only when `pt.band.z`'s first bit asks.
 //
 // With adaptive sampling (V2; `pt.band.z`'s second bit) the sum holds a
 // second vec4 a pixel after the frame's sums: its samples' luminance
@@ -444,6 +454,22 @@ const PT_REGULAR_ROUGH: f32 = 0.4;
 var<private> pt_g_albedo: vec3<f32>;
 var<private> pt_g_normal: vec3<f32>;
 var<private> pt_g_t: f32;
+
+// The share of a sample's radiance its first surface reflects
+// specularly (path-tracing-research D5): its coat's and a metal's share
+// of the direct light, and all a bounce brings back when the first
+// bounce took the coat's lobe. The rest is diffuse. The
+// denoiser filters the two apart: a reflection follows the view and the
+// roughness, where the diffuse light follows the surface.
+var<private> pt_spec: vec3<f32>;
+
+// The firefly clamp on a path's radiance, its specular share scaled
+// alike.
+fn pt_clamp(l: vec3<f32>) -> vec3<f32> {
+    let c = min(l, vec3<f32>(pt.misc.y));
+    pt_spec = pt_spec * select(vec3<f32>(1.0, 1.0, 1.0), c / max(l, vec3<f32>(1.0e-30, 1.0e-30, 1.0e-30)), l > c);
+    return c;
+}
 
 fn pt_first(h: PtHit, d: vec3<f32>) {
     // The surface's whole reflectance seen along d: the albedo under the
@@ -795,6 +821,25 @@ struct PtLight {
     guide: vec2<f32>,
 };
 
+// The specular share of what `pt_light_add` adds for a lit light: the
+// coat's term, weighted against its bounces where it is. Not the
+// highlight: the lit tier's shine on the direct light, no lobe a bounce
+// samples -- split from the diffuse it made the matte Mandelbulb's
+// denoised picture worse (coarse error 5.3% to 7.7% at 4 samples), and
+// with the diffuse it changes nothing.
+fn pt_light_spec(through: vec3<f32>, l: PtLight, seen: f32, shadow_strength: f32) -> vec3<f32> {
+    var vis = 1.0;
+    if (pt.misc.z > 0.0) {
+        vis = mix(1.0, seen, shadow_strength);
+    }
+    var r = through * l.color * l.spec * (l.pg * l.ndl * vis);
+    if (l.w >= 0.0) {
+        let spec_vis = l.w * seen + (1.0 - shadow_strength) * (1.0 - seen);
+        r = r + through * l.color * l.spec * (l.pg * l.ndl * (spec_vis - vis));
+    }
+    return r;
+}
+
 // Every light, each sampled over its angular size. Picking one a surface
 // (by power) would save shadow rays, but a face only one light reaches
 // then reads all of it or none, sample to sample: measured as speckle over
@@ -915,6 +960,8 @@ struct PtBounce {
     through: vec3<f32>,
     coat_pdf: f32,
     regular: bool,
+    // The coat's lobe, not Lambert's.
+    spec: bool,
 };
 
 // The gloss's lobe by the visible normals, chosen by the coat's Fresnel at
@@ -927,8 +974,10 @@ fn pt_bounce(s: PtShade, through: vec3<f32>, regular: bool, bounce: u32) -> PtBo
     out.through = through;
     out.regular = regular;
     out.coat_pdf = 0.0;
+    out.spec = false;
     var nd = vec3<f32>(0.0, 0.0, 1.0);
     if (s.p_spec > 0.0 && pt_rand() < s.p_spec) {
+        out.spec = true;
         let frame = pt_frame(s.n);
         let vl = transpose(frame) * s.v;
         let hl = pt_vndf(vl, sqrt(s.a2));
@@ -1013,6 +1062,11 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     var through = vec3<f32>(1.0, 1.0, 1.0);
     var travelled = 0.0;
     var regular = false;
+    // The specular share (`pt_spec`): what the first bounce brings back
+    // counts whole when it took the coat's lobe, from the radiance there.
+    pt_spec = vec3<f32>(0.0, 0.0, 0.0);
+    var spec_from = vec3<f32>(0.0, 0.0, 0.0);
+    var spec_path = false;
     for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
         let p = o + d * h.t;
         travelled = travelled + h.t;
@@ -1037,6 +1091,9 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                     seen = select(0.0, 1.0, pt_scene_visible(s.start, l.dir, l.dist, travelled));
                 }
                 radiance = pt_light_add(radiance, through, l, seen, s.shadow_strength);
+                if (bounce == 0u) {
+                    pt_spec = pt_spec + pt_light_spec(through, l, seen, s.shadow_strength);
+                }
             }
             guide = guide + l.guide;
         }
@@ -1050,6 +1107,10 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         if (!b.go) {
             break;
         }
+        if (bounce == 0u && b.spec) {
+            spec_path = true;
+            spec_from = radiance;
+        }
         through = b.through;
         regular = b.regular;
         o = s.start;
@@ -1059,6 +1120,9 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             radiance = pt_escape(radiance, through, d, b.coat_pdf);
             break;
         }
+    }
+    if (spec_path) {
+        pt_spec = pt_spec + (radiance - spec_from);
     }
     return radiance;
 }
@@ -1091,9 +1155,11 @@ fn pt_trace_pixel(x: u32, y: u32, tile: vec4<u32>) {
     let guided = (pt.band.z & 1u) != 0u;
     var g0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var g1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var g2 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if (guided && pt.sample_base != 0u) {
-        g0 = pt_guide[2u * idx];
-        g1 = pt_guide[2u * idx + 1u];
+        g0 = pt_guide[3u * idx];
+        g1 = pt_guide[3u * idx + 1u];
+        g2 = pt_guide[3u * idx + 2u];
     }
     let pixel = pt_hash((fy * params.width + fx) * 0x9E3779B9u + pt.seed);
     for (var s = 0u; s < pt.samples; s = s + 1u) {
@@ -1107,12 +1173,17 @@ fn pt_trace_pixel(x: u32, y: u32, tile: vec4<u32>) {
         pt_g_albedo = vec3<f32>(1.0, 1.0, 1.0);
         pt_g_normal = vec3<f32>(0.0, 0.0, 0.0);
         pt_g_t = 0.0;
+        pt_spec = vec3<f32>(0.0, 0.0, 0.0);
         let v = pt_sample(fx, fy);
         sum = sum + v;
         if (guided && v.a > 0.0) {
-            let l = dot(v.rgb / v.a, vec3<f32>(0.2126, 0.7152, 0.0722));
-            g0 = g0 + vec4<f32>(pt_g_albedo * v.a, l * l * v.a);
+            // Each share's luminance squared: the denoiser filters each
+            // by its own noise (D5), and takes the whole's as their sum.
+            let ls = dot(pt_spec, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let ld = dot(v.rgb / v.a, vec3<f32>(0.2126, 0.7152, 0.0722)) - ls;
+            g0 = g0 + vec4<f32>(pt_g_albedo * v.a, ld * ld * v.a);
             g1 = g1 + vec4<f32>(pt_g_normal * v.a, pt_g_t * v.a);
+            g2 = g2 + vec4<f32>(pt_spec * v.a, ls * ls * v.a);
         }
         if (adaptive) {
             // The sample as the pixel shows it, premultiplied.
@@ -1126,8 +1197,9 @@ fn pt_trace_pixel(x: u32, y: u32, tile: vec4<u32>) {
         pt_sum[si] = vec4<f32>(st.x, st.y, f32(first + pt.samples), st.w);
     }
     if (guided) {
-        pt_guide[2u * idx] = g0;
-        pt_guide[2u * idx + 1u] = g1;
+        pt_guide[3u * idx] = g0;
+        pt_guide[3u * idx + 1u] = g1;
+        pt_guide[3u * idx + 2u] = g2;
     }
 }
 
@@ -1247,9 +1319,12 @@ struct DenoiseParams {
     split_col: u32,
     // 1: each pixel's count is its own (adaptive sampling).
     adaptive: u32,
-    pad0: u32,
-    pad1: u32,
-    pad2: u32,
+    // D5: 1 to filter the specular share apart from the diffuse; 1 for
+    // the a-trous pass over the specular; the coat's roughness, by which
+    // that pass reaches.
+    split_spec: u32,
+    spec_pass: u32,
+    rough: f32,
 };
 @group(0) @binding(0) var<uniform> dp: DenoiseParams;
 @group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
@@ -1259,6 +1334,9 @@ struct DenoiseParams {
 @group(0) @binding(5) var light_out: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(6) var feat_out: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(7) var out_tex: texture_storage_2d<rgba32float, write>;
+// D5: the specular light, as `light_out` and `light_in` hold the diffuse.
+@group(0) @binding(8) var spec_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(9) var spec_in: texture_2d<f32>;
 
 // The albedo's luminance below which the variance is not divided by it.
 const DN_FLOOR: f32 = 0.01;
@@ -1298,10 +1376,38 @@ struct DnPixel {
     albedo: vec3<f32>,
     normal: vec3<f32>,
     depth: f32,
-    // The radiance's luminance, its mean and its mean square.
+    // The diffuse share's luminance, its mean and its mean square; the
+    // specular share's (D5), and its light over the same albedo -- when
+    // split (`dp.split_spec`), `light` is the diffuse share's. The whole's
+    // variance is taken as the shares' summed: their covariance is not
+    // gathered (a highlight and the diffuse light share a light's
+    // samples), so it is a little low where both are.
     m1: f32,
     m2: f32,
+    spec: vec3<f32>,
+    s1: f32,
+    s2: f32,
 };
+
+// A pixel's samples' luminance variance (`m` the diffuse share's, `s` the
+// specular's, or the whole's when both).
+fn dn_var(m1: f32, m2: f32) -> f32 {
+    return max(m2 - m1 * m1, 0.0);
+}
+
+// A colour over an albedo, exactly, channel by channel -- a floor in the
+// division leaves a dark channel's light a fraction of its neighbours',
+// and averaging them multiplied it back up (a yellow face gained +13
+// levels of blue). A channel with no albedo reflects nothing to divide;
+// the others' light stands in for its neighbours to average, and it is
+// multiplied back by zero.
+fn dn_demod(c: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
+    let has = albedo > vec3<f32>(1.0e-12, 1.0e-12, 1.0e-12);
+    let e = select(vec3<f32>(0.0, 0.0, 0.0), c / max(albedo, vec3<f32>(1.0e-12, 1.0e-12, 1.0e-12)), has);
+    let k = dot(select(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), has), vec3<f32>(1.0, 1.0, 1.0));
+    let stand_in = (e.x + e.y + e.z) / max(k, 1.0);
+    return select(vec3<f32>(stand_in, stand_in, stand_in), e, has);
+}
 
 fn dn_pixel(q: vec2<i32>) -> DnPixel {
     var o: DnPixel;
@@ -1311,24 +1417,25 @@ fn dn_pixel(q: vec2<i32>) -> DnPixel {
     if (!(s.a > 0.0) || dn_n(u32(q.x), u32(q.y)) == 0u) {
         return o;
     }
-    let g0 = pt_guide[2u * i];
-    let g1 = pt_guide[2u * i + 1u];
+    let g0 = pt_guide[3u * i];
+    let g1 = pt_guide[3u * i + 1u];
     o.cover = s.a;
     o.albedo = g0.rgb / s.a;
     let c = s.rgb / s.a;
-    // The light: the colour over the albedo, exactly, channel by channel
-    // -- a floor in the division leaves a dark channel's light a fraction
-    // of its neighbours', and averaging them multiplied it back up (a
-    // yellow face gained +13 levels of blue). A channel with no albedo
-    // reflects nothing to divide; the others' light stands in for its
-    // neighbours to average, and it is multiplied back by zero.
-    let has = o.albedo > vec3<f32>(1.0e-12, 1.0e-12, 1.0e-12);
-    let e = select(vec3<f32>(0.0, 0.0, 0.0), c / max(o.albedo, vec3<f32>(1.0e-12, 1.0e-12, 1.0e-12)), has);
-    let k = dot(select(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), has), vec3<f32>(1.0, 1.0, 1.0));
-    let stand_in = (e.x + e.y + e.z) / max(k, 1.0);
-    o.light = select(vec3<f32>(stand_in, stand_in, stand_in), e, has);
-    o.m1 = dn_lum(c);
+    let g2 = pt_guide[3u * i + 2u];
+    let sc = g2.rgb / s.a;
+    o.s1 = dn_lum(sc);
+    o.s2 = g2.a / s.a;
+    o.m1 = dn_lum(c) - o.s1;
     o.m2 = g0.a / s.a;
+    // The light: the colour over the albedo (`dn_demod`). Split, the
+    // specular share's and the rest's.
+    if (dp.split_spec != 0u) {
+        o.spec = dn_demod(sc, o.albedo);
+        o.light = dn_demod(max(c - sc, vec3<f32>(0.0, 0.0, 0.0)), o.albedo);
+    } else {
+        o.light = dn_demod(c, o.albedo);
+    }
     let l = length(g1.xyz);
     o.normal = select(vec3<f32>(0.0, 0.0, 1.0), g1.xyz / max(l, 1.0e-20), l > 1.0e-12);
     o.depth = g1.w / s.a;
@@ -1371,7 +1478,7 @@ fn dn_depth(q: vec2<i32>) -> f32 {
     if (!(a > 0.0) || dn_n(u32(q.x), u32(q.y)) == 0u) {
         return 0.0;
     }
-    return pt_guide[2u * i + 1u].w / a;
+    return pt_guide[3u * i + 1u].w / a;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -1383,11 +1490,13 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p = dn_pixel(px);
     if (!(p.cover > 0.0)) {
         textureStore(light_out, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        textureStore(spec_out, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         textureStore(feat_out, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
     let al = max(dn_lum(p.albedo), DN_FLOOR);
     var variance = 0.0;
+    var spec_variance = 0.0;
     if (dn_n(gid.x, gid.y) >= 4u) {
         // The mean's: the samples' over their number. A coverage-weighted
         // mean's is the samples' times sum(a^2) / sum(a)^2, which lies
@@ -1397,13 +1506,19 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         // 1/a too wide under a uniform haze -- so the hazy distance blurs
         // somewhat more, rather than an edge against the sky keeping its
         // noise.
-        variance = max(p.m2 - p.m1 * p.m1, 0.0) / max(p.cover, 1.0) / (al * al);
+        // Each share's own, or the whole's (their sum) when not split.
+        let vd = dn_var(p.m1, p.m2);
+        let vs = dn_var(p.s1, p.s2);
+        variance = select(vd + vs, vd, dp.split_spec != 0u) / max(p.cover, 1.0) / (al * al);
+        spec_variance = vs / max(p.cover, 1.0) / (al * al);
     } else {
         // Too few samples for moments: the light's spread over the
         // neighbours on the same surface.
         var s1 = 0.0;
         var s2 = 0.0;
         var sw = 0.0;
+        var t1 = 0.0;
+        var t2 = 0.0;
         for (var dy = -3; dy <= 3; dy = dy + 1) {
             for (var dx = -3; dx <= 3; dx = dx + 1) {
                 let q = px + vec2<i32>(dx, dy);
@@ -1419,11 +1534,16 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
                 s1 = s1 + w * l;
                 s2 = s2 + w * l * l;
                 sw = sw + w;
+                let ls = dn_lum(o.spec);
+                t1 = t1 + w * ls;
+                t2 = t2 + w * ls * ls;
             }
         }
         if (sw > 0.0) {
             let m = s1 / sw;
             variance = max(s2 / sw - m * m, 0.0);
+            let ms = t1 / sw;
+            spec_variance = max(t2 / sw - ms * ms, 0.0);
         }
     }
     // An outlier: no brighter than `DN_CLAMP_FACTOR` times the brightest
@@ -1433,6 +1553,7 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     // proportion, so it fades rather than switching off, and a picture of
     // many samples keeps the spiky light a metal really has.
     var light = p.light;
+    var spec = p.spec;
     let nc = dn_n(gid.x, gid.y);
     {
         var top = 0.0;
@@ -1447,19 +1568,25 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (!(o.cover > 0.0) || dot(o.normal, p.normal) < 0.8) {
                     continue;
                 }
-                top = max(top, dn_lum(o.light));
+                top = max(top, dn_lum(o.light + o.spec));
                 found = true;
             }
         }
-        let l = dn_lum(light);
+        // The whole light against its neighbours' wholes, split or not,
+        // both shares scaled alike: a share against its neighbours' same
+        // share clipped a highlight a few pixels wide (the matte
+        // Mandelbulb's, measured).
+        let l = dn_lum(light + spec);
         let cap = DN_CLAMP_FACTOR * max(1.0, f32(nc) / f32(DN_CLAMP_FULL)) * top;
         if (found && l > cap) {
             light = light * (cap / l);
+            spec = spec * (cap / l);
         }
     }
     let gx = dn_slope(p.depth, dn_depth(px - vec2<i32>(1, 0)), dn_depth(px + vec2<i32>(1, 0)));
     let gy = dn_slope(p.depth, dn_depth(px - vec2<i32>(0, 1)), dn_depth(px + vec2<i32>(0, 1)));
     textureStore(light_out, px, vec4<f32>(light, variance));
+    textureStore(spec_out, px, vec4<f32>(spec, spec_variance));
     textureStore(feat_out, px, vec4<f32>(dn_oct(p.normal), p.depth, max(gx, gy)));
 }
 
@@ -1532,7 +1659,17 @@ fn atrous(@builtin(global_invocation_id) gid: vec3<u32>) {
             let reach = f32(step * max(abs(kx), abs(ky)));
             let wz = exp(-abs(fc.z - fq.z) / (fc.w * reach + fc.z * 1.0e-3));
             let wl = exp(-abs(lc - dn_lum(lq.rgb)) / deviation);
-            let w = dn_b3(kx) * dn_b3(ky) * wn * wz * wl;
+            var w = dn_b3(kx) * dn_b3(ky) * wn * wz * wl;
+            // The specular light's pass (D5): a polished surface's
+            // reflection is the view's own, not its neighbours', so the
+            // pass reaches by the roughness -- none below 0.1, as the
+            // diffuse's from 0.5 -- but whole at a few samples, whose noise
+            // is the most of any reflection (`4 / n` of it: measured, by
+            // the roughness alone the glossy solids at 4 samples were up
+            // to 7% worse than not splitting).
+            if (dp.spec_pass != 0u) {
+                w = w * max(smoothstep(0.1, 0.5, dp.rough), min(4.0 / f32(max(dp.count, 1u)), 1.0));
+            }
             sum = sum + lq.rgb * w;
             wsum = wsum + w;
             vsum = vsum + w * w * lq.a;
@@ -1553,7 +1690,11 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(out_tex, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
-    let filtered = textureLoad(light_in, px, 0).rgb * p.albedo;
+    var light = textureLoad(light_in, px, 0).rgb;
+    if (dp.split_spec != 0u) {
+        light = light + textureLoad(spec_in, px, 0).rgb;
+    }
+    let filtered = light * p.albedo;
     // The filter may move a pixel from its own mean by no more than
     // `DN_TRUST` of that mean's standard errors (its samples' luminance
     // moments over their coverage): within them the change is noise
@@ -1569,7 +1710,7 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (n >= DN_TRUST_FROM) {
         let s = pt_sum[u32(px.y) * dp.width + u32(px.x)];
         let raw = s.rgb / s.a;
-        let se = sqrt(max(p.m2 - p.m1 * p.m1, 0.0) / max(p.cover, 1.0));
+        let se = sqrt((dn_var(p.m1, p.m2) + dn_var(p.s1, p.s2)) / max(p.cover, 1.0));
         let gap = abs(filtered - raw);
         let off = max(gap.r, max(gap.g, gap.b));
         let allowed = DN_TRUST * max(sqrt(16.0 / f32(n)), 1.0) * se;
@@ -1755,8 +1896,38 @@ struct Denoiser {
     prepare: ComputePipeline,
     atrous: ComputePipeline,
     finish: ComputePipeline,
-    /// Two lights (ping-pong) and the features, at `size`.
+    /// Two lights (ping-pong) and the features, at their size; and the
+    /// specular share's two lights (D5) at theirs -- 1x1 stand-ins, which
+    /// nothing reads, while it is not split.
     textures: Option<([(Texture, TextureView); 3], (u32, u32))>,
+    spec: Option<([(Texture, TextureView); 2], (u32, u32))>,
+}
+
+/// The denoiser's working texture.
+fn denoise_texture(device: &Device, (w, h): (u32, u32)) -> (Texture, TextureView) {
+    let t = device.create_texture(&TextureDescriptor {
+        label: Some("Path Denoise"),
+        size: Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba32Float,
+        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let v = t.create_view(&TextureViewDescriptor::default());
+    (t, v)
+}
+
+/// Whether the denoiser filters the specular share apart (D5): where
+/// the material has a coat or a metal. Without, the share is none and
+/// the split changes nothing. Test-only `PT_D5=none` measures without.
+fn split_spec(coated: bool) -> bool {
+    #[cfg(test)]
+    if std::env::var("PT_D5").is_ok_and(|v| v == "none") {
+        return false;
+    }
+    coated
 }
 
 /// Where a pass over the frame has reached: the pixels it has given one
@@ -1831,6 +2002,11 @@ pub(crate) struct PathSum {
     active: Option<u32>,
     last_active: Option<u32>,
     last_active_seq: u32,
+    /// The material's coat -- whether it has one or a metal, and its
+    /// roughness -- by which the denoiser filters the specular share (D5;
+    /// [`Self::set_material`]).
+    coated: bool,
+    rough: f32,
 }
 
 impl PathSum {
@@ -1915,7 +2091,17 @@ impl PathSum {
             active: None,
             last_active: None,
             last_active_seq: 0,
+            coated: false,
+            rough: 0.5,
         }
+    }
+
+    /// The material the picture is traced with: the denoiser filters the
+    /// specular share apart where it has a coat or a metal, a polished
+    /// surface's reflection little (D5).
+    pub(crate) fn set_material(&mut self, settings: &PathSettings) {
+        self.coated = settings.gloss > 0.0 || settings.metallic > 0.0;
+        self.rough = if settings.roughness.is_finite() { settings.roughness.clamp(0.0, 1.0) } else { 0.5 };
     }
 
     /// Sample adaptively from now on (V2), or not: each pixel's
@@ -2142,12 +2328,13 @@ impl PathSum {
     /// not. True when that changed: the guides start with the sum, so the
     /// caller starts it over.
     pub(crate) fn set_guided(&mut self, device: &Device, on: bool) -> bool {
-        // The guides are 32 bytes a pixel, bound whole: past what one
-        // binding holds (128 MB on a browser's floor: 2048 x 2048), the
-        // picture goes undenoised rather than failing validation. A
-        // terrain's still tiles stay within it; a solid's frame need not.
+        // The guides are 48 bytes a pixel, bound whole: past what one
+        // binding holds (128 MB on a browser's floor: 1632 x 1632, 1080p
+        // within it), the picture goes undenoised rather than failing
+        // validation. A terrain's still tiles stay within it; a solid's
+        // frame need not.
         let limits = device.limits();
-        let fits = self.px as u64 * 32 <= (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size);
+        let fits = self.px as u64 * GUIDE_BYTES <= (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size);
         if on && !fits && !self.guided_refused {
             log::warn!("Denoise is off for this picture: its {} pixels' guides exceed one storage binding", self.px);
         }
@@ -2161,7 +2348,7 @@ impl PathSum {
             }
             self.guide = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("Path Guide"),
-                size: self.px as u64 * 32,
+                size: self.px as u64 * GUIDE_BYTES,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }));
@@ -2304,7 +2491,7 @@ impl PathSum {
 
     /// The denoiser's resolve: `prepare`, the à-trous passes and
     /// `finish`, into `out`.
-    fn denoise(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, split: PathSplit) {
+    fn denoise(&mut self, device: &Device, queue: &Queue, out: &TextureView, w: u32, h: u32, at: PathSplit) {
         let d = self.denoiser.get_or_insert_with(|| {
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("Path Denoise"),
@@ -2320,7 +2507,7 @@ impl PathSum {
                     cache: None,
                 })
             };
-            Denoiser { prepare: make("prepare"), atrous: make("atrous"), finish: make("finish"), textures: None }
+            Denoiser { prepare: make("prepare"), atrous: make("atrous"), finish: make("finish"), textures: None, spec: None }
         });
         if d.textures.as_ref().is_none_or(|(_, s)| *s != (w, h)) {
             if let Some((ts, _)) = d.textures.take() {
@@ -2328,25 +2515,24 @@ impl PathSum {
                     t.destroy();
                 }
             }
-            let make = || {
-                let t = device.create_texture(&TextureDescriptor {
-                    label: Some("Path Denoise"),
-                    size: Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: TextureDimension::D2,
-                    format: TextureFormat::Rgba32Float,
-                    usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                let v = t.create_view(&TextureViewDescriptor::default());
-                (t, v)
-            };
-            d.textures = Some(([make(), make(), make()], (w, h)));
+            d.textures = Some(([0; 3].map(|_| denoise_texture(device, (w, h))), (w, h)));
+        }
+        let split_on = split_spec(self.coated);
+        let spec_size = if split_on { (w, h) } else { (1, 1) };
+        if d.spec.as_ref().is_none_or(|(_, s)| *s != spec_size) {
+            if let Some((ts, _)) = d.spec.take() {
+                for (t, _) in ts {
+                    t.destroy();
+                }
+            }
+            d.spec = Some(([0; 2].map(|_| denoise_texture(device, spec_size)), spec_size));
         }
         let ([a, b, feat], _) = d.textures.as_ref().expect("made above");
+        let ([sa, sb], _) = d.spec.as_ref().expect("made above");
+        let split = u32::from(split_on);
+        let rough = self.rough;
         let guide = self.guide.as_ref().expect("guided");
-        let params = |step: u32| {
+        let params = |step: u32, spec_pass: bool| {
             let buf = device.create_buffer(&BufferDescriptor {
                 label: Some("Path Denoise Params"),
                 size: 48,
@@ -2355,7 +2541,11 @@ impl PathSum {
             });
             let sigma = DENOISE_SIGMA * (DENOISE_FULL / self.count.max(1) as f32).sqrt().min(1.0);
             let adaptive = u32::from(self.adaptive);
-            queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, step, sigma.to_bits(), split.band_end, split.col, adaptive, 0, 0, 0]));
+            queue.write_buffer(
+                &buf,
+                0,
+                bytemuck::cast_slice(&[w, h, self.count, at.row, step, sigma.to_bits(), at.band_end, at.col, adaptive, split, u32::from(spec_pass), rough.to_bits()]),
+            );
             buf
         };
         let (gx, gy) = (w.div_ceil(8), h.div_ceil(8));
@@ -2371,7 +2561,7 @@ impl PathSum {
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         };
-        let p0 = params(0);
+        let p0 = params(0, false);
         run(
             &mut enc,
             &d.prepare,
@@ -2381,23 +2571,38 @@ impl PathSum {
                 BindGroupEntry { binding: 2, resource: guide.as_entire_binding() },
                 BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&a.1) },
                 BindGroupEntry { binding: 6, resource: BindingResource::TextureView(&feat.1) },
+                BindGroupEntry { binding: 8, resource: BindingResource::TextureView(&sa.1) },
             ],
         );
-        let (mut from, mut to) = (a, b);
-        for &step in denoise_steps(self.count) {
-            let ps = params(step);
-            run(
-                &mut enc,
-                &d.atrous,
-                &[
-                    BindGroupEntry { binding: 0, resource: ps.as_entire_binding() },
-                    BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&from.1) },
-                    BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&feat.1) },
-                    BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&to.1) },
-                ],
-            );
-            std::mem::swap(&mut from, &mut to);
-        }
+        // The diffuse light, or the whole when not split; then the
+        // specular (D5). Each pass reads one of a pair and writes the
+        // other: the last writes the first of the pair after an even
+        // number of passes.
+        let steps = denoise_steps(self.count);
+        let passes = |enc: &mut CommandEncoder, pair: [&TextureView; 2], spec_pass: bool| {
+            for (i, &step) in steps.iter().enumerate() {
+                let ps = params(step, spec_pass);
+                run(
+                    enc,
+                    &d.atrous,
+                    &[
+                        BindGroupEntry { binding: 0, resource: ps.as_entire_binding() },
+                        BindGroupEntry { binding: 3, resource: BindingResource::TextureView(pair[i % 2]) },
+                        BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&feat.1) },
+                        BindGroupEntry { binding: 5, resource: BindingResource::TextureView(pair[(i + 1) % 2]) },
+                    ],
+                );
+            }
+        };
+        let odd = steps.len() % 2 == 1;
+        passes(&mut enc, [&a.1, &b.1], false);
+        let light = if odd { b } else { a };
+        let spec = if split_on {
+            passes(&mut enc, [&sa.1, &sb.1], true);
+            if odd { sb } else { sa }
+        } else {
+            sa
+        };
         run(
             &mut enc,
             &d.finish,
@@ -2405,8 +2610,9 @@ impl PathSum {
                 BindGroupEntry { binding: 0, resource: p0.as_entire_binding() },
                 BindGroupEntry { binding: 1, resource: self.sum.as_entire_binding() },
                 BindGroupEntry { binding: 2, resource: guide.as_entire_binding() },
-                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&from.1) },
+                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&light.1) },
                 BindGroupEntry { binding: 7, resource: BindingResource::TextureView(out) },
+                BindGroupEntry { binding: 9, resource: BindingResource::TextureView(&spec.1) },
             ],
         );
         queue.submit(std::iter::once(enc.finish()));
@@ -2421,8 +2627,8 @@ impl PathSum {
         if let Some(g) = &self.guide {
             g.destroy();
         }
-        if let Some((ts, _)) = self.denoiser.as_ref().and_then(|d| d.textures.as_ref()) {
-            for (t, _) in ts {
+        if let Some(d) = &self.denoiser {
+            for (t, _) in d.textures.iter().flat_map(|(ts, _)| ts.iter()).chain(d.spec.iter().flat_map(|(ts, _)| ts.iter())) {
                 t.destroy();
             }
         }

@@ -2025,7 +2025,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         let depth = h.t * dot(ray.d, ifs_forward());
         coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
-    let l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
+    let l = pt_clamp(pt_path(ray.o, ray.d, h));
     return vec4<f32>(l * coverage, coverage);
 }
 "#;
@@ -4206,6 +4206,7 @@ impl TerrainRenderer {
             self.path.reset();
         }
         self.path.poll(device);
+        self.path.set_material(settings);
         let noise_threshold = if self.path.adaptive() { settings.noise_threshold } else { 0.0 };
         let settings = &PathSettings { denoise: self.path.guided(), noise_threshold, ..*settings };
         let atlas = self.atlas.as_ref().expect("checked");
