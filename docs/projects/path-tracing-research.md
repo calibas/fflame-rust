@@ -187,6 +187,89 @@ curved pixels measured apart. Gloss 0 and metallic 0 bit-identical;
 5. **Decide:** a learned denoiser for stills (D6), and an HDRI environment
    (reopens 2026-10-02's decision to skip image files).
 
+## Agreed 2026-10-20: order of work
+
+The user: "Yes" to 2, 3 and 4 above (item 1 was built within P4). In
+this order, each change measured before it lands:
+
+0. [ ] **The gate:** `denoise_quality` (`solid_path.rs`, ignored): the
+   Menger Sponge, the Mandelbulb and the Mandelbox, each matte, glossy
+   (gloss 0.04, roughness 0.15) and metal (metallic 1, roughness 0.4), at
+   4, 16 and 64 samples, raw and denoised, against 1024 undenoised samples
+   from a stream of their own (cached in `PT_REF_DIR`). The luminance
+   error over covered pixels as a share of the mean, split by scale:
+   **fine** (the error less its 3x3 mean: speckle) and **coarse** (its 9x9
+   mean: blotches) -- in place of FLIP, the two failures the user named,
+   which RMSE weighs alike.
+   **What the gate found first (2026-10-20).** Every solid denoiser test
+   so far -- and the tuning of `DENOISE_SIGMA` and `DENOISE_FULL` on
+   solids -- ran with an all-white palette (the tests' `white_palette`),
+   so the albedo guide never had a colour to separate; the gate's first
+   run did too, and was redone with each preset's palette. With colour:
+   - **The denoiser removes little on a fractal solid**: on average it
+     left 98% of the raw error, and from 16 samples it often made the
+     picture *worse* (the Mandelbox at 64 samples: 1.09% raw, 1.61%
+     denoised) -- the blotches, as coarse error.
+   - **Most of a coloured solid's error is the colouring's own sub-pixel
+     variation**: the Mandelbulb at 4 samples is 17.8% from its reference
+     white, 46% with its palette. A filter that divides out the pixel's
+     mean albedo and multiplies it back leaves that untouched; filtering
+     the whole colour instead (the guide white) was no better.
+   - **Gloss and metal are fireflies**: 30-200% at 4 samples, 6-43% at 64.
+1. [~] D1 clean guides: built; within 1% everywhere -- the guide's noise
+   is not what limits the filter here. Kept (correct, and free).
+2. [x] D2 the variance: built, measured, **dropped** -- a wider stop
+   blurred more detail than noise (mean denoised/raw 0.982 -> 1.014; the
+   Mandelbox at 16 samples 3.84% -> 4.66%).
+   **In its place, a confidence bound on the filter** (`finish`): a pixel
+   may move from its own mean by no more than its standard error times
+   `max(1, sqrt(16 / n))`, measured on the largest channel, shrinking
+   past it as (bound / gap)^2 -- so a disagreement within the noise is
+   noise removed, and a larger one, the picture's detail, goes back to
+   the samples' own; from 8 samples on. Mean denoised/raw 0.979 -> 0.934;
+   from 16 samples the denoised picture is no worse than raw anywhere
+   (the Mandelbox at 64: 1.61% -> 1.11%, its coarse error halved), and it
+   converges to the samples' mean. (A hard clamp at 2 and 1 errors: 0.967,
+   0.948; by luminance alone the colours still bled.)
+3. [x] D3 outliers, measured against references of 4096 samples with no
+   firefly clamp (`PT_REF_TRUTH`), so a change to the estimator shows its
+   bias:
+   - **The clamp split** (direct light at 10x the bound): **dropped** --
+     less bias, more noise from the highlights at these counts (glossy
+     Mandelbulb at 16 samples 62.6% -> 74.0% raw); MIS had already undone
+     most of the darkening the whole-path clamp was blamed for.
+   - **Path regularisation** (a coat past a diffuse bounce at least
+     roughness 0.4, `PT_REGULAR_ROUGH`): kept -- glossy 1-4% better, nothing
+     worse (a metal never bounces diffusely).
+   - **The neighbourhood clamp** (`prepare`): a pixel's light no brighter
+     than twice its brightest neighbour's on the same surface (normals
+     within 37 degrees), loosening in proportion past 16 samples so it
+     fades rather than switching off. Kept: glossy at 4 samples 76% (the
+     Mandelbox), 32% (the Menger) and 21% (the Mandelbulb) less error,
+     metal 13-17%; at its neighbours' maximum itself it darkened a metal's
+     real glints (the Mandelbox metal +33%), and held at 2x to every count
+     it biased one at 64 samples (+16%).
+4. [x] D4 edge stops:
+   - **The normals' stop eased where a pixel holds several facets**
+     (their mean's length; a fourth texture): **dropped** -- neutral (mean
+     0.866 -> 0.865), a little less speckle for a little more blotch.
+   - **The widest strides dropped as samples gather** (16 from 8 samples,
+     8 from 32; `denoise_steps`): kept -- neutral in error, two passes of
+     five fewer.
+   - **Back to the raw value once converged**: superseded by the
+     confidence bound (2. above).
+
+   **D1-D4 together, 2026-10-20** (both against the 4096-sample truth):
+   the denoised picture's error as a share of the raw's, averaged over
+   the 27 cases, **0.986 -> 0.866**; the denoised picture now worse than
+   raw nowhere from 16 samples (it was in 9 of 18 cases). Kept: D1, the
+   confidence bound, path regularisation, the neighbourhood clamp, the
+   stride schedule.
+5. [ ] S1 the measurement; S2 only if the lanes idle half the time or
+   more.
+6. [ ] V2 adaptive sampling.
+7. [ ] D5 specular and diffuse denoised apart (metals exist now).
+
 Sources: Blender 4.0 shading release notes; Veach and Guibas 1995; Dammertz
 et al. 2010; Kaplanyan and Dachsbacher 2013; Karis 2013, 2014; Kulla and
 Conty 2017; Turquin 2019; Zirr et al. 2018; Bitterli et al. 2016; Koskela

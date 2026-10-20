@@ -722,6 +722,11 @@ impl EscapeRenderer {
         let key = format!("ifs_path|{}|{}|b{beam}|{lens_id}|{sums}|{placed}", def.name, coloring.name);
         if !self.pipelines.contains_key(&key) {
             let source = assembler::assemble_ifs_path(def, coloring, beam, lens_src.as_deref(), sums, placed);
+            #[cfg(test)]
+            let source = match self.path_source_patch {
+                Some(patch) => patch(source),
+                None => source,
+            };
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -776,6 +781,12 @@ impl EscapeRenderer {
     #[cfg(test)]
     pub(crate) fn solid_path_texture_for_test(&self) -> Option<&Texture> {
         self.solid_path.as_ref().map(|p| &p.output.0)
+    }
+
+    /// Test-only: the solid path tracer's sum and guide buffers.
+    #[cfg(test)]
+    pub(crate) fn solid_path_buffers_for_test(&self) -> Option<(&Buffer, &Buffer)> {
+        self.solid_path.as_ref().map(|p| (p.sum.sum_buffer(), p.sum.guide_buffer()))
     }
 }
 
@@ -2071,6 +2082,241 @@ mod tests {
             100.0 * rmse / mean_r.max(1e-12),
             100.0 * (sum_o - sum_r) / sum_r.max(1e-12)
         );
+    }
+
+    /// MEASUREMENT (path-tracing-research, the denoiser's gates): the
+    /// denoiser against the raw sum, by scene and material, at 4, 16 and 64
+    /// samples -- the Menger Sponge (flat faces: blotches), the Mandelbulb
+    /// (curved: speckle) and the Mandelbox, each matte (as it ships),
+    /// glossy (gloss 0.04, roughness 0.15) and metal (metallic 1, roughness
+    /// 0.4) -- against a reference of `PT_REF_SAMPLES` (1024) undenoised
+    /// samples from a stream of its own, cached in `PT_REF_DIR` when set.
+    /// The error is the luminance's over the pixels the solid covers whole,
+    /// as a share of the reference's mean, and split by scale: **fine**,
+    /// the error less its 3x3 mean (speckle), and **coarse**, its 9x9 mean
+    /// (blotches) -- the two RMSE weighs alike and the eye does not.
+    /// `PT_SCENES` and `PT_VARIANTS` (comma-separated) pick a subset.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn denoise_quality() {
+        let (device, queue) = device().expect("gpu");
+        let (w, h) = (320u32, 180u32);
+        let list = |var: &str, default: &str| -> Vec<String> {
+            std::env::var(var).unwrap_or_else(|_| default.to_string()).split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        };
+        let scenes = list("PT_SCENES", "Menger Sponge,Mandelbulb,Mandelbox");
+        let variants = list("PT_VARIANTS", "matte,gloss,metal");
+        let ref_samples: u32 = std::env::var("PT_REF_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
+        let ref_dir = std::env::var("PT_REF_DIR").ok();
+        // The truth: no firefly clamp in the reference, so a change to the
+        // estimator (its clamp, its regularisation) is measured with its
+        // bias, not against the old estimator's.
+        let truth = std::env::var("PT_REF_TRUTH").is_ok();
+        let presets = crate::resources::load_presets_with_fallback();
+        let mut table = Vec::new();
+        for scene in &scenes {
+            let base = presets.iter().find(|c| &c.flame.name == scene).unwrap_or_else(|| panic!("no preset {scene}")).clone();
+            // The preset's own palette: a white one makes every albedo
+            // white, and the denoiser's albedo guide nothing to separate.
+            let (_pt, palette) = config_palette(&device, &queue, &base);
+            for variant in &variants {
+                let mut c = base.clone();
+                c.escape.solid_tier = RenderTier::PathTraced;
+                match variant.as_str() {
+                    "matte" => {}
+                    "gloss" => {
+                        c.solid_shading.gloss = 0.04;
+                        c.solid_shading.roughness = 0.15;
+                    }
+                    "metal" => {
+                        c.solid_shading.metallic = 1.0;
+                        c.solid_shading.roughness = 0.4;
+                    }
+                    other => panic!("no variant {other}"),
+                }
+                let picture = |samples: u32, seed: u32, denoise: bool, no_clamp: bool| {
+                    let mut c = c.clone();
+                    c.escape.path.denoise = denoise;
+                    let mut r = solid_renderer_for(&device, &c, w, h);
+                    r.path_seed_offset = seed;
+                    r.path_no_clamp = no_clamp;
+                    r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+                    let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                    r.destroy();
+                    out
+                };
+                let file = ref_dir.as_ref().map(|d| format!("{d}/{}-{variant}-{ref_samples}-{w}x{h}{}.bin", scene.replace(' ', "_"), if truth { "-truth" } else { "" }));
+                let reference: Vec<[f32; 4]> = match file.as_ref().and_then(|f| std::fs::read(f).ok()) {
+                    Some(bytes) => bytemuck::cast_slice(&bytes).to_vec(),
+                    None => {
+                        let r = picture(ref_samples, 7919, false, truth);
+                        if let Some(f) = &file {
+                            std::fs::write(f, bytemuck::cast_slice::<[f32; 4], u8>(&r)).expect("write the reference");
+                        }
+                        r
+                    }
+                };
+                let errors = |out: &[[f32; 4]]| quality_errors(out, &reference, w, h);
+                for samples in [4u32, 16, 64] {
+                    let raw = errors(&picture(samples, 0, false, false));
+                    let dn = errors(&picture(samples, 0, true, false));
+                    table.push(format!(
+                        "{scene:<14} {variant:<6} {samples:>3} | raw {:>6.2}% fine {:>6.2}% coarse {:>6.2}% | denoised {:>6.2}% fine {:>6.2}% coarse {:>6.2}%",
+                        raw[0], raw[1], raw[2], dn[0], dn[1], dn[2]
+                    ));
+                    println!("{}", table.last().unwrap());
+                }
+            }
+        }
+        println!("\n{}", table.join("\n"));
+    }
+
+    /// MEASUREMENT (path-tracing-research S1): how much of the march loop's
+    /// time a warp's lanes sit idle. One sample of each scene at 320x180,
+    /// its shader patched to count each lane's distance steps by phase --
+    /// the camera ray; then per bounce, the first light's shadow ray, the
+    /// others', and the bounce's march -- written over the sum and the
+    /// guides. A warp is 32 lanes, an 8x4 block of the frame (the 8x8
+    /// workgroup's halves). The march loops run one after another, so a
+    /// warp spends on each phase its slowest lane's steps:
+    /// - **now**: all the lanes' steps over 32 times the sum, by phase, of
+    ///   the warp's slowest;
+    /// - **fused** (S2 without refill: one loop, every phase): over 32 times
+    ///   the warp's slowest lane's total;
+    /// - with refill (S2 whole), the lanes pull new pixels and the
+    ///   efficiency nears 1: its gain is 1 / now.
+    /// Steps are distance calls, not their cost; a solid's own iteration
+    /// count varies within each call too, and is not counted here.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn march_lane_efficiency() {
+        let (device, queue) = device().expect("gpu");
+        let (w, h) = (320u32, 180u32);
+        fn patch(src: String) -> String {
+            let swap = |s: String, from: &str, to: &str| {
+                assert_eq!(s.matches(from).count(), 1, "patch site: {from}");
+                s.replace(from, to)
+            };
+            let mut s = format!("var<private> pt_steps: array<u32, 12>;\nvar<private> pt_phase: u32;\n{src}");
+            s = swap(s, "let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);", "let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);\n        pt_steps[0] = pt_steps[0] + 1u;");
+            s = swap(s, "let dist = ifs_distance_at(o + d * t, eps);", "let dist = ifs_distance_at(o + d * t, eps);\n        pt_steps[pt_phase] = pt_steps[pt_phase] + 1u;");
+            s = swap(
+                s,
+                "seen = select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled));",
+                "pt_phase = min(1u + 3u * bounce + min(li, 1u), 11u);\n                    seen = select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled));",
+            );
+            s = swap(s, "h = pt_scene_next(o, d, travelled);", "pt_phase = min(3u + 3u * bounce, 11u);\n        h = pt_scene_next(o, d, travelled);");
+            s = swap(s, "    pt_sum[idx] = sum;", "    pt_sum[idx] = vec4<f32>(f32(pt_steps[0]), f32(pt_steps[1]), f32(pt_steps[2]), f32(pt_steps[3]));");
+            swap(
+                s,
+                "        pt_guide[2u * idx] = g0;\n        pt_guide[2u * idx + 1u] = g1;",
+                "        pt_guide[2u * idx] = vec4<f32>(f32(pt_steps[4]), f32(pt_steps[5]), f32(pt_steps[6]), f32(pt_steps[7]));\n        pt_guide[2u * idx + 1u] = vec4<f32>(f32(pt_steps[8]), f32(pt_steps[9]), f32(pt_steps[10]), f32(pt_steps[11]));",
+            )
+        }
+        let names = ["camera", "b0 light", "b0 lights", "b0 bounce", "b1 light", "b1 lights", "b1 bounce", "b2 light", "b2 lights", "b2 bounce"];
+        let presets = crate::resources::load_presets_with_fallback();
+        for scene in ["Menger Sponge", "Mandelbulb", "Mandelbox"] {
+            let mut c = presets.iter().find(|c| c.flame.name == scene).expect("the preset").clone();
+            let (_pt, palette) = config_palette(&device, &queue, &c);
+            c.escape.solid_tier = RenderTier::PathTraced;
+            c.escape.path.denoise = true;
+            let mut r = solid_renderer_for(&device, &c, w, h);
+            r.path_source_patch = Some(patch);
+            r.render_solid_still(&device, &queue, &c, &palette, 1, || { wait(&device); true });
+            let (sum, guide) = r.solid_path_buffers_for_test().expect("traced");
+            let px = (w * h) as usize;
+            let a: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, sum, px as u64 * 16)).to_vec();
+            let g: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, guide, px as u64 * 32)).to_vec();
+            r.destroy();
+            let steps = |k: usize| -> [f64; 12] {
+                let (p, q, s) = (a[k], g[2 * k], g[2 * k + 1]);
+                [p[0], p[1], p[2], p[3], q[0], q[1], q[2], q[3], s[0], s[1], s[2], s[3]].map(|x| x as f64)
+            };
+            let (mut work, mut now, mut fused) = (0.0, 0.0, 0.0);
+            let (mut phase_work, mut phase_slow) = ([0.0f64; 12], [0.0f64; 12]);
+            for by in 0..h / 4 {
+                for bx in 0..w / 8 {
+                    let lanes: Vec<[f64; 12]> = (0..32).map(|i| steps(((by * 4 + i / 8) * w + bx * 8 + i % 8) as usize)).collect();
+                    for ph in 0..12 {
+                        let slow = lanes.iter().map(|l| l[ph]).fold(0.0, f64::max);
+                        let sum: f64 = lanes.iter().map(|l| l[ph]).sum();
+                        phase_work[ph] += sum;
+                        phase_slow[ph] += 32.0 * slow;
+                        work += sum;
+                        now += 32.0 * slow;
+                    }
+                    fused += 32.0 * lanes.iter().map(|l| l.iter().sum::<f64>()).fold(0.0, f64::max);
+                }
+            }
+            println!("{scene}: {:.1} steps a pixel; efficiency now {:.0}%, fused {:.0}% -- refill's gain {:.2}x, fusing's alone {:.2}x", work / px as f64, 100.0 * work / now, 100.0 * work / fused, now / work, now / fused);
+            for (ph, name) in names.iter().enumerate() {
+                if phase_slow[ph] > 0.0 {
+                    println!("    {name:<10} {:>6.1} steps a pixel, {:>3.0}% of the steps, lanes busy {:>3.0}%", phase_work[ph] / px as f64, 100.0 * phase_work[ph] / work, 100.0 * phase_work[ph] / phase_slow[ph]);
+                }
+            }
+        }
+    }
+
+    /// A config's palette as the renderer reads it (256 entries).
+    fn config_palette(device: &Device, queue: &Queue, c: &FractalConfig) -> (Texture, TextureView) {
+        let tex = crate::gpu::buffers::create_palette_texture(device, 256, "test palette");
+        crate::gpu::buffers::write_palette_table(queue, &tex, 256, &c.palette.generate_texture_data(256));
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// [`renderer_for`] for any solid: the flame's packed when it has one.
+    fn solid_renderer_for(device: &Device, c: &FractalConfig, w: u32, h: u32) -> EscapeRenderer {
+        let mut r = EscapeRenderer::new(device, w, h);
+        r.resize(device, w, h, 1);
+        let def = crate::escape::ifs::get_ifs(&c.escape.formula).expect("solid");
+        let registry = crate::variations::global_registry();
+        r.set_ifs(crate::escape::ifs::pack_for(def, c, &registry));
+        drop(registry);
+        r.set_solid_lighting(&c.solid_shading, (c.fog_strength, c.fog_start, c.background_color));
+        r.set_solid_sky(crate::escape::path_core::sky_seen(&c.escape.path, c));
+        r.set_solid_material(crate::escape::path_core::lit_material(c));
+        r.set_solid_studio(crate::escape::path_core::studio_level(&c.escape.path, c));
+        r
+    }
+
+    /// A picture's luminance error against a reference over the pixels the
+    /// solid covers whole (with their 3x3 neighbours), as percentages of
+    /// the reference's mean: [the whole, the fine part (the error less its
+    /// 3x3 mean), the coarse part (its 9x9 mean)].
+    fn quality_errors(out: &[[f32; 4]], reference: &[[f32; 4]], w: u32, h: u32) -> [f64; 3] {
+        let lum = |p: &[f32; 4]| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
+        let (wi, hi) = (w as i32, h as i32);
+        let covered = |x: i32, y: i32| x >= 0 && y >= 0 && x < wi && y < hi && reference[(y * wi + x) as usize][3] >= 0.999;
+        let inside: Vec<bool> = (0..wi * hi).map(|k| (-1..=1).all(|dy| (-1..=1).all(|dx| covered(k % wi + dx, k / wi + dy)))).collect();
+        let e: Vec<f64> = out.iter().zip(reference).map(|(o, r)| lum(o) - lum(r)).collect();
+        let mean_of = |x: i32, y: i32, r: i32| {
+            let (mut s, mut n) = (0.0, 0.0);
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if covered(x + dx, y + dy) {
+                        s += e[((y + dy) * wi + x + dx) as usize];
+                        n += 1.0;
+                    }
+                }
+            }
+            s / f64::max(n, 1.0)
+        };
+        let (mut n, mut whole, mut fine, mut coarse, mut sum_r) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        for k in 0..wi * hi {
+            if !inside[k as usize] {
+                continue;
+            }
+            let (x, y) = (k % wi, k / wi);
+            let ek = e[k as usize];
+            n += 1.0;
+            whole += ek * ek;
+            fine += (ek - mean_of(x, y, 1)).powi(2);
+            coarse += mean_of(x, y, 4).powi(2);
+            sum_r += lum(&reference[k as usize]);
+        }
+        let mean = (sum_r / f64::max(n, 1.0)).max(1.0e-12);
+        [whole, fine, coarse].map(|s| 100.0 * (s / f64::max(n, 1.0)).sqrt() / mean)
     }
 
     /// Denoise asked for where the guides -- 32 bytes a pixel, bound
