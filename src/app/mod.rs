@@ -3143,6 +3143,11 @@ impl App {
                 if final_config.sim.terrain_active() {
                     let device = &self.gpu.device;
                     let queue = &self.gpu.queue;
+                    // Fly mode's floor: the ground under the eye (P6).
+                    let fly_ground = self.fly_mode && {
+                        let s = self.config_manager.system_settings();
+                        s.fly_collisions || s.fly_proximity
+                    };
                     let terrain = self
                         .sim_terrain
                         .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
@@ -3151,6 +3156,9 @@ impl App {
                     // An export in the background has the GPU meanwhile;
                     // its own cadence redraws the window.
                     let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
+                    if !exporting && fly_ground {
+                        terrain.probe_ground(device, queue, &final_config);
+                    }
                     if !exporting && terrain.render_viewport(device, queue, &final_config) {
                         self.window.request_redraw();
                     }

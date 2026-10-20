@@ -598,9 +598,9 @@ view:
   fly_sprint_multiplier: "Sprint multiplier:"
   fly_invert_y: "Invert Y axis"
   fly_collisions: "Stop at surfaces"
-  tooltip_fly_collisions: "A solid: never fly into its surface. The solid's distance from the eye is measured on the GPU as you fly, and each step stays within half of it, so you close on a wall and stop just short."
+  tooltip_fly_collisions: "A solid: never fly into its surface. The solid's distance from the eye is measured on the GPU as you fly, and each step stays within half of it, so you close on a wall and stop just short. A terrain: the eye stays just above the ground under it, so you can fly down into valleys and climb over hills."
   fly_proximity: "Speed by distance"
-  tooltip_fly_proximity: "A solid: fly at a speed set by how far its surface is, not by the zoom, and let the zoom follow -- slowing and zooming in as you near a surface, so you can fly into its detail as deep as the solid's precision goes."
+  tooltip_fly_proximity: "A solid: fly at a speed set by how far its surface is, not by the zoom, and let the zoom follow -- slowing and zooming in as you near a surface, so you can fly into its detail as deep as the solid's precision goes. A terrain: fly at a speed set by your height above the ground."
 
   # Depth Effects (collapsible section)
   deep_zoom: "Deep Zoom"

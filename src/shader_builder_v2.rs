@@ -2239,9 +2239,10 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
 
     /// The same map in 3D (3d-look-and-tools P5): `flame_map3(xform_id, p,
     /// seed)`, each transform's variations by their 3D bodies, z kept (a
-    /// map flattens nothing) -- a solid's calls of built-in variations,
-    /// and its lens at z = 0. A variation with no 3D body is left out
+    /// map flattens nothing) -- a solid's calls of built-in variations and
+    /// its Orbit transformations, and its lens at z = 0. A variation with no 3D body is left out
     /// (`generate_variation_code`), so it maps as the identity.
+    #[cfg_attr(not(feature = "engine-escape"), allow(dead_code))]
     pub fn build_layer_map3_at(
         &self,
         flame: &crate::scene::transforms::Flame,

@@ -91,6 +91,24 @@ impl App {
         None
     }
 
+    /// The ground's height under the eye a terrain's probe last measured,
+    /// in its world's units (fly mode's floor, P6), or None. The escape
+    /// terrain's frame probes it with the nearest ground in view; the
+    /// simulation terrain's while fly mode uses it.
+    fn fly_ground(&self) -> Option<f64> {
+        #[cfg(feature = "terrain")]
+        {
+            use crate::camera::gesture::ViewKind;
+            match crate::camera::gesture::view_kind(self.config_manager.active_config()) {
+                ViewKind::EscapeTerrain => return self.escape_terrain.as_ref().and_then(|t| t.ground_under_eye()).map(f64::from),
+                #[cfg(feature = "engine-sim")]
+                ViewKind::SimTerrain => return self.sim_terrain.as_ref().and_then(|t| t.ground_under_eye()).map(f64::from),
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// Turn the camera by a fly-mode drag, about its eye
     /// (`camera::fly::look`).
     pub fn apply_fly_mouse_look(&mut self, drag_dx: f32, drag_dy: f32) {
@@ -158,6 +176,7 @@ impl App {
             clearance: self.fly_clearance(),
             collisions: settings.fly_collisions,
             proximity: settings.fly_proximity,
+            ground: self.fly_ground(),
         };
         if let Some(edit) = crate::camera::fly::fly(self.config_manager.active_config(), thrust, (speed * dt) as f64, panel, limits) {
             edit.apply(&mut self.config_manager);

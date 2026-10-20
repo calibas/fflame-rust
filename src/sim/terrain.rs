@@ -239,6 +239,26 @@ impl SimTerrain {
         self.tiers.output_view(&self.terrain)
     }
 
+    /// Measure the ground under the eye for fly mode's floor
+    /// (3d-look-and-tools P6): collect the last probe and start the next,
+    /// without waiting -- a probe only when the view has changed
+    /// (`TerrainRenderer::probe_nearest`). Before the frame's render: the
+    /// probe writes the view's uniform.
+    pub fn probe_ground(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) {
+        let (gw, gh) = self.grid;
+        if gw == 0 || gh == 0 {
+            return;
+        }
+        self.terrain.poll_nearest(device);
+        self.terrain.probe_nearest(device, queue, &sim_terrain_view(config, gw, gh, [0.0, 0.0]));
+    }
+
+    /// The ground's height under the eye at the last probe, in cells:
+    /// None before one lands, or where no ground lies under the eye.
+    pub fn ground_under_eye(&self) -> Option<f32> {
+        self.terrain.ground_under_eye()
+    }
+
     /// Path-traced samples so far, and whether the picture is theirs.
     pub fn path_progress(&self) -> (u32, bool) {
         self.tiers.path_progress(&self.terrain)
