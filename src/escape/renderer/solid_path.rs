@@ -2028,15 +2028,19 @@ mod tests {
     #[ignore = "measurement: needs a GPU"]
     fn path_quality_against_a_reference() {
         let (device, queue) = device().expect("gpu");
-        let (_pt, palette) = white_palette(&device, &queue);
-        let (w, h) = (320u32, 180u32);
+        let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
+        let (w, h) = (env("PT_W").unwrap_or(320), env("PT_H").unwrap_or(180));
         let name = std::env::var("PT_PRESET").unwrap_or_else(|_| "Menger Sponge".to_string());
-        let samples: u32 = std::env::var("PT_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+        let samples: u32 = env("PT_SAMPLES").unwrap_or(64);
+        // `PT_TIME_ONLY`: the time alone, no reference; `PT_W`, `PT_H` the
+        // size.
+        let time_only = std::env::var("PT_TIME_ONLY").is_ok();
         let mut c = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == name).expect("the preset");
+        let (_pt, palette) = config_palette(&device, &queue, &c);
         c.escape.solid_tier = RenderTier::PathTraced;
         c.escape.path.denoise = false;
         let picture = |samples: u32, seed: u32| {
-            let mut r = renderer_for(&device, &c, w, h);
+            let mut r = solid_renderer_for(&device, &c, w, h);
             r.path_seed_offset = seed;
             // Compiled and warm before the clock starts.
             r.render_solid_still(&device, &queue, &c, &palette, 1, || { wait(&device); true });
@@ -2048,6 +2052,11 @@ mod tests {
             r.destroy();
             (out, ms)
         };
+        if time_only {
+            let (_, ms) = picture(samples, 0);
+            println!("{name} at {w}x{h}: {ms:.2} ms a sample over {samples}");
+            return;
+        }
         let path = std::env::var("PT_REF").ok();
         let reference: Vec<[f32; 4]> = match path.as_ref().and_then(|p| std::fs::read(p).ok()) {
             Some(bytes) => bytemuck::cast_slice(&bytes).to_vec(),
@@ -2202,15 +2211,15 @@ mod tests {
             s = swap(s, "let dist = ifs_distance_at(o + d * t, eps);", "let dist = ifs_distance_at(o + d * t, eps);\n        pt_steps[pt_phase] = pt_steps[pt_phase] + 1u;");
             s = swap(
                 s,
-                "seen = select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled));",
-                "pt_phase = min(1u + 3u * bounce + min(li, 1u), 11u);\n                    seen = select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled));",
+                "seen = select(0.0, 1.0, pt_scene_visible(s.start, l.dir, l.dist, travelled));",
+                "pt_phase = min(1u + 3u * bounce + min(li, 1u), 11u);\n                    seen = select(0.0, 1.0, pt_scene_visible(s.start, l.dir, l.dist, travelled));",
             );
             s = swap(s, "h = pt_scene_next(o, d, travelled);", "pt_phase = min(3u + 3u * bounce, 11u);\n        h = pt_scene_next(o, d, travelled);");
-            s = swap(s, "    pt_sum[idx] = sum;", "    pt_sum[idx] = vec4<f32>(f32(pt_steps[0]), f32(pt_steps[1]), f32(pt_steps[2]), f32(pt_steps[3]));");
+            s = swap(s, "\n    pt_sum[idx] = sum;", "\n    pt_sum[idx] = vec4<f32>(f32(pt_steps[0]), f32(pt_steps[1]), f32(pt_steps[2]), f32(pt_steps[3]));");
             swap(
                 s,
-                "        pt_guide[2u * idx] = g0;\n        pt_guide[2u * idx + 1u] = g1;",
-                "        pt_guide[2u * idx] = vec4<f32>(f32(pt_steps[4]), f32(pt_steps[5]), f32(pt_steps[6]), f32(pt_steps[7]));\n        pt_guide[2u * idx + 1u] = vec4<f32>(f32(pt_steps[8]), f32(pt_steps[9]), f32(pt_steps[10]), f32(pt_steps[11]));",
+                "\n        pt_guide[2u * idx] = g0;\n        pt_guide[2u * idx + 1u] = g1;",
+                "\n        pt_guide[2u * idx] = vec4<f32>(f32(pt_steps[4]), f32(pt_steps[5]), f32(pt_steps[6]), f32(pt_steps[7]));\n        pt_guide[2u * idx + 1u] = vec4<f32>(f32(pt_steps[8]), f32(pt_steps[9]), f32(pt_steps[10]), f32(pt_steps[11]));",
             )
         }
         let names = ["camera", "b0 light", "b0 lights", "b0 bounce", "b1 light", "b1 lights", "b1 bounce", "b2 light", "b2 lights", "b2 bounce"];

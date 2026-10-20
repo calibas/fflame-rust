@@ -265,8 +265,66 @@ this order, each change measured before it lands:
    raw nowhere from 16 samples (it was in 9 of 18 cases). Kept: D1, the
    confidence bound, path regularisation, the neighbourhood clamp, the
    stride schedule.
-5. [ ] S1 the measurement; S2 only if the lanes idle half the time or
-   more.
+5. [x] **S1 measured 2026-10-20** (`march_lane_efficiency`: one sample
+   at 320x180, the shader patched to count each lane's distance steps by
+   phase; a warp an 8x4 block). The share of a warp's lanes busy, and what
+   S2 could gain at best:
+
+   | Solid | busy now | fused alone | fused, with refill |
+   |---|---|---|---|
+   | Menger Sponge | 25% | 1.53x | 3.97x |
+   | Mandelbulb | 20% | 1.33x | 4.88x |
+   | Mandelbox | 50% | 1.09x | 1.99x |
+
+   The camera ray keeps 58-80% of the lanes busy; a bounce's march
+   15-29%, the first light's shadow 25-41% -- only some lanes have one
+   to trace, and the rest wait. Past the agreed bar (idle half the time or
+   more) on two of three, so **S2 goes ahead**, with refill: fusing alone
+   is worth little. Steps are distance calls, not their cost (a fractal's
+   iteration count varies within each), so the gains are ceilings.
+   [x] **S2's design** (built, measured slower, parked -- below). Mode D's solids only (a terrain's trace is a
+   traversal of sections, not a distance march, and keeps `pt_path`):
+   - **One loop, one distance step an iteration**, of whichever ray the
+     lane holds -- the camera ray, a light's shadow ray, a bounce -- with
+     the shading on the transitions: a hit's surface, each light's
+     contribution (seen and unseen, added when its shadow ray ends), the
+     bounce's lobe. The draws in the order `pt_path` makes them, so a
+     sample's random numbers, and so its value, do not change.
+   - **Refill within the workgroup**: a workgroup takes a tile of several
+     pixels a lane, and its lanes pull pixels from a `var<workgroup>`
+     atomic counter as they finish -- no new storage binding (the solid's
+     path tracer is near a browser's eight), the bands and their pricing
+     as they are. A lane owns a pixel until its samples are in, so the sum
+     is written without atomics, and in sample order.
+   - **Gates**: the picture to the last bit or within f32 reordering
+     against the current tracer (`solid_samples_are_band_invariant`, the
+     tier tests); the time a sample on the three solids at 320x180 and
+     1080p (`path_quality_against_a_reference`).
+
+   **S2 built and measured 2026-10-20 -- slower; parked.** The fused
+   march with refill was built as designed (`main_fused`, beside `main`)
+   and gave the same picture: identical to the bit on a flame cube, a
+   metal Mandelbox and a band split in tiles, and to the last bits on a
+   glossy Mandelbulb. But a sample took **2.6-3.5x longer at 1080p**
+   (the Mandelbulb 46 -> 162 ms, the Mandelbox 21 -> 55) and up to 25x at
+   320x180, and holding less state (the shading recomputed, the sums in
+   memory) made it slower still (184 ms). Why, as far as measured:
+   - **Tiles cost parallelism**: 512 pixels a workgroup gave a 320x180
+     frame 113 workgroups, a third of what the GPU holds; the Menger's
+     8-row bands got 5 where `main` dispatched 40 -- the 25x.
+   - **The surfaces serialise**: a hit costs a normal (six distance calls)
+     and a colouring's walk. In `main` the lanes that hit in a phase
+     evaluate theirs together; in the fused loop lanes hit on different
+     iterations, and the warp evaluates one lane's surface at a time.
+     S1 counted only march steps (6-8 a pixel); the surfaces are about as
+     much work again, so its ceilings (4-5x) were too high.
+   A version that could win would take the normal's six calls as steps of
+   the one loop and batch the colourings' walks, and size its tiles to the
+   band -- a deeper rewrite of the tracer, with the gain now uncertain:
+   **for the user's decision**, not built. Kept from S2: `pt_path` on shared
+   pieces (`pt_shade`, `pt_light`, `pt_light_add`, `pt_bounce`,
+   `pt_escape`, `pt_guide_white`), the same pictures to the bit (a solid,
+   a metal, a terrain, a flame's solid), the same speed within noise.
 6. [ ] V2 adaptive sampling.
 7. [ ] D5 specular and diffuse denoised apart (metals exist now).
 

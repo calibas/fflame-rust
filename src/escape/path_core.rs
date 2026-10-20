@@ -643,6 +643,302 @@ struct PtHit {
     ng: vec3<f32>,
 };
 
+// A surface's shading where a path meets it: what each light and the
+// bounce read (`pt_path`, and mode D's fused march). `p` is where the ray
+// along `d` met it; `regular`, whether the path has bounced diffusely.
+struct PtShade {
+    p: vec3<f32>,
+    n: vec3<f32>,
+    // The true surface, where a texture tilted the shading normal.
+    ng: vec3<f32>,
+    bumped: bool,
+    // What it reflects of its colour (`ifs_reflectance`).
+    albedo: vec3<f32>,
+    // Where a ray leaving it starts.
+    start: vec3<f32>,
+    // The coat: Lambert under a gloss of reflectance f0 at normal
+    // incidence, the diffuse taking what the coat's Fresnel does not; a
+    // metal's (P4) reflectance the albedo's colour, with nothing under
+    // it; and either given back what single scattering loses
+    // (`ifs_coat_energy`).
+    f0: f32,
+    metal: f32,
+    coated: bool,
+    f0c: vec3<f32>,
+    a2: f32,
+    v: vec3<f32>,
+    nv: f32,
+    energy: vec3<f32>,
+    // The bounce's lobe choice: the coat's at its Fresnel at this view.
+    p_spec: f32,
+    // Whether the coat's direct light is weighted against its bounces.
+    mis: bool,
+    shadow_strength: f32,
+};
+
+fn pt_shade(h: PtHit, p: vec3<f32>, d: vec3<f32>, regular: bool, bounce: u32) -> PtShade {
+    var s: PtShade;
+    s.p = p;
+    s.n = h.n;
+    s.bumped = dot(h.ng, h.ng) > 0.5;
+    s.ng = select(s.n, h.ng, s.bumped);
+    s.albedo = h.albedo.rgb * ifs_reflectance();
+    s.start = p + s.ng * h.bias;
+    s.f0 = h.f0;
+    s.metal = h.metal;
+    s.coated = s.f0 > 0.0 || s.metal > 0.0;
+    s.f0c = mix(vec3<f32>(s.f0, s.f0, s.f0), s.albedo, s.metal);
+    // Past a diffuse bounce, a coat is no sharper than `PT_REGULAR_ROUGH`
+    // (path regularisation, path-tracing-research D3; Kaplanyan and
+    // Dachsbacher 2013, Cycles' Filter Glossy): light that found a glossy
+    // surface after a diffuse one is the rare bright path a few samples
+    // keep as a firefly.
+    let rough = select(h.rough, max(h.rough, PT_REGULAR_ROUGH), regular);
+    s.a2 = max(rough * rough, 1.0e-4) * max(rough * rough, 1.0e-4);
+    s.v = -d;
+    s.nv = max(dot(s.n, s.v), 1.0e-4);
+    s.energy = ifs_coat_energy(s.f0c, s.nv, rough);
+    // Without a coat, no draw to choose a lobe: Lambert's samples are the
+    // same stream they were before the coat existed. A metal leans the
+    // choice to the coat, wholly at 1, where nothing is under it.
+    s.p_spec = select(0.0, mix(clamp(select(0.0, pt_fresnel(s.f0, s.nv), s.f0 > 0.0), 0.1, 0.9), 1.0, s.metal), s.coated);
+    // Only when there is a bounce from here to meet a light.
+    s.mis = pt.lens.z > 0.5 && s.p_spec > 0.0 && pt.misc.z > 0.0 && bounce < pt.bounces;
+    s.shadow_strength = clamp(pt.misc.z, 0.0, 1.0);
+    return s;
+}
+
+// One light at a surface (`pt_light`): its direction, sampled over its
+// angular size, and its reach; whether it lights the surface; and its
+// terms, which the shadow ray's verdict weighs (`pt_light_add`). And, at
+// the first surface, its shares of the denoiser's guide.
+struct PtLight {
+    lit: bool,
+    dir: vec3<f32>,
+    dist: f32,
+    color: vec3<f32>,
+    // Its power times its fall-off, and the cosine.
+    pg: f32,
+    ndl: f32,
+    // The diffuse and the coat: albedo (diffuse) + the coat's BRDF times
+    // pi, the rig's units.
+    brdf: vec3<f32>,
+    spec: vec3<f32>,
+    // The coat's share's weight against its bounces (multiple importance
+    // sampling); below 0, none.
+    w: f32,
+    // The highlight; below 0, none.
+    shine: f32,
+    // At the first surface, the direct light the albedo shapes and the
+    // light it does not (the guide's white share).
+    guide: vec2<f32>,
+};
+
+// Every light, each sampled over its angular size. Picking one a surface
+// (by power) would save shadow rays, but a face only one light reaches
+// then reads all of it or none, sample to sample: measured as speckle over
+// a two-light solid's lit faces. The diffuse in the rig's units (its I as
+// pi times a radiance's), the gloss's physical BRDF times the same
+// irradiance, pi I cos.
+fn pt_light(s: PtShade, li: u32, bounce: u32, rough: f32) -> PtLight {
+    var out: PtLight;
+    // A point or a headlamp from where this surface is, its power fallen
+    // off with the distance (the rig's `ifs_light_at`).
+    let la = ifs_light_at(li, s.p);
+    let ld = pt_cone(la.dir, pt.misc.w);
+    let ndl = dot(s.n, ld);
+    out.dir = ld;
+    out.dist = la.dist;
+    out.lit = ndl > 0.0 && (!s.bumped || dot(s.ng, ld) > 0.0);
+    out.w = -1.0;
+    out.shine = -1.0;
+    out.guide = vec2<f32>(0.0, 0.0);
+    if (out.lit) {
+        var spec = vec3<f32>(0.0, 0.0, 0.0);
+        var diff = 1.0;
+        if (s.coated) {
+            let hv = normalize(ld + s.v);
+            let vh = max(dot(s.v, hv), 0.0);
+            let dg = 3.141592654 * pt_ggx_d(max(dot(s.n, hv), 0.0), s.a2) * pt_g1(ndl, s.a2) * pt_g1(s.nv, s.a2) / (4.0 * ndl * s.nv);
+            spec = ifs_coat_fresnel3(s.f0c, vh) * s.energy * dg;
+            diff = (1.0 - s.metal) * select(1.0, 1.0 - pt_fresnel(s.f0, vh), s.f0 > 0.0);
+        }
+        out.color = ifs_light_color(li);
+        out.pg = ifs_light_power(li) * la.gain;
+        out.ndl = ndl;
+        out.brdf = s.albedo * (ifs_diffuse() * diff) + spec;
+        out.spec = spec;
+        if (s.mis && ifs_light_kind(li) == 0u) {
+            out.w = pt_power_weight(pt_light_pdf(), pt_coat_pdf(s.n, s.v, ld, s.a2, s.p_spec));
+        }
+        // The highlight, the lit tier's very term (materials.md §4.1):
+        // Blinn-Phong on the direct light, unnormalised and without the
+        // cosine, so both tiers draw it alike. Not a lobe a bounce
+        // samples: it is the lights' shine alone. Weighted by the shading
+        // strength, as the lit tier's mix weights it: a rig at strength 0
+        // draws no highlight in either tier (a terrain's touched rig
+        // carried the flame default 0.35, and glinted from P7 on where it
+        // never had).
+        let shine_weight = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
+        if (shine_weight > 0.0) {
+            let hb = normalize(ld + s.v);
+            out.shine = shine_weight * pow(max(dot(s.n, hb), 0.0), max(ifs_shininess(), 1.0));
+        }
+    }
+    // The guide's shares (path-tracing-research D1): from the light's
+    // centre, its lobe widened by the cone's size, and with no visibility
+    // -- the same every sample, so the guide holds no noise of its own.
+    // (From the sampled direction and the shadow ray's verdict it
+    // flickered sample to sample, and the filter, dividing the light by it
+    // and multiplying back, put the speckle back on glossy and highlit
+    // faces.) A metal's reflection is the albedo's colour: shaped by it,
+    // as the diffuse is, where a coat's is white.
+    if (bounce == 0u) {
+        let lc = la.dir;
+        let ndc = dot(s.n, lc);
+        if (ndc > 0.0) {
+            let lumw = vec3<f32>(0.2126, 0.7152, 0.0722);
+            var spec_c = 0.0;
+            var diff_c = 1.0;
+            if (s.coated) {
+                let alpha_c = min(rough * rough + 0.5 * sqrt(max(1.0 - pt.misc.w * pt.misc.w, 0.0)), 1.0);
+                let a2c = max(alpha_c * alpha_c, 1.0e-4);
+                let hc = normalize(lc + s.v);
+                let vhc = max(dot(s.v, hc), 0.0);
+                let dgc = 3.141592654 * pt_ggx_d(max(dot(s.n, hc), 0.0), a2c) * pt_g1(ndc, a2c) * pt_g1(s.nv, a2c) / (4.0 * ndc * s.nv);
+                spec_c = dot(ifs_coat_fresnel3(s.f0c, vhc) * s.energy, lumw) * dgc;
+                diff_c = (1.0 - s.metal) * select(1.0, 1.0 - pt_fresnel(s.f0, vhc), s.f0 > 0.0);
+            }
+            var shine_c = 0.0;
+            let shine_w = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
+            if (shine_w > 0.0) {
+                shine_c = shine_w * pow(max(dot(s.n, normalize(lc + s.v)), 0.0), max(ifs_shininess(), 1.0));
+            }
+            let lum = dot(ifs_light_color(li), lumw) * ifs_light_power(li) * la.gain;
+            out.guide = vec2<f32>(lum * ndc * (ifs_diffuse() * diff_c + spec_c * s.metal), lum * (ndc * spec_c * (1.0 - s.metal) + shine_c));
+        }
+    }
+    return out;
+}
+
+// A lit light's light added to `radiance`, `seen` its shadow ray's verdict
+// (1 when no ray was traced: shadow strength 0).
+fn pt_light_add(radiance: vec3<f32>, through: vec3<f32>, l: PtLight, seen: f32, shadow_strength: f32) -> vec3<f32> {
+    var vis = 1.0;
+    if (pt.misc.z > 0.0) {
+        vis = mix(1.0, seen, shadow_strength);
+    }
+    let light = l.color * (l.pg * l.ndl * vis);
+    var r = radiance + through * light * l.brdf;
+    // The coat's share, weighted against its bounces where a bounce can
+    // meet this light: the part of it that reaches (`seen`) by the power
+    // heuristic, the part a partial shadow strength lets through the solid
+    // -- which no bounce sees -- whole. Their sum is `vis`; what it takes
+    // from the coat's share added above.
+    if (l.w >= 0.0) {
+        let spec_vis = l.w * seen + (1.0 - shadow_strength) * (1.0 - seen);
+        r = r + through * l.color * l.spec * (l.pg * l.ndl * (spec_vis - vis));
+    }
+    if (l.shine >= 0.0) {
+        r = r + through * l.color * (l.pg * vis * l.shine);
+    }
+    return r;
+}
+
+// A bounce's choice at a surface (`pt_bounce`): its direction, the
+// throughput it carries on, the coat's density toward it (for the lights
+// it may meet), and whether the path goes on at all.
+struct PtBounce {
+    go: bool,
+    dir: vec3<f32>,
+    through: vec3<f32>,
+    coat_pdf: f32,
+    regular: bool,
+};
+
+// The gloss's lobe by the visible normals, chosen by the coat's Fresnel at
+// this view (`p_spec`); else Lambert's, whose cosine sampling leaves the
+// albedo times what the coat lets through. Russian roulette from the
+// second bounce.
+fn pt_bounce(s: PtShade, through: vec3<f32>, regular: bool, bounce: u32) -> PtBounce {
+    var out: PtBounce;
+    out.go = false;
+    out.through = through;
+    out.regular = regular;
+    out.coat_pdf = 0.0;
+    var nd = vec3<f32>(0.0, 0.0, 1.0);
+    if (s.p_spec > 0.0 && pt_rand() < s.p_spec) {
+        let frame = pt_frame(s.n);
+        let vl = transpose(frame) * s.v;
+        let hl = pt_vndf(vl, sqrt(s.a2));
+        let hv = frame * hl;
+        nd = reflect(-s.v, hv);
+        let nl = dot(s.n, nd);
+        if (nl <= 0.0) {
+            return out;
+        }
+        out.through = through * ifs_coat_fresnel3(s.f0c, max(dot(s.v, hv), 0.0)) * s.energy * (pt_g1(nl, s.a2) / s.p_spec);
+        if (s.mis) {
+            out.coat_pdf = pt_coat_pdf(s.n, s.v, nd, s.a2, s.p_spec);
+        }
+    } else {
+        nd = pt_cosine(s.n);
+        out.regular = true;
+        // No coat at all at reflectance 0: Schlick's term alone would
+        // still take (1 - cos)^5 of a glance.
+        let coat = select(0.0, pt_fresnel(s.f0, s.nv), s.f0 > 0.0);
+        out.through = through * s.albedo * ((1.0 - s.metal) * (1.0 - coat) / (1.0 - s.p_spec));
+    }
+    // A tilted normal can send a bounce under the true surface: it has
+    // nowhere to go.
+    if (s.bumped && dot(s.ng, nd) <= 0.0) {
+        return out;
+    }
+    if (bounce >= 1u) {
+        let q = clamp(max(out.through.r, max(out.through.g, out.through.b)), 0.05, 0.95);
+        if (pt_rand() > q) {
+            return out;
+        }
+        out.through = out.through / q;
+    }
+    out.dir = nd;
+    out.go = true;
+    return out;
+}
+
+// A bounce along `d` that met nothing: the environment, and the lights it
+// meets -- a directional light's radiance over its cone (its irradiance pi
+// I spread over the cone's solid angle), weighted against the lights' own
+// samples of it.
+fn pt_escape(radiance: vec3<f32>, through: vec3<f32>, d: vec3<f32>, coat_pdf: f32) -> vec3<f32> {
+    var r = radiance + through * pt_sky(d);
+    if (coat_pdf > 0.0) {
+        let pl = pt_light_pdf();
+        let w = pt_power_weight(coat_pdf, pl);
+        for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
+            if (ifs_light_kind(li) == 0u && dot(d, ifs_light_dir(li)) >= pt.misc.w) {
+                r = r + through * ifs_light_color(li) * (ifs_light_power(li) * 3.141592654 * pl * w);
+            }
+        }
+    }
+    return r;
+}
+
+// The denoiser divides a pixel's light by its guide to keep the albedo's
+// detail out of the blur, and multiplies it back after. Light the albedo
+// does not shape -- a highlight, a coat's glint -- divided by a saturated
+// albedo's near-zero channels came back as bands of the wrong colour
+// (field-reported: a terrain's sun glint, banded red and yellow in its
+// valleys). So the guide takes that light's share as white, as it takes
+// the coat's reflection of the sky (`pt_first`): exact where there is
+// none. `guide`: the first surface's lights' shares, summed.
+fn pt_guide_white(guide: vec2<f32>) {
+    if (guide.y > 0.0) {
+        let w = guide.y / max(guide.x + guide.y, 1.0e-20);
+        pt_g_albedo = pt_g_albedo * (1.0 - w) + vec3<f32>(w, w, w);
+    }
+}
+
 // The radiance a path brings back from its first surface `first`,
 // reached along (o0, d0): at each surface its glow, the lights sampled
 // over their angular size with a shadow ray each, and a bounce -- the
@@ -655,11 +951,6 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     var radiance = vec3<f32>(0.0, 0.0, 0.0);
     var through = vec3<f32>(1.0, 1.0, 1.0);
     var travelled = 0.0;
-    // Past a diffuse bounce, a coat is no sharper than `PT_REGULAR_ROUGH`
-    // (path regularisation, path-tracing-research D3; Kaplanyan and
-    // Dachsbacher 2013, Cycles' Filter Glossy): light that found a glossy
-    // surface after a diffuse one is the rare bright path a few samples
-    // keep as a firefly.
     var regular = false;
     for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
         let p = o + d * h.t;
@@ -672,215 +963,39 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             }
             break;
         }
-        let n = h.n;
-        // The true surface, where a texture tilted the shading normal.
-        let bumped = dot(h.ng, h.ng) > 0.5;
-        let ng = select(n, h.ng, bumped);
-        // What it reflects of its colour (`ifs_reflectance`); its glow is
-        // the colour's own.
-        let colour = h.albedo.rgb;
-        let albedo = colour * ifs_reflectance();
-        let start = p + ng * h.bias;
-        // Its glow.
-        radiance = radiance + through * colour * pt.mat.z;
-        // The coat: Lambert under a gloss of reflectance f0 at normal
-        // incidence, the diffuse taking what the coat's Fresnel does not;
-        // a metal's (P4) reflectance the albedo's colour, with nothing
-        // under it; and either given back what single scattering loses
-        // (`ifs_coat_energy`).
-        let f0 = h.f0;
-        let metal = h.metal;
-        let coated = f0 > 0.0 || metal > 0.0;
-        let f0c = mix(vec3<f32>(f0, f0, f0), albedo, metal);
-        let rough = select(h.rough, max(h.rough, PT_REGULAR_ROUGH), regular);
-        let a2 = max(rough * rough, 1.0e-4) * max(rough * rough, 1.0e-4);
-        let v = -d;
-        let nv = max(dot(n, v), 1.0e-4);
-        let energy = ifs_coat_energy(f0c, nv, rough);
-        // The bounce's lobe choice: the coat's at its Fresnel at this view.
-        // Without a coat, no draw to choose a lobe: Lambert's samples are
-        // the same stream they were before the coat existed. A metal
-        // leans the choice to the coat, wholly at 1, where nothing is
-        // under it.
-        let p_spec = select(0.0, mix(clamp(select(0.0, pt_fresnel(f0, nv), f0 > 0.0), 0.1, 0.9), 1.0, metal), coated);
-        // Whether the coat's direct light is weighted against its bounces
-        // (above): only when there is a bounce from here to meet a light.
-        let mis = pt.lens.z > 0.5 && p_spec > 0.0 && pt.misc.z > 0.0 && bounce < pt.bounces;
-        let shadow_strength = clamp(pt.misc.z, 0.0, 1.0);
-        // Every light, each sampled over its angular size. Picking one a
-        // surface (by power) would save shadow rays, but a face only one
-        // light reaches then reads all of it or none, sample to sample:
-        // measured as speckle over a two-light solid's lit faces. The
-        // diffuse in the rig's units (its I as pi times a radiance's), the
-        // gloss's physical BRDF times the same irradiance, pi I cos. No
-        // shadow ray at strength 0.
-        // At the first surface, how much of its direct light the albedo
-        // shapes (the diffuse, without the albedo) and how much it does not
-        // (the coat's and the highlight's): the denoiser's guide below.
-        var first_diffuse = 0.0;
-        var first_white = 0.0;
+        let s = pt_shade(h, p, d, regular, bounce);
+        // Its glow: the colour's own.
+        radiance = radiance + through * h.albedo.rgb * pt.mat.z;
+        var guide = vec2<f32>(0.0, 0.0);
         for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-            // A point or a headlamp from where this surface is, its power
-            // fallen off with the distance (the rig's `ifs_light_at`).
-            let la = ifs_light_at(li, p);
-            let ld = pt_cone(la.dir, pt.misc.w);
-            let ndl = dot(n, ld);
-            if (ndl > 0.0 && (!bumped || dot(ng, ld) > 0.0)) {
-                var vis = 1.0;
+            let l = pt_light(s, li, bounce, h.rough);
+            if (l.lit) {
+                // No shadow ray at strength 0.
                 var seen = 1.0;
                 if (pt.misc.z > 0.0) {
-                    seen = select(0.0, 1.0, pt_scene_visible(start, ld, la.dist, travelled));
-                    vis = mix(1.0, seen, shadow_strength);
+                    seen = select(0.0, 1.0, pt_scene_visible(s.start, l.dir, l.dist, travelled));
                 }
-                var spec = vec3<f32>(0.0, 0.0, 0.0);
-                var diff = 1.0;
-                if (coated) {
-                    let hv = normalize(ld + v);
-                    let vh = max(dot(v, hv), 0.0);
-                    let dg = 3.141592654 * pt_ggx_d(max(dot(n, hv), 0.0), a2) * pt_g1(ndl, a2) * pt_g1(nv, a2) / (4.0 * ndl * nv);
-                    spec = ifs_coat_fresnel3(f0c, vh) * energy * dg;
-                    diff = (1.0 - metal) * select(1.0, 1.0 - pt_fresnel(f0, vh), f0 > 0.0);
-                }
-                let light = ifs_light_color(li) * (ifs_light_power(li) * la.gain * ndl * vis);
-                radiance = radiance + through * light * (albedo * (ifs_diffuse() * diff) + spec);
-                // The coat's share, weighted against its bounces where a
-                // bounce can meet this light: the part of it that reaches
-                // (`seen`) by the power heuristic, the part a partial
-                // shadow strength lets through the solid -- which no bounce
-                // sees -- whole. Their sum is `vis`; what it takes from
-                // the coat's share added above.
-                var spec_vis = vis;
-                if (mis && ifs_light_kind(li) == 0u) {
-                    let w = pt_power_weight(pt_light_pdf(), pt_coat_pdf(n, v, ld, a2, p_spec));
-                    spec_vis = w * seen + (1.0 - shadow_strength) * (1.0 - seen);
-                    radiance = radiance + through * ifs_light_color(li) * spec * (ifs_light_power(li) * la.gain * ndl * (spec_vis - vis));
-                }
-                // The highlight, the lit tier's very term (materials.md
-                // §4.1): Blinn-Phong on the direct light, unnormalised and
-                // without the cosine, so both tiers draw it alike. Not a
-                // lobe a bounce samples: it is the lights' shine alone.
-                // Weighted by the shading strength, as the lit tier's mix
-                // weights it: a rig at strength 0 draws no highlight in
-                // either tier (a terrain's touched rig carried the flame
-                // default 0.35, and glinted from P7 on where it never had).
-                var shine = 0.0;
-                let shine_weight = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
-                if (shine_weight > 0.0) {
-                    let hb = normalize(ld + v);
-                    shine = shine_weight * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
-                    radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * la.gain * vis * shine);
-                }
+                radiance = pt_light_add(radiance, through, l, seen, s.shadow_strength);
             }
-            // The guide's shares (path-tracing-research D1): from the
-            // light's centre, its lobe widened by the cone's size, and with
-            // no visibility -- the same every sample, so the guide holds no
-            // noise of its own. (From the sampled direction and the shadow
-            // ray's verdict it flickered sample to sample, and the filter,
-            // dividing the light by it and multiplying back, put the
-            // speckle back on glossy and highlit faces.) A metal's
-            // reflection is the albedo's colour: shaped by it, as the
-            // diffuse is, where a coat's is white.
-            if (bounce == 0u) {
-                let lc = la.dir;
-                let ndc = dot(n, lc);
-                if (ndc > 0.0) {
-                    let lumw = vec3<f32>(0.2126, 0.7152, 0.0722);
-                    var spec_c = 0.0;
-                    var diff_c = 1.0;
-                    if (coated) {
-                        let alpha_c = min(h.rough * h.rough + 0.5 * sqrt(max(1.0 - pt.misc.w * pt.misc.w, 0.0)), 1.0);
-                        let a2c = max(alpha_c * alpha_c, 1.0e-4);
-                        let hc = normalize(lc + v);
-                        let vhc = max(dot(v, hc), 0.0);
-                        let dgc = 3.141592654 * pt_ggx_d(max(dot(n, hc), 0.0), a2c) * pt_g1(ndc, a2c) * pt_g1(nv, a2c) / (4.0 * ndc * nv);
-                        spec_c = dot(ifs_coat_fresnel3(f0c, vhc) * energy, lumw) * dgc;
-                        diff_c = (1.0 - metal) * select(1.0, 1.0 - pt_fresnel(f0, vhc), f0 > 0.0);
-                    }
-                    var shine_c = 0.0;
-                    let shine_w = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
-                    if (shine_w > 0.0) {
-                        shine_c = shine_w * pow(max(dot(n, normalize(lc + v)), 0.0), max(ifs_shininess(), 1.0));
-                    }
-                    let lum = dot(ifs_light_color(li), lumw) * ifs_light_power(li) * la.gain;
-                    first_diffuse = first_diffuse + lum * ndc * (ifs_diffuse() * diff_c + spec_c * metal);
-                    first_white = first_white + lum * (ndc * spec_c * (1.0 - metal) + shine_c);
-                }
-            }
+            guide = guide + l.guide;
         }
-        // The denoiser divides a pixel's light by its guide to keep the
-        // albedo's detail out of the blur, and multiplies it back after.
-        // Light the albedo does not shape -- a highlight, a coat's glint --
-        // divided by a saturated albedo's near-zero channels came back as
-        // bands of the wrong colour (field-reported: a terrain's sun glint,
-        // banded red and yellow in its valleys). So the guide takes that
-        // light's share as white, as it takes the coat's reflection of the
-        // sky (`pt_first`): exact where there is none.
-        if (bounce == 0u && first_white > 0.0) {
-            let w = first_white / max(first_diffuse + first_white, 1.0e-20);
-            pt_g_albedo = pt_g_albedo * (1.0 - w) + vec3<f32>(w, w, w);
+        if (bounce == 0u) {
+            pt_guide_white(guide);
         }
         if (bounce >= pt.bounces) {
             break;
         }
-        // The bounce: the gloss's lobe by the visible normals, chosen by
-        // the coat's Fresnel at this view (`p_spec`); else Lambert's, whose
-        // cosine sampling leaves the albedo times what the coat lets
-        // through.
-        var nd = vec3<f32>(0.0, 0.0, 1.0);
-        // The coat's bounce's density toward where it went, for the
-        // lights it may meet (0: Lambert's, or no weighting).
-        var coat_pdf = 0.0;
-        if (p_spec > 0.0 && pt_rand() < p_spec) {
-            let frame = pt_frame(n);
-            let vl = transpose(frame) * v;
-            let hl = pt_vndf(vl, sqrt(a2));
-            let hv = frame * hl;
-            nd = reflect(-v, hv);
-            let nl = dot(n, nd);
-            if (nl <= 0.0) {
-                break;
-            }
-            through = through * ifs_coat_fresnel3(f0c, max(dot(v, hv), 0.0)) * energy * (pt_g1(nl, a2) / p_spec);
-            if (mis) {
-                coat_pdf = pt_coat_pdf(n, v, nd, a2, p_spec);
-            }
-        } else {
-            nd = pt_cosine(n);
-            regular = true;
-            // No coat at all at reflectance 0: Schlick's term alone would
-            // still take (1 - cos)^5 of a glance.
-            let coat = select(0.0, pt_fresnel(f0, nv), f0 > 0.0);
-            through = through * albedo * ((1.0 - metal) * (1.0 - coat) / (1.0 - p_spec));
-        }
-        // A tilted normal can send a bounce under the true surface: it has
-        // nowhere to go.
-        if (bumped && dot(ng, nd) <= 0.0) {
+        let b = pt_bounce(s, through, regular, bounce);
+        if (!b.go) {
             break;
         }
-        if (bounce >= 1u) {
-            let q = clamp(max(through.r, max(through.g, through.b)), 0.05, 0.95);
-            if (pt_rand() > q) {
-                break;
-            }
-            through = through / q;
-        }
-        o = start;
-        d = nd;
+        through = b.through;
+        regular = b.regular;
+        o = s.start;
+        d = b.dir;
         h = pt_scene_next(o, d, travelled);
         if (!h.hit) {
-            radiance = radiance + through * pt_sky(d);
-            // The lights it meets: a directional light's radiance over its
-            // cone (its irradiance pi I spread over the cone's solid
-            // angle), weighted against the lights' own samples of it.
-            if (coat_pdf > 0.0) {
-                let pl = pt_light_pdf();
-                let w = pt_power_weight(coat_pdf, pl);
-                for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-                    if (ifs_light_kind(li) == 0u && dot(d, ifs_light_dir(li)) >= pt.misc.w) {
-                        radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * 3.141592654 * pl * w);
-                    }
-                }
-            }
+            radiance = pt_escape(radiance, through, d, b.coat_pdf);
             break;
         }
     }
