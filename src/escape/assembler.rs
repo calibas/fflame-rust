@@ -7073,6 +7073,11 @@ fn ifs_coat_fresnel3(f0: vec3<f32>, c: f32) -> vec3<f32> {
 // a darker floor.
 fn ifs_studio_level() -> f32 { return max(params.fdata[32].x, 0.0); }
 
+// How much of its colour a surface reflects (the material's reflectance):
+// the albedo every tier lights is the colour times this. Its complement
+// in the studio row's z, so a uniform that never wrote it reflects all.
+fn ifs_reflectance() -> f32 { return 1.0 - clamp(params.fdata[32].z, 0.0, 1.0); }
+
 // A direction in the studio's frame: x right, y up, z toward the front.
 fn ifs_studio_frame(d: vec3<f32>) -> vec3<f32> {
     if (params.fdata[32].y > 0.5) {
@@ -7187,7 +7192,10 @@ fn ifs_studio_reflect(n: vec3<f32>, v: vec3<f32>, rough: f32) -> f32 {
 
 // `p` is the surface's position, in the geometry's frame: what a point
 // light's direction, distance and falloff are measured from.
-fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32, p: vec3<f32>) -> vec3<f32> {
+fn ifs_rig(colour: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: vec3<f32>, t: f32, p: vec3<f32>) -> vec3<f32> {
+    // What the surface reflects of its colour (`ifs_reflectance`); its
+    // glow and its unshaded colour are the colour's own.
+    let albedo = colour * ifs_reflectance();
     let ao = mix(1.0, ao_raw, clamp(ifs_occlusion_strength(), 0.0, 1.0));
     let shadow_amount = clamp(ifs_shadow_strength(), 0.0, 1.0);
     let v = -dir;
@@ -7219,7 +7227,7 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
             lit_rgb = lit_rgb + refl_v * (studio * ao * ifs_studio_reflect(ifs_studio_frame(n), ifs_studio_frame(v), rough));
         }
     }
-    lit_rgb = lit_rgb + albedo * max(ifs_glow(), 0.0);
+    lit_rgb = lit_rgb + colour * max(ifs_glow(), 0.0);
     let lights = ifs_light_count();
     for (var li = 0u; li < lights; li = li + 1u) {
         let la = ifs_light_at(li, p);
@@ -7250,7 +7258,7 @@ fn ifs_rig(albedo: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
             lit_rgb = lit_rgb + lcol * (ifs_specular() * spec * s);
         }
     }
-    var rgb = mix(albedo, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
+    var rgb = mix(colour, lit_rgb, clamp(ifs_shading_strength(), 0.0, 1.0));
     // Depth fog AFTER lighting, so distant lit surfaces fade toward
     // the background like atmosphere rather than being lit on top of
     // it -- the ordering the shade pass settled on. The fog colour is

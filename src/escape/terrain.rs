@@ -2251,7 +2251,7 @@ pub struct TerrainView {
     /// The material the lit tier reads as the path tracer does
     /// (camera-unification C7): the coat's reflectance and roughness,
     /// the glow and the metallic (`path_core::lit_material`).
-    pub material: [f32; 4],
+    pub material: [f32; 5],
     /// The surface texture's bump (docs/projects/surface-textures.md);
     /// off for a simulation's terrain.
     pub surface: super::surface::SurfaceTexture,
@@ -4000,7 +4000,7 @@ impl TerrainRenderer {
         }
         fdata[10][3] = view.material[3];
         // The studio, the world's with z up (`ifs_studio`).
-        fdata[32] = [view.studio, 1.0, 0.0, 0.0];
+        fdata[32] = [view.studio, 1.0, 1.0 - view.material[4], 0.0];
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -4727,7 +4727,7 @@ pub(crate) mod gpu_tests {
             curve: 0,
             invert: false,
             range: None,
-            material: [0.0, 0.5, 0.0, 0.0],
+            material: [0.0, 0.5, 0.0, 0.0, 1.0],
             surface: crate::escape::surface::SurfaceTexture::off(),
         }
     }
@@ -4928,6 +4928,13 @@ pub(crate) mod gpu_tests {
         }
         println!("flat plane: want {want:?}, worst error {worst:.2e}");
         assert!(worst < 1e-5, "{worst}");
+        // The material's reflectance scales the albedo the light meets.
+        v.material[4] = 0.5;
+        r.render(&device, &queue, &v);
+        let half: Vec<[f32; 4]> = bytemuck::cast_slice(&read_texture(&device, &queue, r.output_texture(), 0, 32, 32, 16)).to_vec();
+        let worst = half.iter().flat_map(|p| (0..3).map(move |c| (p[c] - 0.5 * want[c]).abs())).fold(0.0f32, f32::max);
+        println!("  at reflectance 0.5: worst error {worst:.2e}");
+        assert!(worst < 1e-5, "the reflectance: {worst}");
     }
 
     /// Distant ground is the average of its texels: a one-cell
@@ -5327,7 +5334,7 @@ pub(crate) mod gpu_tests {
             r.render(&device, &queue, &v);
             read_output(&device, &queue, &r, w, h)
         };
-        v.material = [gloss, roughness, glow, 0.0];
+        v.material = [gloss, roughness, glow, 0.0, 1.0];
         r.render(&device, &queue, &v);
         let lit = read_output(&device, &queue, &r, w, h);
         let moved = lit.iter().zip(&plain).flat_map(|(a, b)| (0..3).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
@@ -5368,7 +5375,7 @@ pub(crate) mod gpu_tests {
         r.render(&device, &queue, &v);
         assert!(mean(&read_output(&device, &queue, &r, w, h)) < 1.0e-6, "no light, no studio: dark");
         v.studio = 1.0;
-        for (material, mat, tolerance) in [("diffuse", [0.0f32, 0.5, 0.0, 0.0], 0.02), ("metal", [0.0, 0.4, 0.0, 1.0], 0.15)] {
+        for (material, mat, tolerance) in [("diffuse", [0.0f32, 0.5, 0.0, 0.0, 1.0], 0.02), ("metal", [0.0, 0.4, 0.0, 1.0, 1.0], 0.15)] {
             if material == "metal" {
                 let hills: Vec<f32> = (0..n * m).map(|k| 2.0 * ((k % n) as f32 * 0.25).sin() * ((k / n) as f32 * 0.25).cos()).collect();
                 r.set_tile(&device, &queue, n, m, &hills, &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
@@ -5475,7 +5482,7 @@ pub(crate) mod gpu_tests {
         // (`coat_energy`).
         for roughness in [0.3f32, 0.7, 1.0] {
             let s = PathSettings { bounces: 2, environment: l, gloss: 0.0, roughness, ..PathSettings::default() };
-            v.material = [0.0, roughness, 0.0, 1.0];
+            v.material = [0.0, roughness, 0.0, 1.0, 1.0];
             r.reset_path();
             r.render_path(&device, &queue, &v, &s, 512, 64);
             let out = read_output(&device, &queue, &r, w, h);

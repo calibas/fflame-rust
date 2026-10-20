@@ -1865,6 +1865,92 @@ mod tests {
         assert_eq!(shape, 0, "the path tracer's shape or light moved");
     }
 
+    /// The material's reflectance scales the albedo every tier lights: the
+    /// lit tier and the path tracer's direct light by it, the light a
+    /// bounce brings by its square or more -- so shadows the bounces alone
+    /// light darken faster than the lit faces, which is what it is for.
+    /// The glow is the colour's own. On the Mandelbulb, curved, where the
+    /// bounces read truest.
+    #[test]
+    fn reflectance_darkens_the_bounced_light_faster() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        use crate::scene::palette::{ColorStop, Palette};
+        const W: u32 = 128;
+        const H: u32 = 96;
+        let grey = ColorStop { position: 0.0, color: [0.8, 0.8, 0.8] };
+        let mut base = FractalConfig::default();
+        base.render_mode = RenderMode::Escape;
+        base.escape.formula = "mandelbulb_solid".to_string();
+        base.escape.cam_yaw = 0.9;
+        base.escape.cam_pitch = 0.42;
+        base.escape.formula_params.insert("shadow".to_string(), 1.0);
+        base.escape.formula_params.insert("occlusion".to_string(), 0.0);
+        base.escape.path.samples = 64;
+        base.palette = Palette { name: "Grey".to_string(), stops: vec![grey.clone(), ColorStop { position: 1.0, ..grey }], locked: false, built_in: false };
+        base.background_color = [0.0; 3];
+        base.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        base.exposure = 1.0;
+        base.gamma = 1.0;
+        let s = &mut base.solid_shading;
+        s.shading_strength = 1.0;
+        s.ambient = 0.0;
+        s.specular = 0.0;
+        for (i, l) in s.lights.iter_mut().enumerate() {
+            l.enabled = i == 0;
+        }
+        s.lights[0].azimuth = 145.0;
+        s.lights[0].elevation = 40.0;
+        s.lights[0].intensity = 0.8;
+        // Each pixel's light, linear: the output is the tone map's 1/2.2.
+        let render = |c: &FractalConfig| -> Vec<f64> {
+            let job = crate::renderer::RenderJob::new(c, W, H);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+            out.rgba_data.chunks(4).map(|p| p[..3].iter().map(|v| (*v as f64 / 255.0).powf(2.2)).sum::<f64>() / 3.0).collect()
+        };
+        let with = |tier: RenderTier, bounces: u32, reflectance: f32| {
+            let mut c = base.clone();
+            c.escape.solid_tier = tier;
+            c.escape.path.bounces = bounces;
+            c.solid_shading.reflectance = reflectance;
+            render(&c)
+        };
+        let mean = |v: &[f64], mask: &[bool]| v.iter().zip(mask).filter(|(_, m)| **m).map(|(x, _)| *x).sum::<f64>() / mask.iter().filter(|m| **m).count().max(1) as f64;
+        let direct = with(RenderTier::PathTraced, 0, 1.0);
+        let full = with(RenderTier::PathTraced, 2, 1.0);
+        // Lit: what the light reaches. Shadowed: covered, and lit by bounces
+        // alone.
+        let lit: Vec<bool> = direct.iter().map(|x| *x > 0.05).collect();
+        let shadow: Vec<bool> = direct.iter().zip(&full).map(|(d, f)| *d == 0.0 && *f > 0.002).collect();
+        let n_lit = lit.iter().filter(|m| **m).count();
+        let n_shadow = shadow.iter().filter(|m| **m).count();
+        let lit_tier = (mean(&with(RenderTier::Lit, 2, 0.5), &lit), mean(&with(RenderTier::Lit, 2, 1.0), &lit));
+        let direct_half = mean(&with(RenderTier::PathTraced, 0, 0.5), &lit) / mean(&direct, &lit);
+        let full_half = with(RenderTier::PathTraced, 2, 0.5);
+        let faces = mean(&full_half, &lit) / mean(&full, &lit);
+        let shadows = mean(&full_half, &shadow) / mean(&full, &shadow);
+        println!(
+            "  {n_lit} lit and {n_shadow} shadowed pixels; at reflectance 0.5: the lit tier {:.3}, the direct light {direct_half:.3}, path traced lit faces {faces:.3}, shadows {shadows:.3}",
+            lit_tier.0 / lit_tier.1
+        );
+        assert!(n_lit > 200 && n_shadow > 200, "the view has lit faces and shadows");
+        assert!((lit_tier.0 / lit_tier.1 - 0.5).abs() < 0.03, "the lit tier scales by the reflectance");
+        assert!((direct_half - 0.5).abs() < 0.03, "the direct light scales by the reflectance");
+        assert!(shadows < 0.3, "the bounced light falls by the square or more: {shadows}");
+        assert!(shadows < faces * 0.7, "the shadows darken faster than the lit faces");
+        // The glow: the colour's own, whatever the reflectance.
+        let mut glow = base.clone();
+        glow.solid_shading.lights[0].enabled = false;
+        glow.solid_shading.glow = 0.5;
+        glow.escape.solid_tier = RenderTier::Lit;
+        let a = render(&glow);
+        glow.solid_shading.reflectance = 0.25;
+        assert_eq!(a, render(&glow), "the glow moved with the reflectance");
+        assert!(a.iter().any(|x| *x > 0.05), "the glow shows");
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far

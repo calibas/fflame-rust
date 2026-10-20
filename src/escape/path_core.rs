@@ -207,12 +207,15 @@ fn shown(config: &FractalConfig, c: [f32; 3]) -> [f32; 3] {
 
 /// A picture's material (docs/archive/projects/materials.md): the coat -- its
 /// reflectance at normal incidence and its roughness -- the albedo's glow,
-/// and how much of it is metal (P4), beside the lights, which every tier
-/// reads. The rig's shaders read the first three in the w of the camera's
-/// rows and the metallic in the fog row's (`ifs_metallic`).
-pub fn lit_material(config: &FractalConfig) -> [f32; 4] {
+/// how much of it is metal (P4), and how much of its colour it reflects
+/// (the reflectance), beside the lights, which every tier reads. The rig's
+/// shaders read the first three in the w of the camera's rows, the
+/// metallic in the fog row's (`ifs_metallic`) and the reflectance's
+/// complement in the studio row's z (`ifs_reflectance`).
+pub fn lit_material(config: &FractalConfig) -> [f32; 5] {
     let s = &config.solid_shading;
-    [s.gloss.clamp(0.0, 1.0), s.roughness.clamp(0.02, 1.0), s.glow.max(0.0), s.metallic.clamp(0.0, 1.0)]
+    let reflectance = if s.reflectance.is_finite() { s.reflectance.clamp(0.0, 1.0) } else { 1.0 };
+    [s.gloss.clamp(0.0, 1.0), s.roughness.clamp(0.02, 1.0), s.glow.max(0.0), s.metallic.clamp(0.0, 1.0), reflectance]
 }
 
 // The coat's albedo fit, and the energy it gives back, are
@@ -393,10 +396,11 @@ fn pt_first(h: PtHit, d: vec3<f32>) {
         f = pt_fresnel(h.f0, c);
         fc = vec3<f32>(f, f, f);
     }
+    let albedo = h.albedo.rgb * ifs_reflectance();
     if (h.metal > 0.0) {
-        fc = ifs_coat_fresnel3(mix(vec3<f32>(h.f0, h.f0, h.f0), h.albedo.rgb, h.metal), c);
+        fc = ifs_coat_fresnel3(mix(vec3<f32>(h.f0, h.f0, h.f0), albedo, h.metal), c);
     }
-    pt_g_albedo = h.albedo.rgb * ((1.0 - h.metal) * (1.0 - f)) + fc;
+    pt_g_albedo = albedo * ((1.0 - h.metal) * (1.0 - f)) + fc;
     pt_g_normal = h.n;
     pt_g_t = h.t;
 }
@@ -663,10 +667,13 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         // The true surface, where a texture tilted the shading normal.
         let bumped = dot(h.ng, h.ng) > 0.5;
         let ng = select(n, h.ng, bumped);
-        let albedo = h.albedo.rgb;
+        // What it reflects of its colour (`ifs_reflectance`); its glow is
+        // the colour's own.
+        let colour = h.albedo.rgb;
+        let albedo = colour * ifs_reflectance();
         let start = p + ng * h.bias;
         // Its glow.
-        radiance = radiance + through * albedo * pt.mat.z;
+        radiance = radiance + through * colour * pt.mat.z;
         // The coat: Lambert under a gloss of reflectance f0 at normal
         // incidence, the diffuse taking what the coat's Fresnel does not;
         // a metal's (P4) reflectance the albedo's colour, with nothing

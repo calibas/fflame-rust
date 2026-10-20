@@ -262,6 +262,8 @@ pub enum ConfigPath {
     SolidGlow,
     /// The material's metallic share (3d-look-and-tools P4).
     SolidMetallic,
+    /// How much of its colour the material reflects.
+    SolidReflectance,
     SsaoStrength,
     SsaoRadius,
     NormalSmoothing,
@@ -1363,6 +1365,7 @@ impl Display for ConfigPath {
             ConfigPath::SolidRoughness => write!(f, "Roughness"),
             ConfigPath::SolidGlow => write!(f, "Glow"),
             ConfigPath::SolidMetallic => write!(f, "Metallic"),
+            ConfigPath::SolidReflectance => write!(f, "Reflectance"),
             ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
             ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
             ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
@@ -2093,6 +2096,7 @@ impl ConfigPath {
             ConfigPath::SolidRoughness => I18nKey::simple("history.param.solid_roughness"),
             ConfigPath::SolidGlow => I18nKey::simple("history.param.solid_glow"),
             ConfigPath::SolidMetallic => I18nKey::simple("history.param.solid_metallic"),
+            ConfigPath::SolidReflectance => I18nKey::simple("history.param.solid_reflectance"),
             ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
             ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
             ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
@@ -3003,6 +3007,7 @@ impl ConfigPath {
             | ConfigPath::SolidRoughness
             | ConfigPath::SolidGlow
             | ConfigPath::SolidMetallic
+            | ConfigPath::SolidReflectance
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
@@ -3833,6 +3838,7 @@ impl ConfigPath {
             ConfigPath::SolidRoughness => "SolidRoughness".to_string(),
             ConfigPath::SolidGlow => "SolidGlow".to_string(),
             ConfigPath::SolidMetallic => "SolidMetallic".to_string(),
+            ConfigPath::SolidReflectance => "SolidReflectance".to_string(),
             ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
             ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
             ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
@@ -3979,6 +3985,7 @@ impl ConfigPath {
             "SolidRoughness" => return Some(ConfigPath::SolidRoughness),
             "SolidGlow" => return Some(ConfigPath::SolidGlow),
             "SolidMetallic" => return Some(ConfigPath::SolidMetallic),
+            "SolidReflectance" => return Some(ConfigPath::SolidReflectance),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
             "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
@@ -4650,6 +4657,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SolidRoughness
         | ConfigPath::SolidGlow
         | ConfigPath::SolidMetallic
+        | ConfigPath::SolidReflectance
         | ConfigPath::SsaoStrength
         | ConfigPath::SsaoRadius
         | ConfigPath::NormalSmoothing
@@ -5736,6 +5744,7 @@ mod tests {
             ConfigPath::SolidRoughness,
             ConfigPath::SolidGlow,
             ConfigPath::SolidMetallic,
+            ConfigPath::SolidReflectance,
             ConfigPath::SsaoStrength,
             ConfigPath::SsaoRadius,
             ConfigPath::NormalSmoothing,

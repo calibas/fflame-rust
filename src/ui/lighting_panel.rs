@@ -269,6 +269,11 @@ fn material(ui: &mut egui::Ui, config_manager: &mut ConfigManager, rig: &Rig) {
     };
     coat(ui, config_manager, ConfigPath::SolidGloss, "view.material_gloss", "view.material_gloss_tip", shading.gloss, 0.0..=1.0);
     coat(ui, config_manager, ConfigPath::SolidMetallic, "view.material_metallic", "view.material_metallic_tip", shading.metallic, 0.0..=1.0);
+    // The albedo's scale: what the path tracer's bounces keep. Not a 3D
+    // flame's, which has no bounces (its Diffuse darkens it alike).
+    if !rig.flame {
+        coat(ui, config_manager, ConfigPath::SolidReflectance, "view.material_reflectance", "view.material_reflectance_tip", shading.reflectance, 0.0..=1.0);
+    }
     if shading.gloss > 0.0 || shading.metallic > 0.0 {
         coat(ui, config_manager, ConfigPath::SolidRoughness, "view.material_roughness", "view.material_roughness_tip", shading.roughness, 0.02..=1.0);
     }
