@@ -538,6 +538,13 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 A hole (albedo alpha 0) ends the path. Past the first surface it sees the
 sky through the hole.
 
+**Path regularisation** (Kaplanyan and Dachsbacher 2013; Cycles' Filter
+Glossy; 2026-10-20): past a diffuse bounce a coat is no sharper than
+roughness 0.4 (`PT_REGULAR_ROUGH`) -- light that found a glossy surface
+after a diffuse one is the rare bright path a few samples keep as a
+firefly. Measured against unclamped references, glossy solids came out
+1-4% nearer; a metal, which never bounces diffusely, is untouched.
+
 **Multiple importance sampling** (Veach and Guibas 1995; 2026-10-19). A
 polished coat's peak is narrower than a light's cone, so the lights' own
 samples rarely land in it, and when they do they are worth a thousand
@@ -587,13 +594,31 @@ guidance (Schied et al. 2017), over one accumulation rather than over
 frames:
 1. **`prepare`:** each pixel's mean light divided by its mean albedo, so
    the filter sees the light alone and the colouring's detail, which
-   lives in the albedo, is multiplied back untouched. With it, the
-   light's variance and the features: the normal and the distance, with
-   the distance's gradient.
-2. **`atrous`**, five times at strides 1, 2, 4, 8, 16: a 5x5 B3 kernel
-   whose taps are weighted by the normals' agreement, the distances'
-   against the gradient, and the lights' against the noise.
-3. **`finish`:** the light times the albedo, with the resolve's coverage.
+   lives in the albedo, is multiplied back untouched. That light no
+   brighter than twice its brightest neighbour's on the same surface
+   (normals within 37 degrees), the bound loosening in proportion past
+   16 samples (`DN_CLAMP_FACTOR`, `DN_CLAMP_FULL`): one rare path -- a
+   bounce that found a small light -- does not stand out of the filter
+   as a dot. With it, the light's variance and the features: the normal
+   and the distance, with the distance's gradient.
+2. **`atrous`** at strides 1, 2, 4, 8, 16 -- 16 dropped from 8 samples on,
+   8 from 32 (`denoise_steps`) -- a 5x5 B3 kernel whose taps are weighted
+   by the normals' agreement, the distances' against the gradient, and
+   the lights' against the noise.
+3. **`finish`:** the light times the albedo, with the resolve's coverage
+   -- moved from the pixel's own mean by no more than its standard error
+   (its samples' luminance moments) times `max(1, sqrt(16 / n))`, judged on
+   its largest channel; past that the move shrinks as (bound / gap)^2, so
+   detail the filter would average away goes back to the samples' own,
+   and the picture converges to their mean (`DN_TRUST`, from 8 samples,
+   `DN_TRUST_FROM`).
+
+Measured (path-tracing-research.md, the `denoise_quality` gate: three
+solids matte, glossy and metal at 4, 16 and 64 samples, against 4096
+unclamped samples): the denoised error averaged 0.866 of the raw, from
+0.986 before the bound and the neighbourhood clamp; on a fractal solid
+most of what remains is the colouring's sub-pixel variation, which no
+filter of the light reaches.
 
 Two lights may differ by four of the noise's standard deviations and
 still be averaged (`DENOISE_SIGMA`). Past 8 samples (`DENOISE_FULL`) that
@@ -605,7 +630,10 @@ The guides are gathered with the samples:
   the coat, plus the coat's own share;
 - the direct light the albedo does not shape (a highlight, a coat's
   glint), taken as white. Divided by a saturated albedo's near-zero
-  channels it came back as bands of the wrong colour.
+  channels it came back as bands of the wrong colour. Its share is
+  reckoned from the light's centre, the lobe widened by the light's
+  size, with no shadow ray: the same every sample, so the guide holds no
+  noise of its own.
 
 The filter costs about a sample of a terrain at 1080p, so it runs on a
 schedule: every count up to 4, then whenever the count has grown by a

@@ -375,6 +375,9 @@ fn pt_sky_seen(d: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(s.rgb * s.a, s.a);
 }
 
+// The roughness a coat keeps at least past a diffuse bounce (D3).
+const PT_REGULAR_ROUGH: f32 = 0.4;
+
 // A sample's first surface, as its geometry reports it (`pt_first`):
 // what the denoiser's guides are made of.
 var<private> pt_g_albedo: vec3<f32>;
@@ -652,6 +655,12 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     var radiance = vec3<f32>(0.0, 0.0, 0.0);
     var through = vec3<f32>(1.0, 1.0, 1.0);
     var travelled = 0.0;
+    // Past a diffuse bounce, a coat is no sharper than `PT_REGULAR_ROUGH`
+    // (path regularisation, path-tracing-research D3; Kaplanyan and
+    // Dachsbacher 2013, Cycles' Filter Glossy): light that found a glossy
+    // surface after a diffuse one is the rare bright path a few samples
+    // keep as a firefly.
+    var regular = false;
     for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
         let p = o + d * h.t;
         travelled = travelled + h.t;
@@ -683,10 +692,11 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
         let metal = h.metal;
         let coated = f0 > 0.0 || metal > 0.0;
         let f0c = mix(vec3<f32>(f0, f0, f0), albedo, metal);
-        let a2 = max(h.rough * h.rough, 1.0e-4) * max(h.rough * h.rough, 1.0e-4);
+        let rough = select(h.rough, max(h.rough, PT_REGULAR_ROUGH), regular);
+        let a2 = max(rough * rough, 1.0e-4) * max(rough * rough, 1.0e-4);
         let v = -d;
         let nv = max(dot(n, v), 1.0e-4);
-        let energy = ifs_coat_energy(f0c, nv, h.rough);
+        let energy = ifs_coat_energy(f0c, nv, rough);
         // The bounce's lobe choice: the coat's at its Fresnel at this view.
         // Without a coat, no draw to choose a lobe: Lambert's samples are
         // the same stream they were before the coat existed. A metal
@@ -760,13 +770,40 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                     shine = shine_weight * pow(max(dot(n, hb), 0.0), max(ifs_shininess(), 1.0));
                     radiance = radiance + through * ifs_light_color(li) * (ifs_light_power(li) * la.gain * vis * shine);
                 }
-                if (bounce == 0u) {
-                    // A metal's reflection is the albedo's colour: shaped by
-                    // it, as the diffuse is, where a coat's is white.
-                    let lum = dot(ifs_light_color(li), vec3<f32>(0.2126, 0.7152, 0.0722)) * ifs_light_power(li) * la.gain * vis;
-                    let spec_lum = dot(spec, vec3<f32>(0.2126, 0.7152, 0.0722));
-                    first_diffuse = first_diffuse + lum * ndl * (ifs_diffuse() * diff + spec_lum * metal);
-                    first_white = first_white + lum * (ndl * spec_lum * (1.0 - metal) + shine);
+            }
+            // The guide's shares (path-tracing-research D1): from the
+            // light's centre, its lobe widened by the cone's size, and with
+            // no visibility -- the same every sample, so the guide holds no
+            // noise of its own. (From the sampled direction and the shadow
+            // ray's verdict it flickered sample to sample, and the filter,
+            // dividing the light by it and multiplying back, put the
+            // speckle back on glossy and highlit faces.) A metal's
+            // reflection is the albedo's colour: shaped by it, as the
+            // diffuse is, where a coat's is white.
+            if (bounce == 0u) {
+                let lc = la.dir;
+                let ndc = dot(n, lc);
+                if (ndc > 0.0) {
+                    let lumw = vec3<f32>(0.2126, 0.7152, 0.0722);
+                    var spec_c = 0.0;
+                    var diff_c = 1.0;
+                    if (coated) {
+                        let alpha_c = min(h.rough * h.rough + 0.5 * sqrt(max(1.0 - pt.misc.w * pt.misc.w, 0.0)), 1.0);
+                        let a2c = max(alpha_c * alpha_c, 1.0e-4);
+                        let hc = normalize(lc + v);
+                        let vhc = max(dot(v, hc), 0.0);
+                        let dgc = 3.141592654 * pt_ggx_d(max(dot(n, hc), 0.0), a2c) * pt_g1(ndc, a2c) * pt_g1(nv, a2c) / (4.0 * ndc * nv);
+                        spec_c = dot(ifs_coat_fresnel3(f0c, vhc) * energy, lumw) * dgc;
+                        diff_c = (1.0 - metal) * select(1.0, 1.0 - pt_fresnel(f0, vhc), f0 > 0.0);
+                    }
+                    var shine_c = 0.0;
+                    let shine_w = ifs_specular() * clamp(ifs_shading_strength(), 0.0, 1.0);
+                    if (shine_w > 0.0) {
+                        shine_c = shine_w * pow(max(dot(n, normalize(lc + v)), 0.0), max(ifs_shininess(), 1.0));
+                    }
+                    let lum = dot(ifs_light_color(li), lumw) * ifs_light_power(li) * la.gain;
+                    first_diffuse = first_diffuse + lum * ndc * (ifs_diffuse() * diff_c + spec_c * metal);
+                    first_white = first_white + lum * (ndc * spec_c * (1.0 - metal) + shine_c);
                 }
             }
         }
@@ -809,6 +846,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             }
         } else {
             nd = pt_cosine(n);
+            regular = true;
             // No coat at all at reflectance 0: Schlick's term alone would
             // still take (1 - cos)^5 of a glance.
             let coat = select(0.0, pt_fresnel(f0, nv), f0 > 0.0);
@@ -991,6 +1029,16 @@ struct DenoiseParams {
 // The albedo's luminance below which the variance is not divided by it.
 const DN_FLOOR: f32 = 0.01;
 
+// How many of a pixel's standard errors the filter may move it by (at
+// 16 samples and more; more below), and from how many samples.
+const DN_TRUST: f32 = 1.0;
+const DN_TRUST_FROM: u32 = 8u;
+
+// How many times its neighbours' brightest a pixel's light may be (D3),
+// to `DN_CLAMP_FULL` samples; past them, more in proportion.
+const DN_CLAMP_FACTOR: f32 = 2.0;
+const DN_CLAMP_FULL: u32 = 16u;
+
 fn dn_lum(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
@@ -1140,9 +1188,40 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
             variance = max(s2 / sw - m * m, 0.0);
         }
     }
+    // An outlier: no brighter than `DN_CLAMP_FACTOR` times the brightest
+    // of its neighbours on the same surface (D3), so one rare path -- a
+    // bounce that found a small light, a glint -- does not stand out of
+    // the filter as a dot. Loosening past `DN_CLAMP_FULL` samples in
+    // proportion, so it fades rather than switching off, and a picture of
+    // many samples keeps the spiky light a metal really has.
+    var light = p.light;
+    let nc = dn_n(gid.x, gid.y);
+    {
+        var top = 0.0;
+        var found = false;
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            for (var dx = -1; dx <= 1; dx = dx + 1) {
+                let q = px + vec2<i32>(dx, dy);
+                if ((dx == 0 && dy == 0) || !dn_inside(q)) {
+                    continue;
+                }
+                let o = dn_pixel(q);
+                if (!(o.cover > 0.0) || dot(o.normal, p.normal) < 0.8) {
+                    continue;
+                }
+                top = max(top, dn_lum(o.light));
+                found = true;
+            }
+        }
+        let l = dn_lum(light);
+        let cap = DN_CLAMP_FACTOR * max(1.0, f32(nc) / f32(DN_CLAMP_FULL)) * top;
+        if (found && l > cap) {
+            light = light * (cap / l);
+        }
+    }
     let gx = dn_slope(p.depth, dn_depth(px - vec2<i32>(1, 0)), dn_depth(px + vec2<i32>(1, 0)));
     let gy = dn_slope(p.depth, dn_depth(px - vec2<i32>(0, 1)), dn_depth(px + vec2<i32>(0, 1)));
-    textureStore(light_out, px, vec4<f32>(p.light, variance));
+    textureStore(light_out, px, vec4<f32>(light, variance));
     textureStore(feat_out, px, vec4<f32>(dn_oct(p.normal), p.depth, max(gx, gy)));
 }
 
@@ -1236,8 +1315,30 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(out_tex, px, vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
-    let light = textureLoad(light_in, px, 0).rgb;
-    textureStore(out_tex, px, vec4<f32>(light * p.albedo, p.cover / f32(n)));
+    let filtered = textureLoad(light_in, px, 0).rgb * p.albedo;
+    // The filter may move a pixel from its own mean by no more than
+    // `DN_TRUST` of that mean's standard errors (its samples' luminance
+    // moments over their coverage): within them the change is noise
+    // removed; past them it is the picture's detail averaged away --
+    // a fractal's sub-pixel relief and colouring, which neighbours cannot
+    // stand in for -- left as blotches. As the samples gather the bound
+    // closes, and the picture converges to the samples' own.
+    // (path-tracing-research: measured against 1024 samples, filtering
+    // more made solids worse.) Below `DN_TRUST_FROM` samples the moments
+    // are too few to judge by, and the filter stands; past it the bound is
+    // `sqrt(16 / n)` errors, at least one, as the moments firm up.
+    var out = filtered;
+    if (n >= DN_TRUST_FROM) {
+        let s = pt_sum[u32(px.y) * dp.width + u32(px.x)];
+        let raw = s.rgb / s.a;
+        let se = sqrt(max(p.m2 - p.m1 * p.m1, 0.0) / max(p.cover, 1.0));
+        let gap = abs(filtered - raw);
+        let off = max(gap.r, max(gap.g, gap.b));
+        let allowed = DN_TRUST * max(sqrt(16.0 / f32(n)), 1.0) * se;
+        let r = allowed / max(off, 1.0e-30);
+        out = raw + (filtered - raw) * select(1.0, r * r, off > allowed);
+    }
+    textureStore(out_tex, px, vec4<f32>(out, p.cover / f32(n)));
 }
 "#;
 
@@ -1260,6 +1361,17 @@ const DENOISE_FULL: f32 = 8.0;
 
 /// The à-trous passes' strides.
 const DENOISE_STEPS: [u32; 5] = [1, 2, 4, 8, 16];
+
+/// The strides at `count` samples (D4): the widest dropped as the samples
+/// gather -- 16 from 8 samples on, 8 from 32 -- since the noise they average
+/// over is gone and what they still cross is the picture's own detail.
+fn denoise_steps(count: u32) -> &'static [u32] {
+    match count {
+        0..8 => &DENOISE_STEPS,
+        8..32 => &DENOISE_STEPS[..4],
+        _ => &DENOISE_STEPS[..3],
+    }
+}
 
 /// How far the denoiser reaches from a pixel, in pixels: the gradient's
 /// and the few-sample variance's neighbours, and each pass's two strides.
@@ -1425,6 +1537,12 @@ impl PathSum {
     /// for them. What the pass's uniform must say.
     pub(crate) fn guided(&self) -> bool {
         self.guided
+    }
+
+    /// Test-only: the running sum.
+    #[cfg(test)]
+    pub(crate) fn sum_buffer(&self) -> &Buffer {
+        &self.sum
     }
 
     /// What binding 10 holds: the guides, or a stand-in the shader does
@@ -1615,7 +1733,7 @@ impl PathSum {
             ],
         );
         let (mut from, mut to) = (a, b);
-        for step in DENOISE_STEPS {
+        for &step in denoise_steps(self.count) {
             let ps = params(step);
             run(
                 &mut enc,

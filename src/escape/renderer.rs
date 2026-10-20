@@ -961,6 +961,10 @@ pub struct EscapeRenderer {
     /// Test-only: no firefly clamp, to measure an estimator's bias.
     #[cfg(test)]
     pub(crate) path_no_clamp: bool,
+    /// Test-only: a rewrite of the solid path tracer's shader before it is
+    /// compiled, to measure it (path-tracing-research S1's step counts).
+    #[cfg(test)]
+    pub(crate) path_source_patch: Option<fn(String) -> String>,
     /// Completion-time GPU cost, for a device with no timestamp
     /// queries (WebGPU exposes none by default). Written by a
     /// `Queue::on_submitted_work_done` callback, drained by
@@ -1935,6 +1939,8 @@ impl EscapeRenderer {
             path_no_mis: false,
             #[cfg(test)]
             path_no_clamp: false,
+            #[cfg(test)]
+            path_source_patch: None,
             #[cfg(test)]
             force_budgeted: false,
             #[cfg(test)]
