@@ -8193,9 +8193,15 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         fdata[3 + k][3] = self.solid_material[k];
                     }
                     fdata[10][3] = self.solid_material[3];
-                    // The studio, in the camera's frame (`ifs_studio`), and
-                    // the reflectance's complement (`ifs_reflectance`).
-                    fdata[32] = [self.solid_studio, 0.0, 1.0 - self.solid_material[4], 0.0];
+                    // The studio, in the camera's frame when the lights
+                    // follow it and fixed in the fractal's when not
+                    // (`ifs_studio_frame`, `ifs::studio_basis`), and the
+                    // reflectance's complement (`ifs_reflectance`).
+                    let follow = self.solid_lighting.0.lights_follow_camera;
+                    fdata[32] = [self.solid_studio, if follow { 0.0 } else { 2.0 }, 1.0 - self.solid_material[4], 0.0];
+                    if !follow {
+                        fdata[33..36].copy_from_slice(&super::ifs::studio_basis());
+                    }
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.

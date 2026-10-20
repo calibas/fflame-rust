@@ -44,6 +44,21 @@ fn lift_path_material(value: &mut serde_json::Value) {
     }
 }
 
+/// Whether a saved escape block draws a solid, for the migrations: a
+/// built-in solid by its formula's name, a Rhai one by its carried
+/// source's `distance`.
+fn json_is_solid(esc: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let formula = esc.get("formula").and_then(|f| f.as_str()).unwrap_or_default();
+    let builtin = matches!(formula, "ifs_flame_3d" | "quaternion_julia_solid" | "kifs_solid" | "mandelbox_solid" | "mandelbulb_solid");
+    let rhai = formula.starts_with("custom-")
+        && esc
+            .get("custom_formula")
+            .and_then(|c| c.get("source"))
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| s.contains("fn distance"));
+    builtin || rhai
+}
+
 /// Current config format version.
 ///
 /// v2 introduces the cloud "opaque blob" wire format (see
@@ -66,7 +81,15 @@ fn lift_path_material(value: &mut serde_json::Value) {
 /// default change, so an absent field there always meant 1.0. Older
 /// files keep loading at 0.5: before the change an absent field was the
 /// old default, which that change deliberately moved to the new one.
-pub const CURRENT_CONFIG_VERSION: u32 = 5;
+///
+/// v5 raises a solid's and a terrain's Shadows default from 0.7 to 0.98;
+/// the v4→v5 arm restores 0.7 where an older file omitted it.
+///
+/// v6 fixes a solid's directional lights in the fractal's space by
+/// default (`SolidShadingSettings::lights_follow_camera` off); before,
+/// they turned with the camera. The v5→v6 arm keeps an older solid's
+/// lights the camera's, so it renders as it did.
+pub const CURRENT_CONFIG_VERSION: u32 = 6;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -1057,6 +1080,21 @@ pub struct SolidShadingSettings {
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
     pub lights: [SolidLight; 4],
+    /// Whether a solid's directional lights and its studio turn with the
+    /// camera (2026-10-19). Off, the default: they are fixed in the
+    /// fractal's space -- a light's azimuth around its z axis from +x, its
+    /// elevation above its xy plane, a terrain's convention -- and stay
+    /// put as the camera orbits or looks around. On: the camera's space,
+    /// azimuth 0 and elevation 0 a headlight, the lights turning with
+    /// every orbit, as every solid was lit before; a solid saved then
+    /// loads with it on (the v5 -> v6 migration), and the View panel's Fly
+    /// Mode section fixes its lights where they are
+    /// (`ui::render_mode::lights_to_world`). A solid's alone: a terrain's
+    /// lights are always the world's, a 3D flame's always the camera's
+    /// (its shade pass lights the projected picture). Not a touch of the
+    /// rig (`rig_untouched`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub lights_follow_camera: bool,
     /// The material's coat (docs/archive/projects/materials.md): its reflectance
     /// at normal incidence (0, the default, is none; 0.04 a dielectric's)
     /// and its roughness (GGX's alpha is its square) -- and the albedo's
@@ -1108,6 +1146,7 @@ impl Default for SolidShadingSettings {
                 SolidLight::default(),
                 SolidLight::default(),
             ],
+            lights_follow_camera: false,
             gloss: 0.0,
             roughness: 0.5,
             glow: 0.0,
@@ -1128,7 +1167,15 @@ impl SolidShadingSettings {
     /// switch that sun off.
     pub fn rig_untouched(&self) -> bool {
         let d = SolidShadingSettings::default();
-        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, metallic: d.metallic, reflectance: d.reflectance, ..self.clone() } == d
+        SolidShadingSettings {
+            gloss: d.gloss,
+            roughness: d.roughness,
+            glow: d.glow,
+            metallic: d.metallic,
+            reflectance: d.reflectance,
+            lights_follow_camera: d.lights_follow_camera,
+            ..self.clone()
+        } == d
     }
 
     /// Whether the shade pass should run at all.
@@ -1566,18 +1613,7 @@ impl FractalConfig {
                 // name, or a Rhai one by its carried source's `distance`.
                 4 => {
                     if let Some(esc) = obj.get_mut("escape").and_then(|e| e.as_object_mut()) {
-                        let formula = esc.get("formula").and_then(|f| f.as_str()).unwrap_or_default().to_string();
-                        let builtin_solid = matches!(
-                            formula.as_str(),
-                            "ifs_flame_3d" | "quaternion_julia_solid" | "kifs_solid" | "mandelbox_solid" | "mandelbulb_solid"
-                        );
-                        let rhai_solid = formula.starts_with("custom-")
-                            && esc
-                                .get("custom_formula")
-                                .and_then(|c| c.get("source"))
-                                .and_then(|s| s.as_str())
-                                .is_some_and(|s| s.contains("fn distance"));
-                        if builtin_solid || rhai_solid {
+                        if json_is_solid(esc) {
                             let params = esc.entry("formula_params").or_insert_with(|| serde_json::json!({}));
                             if let Some(m) = params.as_object_mut() {
                                 m.entry("shadow").or_insert(serde_json::json!(0.7));
@@ -1589,6 +1625,19 @@ impl FractalConfig {
                     }
                     if let Some(t) = obj.get_mut("sim").and_then(|s| s.get_mut("terrain")).and_then(|t| t.as_object_mut()) {
                         t.entry("shadow").or_insert(serde_json::json!(0.7));
+                    }
+                }
+                // v5 -> v6: a solid's directional lights and studio turned
+                // with the camera; now they are fixed in the fractal's
+                // space (`SolidShadingSettings::lights_follow_camera`). A
+                // solid saved before keeps the camera's, so it renders as
+                // it did.
+                5 => {
+                    if obj.get("escape").and_then(|e| e.as_object()).is_some_and(json_is_solid) {
+                        let shading = obj.entry("solid_shading").or_insert_with(|| serde_json::json!({}));
+                        if let Some(s) = shading.as_object_mut() {
+                            s.insert("lights_follow_camera".to_string(), serde_json::json!(true));
+                        }
                     }
                 }
                 other => {
@@ -2060,6 +2109,41 @@ mod tests {
         assert!(c.escape.formula_params.get("shadow").is_none(), "the def's default, 0.98");
         assert_eq!(c.escape.terrain.shadow, 0.98);
         assert_eq!(c.sim.terrain.shadow, 0.98);
+    }
+
+    /// A solid's lights became the fractal's in v6: a solid saved before --
+    /// built-in, or Rhai by its `distance` -- keeps them the camera's, rig
+    /// touched or not, and still reads as untouched when it was; a plane's
+    /// formula and a v6 solid stay with the fractal's; and every solid
+    /// preset that ships lights in the fractal's space (converted at its own
+    /// camera, `scripts/presets_lights_to_world.py`).
+    #[test]
+    fn a_solid_saved_before_v6_keeps_its_lights_on_the_camera() {
+        let file = |version: u32, escape: &str, shading: &str| {
+            format!(r#"{{"version": {version}, "render_mode": "escape", "flame": {{"name": "t", "transforms": []}}, "escape": {escape}{shading}}}"#)
+        };
+        let follows = |json: String| FractalConfig::from_json(&json).expect("loads").solid_shading.lights_follow_camera;
+        let bulb = r#"{"formula": "mandelbulb_solid"}"#;
+        let rhai = r#"{"formula": "custom-0123", "custom_formula": {"dialect": "rhai", "entry": "s", "source": "fn distance(s, p) { 0.0 }"}}"#;
+        assert!(follows(file(5, bulb, "")), "an untouched built-in solid");
+        assert!(follows(file(5, bulb, r#", "solid_shading": {"shading_strength": 1.0}"#)), "a touched one");
+        assert!(follows(file(4, rhai, "")), "a Rhai solid, through two migrations");
+        assert!(!follows(file(5, r#"{"formula": "mandelbrot"}"#, "")), "a plane's formula");
+        assert!(!follows(file(6, bulb, "")), "a v6 solid");
+        let old = FractalConfig::from_json(&file(5, bulb, "")).unwrap();
+        assert!(old.solid_shading.rig_untouched(), "the flag is not a touch of the rig");
+        // The shipped presets.
+        let presets: Vec<serde_json::Value> = serde_json::from_str(crate::resources::presets::PRESETS_JSON).unwrap();
+        let mut solids = 0;
+        for v in presets {
+            let solid = v.get("escape").and_then(|e| e.as_object()).is_some_and(json_is_solid);
+            let c = FractalConfig::from_json_value(v).unwrap();
+            if solid {
+                solids += 1;
+                assert!(!c.solid_shading.lights_follow_camera, "{}: a shipped solid's lights follow the camera", c.flame.name);
+            }
+        }
+        assert!(solids >= 20, "{solids} solid presets");
     }
 
     #[test]

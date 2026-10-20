@@ -7064,8 +7064,9 @@ fn ifs_coat_fresnel3(f0: vec3<f32>, c: f32) -> vec3<f32> {
 //__COAT_ENERGY__
 
 // The studio (3d-look-and-tools P4), fdata[32]: x its brightness (0,
-// none), y its frame -- 0 the camera's (a solid's, turning with it as its
-// lights do), 1 the world's with z up (a terrain's). Reflections and
+// none), y its frame -- 0 the camera's (a solid whose lights follow it),
+// 1 the world's with z up (a terrain's), 2 a fixed basis in fdata[33..35]
+// (a solid whose lights are the fractal's: `ifs::studio_basis`). Reflections and
 // bounces see it in place of the sky's light; the camera still sees the
 // background. Neutral white: an overhead softbox a little behind the
 // subject (what a top face seen from above mirrors), two strips behind to
@@ -7080,6 +7081,9 @@ fn ifs_reflectance() -> f32 { return 1.0 - clamp(params.fdata[32].z, 0.0, 1.0); 
 
 // A direction in the studio's frame: x right, y up, z toward the front.
 fn ifs_studio_frame(d: vec3<f32>) -> vec3<f32> {
+    if (params.fdata[32].y > 1.5) {
+        return vec3<f32>(dot(d, params.fdata[33].xyz), dot(d, params.fdata[34].xyz), -dot(d, params.fdata[35].xyz));
+    }
     if (params.fdata[32].y > 0.5) {
         return vec3<f32>(d.x, d.z, -d.y);
     }

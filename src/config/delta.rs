@@ -270,6 +270,8 @@ pub enum ConfigPath {
     GapFill,
     /// Enable/disable one of the 4 shade-pass lights.
     SolidLightEnabled { index: usize },
+    /// Whether a solid's directional lights turn with the camera.
+    SolidLightsFollowCamera,
     /// Parameter of one shade-pass light: "azimuth", "elevation",
     /// "intensity", "color_r", "color_g", "color_b".
     SolidLightParam { index: usize, param: String },
@@ -1371,6 +1373,7 @@ impl Display for ConfigPath {
             ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
             ConfigPath::GapFill => write!(f, "Gap Fill"),
             ConfigPath::SolidLightEnabled { index } => write!(f, "Light {} Enabled", index + 1),
+            ConfigPath::SolidLightsFollowCamera => write!(f, "Lights Follow Camera"),
             ConfigPath::SolidLightParam { index, param } => write!(f, "Light {} {}", index + 1, param),
             ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
             ConfigPath::Xaos { src, dst } => {
@@ -2102,6 +2105,7 @@ impl ConfigPath {
             ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
             ConfigPath::GapFill => I18nKey::simple("history.param.gap_fill"),
             ConfigPath::SolidLightEnabled { .. } => I18nKey::simple("history.param.solid_light_enabled"),
+            ConfigPath::SolidLightsFollowCamera => I18nKey::simple("history.param.solid_lights_follow_camera"),
             ConfigPath::SolidLightParam { .. } => I18nKey::simple("history.param.solid_light_param"),
             ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
@@ -3014,6 +3018,7 @@ impl ConfigPath {
             | ConfigPath::GapFill
             | ConfigPath::SolidShadowStrength
             | ConfigPath::SolidLightEnabled { .. }
+            | ConfigPath::SolidLightsFollowCamera
             | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
 
             // Tone mapping - re-run tonemap shader
@@ -3844,6 +3849,7 @@ impl ConfigPath {
             ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
             ConfigPath::GapFill => "GapFill".to_string(),
             ConfigPath::SolidLightEnabled { index } => format!("SolidLight.{}.enabled", index),
+            ConfigPath::SolidLightsFollowCamera => "SolidLightsFollowCamera".to_string(),
             ConfigPath::SolidLightParam { index, param } => format!("SolidLight.{}.{}", index, param),
             ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
@@ -3985,6 +3991,7 @@ impl ConfigPath {
             "SolidRoughness" => return Some(ConfigPath::SolidRoughness),
             "SolidGlow" => return Some(ConfigPath::SolidGlow),
             "SolidMetallic" => return Some(ConfigPath::SolidMetallic),
+            "SolidLightsFollowCamera" => return Some(ConfigPath::SolidLightsFollowCamera),
             "SolidReflectance" => return Some(ConfigPath::SolidReflectance),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
@@ -4915,7 +4922,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::ColorEffectEnabled { .. } => {
             json_as_bool(json).map(ConfigValue::Bool)
         }
-        ConfigPath::SolidLightEnabled { .. } => {
+        ConfigPath::SolidLightEnabled { .. } | ConfigPath::SolidLightsFollowCamera => {
             json.as_bool().map(ConfigValue::Bool)
         }
 
@@ -5750,6 +5757,7 @@ mod tests {
             ConfigPath::NormalSmoothing,
             ConfigPath::GapFill,
             ConfigPath::SolidLightEnabled { index: 2 },
+            ConfigPath::SolidLightsFollowCamera,
             ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() },
             ConfigPath::SolidLightParam { index: 3, param: "color_b".to_string() },
             ConfigPath::FarDensityFadeStart,

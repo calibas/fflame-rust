@@ -543,6 +543,16 @@ fn fly_controls(
             *fly_mode_toggle_requested = true;
         }
     }
+    // A solid saved while its lights turned with the camera: flying swings
+    // them. One click fixes them in the fractal where they are, the picture
+    // as it stands.
+    #[cfg(feature = "engine-escape")]
+    if kind == crate::camera::gesture::ViewKind::Solid && config_manager.active_config().solid_shading.lights_follow_camera {
+        if ui.button(t!("view.lights_to_world").as_ref()).on_hover_text(t!("view.lights_to_world_tip")).clicked() {
+            let changes = super::render_mode::lights_to_world(config_manager.active_config());
+            let _ = config_manager.update_batch(changes, "history.action.lights_to_world".to_string());
+        }
+    }
     egui::CollapsingHeader::new(t!("view.fly_mode_settings").as_ref())
         .default_open(false)
         .show(ui, |ui| {

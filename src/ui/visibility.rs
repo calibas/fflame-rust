@@ -67,6 +67,8 @@ const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 const TWO_D_ONLY: &str = "visibility.two_d_only";
 const LIGHT_FLAME: &str = "visibility.light_flame";
 const POINT_LIGHT_TERRAIN: &str = "visibility.point_light_terrain";
+/// A 3D flame's lights turn with its camera, always.
+const LIGHT_FRAME_FLAME: &str = "visibility.light_frame_flame";
 
 /// Whether a view offers a kind of light (lights-in-the-fractal, L6): a
 /// directional light everywhere; a point where the world holds still --
@@ -82,6 +84,19 @@ pub fn light_kind(kind: crate::config::LightKind, view: crate::camera::gesture::
         (LightKind::Headlamp, ViewKind::Solid | ViewKind::EscapeTerrain | ViewKind::SimTerrain) => Vis::Show,
         (LightKind::Point, ViewKind::EscapeTerrain | ViewKind::SimTerrain) => Vis::Grey(POINT_LIGHT_TERRAIN),
         _ => Vis::Grey(LIGHT_FLAME),
+    }
+}
+
+/// Whether a view's directional lights may follow the camera
+/// (`SolidShadingSettings::lights_follow_camera`): a solid's choose; a 3D
+/// flame's always do (its shade pass lights the projected picture); a
+/// terrain's never do, so it has nothing to choose.
+pub fn light_frame(view: crate::camera::gesture::ViewKind) -> Vis {
+    use crate::camera::gesture::ViewKind;
+    match view {
+        ViewKind::Solid => Vis::Show,
+        ViewKind::Flame3d => Vis::Grey(LIGHT_FRAME_FLAME),
+        _ => Vis::Hide,
     }
 }
 

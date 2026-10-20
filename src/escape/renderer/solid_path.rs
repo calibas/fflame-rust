@@ -1006,6 +1006,9 @@ mod tests {
         c.solid_shading.lights[0].enabled = true;
         c.solid_shading.lights[0].azimuth = 30.0;
         c.solid_shading.lights[0].elevation = 35.0;
+        // The scene the bars were measured on: the light at those angles
+        // from the camera (the fractal's frame lights other faces).
+        c.solid_shading.lights_follow_camera = true;
         c.background_color = [0.5, 0.6, 0.8];
         c.escape.path.bounces = 2;
         let mut r = renderer_for(&device, &c, w, h);
@@ -1951,6 +1954,57 @@ mod tests {
         assert!(a.iter().any(|x| *x > 0.05), "the glow shows");
     }
 
+    /// The Fly Mode section's conversion (2026-10-19): a solid whose lights
+    /// follow the camera, its lights fixed in the fractal where they are,
+    /// is the same picture -- two directional lights with their shadows,
+    /// and the studio, whose fixed frame is the camera's at the solids'
+    /// usual view, where this one stands -- and the lights no longer
+    /// follow. On the Mandelbulb, both tiers.
+    #[cfg(feature = "web-app")]
+    #[test]
+    fn fixing_a_solids_lights_in_the_fractal_keeps_its_picture() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const N: u32 = 96;
+        let mut c = FractalConfig::default();
+        c.render_mode = RenderMode::Escape;
+        c.escape.formula = "mandelbulb_solid".to_string();
+        c.escape.cam_yaw = 0.9;
+        c.escape.cam_pitch = 0.42;
+        c.escape.formula_params.insert("shadow".to_string(), 1.0);
+        c.escape.path.studio = true;
+        c.escape.path.samples = 8;
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.solid_shading.shading_strength = 1.0;
+        c.solid_shading.ambient = 0.0;
+        c.solid_shading.gloss = 0.06;
+        c.solid_shading.lights[1].enabled = true;
+        c.solid_shading.lights_follow_camera = true;
+        let render = |c: &FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, N, N);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        let apart = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.abs_diff(*q) > 2)).count();
+        for tier in [RenderTier::Lit, RenderTier::PathTraced] {
+            let mut old = c.clone();
+            old.escape.solid_tier = tier;
+            let mut fixed = old.clone();
+            for (path, value) in crate::ui::render_mode::lights_to_world(&old) {
+                crate::config::ConfigManager::apply_value_detached(&mut fixed, crate::config::EditingTarget::Main, &path, value).expect("applies");
+            }
+            assert!(!fixed.solid_shading.lights_follow_camera, "the lights no longer follow");
+            assert_ne!(fixed.solid_shading.lights[0].azimuth, old.solid_shading.lights[0].azimuth, "the angles turned");
+            let (a, b) = (render(&old), render(&fixed));
+            let lit = a.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+            let d = apart(&a, &b);
+            println!("  {tier:?}: {d} of {lit} lit pixels apart");
+            assert!(lit > (N * N / 10) as usize, "{tier:?}: the view shows the bulb");
+            assert!(d * 500 <= lit, "{tier:?}: {d} of {lit} pixels apart");
+        }
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far
@@ -2415,11 +2469,10 @@ mod tests {
         c.solid_shading.lights[0].color = [1.0, 0.6, 0.3];
         let sun = lit_picture(&device, &queue, &c, &palette, w, h);
 
-        // The same direction in the world, as `pack_rig3` turns it.
-        let (right, up, forward) = crate::escape::ifs::solid_frame(c.escape.cam_pitch as f64, c.escape.cam_yaw as f64, c.escape.cam_bank as f64, c.escape.rotation as f64);
+        // The same direction in the world: the light fixed in the fractal's
+        // space (the default since 2026-10-19), azimuth about z from +x.
         let (a, e) = ((az as f64).to_radians(), (el as f64).to_radians());
-        let k = [e.cos() * a.sin(), e.sin(), e.cos() * a.cos()];
-        let dir: Vec<f64> = (0..3).map(|i| right[i] * k[0] + up[i] * k[1] - forward[i] * k[2]).collect();
+        let dir = [e.cos() * a.cos(), e.cos() * a.sin(), e.sin()];
         let far = 1.0e4;
         let l = &mut c.solid_shading.lights[0];
         l.kind = crate::config::LightKind::Point;

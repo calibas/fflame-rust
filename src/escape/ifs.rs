@@ -6311,24 +6311,22 @@ fn pack_rig3(
             }
             continue;
         }
+        // In the camera's space when the lights follow it, else fixed in
+        // the fractal's (`SolidShadingSettings::lights_follow_camera`).
+        let follow = shading.lights_follow_camera;
         let (az, el) = if any {
-            (l.azimuth.to_radians() as f64, l.elevation.to_radians() as f64)
+            (l.azimuth, l.elevation)
+        } else if follow {
+            // The panel's own light-0 default, so "untouched" and "light 0
+            // as it ships" are the same picture.
+            (35.0, 40.0)
         } else {
-            // The panel's own light-0 default, so "untouched" and
-            // "light 0 as it ships" are the same picture.
-            (35f32.to_radians() as f64, 40f32.to_radians() as f64)
+            // The world's default key, which taking the rig over writes to
+            // light 0 (`ui::render_mode::rig_taken_over`).
+            default_world_key()
         };
-        // Camera space: azimuth 0, elevation 0 is a headlight, azimuth
-        // swings about the vertical and elevation tilts up. Rotated to
-        // world through the camera's own basis -- +z in camera space
-        // points BACK at the eye, which is -forward.
-        let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
-        let dir = [
-            cam.right[0] * c[0] + cam.up[0] * c[1] - cam.forward[0] * c[2],
-            cam.right[1] * c[0] + cam.up[1] * c[1] - cam.forward[1] * c[2],
-            cam.right[2] * c[0] + cam.up[2] * c[1] - cam.forward[2] * c[2],
-        ];
-        let dir = normalize3(dir);
+        let (az, el) = (az.to_radians() as f64, el.to_radians() as f64);
+        let dir = if follow { camera_light_dir(cam.right, cam.up, cam.forward, az, el) } else { world_light_dir(az, el) };
         let (colour, intensity) = if any {
             (l.color, l.intensity.max(0.0))
         } else {
@@ -6342,6 +6340,55 @@ fn pack_rig3(
         }
     }
     out[7][2] = n as f32;
+}
+
+/// A light at `az`, `el` (radians) in the solid camera's space as a world
+/// direction: azimuth 0, elevation 0 is a headlight, azimuth swings about
+/// the vertical and elevation tilts up. Rotated to world through the
+/// camera's own basis -- +z in camera space points BACK at the eye, which
+/// is -forward.
+fn camera_light_dir(right: [f64; 3], up: [f64; 3], forward: [f64; 3], az: f64, el: f64) -> [f64; 3] {
+    let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+    normalize3([
+        right[0] * c[0] + up[0] * c[1] - forward[0] * c[2],
+        right[1] * c[0] + up[1] * c[1] - forward[1] * c[2],
+        right[2] * c[0] + up[2] * c[1] - forward[2] * c[2],
+    ])
+}
+
+/// A light fixed in the fractal's space: `az` (radians) around its z axis
+/// from +x, `el` above its xy plane -- a terrain's convention
+/// (`terrain::light_direction`).
+fn world_light_dir(az: f64, el: f64) -> [f64; 3] {
+    [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()]
+}
+
+/// The fractal's-space angles, in degrees, of a light at `azimuth`,
+/// `elevation` degrees in this view's camera space: the same direction,
+/// so a picture whose lights stop following the camera is unchanged where
+/// it stands (`ui::render_mode::lights_to_world`).
+pub fn camera_light_to_world(escape: &crate::config::escape::EscapeConfig, azimuth: f32, elevation: f32) -> (f32, f32) {
+    let (right, up, forward) = solid_frame(escape.cam_pitch as f64, escape.cam_yaw as f64, escape.cam_bank as f64, escape.rotation as f64);
+    let d = camera_light_dir(right, up, forward, azimuth.to_radians() as f64, elevation.to_radians() as f64);
+    (d[1].atan2(d[0]).to_degrees() as f32, d[2].clamp(-1.0, 1.0).asin().to_degrees() as f32)
+}
+
+/// The view a solid's studio is fixed to when its lights are the fractal's
+/// (`ifs_studio_frame`'s third frame): the camera's at the solids' usual
+/// view, yaw 0.9 and pitch 0.42 -- where the shipped solid presets stand --
+/// so the studio lights them as the camera's studio did, and stays put as
+/// the camera moves. Its right, up and forward, for `fdata[33..35]`.
+pub fn studio_basis() -> [[f32; 4]; 3] {
+    let (right, up, forward) = solid_frame(0.42f32 as f64, 0.9f32 as f64, 0.0, 0.0);
+    [right, up, forward].map(|v| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0])
+}
+
+/// A solid's key light in the fractal's space for an untouched rig, to the
+/// degree: the camera's key (35, 40) as the default camera sees it, so a
+/// solid seen from where it starts is lit as an untouched one always was.
+pub fn default_world_key() -> (f32, f32) {
+    let (az, el) = camera_light_to_world(&crate::config::escape::EscapeConfig::default(), 35.0, 40.0);
+    (az.round(), el.round())
 }
 
 /// A point's or a headlamp's kind and its `fdata[28 + i]` (the rig's
@@ -6653,6 +6700,54 @@ pub fn pack_maps(
 
 #[cfg(test)]
 mod tests {
+    /// A solid's directional lights (2026-10-19): fixed in the fractal's
+    /// space, the rig's light rows are the same from every camera; following
+    /// the camera, they turn with it -- as they did before, to the bit. And a
+    /// light's angles turned into the fractal's space at a camera keep its
+    /// direction there (`camera_light_to_world`, the Fly Mode section's
+    /// conversion).
+    #[test]
+    fn a_solids_lights_are_the_fractals_or_the_cameras() {
+        use super::{camera_light_dir, camera_light_to_world, pack_rig3, solid_frame, world_light_dir, SolidCamera};
+        let camera = |pitch: f64, yaw: f64, bank: f64| {
+            let (right, up, forward) = solid_frame(pitch, yaw, bank, 0.0);
+            SolidCamera { eye: [0.0; 3], target: [0.0; 3], forward, right, up, fov: 0.7, distance: 2.0, eye_rel: forward.map(|f| -2.0 * f) }
+        };
+        let rows = |cam: &SolidCamera, shading: &crate::config::SolidShadingSettings| {
+            let mut out = [[0.0f32; 4]; 36];
+            pack_rig3(cam, shading, (0.0, 0.0, [0.0; 3]), &mut out);
+            [out[11], out[13]]
+        };
+        let mut shading = crate::config::SolidShadingSettings { shading_strength: 1.0, ..Default::default() };
+        shading.lights[1].enabled = true;
+        let (a, b) = (camera(0.4, 0.9, 0.0), camera(-0.3, 2.5, 0.4));
+        assert_eq!(rows(&a, &shading), rows(&b, &shading), "fixed in the fractal: the same from every camera");
+        let (az, el) = (shading.lights[0].azimuth.to_radians() as f64, shading.lights[0].elevation.to_radians() as f64);
+        let d = world_light_dir(az, el);
+        assert_eq!(rows(&a, &shading)[0][..3], [d[0] as f32, d[1] as f32, d[2] as f32], "the fractal's angles: z up, azimuth from +x");
+        shading.lights_follow_camera = true;
+        assert_ne!(rows(&a, &shading), rows(&b, &shading), "following the camera: turned with it");
+        // As before 2026-10-19, to the bit.
+        let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+        let old = super::normalize3(std::array::from_fn(|k| a.right[k] * c[0] + a.up[k] * c[1] - a.forward[k] * c[2]));
+        assert_eq!(rows(&a, &shading)[0][..3], [old[0] as f32, old[1] as f32, old[2] as f32]);
+        // The conversion keeps the direction, at any camera and angle.
+        let mut worst = 0.0f64;
+        for (pitch, yaw, bank) in [(0.4f32, 0.9f32, 0.0f32), (-1.2, 3.0, 0.7), (1.5, -2.0, -0.3)] {
+            let mut e = crate::config::escape::EscapeConfig::default();
+            (e.cam_pitch, e.cam_yaw, e.cam_bank) = (pitch, yaw, bank);
+            let (r, u, f) = solid_frame(pitch as f64, yaw as f64, bank as f64, 0.0);
+            for (az, el) in [(35.0f32, 40.0f32), (-95.0, 10.0), (170.0, -60.0), (0.0, 0.0)] {
+                let want = camera_light_dir(r, u, f, az.to_radians() as f64, el.to_radians() as f64);
+                let (waz, wel) = camera_light_to_world(&e, az, el);
+                let got = world_light_dir(waz.to_radians() as f64, wel.to_radians() as f64);
+                worst = worst.max((0..3).map(|k| (got[k] - want[k]).abs()).fold(0.0, f64::max));
+            }
+        }
+        println!("  the conversion's worst direction error: {worst:.1e}");
+        assert!(worst < 1.0e-6, "{worst}");
+    }
+
     /// The user's Extent reaches the packed ball, and 0 leaves the
     /// measured one alone.
     #[test]
