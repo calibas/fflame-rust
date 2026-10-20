@@ -2048,6 +2048,7 @@ impl ConfigManager {
             ConfigPath::SimTerrainTargetY => Ok(ConfigValue::Float(config.sim.terrain.target_y)),
             ConfigPath::SimTerrainTargetLift => Ok(ConfigValue::Float(config.sim.terrain.target_lift)),
             ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
+            ConfigPath::SimPathNoiseThreshold => Ok(ConfigValue::Float(config.sim.terrain.path.noise_threshold)),
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
             // The material is the picture's, beside the lights
@@ -2203,6 +2204,7 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainTier => Ok(ConfigValue::String(config.escape.terrain.tier.as_str().to_string())),
             ConfigPath::EscapeSolidTier => Ok(ConfigValue::String(config.escape.solid_tier.as_str().to_string())),
             ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
+            ConfigPath::EscapePathNoiseThreshold => Ok(ConfigValue::Float(config.escape.path.noise_threshold)),
             ConfigPath::EscapePathBounces => Ok(ConfigValue::UInt(config.escape.path.bounces)),
             ConfigPath::EscapePathEnvironment => Ok(config.escape.path.environment.into()),
             ConfigPath::EscapePathGloss => Ok(config.solid_shading.gloss.into()),
@@ -3449,6 +3451,10 @@ impl ConfigManager {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.samples = v.clamp(1, 65_536);
             }
+            ConfigPath::SimPathNoiseThreshold => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.noise_threshold = if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 };
+            }
             ConfigPath::SimPathBounces => {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.bounces = v.min(16);
@@ -3864,6 +3870,10 @@ impl ConfigManager {
             ConfigPath::EscapePathSamples => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.path.samples = v.clamp(1, 65_536);
+            }
+            ConfigPath::EscapePathNoiseThreshold => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.noise_threshold = if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 };
             }
             ConfigPath::EscapePathBounces => {
                 let v: u32 = value.try_into()?;

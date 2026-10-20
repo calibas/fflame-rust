@@ -2348,6 +2348,13 @@ pub struct PathTraceConfig {
     /// the world's. Off by default.
     #[serde(default, skip_serializing_if = "is_false")]
     pub studio: bool,
+    /// Adaptive sampling (path-tracing-research V2): a pixel stops taking
+    /// samples once its noise -- its mean's standard error as the display
+    /// shows it, in levels of 255 -- and its neighbours' are under this;
+    /// `samples` is then the most any pixel takes. 0, off: every pixel
+    /// takes `samples`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub noise_threshold: f32,
 }
 
 /// A clear sky's blue overhead.
@@ -2389,6 +2396,7 @@ impl Default for PathTraceConfig {
             sky_gradient: false,
             zenith: default_path_zenith(),
             studio: false,
+            noise_threshold: 0.0,
         }
     }
 }

@@ -529,7 +529,7 @@ sections by the view:
 
 | Section | Solid | Escape terrain | Simulation terrain | 3D flame |
 |---|---|---|---|---|
-| Rendering | render tier; samples, bounces, denoise (not Lit) | the same | the same | -- |
+| Rendering | render tier; samples, noise threshold, bounces, denoise (not Lit) | the same | the same | -- |
 | Sky | sky colour (the background, as in Colors), gradient and zenith, Studio light, Sky light (not Lit, unless the studio is on) | the same | the same | -- |
 | Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only, once Shading strength is above 0 |
 | Shading | strength, ambient, occlusion strength and reach (not Path traced) | the same, the terrain's reach | the same, the terrain's reach | strength, ambient, SSAO strength and radius, normal smoothing, gap fill |

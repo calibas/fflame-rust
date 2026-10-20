@@ -327,8 +327,119 @@ this order, each change measured before it lands:
    pieces (`pt_shade`, `pt_light`, `pt_light_add`, `pt_bounce`,
    `pt_escape`, `pt_guide_white`), the same pictures to the bit (a solid,
    a metal, a terrain, a flame's solid), the same speed within noise.
-6. [ ] V2 adaptive sampling.
+6. [x] **V2 adaptive sampling** -- built 2026-10-20, off by default (a
+   Noise threshold in the Rendering section; TERRAIN.md, *Adaptive
+   sampling*, has how it works).
+   **Its ceiling, measured first (`adaptive_sampling_potential`):** each
+   gate case rendered twice at 64 samples from two streams; on the CPU,
+   the gate's error with the same samples dealt per pixel in proportion
+   to its standard deviation as the first render estimates it (above a
+   minimum of 4 or 8), judged by the second render's variances, against
+   the same samples dealt evenly -- over the pixels a sample hit (75% of
+   these frames are sky). The samples an even deal needs to match it:
+
+   | Solid | matte | gloss | metal |
+   |---|---|---|---|
+   | Menger Sponge | 2.6-2.9x | 3.3-3.4x | 3.7-4.0x |
+   | Mandelbulb | 3.4-3.9x | 4.2-4.8x | 3.7-4.3x |
+   | Mandelbox | 7.3-8.6x | 94-115x | 42-55x |
+
+   On the glossy and metal Mandelbox 1% of the pixels hold 95-99% of the
+   error, the same pixels in both streams. A ceiling in samples, which
+   prices a sample the same on every pixel -- and that is what the build
+   found false.
+   **As built:**
+   - Per-pixel statistics after the sums, in the same binding (the solid
+     path tracer is near a browser's storage-buffer count): the samples'
+     luminance squared, the odd samples' luminance, the pixel's own count
+     (negative once converged) and its noise at the last check.
+   - The check at fixed counts (16, then each eighth more), so a picture
+     does not depend on its batching: each pixel's noise as the display
+     shows it -- its mean's standard error one up, through the exposure
+     and the display's power, in levels of 255 -- and a pixel converged
+     where it and its eight neighbours are under the threshold; the check
+     lists the pixels still sampling, and the count comes back without
+     waiting.
+   - After a check the trace takes the list, a thread an entry, so a
+     warp's lanes all still sample; each pixel draws from its own count,
+     and its sum is the plain tracer's at that count, to the bit
+     (`adaptive_pixels_draw_their_own_streams`, and the terrain's).
+   - The resolve and the denoiser read each pixel's count; a new
+     threshold reflags at the next check without restarting.
+   **Measured at equal time** (`adaptive_quality`: the time the even deal
+   needs for the adaptive picture's error, over the adaptive picture's;
+   thresholds 8, 4 and 2 levels, at most 256 samples; the Mandelbulb and
+   the Mandelbox at 1280x720 against 4096 samples, the Menger at 640x360
+   against 1024), by the gate's error / as the display shows it:
+
+   | Solid | matte | gloss | metal |
+   |---|---|---|---|
+   | Menger Sponge | 1.2-1.6x / 1.2-1.7x | 1.5-2.4x / 1.4-1.8x | 1.1-1.5x / 1.0-1.3x |
+   | Mandelbulb | 0.7-1.05x / 1.0-1.1x | 1.0x / 0.9-1.0x | 0.95-1.2x / 0.9-1.1x |
+   | Mandelbox | 1.2-2.5x / 0.9-1.4x | 2.5-6.1x / 1.8-3.3x | 1.7-3.6x / 0.9-1.9x |
+
+   At threshold 4, the mean over the nine: **1.95x** by the gate, **1.44x**
+   as shown. The samples saved were 2.5-5x; the time saved is less
+   because **the pixels that stay noisy are the costly ones** -- a sample
+   of a pixel still sampling late cost about five times the frame's
+   average on the Mandelbulb, 2.7 times on the Menger (crevices: long
+   marches, bounces that do not escape) -- so on the Mandelbulb it breaks
+   even. Below threshold 4 the gain shrinks: more pixels run to the cap,
+   and the error stalls at theirs.
+   **On the way there:**
+   - **Converged lanes were not the cost.** Without a list, a pass with
+     3.6% of the pixels still sampling kept 12.5% of the warps busy and
+     cost two thirds of a full pass: the late passes were dispatches whose
+     time is their slowest pixel's.
+   - **A barrier in the trace kernel made it 3.4 times slower** (a GTX
+     1660 SUPER): a workgroup sharing out its own block's pixels, through
+     workgroup memory and a barrier, took 1.9 s where the plain kernel took
+     0.56 s for the same samples -- without the list, without the loop,
+     with the barrier alone. Why is not measured; the list is built in
+     the check instead.
+   - **Tuning:** a first check at 8 samples, not 16, was worse on the
+     matte Mandelbox as shown (0.7-1.2x against 0.9-1.4x); the noise from
+     the odd half (|odd - all|, Cycles') was about even with the moments'
+     and a little worse at 8. Kept: 16 and the moments.
+   - **For your decision: the default.** Off keeps every picture as it
+     was. On at 4 would make most solids faster to a given noise, and the
+     Mandelbulb about as fast.
 7. [ ] D5 specular and diffuse denoised apart (metals exist now).
+
+## Found on the way (2026-10-20)
+
+Measured while building V2, at the user's invitation to look for more
+("if you find anything else worth researching or possible
+performance/quality wins"). Nothing here is built.
+
+- **A ray leaving a surface is marched far finer than its pixel.** Its
+  hit tolerance is the smaller of 0.4 of its footprint and a
+  ten-thousandth of the solid's ball (`pt_ifs_leave`, as the walk's
+  shadows are), and at the presets' views the ball's term always binds --
+  two pixels of footprint in place of 0.4 (`wide`) changed nothing. Loosening that cap is
+  the largest saving found (`path_quality_against_a_reference` with
+  `PT_PATCH`, 1080p, 64 samples against 1024):
+
+  | Cap | Mandelbulb | Mandelbox | Menger Sponge |
+  |---|---|---|---|
+  | 3e-4 of the ball | 1.39x faster; RMSE 10.0% -> 14.5%, bias -1.1% | 1.24x; 2.8% -> 9.0%, -0.6% | 1.24x |
+  | 1e-3 of the ball | 1.89x; 10.0% -> 30.8%, -3.1% | 1.51x; 2.8% -> 19.7%, -1.4% | 1.59x |
+
+  The cost: near-misses count as hits, so fine shadows and crevices
+  darken -- most on the Mandelbulb, whose distance estimate is not a
+  strict bound. A quality-for-speed choice (a draft setting, or a cap per
+  solid by how exact its estimate is), **for your decision**; the lit
+  tier's shadows share the rule, so the tiers would part unless both move.
+- **A hit's normal is not a cost.** Four distance calls at a
+  tetrahedron's corners (`tetra`) in place of six were no faster, and
+  moved the picture far more than a normal estimate should (RMSE 9% to
+  56% on the Mandelbulb at 320x180): the solids' estimates are not smooth
+  at that scale. Not worth more.
+- **Noise and cost go together on these solids** (V2 above): a pixel
+  still noisy late costs 3-5 times the average sample. Anything that
+  shortens a crevice's path -- Russian roulette from the first bounce
+  rather than the second, the cap above for bounce rays alone -- is worth
+  more here than its share of pixels suggests. Unmeasured.
 
 Sources: Blender 4.0 shading release notes; Veach and Guibas 1995; Dammertz
 et al. 2010; Kaplanyan and Dachsbacher 2013; Karis 2013, 2014; Kulla and

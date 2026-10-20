@@ -29,6 +29,8 @@
 //! which both get from the same text (`assembler::IFS_RIG`'s family).
 
 use crate::config::FractalConfig;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use wgpu::*;
 
 /// The path tracer's settings for a pass (plan section 4).
@@ -67,6 +69,26 @@ pub struct PathSettings {
     /// Multiple importance sampling of the coat and the lights (P4; on):
     /// off only to measure it against.
     pub mis: bool,
+    /// Adaptive sampling (V2): the noise, in the display's levels of 255,
+    /// under which a pixel stops taking samples ([`PathSum::check_if_due`];
+    /// 0, off).
+    pub noise_threshold: f32,
+    /// How the display shows the accumulator's units, for the noise's
+    /// levels: the tone map's exposure, and the power the display raises
+    /// the exposed value to -- its gamma and the sRGB encoding, `shown`
+    /// inverted.
+    pub display: [f32; 2],
+}
+
+impl PathSettings {
+    /// What starts a sum over when it changes: everything but the noise
+    /// threshold's value -- a pixel's samples do not depend on it, and the
+    /// next check flags the pixels by the new one -- though turning it on
+    /// or off does (the statistics start with the sum).
+    pub fn restart_key(&self) -> String {
+        let on = if self.noise_threshold > 0.0 { 1.0 } else { 0.0 };
+        format!("{:?}", PathSettings { noise_threshold: on, ..*self })
+    }
 }
 
 impl Default for PathSettings {
@@ -87,6 +109,8 @@ impl Default for PathSettings {
             sky: None,
             studio: 0.0,
             mis: true,
+            noise_threshold: 0.0,
+            display: [1.0, 1.0 / 2.2],
         }
     }
 }
@@ -135,6 +159,7 @@ pub fn path_settings_from(
         .max(studio * STUDIO_PEAK);
     let target = target.max(1.0e-30);
     let material = lit_material(config);
+    let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
     PathSettings {
         bounces: t.bounces.min(16),
         environment: env,
@@ -150,6 +175,8 @@ pub fn path_settings_from(
         sky,
         studio,
         mis: true,
+        noise_threshold: if t.noise_threshold.is_finite() { t.noise_threshold.max(0.0) } else { 0.0 },
+        display: [config.exposure.max(1.0e-6), 1.0 / (2.2 * gamma)],
     }
 }
 
@@ -243,6 +270,7 @@ pub(crate) struct PathParamsGpu {
     lens: [f32; 4],
     band: [u32; 4],
     sky: [f32; 4],
+    list: [u32; 4],
 }
 
 impl PathParamsGpu {
@@ -273,9 +301,19 @@ impl PathParamsGpu {
                 settings.lake_roughness.clamp(0.02, 1.0),
             ],
             lens: [settings.aperture.max(0.0), settings.focus.max(1.0e-6), if settings.mis { 1.0 } else { 0.0 }, 0.0],
-            band: [band.0, band.1, u32::from(settings.denoise), 0],
+            band: [band.0, band.1, u32::from(settings.denoise) | u32::from(settings.noise_threshold > 0.0) << 1, 0],
             sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
+            list: [0; 4],
         }
+    }
+
+    /// Sampling adaptively once a check has listed the pixels still
+    /// sampling (V2): the dispatch takes `entries` of the list from its
+    /// `first`, a thread an entry, in place of a band's rect. Its
+    /// workgroups go across in a row of at most [`LIST_ROW`].
+    pub(crate) fn from_list(mut self, first: u32, entries: u32) -> Self {
+        self.list = [first, entries, 1, 0];
+        self
     }
 
     /// The dispatch starts at column `x0` (a tile of a band): its
@@ -298,6 +336,16 @@ impl PathParamsGpu {
     }
 }
 
+/// Workgroups in a row of a list's dispatch: `main`'s `PT_LIST_ROW`.
+pub(crate) const LIST_ROW: u32 = 1024;
+
+/// A list dispatch's workgroups for `entries` of it, 64 a workgroup, in
+/// rows of [`LIST_ROW`].
+pub(crate) fn list_groups(entries: u32) -> (u32, u32) {
+    let groups = entries.div_ceil(64).max(1);
+    (groups.min(LIST_ROW), groups.div_ceil(LIST_ROW))
+}
+
 /// Samples an Auto tier gathers before the path tracer's picture
 /// replaces the lit tier's: below this the noise reads worse than the lit
 /// picture.
@@ -317,7 +365,14 @@ pub(crate) const PT_CORE_WGSL: &str = r#"
 @group(0) @binding(9) var<uniform> pt: PtParams;
 // The denoiser's guides, two a pixel, summed with the samples weighted
 // by their coverage: (albedo, the light's luminance squared) and
-// (normal, distance). Written only when `pt.band.z` asks.
+// (normal, distance). Written only when `pt.band.z`'s first bit asks.
+//
+// With adaptive sampling (V2; `pt.band.z`'s second bit) the sum holds a
+// second vec4 a pixel after the frame's sums: its samples' luminance
+// squared, its odd samples' luminance, its count -- negative once it has
+// converged -- and its noise at the last check (`PATH_ADAPT_WGSL`); and
+// after those the last check's list of the pixels still sampling: their
+// number, then their indices, four a vec4.
 @group(0) @binding(10) var<storage, read_write> pt_guide: array<vec4<f32>>;
 
 struct PtParams {
@@ -343,12 +398,18 @@ struct PtParams {
     lens: vec4<f32>,
     // x: the dispatch's first row, y: its rows (a band, for a geometry
     // whose sample would outlast the GPU's watchdog over a whole frame),
-    // z: 1 to gather the denoiser's guides, w: its first column (a band
-    // too costly for one dispatch goes across in tiles).
+    // z: bit 1 to gather the denoiser's guides, bit 2 adaptive sampling,
+    // w: its first column (a band too costly for one dispatch goes across
+    // in tiles).
     band: vec4<u32>,
     // A gradient sky's zenith radiance, and 1 when there is one: the
     // environment (`env`) is then the horizon's.
     sky: vec4<f32>,
+    // Adaptive sampling's list (V2): z 1 when the dispatch traces the
+    // pixels the last check listed as still sampling, x entries from its
+    // first, y of them -- a thread an entry, 64 a workgroup, the
+    // workgroups in rows of `PT_LIST_ROW` -- in place of `band`'s rect.
+    list: vec4<u32>,
 };
 
 // The environment's radiance from direction d: uniform, or the gradient
@@ -1002,27 +1063,32 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     return radiance;
 }
 
-// Each invocation adds its pixel's samples, in order, to the running
-// sum: the same bits however the samples are split into dispatches --
-// and, its random numbers keyed by its place in the whole frame, however
-// the frame is split into tiles.
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let tile = pt_tile();
-    let y = gid.y + pt.band.x;
-    let x = gid.x + pt.band.w;
-    if (x >= tile.z || gid.y >= pt.band.y || y >= tile.w) {
-        return;
-    }
+// A pixel's samples, in order, added to its running sum: the same bits
+// however the samples are split into dispatches -- and, its random
+// numbers keyed by its place in the whole frame, however the frame is
+// split into tiles. Sampling adaptively, a pixel draws from its own
+// count, so its samples are the same stream however many the frame's
+// other pixels have taken, and one that has converged takes none.
+fn pt_trace_pixel(x: u32, y: u32, tile: vec4<u32>) {
     let idx = y * tile.z + x;
     let fx = tile.x + x;
     let fy = tile.y + y;
-    pt_scene_begin();
+    let adaptive = (pt.band.z & 2u) != 0u;
+    let si = tile.z * tile.w + idx;
+    var first = pt.sample_base;
+    var st = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if (adaptive && pt.sample_base != 0u) {
+        st = pt_sum[si];
+        if (st.z < 0.0) {
+            return;
+        }
+        first = u32(st.z);
+    }
     var sum = pt_sum[idx];
     if (pt.sample_base == 0u) {
         sum = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    let guided = pt.band.z != 0u;
+    let guided = (pt.band.z & 1u) != 0u;
     var g0 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var g1 = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if (guided && pt.sample_base != 0u) {
@@ -1032,7 +1098,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel = pt_hash((fy * params.width + fx) * 0x9E3779B9u + pt.seed);
     for (var s = 0u; s < pt.samples; s = s + 1u) {
         pt_seed = pixel;
-        pt_index = pt.sample_base + s;
+        pt_index = first + s;
         pt_dim = 0u;
         // A sample that meets no surface -- the sky -- reports none: its
         // guides are an albedo of one, which divides nothing out, and a
@@ -1048,12 +1114,57 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             g0 = g0 + vec4<f32>(pt_g_albedo * v.a, l * l * v.a);
             g1 = g1 + vec4<f32>(pt_g_normal * v.a, pt_g_t * v.a);
         }
+        if (adaptive) {
+            // The sample as the pixel shows it, premultiplied.
+            let l = dot(v.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            st.x = st.x + l * l;
+            st.y = st.y + select(0.0, l, (pt_index & 1u) != 0u);
+        }
     }
     pt_sum[idx] = sum;
+    if (adaptive) {
+        pt_sum[si] = vec4<f32>(st.x, st.y, f32(first + pt.samples), st.w);
+    }
     if (guided) {
         pt_guide[2u * idx] = g0;
         pt_guide[2u * idx + 1u] = g1;
     }
+}
+
+// Workgroups in a row of a list's dispatch (`PathParamsGpu::from_list`).
+const PT_LIST_ROW: u32 = 1024u;
+
+// Each invocation, its pixel's samples: the band's rect's, or -- sampling
+// adaptively, once a check has listed the pixels still sampling -- a list
+// entry's, so a warp's lanes are 32 pixels that all still sample, not a
+// block of the frame where most have converged. (A workgroup sharing out
+// its own block's would need a barrier, and one in this kernel made the
+// march 3.4 times slower on a GTX 1660 SUPER.)
+@compute @workgroup_size(8, 8, 1)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(workgroup_id) wg: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
+    let tile = pt_tile();
+    var x = gid.x + pt.band.w;
+    var y = gid.y + pt.band.x;
+    if (pt.list.z != 0u) {
+        let k = (wg.y * PT_LIST_ROW + wg.x) * 64u + li;
+        let p = tile.z * tile.w;
+        let listed = u32(pt_sum[2u * p].x);
+        if (k >= pt.list.y || pt.list.x + k >= listed) {
+            return;
+        }
+        let e = pt.list.x + k;
+        let idx = u32(pt_sum[2u * p + 1u + e / 4u][e % 4u]);
+        x = idx % tile.z;
+        y = idx / tile.z;
+    } else if (x >= tile.z || gid.y >= pt.band.y || y >= tile.w) {
+        return;
+    }
+    pt_scene_begin();
+    pt_trace_pixel(x, y, tile);
 }
 "#;
 
@@ -1062,7 +1173,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// contract. Rows above `split` hold one sample more than `count` (a
 /// banded pass part-way down the frame), and so do the columns left of
 /// `split_col` of the band from it to `band_end` (a band part-way across:
-/// [`PathSplit`]).
+/// [`PathSplit`]). Sampling adaptively, each pixel's count is its own.
 pub(crate) const PATH_RESOLVE_WGSL: &str = r#"
 struct ResolveParams {
     width: u32,
@@ -1071,7 +1182,7 @@ struct ResolveParams {
     split: u32,
     band_end: u32,
     split_col: u32,
-    pad0: u32,
+    adaptive: u32,
     pad1: u32,
 };
 @group(0) @binding(0) var<uniform> rp: ResolveParams;
@@ -1089,7 +1200,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         rgb = s.rgb / s.a;
     }
     let ahead = gid.y < rp.split || (gid.y < rp.band_end && gid.x < rp.split_col);
-    let n = rp.count + select(0u, 1u, ahead);
+    var n = rp.count + select(0u, 1u, ahead);
+    if (rp.adaptive != 0u) {
+        n = u32(abs(pt_sum[rp.width * rp.height + gid.y * rp.width + gid.x].z));
+    }
     // A row no sample has reached yet: nothing there, whatever the sum
     // still holds from before.
     if (n == 0u) {
@@ -1131,6 +1245,11 @@ struct DenoiseParams {
     // The band part-way across, as the resolve has it.
     band_end: u32,
     split_col: u32,
+    // 1: each pixel's count is its own (adaptive sampling).
+    adaptive: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 @group(0) @binding(0) var<uniform> dp: DenoiseParams;
 @group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
@@ -1158,8 +1277,12 @@ fn dn_lum(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
-// A pixel's samples: the count, one more where the pass has been.
+// A pixel's samples: the count, one more where the pass has been; or,
+// sampling adaptively, its own.
 fn dn_n(x: u32, y: u32) -> u32 {
+    if (dp.adaptive != 0u) {
+        return u32(abs(pt_sum[dp.width * dp.height + y * dp.width + x].z));
+    }
     let ahead = y < dp.split || (y < dp.band_end && x < dp.split_col);
     return dp.count + select(0u, 1u, ahead);
 }
@@ -1457,6 +1580,139 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// Adaptive sampling's check (path-tracing-research V2), over the sum's
+/// per-pixel statistics (the second vec4 a pixel, after the frame's sums;
+/// `PT_CORE_WGSL`'s `main` gathers them):
+/// - `error`: each pixel's noise -- its mean's standard error, from its
+///   samples' moments, or (`halves`) the gap between its odd samples' mean
+///   and its whole mean (Dammertz et al. 2010, as Cycles) -- in the
+///   display's levels of 255: how far one error above the mean shows,
+///   through the tone map's exposure and the display's power on it.
+///   Written in the statistics' w.
+/// - `converge`: a pixel converges where its noise and its eight
+///   neighbours' are under the threshold -- an unconverged pixel keeps
+///   its neighbours sampling, and a converged one wakes when a
+///   neighbour's noise rises; the flag is its count's sign. The pixels
+///   still sampling are counted and listed after the statistics, a
+///   workgroup's together (its block of the frame: a warp tracing the
+///   list takes neighbours where it can).
+/// - `publish`: the list's length at its head, for the tracer.
+///
+/// Passes apart since each reads what the one before writes.
+pub(crate) const PATH_ADAPT_WGSL: &str = r#"
+struct AdaptParams {
+    width: u32,
+    height: u32,
+    halves: u32,
+    pad0: u32,
+    threshold: f32,
+    exposure: f32,
+    power: f32,
+    pad1: f32,
+};
+@group(0) @binding(0) var<uniform> ap: AdaptParams;
+@group(0) @binding(1) var<storage, read_write> pt_sum: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> ap_active: atomic<u32>;
+
+var<workgroup> ap_group: atomic<u32>;
+var<workgroup> ap_base: u32;
+
+fn ap_lum(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// The level of 255 the display shows a radiance at.
+fn ap_level(x: f32) -> f32 {
+    let v = x * ap.exposure;
+    return select(0.0, 255.0 * pow(v, ap.power), v > 0.0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn error(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= ap.width || gid.y >= ap.height) {
+        return;
+    }
+    let i = gid.y * ap.width + gid.x;
+    let k = ap.width * ap.height + i;
+    let st = pt_sum[k];
+    let n = abs(st.z);
+    var err = 1.0e30;
+    if (n >= 2.0) {
+        let m = ap_lum(pt_sum[i].rgb) / n;
+        var se = sqrt(max(st.x / n - m * m, 0.0) / (n - 1.0));
+        if (ap.halves != 0u) {
+            se = abs(st.y / floor(n * 0.5) - m);
+        }
+        err = ap_level(m + se) - ap_level(m);
+    }
+    pt_sum[k].w = err;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn converge(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if (li == 0u) {
+        atomicStore(&ap_group, 0u);
+    }
+    workgroupBarrier();
+    var rank = 0xffffffffu;
+    if (gid.x < ap.width && gid.y < ap.height) {
+        let base = ap.width * ap.height;
+        var worst = 0.0;
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            for (var dx = -1; dx <= 1; dx = dx + 1) {
+                let q = vec2<i32>(gid.xy) + vec2<i32>(dx, dy);
+                if (q.x < 0 || q.y < 0 || q.x >= i32(ap.width) || q.y >= i32(ap.height)) {
+                    continue;
+                }
+                worst = max(worst, pt_sum[base + u32(q.y) * ap.width + u32(q.x)].w);
+            }
+        }
+        let k = base + gid.y * ap.width + gid.x;
+        let n = abs(pt_sum[k].z);
+        let done = worst < ap.threshold;
+        pt_sum[k].z = select(n, -n, done);
+        if (!done) {
+            rank = atomicAdd(&ap_group, 1u);
+        }
+    }
+    workgroupBarrier();
+    if (li == 0u) {
+        ap_base = atomicAdd(&ap_active, atomicLoad(&ap_group));
+    }
+    workgroupBarrier();
+    if (rank != 0xffffffffu) {
+        let e = ap_base + rank;
+        pt_sum[2u * ap.width * ap.height + 1u + e / 4u][e % 4u] = f32(gid.y * ap.width + gid.x);
+    }
+}
+
+@compute @workgroup_size(1, 1, 1)
+fn publish() {
+    pt_sum[2u * ap.width * ap.height].x = f32(atomicLoad(&ap_active));
+}
+"#;
+
+/// Adaptive sampling's first check (V2), in samples a pixel: from fewer
+/// the noise is too rough to judge by, and a rare bright path (a glint
+/// the coat's lobe finds now and then) has had little chance to show.
+pub(crate) const ADAPTIVE_MIN_SAMPLES: u32 = 16;
+
+/// Whether adaptive sampling checks at `count` samples: at `min`, then
+/// each time the count has grown by an eighth (at least one) -- fixed
+/// counts, so a picture does not depend on how its samples were batched.
+fn adaptive_check_at(count: u32, min: u32) -> bool {
+    count > 0 && next_adaptive_check(count - 1, min) == count
+}
+
+/// The first count past `count` adaptive sampling checks at.
+fn next_adaptive_check(count: u32, min: u32) -> u32 {
+    let mut c = min.max(1);
+    while c <= count {
+        c += (c / 8).max(1);
+    }
+    c
+}
+
 /// How many of the noise's standard deviations two pixels' lights may
 /// differ by and still be averaged: SVGF's 4. Measured against 1, 2 and
 /// 8 on a terrain and two solids at 4 and 16 samples, it was the best or
@@ -1521,11 +1777,24 @@ impl PathSplit {
     }
 }
 
+/// Adaptive sampling's check (V2): its passes, and the counter of the
+/// pixels still sampling.
+struct Adapt {
+    error: ComputePipeline,
+    converge: ComputePipeline,
+    publish: ComputePipeline,
+    active: Buffer,
+}
+
 /// A path tracer's per-pixel sum (premultiplied radiance, coverage),
 /// the samples in it, and the pass that resolves it into an output.
 pub(crate) struct PathSum {
+    /// `px` pixels' sums, and -- sampling adaptively (`sections` 2) -- as
+    /// many pixels' statistics and the last check's list after them
+    /// ([`Self::size`]).
     sum: Buffer,
     px: u32,
+    sections: u32,
     count: u32,
     resolve_layout: BindGroupLayout,
     resolve_pipeline: ComputePipeline,
@@ -1541,6 +1810,27 @@ pub(crate) struct PathSum {
     /// When the denoiser last ran: the count and split it filtered, and
     /// the time (`resolve`'s schedule).
     denoised: Option<(u32, PathSplit, web_time::Instant)>,
+    /// Adaptive sampling (V2): on, and whether its statistics were asked
+    /// for and did not fit (warned once).
+    adaptive: bool,
+    adaptive_refused: bool,
+    adapt: Option<Adapt>,
+    /// The first check's count ([`ADAPTIVE_MIN_SAMPLES`]) and the noise
+    /// measured from the odd half rather than the moments.
+    adapt_min: u32,
+    adapt_halves: bool,
+    /// The last check: its count and threshold, and its sequence number.
+    checked: Option<(u32, f32)>,
+    check_seq: u32,
+    /// The checks' counts of the pixels still sampling, in flight: the
+    /// check's sequence number, whether it has landed (1, 2 failed), and
+    /// where it lands.
+    pending: Vec<(u32, Arc<AtomicU8>, Buffer)>,
+    /// The pixels still sampling at the last check, once its count is
+    /// back; and the latest count back from any check, for a price.
+    active: Option<u32>,
+    last_active: Option<u32>,
+    last_active_seq: u32,
 }
 
 impl PathSum {
@@ -1601,8 +1891,9 @@ impl PathSum {
             mapped_at_creation: false,
         });
         PathSum {
-            sum: Self::create(device, px),
+            sum: Self::create(device, px, 1),
             px,
+            sections: 1,
             count: 0,
             resolve_layout,
             resolve_pipeline,
@@ -1613,7 +1904,238 @@ impl PathSum {
             no_guide,
             denoiser: None,
             denoised: None,
+            adaptive: false,
+            adaptive_refused: false,
+            adapt: None,
+            adapt_min: ADAPTIVE_MIN_SAMPLES,
+            adapt_halves: false,
+            checked: None,
+            check_seq: 0,
+            pending: Vec::new(),
+            active: None,
+            last_active: None,
+            last_active_seq: 0,
         }
+    }
+
+    /// Sample adaptively from now on (V2), or not: each pixel's
+    /// statistics after the sums, where both fit in one binding. True
+    /// when that changed: the statistics start with the sum, so the caller
+    /// starts it over.
+    pub(crate) fn set_adaptive(&mut self, device: &Device, on: bool) -> bool {
+        let limits = device.limits();
+        let fits = Self::size(self.px, 2) <= (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size);
+        if on && !fits && !self.adaptive_refused {
+            log::warn!("Adaptive sampling is off for this picture: its {} pixels' statistics exceed one storage binding", self.px);
+        }
+        self.adaptive_refused = on && !fits;
+        let on = on && fits;
+        let changed = on != self.adaptive;
+        self.adaptive = on;
+        if on && self.sections < 2 {
+            self.sum.destroy();
+            self.sections = 2;
+            self.sum = Self::create(device, self.px, 2);
+        }
+        changed
+    }
+
+    /// Whether the sum samples adaptively: asked for, and room for its
+    /// statistics. What the pass's uniform must say.
+    pub(crate) fn adaptive(&self) -> bool {
+        self.adaptive
+    }
+
+    /// Test-only: the first check's count, and the noise from the odd
+    /// half (Dammertz's) rather than the moments.
+    #[cfg(test)]
+    pub(crate) fn tune_adaptive(&mut self, min: u32, halves: bool) {
+        self.adapt_min = min.max(2);
+        self.adapt_halves = halves;
+    }
+
+    /// Whether the passes trace the last check's list of the pixels still
+    /// sampling (`PathParamsGpu::from_list`): sampling adaptively, once a
+    /// check has run.
+    pub(crate) fn listed(&self) -> bool {
+        self.adaptive && self.checked.is_some()
+    }
+
+    /// The count the next check is at, sampling adaptively: a dispatch
+    /// of several samples stops there.
+    pub(crate) fn next_check(&self) -> Option<u32> {
+        self.adaptive.then(|| next_adaptive_check(self.count, self.adapt_min))
+    }
+
+    /// Whether the sum is done: `target` samples, or -- sampling
+    /// adaptively -- every pixel converged at the last check whose count
+    /// is back ([`Self::poll`]). A converged pixel wakes only at a check
+    /// that finds a neighbour noisier, and with none sampling none can.
+    pub(crate) fn done(&self, target: u32) -> bool {
+        self.count >= target || (self.adaptive && self.active == Some(0))
+    }
+
+    /// The pixels still sampling at the last check, once its count is
+    /// back: the list's length.
+    pub(crate) fn active(&self) -> Option<u32> {
+        self.adaptive.then_some(self.active).flatten()
+    }
+
+    /// The pixels still sampling at the latest check whose count is back,
+    /// if not the last: what the list's length is likely to be, to price
+    /// a pass by until the last's comes back (it changes by a few percent
+    /// a check). None after a check under a new threshold, which may wake
+    /// any number.
+    pub(crate) fn active_estimate(&self) -> Option<u32> {
+        self.adaptive.then_some(self.active.or(self.last_active)).flatten()
+    }
+
+    /// Collect the checks' counts that have landed, without waiting.
+    pub(crate) fn poll(&mut self, device: &Device) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let _ = device.poll(PollType::Poll);
+        let mut keep = Vec::new();
+        for (seq, flag, stage) in std::mem::take(&mut self.pending) {
+            match flag.load(Ordering::Acquire) {
+                0 => keep.push((seq, flag, stage)),
+                state => {
+                    if state == 1 {
+                        let v = {
+                            let data = stage.slice(..4).get_mapped_range();
+                            u32::from_le_bytes(data[0..4].try_into().expect("four bytes"))
+                        };
+                        stage.unmap();
+                        // Only the last check's: an earlier one's count
+                        // is not the pixels' now, though it is an
+                        // estimate of it.
+                        if seq == self.check_seq {
+                            self.active = Some(v);
+                        }
+                        if seq.wrapping_sub(self.last_active_seq) as i32 > 0 {
+                            self.last_active = Some(v);
+                            self.last_active_seq = seq;
+                        }
+                    }
+                    stage.destroy();
+                }
+            }
+        }
+        self.pending = keep;
+    }
+
+    /// A new noise threshold (V2): a sum the last check found done may
+    /// not be under it, so it is not done until a check under it says so
+    /// -- the next dispatch's ([`Self::check_if_due`]). The sum's samples
+    /// stand: each pixel's are its own, and the check flags them afresh.
+    /// True when it was so.
+    pub(crate) fn retune(&mut self, threshold: f32) -> bool {
+        if !self.adaptive || !(threshold > 0.0) || !self.checked.is_some_and(|(_, t)| t != threshold) {
+            return false;
+        }
+        self.active = None;
+        self.last_active = None;
+        true
+    }
+
+    /// Adaptive sampling's check (V2), when one is due: at the counts
+    /// [`adaptive_check_at`] names, or at once when the threshold has
+    /// changed since the last. Its passes over the frame (`w` by `h`;
+    /// [`PATH_ADAPT_WGSL`]) flag the pixels that have converged and list
+    /// those still sampling, and their count comes back without waiting
+    /// ([`Self::poll`], [`Self::done`]). Submits its own work. True when
+    /// it ran: a pass over the list starts again on the new one.
+    pub(crate) fn check_if_due(&mut self, device: &Device, queue: &Queue, w: u32, h: u32, settings: &PathSettings) -> bool {
+        let threshold = settings.noise_threshold;
+        if !self.adaptive || !(threshold > 0.0) || self.count < self.adapt_min {
+            return false;
+        }
+        let at_point = adaptive_check_at(self.count, self.adapt_min) && self.checked.is_none_or(|(c, _)| c != self.count);
+        let retuned = self.checked.is_some_and(|(_, t)| t != threshold);
+        if !(at_point || retuned) {
+            return false;
+        }
+        self.checked = Some((self.count, threshold));
+        self.check_seq = self.check_seq.wrapping_add(1);
+        self.active = None;
+        if retuned {
+            self.last_active = None;
+        }
+        let a = self.adapt.get_or_insert_with(|| {
+            let module = device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Path Adapt"),
+                source: ShaderSource::Wgsl(PATH_ADAPT_WGSL.into()),
+            });
+            let make = |entry: &str| {
+                device.create_compute_pipeline(&ComputePipelineDescriptor {
+                    label: Some(&format!("Path Adapt {entry}")),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+            Adapt {
+                error: make("error"),
+                converge: make("converge"),
+                publish: make("publish"),
+                active: device.create_buffer(&BufferDescriptor {
+                    label: Some("Path Adapt Active"),
+                    size: 4,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            }
+        });
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Adapt Params"),
+            size: 32,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let [exposure, power] = settings.display;
+        queue.write_buffer(&params, 0, bytemuck::cast_slice(&[w, h, u32::from(self.adapt_halves), 0, threshold.to_bits(), exposure.to_bits(), power.to_bits(), 0]));
+        queue.write_buffer(&a.active, 0, &[0u8; 4]);
+        let stage = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Adapt Readback"),
+            size: 4,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Path Adapt") });
+        for (pipeline, counted) in [(&a.error, false), (&a.converge, true), (&a.publish, true)] {
+            let mut entries = vec![
+                BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: self.sum.as_entire_binding() },
+            ];
+            if counted {
+                entries.push(BindGroupEntry { binding: 2, resource: a.active.as_entire_binding() });
+            }
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Path Adapt"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Path Adapt"), timestamp_writes: None });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            if std::ptr::eq(pipeline, &a.publish) {
+                pass.dispatch_workgroups(1, 1, 1);
+            } else {
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+        }
+        enc.copy_buffer_to_buffer(&a.active, 0, &stage, 0, 4);
+        queue.submit(std::iter::once(enc.finish()));
+        let landed = Arc::new(AtomicU8::new(0));
+        let flag = landed.clone();
+        stage.slice(..4).map_async(MapMode::Read, move |r| {
+            flag.store(if r.is_ok() { 1 } else { 2 }, Ordering::Release);
+        });
+        self.pending.push((self.check_seq, landed, stage));
+        true
     }
 
     /// Gather the denoiser's guides with the samples from now on, or
@@ -1669,10 +2191,18 @@ impl PathSum {
         }
     }
 
-    fn create(device: &Device, px: u32) -> Buffer {
+    /// The sum's bytes for `px` pixels: their sums, and -- sampling
+    /// adaptively (`sections` 2) -- their statistics, and the list's
+    /// length and its entries, four a vec4.
+    fn size(px: u32, sections: u32) -> u64 {
+        let px = px as u64;
+        16 * if sections > 1 { 2 * px + 1 + px.div_ceil(4) } else { px }
+    }
+
+    fn create(device: &Device, px: u32, sections: u32) -> Buffer {
         device.create_buffer(&BufferDescriptor {
             label: Some("Path Sum"),
-            size: px as u64 * 16,
+            size: Self::size(px, sections),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
@@ -1682,11 +2212,10 @@ impl PathSum {
     pub(crate) fn ensure(&mut self, device: &Device, px: u32) {
         if px > self.px {
             self.sum.destroy();
-            self.sum = Self::create(device, px);
+            self.sum = Self::create(device, px, self.sections);
             self.px = px;
         }
-        self.count = 0;
-        self.denoised = None;
+        self.reset();
     }
 
     pub(crate) fn buffer(&self) -> &Buffer {
@@ -1702,6 +2231,12 @@ impl PathSum {
     pub(crate) fn reset(&mut self) {
         self.count = 0;
         self.denoised = None;
+        self.checked = None;
+        // A count in flight is the old picture's.
+        self.check_seq = self.check_seq.wrapping_add(1);
+        self.active = None;
+        self.last_active = None;
+        self.last_active_seq = self.check_seq;
     }
 
     /// `n` more samples are in it, over the whole frame.
@@ -1740,7 +2275,7 @@ impl PathSum {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, split.band_end, split.col, 0, 0]));
+        queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, split.band_end, split.col, u32::from(self.adaptive), 0]));
         let bg = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Path Resolve"),
             layout: &self.resolve_layout,
@@ -1814,12 +2349,13 @@ impl PathSum {
         let params = |step: u32| {
             let buf = device.create_buffer(&BufferDescriptor {
                 label: Some("Path Denoise Params"),
-                size: 32,
+                size: 48,
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             let sigma = DENOISE_SIGMA * (DENOISE_FULL / self.count.max(1) as f32).sqrt().min(1.0);
-            queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, step, sigma.to_bits(), split.band_end, split.col]));
+            let adaptive = u32::from(self.adaptive);
+            queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[w, h, self.count, split.row, step, sigma.to_bits(), split.band_end, split.col, adaptive, 0, 0, 0]));
             buf
         };
         let (gx, gy) = (w.div_ceil(8), h.div_ceil(8));
@@ -1879,6 +2415,9 @@ impl PathSum {
     pub(crate) fn destroy(&self) {
         self.sum.destroy();
         self.no_guide.destroy();
+        if let Some(a) = &self.adapt {
+            a.active.destroy();
+        }
         if let Some(g) = &self.guide {
             g.destroy();
         }

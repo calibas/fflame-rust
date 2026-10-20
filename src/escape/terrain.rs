@@ -4156,6 +4156,16 @@ impl TerrainRenderer {
         self.path.count()
     }
 
+    /// Whether the path tracer's sum is done: `target` samples, or --
+    /// sampling adaptively (V2) -- every pixel converged at a check whose
+    /// count has come back (polled here, without waiting) under
+    /// `noise_threshold` (a new one reopens it: `PathSum::retune`).
+    pub fn path_done(&mut self, device: &Device, target: u32, noise_threshold: f32) -> bool {
+        self.path.retune(noise_threshold);
+        self.path.poll(device);
+        self.path.done(target)
+    }
+
     /// The path tracer's mean into the output now -- denoised, if it is,
     /// whatever the denoiser's schedule says (`PathSum::resolve`).
     /// Submits its own work.
@@ -4168,7 +4178,11 @@ impl TerrainRenderer {
     /// the output (a denoised one on the denoiser's schedule:
     /// `resolve_path` for the current one). Submits its own work. The
     /// samples are the next ones in order, so the sum is the same bits
-    /// however they are split.
+    /// however they are split. Sampling adaptively (V2), a dispatch stops
+    /// at the next check, the check follows it, and once one has run the
+    /// passes trace its list of the pixels still sampling -- the whole
+    /// list a dispatch, a terrain's sample being cheap; fewer than
+    /// `samples` once every pixel has converged.
     pub fn render_path(
         &mut self,
         device: &Device,
@@ -4188,7 +4202,12 @@ impl TerrainRenderer {
         if self.path.set_guided(device, settings.denoise) {
             self.path.reset();
         }
-        let settings = &PathSettings { denoise: self.path.guided(), ..*settings };
+        if self.path.set_adaptive(device, settings.noise_threshold > 0.0) {
+            self.path.reset();
+        }
+        self.path.poll(device);
+        let noise_threshold = if self.path.adaptive() { settings.noise_threshold } else { 0.0 };
+        let settings = &PathSettings { denoise: self.path.guided(), noise_threshold, ..*settings };
         let atlas = self.atlas.as_ref().expect("checked");
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
@@ -4197,11 +4216,18 @@ impl TerrainRenderer {
         // A ray's share of a pixel per unit of distance: half a pixel,
         // since the jitter already spreads the samples over the whole.
         let per_ray = (view.camera.fov * 0.5).tan() / self.frame.1.max(1) as f32;
+        let px = self.out_w * self.out_h;
         let mut done = 0;
-        while done < samples {
-            let n = per_dispatch.max(1).min(samples - done);
-            let buf = PathParamsGpu::new(settings, self.path.count(), n, per_ray, view.shadow, radius, (0, self.out_h))
-                .buffer(device, queue);
+        while done < samples && !self.path.done(u32::MAX) {
+            self.path.poll(device);
+            let count = self.path.count();
+            let n = per_dispatch.max(1).min(samples - done).min(self.path.next_check().map_or(u32::MAX, |c| c - count));
+            let listed = self.path.listed();
+            let mut buf = PathParamsGpu::new(settings, count, n, per_ray, view.shadow, radius, (0, self.out_h));
+            if listed {
+                buf = buf.from_list(0, px);
+            }
+            let buf = buf.buffer(device, queue);
             let bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Terrain Path"),
                 layout: &self.path_layout,
@@ -4227,10 +4253,16 @@ impl TerrainRenderer {
                 let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Path"), timestamp_writes: None });
                 pass.set_pipeline(self.rig_pipeline(placed, 2));
                 pass.set_bind_group(0, &bg, &[]);
-                pass.dispatch_workgroups(gx, gy, 1);
+                if listed {
+                    let (lx, ly) = super::path_core::list_groups(px);
+                    pass.dispatch_workgroups(lx, ly, 1);
+                } else {
+                    pass.dispatch_workgroups(gx, gy, 1);
+                }
             }
             queue.submit(std::iter::once(enc.finish()));
             self.path.add(n);
+            let _ = self.path.check_if_due(device, queue, self.out_w, self.out_h, settings);
             done += n;
         }
         // The mean, into the output.
@@ -6524,6 +6556,55 @@ pub(crate) mod gpu_tests {
         assert!(sums.windows(2).all(|p| p[0] == p[1]), "the sums differ across batchings");
         let f: &[f32] = bytemuck::cast_slice(&sums[0]);
         assert!(f.iter().any(|v| *v > 0.0), "something was traced");
+    }
+
+    /// Adaptive sampling on a terrain (V2): each pixel's sum is, to the
+    /// bit, the plain tracer's at that pixel's own count -- some stopped
+    /// early, some went to the end, traced from the check's list --
+    /// however the samples were batched; and at a threshold nothing
+    /// exceeds, every pixel stops at the first check.
+    #[test]
+    fn a_terrain_samples_adaptively_in_its_own_streams() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 30u32);
+        let px = (w * h) as usize;
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let albedo: Vec<[f32; 4]> = (0..n * m).map(|k| [0.3 + 0.5 * ((k % 7) as f32 / 7.0), 0.6, 0.4, 1.0]).collect();
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let v = view(camera([64.0, 48.0, 8.0], 0.6, 0.4, 150.0, 0.9));
+        let plain = PathSettings { bounces: 3, environment: [0.3, 0.4, 0.6], clamp: 10.0, seed: 3, ..PathSettings::default() };
+        const TARGET: u32 = 24;
+        let adaptive = |r: &mut TerrainRenderer, threshold: f32, per: u32| {
+            r.path.tune_adaptive(4, false);
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &PathSettings { noise_threshold: threshold, ..plain }, TARGET, per);
+            let a: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, r.path_sum_for_test(), (px * 32) as u64)).to_vec();
+            a
+        };
+        let a = adaptive(&mut r, 3.0, 1);
+        assert!(a == adaptive(&mut r, 3.0, 5) && a == adaptive(&mut r, 3.0, 24), "the batching moved the adaptive sum");
+        let counts: Vec<u32> = (0..px).map(|k| a[px + k][2].abs() as u32).collect();
+        let early = counts.iter().filter(|&&k| k < TARGET).count();
+        println!("{early} of {px} pixels stopped early");
+        assert!(early > 0 && early < px, "{early} of {px}: the test needs both");
+        let mut distinct = counts.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        for &k in &distinct {
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &plain, k, k);
+            let u: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, r.path_sum_for_test(), (px * 16) as u64)).to_vec();
+            for i in (0..px).filter(|&i| counts[i] == k) {
+                assert_eq!(a[i], u[i], "pixel {i} at {k} samples");
+            }
+        }
+        let all = adaptive(&mut r, 1.0e6, 8);
+        assert!((0..px).all(|k| all[px + k][2] == -4.0), "every pixel converged at the first check");
     }
 
     /// A still drawn in tiles (T5's output tiling) is the still drawn
