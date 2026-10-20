@@ -279,6 +279,53 @@ coloring."
    Orbit `linear3D` changes nothing; an Orbit translation moves the trap
    colouring as the trap moved.
 
+**Step 1's design (2026-10-19, after a survey of the language).** `vary`
+today inlines only the user's own 2D Rhai variations, on numbers and
+complex values: the IR has no vector and no external call, and nothing
+marks a program GPU-only. So:
+- **The language:** in a solid, `vary("name", v[, #{ param: value }])`
+  of a vector and a BUILT-IN variation with a 3D body lowers to a new
+  statement, `Stmt::Map` / `IStmt::Map { call, input: [x, y, z], out:
+  [three floats] }` -- one call, not three -- the solid's `call`-th.
+  A parameter's value is a number or one of the solid's own
+  parameters (`p.scale`), recorded on the program
+  (`Program::maps`, `MapCall { variation, params }`). Refused outside a
+  solid, in `prepare` and in `escaped` (pure); the interpreter, which
+  runs a solid only in tests, refuses it; the derivation passes never
+  see a solid.
+- **The WGSL:** `let m = esc_solid_map(call, vec3(x, y, z));` and the
+  three parts. `esc_solid_map` is the maps glue's, and calls
+  `flame_map3(slot, p, seed)`, the maps flame built in 3D
+  (`ShaderBuilder::build_layer_map3_at`: the variations' 3D bodies),
+  the solid's calls after the lens and the transformations.
+- **The parameters:** a number is in the pipeline's key; a solid
+  parameter's value is written to the maps' buffer each frame, so a
+  slider recompiles nothing.
+- **The lens** of a solid that calls one is the 3D body at z = 0 (a
+  variation with no 3D body cannot be its lens then: it is the
+  identity).
+- The distance estimate is the solid's to keep honest: a variation
+  stretches space, and `distance` divides by what the steps did -- a
+  solid's author scales its derivative for the variation, as
+  Mandelbulber's transforms ask of theirs.
+- Considered and set aside for now: **Iteration transformations for
+  every solid** (C4's stage in mode D, through the Transformations
+  panel): no language, every solid at once -- but the built-ins' distance
+  estimates cannot know a variation's stretch, so a march through them
+  oversteps. A follow-up, with a step factor.
+
+**Step 1 done 2026-10-19** as designed (ESCAPE.md, *A solid calls
+built-in flame variations*). Measured: `linear3D` in the KIFS Menger
+example's step is the example to the pixel; `spherical3D` is its Rhai
+twin to the pixel (1,776 of 9,216 pixels from the example); `julia3D`
+with its power bound to the solid's scale is it at the number. 26 match
+sites took an arm: walkers read the map's input and write its parts;
+the derivative passes give up on one (no derivative through a
+variation); the perturbation emitters and the big-float reference,
+which a solid never reaches, say so. A new example,
+`solid-inverted-menger.rhai`. Step 2 (Orbit transformations for solids'
+colourings) not built: it needs a hook in each built-in solid's walk.
+
 ## P6. Fly mode: collisions, and speed by proximity
 
 "Collisions in Fly Mode (path/ray tracing)? Another option to adjust
@@ -332,6 +379,6 @@ compensation, the environment, AgX).
 2. [x] P2 the 3D look and Lit toward Path traced, 2026-10-19.
 3. [x] P3 the Lighting & Material panel, 2026-10-19.
 4. [x] P4 materials, 2026-10-19 (step 5, light size, left for the user).
-5. [ ] P5 flame variations in solids, Orbit colouring.
+5. [~] P5 flame variations in solids: step 1 done 2026-10-19; step 2, Orbit colouring for solids, not built.
 6. [~] P6 fly mode: solids done 2026-10-19; terrains (step 4) not built.
 7. [x] P7 research written up (alongside), 2026-10-19.

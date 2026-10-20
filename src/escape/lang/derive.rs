@@ -141,6 +141,17 @@ fn tainted(p: &Program) -> Vec<bool> {
                                 *changed = true;
                             }
                         }
+                        // A solid's map follows the pixel as its input does.
+                        IStmt::Map { input, out, .. } => {
+                            if input.iter().any(|x| follows(x, t)) {
+                                for v in out {
+                                    if !t[*v] {
+                                        t[*v] = true;
+                                        *changed = true;
+                                    }
+                                }
+                            }
+                        }
                         // An array follows the pixel once an element does.
                         IStmt::SetElem { var, index, value } => {
                             if !t[*var] && (follows(value, t) || follows(index, t)) {
@@ -205,7 +216,12 @@ fn needed(p: &Program) -> Vec<bool> {
                     mark(index, need, changed);
                     mark(value, need, changed);
                 }
-                IStmt::Assign(..) | IStmt::SetElem { .. } => {}
+                IStmt::Map { input, out, .. } if out.iter().any(|v| need[*v]) => {
+                    for x in input.iter() {
+                        mark(x, need, changed);
+                    }
+                }
+                IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
                 IStmt::If { arms, otherwise } => {
                     for (_, b) in arms {
                         walk(b, need, changed);
@@ -286,6 +302,8 @@ impl D<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                // No derivative through a solid's call of a variation.
+                IStmt::Map { .. } => return None,
                 IStmt::Assign(place, e) => {
                     let target = match place {
                         Place::Z => Some(self.dz),
@@ -644,6 +662,8 @@ impl J<'_> {
         let mut out = Vec::new();
         for s in stmts {
             match s {
+                // No derivative through a solid's call of a variation.
+                IStmt::Map { .. } => return None,
                 IStmt::Assign(place, e) => {
                     let target = match place {
                         Place::Z => Some(self.dz),

@@ -410,6 +410,47 @@ mod tests {
     /// What `vary` refuses: a name that is no variation of the user's, a
     /// built-in's (a later step), a parameter the variation lacks, a
     /// form that is not one.
+    /// A solid calls a built-in variation's 3D body (3d-look-and-tools
+    /// P5, C3): `vary("name", v)` of a vector is one map call, its
+    /// parameters numbers or the solid's own, and its WGSL calls the maps
+    /// flame (`esc_solid_map`); and it is refused where it cannot be -- in
+    /// `prepare`, of a variation of the user's, with a value per pixel, of
+    /// a parameter it does not have.
+    #[test]
+    fn a_solid_calls_a_built_in_variation() {
+        use crate::escape::lang::ir::{MapCall, MapValue};
+        let solid = |step: &str, extra: &str| {
+            format!(
+                "const PARAMS = #{{ k: #{{ value: 0.5 }} }};\nconst INFO = #{{ title: \"t\", radius: 2.0 }};\n{extra}\n\
+                 fn start(pos, p) {{ #{{ z: pos }} }}\nfn step(s, p) {{ {step} s }}\nfn distance(s, p) {{ length(s.z) - 1.0 }}"
+            )
+        };
+        let src = solid("s.z = vary(\"linear3D\", s.z) * 0.9; s.z = vary(\"julia3D\", s.z, #{ power: p.k }); s.z = vary(\"julia3D\", s.z, #{ power: -3 });", "");
+        let p = crate::escape::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{}", d[0].message));
+        assert_eq!(
+            p.maps,
+            vec![
+                MapCall { variation: "linear3D".into(), params: vec![] },
+                MapCall { variation: "julia3D".into(), params: vec![("power".into(), MapValue::Param("k".into()))] },
+                MapCall { variation: "julia3D".into(), params: vec![("power".into(), MapValue::Const(-3.0))] },
+            ]
+        );
+        let base = crate::escape::ifs::template_parameters().len();
+        let w = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
+        for k in 0..3 {
+            assert!(w.contains(&format!("esc_solid_map({k}u, vec3<f32>(")), "call {k}:\n{w}");
+        }
+        crate::escape::lang::wgsl::validate_solid(&w).expect("validates");
+        let refused = |src: String, says: &str| {
+            let d = crate::escape::lang::rhai::solid(&src).err().unwrap_or_else(|| panic!("compiled: {src}"));
+            assert!(d.iter().any(|x| x.message.contains(says)), "{says}: {:?}", d.iter().map(|x| &x.message).collect::<Vec<_>>());
+        };
+        refused(solid("", "fn prepare(p) { #{ q: vary(\"linear3D\", vec3(1.0, 0.0, 0.0)) } }"), "GPU");
+        refused(solid("s.z = vary(\"no_such_thing\", s.z);", ""), "not a built-in variation with a 3D body");
+        refused(solid("s.z = vary(\"julia3D\", s.z, #{ power: s.z.x });", ""), "per picture");
+        refused(solid("s.z = vary(\"julia3D\", s.z, #{ weight: 2.0 });", ""), "has no parameter `weight`");
+    }
+
     #[test]
     fn vary_refuses_what_it_cannot_inline() {
         let msg = |src: &str| match lang::rhai::with_variations(&bend_scope(), || lang::rhai::program(src)) {

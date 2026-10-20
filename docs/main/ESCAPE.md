@@ -509,8 +509,8 @@ fn escaped(s, p) {
   `variations` with the sources it called (`with_called_variations`,
   flat: a variation a variation calls too), so the config carries them,
   and `name_of` hashes them, so a changed variation is a changed entry.
-  A built-in variation is refused (C3, maybe). Example:
-  `assets/formulas/whorled-mandelbrot.rhai`.
+  A built-in variation is refused in a formula; a solid calls built-ins
+  (below). Example: `assets/formulas/whorled-mandelbrot.rhai`.
 - **A Rhai solid** (the KIFS plan, B3; `EntryKind::Solid`, a file with
   `fn distance`): `fn start(pos, p)` returns the state from the point
   being measured -- `z`, the iterate, a vector, and `dr`, the running
@@ -525,6 +525,34 @@ fn escaped(s, p) {
   its Ball Radius, since mode D's `fdata` is the walk's -- and function
   parameters (`function: "sin"`) are menus as a formula's. Example:
   `assets/formulas/solid-kifs-menger.rhai`, which uses both.
+- **A solid calls built-in flame variations** (3d-look-and-tools P5,
+  C3; 2026-10-19): `vary("name", v)` or `vary("name", v, #{ param:
+  value })` of a vector, in `start`, `step` or `distance`, applies the
+  built-in's 3D body to `v`. It lowers to one statement
+  (`ast::Stmt::Map` / `ir::IStmt::Map { call, input, out }`, the
+  solid's `call`-th, into three float locals), recorded on the program
+  (`Program::maps`, a `MapCall { variation, params }` each). A
+  parameter's value is a number or one of the solid's float
+  parameters (`p.name`), read per picture -- written to the maps'
+  buffer each frame, so a slider recompiles nothing; the rest are the
+  variation's defaults. The WGSL is `esc_solid_map(call, v)`, the maps
+  flame's glue (`lens::maps_glue_in`), which applies `flame_map3`: the
+  escape view's maps flame built in 3D (`build_layer_map3_at`, each
+  variation's 3D body, z kept) with the solid's calls after the lens and
+  the transformations. With calls, the lens is the 3D body at z = 0 (a
+  lens variation with no 3D body maps as the identity then). GPU only:
+  refused in `prepare` and in `escaped`, and the interpreter refuses it;
+  the derivation passes never see a solid. Refused also: a variation
+  with no 3D body or of the user's (`vary("x", complex(v.x, v.y))` takes
+  one of those on the plane), a value per pixel, an unknown parameter.
+  The distance a solid gives is its own to keep honest: a variation
+  stretches space. Example: `assets/formulas/solid-inverted-menger.rhai`
+  (the sponge inverted in the unit sphere by `spherical3D`, its distance
+  multiplied back by the inversion's stretch). Gates:
+  `a_solid_calls_a_built_in_variation` (the language),
+  `a_solid_calls_built_in_variations` (the GPU: `linear3D` the identity
+  to the pixel, `spherical3D` its Rhai twin to the pixel, a parameter
+  bound to the solid's as the number).
 - **Vectors** (`rhai/vec.rs`; the KIFS plan, B1): `vec3(x, y, z)` (or
   `vec3(s)`), its parts `v.x`, `v.y`, `v.z` read and set, `+`, `-`, `*`
   and `/` (by a number, or part by part), `dot`, `cross`, `length`,

@@ -126,6 +126,11 @@ pub enum Stmt {
     If { arms: Vec<(Expr, Vec<Stmt>)>, otherwise: Option<Vec<Stmt>>, span: Span },
     While { cond: Expr, body: Vec<Stmt>, span: Span },
     Repeat { body: Vec<Stmt>, cond: Expr, span: Span },
+    /// A solid's `call`-th call of a built-in flame variation on a vector
+    /// (3d-look-and-tools P5, C3): the 3D body applied to `input`, its
+    /// parts into the three float variables `out`. Never parsed: the Rhai
+    /// dialect's `vary` lowers to it, in a solid alone (`ir::MapCall`).
+    Map { call: u32, input: Box<[Expr; 3]>, out: [String; 3], span: Span },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

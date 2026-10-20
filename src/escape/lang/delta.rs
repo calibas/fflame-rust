@@ -228,8 +228,8 @@ fn stmt_reads_foreign(s: &IStmt, p: &Program) -> bool {
     match s {
         IStmt::Assign(Place::Var(v), x) => !(p.vars[*v].perturb) || e(x, p),
         IStmt::Assign(_, x) => e(x, p),
-        // The equations write no array.
-        IStmt::SetElem { .. } => true,
+        // The equations write no array, nor call a solid's variation.
+        IStmt::SetElem { .. } | IStmt::Map { .. } => true,
         IStmt::If { arms, otherwise } => {
             arms.iter().any(|(c, b)| e(c, p) || b.iter().any(|s| stmt_reads_foreign(s, p))) || otherwise.iter().any(|s| stmt_reads_foreign(s, p))
         }
@@ -366,7 +366,7 @@ fn uniform_vars(p: &Program) -> Vec<bool> {
         for s in stmts {
             match s {
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e)),
-                IStmt::Assign(..) | IStmt::SetElem { .. } => {}
+                IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
                 IStmt::If { arms, otherwise } => {
                     for (_, b) in arms {
                         assigns(b, out);
@@ -495,6 +495,7 @@ pub(crate) fn init_cases(p: &Program) -> Option<Vec<InitCase>> {
 fn walk_init(stmts: &[IStmt], mut cases: Vec<InitCase>, p: &Program) -> Option<Vec<InitCase>> {
     for s in stmts {
         match s {
+            IStmt::Map { .. } => return None,
             IStmt::Assign(place, e) => {
                 for c in &mut cases {
                     let mut ok = true;
@@ -675,6 +676,13 @@ pub(crate) fn last_was_too_large() -> bool {
 fn assigned_in(stmts: &[IStmt], out: &mut Vec<VarId>, dz: &mut bool) {
     for s in stmts {
         match s {
+            IStmt::Map { out: parts, .. } => {
+                for v in parts {
+                    if !out.contains(v) {
+                        out.push(*v);
+                    }
+                }
+            }
             IStmt::Assign(Place::Var(v), _) => {
                 if !out.contains(v) {
                     out.push(*v);
@@ -700,6 +708,7 @@ fn stmt_nodes(s: &IStmt) -> usize {
         IStmt::SetElem { index, value, .. } => 1 + nodes(index) + nodes(value),
         IStmt::If { arms, otherwise } => 1 + arms.iter().map(|(c, b)| nodes(c) + block(b)).sum::<usize>() + block(otherwise),
         IStmt::While { cond, body } | IStmt::Repeat { body, cond } => 1 + nodes(cond) + block(body),
+        IStmt::Map { input, .. } => 1 + input.iter().map(nodes).sum::<usize>(),
     }
 }
 
@@ -1899,6 +1908,7 @@ fn stmt_reads_var(s: &IStmt, v: VarId) -> bool {
     match s {
         IStmt::Assign(_, x) => e(x, v),
         IStmt::SetElem { index, value, .. } => e(index, v) || e(value, v),
+        IStmt::Map { input, .. } => input.iter().any(|x| e(x, v)),
         IStmt::If { arms, otherwise } => {
             arms.iter().any(|(c, b)| e(c, v) || b.iter().any(|s| stmt_reads_var(s, v))) || otherwise.iter().any(|s| stmt_reads_var(s, v))
         }
@@ -1911,6 +1921,7 @@ fn strip_assigns(stmts: &mut Vec<IStmt>, v: VarId) {
     stmts.retain(|s| !matches!(s, IStmt::Assign(Place::Var(w), _) if *w == v));
     for s in stmts {
         match s {
+            IStmt::Map { .. } => {}
             IStmt::If { arms, otherwise } => {
                 for (_, b) in arms {
                     strip_assigns(b, v);
@@ -1937,6 +1948,7 @@ pub(crate) fn writes_var(stmts: &[IStmt], v: VarId) -> bool {
         IStmt::Assign(Place::Var(w), _) => *w == v,
         IStmt::Assign(..) => false,
         IStmt::SetElem { var, .. } => *var == v,
+        IStmt::Map { out, .. } => out.contains(&v),
         IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes_var(b, v)) || writes_var(otherwise, v),
         IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes_var(body, v),
     })

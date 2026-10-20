@@ -509,7 +509,9 @@ function takes the point, and the ids when it has parameters (as
   measured ones (`lens::lens_menu`).
 - **Inside a formula**: `vary("name", z)` inlines one into an escape
   formula or colouring, the entry carrying its source
-  ([ESCAPE.md](ESCAPE.md#the-formula-language)).
+  ([ESCAPE.md](ESCAPE.md#the-formula-language)). A Rhai solid calls a
+  BUILT-IN variation's 3D body on a vector the same way, through the
+  maps flame built in 3D (`flame_map3`).
 - **Hooks** (`escape::lang::wgsl::variation_shape`): `rand()` declares
   `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
   `WritesColor`; `init(p)` and `this.name` are per-thread state

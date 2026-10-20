@@ -264,6 +264,7 @@ fn checked(lowered: Lowered, kind: EntryKind) -> Result<Program, Vec<Diag>> {
             if p.reads(super::ir::Predef::Pass) {
                 p.cycle = lowered.cycle;
             }
+            p.maps = lowered.maps;
             Ok(p)
         }
         _ => Err(diags),
@@ -304,6 +305,9 @@ pub struct Lowered {
     names: Vec<(String, String)>,
     /// The variations `vary` inlined, `(name, source)`, first call first.
     pub variations: Vec<(String, String)>,
+    /// A solid's calls of built-in variations, by their `Stmt::Map`'s
+    /// `call` (3d-look-and-tools P5).
+    pub maps: Vec<super::ir::MapCall>,
 }
 
 impl Lowered {
@@ -364,6 +368,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         names: Vec::new(),
         fresh: 0,
         variations: Vec::new(),
+        maps: Vec::new(),
         param_vecs: HashSet::new(),
         three,
         solid: kind == EntryKind::Solid,
@@ -375,6 +380,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
     let mut out = l.run(&ast, kind).map_err(|d| vec![d])?;
     out.names = l.names;
     out.variations = l.variations;
+    out.maps = l.maps;
     // The checker's names for what the context reads.
     for (uf, rhai) in CTX_FIELDS {
         out.names.push((format!("#{uf}"), format!("ctx.{rhai}")));
@@ -536,6 +542,8 @@ struct Lowerer<'s> {
     fresh: usize,
     /// The variations `vary` inlined, `(name, source)`.
     variations: Vec<(String, String)>,
+    /// A solid's calls of built-in variations (P5), `call` their index.
+    maps: Vec<super::ir::MapCall>,
     /// The vector parameters (B1), each three float parameters
     /// `name_x`, `name_y`, `name_z`.
     param_vecs: HashSet<String>,
@@ -769,7 +777,7 @@ impl<'s> Lowerer<'s> {
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
         let entry = Entry { name: title, setting, span, body: span, sections, default, switch: Settings::default() };
-        Ok(Lowered { entry, cycle, names: Vec::new(), variations: Vec::new() })
+        Ok(Lowered { entry, cycle, names: Vec::new(), variations: Vec::new(), maps: Vec::new() })
     }
 
     /// A transformation's function as its section (UF's `transform:`):

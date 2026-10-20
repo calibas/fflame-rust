@@ -1722,6 +1722,68 @@ mod tests {
         }
     }
 
+    /// A Rhai solid calls built-in flame variations (3d-look-and-tools P5,
+    /// C3), through the maps flame built in 3D: the shipped KIFS Menger
+    /// example calling `linear3D` in its step is the example, pixel for
+    /// pixel; calling `spherical3D` (an inversion) is the same inversion
+    /// written in Rhai, to the march's edge pixels, and not the example;
+    /// and a parameter bound to the solid's own (`power: p.scale`, the
+    /// scale's default 3) reaches the variation as the number does.
+    #[test]
+    fn a_solid_calls_built_in_variations() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        use crate::config::escape::{CustomDialect, CustomSource};
+        const N: u32 = 96;
+        let base = include_str!("../../../assets/formulas/solid-kifs-menger.rhai").replace("\r\n", "\n");
+        assert!(base.contains("fn step(s, p) {\n"), "the example's step");
+        let with = |line: &str| base.replacen("fn step(s, p) {\n", &format!("fn step(s, p) {{\n    {line}\n"), 1);
+        let coverage = |src: &str| -> Vec<bool> {
+            let source = CustomSource { dialect: CustomDialect::Rhai, entry: "menger".to_string(), source: src.to_string(), variations: Vec::new() };
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Solid, &source);
+            c.escape.custom_formula = Some(source);
+            c.escape.cam_yaw = 0.9;
+            c.escape.cam_pitch = 0.42;
+            c.escape.formula_params.insert("shadow".to_string(), 0.0);
+            c.escape.formula_params.insert("occlusion".to_string(), 0.0);
+            let white = crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] };
+            c.palette = crate::scene::palette::Palette {
+                name: "White".to_string(),
+                stops: vec![white.clone(), crate::scene::palette::ColorStop { position: 1.0, ..white }],
+                locked: false,
+                built_in: false,
+            };
+            let job = crate::renderer::RenderJob::new(&c, N, N);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+            out.rgba_data.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).collect()
+        };
+        let apart = |a: &[bool], b: &[bool]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+        let plain = coverage(&base);
+        let covered = plain.iter().filter(|x| **x).count();
+        let ident = coverage(&with("s.z = vary(\"linear3D\", s.z);"));
+        let inverted = coverage(&with("s.z = vary(\"spherical3D\", s.z);"));
+        let twin = coverage(&with("s.z = s.z * (1.0 / max(dot(s.z, s.z), 1e-30));"));
+        println!(
+            "  the example covers {covered} of {}; linear3D apart {}; spherical3D apart from its twin {}, from the example {}",
+            N * N,
+            apart(&plain, &ident),
+            apart(&inverted, &twin),
+            apart(&inverted, &plain)
+        );
+        assert!(covered > (N * N / 20) as usize, "the view shows the sponge: {covered}");
+        assert_eq!(apart(&plain, &ident), 0, "linear3D is the identity");
+        assert!(apart(&inverted, &twin) <= (N * N / 400) as usize, "spherical3D is its twin");
+        assert!(apart(&inverted, &plain) > (N * N / 100) as usize, "spherical3D does something");
+        let bound = coverage(&with("s.z = vary(\"julia3D\", s.z, #{ power: p.scale });"));
+        let number = coverage(&with("s.z = vary(\"julia3D\", s.z, #{ power: 3 });"));
+        println!("  julia3D at the solid's scale apart from at 3: {}", apart(&bound, &number));
+        assert_eq!(apart(&bound, &number), 0, "the solid's parameter reaches the variation");
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far

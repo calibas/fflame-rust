@@ -254,6 +254,8 @@ impl BigMachine {
     fn exec(&mut self, stmts: &[IStmt]) -> R<()> {
         for s in stmts {
             match s {
+                // A solid's alone; a reference orbit is a formula's.
+                IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in a reference orbit"),
                 IStmt::Assign(place, e) => {
                     let v = self.eval(e)?;
                     match place {

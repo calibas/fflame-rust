@@ -282,6 +282,12 @@ fn place_slot(p: Place) -> Option<Slot> {
 /// Every slot a statement reads or writes, in order.
 fn slots_of_stmt(s: &IStmt, out: &mut Vec<Slot>) {
     match s {
+        IStmt::Map { input, out: parts, .. } => {
+            for x in input.iter() {
+                slots_of_expr(x, out);
+            }
+            out.extend(parts.iter().map(|v| Slot::Var(*v)));
+        }
         IStmt::Assign(place, e) => {
             slots_of_expr(e, out);
             out.extend(place_slot(*place));
@@ -782,6 +788,7 @@ impl<'p> Printer<'p> {
 
     fn stmt(&mut self, st: &IStmt) -> R<()> {
         match st {
+            IStmt::Map { .. } => return Err("a solid's call of a built-in variation has no Rhai spelling of its own here".to_string()),
             IStmt::SetElem { var, index, value } => {
                 // Declared by `body` before its first statement.
                 let target = self.target(Slot::Var(*var))?;

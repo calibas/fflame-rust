@@ -41,6 +41,9 @@ struct Registry {
     /// the template's), and where its globals do (after its parameters,
     /// its colour depth and its ball).
     solid_globals: HashMap<String, (usize, usize)>,
+    /// A solid's calls of built-in variations (3d-look-and-tools P5),
+    /// which the maps flame carries ([`solid_maps`]).
+    solid_maps: HashMap<String, Vec<ir::MapCall>>,
     /// The colourings keeping more than four floats: the `vec4`s of
     /// state past the first ([`accum_ext`]).
     accum_ext: HashMap<String, usize>,
@@ -472,6 +475,12 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     };
     let def: &'static super::ifs::IfsDef = Box::leak(Box::new(def));
     super::ifs::register_custom_solid(def);
+    // Its calls of built-in variations, which the maps flame carries.
+    if !p.maps.is_empty() {
+        if let Ok(mut r) = registry().write() {
+            r.solid_maps.insert(name.to_string(), p.maps.clone());
+        }
+    }
     // Its `prepare`, which the renderer has the interpreter compute.
     if !p.globals.is_empty() {
         if let Ok(mut r) = registry().write() {
@@ -707,6 +716,8 @@ pub fn bla_steps(escape: &EscapeConfig, orbit: &[[f64; 2]], reference: lang::bui
                 arms.iter().any(|(c, b)| varies(c, p) || branches_on_the_iterate(b, p)) || branches_on_the_iterate(otherwise, p)
             }
             IStmt::While { .. } | IStmt::Repeat { .. } => true,
+            // A solid's: never a formula's straight-line step.
+            IStmt::Map { .. } => true,
         })
     }
     if branches_on_the_iterate(&prog.loop_body, &prog) {
@@ -1262,6 +1273,13 @@ pub fn accum_ext(name: &str) -> usize {
 /// UF runs `global:` once per image; the renderer asks every frame, so
 /// the last answer per name is kept and reused while nothing it read
 /// has changed.
+/// The calls of built-in flame variations the solid `name` makes, by their
+/// `call` (3d-look-and-tools P5): empty for none, or for a solid not
+/// compiled (`ensure` compiles one first).
+pub fn solid_maps(name: &str) -> Vec<ir::MapCall> {
+    registry().read().ok().and_then(|r| r.solid_maps.get(name).cloned()).unwrap_or_default()
+}
+
 pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(usize, Vec<f32>)> {
     let (p, base, at) = {
         let r = registry().read().ok()?;
@@ -1872,6 +1890,10 @@ mod tests {
                     IStmt::Assign(_, e) => first(e, p, inits, found),
                     IStmt::SetElem { .. } => {
                         *found = Some("an array written in the loop".into());
+                        return;
+                    }
+                    IStmt::Map { .. } => {
+                        *found = Some("a solid's call of a variation".into());
                         return;
                     }
                     IStmt::If { arms, otherwise } => {
