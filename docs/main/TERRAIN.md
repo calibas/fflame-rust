@@ -287,7 +287,26 @@ is the default key light. The solid presets carry the same.
   rig's shaders; `metallic` in the 3D flame's shade pass.
 - **Roughness** (0.02 to 1): the coat's GGX roughness (alpha is its
   square).
-- **Glow:** the albedo's own light.
+- **Glow:** the colour's own light.
+- **Reflectance** (0 to 1, default 1; 2026-10-19): how much of its colour
+  the surface reflects. The albedo every tier lights is the colour times
+  it -- the diffuse, a metal's coat colour and every bounce -- while the
+  glow and the unshaded colour (Shading strength below 1) keep the
+  colour's own strength, and a dielectric coat's highlight does not
+  depend on it. In the studio row's z as its complement
+  (`ifs_reflectance`, `fdata[32].z`: a uniform that never wrote it
+  reflects all), read by `ifs_rig` and the path tracer (`pt_path`,
+  `pt_first`'s guide); solids and terrains, not the 3D flame (its shade
+  pass has no bounces; the panel hides the row there). The Lit tier and
+  the path tracer's direct light scale by it exactly; a bounce brings the
+  square or less, so with the exposure raised by its inverse the lit
+  faces hold and the shadows the bounces alone light fall by it. Why it
+  exists: a palette at full strength is a surface no real material is,
+  and in an enclosed view its bounced light fills the shadows (a Fire
+  palette's red bounces almost without loss). Gates:
+  `reflectance_darkens_the_bounced_light_faster` (the Mandelbulb: Lit and
+  the direct light 0.500 at 0.5, the bounce-lit shadows 0.236; the glow to
+  the byte), and the terrain's flat plane at 0.5 (to 1.5e-8).
 
 Every tier evaluates the coat alike on the direct light -- both escape
 and simulation tiers and the 3D flame's shade pass: GGX's distribution,

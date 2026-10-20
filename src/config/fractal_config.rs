@@ -669,6 +669,10 @@ fn is_default_trim_levels(v: &u32) -> bool {
     *v == default_trim_levels()
 }
 
+fn is_one_f32(v: &f32) -> bool {
+    *v == 1.0
+}
+
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
@@ -1074,6 +1078,15 @@ pub struct SolidShadingSettings {
     /// dielectric coat alone. A material, like the coat: not the rig.
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub metallic: f32,
+    /// How much of its colour the surface reflects (2026-10-19): the
+    /// albedo every tier lights is the colour times this -- 1, the
+    /// default, the colour itself. The path tracer's bounces lose the
+    /// rest at every surface, so below 1 its shadows, lit by bounces
+    /// alone, darken faster than its lit faces; the Lit tier has no
+    /// bounces and only darkens. The glow and the unshaded colour keep the
+    /// colour's own strength. A material, like the coat: not the rig.
+    #[serde(skip_serializing_if = "is_one_f32")]
+    pub reflectance: f32,
 }
 
 impl Default for SolidShadingSettings {
@@ -1099,6 +1112,7 @@ impl Default for SolidShadingSettings {
             roughness: 0.5,
             glow: 0.0,
             metallic: 0.0,
+            reflectance: 1.0,
         }
     }
 }
@@ -1114,7 +1128,7 @@ impl SolidShadingSettings {
     /// switch that sun off.
     pub fn rig_untouched(&self) -> bool {
         let d = SolidShadingSettings::default();
-        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, metallic: d.metallic, ..self.clone() } == d
+        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, metallic: d.metallic, reflectance: d.reflectance, ..self.clone() } == d
     }
 
     /// Whether the shade pass should run at all.

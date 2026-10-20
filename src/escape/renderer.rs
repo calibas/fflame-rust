@@ -868,7 +868,7 @@ pub struct EscapeRenderer {
     solid_sky: Option<[f32; 3]>,
     /// The solid's material, the lit tier's as the path tracer's: the
     /// coat's reflectance and roughness, and the glow.
-    solid_material: [f32; 4],
+    solid_material: [f32; 5],
     /// The studio's brightness (`path_core::studio_level`; 0, none).
     solid_studio: f32,
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
@@ -1904,7 +1904,7 @@ impl EscapeRenderer {
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
             solid_sky: None,
-            solid_material: [0.0, 0.5, 0.0, 0.0],
+            solid_material: [0.0, 0.5, 0.0, 0.0, 1.0],
             solid_studio: 0.0,
             ifs_chain: None,
             ifs_chain_key: String::new(),
@@ -4307,7 +4307,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// and roughness and the glow, which the lit tier reads as the path
     /// tracer does. Applied by the relight, so a change needs no walk.
     /// True when it changed.
-    pub fn set_solid_material(&mut self, material: [f32; 4]) -> bool {
+    pub fn set_solid_material(&mut self, material: [f32; 5]) -> bool {
         if self.solid_material == material {
             return false;
         }
@@ -8193,8 +8193,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         fdata[3 + k][3] = self.solid_material[k];
                     }
                     fdata[10][3] = self.solid_material[3];
-                    // The studio, in the camera's frame (`ifs_studio`).
-                    fdata[32] = [self.solid_studio, 0.0, 0.0, 0.0];
+                    // The studio, in the camera's frame (`ifs_studio`), and
+                    // the reflectance's complement (`ifs_reflectance`).
+                    fdata[32] = [self.solid_studio, 0.0, 1.0 - self.solid_material[4], 0.0];
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.
