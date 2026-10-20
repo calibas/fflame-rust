@@ -594,6 +594,7 @@ impl EscapeRenderer {
                 path.restart();
             }
             settings.denoise = path.sum.guided();
+            path.sum.set_material(&settings);
             // Adaptive sampling's statistics likewise (V2).
             #[cfg(test)]
             if let Some((min, halves)) = self.path_adapt {
@@ -2352,8 +2353,8 @@ mod tests {
             s = swap(s, "\n    pt_sum[idx] = sum;", "\n    pt_sum[idx] = vec4<f32>(f32(pt_steps[0]), f32(pt_steps[1]), f32(pt_steps[2]), f32(pt_steps[3]));");
             swap(
                 s,
-                "\n        pt_guide[2u * idx] = g0;\n        pt_guide[2u * idx + 1u] = g1;",
-                "\n        pt_guide[2u * idx] = vec4<f32>(f32(pt_steps[4]), f32(pt_steps[5]), f32(pt_steps[6]), f32(pt_steps[7]));\n        pt_guide[2u * idx + 1u] = vec4<f32>(f32(pt_steps[8]), f32(pt_steps[9]), f32(pt_steps[10]), f32(pt_steps[11]));",
+                "\n        pt_guide[3u * idx] = g0;\n        pt_guide[3u * idx + 1u] = g1;",
+                "\n        pt_guide[3u * idx] = vec4<f32>(f32(pt_steps[4]), f32(pt_steps[5]), f32(pt_steps[6]), f32(pt_steps[7]));\n        pt_guide[3u * idx + 1u] = vec4<f32>(f32(pt_steps[8]), f32(pt_steps[9]), f32(pt_steps[10]), f32(pt_steps[11]));",
             )
         }
         let names = ["camera", "b0 light", "b0 lights", "b0 bounce", "b1 light", "b1 lights", "b1 bounce", "b2 light", "b2 lights", "b2 bounce"];
@@ -2369,10 +2370,10 @@ mod tests {
             let (sum, guide) = r.solid_path_buffers_for_test().expect("traced");
             let px = (w * h) as usize;
             let a: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, sum, px as u64 * 16)).to_vec();
-            let g: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, guide, px as u64 * 32)).to_vec();
+            let g: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, guide, px as u64 * path_core::GUIDE_BYTES)).to_vec();
             r.destroy();
             let steps = |k: usize| -> [f64; 12] {
-                let (p, q, s) = (a[k], g[2 * k], g[2 * k + 1]);
+                let (p, q, s) = (a[k], g[3 * k], g[3 * k + 1]);
                 [p[0], p[1], p[2], p[3], q[0], q[1], q[2], q[3], s[0], s[1], s[2], s[3]].map(|x| x as f64)
             };
             let (mut work, mut now, mut fused) = (0.0, 0.0, 0.0);
@@ -2506,12 +2507,14 @@ mod tests {
                     r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
                     let (sum, guide) = r.solid_path_buffers_for_test().expect("traced");
                     let a: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, sum, px as u64 * 16)).to_vec();
-                    let g: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, guide, px as u64 * 32)).to_vec();
+                    let g: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, guide, px as u64 * path_core::GUIDE_BYTES)).to_vec();
                     r.destroy();
                     // A sample's premultiplied luminance: its second moment
                     // (the guide's, a hit's luminance squared; a miss adds
                     // nothing) less its mean's square.
-                    let var: Vec<f64> = (0..px).map(|k| (g[2 * k][3] as f64 / n - (lum(a[k]) / n).powi(2)).max(0.0)).collect();
+                    // (The guides hold each share's moment; their sum, the
+                    // whole's but for the shares' covariance.)
+                    let var: Vec<f64> = (0..px).map(|k| ((g[3 * k][3] + g[3 * k + 2][3]) as f64 / n - (lum(a[k]) / n).powi(2)).max(0.0)).collect();
                     (a, var)
                 };
                 let (a, var_a) = render(0);
@@ -3073,6 +3076,65 @@ mod tests {
         println!("stopped at {samples} of 4096");
         assert!(samples < 64, "went on to {samples}");
         assert!((0..px).all(|k| a[px + k][2] == -4.0), "every pixel converged at the first check");
+    }
+
+    /// The denoiser's specular share (path-tracing-research D5), gathered
+    /// with its guides: none on a matte surface without a highlight; all
+    /// the light on a metal -- no glow, nothing diffuse under it, every
+    /// bounce the coat's lobe -- to rounding (the share sums the same terms
+    /// in another order); and the picture's sum the same bits whether the
+    /// guides are gathered or not.
+    #[test]
+    fn the_specular_share_is_the_coats() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 24u32);
+        let px = (w * h) as usize;
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.solid_shading.lights[0].enabled = true;
+        c.solid_shading.specular = 0.0;
+        c.solid_shading.glow = 0.0;
+        c.solid_shading.gloss = 0.0;
+        c.escape.path.bounces = 2;
+        let trace = |c: &FractalConfig| {
+            let mut r = renderer_for(&device, c, w, h);
+            r.solid_path = Some(SolidPath::new(&device, w, h));
+            while r.trace_solid(&device, &queue, c, &palette, 8, 1.0e9) {
+                wait(&device);
+            }
+            let (sum, guide) = r.solid_path_buffers_for_test().expect("traced");
+            let a: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, sum, (px * 16) as u64)).to_vec();
+            let g: Vec<[f32; 4]> = if c.escape.path.denoise {
+                bytemuck::cast_slice(&read_buffer(&device, &queue, guide, px as u64 * path_core::GUIDE_BYTES)).to_vec()
+            } else {
+                Vec::new()
+            };
+            r.destroy();
+            (a, g)
+        };
+        for metallic in [0.0f32, 1.0] {
+            c.solid_shading.metallic = metallic;
+            c.escape.path.denoise = false;
+            let (plain, _) = trace(&c);
+            c.escape.path.denoise = true;
+            let (a, g) = trace(&c);
+            assert!(a == plain, "metallic {metallic}: gathering the guides moved the sum");
+            let lit = (0..px).filter(|&k| a[k][3] > 0.0 && a[k][0] + a[k][1] + a[k][2] > 0.0).count();
+            assert!(lit > px / 10, "metallic {metallic}: the view shows the cube lit");
+            for k in (0..px).filter(|&k| a[k][3] > 0.0) {
+                let spec = g[3 * k + 2];
+                for ch in 0..3 {
+                    if metallic == 0.0 {
+                        assert_eq!(spec[ch], 0.0, "pixel {k}: a matte surface reflected specularly");
+                    } else {
+                        assert!((spec[ch] - a[k][ch]).abs() <= 1.0e-4 * a[k][ch].abs().max(1.0e-3), "pixel {k}: the metal's share {spec:?} of {:?}", a[k]);
+                    }
+                }
+            }
+        }
     }
 
     /// A row no call has measured is priced at the model at least, not at

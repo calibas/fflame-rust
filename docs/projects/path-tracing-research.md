@@ -404,7 +404,46 @@ this order, each change measured before it lands:
    - **For your decision: the default.** Off keeps every picture as it
      was. On at 4 would make most solids faster to a given noise, and the
      Mandelbulb about as fast.
-7. [ ] D5 specular and diffuse denoised apart (metals exist now).
+7. [x] **D5 specular and diffuse denoised apart** -- built 2026-10-20, on
+   for a coated or metal material (TERRAIN.md, *Resolve and the
+   denoiser*). The specular share is a sample's first surface's coat and
+   metal terms of the direct light and all a first bounce brings back
+   when it took the coat's lobe; each share filtered by its own noise.
+   Measured on the gate (`denoise_quality`, 4096 unclamped samples;
+   `PT_D5=none` against), the denoised error over the raw, averaged over
+   the 27 cases:
+
+   | Specular rule | mean | coarse | worse than raw from 16 | worst / best against not splitting |
+   |---|---|---|---|---|
+   | not split (committed) | 0.867 | 1.072 | 6, at most 3.3% | -- |
+   | filtered as the diffuse | 0.870 | 1.132 | 6 | -- |
+   | not filtered | 0.880 | 0.996 | 3 | 1.21 / 0.90 |
+   | by roughness | 0.866 | 1.043 | 4 | 1.07 / 0.90 |
+   | **by roughness, whole at few samples** | **0.864** | 1.051 | 4, at most 2.3% | **1.023 / 0.923** |
+
+   (The last three with the highlight left diffuse; see below.) Kept:
+   the last. Glossy: the Mandelbox 7.7% better at 16 samples, the
+   Mandelbulb's coarse error 15% and 14% lower at 16 and 64; metal within
+   1%; matte the same picture (no coat, no split).
+   On the way:
+   - **The highlight is diffuse.** Split out with the coat, the matte
+     Mandelbulb's highlight made its denoised picture worse (coarse error
+     5.3% to 7.9% at 4 samples) whether filtered or not, and clamping the
+     whole light rather than each share did not help: it is the lit
+     tier's shine on the direct light, no lobe a bounce samples.
+   - **Each share's own moment**, the whole's variance their sum (the
+     shares' covariance not gathered): the same results as the whole's
+     own moment where not split (0.867 both).
+   - **Filtered by the roughness alone**, a polished coat at 4 samples
+     kept its reflection's noise: up to 7% worse there.
+   - The committed D1-D4 tables were re-measured first: the gate's
+     numbers at the commit (e24da347) differ from the session's table
+     by up to a few percent case by case (the table's last run was of an
+     uncommitted intermediate), the mean the same (0.867 against 0.866).
+   Cost: the guides 48 bytes a pixel from 32 (a browser's 128 MB binding
+   floor denoises up to about 2.8 million pixels, from 4: 1080p fits,
+   1440p no longer does), two more textures and the specular's passes
+   where split.
 
 ## Found on the way (2026-10-20)
 
