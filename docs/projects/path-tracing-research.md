@@ -227,8 +227,9 @@ this order, each change measured before it lands:
    past it as (bound / gap)^2 -- so a disagreement within the noise is
    noise removed, and a larger one, the picture's detail, goes back to
    the samples' own; from 8 samples on. Mean denoised/raw 0.979 -> 0.934;
-   from 16 samples the denoised picture is no worse than raw anywhere
-   (the Mandelbox at 64: 1.61% -> 1.11%, its coarse error halved), and it
+   from 16 samples the denoised picture is at most 2% worse than raw (it
+   had been up to 48%; the Mandelbox at 64: 1.61% -> 1.11%, its coarse
+   error halved), and it
    converges to the samples' mean. (A hard clamp at 2 and 1 errors: 0.967,
    0.948; by luminance alone the colours still bled.)
 3. [x] D3 outliers, measured against references of 4096 samples with no
@@ -261,8 +262,9 @@ this order, each change measured before it lands:
 
    **D1-D4 together, 2026-10-20** (both against the 4096-sample truth):
    the denoised picture's error as a share of the raw's, averaged over
-   the 27 cases, **0.986 -> 0.866**; the denoised picture now worse than
-   raw nowhere from 16 samples (it was in 9 of 18 cases). Kept: D1, the
+   the 27 cases, **0.986 -> 0.866**; from 16 samples the denoised picture
+   is worse than raw in 6 of 18 cases, by at most 3.2% (it was in 11, by
+   up to 51%: the Mandelbox matte at 64). Kept: D1, the
    confidence bound, path regularisation, the neighbourhood clamp, the
    stride schedule.
 5. [x] **S1 measured 2026-10-20** (`march_lane_efficiency`: one sample
