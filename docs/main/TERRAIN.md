@@ -433,8 +433,8 @@ lens.
 The **Lighting & Material panel** (`ui::lighting_panel`; its sections by
 view in [UI.md](UI.md#the-lighting--material-panel)) holds, for a solid
 or a terrain:
-- **Rendering:** the render tier and the path tracer's samples,
-  bounces and denoiser;
+- **Rendering:** the render tier and the path tracer's samples, noise
+  threshold (adaptive sampling), bounces and denoiser;
 - **Sky:** the sky colour (the background), the gradient, Sky light;
 - **Lights:** Light 1 to 4 with their Kind and its settings (*Kinds of
   light*) and Intensity;
@@ -486,7 +486,8 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 
 | Field | Default | UI | Means |
 |---|---|---|---|
-| `samples` | 256 | Samples (1 to 4096) | the viewport's target, and an export's count |
+| `samples` | 256 | Samples (1 to 4096) | the viewport's target, and an export's count; sampling adaptively, the most any pixel takes |
+| `noise_threshold` | 0 (off) | Noise threshold (0 to 16) | adaptive sampling: a pixel stops once its noise, in display levels of 255, and its neighbours' are under this (*Adaptive sampling*) |
 | `bounces` | 2 | Bounces (0 to 8) | bounces after the first surface; 0 is direct light only |
 | `environment` | 1.0 | Sky light (0 to 4) | the sky's brightness as a light |
 | `aperture` | 0 | Aperture (0 to 0.2) | the lens radius, a fraction of the distance to the target; 0 is a pinhole |
@@ -581,6 +582,61 @@ and however the frame is split into tiles:
 
 `path_samples_are_batch_invariant` and `a_still_in_tiles_is_the_still_whole`
 hold this.
+
+### Adaptive sampling
+
+With a noise threshold (`noise_threshold`, levels of 255; 0 is off) a
+pixel stops taking samples once it is clean enough, and the time goes to
+the noisy ones (path-tracing-research.md, V2):
+- **Each pixel keeps statistics** beside its sum, in the same buffer
+  after the frame's sums (no new binding; the solid path tracer is near
+  a browser's storage-buffer count): its samples' luminance squared, its
+  odd samples' luminance, its own count -- negative once converged -- and
+  its noise at the last check.
+- **The check** (`PATH_ADAPT_WGSL`, `PathSum::check_if_due`) runs at
+  fixed counts -- `ADAPTIVE_MIN_SAMPLES` (16), then each time the count
+  has grown by an eighth -- so a picture does not depend on how its
+  samples were batched. `error` measures each pixel's noise: its mean's
+  standard error from the moments, as the display shows it -- how far one
+  error above the mean lands through the Linear tone map's exposure and
+  the display's power on it (`PathSettings::display`, `shown` inverted).
+  `converge` flags a pixel converged where its noise and its eight
+  neighbours' are under the threshold, so an unconverged pixel keeps its
+  neighbours sampling and a converged one wakes when a neighbour's noise
+  rises; it lists the pixels still sampling, a workgroup's together, after
+  the statistics, and `publish` writes the list's length at its head. The
+  count comes back without waiting.
+- **The trace takes the list.** Once a check has run, `main` takes a
+  list entry a thread (`PathParamsGpu::from_list`) in place of a band's
+  rect, so a warp's 32 lanes are pixels that all still sample. A pixel
+  draws from its own count, so its samples are the same stream however
+  the frame is dealt: each pixel's sum is the plain tracer's at its count,
+  to the bit. (A workgroup sharing out its own block's pixels needs a
+  barrier, and a barrier in this kernel made the march 3.4 times slower on
+  a GTX 1660 SUPER, so the check lists them instead.)
+- **The resolve and the denoiser** read each pixel's count.
+- **Done** is the samples asked for, or the check's count of pixels still
+  sampling coming back as none. A new threshold does not restart the
+  picture: the next dispatch checks under it (`PathSum::retune`).
+- **The solid's driver** prices a pass over the list per entry-sample,
+  measured (the pixels still sampling are the costly ones: a crevice's
+  long marches, about five times the frame's average on the Mandelbulb),
+  by the last list length that came back until the newest does, and sends
+  the whole list at several samples a dispatch where it fits. A
+  terrain's sends the whole list a dispatch.
+- A still drawn in tiles converges tile by tile: a pixel at a seam does
+  not see its neighbour across it, so it may stop a check sooner or later
+  than the whole frame would stop it -- noise, not a seam.
+
+Measured (`adaptive_quality`, 2026-10-20; path-tracing-research.md has
+the table): the time even sampling takes to the adaptive picture's error,
+over the adaptive picture's time, at thresholds 8, 4 and 2 with at most
+256 samples. At 4, averaged over the Menger, the Mandelbulb and the
+Mandelbox matte, glossy and metal: 1.95x by the gate's error (linear
+luminance), 1.44x by the error as the display shows it. It pays where a
+few pixels hold the noise -- the glossy Mandelbox 4.1x (2.8x as shown) --
+and breaks even on the Mandelbulb, whose noisy pixels are its costly
+ones. Off by default.
 
 ### Resolve and the denoiser
 

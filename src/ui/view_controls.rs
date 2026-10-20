@@ -713,6 +713,7 @@ pub(super) fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
             config.sim.terrain.path.clone(),
             super::escape_panel::PathPaths {
                 samples: ConfigPath::SimPathSamples,
+                noise_threshold: ConfigPath::SimPathNoiseThreshold,
                 bounces: ConfigPath::SimPathBounces,
                 environment: ConfigPath::SimPathEnvironment,
                 aperture: ConfigPath::SimPathAperture,

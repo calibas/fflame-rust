@@ -961,6 +961,10 @@ pub struct EscapeRenderer {
     /// Test-only: no firefly clamp, to measure an estimator's bias.
     #[cfg(test)]
     pub(crate) path_no_clamp: bool,
+    /// Test-only: adaptive sampling's first check and its noise from the
+    /// odd half (`PathSum::tune_adaptive`), to measure them.
+    #[cfg(test)]
+    pub(crate) path_adapt: Option<(u32, bool)>,
     /// Test-only: a rewrite of the solid path tracer's shader before it is
     /// compiled, to measure it (path-tracing-research S1's step counts).
     #[cfg(test)]
@@ -1939,6 +1943,8 @@ impl EscapeRenderer {
             path_no_mis: false,
             #[cfg(test)]
             path_no_clamp: false,
+            #[cfg(test)]
+            path_adapt: None,
             #[cfg(test)]
             path_source_patch: None,
             #[cfg(test)]

@@ -497,6 +497,8 @@ pub enum ConfigPath {
     /// grid widths.
     SimTerrainTargetLift,
     SimPathSamples,
+    /// Adaptive sampling's noise threshold (path-tracing-research V2).
+    SimPathNoiseThreshold,
     SimPathBounces,
     SimPathEnvironment,
     SimPathGloss,
@@ -566,6 +568,8 @@ pub enum ConfigPath {
     EscapeTerrainTier,
     EscapeSolidTier,
     EscapePathSamples,
+    /// Adaptive sampling's noise threshold (path-tracing-research V2).
+    EscapePathNoiseThreshold,
     EscapePathBounces,
     EscapePathEnvironment,
     EscapePathGloss,
@@ -1232,6 +1236,7 @@ impl Display for ConfigPath {
             ConfigPath::SimTerrainTargetY => write!(f, "Simulation Terrain Target Y"),
             ConfigPath::SimTerrainTargetLift => write!(f, "Simulation Terrain Target Lift"),
             ConfigPath::SimPathSamples => write!(f, "Simulation Path Samples"),
+            ConfigPath::SimPathNoiseThreshold => write!(f, "Simulation Noise Threshold"),
             ConfigPath::SimPathBounces => write!(f, "Simulation Path Bounces"),
             ConfigPath::SimPathEnvironment => write!(f, "Simulation Sky Light"),
             ConfigPath::SimPathGloss => write!(f, "Simulation Gloss"),
@@ -1285,6 +1290,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainTier => write!(f, "Terrain Rendering"),
             ConfigPath::EscapeSolidTier => write!(f, "Solid Rendering Tier"),
             ConfigPath::EscapePathSamples => write!(f, "Path Samples"),
+            ConfigPath::EscapePathNoiseThreshold => write!(f, "Noise Threshold"),
             ConfigPath::EscapePathBounces => write!(f, "Path Bounces"),
             ConfigPath::EscapePathEnvironment => write!(f, "Sky Light"),
             ConfigPath::EscapePathGloss => write!(f, "Gloss"),
@@ -1674,6 +1680,7 @@ impl ConfigPath {
             ConfigPath::SimTerrainTargetY => I18nKey::simple("history.param.sim_terrain_target_y"),
             ConfigPath::SimTerrainTargetLift => I18nKey::simple("history.param.sim_terrain_target_lift"),
             ConfigPath::SimPathSamples => I18nKey::simple("history.param.sim_path_samples"),
+            ConfigPath::SimPathNoiseThreshold => I18nKey::simple("history.param.sim_path_noise_threshold"),
             ConfigPath::SimPathBounces => I18nKey::simple("history.param.sim_path_bounces"),
             ConfigPath::SimPathEnvironment => I18nKey::simple("history.param.sim_path_environment"),
             ConfigPath::SimPathGloss => I18nKey::simple("history.param.sim_path_gloss"),
@@ -1740,6 +1747,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainTier => I18nKey::simple("history.param.escape_terrain_tier"),
             ConfigPath::EscapeSolidTier => I18nKey::simple("history.param.escape_solid_tier"),
             ConfigPath::EscapePathSamples => I18nKey::simple("history.param.escape_path_samples"),
+            ConfigPath::EscapePathNoiseThreshold => I18nKey::simple("history.param.escape_path_noise_threshold"),
             ConfigPath::EscapePathBounces => I18nKey::simple("history.param.escape_path_bounces"),
             ConfigPath::EscapePathEnvironment => I18nKey::simple("history.param.escape_path_environment"),
             ConfigPath::EscapePathGloss => I18nKey::simple("history.param.escape_path_gloss"),
@@ -3394,6 +3402,10 @@ impl ConfigPath {
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             // Disk housekeeping only: nothing on the GPU changes.
             ConfigPath::SystemOrbitCacheMb => UpdateType::None,
+            // Adaptive sampling's threshold: the path tracer reads it each
+            // frame, and a new one reflags the pixels at its next check
+            // without starting the picture over (`PathSum::retune`).
+            ConfigPath::EscapePathNoiseThreshold | ConfigPath::SimPathNoiseThreshold => UpdateType::None,
             // Read by the frame loop each frame; orbits persist, so how
             // the work is sliced changes nothing to reset.
             ConfigPath::SystemFrameGovernor | ConfigPath::SystemManualWorkgroups => UpdateType::None,
@@ -3665,6 +3677,7 @@ impl ConfigPath {
             ConfigPath::SimTerrainTargetY => "Sim.Terrain.TargetY".to_string(),
             ConfigPath::SimTerrainTargetLift => "Sim.Terrain.TargetLift".to_string(),
             ConfigPath::SimPathSamples => "Sim.Path.Samples".to_string(),
+            ConfigPath::SimPathNoiseThreshold => "Sim.Path.NoiseThreshold".to_string(),
             ConfigPath::SimPathBounces => "Sim.Path.Bounces".to_string(),
             ConfigPath::SimPathEnvironment => "Sim.Path.Environment".to_string(),
             ConfigPath::SimPathGloss => "Sim.Path.Gloss".to_string(),
@@ -3764,6 +3777,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainTier => "Escape.Terrain.Tier".to_string(),
             ConfigPath::EscapeSolidTier => "Escape.SolidTier".to_string(),
             ConfigPath::EscapePathSamples => "Escape.Path.Samples".to_string(),
+            ConfigPath::EscapePathNoiseThreshold => "Escape.Path.NoiseThreshold".to_string(),
             ConfigPath::EscapePathBounces => "Escape.Path.Bounces".to_string(),
             ConfigPath::EscapePathEnvironment => "Escape.Path.Environment".to_string(),
             ConfigPath::EscapePathGloss => "Escape.Path.Gloss".to_string(),
@@ -4099,6 +4113,7 @@ impl ConfigPath {
                 ["Terrain", "Tier"] => return Some(ConfigPath::EscapeTerrainTier),
                 ["SolidTier"] => return Some(ConfigPath::EscapeSolidTier),
                 ["Path", "Samples"] => return Some(ConfigPath::EscapePathSamples),
+                ["Path", "NoiseThreshold"] => return Some(ConfigPath::EscapePathNoiseThreshold),
                 ["Path", "Bounces"] => return Some(ConfigPath::EscapePathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::EscapePathEnvironment),
                 ["Path", "Gloss"] => return Some(ConfigPath::EscapePathGloss),
@@ -4197,6 +4212,7 @@ impl ConfigPath {
                 ["Terrain", "TargetY"] => return Some(ConfigPath::SimTerrainTargetY),
                 ["Terrain", "TargetLift"] => return Some(ConfigPath::SimTerrainTargetLift),
                 ["Path", "Samples"] => return Some(ConfigPath::SimPathSamples),
+                ["Path", "NoiseThreshold"] => return Some(ConfigPath::SimPathNoiseThreshold),
                 ["Path", "Bounces"] => return Some(ConfigPath::SimPathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::SimPathEnvironment),
                 ["Path", "Gloss"] => return Some(ConfigPath::SimPathGloss),
@@ -4780,6 +4796,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainTiling
         | ConfigPath::SimTerrainTier
         | ConfigPath::SimPathSamples
+        | ConfigPath::SimPathNoiseThreshold
         | ConfigPath::SimPathBounces
         | ConfigPath::SimPathDenoise
         | ConfigPath::SimPathSky
@@ -5077,6 +5094,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainTier
         | ConfigPath::EscapeSolidTier
         | ConfigPath::EscapePathSamples
+        | ConfigPath::EscapePathNoiseThreshold
         | ConfigPath::EscapePathBounces
         | ConfigPath::EscapePathDenoise
         | ConfigPath::EscapePathSky
@@ -5873,6 +5891,7 @@ mod tests {
             (ConfigPath::EscapeTerrainTier, ConfigValue::String("path_traced".into()), false),
             (ConfigPath::EscapeSolidTier, ConfigValue::String("auto".into()), false),
             (ConfigPath::EscapePathSamples, ConfigValue::UInt(64), false),
+            (ConfigPath::EscapePathNoiseThreshold, ConfigValue::Float(2.5), false),
             (ConfigPath::EscapePathBounces, ConfigValue::UInt(4), false),
             (ConfigPath::EscapePathEnvironment, ConfigValue::Float(0.5), true),
             (ConfigPath::EscapePathGloss, ConfigValue::Float(0.25), true),
@@ -5950,6 +5969,7 @@ mod tests {
             (ConfigPath::SimTerrainTargetY, ConfigValue::Float(0.25), true),
             (ConfigPath::SimTerrainTargetLift, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathSamples, ConfigValue::UInt(2), false),
+            (ConfigPath::SimPathNoiseThreshold, ConfigValue::Float(2.5), false),
             (ConfigPath::SimPathBounces, ConfigValue::UInt(2), false),
             (ConfigPath::SimPathEnvironment, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathGloss, ConfigValue::Float(0.25), true),

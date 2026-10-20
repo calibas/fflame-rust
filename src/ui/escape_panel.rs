@@ -1447,6 +1447,7 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
 /// The ConfigPaths of a block of path-tracing settings.
 pub(crate) struct PathPaths {
     pub samples: ConfigPath,
+    pub noise_threshold: ConfigPath,
     pub bounces: ConfigPath,
     pub environment: ConfigPath,
     pub aperture: ConfigPath,
@@ -1461,6 +1462,7 @@ pub(crate) struct PathPaths {
 pub(crate) fn escape_path_paths() -> PathPaths {
     PathPaths {
         samples: ConfigPath::EscapePathSamples,
+        noise_threshold: ConfigPath::EscapePathNoiseThreshold,
         bounces: ConfigPath::EscapePathBounces,
         environment: ConfigPath::EscapePathEnvironment,
         aperture: ConfigPath::EscapePathAperture,
@@ -1520,6 +1522,17 @@ pub(crate) fn show_render_tier(
             .changed()
         {
             let _ = config_manager.update_param(paths.samples.clone(), ConfigValue::UInt(v));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.path_noise_threshold"));
+        let mut v = pt.noise_threshold;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=16.0).step_by(0.25))
+            .on_hover_text(t!("escape_panel.path_noise_threshold_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(paths.noise_threshold.clone(), v.into());
         }
     });
     ui.horizontal(|ui| {

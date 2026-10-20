@@ -121,7 +121,10 @@ fn min_band_rows(w: u32) -> u32 {
     (MIN_BAND_PX.div_ceil(w.max(1))).div_ceil(8).max(1) * 8
 }
 
-/// One dispatch: rows from `y0`, columns from `x0`, at `n` samples.
+/// One dispatch: rows from `y0`, columns from `x0`, at `n` samples. Or
+/// -- sampling adaptively once a check has listed the pixels still
+/// sampling (`list`: the entries of it taken to be there, and the bound
+/// the pass goes to) -- `rows` entries of the list from `y0`.
 #[derive(Clone, Copy, Debug)]
 struct Band {
     y0: u32,
@@ -129,6 +132,7 @@ struct Band {
     x0: u32,
     cols: u32,
     n: u32,
+    list: Option<(u32, u32)>,
 }
 
 /// Calls the GPU has finished, for the sizing: (generation, the
@@ -162,8 +166,18 @@ pub(super) struct SolidPath {
     /// rows from `row` and the columns done (0: none started).
     band_rows: u32,
     col: u32,
+    /// The pass in progress over the last check's list (sampling
+    /// adaptively): its entries already traced.
+    entry: u32,
+    /// An entry-sample's measured cost in ms since the picture last
+    /// restarted (0: not yet).
+    entry_ms: f32,
     /// Whether the picture shown is this one, not the walk's.
     shown: bool,
+    /// The sum is done and its last picture resolved (`resolve_now`):
+    /// adaptive sampling learns that every pixel has converged only when a
+    /// check's count comes back, after the call that ran it.
+    finished: bool,
     /// Each row's measured cost in ms a full-width sample since the
     /// picture last restarted (0: not yet), and the most any row has
     /// cost.
@@ -241,7 +255,10 @@ impl SolidPath {
             row: 0,
             band_rows: 0,
             col: 0,
+            entry: 0,
+            entry_ms: 0.0,
             shown: false,
+            finished: false,
             row_ms: vec![0.0; h as usize],
             max_ms: 0.0,
             generation: 0,
@@ -260,7 +277,10 @@ impl SolidPath {
         self.row = 0;
         self.band_rows = 0;
         self.col = 0;
+        self.entry = 0;
+        self.entry_ms = 0.0;
         self.shown = false;
+        self.finished = false;
         self.row_ms.iter_mut().for_each(|c| *c = 0.0);
         self.max_ms = 0.0;
         self.generation = self.generation.wrapping_add(1);
@@ -290,8 +310,23 @@ impl SolidPath {
                 super::PATH_BUDGET_SHIFT.store((shift + 1).min(6), std::sync::atomic::Ordering::Relaxed);
                 log::warn!("escape solid path: a call took {ms:.0} ms; halving its bands for the session");
             }
+            if generation != self.generation {
+                continue;
+            }
+            // A call that traced the list prices an entry-sample by the
+            // entries taken to be there (past the list's end threads return
+            // at once and cost nothing to speak of), and prices no row.
+            if bands.iter().any(|b| b.list.is_some()) {
+                if bands.iter().all(|b| b.list.is_some()) {
+                    let entries: f32 = bands.iter().map(|b| (b.list.map_or(0, |(real, _)| real) * b.n) as f32).sum();
+                    if entries > 0.0 {
+                        self.entry_ms = ms / entries;
+                    }
+                }
+                continue;
+            }
             let units: f32 = bands.iter().map(|b| (b.rows * b.n) as f32 * b.cols as f32 / w).sum();
-            if generation != self.generation || !(units > 0.0) {
+            if !(units > 0.0) {
                 continue;
             }
             let per = ms / units;
@@ -480,7 +515,7 @@ impl EscapeRenderer {
         // sum kept the old light under the new tone map. A change starts
         // it over, as a terrain's tiers do. (The lens's focus is in the
         // config's units; the distance only scales it.)
-        let key = format!("{:?}", path_core::path_settings(config, 1.0));
+        let key = path_core::path_settings(config, 1.0).restart_key();
         if let Some(p) = self.solid_path.as_mut() {
             if p.settings.as_deref() != Some(key.as_str()) {
                 if p.settings.is_some() {
@@ -489,15 +524,28 @@ impl EscapeRenderer {
                 p.settings = Some(key);
             }
         }
-        if self.solid_path_samples() >= target {
-            return false;
+        // Done: every sample in, or -- sampling adaptively -- every pixel
+        // converged at a check whose count has come back since, under the
+        // threshold the config has now (a new one reopens it).
+        if let Some(p) = self.solid_path.as_mut() {
+            if p.sum.retune(path_core::path_settings(config, 1.0).noise_threshold) {
+                p.finished = false;
+            }
+            p.sum.poll(device);
+            if p.sum.done(target) {
+                if !p.finished {
+                    p.finished = true;
+                    let split = p.split();
+                    p.sum.resolve_now(device, queue, &p.output.1, w, h, split);
+                }
+                return false;
+            }
         }
         // What the walk has before its first band.
         self.ensure_lens(device, queue, escape);
         self.ensure_ifs_seeds(escape);
         self.upload_ifs(device, queue, true);
         self.upload_ifs_chain(device, queue);
-        let key = self.ensure_solid_path_pipeline(device, escape, def);
 
         // The escape uniform at the output's size: the path traces
         // display pixels, its jitter the antialiasing.
@@ -538,14 +586,30 @@ impl EscapeRenderer {
         let cap = (model_rows >> shift).max(8);
         let ceiling = DISPATCH_CEILING_MS / (1u32 << shift) as f32;
 
+        let adaptive = {
+            let path = self.solid_path.as_mut().expect("made above");
+            // The denoiser's guides start with the sum; the pass gathers
+            // them only where they fit (`set_guided`).
+            if path.sum.set_guided(device, settings.denoise) {
+                path.restart();
+            }
+            settings.denoise = path.sum.guided();
+            // Adaptive sampling's statistics likewise (V2).
+            #[cfg(test)]
+            if let Some((min, halves)) = self.path_adapt {
+                path.sum.tune_adaptive(min, halves);
+            }
+            if path.sum.set_adaptive(device, settings.noise_threshold > 0.0) {
+                path.restart();
+            }
+            path.sum.adaptive()
+        };
+        if !adaptive {
+            settings.noise_threshold = 0.0;
+        }
+        let key = self.ensure_solid_path_pipeline(device, escape, def);
         let ifs_group = self.ifs_bind_group(device);
         let path = self.solid_path.as_mut().expect("made above");
-        // The denoiser's guides start with the sum; the pass gathers them
-        // only where they fit (`set_guided`).
-        if path.sum.set_guided(device, settings.denoise) {
-            path.restart();
-        }
-        settings.denoise = path.sum.guided();
         path.collect();
         #[cfg(test)]
         let ceiling = path.ceiling.unwrap_or(ceiling);
@@ -553,44 +617,101 @@ impl EscapeRenderer {
         let mut first_submit: Option<web_time::Instant> = None;
         queue.write_buffer(&path.params, 0, bytemuck::bytes_of(&params));
         let mut spent = 0.0f32;
-        while spent < frame_ms && traced.len() < 16 && path.sum.count() < target {
+        // A list's chunk is capped in pixel-samples: the model's band,
+        // halved, as its price is doubled.
+        let cap_entries = (cap as u64 * w as u64 / 2).max(64);
+        while spent < frame_ms && traced.len() < 16 && !path.sum.done(target) {
             let count = path.sum.count();
             let room = (frame_ms - spent).min(ceiling);
+            let next = path.sum.next_check().map_or(u32::MAX, |c| c - count);
             // A whole frame at several samples, where the measurements say
             // they fit and the model's cap -- rows times samples -- agrees.
-            let whole = (path.row == 0 && path.band_rows == 0)
+            let whole = (!path.sum.listed() && path.row == 0 && path.band_rows == 0)
                 .then(|| path.frame_ms())
                 .flatten()
                 .filter(|&f| f <= room && h <= cap);
-            let (b, ms) = match whole {
-                Some(f) => {
-                    let n = ((room / f).floor() as u32).min(cap / h).clamp(1, 64).min(target - count);
-                    (Band { y0: 0, rows: h, x0: 0, cols: w, n }, f * n as f32)
+            let (b, ms) = if path.sum.listed() {
+                // Sampling adaptively once a check has listed the pixels
+                // still sampling (V2): a pass is the list, in chunks priced
+                // an entry-sample at a time -- measured, or twice the
+                // model's pixel, those still sampling being the costly
+                // ones (a crevice's long marches) -- and the whole list at
+                // several samples where it fits. The pass goes to the
+                // list's length once the check's count is back, and until
+                // then to the frame's pixels, the threads past the list's
+                // end returning at once; it is priced by the latest count
+                // back, the list's length changing by a few percent a
+                // check, and capped at twice that.
+                let known = path.sum.active();
+                let bound = known.unwrap_or(w * h).max(1);
+                // The list's length back, and short of the entries already
+                // traced: they were all of it, and the pass is done.
+                if path.entry >= bound {
+                    path.entry = 0;
+                    path.sum.add(1);
+                    let _ = path.sum.check_if_due(device, queue, w, h, &settings);
+                    continue;
                 }
-                None => {
-                    if path.band_rows == 0 {
-                        path.band_rows = path.plan(path.row, frame_ms - spent, model_ms, cap).0;
-                        path.col = 0;
+                let est = known.or(path.sum.active_estimate()).unwrap_or(w * h).clamp(1, bound);
+                let guard = est.saturating_mul(2).min(bound);
+                let per = if path.entry_ms > 0.0 { path.entry_ms } else { 2.0 * model_ms / w as f32 };
+                let real = est.saturating_sub(path.entry);
+                let n = if path.entry == 0 {
+                    let by_time = room / (per * est as f32);
+                    let by_cap = cap_entries as f32 / guard as f32;
+                    (by_time.min(by_cap).floor() as u32).clamp(1, 64).min(target - count).min(next)
+                } else {
+                    1
+                };
+                let entries = if n > 1 {
+                    bound
+                } else {
+                    let by_time = ((room / per) as u64 / 64 * 64).max(64);
+                    let take = (real as u64).min(by_time).min((cap_entries / 2 / 64 * 64).max(64)) as u32;
+                    // The chunk that reaches the list's end goes on to the
+                    // bound: what is past it costs nothing.
+                    if take >= real { bound - path.entry } else { take }
+                };
+                let taken = entries.min(real);
+                (Band { y0: path.entry, rows: entries, x0: 0, cols: 0, n, list: Some((taken, bound)) }, taken as f32 * n as f32 * per)
+            } else {
+                match whole {
+                    Some(f) => {
+                        // Sampling adaptively, no further than the next check.
+                        let n = ((room / f).floor() as u32)
+                            .min(cap / h)
+                            .clamp(1, 64)
+                            .min(target - count)
+                            .min(next);
+                        (Band { y0: 0, rows: h, x0: 0, cols: w, n, list: None }, f * n as f32)
                     }
-                    let rows = path.band_rows;
-                    // At today's prices: a tile measured since the band
-                    // began has priced its rows.
-                    let band_ms: f32 = (path.row..path.row + rows).map(|y| path.price(y, model_ms)).sum();
-                    let cols = if path.col == 0 && band_ms <= ceiling {
-                        w
-                    } else {
-                        // Across in tiles of whole workgroups, each its
-                        // share of the band's price, padded for a band
-                        // whose cost is not spread evenly.
-                        let fit = (w as f32 * ceiling / (band_ms * TILE_SAFETY)) as u32 / 8 * 8;
-                        fit.max(8).min(w - path.col)
-                    };
-                    (Band { y0: path.row, rows, x0: path.col, cols, n: 1 }, band_ms * cols as f32 / w as f32)
+                    None => {
+                        if path.band_rows == 0 {
+                            path.band_rows = path.plan(path.row, frame_ms - spent, model_ms, cap).0;
+                            path.col = 0;
+                        }
+                        let rows = path.band_rows;
+                        // At today's prices: a tile measured since the band
+                        // began has priced its rows.
+                        let band_ms: f32 = (path.row..path.row + rows).map(|y| path.price(y, model_ms)).sum();
+                        let cols = if path.col == 0 && band_ms <= ceiling {
+                            w
+                        } else {
+                            // Across in tiles of whole workgroups, each its
+                            // share of the band's price, padded for a band
+                            // whose cost is not spread evenly.
+                            let fit = (w as f32 * ceiling / (band_ms * TILE_SAFETY)) as u32 / 8 * 8;
+                            fit.max(8).min(w - path.col)
+                        };
+                        (Band { y0: path.row, rows, x0: path.col, cols, n: 1, list: None }, band_ms * cols as f32 / w as f32)
+                    }
                 }
             };
-            let uniform = PathParamsGpu::new(&settings, count, b.n, per_ray, param("shadow", 0.7), radius, (b.y0, b.rows))
-                .from_column(b.x0)
-                .buffer(device, queue);
+            let mut uniform = PathParamsGpu::new(&settings, count, b.n, per_ray, param("shadow", 0.7), radius, (b.y0, b.rows)).from_column(b.x0);
+            if b.list.is_some() {
+                uniform = uniform.from_list(b.y0, b.rows);
+            }
+            let uniform = uniform.buffer(device, queue);
             let group = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Escape Solid Path"),
                 layout: &path.layout,
@@ -612,15 +733,29 @@ impl EscapeRenderer {
                 if let Some(l) = self.lens_gpu.as_ref() {
                     pass.set_bind_group(2, l.bind_group(), &[]);
                 }
-                pass.dispatch_workgroups(b.cols.div_ceil(8), b.rows.div_ceil(8), 1);
+                if b.list.is_some() {
+                    let (gx, gy) = path_core::list_groups(b.rows);
+                    pass.dispatch_workgroups(gx, gy, 1);
+                } else {
+                    pass.dispatch_workgroups(b.cols.div_ceil(8), b.rows.div_ceil(8), 1);
+                }
             }
             first_submit.get_or_insert_with(web_time::Instant::now);
             queue.submit(std::iter::once(enc.finish()));
             traced.push(b);
             #[cfg(test)]
-            path.dispatched.push((b.rows * b.n, cap, b.cols));
+            path.dispatched.push(match b.list {
+                Some(_) => (b.rows * b.n, cap_entries as u32, 0),
+                None => (b.rows * b.n, cap, b.cols),
+            });
             spent += ms;
-            if whole.is_some() {
+            if let Some((_, bound)) = b.list {
+                path.entry += b.rows;
+                if path.entry >= bound {
+                    path.entry = 0;
+                    path.sum.add(b.n);
+                }
+            } else if whole.is_some() {
                 path.sum.add(b.n);
             } else {
                 path.col += b.cols;
@@ -633,6 +768,12 @@ impl EscapeRenderer {
                         path.sum.add(1);
                     }
                 }
+            }
+            // A pass complete at a check's count: which pixels go on. (Or a
+            // new threshold's check, part-way through a pass over the list:
+            // the pass starts again on the new list.)
+            if path.sum.check_if_due(device, queue, w, h, &settings) {
+                path.entry = 0;
             }
         }
         if let Some(submitted) = first_submit {
@@ -657,12 +798,13 @@ impl EscapeRenderer {
         }
         // The last picture current, whatever the denoiser's schedule.
         let split = path.split();
-        if path.sum.count() >= target {
+        if path.sum.done(target) {
+            path.finished = true;
             path.sum.resolve_now(device, queue, &path.output.1, w, h, split);
         } else {
             path.sum.resolve(device, queue, &path.output.1, w, h, split);
         }
-        path.sum.count() < target
+        !path.sum.done(target)
     }
 
     /// Rows of a `w`-wide frame the walk's model (`direct_rows_per_dispatch`)
@@ -2033,15 +2175,20 @@ mod tests {
         let name = std::env::var("PT_PRESET").unwrap_or_else(|_| "Menger Sponge".to_string());
         let samples: u32 = env("PT_SAMPLES").unwrap_or(64);
         // `PT_TIME_ONLY`: the time alone, no reference; `PT_W`, `PT_H` the
-        // size.
+        // size. `PT_PATCH` a candidate's shader patch (`cost_patch`), the
+        // reference rendered without it.
         let time_only = std::env::var("PT_TIME_ONLY").is_ok();
+        let patch = std::env::var("PT_PATCH").ok().map(|p| cost_patch(&p));
         let mut c = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == name).expect("the preset");
         let (_pt, palette) = config_palette(&device, &queue, &c);
         c.escape.solid_tier = RenderTier::PathTraced;
         c.escape.path.denoise = false;
-        let picture = |samples: u32, seed: u32| {
+        let picture = |samples: u32, seed: u32, patched: bool| {
             let mut r = solid_renderer_for(&device, &c, w, h);
             r.path_seed_offset = seed;
+            if patched {
+                r.path_source_patch = patch;
+            }
             // Compiled and warm before the clock starts.
             r.render_solid_still(&device, &queue, &c, &palette, 1, || { wait(&device); true });
             r.reset_solid_path();
@@ -2053,7 +2200,7 @@ mod tests {
             (out, ms)
         };
         if time_only {
-            let (_, ms) = picture(samples, 0);
+            let (_, ms) = picture(samples, 0, true);
             println!("{name} at {w}x{h}: {ms:.2} ms a sample over {samples}");
             return;
         }
@@ -2063,7 +2210,7 @@ mod tests {
             None => {
                 let n: u32 = std::env::var("PT_REF_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
                 // A stream of its own: the samples measured are not in it.
-                let (r, ms) = picture(n, 7919);
+                let (r, ms) = picture(n, 7919, false);
                 println!("reference: {n} samples, {ms:.1} ms a sample");
                 if let Some(p) = &path {
                     std::fs::write(p, bytemuck::cast_slice::<[f32; 4], u8>(&r)).expect("write the reference");
@@ -2071,7 +2218,7 @@ mod tests {
                 r
             }
         };
-        let (out, ms) = picture(samples, 0);
+        let (out, ms) = picture(samples, 0, true);
         let (mut n, mut se, mut sum_o, mut sum_r) = (0usize, 0.0f64, 0.0f64, 0.0f64);
         for (o, r) in out.iter().zip(&reference) {
             if r[3] < 0.999 {
@@ -2129,20 +2276,7 @@ mod tests {
             // white, and the denoiser's albedo guide nothing to separate.
             let (_pt, palette) = config_palette(&device, &queue, &base);
             for variant in &variants {
-                let mut c = base.clone();
-                c.escape.solid_tier = RenderTier::PathTraced;
-                match variant.as_str() {
-                    "matte" => {}
-                    "gloss" => {
-                        c.solid_shading.gloss = 0.04;
-                        c.solid_shading.roughness = 0.15;
-                    }
-                    "metal" => {
-                        c.solid_shading.metallic = 1.0;
-                        c.solid_shading.roughness = 0.4;
-                    }
-                    other => panic!("no variant {other}"),
-                }
+                let c = gate_variant(&base, variant);
                 let picture = |samples: u32, seed: u32, denoise: bool, no_clamp: bool| {
                     let mut c = c.clone();
                     c.escape.path.denoise = denoise;
@@ -2266,6 +2400,300 @@ mod tests {
         }
     }
 
+    /// Candidates for a cheaper sample (path-tracing-research, *Found on
+    /// the way*), as patches of the solid path tracer's shader for
+    /// `path_quality_against_a_reference` (`PT_PATCH`):
+    /// - `tetra`: a hit's normal from four distance calls at a
+    ///   tetrahedron's corners (Quilez) in place of six central
+    ///   differences;
+    /// - `wide`: a ray leaving a surface called hit within two pixels of
+    ///   its footprint, not 0.4 -- under the same cap;
+    /// - `cap`, `cap3`: that cap a thousandth, or three ten-thousandths,
+    ///   of the solid's ball, not a ten-thousandth.
+    fn cost_patch(name: &str) -> fn(String) -> String {
+        const LEAVE: &str = "let eps = max(min(ifs_radius() * 1.0e-4, e0 * 0.4), 1.0e-30);";
+        fn swap(s: String, from: &str, to: &str) -> String {
+            assert_eq!(s.matches(from).count(), 1, "patch site: {from}");
+            s.replace(from, to)
+        }
+        fn tetra(s: String) -> String {
+            swap(
+                s,
+                "    let n = vec3<f32>(
+        ifs_distance_at(p + dx, e) - ifs_distance_at(p - dx, e),
+        ifs_distance_at(p + dy, e) - ifs_distance_at(p - dy, e),
+        ifs_distance_at(p + dz, e) - ifs_distance_at(p - dz, e),
+    );",
+                "    let k = vec2<f32>(1.0, -1.0);
+    let n = k.xyy * ifs_distance_at(p + k.xyy * h, e) + k.yyx * ifs_distance_at(p + k.yyx * h, e) + k.yxy * ifs_distance_at(p + k.yxy * h, e) + k.xxx * ifs_distance_at(p + k.xxx * h, e);",
+            )
+        }
+        fn wide(s: String) -> String {
+            swap(s, LEAVE, "let eps = max(min(ifs_radius() * 1.0e-4, e0 * 2.0), 1.0e-30);")
+        }
+        fn cap(s: String) -> String {
+            swap(s, LEAVE, "let eps = max(min(ifs_radius() * 1.0e-3, e0 * 0.4), 1.0e-30);")
+        }
+        fn cap3(s: String) -> String {
+            swap(s, LEAVE, "let eps = max(min(ifs_radius() * 3.0e-4, e0 * 0.4), 1.0e-30);")
+        }
+        match name {
+            "tetra" => tetra,
+            "wide" => wide,
+            "cap" => cap,
+            "cap3" => cap3,
+            other => panic!("no patch {other}"),
+        }
+    }
+
+    /// The gates' material variants of a solid preset, path traced:
+    /// matte (as it ships), glossy (gloss 0.04, roughness 0.15) and metal
+    /// (metallic 1, roughness 0.4).
+    fn gate_variant(base: &FractalConfig, variant: &str) -> FractalConfig {
+        let mut c = base.clone();
+        c.escape.solid_tier = RenderTier::PathTraced;
+        match variant {
+            "matte" => {}
+            "gloss" => {
+                c.solid_shading.gloss = 0.04;
+                c.solid_shading.roughness = 0.15;
+            }
+            "metal" => {
+                c.solid_shading.metallic = 1.0;
+                c.solid_shading.roughness = 0.4;
+            }
+            other => panic!("no variant {other}"),
+        }
+        c
+    }
+
+    /// MEASUREMENT (path-tracing-research V2, before building it): what
+    /// adaptive sampling could gain at best. Each gate scene and variant
+    /// rendered twice at `PT_SAMPLES` (64) samples from two streams, each
+    /// pixel's luminance variance from the guides' second moment; then, on
+    /// the CPU, the gate's error (`quality_errors`'s whole, as a mean
+    /// square over the pixels the solid covers) with the same total
+    /// samples dealt out per pixel in proportion to its standard deviation
+    /// as the FIRST render estimates it -- the allocation that minimises
+    /// the error, above a minimum count -- judged by the SECOND render's
+    /// variances (an allocation from the variances it is judged by would
+    /// count a firefly it happened to see as foreseen). Against the same
+    /// samples dealt evenly; the gain is the samples an even deal needs to
+    /// match it, over the samples it had. Only pixels some sample hit
+    /// are dealt samples (a miss costs next to nothing), and a sample is
+    /// priced the same on every one of them: a ceiling, with variances no
+    /// sampler knows at its minimum count.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn adaptive_sampling_potential() {
+        let (device, queue) = device().expect("gpu");
+        let (w, h) = (320u32, 180u32);
+        let samples: u32 = std::env::var("PT_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+        let presets = crate::resources::load_presets_with_fallback();
+        let lum = |p: [f32; 4]| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
+        let px = (w * h) as usize;
+        let n = samples as f64;
+        for scene in ["Menger Sponge", "Mandelbulb", "Mandelbox"] {
+            let base = presets.iter().find(|c| c.flame.name == scene).expect("the preset").clone();
+            let (_pt, palette) = config_palette(&device, &queue, &base);
+            for variant in ["matte", "gloss", "metal"] {
+                let mut c = gate_variant(&base, variant);
+                c.escape.path.denoise = true;
+                // A pixel's sums and its variance, from one stream.
+                let render = |seed: u32| {
+                    let mut r = solid_renderer_for(&device, &c, w, h);
+                    r.path_seed_offset = seed;
+                    r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+                    let (sum, guide) = r.solid_path_buffers_for_test().expect("traced");
+                    let a: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, sum, px as u64 * 16)).to_vec();
+                    let g: Vec<[f32; 4]> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_buffer(&device, &queue, guide, px as u64 * 32)).to_vec();
+                    r.destroy();
+                    // A sample's premultiplied luminance: its second moment
+                    // (the guide's, a hit's luminance squared; a miss adds
+                    // nothing) less its mean's square.
+                    let var: Vec<f64> = (0..px).map(|k| (g[2 * k][3] as f64 / n - (lum(a[k]) / n).powi(2)).max(0.0)).collect();
+                    (a, var)
+                };
+                let (a, var_a) = render(0);
+                let (_, var_b) = render(7919);
+                let (wi, hi) = (w as i32, h as i32);
+                let covered = |x: i32, y: i32| x >= 0 && y >= 0 && x < wi && y < hi && a[(y * wi + x) as usize][3] as f64 >= n - 0.5;
+                let inside: Vec<bool> = (0..wi * hi).map(|k| (-1..=1).all(|dy| (-1..=1).all(|dx| covered(k % wi + dx, k / wi + dy)))).collect();
+                let solid: Vec<usize> = (0..px).filter(|&k| a[k][3] > 0.0).collect();
+                let count = inside.iter().filter(|&&b| b).count() as f64;
+                let mean = (0..px).filter(|&k| inside[k]).map(|k| lum(a[k]) / n).sum::<f64>() / count.max(1.0);
+                let sd: Vec<f64> = var_a.iter().map(|v| v.sqrt()).collect();
+                // The gate's mean square at counts `ns`, over the inside,
+                // by the second render's variances.
+                let mse = |ns: &dyn Fn(usize) -> f64| (0..px).filter(|&k| inside[k]).map(|k| var_b[k] / ns(k)).sum::<f64>() / count.max(1.0);
+                // How much of the even deal's error the worst 1% of the
+                // inside holds: the tail an allocation chases.
+                let mut sq: Vec<f64> = (0..px).filter(|&k| inside[k]).map(|k| var_b[k]).collect();
+                sq.sort_by(|x, y| y.total_cmp(x));
+                let top = sq.iter().take(sq.len() / 100).sum::<f64>() / sq.iter().sum::<f64>().max(1e-30);
+                let mut line = format!("{scene:<14} {variant:<6} solid {:>3.0}% inside {:>3.0}% top1% {:>3.0}%", 100.0 * solid.len() as f64 / px as f64, 100.0 * count / px as f64, 100.0 * top);
+                for avg in [16.0f64, 64.0] {
+                    let even = mse(&|_| avg);
+                    for min in [4.0f64, 8.0] {
+                        // The scale whose counts, max(min, k sd), average
+                        // `avg` over the solid's pixels: by bisection.
+                        let total = |k: f64| solid.iter().map(|&i| (k * sd[i]).max(min)).sum::<f64>() / solid.len().max(1) as f64;
+                        let (mut lo, mut hi_k) = (0.0f64, 1.0f64);
+                        while total(hi_k) < avg {
+                            hi_k *= 2.0;
+                        }
+                        for _ in 0..60 {
+                            let mid = 0.5 * (lo + hi_k);
+                            if total(mid) < avg { lo = mid } else { hi_k = mid }
+                        }
+                        let k = hi_k;
+                        let best = mse(&|i| (k * sd[i]).max(min));
+                        line += &format!(" | {avg:>2}/{min}: {:.2}x ({:.2}% -> {:.2}%)", even / best, 100.0 * even.sqrt() / mean, 100.0 * best.sqrt() / mean);
+                    }
+                }
+                println!("{line}");
+            }
+        }
+    }
+
+    /// MEASUREMENT (path-tracing-research V2): adaptive sampling against
+    /// the even deal at equal time. Each gate case (`gate_variant`; subsets
+    /// by `PT_SCENES`, `PT_VARIANTS`) at 320x180 (`PT_W`, `PT_H`),
+    /// undenoised (`PT_DENOISE` to denoise both), against a reference of
+    /// `PT_REF_SAMPLES` (4096) samples of the same estimator from a stream
+    /// of its own (cached in `PT_REF_DIR`): the
+    /// even deal at 8 to 128 samples, and adaptive sampling to at most
+    /// `PT_MAX` (256) at each of `PT_THRESHOLDS` (levels; "8,4,2,1"), its
+    /// first check at `PT_MIN` (`ADAPTIVE_MIN_SAMPLES`), its noise from the
+    /// odd half with `PT_HALVES`. Each picture timed as a still renders it,
+    /// warm; the error is `quality_errors`'s, and as the display shows it
+    /// (`display_error`: what the threshold is in). The speedup is the time
+    /// the even deal needs for the adaptive picture's error -- interpolated
+    /// between its counts in log-log, past them at error ~ time^-1/2 --
+    /// over the adaptive picture's time, by each error.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn adaptive_quality() {
+        let (device, queue) = device().expect("gpu");
+        let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
+        let (w, h) = (env("PT_W").unwrap_or(320), env("PT_H").unwrap_or(180));
+        let ref_samples = env("PT_REF_SAMPLES").unwrap_or(4096);
+        let px = (w * h) as usize;
+        let list = |var: &str, default: &str| -> Vec<String> {
+            std::env::var(var).unwrap_or_else(|_| default.to_string()).split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        };
+        let scenes = list("PT_SCENES", "Menger Sponge,Mandelbulb,Mandelbox");
+        let variants = list("PT_VARIANTS", "matte,gloss,metal");
+        let thresholds: Vec<f32> = list("PT_THRESHOLDS", "8,4,2,1").iter().map(|t| t.parse().expect("a threshold")).collect();
+        let max = env("PT_MAX").unwrap_or(256);
+        let min = env("PT_MIN").unwrap_or(crate::escape::path_core::ADAPTIVE_MIN_SAMPLES);
+        let halves = std::env::var("PT_HALVES").is_ok();
+        let denoise = std::env::var("PT_DENOISE").is_ok();
+        let ref_dir = std::env::var("PT_REF_DIR").ok();
+        let presets = crate::resources::load_presets_with_fallback();
+        let mut table = Vec::new();
+        for scene in &scenes {
+            let base = presets.iter().find(|c| &c.flame.name == scene).unwrap_or_else(|| panic!("no preset {scene}")).clone();
+            let (_pt, palette) = config_palette(&device, &queue, &base);
+            for variant in &variants {
+                let mut c = gate_variant(&base, variant);
+                c.escape.path.denoise = denoise;
+                let display = crate::escape::path_core::path_settings(&c, 1.0).display;
+                // A picture, its time and its mean samples a pixel.
+                let picture = |c: &FractalConfig, samples: u32, seed: u32| {
+                    let adaptive = c.escape.path.noise_threshold > 0.0;
+                    let mut r = solid_renderer_for(&device, c, w, h);
+                    r.path_seed_offset = seed;
+                    r.path_adapt = Some((min, halves));
+                    // Compiled and warm before the clock starts: the check's
+                    // passes too.
+                    r.render_solid_still(&device, &queue, c, &palette, if adaptive { min } else { 1 }, || { wait(&device); true });
+                    r.reset_solid_path();
+                    let t = std::time::Instant::now();
+                    r.render_solid_still(&device, &queue, c, &palette, samples, || { wait(&device); true });
+                    let ms = t.elapsed().as_secs_f64() * 1000.0;
+                    let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                    let mean_n = if adaptive {
+                        let a: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, r.solid_path_sum_for_test().expect("traced"), (px * 32) as u64)).to_vec();
+                        let n = |k: usize| a[px + k][2].abs() as u32;
+                        // How the samples were dealt: the share of the
+                        // pixels, and of the warps (8x4 blocks), that went to
+                        // the end -- a warp runs while any of its lanes does.
+                        let at_end = (0..px).filter(|&k| n(k) >= samples).count();
+                        let (mut warps, mut busy) = (0usize, 0usize);
+                        for by in 0..h / 4 {
+                            for bx in 0..w / 8 {
+                                warps += 1;
+                                busy += usize::from((0..32).any(|i| n(((by * 4 + i / 8) * w + bx * 8 + i % 8) as usize) >= samples));
+                            }
+                        }
+                        println!("    at the end: {:.1}% of the pixels, {:.1}% of the warps", 100.0 * at_end as f64 / px as f64, 100.0 * busy as f64 / warps as f64);
+                        let d = &r.solid_path.as_ref().expect("traced").dispatched;
+                        let whole: Vec<u32> = d.iter().filter(|&&(units, _, cols)| cols == w && units >= h && units % h == 0).map(|&(units, _, _)| units / h).collect();
+                        let listed: Vec<u32> = d.iter().filter(|&&(_, _, cols)| cols == 0).map(|&(units, _, _)| units).collect();
+                        println!("    {} dispatches, {} of them whole frames (samples {:?}); {} of the list, {} entry-samples: {:?}", d.len(), whole.len(), whole, listed.len(), listed.iter().sum::<u32>(), listed);
+                        (0..px).map(|k| n(k) as f64).sum::<f64>() / px as f64
+                    } else {
+                        samples as f64
+                    };
+                    r.destroy();
+                    (out, ms, mean_n)
+                };
+                let file = ref_dir.as_ref().map(|d| format!("{d}/{}-{variant}-{ref_samples}-{w}x{h}.bin", scene.replace(' ', "_")));
+                let reference: Vec<[f32; 4]> = match file.as_ref().and_then(|f| std::fs::read(f).ok()) {
+                    Some(bytes) => bytemuck::cast_slice(&bytes).to_vec(),
+                    None => {
+                        let mut plain = c.clone();
+                        plain.escape.path.denoise = false;
+                        let (r, ms, _) = picture(&plain, ref_samples, 7919);
+                        println!("reference: {ref_samples} samples in {ms:.0} ms");
+                        if let Some(f) = &file {
+                            std::fs::write(f, bytemuck::cast_slice::<[f32; 4], u8>(&r)).expect("write the reference");
+                        }
+                        r
+                    }
+                };
+                let mut even = Vec::new();
+                for n in [8u32, 16, 32, 64, 128] {
+                    let (out, ms, _) = picture(&c, n, 0);
+                    let e = quality_errors(&out, &reference, w, h);
+                    let d = display_error(&out, &reference, w, h, display);
+                    even.push((ms, e[0], d));
+                    table.push(format!("{scene:<14} {variant:<6} even {n:>4}        | {ms:>8.0} ms | error {:>6.2}% fine {:>6.2}% coarse {:>6.2}% | {d:>5.2} levels", e[0], e[1], e[2]));
+                    println!("{}", table.last().unwrap());
+                }
+                // The even deal's time to an error (by `which`), in log-log.
+                let even_time = |err: f64, which: usize| {
+                    let pts: Vec<(f64, f64)> = even.iter().map(|&(t, e, d)| (t.ln(), if which == 0 { e } else { d }.ln())).collect();
+                    let le = err.ln();
+                    for pair in pts.windows(2) {
+                        let ((t0, e0), (t1, e1)) = (pair[0], pair[1]);
+                        if (le <= e0 && le >= e1) || (le >= e0 && le <= e1) {
+                            let f = if (e1 - e0).abs() > 1e-12 { (le - e0) / (e1 - e0) } else { 0.0 };
+                            return (t0 + f * (t1 - t0)).exp();
+                        }
+                    }
+                    // Past the ends: error ~ time^-1/2.
+                    let (t, e) = if le < pts.last().unwrap().1 { *pts.last().unwrap() } else { pts[0] };
+                    (t - 2.0 * (le - e)).exp()
+                };
+                for &threshold in &thresholds {
+                    let mut a = c.clone();
+                    a.escape.path.noise_threshold = threshold;
+                    let (out, ms, mean_n) = picture(&a, max, 0);
+                    let e = quality_errors(&out, &reference, w, h);
+                    let d = display_error(&out, &reference, w, h, display);
+                    table.push(format!(
+                        "{scene:<14} {variant:<6} T {threshold:>4} n {mean_n:>6.1} | {ms:>8.0} ms | error {:>6.2}% fine {:>6.2}% coarse {:>6.2}% | {d:>5.2} levels | speedup {:.2}x, displayed {:.2}x",
+                        e[0], e[1], e[2], even_time(e[0], 0) / ms, even_time(d, 1) / ms
+                    ));
+                    println!("{}", table.last().unwrap());
+                }
+            }
+        }
+        println!("\n{}", table.join("\n"));
+    }
+
     /// A config's palette as the renderer reads it (256 entries).
     fn config_palette(device: &Device, queue: &Queue, c: &FractalConfig) -> (Texture, TextureView) {
         let tex = crate::gpu::buffers::create_palette_texture(device, 256, "test palette");
@@ -2326,6 +2754,30 @@ mod tests {
         }
         let mean = (sum_r / f64::max(n, 1.0)).max(1.0e-12);
         [whole, fine, coarse].map(|s| 100.0 * (s / f64::max(n, 1.0)).sqrt() / mean)
+    }
+
+    /// A picture's error against a reference as the display shows it: the
+    /// luminance through the Linear tone map's exposure and the display's
+    /// power on it (`PathSettings::display`), in levels of 255, RMS over
+    /// the pixels the solid covers whole (with their 3x3 neighbours) --
+    /// what adaptive sampling's threshold is in, where the gate's error
+    /// weighs a bright pixel's noise more than the eye does.
+    fn display_error(out: &[[f32; 4]], reference: &[[f32; 4]], w: u32, h: u32, [exposure, power]: [f32; 2]) -> f64 {
+        let level = |p: &[f32; 4]| {
+            let v = (0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64) * exposure as f64;
+            if v > 0.0 { 255.0 * v.powf(power as f64) } else { 0.0 }
+        };
+        let (wi, hi) = (w as i32, h as i32);
+        let covered = |x: i32, y: i32| x >= 0 && y >= 0 && x < wi && y < hi && reference[(y * wi + x) as usize][3] >= 0.999;
+        let (mut n, mut se) = (0.0f64, 0.0f64);
+        for k in 0..wi * hi {
+            let (x, y) = (k % wi, k / wi);
+            if (-1..=1).all(|dy| (-1..=1).all(|dx| covered(x + dx, y + dy))) {
+                n += 1.0;
+                se += (level(&out[k as usize]) - level(&reference[k as usize])).powi(2);
+            }
+        }
+        (se / n.max(1.0)).sqrt()
     }
 
     /// Denoise asked for where the guides -- 32 bytes a pixel, bound
@@ -2466,6 +2918,161 @@ mod tests {
         }
         assert!(sums.iter().all(|s| *s == sums[0]), "the banding moved the sum");
         r.destroy();
+    }
+
+    /// A small Mandelbulb path traced adaptively (V2) to `target` samples
+    /// at a noise threshold, its first check at `min`, its noise from the
+    /// odd half when `halves`, in calls of `frame_ms` (and `ceiling`, tiles
+    /// across the bands): the sums and the statistics after them.
+    #[allow(clippy::too_many_arguments)]
+    fn adaptive_bulb(device: &Device, queue: &Queue, c: &FractalConfig, palette: &TextureView, (w, h): (u32, u32), target: u32, (min, halves): (u32, bool), (frame_ms, ceiling): (f32, Option<f32>)) -> (EscapeRenderer, Vec<[f32; 4]>) {
+        let mut r = solid_renderer_for(device, c, w, h);
+        r.path_adapt = Some((min, halves));
+        r.solid_path = Some(SolidPath::new(device, w, h));
+        r.solid_path.as_mut().expect("made").ceiling = ceiling;
+        let mut guard = 0;
+        while r.trace_solid(device, queue, c, palette, target, frame_ms) {
+            wait(device);
+            guard += 1;
+            assert!(guard < 100_000);
+        }
+        let px = (w * h) as u64;
+        let sums = bytemuck::cast_slice(&read_buffer(device, queue, r.solid_path_sum_for_test().expect("traced"), px * 32)).to_vec();
+        (r, sums)
+    }
+
+    /// The Mandelbulb preset path traced, undenoised, sampling adaptively
+    /// at `threshold` levels.
+    fn adaptive_config(threshold: f32) -> FractalConfig {
+        let mut c = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == "Mandelbulb").expect("the preset");
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.escape.path.denoise = false;
+        c.escape.path.noise_threshold = threshold;
+        c
+    }
+
+    /// Adaptive sampling (V2) deals samples, it does not change them: each
+    /// pixel's sum is, to the bit, the sum the plain tracer gives it at
+    /// that pixel's own count -- some stopped at the first check, some
+    /// went to the target, traced from the check's list -- however the
+    /// frame was banded (whole frames, tiles across the bands); and the
+    /// resolve divides each by its own count.
+    #[test]
+    fn adaptive_pixels_draw_their_own_streams() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let px = (w * h) as usize;
+        let c = adaptive_config(3.0);
+        let (_pt, palette) = config_palette(&device, &queue, &c);
+        const TARGET: u32 = 24;
+        let (r, a) = adaptive_bulb(&device, &queue, &c, &palette, (w, h), TARGET, (4, false), (1.0e9, None));
+        let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+        r.destroy();
+        let (r, b) = adaptive_bulb(&device, &queue, &c, &palette, (w, h), TARGET, (4, false), (1.0e-9, Some(1.0e-6)));
+        r.destroy();
+        assert!(a == b, "the banding moved the adaptive sum");
+        let n: Vec<u32> = (0..px).map(|k| a[px + k][2].abs() as u32).collect();
+        let mut counts: Vec<u32> = n.clone();
+        counts.sort_unstable();
+        counts.dedup();
+        let early = n.iter().filter(|&&k| k < TARGET).count();
+        println!("counts {counts:?}; {early} of {px} pixels stopped early");
+        assert!(early > 0 && early < px, "{early} of {px} stopped early: the test needs both");
+        let mut plain = c.clone();
+        plain.escape.path.noise_threshold = 0.0;
+        for &k in &counts {
+            let mut r = solid_renderer_for(&device, &plain, w, h);
+            r.render_solid_still(&device, &queue, &plain, &palette, k, || { wait(&device); true });
+            let u: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, r.solid_path_sum_for_test().expect("traced"), (px * 16) as u64)).to_vec();
+            r.destroy();
+            for i in (0..px).filter(|&i| n[i] == k) {
+                assert_eq!(a[i], u[i], "pixel {i} at {k} samples");
+            }
+        }
+        // The resolve: the mean over the coverage, and the coverage over
+        // the pixel's own count.
+        for i in 0..px {
+            let s = a[i];
+            let want = if s[3] > 0.0 { [s[0] / s[3], s[1] / s[3], s[2] / s[3], s[3] / n[i] as f32] } else { [0.0, 0.0, 0.0, 0.0] };
+            for k in 0..4 {
+                assert!((out[i][k] - want[k]).abs() <= 1.0e-6 * want[k].abs().max(1.0), "pixel {i}: {:?} against {want:?}", out[i]);
+            }
+        }
+    }
+
+    /// The check (`PATH_ADAPT_WGSL`) is its arithmetic: one check at 8
+    /// samples, each pixel's noise what the CPU makes of its statistics --
+    /// the mean's standard error from the moments, or the odd half's gap,
+    /// one up from the mean in the display's levels -- and a pixel
+    /// converged exactly where its noise and its neighbours' are under the
+    /// threshold.
+    #[test]
+    fn the_adaptive_check_is_its_arithmetic() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let px = (w * h) as usize;
+        let threshold = 3.0f32;
+        let c = adaptive_config(threshold);
+        let (_pt, palette) = config_palette(&device, &queue, &c);
+        let [exposure, power] = crate::escape::path_core::path_settings(&c, 1.0).display;
+        let level = |x: f64| if x * exposure as f64 > 0.0 { 255.0 * (x * exposure as f64).powf(power as f64) } else { 0.0 };
+        let lum = |p: [f32; 4]| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
+        for halves in [false, true] {
+            let (r, a) = adaptive_bulb(&device, &queue, &c, &palette, (w, h), 8, (8, halves), (1.0e9, None));
+            r.destroy();
+            let mut converged = 0;
+            for i in 0..px {
+                let st = a[px + i];
+                assert_eq!(st[2].abs(), 8.0, "pixel {i}'s count");
+                let m = lum(a[i]) / 8.0;
+                let se = if halves { (st[1] as f64 / 4.0 - m).abs() } else { ((st[0] as f64 / 8.0 - m * m).max(0.0) / 7.0).sqrt() };
+                let err = level(m + se) - level(m);
+                assert!((st[3] as f64 - err).abs() <= 2.0e-3 * err.max(1.0), "pixel {i} (halves {halves}): noise {} against {err}", st[3]);
+                let (x, y) = ((i as u32 % w) as i32, (i as u32 / w) as i32);
+                let mut worst = 0.0f32;
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let (qx, qy) = (x + dx, y + dy);
+                        if qx >= 0 && qy >= 0 && qx < w as i32 && qy < h as i32 {
+                            worst = worst.max(a[px + (qy as u32 * w + qx as u32) as usize][3]);
+                        }
+                    }
+                }
+                assert_eq!(st[2] < 0.0, worst < threshold, "pixel {i}'s flag (halves {halves}): worst {worst}");
+                converged += usize::from(st[2] < 0.0);
+            }
+            println!("halves {halves}: {converged} of {px} converged at 8");
+            assert!(converged > 0 && converged < px, "{converged} of {px}: the test needs both");
+        }
+    }
+
+    /// A picture sampled adaptively stops once every pixel has converged
+    /// (V2), well short of the samples asked for: at a threshold nothing
+    /// exceeds, every pixel stops at the first check, and the calls after
+    /// it -- before its count came back -- added nothing.
+    #[test]
+    fn adaptive_sampling_stops_once_every_pixel_converges() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let px = (w * h) as usize;
+        let c = adaptive_config(1.0e6);
+        let (_pt, palette) = config_palette(&device, &queue, &c);
+        let (r, a) = adaptive_bulb(&device, &queue, &c, &palette, (w, h), 4096, (4, false), (EXPORT_FRAME_MS, None));
+        let samples = r.solid_path_samples();
+        assert!(r.solid_path_shown() || samples > 0, "traced");
+        r.destroy();
+        println!("stopped at {samples} of 4096");
+        assert!(samples < 64, "went on to {samples}");
+        assert!((0..px).all(|k| a[px + k][2] == -4.0), "every pixel converged at the first check");
     }
 
     /// A row no call has measured is priced at the model at least, not at
