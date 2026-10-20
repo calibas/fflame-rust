@@ -141,6 +141,22 @@ fn lights(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fracta
         ui.label(egui::RichText::new(t!("lighting.flame_unlit")).small().weak());
         return;
     }
+    // Whose space the directional lights are in. No conversion: the
+    // lights keep their angles, read in the other space (the Fly Mode
+    // section's button converts).
+    match super::visibility::light_frame(view) {
+        super::visibility::Vis::Show => {
+            let mut follow = config.solid_shading.lights_follow_camera;
+            if ui.checkbox(&mut follow, t!("lighting.lights_follow_camera").as_ref()).on_hover_text(t!("lighting.lights_follow_camera_tip")).changed() {
+                let _ = config_manager.update_param(ConfigPath::SolidLightsFollowCamera, follow.into());
+            }
+        }
+        super::visibility::Vis::Grey(why) => {
+            let mut on = true;
+            ui.add_enabled(false, egui::Checkbox::new(&mut on, t!("lighting.lights_follow_camera").as_ref())).on_disabled_hover_text(t!(why));
+        }
+        super::visibility::Vis::Hide => {}
+    }
     let shading = &rig.shown;
     // A solid's camera, for a point light's placing and its scale:
     // where the eye is, and how far from its target.

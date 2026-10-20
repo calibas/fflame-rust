@@ -19,6 +19,7 @@ visibility:
   two_d_only: "2D flame mode only: Focused Rendering plans the view in the plane, and a 3D flame's samples depend on the camera and their depth."
   light_flame: "Lights an escape-time solid or a terrain. A 3D flame is lit in screen space, by directional lights alone; this light is off here."
   point_light_terrain: "Lights an escape-time solid. A terrain's world moves with the view, so a light placed in it has nowhere to stay; this light is off here."
+  light_frame_flame: "A 3D flame's lights always turn with its camera: its shading lights the projected picture, which has no fixed space to hold a light in."
 
 # The four render modes, named once. Used by the mode picker and by
 # anything that has to say which engine is running.
@@ -209,6 +210,8 @@ lighting:
   studio: "Studio light"
   studio_tip: "Light the surface from a photo studio -- an overhead softbox, two strips behind, dim walls and floor -- instead of the sky, while the background stays as it is. What polished and metal surfaces reflect, in both tiers; Sky light is its brightness. A solid's studio turns with the camera, as its lights do."
   flame_unlit: "Shading strength 0: the 3D flame draws its classic emissive colours, unlit. Raise Shading strength to light it."
+  lights_follow_camera: "Lights follow the camera"
+  lights_follow_camera_tip: "Off (the default): the directional lights are fixed in the fractal -- Azimuth around its z axis, Elevation above its xy plane -- and stay put as you orbit or fly. On: they turn with the camera -- Azimuth 0, Elevation 0 is a headlight -- so moving the camera moves the light across the fractal. Solids saved before 2026-10-19 load with this on; the Fly Mode section can fix their lights where they are. Switching it here keeps each light's angles, so the light moves. Point lights and the headlamp are not affected."
   ambient_tip: "Light from every direction, before shadows. The lit tier adds the colour times it, darkened by the occlusion; the path tracer adds it to the sky its bounces see. 0 leaves the side away from the lights dark."
   occlusion_strength_tip: "How strongly the walls enclosing a point darken its ambient light, in the lit tier (the path tracer traces the sky instead). It never darkens the lights: their shadows do."
 
@@ -548,6 +551,8 @@ view:
   camera_z: "Z Position:"
   fly_mode_on: "🚀 Exit Fly Mode (F2)"
   fly_mode_off: "🚀 Enter Fly Mode (F2)"
+  lights_to_world: "Fix lights in the fractal"
+  lights_to_world_tip: "This solid was saved when lights turned with the camera, so orbiting or flying moves them across it. Fix them in the fractal where they are now: the picture stays as it is, and from then on the lights stay put as you move. Undoable."
   depth_density_section: "Depth Density"
   depth_density_compensation: "Depth Density Comp."
   far_density_fade_section: "Far Density Fade"
@@ -907,6 +912,7 @@ history:
     normal_smoothing: "Normal Smoothing"
     gap_fill: "Gap Fill"
     solid_light_enabled: "Light Enabled"
+    solid_lights_follow_camera: "Lights Follow Camera"
     solid_light_param: "Light Parameter"
     dof_blur_strength: "DOF Blur Strength"
     fog_strength: "Fog Density"
@@ -1272,6 +1278,7 @@ history:
     use_custom_coloring: "Use Custom Colouring"
     use_custom_variation: "Use Custom Variation"
     escape_transform_add: "Add Transformation"
+    lights_to_world: "Fix Lights in the Fractal"
     escape_transform_remove: "Remove Transformation"
     escape_transform_move: "Move Transformation"
     escape_transform_stage: "Change Transformation Stage"

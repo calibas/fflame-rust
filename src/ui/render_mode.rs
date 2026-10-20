@@ -50,30 +50,68 @@ pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath
     if after.solid_shading.rig_untouched() {
         changes.extend(rig_taken_over(after));
     }
+    // A new solid's lights are the fractal's, whatever an older file left.
+    if after.solid_shading.lights_follow_camera {
+        changes.push((ConfigPath::SolidLightsFollowCamera, false.into()));
+    }
     changes
 }
 
 /// What an untouched lighting rig becomes when a lit 3D view takes it
 /// over -- on entry (the 3D look) and at the Lighting & Material panel's
 /// first change of it: full strength and no ambient (3d-look-and-tools
-/// P2), the rest as stored, and on a terrain light 0 where the untouched
-/// rig's sun was (`DEFAULT_SUN`; light 0 ships at mode D's key light), so
-/// taking the rig over does not swing the sun.
+/// P2), the rest as stored, and light 0 where the untouched rig's key
+/// light was, so taking the rig over does not swing it: on a terrain the
+/// sun (`DEFAULT_SUN`; light 0 ships at mode D's camera key light), on a
+/// solid whose lights are the fractal's the world's key
+/// (`ifs::default_world_key`).
 pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
     #[allow(unused_mut)]
     let mut changes = vec![(ConfigPath::ShadingStrength, 1.0f32.into()), (ConfigPath::SolidAmbient, 0.0f32.into())];
+    #[allow(unused_variables)]
+    let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
+    #[cfg(feature = "engine-escape")]
+    if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid && !config.solid_shading.lights_follow_camera {
+        let (azimuth, elevation) = crate::escape::ifs::default_world_key();
+        changes.push((light("azimuth"), azimuth.into()));
+        changes.push((light("elevation"), elevation.into()));
+    }
     #[cfg(feature = "terrain")]
     {
         use crate::camera::gesture::{view_kind, ViewKind};
         if matches!(view_kind(config), ViewKind::EscapeTerrain | ViewKind::SimTerrain) {
             let (azimuth, elevation) = crate::escape::terrain::DEFAULT_SUN;
-            let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
             changes.push((light("azimuth"), azimuth.into()));
             changes.push((light("elevation"), elevation.into()));
         }
     }
-    #[cfg(not(feature = "terrain"))]
+    #[cfg(not(any(feature = "terrain", feature = "engine-escape")))]
     let _ = config;
+    changes
+}
+
+/// A solid's lights fixed in the fractal's space where they are now (the
+/// View panel's Fly Mode section, for a solid saved while lights turned
+/// with the camera): each directional light's angles turned from the
+/// camera's space into the fractal's at this camera, and
+/// `lights_follow_camera` off -- the picture as it stands, and from then on
+/// the lights stay put as the camera moves. An untouched rig is taken
+/// over first: its key light is light 0 as it ships.
+#[cfg(feature = "engine-escape")]
+pub fn lights_to_world(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    let mut changes = Vec::new();
+    if config.solid_shading.rig_untouched() {
+        changes.extend(rig_taken_over(config));
+    }
+    for (index, l) in config.solid_shading.lights.iter().enumerate() {
+        if l.kind != crate::config::LightKind::Directional {
+            continue;
+        }
+        let (azimuth, elevation) = crate::escape::ifs::camera_light_to_world(&config.escape, l.azimuth, l.elevation);
+        changes.push((ConfigPath::SolidLightParam { index, param: "azimuth".to_string() }, azimuth.into()));
+        changes.push((ConfigPath::SolidLightParam { index, param: "elevation".to_string() }, elevation.into()));
+    }
+    changes.push((ConfigPath::SolidLightsFollowCamera, false.into()));
     changes
 }
 
@@ -272,6 +310,29 @@ mod tests {
     use super::*;
     use crate::config::FractalConfig;
     use crate::scene::tonemap::ToneMapMode;
+
+    /// A solid's lights on entry (2026-10-19): the 3D look leaves them the
+    /// fractal's whatever an older file left; an untouched rig taken over
+    /// keeps its key light where it was -- the world's key when the lights
+    /// are the fractal's, light 0 as it ships when they follow the camera.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn a_solid_enters_with_its_lights_in_the_fractal() {
+        let mut solid = FractalConfig::default();
+        solid.render_mode = RenderMode::Escape;
+        solid.escape.formula = "mandelbulb_solid".to_string();
+        let mut plane = solid.clone();
+        plane.escape.formula = "mandelbrot".to_string();
+        let mut old = solid.clone();
+        old.solid_shading.lights_follow_camera = true;
+        assert!(look_3d(&plane, &old).contains(&(ConfigPath::SolidLightsFollowCamera, false.into())), "entering: the fractal's");
+        assert!(!look_3d(&plane, &solid).iter().any(|(p, _)| *p == ConfigPath::SolidLightsFollowCamera), "already the fractal's");
+        let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
+        let (azimuth, elevation) = crate::escape::ifs::default_world_key();
+        let taken = rig_taken_over(&solid);
+        assert!(taken.contains(&(light("azimuth"), azimuth.into())) && taken.contains(&(light("elevation"), elevation.into())));
+        assert!(!rig_taken_over(&old).iter().any(|(p, _)| matches!(p, ConfigPath::SolidLightParam { .. })), "the camera's key stays");
+    }
 
     fn manager_in(mode: RenderMode) -> ConfigManager {
         let mut config = FractalConfig::default();

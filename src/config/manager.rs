@@ -2759,6 +2759,7 @@ impl ConfigManager {
                 let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 Ok(l.enabled.into())
             }
+            ConfigPath::SolidLightsFollowCamera => Ok(config.solid_shading.lights_follow_camera.into()),
             ConfigPath::SolidLightParam { index, param } => {
                 let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 // A point's position is f64, as the world it sits in.
@@ -4600,6 +4601,9 @@ impl ConfigManager {
             ConfigPath::SolidLightEnabled { index } => {
                 let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
                 l.enabled = value.try_into()?;
+            }
+            ConfigPath::SolidLightsFollowCamera => {
+                self.current.solid_shading.lights_follow_camera = value.try_into()?;
             }
             ConfigPath::SolidLightParam { index, param } => {
                 let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;

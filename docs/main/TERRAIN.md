@@ -86,7 +86,7 @@ What the last three share:
 | Path tracer | `path_core` with the distance field (`solid_path.rs`) | `path_core` with the height field (`PATH_WGSL`) | the same as the escape terrain |
 | Tier | `escape.solid_tier`, default Lit | `escape.terrain.tier`, default Auto | `sim.terrain.tier`, default Auto |
 | Path settings | `escape.path` | `escape.path` | `sim.terrain.path` |
-| Lights | camera space | world-fixed | world-fixed |
+| Lights | fixed in the fractal (or the camera's, a toggle) | world-fixed | world-fixed |
 | Fog | the flame's fog fields | the terrain's Far and Haze | Far and Haze on a repeated ground |
 
 Every one hands the tail an `Rgba32Float` image in the accumulator's
@@ -156,8 +156,25 @@ The splat-only settings (solid strength, surface thickness, SSAO radius,
 normal smoothing, gap fill, shadow maps) are the 3D flame's alone.
 
 **The lights' space differs:**
-- **Flames and mode D:** camera space. Azimuth 0, elevation 0 is a
-  headlight. Mode D rotates them into the world once, in `pack_rig3`.
+- **Mode D (2026-10-19):** fixed in the fractal's space by default --
+  azimuth counter-clockwise about its z axis from +x, elevation above its
+  xy plane, a terrain's convention -- so they stay put as the camera
+  orbits or flies. `SolidShadingSettings::lights_follow_camera` (the
+  Lighting & Material panel's "Lights follow the camera") puts them in
+  the camera's space instead: azimuth 0, elevation 0 a headlight, the
+  lights turning with every orbit, as every solid was lit before. Config
+  v6: a solid saved before loads with it on and renders as it did; the
+  3D look turns it off on entering a solid; the View panel's Fly Mode
+  section shows **Fix lights in the fractal** for a solid with it on
+  (`ui::render_mode::lights_to_world`: each directional light's angles
+  turned into the fractal's at this camera, `ifs::camera_light_to_world`
+  -- the picture as it stands, 0 pixels apart in both tiers -- and the
+  flag off, one undo step). Switching the toggle itself converts nothing:
+  the angles are read in the other space, and the light moves. Both
+  spaces are turned into world directions in `pack_rig3`. Points and the
+  headlamp are not affected.
+- **Flames:** camera space, always: the shade pass lights the projected
+  picture (`visibility::light_frame` greys the toggle).
 - **Terrains:** world-fixed, the 2D relief's light. Azimuth is
   counter-clockwise from east on the plane, elevation is above it
   (`terrain::light_direction`).
@@ -237,8 +254,11 @@ it would be a flat silhouette, so `SolidShadingSettings::rig_untouched`
 switches in a default instead:
 - **A terrain** gets a default sun, `DEFAULT_SUN` = azimuth 135°,
   elevation 30°, white at intensity 1;
-- **mode D** gets a key light at the panel's light-0 default (35°, 40°,
-  camera space).
+- **mode D** gets a key light at the panel's light-0 default (35°, 40°)
+  in camera space when its lights follow the camera; fixed in the
+  fractal, the same light as the default camera (yaw 0, pitch 0.42) sees
+  it, to the degree (`ifs::default_world_key`), which taking the rig
+  over writes to light 0 (`render_mode::rig_taken_over`).
 
 Either way the rig is strength 1, ambient 0.12, diffuse 0.88, no
 highlight, occlusion strength 1. The material is left out of the test,
@@ -347,10 +367,13 @@ the background or the gradient (`ifs_studio` in the rig):
 
 Its brightness is Sky light over the exposure (`path_core::studio_level`),
 so a radiance of 1 reads white at any exposure, as the background does.
-Its frame: a solid's turns with the camera, as its lights do (`fdata[32].y`
-0: x right, y up, z toward the viewer); a terrain's is the world's with z
-up (1). In `fdata[32]` for both tiers (the terrain's uniform grew from 32
-vec4s to 36).
+Its frame (`fdata[32].y`): a solid's turns with the camera when its
+lights do (0: x right, y up, z toward the viewer); fixed in the fractal
+when they are (2), its basis in `fdata[33..35]` the camera's at the
+solids' usual view, yaw 0.9 and pitch 0.42 (`ifs::studio_basis`), where
+the shipped solid presets stand, so they keep their look; a terrain's is
+the world's with z up (1). In `fdata[32]` for both tiers (the terrain's
+uniform grew from 32 vec4s to 36).
 
 - **The path tracer:** a bounce that escapes sees the studio plus the
   ambient (`pt_sky`; the environment is then the ambient alone).

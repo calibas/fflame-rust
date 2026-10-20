@@ -194,7 +194,7 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 
 ## Versioning and migration
 
-`CURRENT_CONFIG_VERSION` is **5** (`src/config/fractal_config.rs`).
+`CURRENT_CONFIG_VERSION` is **6** (`src/config/fractal_config.rs`).
 `migrate_value` upgrades one version per arm:
 
 | arm | what it does |
@@ -204,6 +204,7 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 | v2 → v3 | lifts the scene-level render fields from `flame` to the top level: `render_mode` (absent: `"2d"`), `perspective_strength` (or the legacy `projection` enum, converted), `depth_density_compensation`, `far_density_fade`, `far_density_fade_start`, and `preserve_z` (absent: `true`) |
 | v3 → v4 | for a file saved as v3 only: an absent `levels_gamma` becomes 1.0. A v3 save skipped the field at 1.0, the pre-2026-05-31 default, rather than at its 0.5 default; every v3 file postdates that change, so absent meant 1.0. Older files keep loading at 0.5, as that change intended |
 | v4 → v5 | the Shadows default rose from 0.7 to 0.98 (2026-10-19): an absent `shadow` becomes 0.7 in `escape.formula_params` when the formula is a solid (a built-in solid's name, or a `custom-` formula whose carried source has `fn distance`), and in `escape.terrain` and `sim.terrain` when the file has them |
+| v5 → v6 | a solid's directional lights became the fractal's (2026-10-19): `solid_shading.lights_follow_camera` becomes true when the formula is a solid (as v4 → v5 tells one), so an older solid keeps the camera's lights and renders as it did. The shipped solid presets were converted to the fractal's at their own cameras and saved as v6 (`scripts/presets_lights_to_world.py`) |
 
 A value **without a `version`** is read as v0, with two exceptions. A
 top-level `render_mode` with none on `flame`, or one of `"escape"` or

@@ -464,6 +464,20 @@ stops over the valley measured, at the orbit's floor without a measure or
 without collisions; a simulation's hill raises the floor; proximity paces
 by the height).
 
+### A solid's lights while flying
+
+A solid's directional lights are fixed in the fractal by default (config
+v6, TERRAIN.md *The lights' space differs*), so flying past them changes
+nothing about where they are. A solid saved before follows the camera, and
+looking around swings its light: the Fly Mode section (under the Fly Mode
+button) then shows **Fix lights in the fractal**, which turns each
+directional light's angles into the fractal's space at the current camera
+and stops them following (`ui::render_mode::lights_to_world`) -- the
+picture as it stands, one undo step. Gate:
+`fixing_a_solids_lights_in_the_fractal_keeps_its_picture` (two lights,
+shadows and the studio on the Mandelbulb: 0 pixels apart, Lit and Path
+traced).
+
 ### Settings
 
 Device preferences in `SystemSettings` (`src/storage/settings.rs`), not
