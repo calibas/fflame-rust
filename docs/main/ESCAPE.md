@@ -1447,7 +1447,34 @@ The last two are offered as animation targets ("Transformation 2
 removal by a session id (`EscapeTransform::id`, never in a file; the
 list's value carries it, `transforms_to_wire`) -- a variation change
 keeps the id, as a flame transform's does (ANIMATION.md, *Binding*).
-Mode B's fields and mode D keep the lens alone.
+Mode B's fields and mode D's planar walk keep the lens alone.
+
+**A solid's Orbit transformations** (3d-look-and-tools P5, step 2;
+2026-10-19): a 3D solid draws the Orbit stage alone, on each variation's
+3D body (a solid has no plane, and its walk takes no map), and the
+section shows only that stage there, with the variations that have a 3D
+body (`lens::drawn_transforms`; a solid's Plane and Iteration entries
+stay in the list, undrawn, and say so). The maps flame is built in 3D
+then (`maps_3d`; the lens at z = 0, as with a solid's calls), and the
+glue gives `esc_orbit3(p: vec3)`. Every solid's walk -- the five
+built-ins' and the Rhai template's -- measures its orbit trap through
+`ifs_trap_point(z)` (the quaternion Julia's, its vector part): the trap's
+point and its closest approach, so the trap colouring moves, and the
+level where it bands by the trap (the KIFS, the flame solid); the
+address, the running derivative and the walk itself do not. Without Orbit transformations `ifs_trap_point` is the identity
+(`assembler::ifs_trap_point_wgsl`); with them it maps only while a
+private flag is up, which `ifs_colour3` raises around `ifs_evaluate3` --
+the walk that colours is the walk the march asks for distances, and a
+march must not pay for maps it does not read -- and both colour sites,
+the walk's hit and the path tracer's `pt_ifs_surface`, call
+`ifs_colour3`. Gates: `a_solids_orbit_transformations_reach_both_colour_sites`
+(the splice, every shipped solid, validated) and
+`a_solids_orbit_transformations_move_its_colour_alone` (GPU, the four
+self-contained built-ins and the Rhai KIFS Menger: an Orbit `linear3D`
+and `spherical3D` at 0 are the picture to the byte, `spherical3D` at 1
+recolours nearly every covered pixel, and under a white palette is the
+picture to the byte -- the shape and the light are the walk's; the path
+tracer likewise on the Mandelbulb).
 
 Gates (`escape::lens` GPU tests): a Plane `linear` is the identity and a
 mirror draws the mirrored half (6 of 9,216 pixels apart, the f32 offset

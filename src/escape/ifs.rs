@@ -1550,10 +1550,14 @@ fn ifs_colour_walk3(delta: vec3<f32>, res: ptr<function, IfsResult>) {
         if (!(r <= 1e37)) {
             break;
         }
-        if (r < trap_r) {
-            trap_r = r;
+        // What the trap measures: the point, through the Orbit
+        // transformations when there are any (3d-look-and-tools P5).
+        let qt = ifs_trap_point(q);
+        let rt = ifs_radius4(qt, w, c);
+        if (rt < trap_r) {
+            trap_r = rt;
             trap_k = k;
-            trap_p = q.xy;
+            trap_p = qt.xy;
         }
         if (r > radius) {
             break;
@@ -2107,10 +2111,14 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         if (k <= depth) {
             spread = dq;
             let along = dot(q.yzw, axis_v);
-            if (mag < trap_r) {
-                trap_r = mag;
+            // What the trap measures: the vector part through the Orbit
+            // transformations when there are any (3d-look-and-tools P5).
+            let qt = vec4<f32>(q.x, ifs_trap_point(q.yzw));
+            let mag_t = length(qt);
+            if (mag_t < trap_r) {
+                trap_r = mag_t;
                 trap_k = k;
-                trap_p = vec2<f32>(q.x, along);
+                trap_p = vec2<f32>(qt.x, dot(qt.yzw, axis_v));
             }
             // The address: a binary digit each iteration, which side of
             // the plane across the axis the orbit falls on (the binary
@@ -2540,10 +2548,16 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         }
         k = k + 1u;
         let r = length(z);
-        if (k <= depth && r < trap_r) {
-            trap_r = r;
-            trap_k = k;
-            trap_p = z.xy;
+        // What the trap measures: the iterate, through the Orbit
+        // transformations when there are any (3d-look-and-tools P5).
+        if (k <= depth) {
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {
+                trap_r = rt;
+                trap_k = k;
+                trap_p = zt.xy;
+            }
         }
         if (escape_k < 0 && r > radius) {
             escape_k = i32(k);
@@ -2817,12 +2831,16 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         k = k + 1u;
         if (k <= depth) {
             spread = dr;
-            if (r < trap_r) {
-                trap_r = r;
+            // What the trap measures: the iterate, through the Orbit
+            // transformations when there are any (3d-look-and-tools P5).
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {
+                trap_r = rt;
                 // In units of the ball: the box is a dozen across where
                 // the other solids are two, and the trap's palette scale
                 // is per unit.
-                let a = abs(z) / radius;
+                let a = abs(zt) / radius;
                 trap_p = vec2<f32>(max(max(a.x, a.y), a.z), min(min(a.x, a.y), a.z));
             }
             address = address + f32(axes * 3u + case_) * place;
@@ -3063,9 +3081,13 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         k = k + 1u;
         if (k <= depth) {
             spread = dr;
-            if (r < trap_r) {
-                trap_r = r;
-                trap_p = vec2<f32>(z.z, length(z.xy));
+            // What the trap measures: the iterate, through the Orbit
+            // transformations when there are any (3d-look-and-tools P5).
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {
+                trap_r = rt;
+                trap_p = vec2<f32>(zt.z, length(zt.xy));
             }
             if (k < depth) {
                 address = address + select(0.0, place, z.z < 0.0);

@@ -3,7 +3,9 @@
 //! (Plane, UF's transformations), to each orbit value the colouring
 //! accumulates (Orbit, UF's trap position), or to `z` after every step
 //! (Iteration). They render through the lens's maps flame
-//! (`escape::lens`); this is only their editor.
+//! (`escape::lens`); this is only their editor. A solid draws the Orbit
+//! stage alone, on each variation's 3D body (3d-look-and-tools P5): the
+//! editor offers only that stage there, and the variations with a 3D body.
 //!
 //! A structural edit -- add, remove, move, a stage or a variation -- writes
 //! the whole list (`ConfigPath::EscapeTransforms`) as one undo step; an
@@ -75,14 +77,16 @@ fn entry(stage: TransformStage, variation: &str, amount: f32) -> EscapeTransform
 }
 
 /// The section: each transformation's stage, variation, amount and
-/// parameters, with move and remove, and Add.
-pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+/// parameters, with move and remove, and Add. `solid`: the formula is a
+/// 3D solid, which draws the Orbit stage alone.
+pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager, solid: bool) {
     let list = config_manager.active_config().escape.transforms.clone();
     egui::CollapsingHeader::new(t!("escape_transforms.title"))
         .id_salt("escape_transforms")
         .default_open(!list.is_empty())
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(t!("escape_transforms.tip")).small().weak());
+            let tip = if solid { t!("escape_transforms.tip_solid") } else { t!("escape_transforms.tip") };
+            ui.label(egui::RichText::new(tip).small().weak());
             let mut edit: Option<(Vec<EscapeTransform>, &'static str)> = None;
             for (i, t) in list.iter().enumerate() {
                 ui.push_id(("escape_transform", i), |ui| {
@@ -90,7 +94,7 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                         ui.horizontal(|ui| {
                             // The stage.
                             egui::ComboBox::from_id_salt("stage").selected_text(stage_label(t.stage)).show_ui(ui, |ui| {
-                                for stage in TransformStage::ALL {
+                                for stage in TransformStage::ALL.into_iter().filter(|s| !solid || *s == TransformStage::Orbit) {
                                     if ui.selectable_label(t.stage == stage, stage_label(stage)).on_hover_text(stage_tip(stage)).clicked() && t.stage != stage {
                                         let mut l = list.clone();
                                         l[i].stage = stage;
@@ -99,7 +103,7 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                                 }
                             });
                             // The variation.
-                            if let Some(name) = variation_picker(ui, i, &t.variation) {
+                            if let Some(name) = variation_picker(ui, i, &t.variation, solid) {
                                 let mut l = list.clone();
                                 // The same transformation, as a flame
                                 // transform keeps its id through a
@@ -124,6 +128,9 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                                 edit = Some((l, "history.action.escape_transform_remove"));
                             }
                         });
+                        if solid && t.stage != TransformStage::Orbit {
+                            ui.label(egui::RichText::new(t!("escape_transforms.not_in_solid")).small().weak());
+                        }
                         let mut a = t.amount;
                         let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
                         if ui
@@ -155,21 +162,23 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
             if ui.button(t!("escape_transforms.add")).on_hover_text(t!("escape_transforms.add_tip")).clicked() {
                 let mut l = list.clone();
                 // The identity until a variation is picked.
-                l.push(entry(TransformStage::Plane, "linear", 1.0));
+                let stage = if solid { TransformStage::Orbit } else { TransformStage::Plane };
+                l.push(entry(stage, "linear", 1.0));
                 write_list(config_manager, &l, "history.action.escape_transform_add");
             }
             // What the stages cost: Plane and Iteration keep the direct path.
-            if config_manager.active_config().escape.transforms_absolute() {
+            if !solid && config_manager.active_config().escape.transforms_absolute() {
                 ui.label(egui::RichText::new(t!("escape_transforms.direct_only")).small().weak());
             }
         });
 }
 
 /// A variation picker for entry `i`: a button showing the current one and
-/// a popup with a filter and every variation with a 2D body -- a popup,
-/// not a combo, so a click in the filter does not close it (the lens
-/// picker's reason). The chosen name, when one is chosen.
-fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str) -> Option<String> {
+/// a popup with a filter and every variation with a 2D body -- in a
+/// solid, with a 3D body -- a popup, not a combo, so a click in the
+/// filter does not close it (the lens picker's reason). The chosen name,
+/// when one is chosen.
+fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool) -> Option<String> {
     let registry = crate::variations::global_registry();
     let label = registry.get(current).map(|v| v.display_name.clone()).unwrap_or_else(|| current.to_string());
     let popup_id = egui::Id::new(("escape_transform_popup", i));
@@ -195,7 +204,7 @@ fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str) -> Option<String
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for name in registry.names() {
                     let Some(info) = registry.get(name) else { continue };
-                    if info.category == VariationCategory::Only3D {
+                    if if solid { info.wgsl_source_3d.is_none() } else { info.category == VariationCategory::Only3D } {
                         continue;
                     }
                     if !needle.is_empty() && !name.to_lowercase().contains(&needle) && !info.display_name.to_lowercase().contains(&needle) {

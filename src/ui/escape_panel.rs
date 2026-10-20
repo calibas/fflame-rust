@@ -1220,10 +1220,12 @@ pub fn render_escape_content(
     // ---- Coloring ----
     show_coloring_section(ui, config_manager, &esc, field, ifs_def);
 
-    // ---- Transformations (the KIFS plan, C4): mode A's formulas ----
-    if field.is_none() && ifs_def.is_none() {
+    // ---- Transformations (the KIFS plan, C4): mode A's formulas, and a
+    // solid's Orbit stage (3d-look-and-tools P5) ----
+    let solid = ifs_def.is_some_and(|d| d.solid);
+    if field.is_none() && (ifs_def.is_none() || solid) {
         ui.separator();
-        super::escape_transforms::show_transforms_section(ui, config_manager);
+        super::escape_transforms::show_transforms_section(ui, config_manager, solid);
     }
 }
 

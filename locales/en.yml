@@ -2967,6 +2967,8 @@ escape_transforms:
   filter: "Filter variations"
   unknown: "Unknown variation `%{name}`: it renders as none"
   direct_only: "A Plane or Iteration transformation keeps the view on the direct path: past about zoom 14 it loses precision."
+  tip_solid: "Variations applied to the orbit a solid's colouring measures (Orbit): the orbit trap moves, the shape does not. Each uses its variation's 3D body."
+  not_in_solid: "A solid draws Orbit transformations only: this one does nothing here."
 hybrid_designer:
   preset: "Preset"
   use_preset: "Use"
