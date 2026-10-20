@@ -415,9 +415,13 @@ pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, Stri
         let z = {z};
         let r = length(z);
         if (k <= depth) {{
-{spread}            if (r < trap_r) {{
-                trap_r = r;
-                let a = abs(z) / radius;
+{spread}            // What the trap measures: `z`, through the Orbit
+            // transformations when there are any.
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {{
+                trap_r = rt;
+                let a = abs(zt) / radius;
                 trap_p = vec2<f32>(max(max(a.x, a.y), a.z), min(min(a.x, a.y), a.z));
             }}
 {addr}        }}
@@ -462,7 +466,8 @@ pub fn validate_solid(wgsl: &str) -> Result<(), String> {
         fn fparam(i: u32) -> f32 {\n    return f32(i);\n}\n\
         fn ifs_radius() -> f32 {\n    return 2.0;\n}\n\
         fn ifs_target_offset() -> vec3<f32> {\n    return vec3<f32>(0.0, 0.0, 0.0);\n}\n\
-        fn esc_solid_map(i: u32, p: vec3<f32>) -> vec3<f32> {\n    return p;\n}\n";
+        fn esc_solid_map(i: u32, p: vec3<f32>) -> vec3<f32> {\n    return p;\n}\n\
+        fn ifs_trap_point(p: vec3<f32>) -> vec3<f32> {\n    return p;\n}\n";
     validate_module(&format!("{STUBS}{wgsl}"))
 }
 

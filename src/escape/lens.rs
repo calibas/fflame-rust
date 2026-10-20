@@ -40,7 +40,7 @@
 //!
 //! See `docs/archive/escape-time/escape-camera-lens.md`.
 
-use crate::config::escape::EscapeConfig;
+use crate::config::escape::{EscapeConfig, EscapeTransform, TransformStage};
 use crate::scene::transforms::{Flame, Transform};
 use crate::variations::VariationRegistry;
 
@@ -232,7 +232,28 @@ pub const LENS_GROUP: u32 = 2;
 /// shader is better off without the machinery than with a no-op in it.
 /// Either sign is a lens; they bulge opposite ways.
 pub fn is_active(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
-    lens_on(escape, registry) || escape.transforms.iter().any(|t| map_usable(registry, &t.variation)) || !solid_maps(escape).is_empty()
+    lens_on(escape, registry) || drawn_transforms(escape, registry).next().is_some() || !solid_maps(escape).is_empty()
+}
+
+/// Whether the formula is a 3D solid (mode D's march): its
+/// transformations are the Orbit stage's alone, on the variations' 3D
+/// bodies (3d-look-and-tools P5).
+fn solid3(escape: &EscapeConfig) -> bool {
+    crate::escape::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid)
+}
+
+/// The transformations the picture draws, in order: each one's variation
+/// known, with a 2D body -- or, in a solid, the Orbit ones with a 3D body
+/// (a solid has no plane, and its walk takes no map).
+pub fn drawn_transforms<'a>(escape: &'a EscapeConfig, registry: &'a VariationRegistry) -> impl Iterator<Item = &'a EscapeTransform> + 'a {
+    let solid = solid3(escape);
+    escape.transforms.iter().filter(move |t| {
+        if solid {
+            t.stage == TransformStage::Orbit && registry.get(&t.variation).is_some_and(|v| v.wgsl_source_3d.is_some())
+        } else {
+            map_usable(registry, &t.variation)
+        }
+    })
 }
 
 /// A solid's calls of built-in variations (3d-look-and-tools P5): the
@@ -242,9 +263,10 @@ pub fn solid_maps(escape: &EscapeConfig) -> Vec<crate::escape::lang::ir::MapCall
     crate::escape::custom::solid_maps(&escape.formula)
 }
 
-/// Whether the maps are built in 3D: a solid calls a variation.
-pub fn maps_3d(escape: &EscapeConfig) -> bool {
-    !solid_maps(escape).is_empty()
+/// Whether the maps are built in 3D: a solid calls a variation, or has
+/// Orbit transformations.
+pub fn maps_3d(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
+    !solid_maps(escape).is_empty() || (solid3(escape) && drawn_transforms(escape, registry).next().is_some())
 }
 
 /// A map call's parameter value this picture: a number, or the solid's
@@ -289,14 +311,13 @@ pub struct MapSlots {
 /// The maps flame's slots for this config. A transformation whose
 /// variation is unknown is left out (an unknown name renders as none).
 pub fn map_slots(escape: &EscapeConfig, registry: &VariationRegistry) -> MapSlots {
-    use crate::config::escape::TransformStage;
     let mut slots = MapSlots::default();
     let mut k = 0u32;
     if lens_on(escape, registry) {
         slots.lens = Some(0);
         k = 1;
     }
-    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+    for t in drawn_transforms(escape, registry) {
         match t.stage {
             TransformStage::Plane => slots.plane.push(k),
             TransformStage::Orbit => slots.orbit.push(k),
@@ -332,7 +353,7 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
     }
     // The transformations (C4): one transform each, the amount in the
     // weight as the lens's, but not negated -- 1 is the variation.
-    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+    for t in drawn_transforms(escape, registry) {
         let info = registry.get(&t.variation)?;
         let mut x = identity_transform();
         x.weight = t.amount.clamp(-LENS_AMOUNT_LIMIT, LENS_AMOUNT_LIMIT);
@@ -437,7 +458,7 @@ pub fn lens_key(escape: &EscapeConfig, registry: &VariationRegistry) -> String {
     }
     // Each transformation's stage, variation and parameters; not its
     // amount, which rides in a buffer as the lens's.
-    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+    for t in drawn_transforms(escape, registry) {
         key.push_str(&format!("|{:?}:{}", t.stage, t.variation));
         for (k, v) in &t.params {
             key.push_str(&format!(",{k}={v}"));
@@ -470,7 +491,7 @@ pub fn maps_identity(escape: &EscapeConfig, registry: &VariationRegistry) -> Str
     if lens_on(escape, registry) {
         key.push_str(&format!("|a{}", escape.lens_amount));
     }
-    for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
+    for t in drawn_transforms(escape, registry) {
         key.push_str(&format!("|a{}", t.amount));
     }
     for m in solid_maps(escape) {
@@ -506,6 +527,9 @@ pub fn maps_glue_in(slots: &MapSlots, three: bool) -> String {
          // seed is the point's own, so a variation that draws varies.\n\
          fn esc_map_seed(p: vec2<f32>) -> u32 {\n    return bitcast<u32>(p.x) * 7919u + bitcast<u32>(p.y) * 104729u;\n}\n",
     );
+    if three {
+        out.push_str("\nfn esc_map_seed3(p: vec3<f32>) -> u32 {\n    return bitcast<u32>(p.x) * 7919u + bitcast<u32>(p.y) * 104729u + bitcast<u32>(p.z) * 1299709u;\n}\n");
+    }
     if let Some(k) = slots.lens {
         out.push_str(&format!(
             "\n// The camera lens: a variation on the normalised screen offset, in\n\
@@ -522,6 +546,16 @@ pub fn maps_glue_in(slots: &MapSlots, three: bool) -> String {
         if list.is_empty() {
             continue;
         }
+        if three && name == "esc_orbit" {
+            // A solid's (P5): the 3D body, on the orbit value its
+            // colourings measure (`ifs_trap_point`).
+            out.push_str("\n// The Orbit transformations of a solid's orbit value, in order.\nfn esc_orbit3(p: vec3<f32>) -> vec3<f32> {\n    var q = p;\n");
+            for k in list {
+                out.push_str(&format!("    q = mix(q, flame_map3({k}u, q, esc_map_seed3(q)), transforms[{k}u].weight);\n"));
+            }
+            out.push_str("    return q;\n}\n");
+            continue;
+        }
         out.push_str(&format!("\n// The transformations of {what}, in order.\nfn {name}(p: vec2<f32>) -> vec2<f32> {{\n    var q = p;\n"));
         for k in list {
             out.push_str(&format!("    q = mix(q, {}, transforms[{k}u].weight);\n", map(*k, "q")));
@@ -534,8 +568,7 @@ pub fn maps_glue_in(slots: &MapSlots, three: bool) -> String {
             "\n// A solid's calls of built-in variations: the `i`-th's 3D body,\n\
              // seeded by the point, as the plane's maps are.\n\
              fn esc_solid_map(i: u32, p: vec3<f32>) -> vec3<f32> {{\n    \
-             let seed = bitcast<u32>(p.x) * 7919u + bitcast<u32>(p.y) * 104729u + bitcast<u32>(p.z) * 1299709u;\n    \
-             return flame_map3({first}u + i, p, seed);\n}}\n"
+             return flame_map3({first}u + i, p, esc_map_seed3(p));\n}}\n"
         ));
     }
     out
@@ -554,7 +587,7 @@ pub fn lens_source(escape: &EscapeConfig, registry: &VariationRegistry) -> Optio
     let slots = map_slots(escape, registry);
     let builder = crate::shader_builder_v2::ShaderBuilder::new(registry.clone());
     // In 3D when a solid calls variations (P5): their 3D bodies.
-    let three = maps_3d(escape);
+    let three = maps_3d(escape, registry);
     let mut src = if three { builder.build_layer_map3_at(&flame, LENS_GROUP) } else { builder.build_layer_map_at(&flame, LENS_GROUP) };
     // The layer map moves the flame's BINDINGS to our group, but not
     // its NAMES, and the escape shader declares a palette of its own.

@@ -8633,6 +8633,9 @@ pub fn assemble_ifs_rig(
     // everything it needs are spliced only for it, and every other
     // mode-D shader is byte-identical without them.
     let measure = !def.solid && coloring.name == "ifs_measure";
+    // A solid's Orbit transformations (3d-look-and-tools P5): what its
+    // colourings measure goes through them, while colouring only.
+    let orbit = solid_orbit(def, lens);
     let mut out = Vec::new();
     lens_prelude(&mut out, lens);
     for line in template.lines() {
@@ -8669,6 +8672,9 @@ pub fn assemble_ifs_rig(
                 // wrapping them. Dropped when there is no sum, so the
                 // text is what it was.
                 push_ifs_sum_markers(&mut out, def.wgsl.trim(), sums);
+                if def.solid {
+                    out.push(ifs_trap_point_wgsl(orbit).trim().to_string());
+                }
                 if measure {
                     push_ifs_sum_markers(&mut out, super::ifs::IFS_JACOBIAN.trim(), sums);
                     out.push(super::ifs::IFS_MEASURE.trim().to_string());
@@ -8690,10 +8696,55 @@ pub fn assemble_ifs_rig(
             "const IFS_MAX_BEAM: u32 = 8u;" => {
                 out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
             }
+            _ if orbit => out.push(line.replace("ifs_evaluate3(p)", "ifs_colour3(p)")),
             _ => out.push(line.to_string()),
         }
     }
     out.join("\n")
+}
+
+/// Whether a solid's colourings measure through Orbit transformations:
+/// the maps define `esc_orbit3` (`lens::maps_glue_in`, built in 3D).
+fn solid_orbit(def: &IfsDef, lens: Option<&str>) -> bool {
+    def.solid && crate::escape::lens::has_stage(lens, "esc_orbit3")
+}
+
+/// What a solid's colourings measure of an orbit value, `ifs_trap_point`
+/// (3d-look-and-tools P5): every solid's walk measures its trap through
+/// it. Without Orbit transformations the value itself; with them, the
+/// value through them -- but only while colouring (`ifs_colour3`, which
+/// the template's colour sites call in place of `ifs_evaluate3`), since
+/// the walk that colours is the walk the march asks for distances, and a
+/// march must not pay for maps it does not read.
+fn ifs_trap_point_wgsl(orbit: bool) -> &'static str {
+    if !orbit {
+        return "
+// What a solid's colourings measure of an orbit value: the value.
+fn ifs_trap_point(p: vec3<f32>) -> vec3<f32> {
+    return p;
+}
+";
+    }
+    "
+// What a solid's colourings measure of an orbit value: the value through
+// the Orbit transformations, while colouring.
+var<private> ifs_colouring: bool = false;
+
+fn ifs_trap_point(p: vec3<f32>) -> vec3<f32> {
+    if (ifs_colouring) {
+        return esc_orbit3(p);
+    }
+    return p;
+}
+
+// The colour walk: `ifs_evaluate3` with the Orbit transformations on.
+fn ifs_colour3(p: vec3<f32>) -> IfsResult {
+    ifs_colouring = true;
+    let res = ifs_evaluate3(p);
+    ifs_colouring = false;
+    return res;
+}
+"
 }
 
 /// The distance field's side of the path tracer (`super::path_core`),
@@ -8864,11 +8915,14 @@ pub fn assemble_ifs_path(
         .expect("the solid template ends in the walk's entry point");
     let mut ray = Vec::new();
     lens_apply_uv(&mut ray, lens, "uv");
+    // The surface's colour through a solid's Orbit transformations, as
+    // the walk's own (`ifs_trap_point_wgsl`).
+    let surface = if solid_orbit(def, lens) { IFS_PATH_WGSL.replace("ifs_evaluate3(p)", "ifs_colour3(p)") } else { IFS_PATH_WGSL.to_string() };
     format!(
         "{}\n{}\n{}",
         &walk[..cut],
         super::path_core::PT_CORE_WGSL.replace("//__LENS_APPLY_RAY__", &ray.join("\n")),
-        IFS_PATH_WGSL
+        surface
     )
 }
 
@@ -10584,6 +10638,44 @@ mod lens_tests {
         validate_lens(&out, "eyefish lens");
     }
 
+    /// A solid's Orbit transformations (3d-look-and-tools P5): every
+    /// solid's walk measures its trap through `ifs_trap_point`, the
+    /// identity without them; with them the maps define `esc_orbit3` (the
+    /// 3D bodies) and both colour sites -- the walk's and the path
+    /// tracer's -- call `ifs_colour3`, the only caller that turns them on.
+    /// A solid's Plane and Iteration transformations are not drawn.
+    #[test]
+    fn a_solids_orbit_transformations_reach_both_colour_sites() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let r = crate::variations::global_registry();
+        let col = &crate::escape::ifs::IFS_TRAP;
+        let mut n = 0;
+        for def in crate::escape::ifs::IFS_DEFS.iter().filter(|d| d.solid) {
+            assert!(def.wgsl.contains("ifs_trap_point("), "{}: the walk measures through the hook", def.name);
+            let mut cfg = EscapeConfig::default();
+            cfg.formula = def.name.to_string();
+            cfg.transforms = vec![EscapeTransform::new(TransformStage::Orbit, "spherical3D", 1.0)];
+            let src = crate::escape::lens::lens_source(&cfg, &r).unwrap_or_else(|| panic!("{}: no maps", def.name));
+            assert!(src.contains("fn esc_orbit3("), "{}: no orbit stage", def.name);
+            let walk = assemble_ifs_rig(def, col, 4, Some(&src), false, false, false);
+            assert!(walk.contains("let res = ifs_colour3(p);"), "{}: the walk's colour site", def.name);
+            validate_lens(&walk, &format!("{} with an Orbit transformation", def.name));
+            let path = assemble_ifs_path(def, col, 4, Some(&src), false, false);
+            assert!(path.contains("ifs_color(ifs_colour3(p))"), "{}: the path tracer's colour site", def.name);
+            validate_lens(&path, &format!("{}'s path tracer with an Orbit transformation", def.name));
+            let plain = assemble_ifs_rig(def, col, 4, None, false, false, false);
+            assert!(!plain.contains("ifs_colour3") && plain.contains("fn ifs_trap_point("), "{}: the plain walk", def.name);
+            validate_lens(&plain, def.name);
+            cfg.transforms = vec![
+                EscapeTransform::new(TransformStage::Plane, "spherical3D", 1.0),
+                EscapeTransform::new(TransformStage::Iteration, "spherical3D", 1.0),
+            ];
+            assert!(crate::escape::lens::lens_source(&cfg, &r).is_none(), "{}: a solid drew a Plane or Iteration transformation", def.name);
+            n += 1;
+        }
+        assert_eq!(n, 5, "the shipped solids");
+    }
+
     /// EVERY variation compiles as a lens.
     ///
     /// The simulation's layer warp already asserts they all validate
@@ -10595,9 +10687,12 @@ mod lens_tests {
     #[ignore = "compiles 647 shaders; run with --ignored"]
     fn every_variation_compiles_as_a_lens() {
         let (f, c) = mandelbrot();
-        let r = crate::variations::global_registry();
+        // The names, and the guard dropped: `lens_for` takes its own, and
+        // a read nested in a read waits on any writer queued between them
+        // (a test registering a Rhai variation), which hung the suite.
+        let names = crate::variations::global_registry().names().to_vec();
         let mut n = 0;
-        for name in r.names() {
+        for name in &names {
             let out = assemble_with_lens(f, c, false, true, Some(&lens_for(name)));
             validate_lens(&out, &format!("lens {name}"));
             n += 1;

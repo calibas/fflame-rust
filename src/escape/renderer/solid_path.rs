@@ -1784,6 +1784,87 @@ mod tests {
         assert_eq!(apart(&bound, &number), 0, "the solid's parameter reaches the variation");
     }
 
+    /// A solid's Orbit transformations (3d-look-and-tools P5) move what
+    /// its colouring measures and nothing else, in every solid's walk:
+    /// under the orbit trap, an Orbit `linear3D` is the picture to the
+    /// byte, and so is `spherical3D` at amount 0; `spherical3D` at 1
+    /// recolours it -- but under a white palette, where the colour is not
+    /// seen, it is the picture to the byte again: the shape and the light
+    /// are the walk's. The path tracer's colour site likewise, on the
+    /// Mandelbulb (curved, where light reads truest).
+    #[test]
+    fn a_solids_orbit_transformations_move_its_colour_alone() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        use crate::config::escape::{CustomDialect, CustomSource, EscapeTransform, TransformStage};
+        use crate::scene::palette::{ColorStop, Palette};
+        const N: u32 = 96;
+        let stop = |position: f32, color: [f32; 3]| ColorStop { position, color };
+        let palette = |stops: Vec<ColorStop>| Palette { name: "Test".to_string(), stops, locked: false, built_in: false };
+        let rainbow = palette(vec![stop(0.0, [1.0, 0.1, 0.1]), stop(0.33, [0.1, 1.0, 0.1]), stop(0.66, [0.1, 0.1, 1.0]), stop(1.0, [1.0, 0.1, 0.1])]);
+        let white = palette(vec![stop(0.0, [1.0; 3]), stop(1.0, [1.0; 3])]);
+        let render = |base: &FractalConfig, palette: &Palette, orbit: Option<(&str, f32)>| -> Vec<u8> {
+            let mut c = base.clone();
+            c.palette = palette.clone();
+            c.escape.transforms = orbit.map(|(v, a)| vec![EscapeTransform::new(TransformStage::Orbit, v, a)]).unwrap_or_default();
+            let job = crate::renderer::RenderJob::new(&c, N, N);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        let apart = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+        let rhai = {
+            let src = include_str!("../../../assets/formulas/solid-kifs-menger.rhai").replace("\r\n", "\n");
+            CustomSource { dialect: CustomDialect::Rhai, entry: "menger".to_string(), source: src, variations: Vec::new() }
+        };
+        let mut solids: Vec<FractalConfig> = Vec::new();
+        for name in ["mandelbulb_solid", "mandelbox_solid", "kifs_solid", "quaternion_julia_solid", "rhai"] {
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            if name == "rhai" {
+                c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Solid, &rhai);
+                c.escape.custom_formula = Some(rhai.clone());
+            } else {
+                c.escape.formula = name.to_string();
+            }
+            c.escape.coloring = "ifs_trap".to_string();
+            c.escape.cam_yaw = 0.9;
+            c.escape.cam_pitch = 0.42;
+            solids.push(c);
+        }
+        for c in &solids {
+            let plain = render(c, &rainbow, None);
+            let covered = plain.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).count();
+            let ident = render(c, &rainbow, Some(("linear3D", 1.0)));
+            let none = render(c, &rainbow, Some(("spherical3D", 0.0)));
+            let moved = render(c, &rainbow, Some(("spherical3D", 1.0)));
+            let shape = apart(&render(c, &white, None), &render(c, &white, Some(("spherical3D", 1.0))));
+            println!(
+                "  {}: covers {covered}; linear3D apart {}, at 0 apart {}, spherical3D apart {}, under white apart {shape}",
+                c.escape.formula,
+                apart(&plain, &ident),
+                apart(&plain, &none),
+                apart(&plain, &moved)
+            );
+            assert!(covered > (N * N / 20) as usize, "{}: the view shows the solid", c.escape.formula);
+            assert_eq!(apart(&plain, &ident), 0, "{}: an Orbit linear3D changed the picture", c.escape.formula);
+            assert_eq!(apart(&plain, &none), 0, "{}: an Orbit transformation at 0 changed the picture", c.escape.formula);
+            assert!(apart(&plain, &moved) > covered / 10, "{}: an Orbit spherical3D left the colour", c.escape.formula);
+            assert_eq!(shape, 0, "{}: an Orbit transformation moved the shape or the light", c.escape.formula);
+        }
+        // The path tracer's colour site.
+        let mut c = solids[0].clone();
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.escape.path.samples = 2;
+        c.escape.path.denoise = false;
+        let plain = render(&c, &rainbow, None);
+        let moved = render(&c, &rainbow, Some(("spherical3D", 1.0)));
+        let shape = apart(&render(&c, &white, None), &render(&c, &white, Some(("spherical3D", 1.0))));
+        println!("  path traced: spherical3D apart {}, under white apart {shape}", apart(&plain, &moved));
+        assert!(apart(&plain, &moved) > (N * N / 50) as usize, "the path tracer's colour left the Orbit transformation out");
+        assert_eq!(shape, 0, "the path tracer's shape or light moved");
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far

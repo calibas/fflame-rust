@@ -323,8 +323,21 @@ sites took an arm: walkers read the map's input and write its parts;
 the derivative passes give up on one (no derivative through a
 variation); the perturbation emitters and the big-float reference,
 which a solid never reaches, say so. A new example,
-`solid-inverted-menger.rhai`. Step 2 (Orbit transformations for solids'
-colourings) not built: it needs a hook in each built-in solid's walk.
+`solid-inverted-menger.rhai`.
+
+**Step 2 done 2026-10-19** (ESCAPE.md, *A solid's Orbit
+transformations*): every solid's walk measures its orbit trap through
+`ifs_trap_point`, which maps through the Orbit transformations' 3D
+bodies while colouring only (a private flag `ifs_colour3` raises around
+the colour walk), so the march pays nothing for them. What moves: the
+trap's point and closest approach (the trap colouring; the level where
+it bands by the trap, the KIFS and the flame solid). What does not: the address (which mirror fired is the walk's), the
+running derivative, the shape and its light. Measured at 96x96: Orbit
+`linear3D` and `spherical3D` at 0 are every solid's picture to the byte;
+`spherical3D` at 1 recolours 99% or more of the covered pixels in each;
+under a white palette it is the picture to the byte, in the lit tier and
+the path tracer. The Escape panel shows the Transformations section for
+a solid with the Orbit stage alone and the variations with a 3D body.
 
 ## P6. Fly mode: collisions, and speed by proximity
 
@@ -379,6 +392,6 @@ compensation, the environment, AgX).
 2. [x] P2 the 3D look and Lit toward Path traced, 2026-10-19.
 3. [x] P3 the Lighting & Material panel, 2026-10-19.
 4. [x] P4 materials, 2026-10-19 (step 5, light size, left for the user).
-5. [~] P5 flame variations in solids: step 1 done 2026-10-19; step 2, Orbit colouring for solids, not built.
+5. [x] P5 flame variations in solids (step 1) and Orbit colouring for solids (step 2), both 2026-10-19.
 6. [~] P6 fly mode: solids done 2026-10-19; terrains (step 4) not built.
 7. [x] P7 research written up (alongside), 2026-10-19.
