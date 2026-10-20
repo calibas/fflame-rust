@@ -145,6 +145,8 @@ impl Lowerer<'_> {
                 match n {
                     "vec3" | "cross" | "normalize" => true,
                     "abs" | "floor" | "min" | "max" | "clamp" => f.args.first().is_some_and(|a| self.is_vec(a, scope)),
+                    // A solid's call of a built-in variation (P5).
+                    "vary" => self.solid && f.args.get(1).is_some_and(|a| self.is_vec(a, scope)),
                     _ => false,
                 }
             }
@@ -222,6 +224,9 @@ impl Lowerer<'_> {
     /// function of vectors.
     fn vcall(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope) -> R<V3> {
         let n = f.name.as_str();
+        if n == "vary" && self.solid {
+            return self.vary_map(f, p, scope);
+        }
         if let Some(def) = self.fns.get(n).cloned() {
             if matches!(n, "start" | "step" | "escaped" | "distance" | "finish" | "prepare" | "init" | "variation" | "variation3") {
                 return self.err(p, format!("`{n}` is the entry's own, not a helper to call"));
@@ -628,6 +633,89 @@ impl Lowerer<'_> {
                 return self.err(p, format!("`{n}` takes numbers; of a vector, take its parts (`v.x`) or `length(v)`"));
             }
         })
+    }
+
+    /// `vary("name", v[, #{ param: value }])` in a solid: a built-in flame
+    /// variation's 3D body applied to the vector `v` (3d-look-and-tools
+    /// P5, C3). One `Stmt::Map`, the solid's next call, into three new
+    /// float locals. A parameter's value is a number or one of the
+    /// solid's float parameters (`p.name`), which reach the variation per
+    /// picture; the rest are the variation's defaults. GPU only: not in
+    /// `escaped` (one test, nothing before it), nor in `prepare`.
+    pub(super) fn vary_map(&mut self, f: &FnCallExpr, p: Position, scope: &mut Scope) -> R<V3> {
+        use super::super::ir::{MapCall, MapValue};
+        const FORM: &str = "`vary(\"name\", v)` or `vary(\"name\", v, #{ param: value })`: a built-in variation's 3D body applied to a vector";
+        if !(2..=3).contains(&f.args.len()) {
+            return self.err(p, FORM);
+        }
+        let Expr::StringConstant(vname, _) = &f.args[0] else { return self.err(p, FORM) };
+        let vname = vname.to_string();
+        if self.pure {
+            return self.err(p, "`escaped` is one test: call the variation in `step` and keep what it gives in the state");
+        }
+        // A built-in with a 3D body.
+        let known: Option<Vec<String>> = {
+            let registry = crate::variations::global_registry();
+            registry
+                .get(&vname)
+                .filter(|v| v.provenance != crate::provenance::Provenance::Custom && v.wgsl_source_3d.is_some())
+                .map(|v| v.parameters.iter().map(|x| x.name.clone()).collect())
+        };
+        let Some(known) = known else {
+            return self.err(
+                p,
+                format!("`{vname}` is not a built-in variation with a 3D body: a solid calls those on a vector (a variation of yours takes a point of the plane: `vary(\"{vname}\", complex(v.x, v.y))`)"),
+            );
+        };
+        let mut params: Vec<(String, MapValue)> = Vec::new();
+        if let Some(arg) = f.args.get(2) {
+            let Expr::Map(m, _) = arg else { return self.err(arg.position(), "the parameters are a map, `#{ name: value }`") };
+            for (k, v) in &m.0 {
+                if !known.iter().any(|x| x == k.name.as_str()) {
+                    let all: Vec<String> = known.iter().map(|x| format!("`{x}`")).collect();
+                    let has = if all.is_empty() { "none".to_string() } else { all.join(", ") };
+                    return self.err(k.pos, format!("`{vname}` has no parameter `{}`; it has {has}", k.name));
+                }
+                let number = |e: &Expr| match e {
+                    Expr::FloatConstant(x, _) => Some(**x),
+                    Expr::IntegerConstant(i, _) => Some(*i as f64),
+                    _ => None,
+                };
+                let value = match v {
+                    _ if number(v).is_some() => MapValue::Const(number(v).expect("a number")),
+                    Expr::FnCall(fc, _) if fc.name.as_str() == "-" && fc.args.len() == 1 && number(&fc.args[0]).is_some() => {
+                        MapValue::Const(-number(&fc.args[0]).expect("a number"))
+                    }
+                    Expr::Dot(be, _, _) if matches!(self.owner(&be.lhs, scope), Some(Owner::Params)) => {
+                        let Expr::Property(prop, pp) = &be.rhs else {
+                            return self.err(v.position(), "a solid's parameter, `p.name`");
+                        };
+                        let name = prop.2.to_string();
+                        if !matches!(self.param_tys.get(name.as_str()), Some(TypeName::Float | TypeName::Int)) {
+                            return self.err(*pp, format!("`{name}` is not one of the solid's number parameters (in `PARAMS`)"));
+                        }
+                        MapValue::Param(name)
+                    }
+                    _ => {
+                        return self.err(
+                            v.position(),
+                            "a built-in variation's parameter is a number or one of the solid's parameters (`p.name`): it reaches the variation per picture, not per pixel",
+                        )
+                    }
+                };
+                params.push((k.name.to_string(), value));
+            }
+        }
+        let input = self.vexpr(&f.args[1], scope)?;
+        let span = self.pos.span(p);
+        let call = self.maps.len() as u32;
+        self.maps.push(MapCall { variation: vname, params });
+        let out = self.vec_local("vary");
+        for n in &out {
+            self.pending.push(ast::Stmt::Decl { ty: TypeName::Float, name: n.clone(), init: None, dims: None, span });
+        }
+        self.pending.push(ast::Stmt::Map { call, input: Box::new(input), out: out.clone(), span });
+        Ok(out.map(|n| mk(ExprKind::Name(n), span)))
     }
 
     /// Three float locals for the vector `written`.

@@ -256,6 +256,7 @@ pub fn grows_past_f32(p: &Program) -> bool {
             IStmt::SetElem { index, value, .. } => e(index, p) || e(value, p),
             IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),
             IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
+            IStmt::Map { input, .. } => input.iter().any(|x| e(x, p)),
         })
     }
     s(&p.loop_body, p)

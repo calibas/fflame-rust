@@ -2237,6 +2237,73 @@ fn flame_map(xform_id: u32, u: vec2<f32>, seed: u32) -> vec2<f32> {{\n\
         re
     }
 
+    /// The same map in 3D (3d-look-and-tools P5): `flame_map3(xform_id, p,
+    /// seed)`, each transform's variations by their 3D bodies, z kept (a
+    /// map flattens nothing) -- a solid's calls of built-in variations,
+    /// and its lens at z = 0. A variation with no 3D body is left out
+    /// (`generate_variation_code`), so it maps as the identity.
+    pub fn build_layer_map3_at(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        group: u32,
+    ) -> String {
+        let constants = ShaderConstants {
+            num_transforms: flame.transforms.len().max(1) as u32,
+            color_mode: 0,
+            has_post_affine: flame.has_post_affine(),
+            has_attachments: flame.has_attachments(),
+            has_post_symmetry: false,
+            has_analytic_blur: false,
+            importance_sampling: false,
+            cylinder_targeting: false,
+            persistent_orbits: false,
+            frame_coverage: false,
+            cylinder_replay: false,
+            cylinder_relative: false,
+            cylinder_offsets: false,
+            // z kept: no variation's z is flattened (`gate_2d_z`).
+            flatten_z_per_iter: false,
+            solid_enabled: false,
+            probe: false,
+            census: false,
+            attachment_cap: flame.attachment_cap() as u32,
+            inlined_transforms: None,
+            cumulative_weights: None,
+            variation_priorities: std::collections::BTreeMap::new(),
+        };
+        let defs = self.build_definitions(flame, true, false, false, true, &constants);
+        let mut src = defs.source;
+        let mut call_args = String::from("&rng");
+        let mut locals = String::new();
+        if defs.has_dc {
+            locals.push_str("    var vc = 0.0;\n");
+            call_args.push_str(", &vc");
+        }
+        if defs.has_rgb {
+            locals.push_str("    var vrc = vec3<f32>(0.0, 0.0, 0.0);\n");
+            call_args.push_str(", &vrc");
+        }
+        call_args.push_str(", &hide");
+        src.push_str(&format!(
+            "\n// A transform as a map of space, for a solid's calls of variations.\n\
+fn flame_map3(xform_id: u32, u: vec3<f32>, seed: u32) -> vec3<f32> {{\n\
+    let xform = transforms[xform_id];\n\
+    var rng = rng_init(seed, 0u);\n\
+    var hide = false;\n\
+{locals}\
+    var v = apply_variations(xform, xform_id, apply_affine(xform, u), {call_args});\n\
+    if (HAS_POST_AFFINE) {{\n\
+        if (xform.post_enabled > 0.5) {{\n\
+            v = apply_post_affine(xform, v);\n\
+        }}\n\
+    }}\n\
+    return v;\n\
+}}\n"
+        ));
+        let src = src.replace("@group(0) @binding(", &format!("@group({group}) @binding("));
+        regex_lite_replace_word(&src, "params", "flame_params")
+    }
+
     pub fn build_from_template(
         &self,
         flame: &crate::scene::transforms::Flame,

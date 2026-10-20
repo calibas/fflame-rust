@@ -274,6 +274,7 @@ impl Checker {
             globals: Vec::new(),
             init,
             loop_body,
+            maps: Vec::new(),
             bailout,
             final_body,
             perturb_init,
@@ -662,6 +663,12 @@ impl Checker {
                     }
                 }
                 Stmt::Expr(e) => self.declare_in_expr(e),
+                // Its parts are declared before it (`vary` in a solid).
+                Stmt::Map { input, .. } => {
+                    for e in input.iter() {
+                        self.declare_in_expr(e);
+                    }
+                }
                 Stmt::If { arms, otherwise, .. } => {
                     for (c, b) in arms {
                         self.declare_in_expr(c);
@@ -1191,6 +1198,26 @@ impl Checker {
                 if let Some(cond) = c {
                     out.push(IStmt::Repeat { body, cond });
                 }
+            }
+            Stmt::Map { call, input, out: names, span } => {
+                // A solid's, outside `prepare`: the GPU's alone.
+                if self.kind != EntryKind::Solid || self.section == SectionKind::Global {
+                    self.error(*span, "a built-in variation runs on the GPU, per pixel: a solid calls it in `start`, `step` or `distance`, not in `prepare`");
+                    return;
+                }
+                let mut parts = Vec::new();
+                for e in input.iter() {
+                    let Some(v) = self.expr(e) else { return };
+                    let Some(v) = self.convert(v, Ty::Float, e.span) else { return };
+                    parts.push(v);
+                }
+                let mut ids = [0usize; 3];
+                for (k, n) in names.iter().enumerate() {
+                    let Some(&id) = self.var_ids.get(n) else { return };
+                    ids[k] = id;
+                }
+                let [x, y, z]: [IExpr; 3] = parts.try_into().expect("three parts");
+                out.push(IStmt::Map { call: *call, input: Box::new([x, y, z]), out: ids });
             }
         }
     }
@@ -1842,6 +1869,7 @@ fn mentions(body: &[Stmt], n: &str) -> bool {
             arms.iter().any(|(c, b)| e(c, n) || mentions(b, n)) || otherwise.as_ref().is_some_and(|b| mentions(b, n))
         }
         Stmt::While { cond, body, .. } | Stmt::Repeat { body, cond, .. } => e(cond, n) || mentions(body, n),
+        Stmt::Map { input, out, .. } => input.iter().any(|x| e(x, n)) || out.iter().any(|o| o == n),
     })
 }
 
@@ -1940,7 +1968,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
 
 fn stmt_span(s: &Stmt) -> Span {
     match s {
-        Stmt::Decl { span, .. } | Stmt::If { span, .. } | Stmt::While { span, .. } | Stmt::Repeat { span, .. } => *span,
+        Stmt::Decl { span, .. } | Stmt::If { span, .. } | Stmt::While { span, .. } | Stmt::Repeat { span, .. } | Stmt::Map { span, .. } => *span,
         Stmt::Expr(e) => e.span,
     }
 }
@@ -2031,6 +2059,15 @@ pub(crate) fn flow(stmts: &[IStmt], f: &mut Flow) {
                 flow(body, f);
                 reads(cond, f);
             }
+            IStmt::Map { input, out, .. } => {
+                for x in input.iter() {
+                    reads(x, f);
+                }
+                for v in out {
+                    f.written.insert(*v);
+                    f.any_write.insert(*v);
+                }
+            }
         }
     }
 }
@@ -2062,7 +2099,7 @@ fn collect_assigns(stmts: &[IStmt], out: &mut Vec<(VarId, IExpr)>) {
     for s in stmts {
         match s {
             IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
-            IStmt::Assign(..) | IStmt::SetElem { .. } => {}
+            IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
             IStmt::If { arms, otherwise } => {
                 for (_, b) in arms {
                     collect_assigns(b, out);

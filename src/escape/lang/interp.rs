@@ -780,6 +780,9 @@ impl<'p> Machine<'p> {
                         k += 1;
                     }
                 }
+                // The GPU's alone: the checker keeps it out of `prepare`,
+                // and the interpreter runs a solid in tests only.
+                IStmt::Map { .. } => panic!("a solid's call of a built-in variation runs on the GPU alone"),
                 IStmt::Repeat { body, cond } => {
                     let mut k = 0;
                     loop {

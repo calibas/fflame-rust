@@ -461,7 +461,8 @@ pub fn validate_solid(wgsl: &str) -> Result<(), String> {
     const STUBS: &str = "struct IfsResult {\n    distance: f32,\n    level: f32,\n    address: f32,\n    color: f32,\n    point: vec2<f32>,\n    escaped: u32,\n    depth: u32,\n}\n\
         fn fparam(i: u32) -> f32 {\n    return f32(i);\n}\n\
         fn ifs_radius() -> f32 {\n    return 2.0;\n}\n\
-        fn ifs_target_offset() -> vec3<f32> {\n    return vec3<f32>(0.0, 0.0, 0.0);\n}\n";
+        fn ifs_target_offset() -> vec3<f32> {\n    return vec3<f32>(0.0, 0.0, 0.0);\n}\n\
+        fn esc_solid_map(i: u32, p: vec3<f32>) -> vec3<f32> {\n    return p;\n}\n";
     validate_module(&format!("{STUBS}{wgsl}"))
 }
 
@@ -1605,6 +1606,18 @@ impl<'p> Gen<'p> {
                 let _ = writeln!(out, "{pad}    if ({c}) {{\n{pad}        break;\n{pad}    }}");
                 let _ = writeln!(out, "{pad}}}");
             }
+            // A solid's call of a built-in variation (P5): the maps
+            // flame's 3D body, once, into the three parts.
+            IStmt::Map { call, input, out: parts } => {
+                let [x, y, z] = [&input[0], &input[1], &input[2]].map(|e| self.expr(e));
+                let k = self.loops;
+                self.loops += 1;
+                let _ = writeln!(out, "{pad}let map{k} = esc_solid_map({call}u, vec3<f32>({x}, {y}, {z}));");
+                for (part, axis) in parts.iter().zip(["x", "y", "z"]) {
+                    let v = self.var(*part);
+                    let _ = writeln!(out, "{pad}{v} = map{k}.{axis};");
+                }
+            }
         }
     }
 
@@ -1877,6 +1890,7 @@ impl<'p> Gen<'p> {
     fn sstmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
                 let (code, class) = self.sgen(e);
                 let (target, want) = match place {
@@ -2091,6 +2105,7 @@ impl<'p> Gen<'p> {
     fn festmt(&mut self, s: &IStmt, depth: usize, out: &mut String) {
         let pad = "    ".repeat(depth);
         match s {
+            IStmt::Map { .. } => unreachable!("a solid's call of a built-in variation in perturbation equations"),
             IStmt::Assign(place, e) => {
                 let (target, cfe) = match place {
                     Place::Var(v) => (format!("v{v}"), self.small_vars[*v]),
@@ -2569,7 +2584,7 @@ fn perturb_var_classes(p: &Program) -> Vec<bool> {
         for s in stmts {
             match s {
                 IStmt::Assign(Place::Var(v), e) => out.push((*v, e.clone())),
-                IStmt::Assign(..) | IStmt::SetElem { .. } => {}
+                IStmt::Assign(..) | IStmt::SetElem { .. } | IStmt::Map { .. } => {}
                 IStmt::If { arms, otherwise } => {
                     for (_, b) in arms {
                         assigns(b, out);
@@ -2655,7 +2670,7 @@ pub fn colours_anything(p: &Program) -> bool {
 fn writes(stmts: &[IStmt], place: Place) -> bool {
     stmts.iter().any(|s| match s {
         IStmt::Assign(p, _) => *p == place,
-        IStmt::SetElem { .. } => false,
+        IStmt::SetElem { .. } | IStmt::Map { .. } => false,
         IStmt::If { arms, otherwise } => arms.iter().any(|(_, b)| writes(b, place)) || writes(otherwise, place),
         IStmt::While { body, .. } | IStmt::Repeat { body, .. } => writes(body, place),
     })

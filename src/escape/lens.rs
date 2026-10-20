@@ -232,7 +232,33 @@ pub const LENS_GROUP: u32 = 2;
 /// shader is better off without the machinery than with a no-op in it.
 /// Either sign is a lens; they bulge opposite ways.
 pub fn is_active(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
-    lens_on(escape, registry) || escape.transforms.iter().any(|t| map_usable(registry, &t.variation))
+    lens_on(escape, registry) || escape.transforms.iter().any(|t| map_usable(registry, &t.variation)) || !solid_maps(escape).is_empty()
+}
+
+/// A solid's calls of built-in variations (3d-look-and-tools P5): the
+/// maps after the lens and the transformations, built in 3D
+/// (`flame_map3`) when there are any. Its source compiled (`ensure`).
+pub fn solid_maps(escape: &EscapeConfig) -> Vec<crate::escape::lang::ir::MapCall> {
+    crate::escape::custom::solid_maps(&escape.formula)
+}
+
+/// Whether the maps are built in 3D: a solid calls a variation.
+pub fn maps_3d(escape: &EscapeConfig) -> bool {
+    !solid_maps(escape).is_empty()
+}
+
+/// A map call's parameter value this picture: a number, or the solid's
+/// parameter's (its default when unset).
+fn map_value(escape: &EscapeConfig, v: &crate::escape::lang::ir::MapValue) -> f64 {
+    use crate::escape::lang::ir::MapValue;
+    match v {
+        MapValue::Const(x) => *x,
+        MapValue::Param(name) => escape.formula_params.get(name).copied().map(f64::from).unwrap_or_else(|| {
+            crate::escape::ifs::get_ifs(&escape.formula)
+                .and_then(|d| d.parameters.iter().find(|p| p.name == name.as_str()))
+                .map_or(0.0, |p| p.default as f64)
+        }),
+    }
 }
 
 /// Whether the lens itself is on: a lens variation at a non-zero
@@ -256,6 +282,8 @@ pub struct MapSlots {
     pub plane: Vec<u32>,
     pub orbit: Vec<u32>,
     pub iterate: Vec<u32>,
+    /// A solid's calls of built-in variations (P5), in call order.
+    pub solid: Vec<u32>,
 }
 
 /// The maps flame's slots for this config. A transformation whose
@@ -274,6 +302,10 @@ pub fn map_slots(escape: &EscapeConfig, registry: &VariationRegistry) -> MapSlot
             TransformStage::Orbit => slots.orbit.push(k),
             TransformStage::Iteration => slots.iterate.push(k),
         }
+        k += 1;
+    }
+    for _ in solid_maps(escape) {
+        slots.solid.push(k);
         k += 1;
     }
     slots
@@ -309,6 +341,18 @@ pub fn lens_flame(escape: &EscapeConfig, registry: &VariationRegistry) -> Option
             if let Some(v) = t.params.get(&p.name) {
                 x.set_variation_param(&t.variation, &p.name, *v);
             }
+        }
+        flame.transforms.push(x);
+    }
+    // A solid's calls (P5): the variation whole, its parameters this
+    // picture's -- written each frame, so a solid parameter's slider
+    // recompiles nothing.
+    for m in solid_maps(escape) {
+        let mut x = identity_transform();
+        x.weight = 1.0;
+        x.set_variation(&m.variation, 1.0);
+        for (name, v) in &m.params {
+            x.set_variation_param(&m.variation, name, map_value(escape, v) as f32);
         }
         flame.transforms.push(x);
     }
@@ -399,6 +443,17 @@ pub fn lens_key(escape: &EscapeConfig, registry: &VariationRegistry) -> String {
             key.push_str(&format!(",{k}={v}"));
         }
     }
+    // A solid's calls: their variations and constant parameters; a
+    // parameter of the solid's rides in the buffer.
+    for m in solid_maps(escape) {
+        key.push_str(&format!("|solid:{}", m.variation));
+        for (k, v) in &m.params {
+            match v {
+                crate::escape::lang::ir::MapValue::Const(x) => key.push_str(&format!(",{k}={x}")),
+                crate::escape::lang::ir::MapValue::Param(p) => key.push_str(&format!(",{k}=p.{p}")),
+            }
+        }
+    }
     key
 }
 
@@ -418,6 +473,11 @@ pub fn maps_identity(escape: &EscapeConfig, registry: &VariationRegistry) -> Str
     for t in escape.transforms.iter().filter(|t| map_usable(registry, &t.variation)) {
         key.push_str(&format!("|a{}", t.amount));
     }
+    for m in solid_maps(escape) {
+        for (k, v) in &m.params {
+            key.push_str(&format!("|{k}{}", map_value(escape, v)));
+        }
+    }
     key
 }
 
@@ -425,6 +485,21 @@ pub fn maps_identity(escape: &EscapeConfig, registry: &VariationRegistry) -> Str
 /// stage with maps a function applying them in order, each blended
 /// toward the identity by its transform's weight.
 pub fn maps_glue(slots: &MapSlots) -> String {
+    maps_glue_in(slots, false)
+}
+
+/// The glue over a maps flame built in 3D (`three`: `flame_map3`, a solid
+/// calling variations, P5): the plane's maps at z = 0, and
+/// `esc_solid_map(i, p)`, the solid's `i`-th call.
+pub fn maps_glue_in(slots: &MapSlots, three: bool) -> String {
+    // A plane's map: the 2D body, or the 3D body at z = 0.
+    let map = |k: u32, p: &str| {
+        if three {
+            format!("flame_map3({k}u, vec3<f32>({p}, 0.0), esc_map_seed({p})).xy")
+        } else {
+            format!("flame_map({k}u, {p}, esc_map_seed({p}))")
+        }
+    };
     let mut out = String::from(
         "\n// The escape view's maps (the lens and the transformations): a\n\
          // variation each, blended toward the identity by its weight. The\n\
@@ -435,7 +510,8 @@ pub fn maps_glue(slots: &MapSlots) -> String {
         out.push_str(&format!(
             "\n// The camera lens: a variation on the normalised screen offset, in\n\
              // the half-height-one convention.\n\
-             fn esc_lens(n: vec2<f32>) -> vec2<f32> {{\n    let mapped = flame_map({k}u, n, esc_map_seed(n));\n    return mix(n, mapped, transforms[{k}u].weight);\n}}\n"
+             fn esc_lens(n: vec2<f32>) -> vec2<f32> {{\n    let mapped = {};\n    return mix(n, mapped, transforms[{k}u].weight);\n}}\n",
+            map(k, "n")
         ));
     }
     for (name, list, what) in [
@@ -448,9 +524,19 @@ pub fn maps_glue(slots: &MapSlots) -> String {
         }
         out.push_str(&format!("\n// The transformations of {what}, in order.\nfn {name}(p: vec2<f32>) -> vec2<f32> {{\n    var q = p;\n"));
         for k in list {
-            out.push_str(&format!("    q = mix(q, flame_map({k}u, q, esc_map_seed(q)), transforms[{k}u].weight);\n"));
+            out.push_str(&format!("    q = mix(q, {}, transforms[{k}u].weight);\n", map(*k, "q")));
         }
         out.push_str("    return q;\n}\n");
+    }
+    // A solid's calls of built-in variations (P5): the 3D body, whole.
+    if let Some(&first) = slots.solid.first() {
+        out.push_str(&format!(
+            "\n// A solid's calls of built-in variations: the `i`-th's 3D body,\n\
+             // seeded by the point, as the plane's maps are.\n\
+             fn esc_solid_map(i: u32, p: vec3<f32>) -> vec3<f32> {{\n    \
+             let seed = bitcast<u32>(p.x) * 7919u + bitcast<u32>(p.y) * 104729u + bitcast<u32>(p.z) * 1299709u;\n    \
+             return flame_map3({first}u + i, p, seed);\n}}\n"
+        ));
     }
     out
 }
@@ -467,7 +553,9 @@ pub fn lens_source(escape: &EscapeConfig, registry: &VariationRegistry) -> Optio
     let flame = lens_flame(escape, registry)?;
     let slots = map_slots(escape, registry);
     let builder = crate::shader_builder_v2::ShaderBuilder::new(registry.clone());
-    let mut src = builder.build_layer_map_at(&flame, LENS_GROUP);
+    // In 3D when a solid calls variations (P5): their 3D bodies.
+    let three = maps_3d(escape);
+    let mut src = if three { builder.build_layer_map3_at(&flame, LENS_GROUP) } else { builder.build_layer_map_at(&flame, LENS_GROUP) };
     // The layer map moves the flame's BINDINGS to our group, but not
     // its NAMES, and the escape shader declares a palette of its own.
     // `build_layer_map` already renames `params` for the same reason;
@@ -482,7 +570,7 @@ pub fn lens_source(escape: &EscapeConfig, registry: &VariationRegistry) -> Optio
     for name in ["palette_texture", "palette_sampler", "ff_atan2"] {
         src = src.replace(name, &format!("lens_{name}"));
     }
-    src.push_str(&maps_glue(&slots));
+    src.push_str(&maps_glue_in(&slots, three));
     Some(src)
 }
 

@@ -354,6 +354,28 @@ pub enum IStmt {
     If { arms: Vec<(IExpr, Vec<IStmt>)>, otherwise: Vec<IStmt> },
     While { cond: IExpr, body: Vec<IStmt> },
     Repeat { body: Vec<IStmt>, cond: IExpr },
+    /// A solid's `call`-th call of a built-in flame variation
+    /// ([`Program::maps`]): the 3D body applied to the vector `input`, its
+    /// parts assigned to the floats `out`. The GPU's alone
+    /// (`esc_solid_map` in the maps flame): the interpreter refuses it,
+    /// and only a solid has one.
+    Map { call: u32, input: Box<[IExpr; 3]>, out: [VarId; 3] },
+}
+
+/// A solid's call of a built-in flame variation (3d-look-and-tools P5,
+/// C3): which variation, and its parameters' values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapCall {
+    pub variation: String,
+    pub params: Vec<(String, MapValue)>,
+}
+
+/// A map call's parameter: a number, or one of the solid's own float
+/// parameters, by name -- read per picture, never per pixel.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MapValue {
+    Const(f64),
+    Param(String),
 }
 
 /// A colouring's region tag (`Name(INSIDE) { ... }`).
@@ -387,6 +409,9 @@ pub struct Program {
     pub funcs: Vec<UserFunc>,
     pub init: Vec<IStmt>,
     pub loop_body: Vec<IStmt>,
+    /// A solid's calls of built-in flame variations, by their
+    /// [`IStmt::Map`]'s `call` (3d-look-and-tools P5).
+    pub maps: Vec<MapCall>,
     /// `global:`, run once per image (on the CPU, by the interpreter).
     pub global_body: Vec<IStmt>,
     /// The global variables the other sections read, in the order they
@@ -567,6 +592,7 @@ impl Program {
                 IStmt::SetElem { index, value, .. } => e(index, p) || e(value, p),
                 IStmt::If { arms, otherwise } => arms.iter().any(|(c, b)| e(c, p) || s(b, p)) || s(otherwise, p),
                 IStmt::While { cond, body } | IStmt::Repeat { body, cond } => e(cond, p) || s(body, p),
+                IStmt::Map { input, .. } => input.iter().any(|x| e(x, p)),
             })
         }
         s(&self.global_body, p)
