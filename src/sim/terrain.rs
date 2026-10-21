@@ -89,6 +89,7 @@ pub fn sim_terrain_view(config: &FractalConfig, gw: u32, gh: u32, jitter: [f32; 
         far,
         sky: crate::escape::path_core::sky_seen(&t.path, config),
         studio: crate::escape::path_core::studio_level(&t.path, config),
+        environment: crate::escape::path_core::environment_settings(&t.path, config),
         material: crate::escape::path_core::lit_material(config),
         curve: 0,
         invert: false,

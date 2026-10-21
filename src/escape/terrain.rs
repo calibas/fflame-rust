@@ -2242,6 +2242,10 @@ pub struct TerrainView {
     pub sky: Option<[f32; 3]>,
     /// The studio's brightness (`path_core::studio_level`; 0, none).
     pub studio: f32,
+    /// An HDRI sky (`path_core::environment_settings`; docs/projects/
+    /// hdri-environment.md), in the world's frame, z up: it lights the
+    /// ground, is what its gloss and water reflect, and is the backdrop.
+    pub environment: Option<super::path_core::EnvSettings>,
     /// The height map's curve (`TerrainCurve::code`) and whether the land
     /// is inverted (docs/archive/terrain/terrain-height.md, H2).
     pub curve: u32,
@@ -2392,6 +2396,11 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
     for l in &view.shading.lights {
         k.push_str(&format!("|{}:{}:{}", l.enabled && l.intensity > 0.0, l.azimuth, l.elevation));
     }
+    // An HDRI sky's sun takes a light, and where it stands decides its
+    // shadow rays.
+    if let Some(e) = view.environment {
+        k.push_str(&format!("|env:{}:{}:{}", e.def.id, e.rotation, e.horizon));
+    }
     k
 }
 
@@ -2521,7 +2530,8 @@ pub struct TerrainRenderer {
     surface_sampler: Sampler,
     /// The path tracer's HDRI sky binding's stand-in (terrains take none
     /// yet).
-    env_stand_in: (Texture, TextureView),
+    /// The HDRI sky (`TerrainView::environment`).
+    env: super::environment::EnvSlot,
     surface_mip_layout: BindGroupLayout,
     surface_mip_pipeline: ComputePipeline,
     /// The nearest ground the view shows (`probe_main`, on the walk's
@@ -2863,7 +2873,7 @@ impl TerrainRenderer {
             surface_image: None,
             surface_dummy,
             surface_sampler,
-            env_stand_in: super::environment::env_stand_in(device),
+            env: Default::default(),
             surface_mip_layout,
             surface_mip_pipeline,
             probe_pipeline,
@@ -4022,6 +4032,10 @@ impl TerrainRenderer {
         fdata[10][3] = view.material[3];
         // The studio, the world's with z up (`ifs_studio`).
         fdata[32] = [view.studio, 1.0, 1.0 - view.material[4], 0.0];
+        // An HDRI sky: its sun the rig's next light, in place of an
+        // untouched panel's default sun; the rest of its map at 36..45
+        // (`environment::EnvSlot::pack`).
+        self.env.pack(&mut fdata, view.shading.rig_untouched());
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -4105,9 +4119,17 @@ impl TerrainRenderer {
         }
     }
 
+    /// Test-only: `map` as the sky's map, read with `settings`, in place of
+    /// the bundled file its id names (a view naming the same id keeps it).
+    #[cfg(test)]
+    pub(crate) fn set_environment_map_for_test(&mut self, device: &Device, queue: &Queue, map: &super::environment::EnvMap, settings: super::path_core::EnvSettings) {
+        self.env.set_map(device, queue, map, settings);
+    }
+
     pub fn render(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
         let placed = view.shading.placed_lights();
         self.ensure_placed(device, placed);
+        self.env.set(device, queue, view.environment);
         let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
         let key = format!("{}|{:?}{:?}", walk_key(view, self.out_w, self.out_h, ground.version), self.frame, self.origin);
         let walk = self.walked.as_deref() != Some(key.as_str()) || self.count_steps;
@@ -4137,6 +4159,7 @@ impl TerrainRenderer {
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
+        let (env_view, env_sampler) = self.env.bindings(device);
         {
             let bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Terrain Relight"),
@@ -4152,8 +4175,8 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
                     BindGroupEntry { binding: 8, resource: BindingResource::TextureView(self.surface_view()) },
                     BindGroupEntry { binding: 9, resource: BindingResource::Sampler(&self.surface_sampler) },
-                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&self.env_stand_in.1) },
-                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&self.surface_sampler) },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&env_view) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&env_sampler) },
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Relight"), timestamp_writes: None });
@@ -4220,6 +4243,7 @@ impl TerrainRenderer {
         }
         let placed = view.shading.placed_lights();
         self.ensure_placed(device, placed);
+        self.env.set(device, queue, view.environment);
         // The denoiser's guides start with the sum; the pass gathers them
         // only where they fit (`set_guided`).
         if self.path.set_guided(device, settings.denoise) {
@@ -4231,9 +4255,23 @@ impl TerrainRenderer {
         self.path.poll(device);
         self.path.set_material(settings);
         let noise_threshold = if self.path.adaptive() { settings.noise_threshold } else { 0.0 };
-        // No HDRI sky on a terrain yet (docs/projects/hdri-environment.md):
-        // the background lights it, as before.
-        let settings = &PathSettings { denoise: self.path.guided(), noise_threshold, env: [0.0; 4], ..*settings };
+        let mut settings = PathSettings { denoise: self.path.guided(), noise_threshold, ..*settings };
+        // No sky's map loaded (this build cannot, or it failed): the
+        // background lights, as it did.
+        if self.env.in_use().is_none() {
+            settings.env = [0.0; 4];
+        }
+        // A sky's sun is a light the clamps follow, with the rig's lights
+        // it draws (as mode D's: `solid_path`).
+        if let Some((sun, set)) = self.env.sun() {
+            let rig = &view.shading;
+            let lights: f32 = if rig.rig_untouched() { 0.0 } else { rig.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum() };
+            let brightest = lights + sun.power(set.scale).iter().cloned().fold(0.0f32, f32::max);
+            settings.clamp = settings.clamp.max(10.0 * brightest);
+            settings.clamp_indirect = settings.clamp_indirect.max(brightest);
+        }
+        let settings = &settings;
+        let (env_view, env_sampler) = self.env.bindings(device);
         let atlas = self.atlas.as_ref().expect("checked");
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
@@ -4272,8 +4310,8 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 11, resource: BindingResource::TextureView(&self.palette) },
                     BindGroupEntry { binding: 12, resource: BindingResource::TextureView(self.surface_view()) },
                     BindGroupEntry { binding: 13, resource: BindingResource::Sampler(&self.surface_sampler) },
-                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&self.env_stand_in.1) },
-                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&self.surface_sampler) },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&env_view) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&env_sampler) },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
@@ -4785,6 +4823,7 @@ pub(crate) mod gpu_tests {
             far: 1.0e30,
             sky: None,
             studio: 0.0,
+            environment: None,
             curve: 0,
             invert: false,
             range: None,
@@ -5452,6 +5491,76 @@ pub(crate) mod gpu_tests {
             println!("plane under the studio, {material}: path {path:.4}, lit over path {ratio:.4}");
             assert!(path > 0.0 && (ratio - 1.0).abs() < tolerance, "{material}: {ratio}");
         }
+    }
+
+    /// An HDRI sky on a terrain (docs/projects/hdri-environment.md, step 6),
+    /// the world's with z up, under it alone (the Sunflowers sky without its
+    /// sun; no lights, no ambient): a flat plane's diffuse is the path
+    /// tracer's to the harmonics' error (it sees the whole upper sky); a
+    /// metal's reflection on rolling ground whose normals sweep the sky,
+    /// the lit tier's reflection levels against the bounces. And an
+    /// untouched panel keeps its default sun under a sunless sky, and gives
+    /// it up to a sky's own. `PT_ENV_GATE=print` prints only.
+    #[test]
+    fn a_plane_under_an_hdri_sky_is_lit_alike() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.specular = 0.0;
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.path.environment_map = "sunflowers".to_string();
+        let set = super::super::path_core::environment_settings(&config.escape.path, &config).expect("bundled");
+        let full = super::super::environment::load(set.def).expect("the bundled file");
+        let map = super::super::environment::EnvMap { sun: None, ..full.clone() };
+        r.set_environment_map_for_test(&device, &queue, &map, set);
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.8, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        v.environment = Some(set);
+        let print_only = std::env::var("PT_ENV_GATE").is_ok_and(|v| v == "print");
+        let mean = |px: &[[f32; 4]]| px.iter().filter(|p| p[3] > 0.0).map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / px.len() as f64;
+        for (material, mat, tolerance) in [("diffuse", [0.0f32, 0.5, 0.0, 0.0, 1.0], 0.03), ("metal", [0.0, 0.4, 0.0, 1.0, 1.0], 0.15)] {
+            if material == "metal" {
+                let hills: Vec<f32> = (0..n * m).map(|k| 2.0 * ((k % n) as f32 * 0.25).sin() * ((k / n) as f32 * 0.25).cos()).collect();
+                r.set_tile(&device, &queue, n, m, &hills, &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+            }
+            v.material = mat;
+            r.render(&device, &queue, &v);
+            let lit = mean(&read_output(&device, &queue, &r, w, h));
+            r.reset_path();
+            let s = PathSettings { bounces: 1, environment: [0.0; 3], gloss: mat[0], roughness: mat[1], ..PathSettings::default() };
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            let path = mean(&read_output(&device, &queue, &r, w, h));
+            let ratio = lit / path.max(1.0e-12);
+            println!("plane under the sky, {material}: path {path:.4}, lit over path {ratio:.4}");
+            if !print_only {
+                assert!(path > 0.0 && (ratio - 1.0).abs() < tolerance, "{material}: {ratio}");
+            }
+        }
+        // An untouched panel: under a sky without a sun (a night's) its
+        // default sun stays -- the plane brighter than the sky alone lights
+        // it; under a sky with one, the sky's sun takes its place -- the
+        // plane lit otherwise than by the default sun.
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        v.material = [0.0, 0.5, 0.0, 0.0, 1.0];
+        r.render(&device, &queue, &v);
+        let sky_alone = mean(&read_output(&device, &queue, &r, w, h));
+        v.shading = SolidShadingSettings::default();
+        r.render(&device, &queue, &v);
+        let default_sun = mean(&read_output(&device, &queue, &r, w, h));
+        r.set_environment_map_for_test(&device, &queue, &full, set);
+        r.render(&device, &queue, &v);
+        let skys_sun = mean(&read_output(&device, &queue, &r, w, h));
+        println!("untouched panel: the sky alone {sky_alone:.4}, with the default sun {default_sun:.4}, with the sky's sun {skys_sun:.4}");
+        assert!(default_sun > sky_alone * 1.2, "the default sun stays under a sunless sky: {default_sun} against {sky_alone}");
+        assert!((skys_sun / default_sun - 1.0).abs() > 0.05, "the sky's sun took the default's place: {skys_sun} against {default_sun}");
     }
 
     /// The path tracer weights the highlight by the shading strength, as

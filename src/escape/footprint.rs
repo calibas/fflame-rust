@@ -398,6 +398,7 @@ pub fn terrain_view(config: &FractalConfig, jitter: [f32; 2]) -> TerrainView {
         far: t.far,
         sky: super::path_core::sky_seen(&config.escape.path, config),
         studio: super::path_core::studio_level(&config.escape.path, config),
+        environment: super::path_core::environment_settings(&config.escape.path, config),
         material: super::path_core::lit_material(config),
         curve: t.curve.code(),
         invert: t.invert,

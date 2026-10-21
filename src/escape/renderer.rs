@@ -871,13 +871,8 @@ pub struct EscapeRenderer {
     solid_material: [f32; 5],
     /// The studio's brightness (`path_core::studio_level`; 0, none).
     solid_studio: f32,
-    /// An HDRI sky (`path_core::environment_settings`): its map on the GPU
-    /// and its sun, the settings it is read with, and the 1x1 stand-in and
-    /// the sampler its binding takes either way.
-    environment: Option<super::environment::EnvGpu>,
-    environment_settings: Option<super::path_core::EnvSettings>,
-    environment_stand_in: Option<(Texture, TextureView)>,
-    environment_sampler: Option<Sampler>,
+    /// An HDRI sky (`path_core::environment_settings`).
+    pub(crate) env: super::environment::EnvSlot,
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -1939,10 +1934,7 @@ impl EscapeRenderer {
             solid_sky: None,
             solid_material: [0.0, 0.5, 0.0, 0.0, 1.0],
             solid_studio: 0.0,
-            environment: None,
-            environment_settings: None,
-            environment_stand_in: None,
-            environment_sampler: None,
+            env: Default::default(),
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -3777,8 +3769,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.pipelines.insert(key.clone(), pipeline);
         }
         let (env_view, env_sampler) = {
-            let (v, s) = self.environment_bindings(device);
-            (v.clone(), s.clone())
+            self.env.bindings(device)
         };
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Recolor Bind Group"),
@@ -4369,60 +4360,18 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     /// An HDRI sky (docs/projects/hdri-environment.md), or none: its map
-    /// loaded and uploaded when it changes (desktop; the web build has none
-    /// yet), its sun the rig's next free light. True when anything about it
-    /// changed -- its sun's shadow is a walk input (`lighting_key`).
+    /// loaded and uploaded when it changes (`environment::EnvSlot`), its
+    /// sun the rig's next free light. True when anything about it changed
+    /// -- its sun's shadow is a walk input (`lighting_key`).
     pub fn set_environment(&mut self, device: &Device, queue: &Queue, settings: Option<super::path_core::EnvSettings>) -> bool {
-        let id = settings.map(|s| s.def.id);
-        if self.environment.as_ref().map(|e| e.id) != id {
-            if let Some(e) = self.environment.take() {
-                e.texture.destroy();
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(def) = settings.map(|s| s.def) {
-                match super::environment::load(def) {
-                    Ok(map) => self.environment = Some(super::environment::EnvGpu::new(device, queue, def.id, &map)),
-                    Err(e) => log::warn!("environment {}: {e}", def.id),
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
-            let _ = (device, queue);
-        }
-        let changed = self.environment_settings != settings;
-        self.environment_settings = settings;
-        changed
+        self.env.set(device, queue, settings)
     }
 
     /// Test-only: `map` as the sky's map, read with `settings`, in place of
     /// the bundled file its id names.
     #[cfg(test)]
     pub(crate) fn set_environment_map_for_test(&mut self, device: &Device, queue: &Queue, map: &super::environment::EnvMap, settings: super::path_core::EnvSettings) {
-        if let Some(e) = self.environment.take() {
-            e.texture.destroy();
-        }
-        self.environment = Some(super::environment::EnvGpu::new(device, queue, settings.def.id, map));
-        self.environment_settings = Some(settings);
-    }
-
-    /// The sky a pass reads: the settings, when its map is loaded.
-    pub(crate) fn environment_in_use(&self) -> Option<super::path_core::EnvSettings> {
-        self.environment.as_ref().and(self.environment_settings)
-    }
-
-    /// The view and the sampler binding 14 and 15 take: the sky's map, or a
-    /// 1x1 stand-in no pass reads.
-    pub(crate) fn environment_bindings(&mut self, device: &Device) -> (&TextureView, &Sampler) {
-        if self.environment_sampler.is_none() {
-            self.environment_sampler = Some(super::environment::env_sampler(device));
-        }
-        if self.environment.is_none() && self.environment_stand_in.is_none() {
-            self.environment_stand_in = Some(super::environment::env_stand_in(device));
-        }
-        let view = match &self.environment {
-            Some(e) => &e.view,
-            None => &self.environment_stand_in.as_ref().expect("made above").1,
-        };
-        (view, self.environment_sampler.as_ref().expect("made above"))
+        self.env.set_map(device, queue, map, settings);
     }
 
     /// The studio's brightness (3d-look-and-tools P4; 0, none), which the
@@ -4451,9 +4400,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // force is a geometry fact. So is an HDRI sky's sun, which takes a
         // light, and where it stands.
         let mut k = format!("{}", s.rig_untouched());
-        if let (Some(e), Some(set)) = (&self.environment, self.environment_settings) {
-            k.push_str(&format!("|env:{}:{}:{}:{}", e.id, e.sun.is_some(), set.rotation, set.horizon));
-        }
+        k.push_str(&self.env.key());
         for l in &s.lights {
             k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
             // Where a point or a headlamp is decides its shadow rays; its
@@ -4806,8 +4753,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // there. Identity.
         queue_contrast(queue, &self.contrast_params, &escape.contrast, None);
         let (env_view, env_sampler) = {
-            let (v, s) = self.environment_bindings(device);
-            (v.clone(), s.clone())
+            self.env.bindings(device)
         };
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Relight Bind Group"),
@@ -8332,32 +8278,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     if !follow {
                         fdata[33..36].copy_from_slice(&super::ifs::studio_basis());
                     }
-                    // An HDRI sky's sun, lifted out of its map: the rig's
-                    // next free light, so both tiers shade and shadow it --
-                    // in place of an untouched rig's stand-in key, the sky
-                    // lighting the scene. Into the world from the sky's
-                    // frame, the world's with z up (`ifs_env_dir` inverted).
-                    if let (Some(e), Some(set)) = (&self.environment, self.environment_settings) {
-                        let untouched = self.solid_lighting.0.rig_untouched();
-                        let mut n = if untouched { 0 } else { fdata[7][2] as usize };
-                        if let Some(sun) = e.sun.filter(|_| n < 4) {
-                            let s = super::environment::turned(super::environment::raised(sun.dir, set.horizon), set.rotation);
-                            let d = [s[0], -s[2], s[1]];
-                            // The rig's intensity is the irradiance over pi
-                            // (`pt_light`); its colour the share of each channel.
-                            let e3 = sun.power(set.scale);
-                            let peak = e3.iter().cloned().fold(0.0f32, f32::max).max(1.0e-30);
-                            fdata[11 + n * 2] = [d[0], d[1], d[2], peak];
-                            fdata[12 + n * 2] = [e3[0] / peak, e3[1] / peak, e3[2] / peak, 0.0];
-                            n += 1;
-                        }
-                        fdata[7][2] = n as f32;
-                        // The rest of the map (`ifs_env`): the lit tier's
-                        // irradiance and reflections, the path tracer's
-                        // light, the backdrop.
-                        let slots = super::environment::env_fdata(e, &set, 0.0);
-                        fdata[super::environment::ENV_FDATA..super::environment::ENV_FDATA + super::environment::ENV_FDATA_LEN].copy_from_slice(&slots);
-                    }
+                    // An HDRI sky: its sun the rig's next free light, so
+                    // both tiers shade and shadow it, and the rest of its
+                    // map the lit tier's irradiance and reflections, the
+                    // path tracer's light and the backdrop.
+                    self.env.pack(&mut fdata, self.solid_lighting.0.rig_untouched());
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.

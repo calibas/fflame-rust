@@ -413,17 +413,21 @@ path tracer's settings. `lift_path_material` lifts them into
 A photographed sky all round (docs/projects/hdri-environment.md):
 `escape::environment`, bundled in `assets/environments/` and named by id
 (`ENVIRONMENTS`) -- Poly Haven's Sunflowers (Pure Sky) and Rogland Clear
-Night, 1K equirectangular Radiance files, CC0. For a solid, for now:
-- **The path tracer** reads it as the sky's light (`pt_env`): in the
-  world's frame, z up, whatever the lights follow (`pt_env_dir`; read in
-  the studio's frame, a camera's at the solids' usual view, its horizon
-  stood at that camera's pitch), turned by Rotation, its horizon raised
-  or lowered by Horizon (the sky above and below the line stretched to
-  fit, the zenith and the nadir fixed: `environment::warp_elevation`; the
-  sun moves with it), scaled so the sky's median shows at its
-  catalog level (`EnvDef::level`) through the exposure and gamma -- a
-  picked colour's `shown`, kept linear -- times Sky light. A camera ray
-  that misses sees it (`pt_sky_seen`), unless Show as backdrop is off.
+Night, 1K equirectangular Radiance files, CC0 -- and **Starfield**, stars
+alone, no file. For solids and both terrains, in both tiers; one text
+reads it everywhere (`ENV_WGSL`, spliced into the rig: `fdata[36..45]`,
+group 0's bindings 14 and 15), each renderer holding the sky in an
+`EnvSlot`.
+- **Its frame** is the world's, z up, whatever the lights follow
+  (`ifs_env_dir`; read in the studio's frame, a camera's at the solids'
+  usual view, its horizon stood at that camera's pitch), turned by
+  Rotation, its horizon raised or lowered by Horizon (the sky above and
+  below the line stretched to fit, the zenith and the nadir fixed:
+  `environment::warp_elevation`; the sun moves with it). It is scaled so
+  the sky's median shows at its catalog level (`EnvDef::level`) through
+  the exposure and gamma -- a picked colour's `shown`, kept linear --
+  times Sky light. A camera ray that misses sees it (`ifs_sky_seen`), in
+  both tiers, unless Show as backdrop is off.
 - **Its sun is lifted out of the map** (`EnvMap::sun`): the texels above
   1000 times the sky's median, joined to the brightest, holding at least a
   tenth of the light -- the Sunflowers sun is nine texels holding 47% of
@@ -431,11 +435,34 @@ Night, 1K equirectangular Radiance files, CC0. For a solid, for now:
   over pi), so both tiers shade and shadow it and polished reflections
   meet it through the lights' own sampling; the map keeps the rest, the
   sun's texels filled from around them. An untouched rig's stand-in key
-  gives way to it: the sky lights the scene.
-- **The lit tier** lights by the sun only, so far: the map's irradiance
-  and its reflections are the plan's next step, and until then Auto's
-  switch shows the difference.
-- The web build has no skies yet (its loading is a step of the plan).
+  (a terrain's default sun) gives way to it; under a sky without one (a
+  night's) the stand-in stays, or the scene would be dark.
+- **The path tracer** reads the map at its finest level (`ifs_env`).
+- **The lit tier** reads it prefiltered: its diffuse light as nine
+  spherical harmonics of the irradiance (`irradiance_sh`, taken on
+  loading over the map at 128x64 and again when the sky turns or its
+  horizon moves; within 2% of the integral on Sunflowers' faces), and a
+  coat's reflection from the texture's mips -- level k the map seen
+  through a GGX lobe of roughness k/5 (`EnvMap::reflection_levels`, the
+  split sum by filtered importance sampling, 170 ms for a 1K sky on
+  loading), read about the lobe's dominant direction (`ifs_env_reflect`).
+  Against the path tracer (`an_hdri_sky_lights_both_tiers_alike`,
+  `a_plane_under_an_hdri_sky_is_lit_alike`): a convex cube's diffuse and
+  gloss within 1%, its metals within 10%; a flat plane's diffuse within
+  1%, metal hills 9%; the Mandelbulb 2-11% dark, where the occlusion
+  estimate stands in for its recesses, as the studio's does.
+- **Stars** (`ifs_env_stars`, Stars in the panel; `environment_stars`):
+  procedural, fixed to the map -- they turn and rise with it, above its
+  horizon only. The sphere in cube-face cells, 160 by 160 a face, a star
+  in about one cell in eleven; its brightness by a power law, its colour
+  orange through white to blue-white. A star is a pixel across at any
+  zoom (its radius 0.6 of the camera's pixel) and display-referred (1
+  shows the brightest at white, at any exposure): sharp, and too faint to
+  light anything. Polished reflections show them, fading out by
+  roughness 0.1. Choosing a night sky in the panel (`EnvDef::stars`)
+  brings them out at 1.
+- The web build has no skies yet (its loading is for the user's
+  decision: docs/projects/hdri-environment.md).
 
 ### The walk and the relight
 
@@ -541,9 +568,10 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 | `sky_gradient` | off | Gradient sky | the background alone, or a gradient to `zenith` overhead |
 | `zenith` | (0.22, 0.40, 0.72) | Zenith | the sky's colour straight up, picked in sRGB |
 | `studio` | off | Studio light | light from a photo studio in place of the sky's, Sky light its brightness (*The studio*) |
-| `environment_map` | none | HDRI sky | a bundled photographed sky that lights and is reflected, in place of the background's, the gradient's and the studio's light (*HDRI skies*; solids for now) |
+| `environment_map` | none | HDRI sky | a bundled photographed sky that lights and is reflected, in place of the background's, the gradient's and the studio's light (*HDRI skies*), or Starfield |
 | `environment_rotation` | 0 | Rotation | the sky turned about the up axis, degrees |
 | `environment_horizon` | 0 | Horizon | the elevation the sky's horizon stands at, degrees (the UI offers -45..45; the config holds -80..80): to set it against the solid |
+| `environment_stars` | 0 | Stars | procedural stars over the sky, their brightness (1, the brightest at white; 0, none) |
 | `environment_backdrop` | on | Show as backdrop | the camera sees the sky (a skybox), or the background |
 
 `path_core::path_settings_from` turns the block into a pass's

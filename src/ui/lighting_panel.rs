@@ -33,8 +33,8 @@ pub fn render_lighting_panel_content(ui: &mut egui::Ui, config_manager: &mut Con
             super::escape_panel::show_render_tier(ui, config_manager, &pt, &paths, tier_path.clone(), tier, id)
         });
         section(ui, "lighting.sky", &mut |ui| {
-            // An HDRI sky: a solid's (terrains take none yet).
-            let mapped = view == ViewKind::Solid && environment(ui, config_manager, &pt);
+            // An HDRI sky: a solid's or a terrain's.
+            let mapped = environment(ui, config_manager, &pt, &paths);
             super::escape_panel::show_sky(ui, config_manager, config.background_color, &pt, &paths, tier, mapped)
         });
     }
@@ -366,7 +366,7 @@ fn lit_tier_runs(config: &FractalConfig, view: ViewKind) -> bool {
 /// one, its turn, whether the camera sees it, and its credit. True when one
 /// is in force.
 #[cfg(feature = "engine-escape")]
-fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate::config::escape::PathTraceConfig) -> bool {
+fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate::config::escape::PathTraceConfig, paths: &super::escape_panel::PathPaths) -> bool {
     use crate::escape::environment::{get, ENVIRONMENTS};
     let current = get(&pt.environment_map);
     ui.horizontal(|ui| {
@@ -376,11 +376,17 @@ fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate
             .selected_text(name)
             .show_ui(ui, |ui| {
                 if ui.selectable_label(current.is_none(), t!("lighting.environment_none")).clicked() && current.is_some() {
-                    let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentMap, ConfigValue::String(String::new()));
+                    let _ = config_manager.update_param(paths.environment_map.clone(), ConfigValue::String(String::new()));
                 }
                 for e in ENVIRONMENTS {
                     if ui.selectable_label(current.is_some_and(|c| c.id == e.id), e.name).clicked() && current.is_none_or(|c| c.id != e.id) {
-                        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentMap, ConfigValue::String(e.id.to_string()));
+                        // A night sky brings its stars out, in the same
+                        // undo step, unless they are set already.
+                        let mut changes = vec![(paths.environment_map.clone(), ConfigValue::String(e.id.to_string()))];
+                        if e.stars && pt.environment_stars <= 0.0 {
+                            changes.push((paths.environment_stars.clone(), ConfigValue::Float(1.0)));
+                        }
+                        let _ = config_manager.update_batch(changes, t!("lighting.environment").to_string());
                     }
                 }
             })
@@ -392,17 +398,23 @@ fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate
     };
     let mut turn = pt.environment_rotation;
     if ui.add(super::VkbSlider::new(&mut turn, 0.0..=360.0).text(t!("lighting.environment_rotation").as_ref()).step_by(1.0)).on_hover_text(t!("lighting.environment_rotation_tip")).changed() {
-        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentRotation, turn.into());
+        let _ = config_manager.update_param(paths.environment_rotation.clone(), turn.into());
     }
     let mut horizon = pt.environment_horizon;
     if ui.add(super::VkbSlider::new(&mut horizon, -45.0..=45.0).text(t!("lighting.environment_horizon").as_ref()).step_by(0.5)).on_hover_text(t!("lighting.environment_horizon_tip")).changed() {
-        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentHorizon, horizon.into());
+        let _ = config_manager.update_param(paths.environment_horizon.clone(), horizon.into());
+    }
+    let mut stars = pt.environment_stars;
+    if ui.add(super::VkbSlider::new(&mut stars, 0.0..=4.0).text(t!("lighting.environment_stars").as_ref()).step_by(0.05)).on_hover_text(t!("lighting.environment_stars_tip")).changed() {
+        let _ = config_manager.update_param(paths.environment_stars.clone(), stars.into());
     }
     let mut seen = pt.environment_backdrop;
     if ui.checkbox(&mut seen, t!("lighting.environment_backdrop")).on_hover_text(t!("lighting.environment_backdrop_tip")).changed() {
-        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentBackdrop, seen.into());
+        let _ = config_manager.update_param(paths.environment_backdrop.clone(), seen.into());
     }
-    ui.hyperlink_to(egui::RichText::new(t!("lighting.environment_credit", credit = def.credit)).small(), def.url);
+    if !def.credit.is_empty() {
+        ui.hyperlink_to(egui::RichText::new(t!("lighting.environment_credit", credit = def.credit)).small(), def.url);
+    }
     true
 }
 
