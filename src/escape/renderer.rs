@@ -1886,10 +1886,12 @@ impl EscapeRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // COPY_SRC: a test reads each pixel's depth back
+        // (`the_fog_begins_without_a_line`).
         let ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Geometry"),
             size: 16,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let ifs_ref_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -4696,7 +4698,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Escape IFS Geometry"),
                 size: (px as u64) * 16,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             self.ifs_geom_px = px;

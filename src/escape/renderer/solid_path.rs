@@ -1875,6 +1875,90 @@ mod tests {
         }
     }
 
+    /// The fog begins without a line (user-reported 2026-10-21: "you can
+    /// see the line where the fog starts very clearly", in both tiers;
+    /// they read one function, `ifs_fog_amount`). A lit cube, one light,
+    /// the fog toward black from inside its depths: the share of light it
+    /// lets through, T, against each pixel's view depth (the walk's hit
+    /// distance along its ray, read from the geometry record). Just past
+    /// the start -- the first twentieth of the fog's length 1/k -- the fog
+    /// rises at under a third of its full rate (taken straight from the
+    /// start it rose at the full rate at once: 0.99 of it; 0.05 now); none
+    /// before the start; past 1/k, the fog as it was, exp(-k d).
+    #[test]
+    fn the_fog_begins_without_a_line() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (192u32, 128u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.solid_shading.lights[0].enabled = true;
+        c.escape.solid_tier = RenderTier::Lit;
+        let def = crate::escape::ifs::get_ifs(&c.escape.formula).expect("solid");
+        let packed = crate::escape::ifs::pack_for(def, &c, &crate::variations::global_registry());
+        let (ifs3, _) = packed.as_ref().and_then(|p| p.solid.as_ref()).expect("a solid");
+        let cam = crate::escape::ifs::solid_camera(&c.escape, ifs3);
+        let (d0, rad) = (cam.distance as f32, ifs3.ball.radius as f32);
+        // The picture, and the hit distance at each pixel.
+        let shot = |c: &FractalConfig| {
+            let mut r = renderer_for(&device, c, w, h);
+            loop {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+                queue.submit(std::iter::once(enc.finish()));
+                if settled {
+                    break;
+                }
+            }
+            let out = read_texture(&device, &queue, &r.output_texture, w, h);
+            let geom = read_buffer(&device, &queue, &r.ifs_geom_buffer, (w * h * 16) as u64);
+            r.destroy();
+            let t: Vec<f32> = geom.chunks_exact(16).map(|g| f32::from_le_bytes([g[12], g[13], g[14], g[15]])).collect();
+            (out, t)
+        };
+        let (base, _) = shot(&c);
+        let k = 2.0 / rad;
+        c.fog_strength = k;
+        c.fog_start = d0 - 0.3 * rad;
+        let (fogged, hit) = shot(&c);
+        let reach = 1.0 / k;
+        let tan_half = (cam.fov * 0.5).tan();
+        let aspect = w as f32 / h as f32;
+        let lum = |p: [f32; 4]| p[0] + p[1] + p[2];
+        let (mut onset, mut onset_n, mut before, mut far_worst, mut far_n) = (0.0f64, 0usize, 0.0f32, 0.0f32, 0usize);
+        for py in 0..h {
+            for px in 0..w {
+                let i = (py * w + px) as usize;
+                if base[i][3] < 1.0 || lum(base[i]) < 0.05 || !(hit[i] > 0.0) {
+                    continue;
+                }
+                let t = lum(fogged[i]) / lum(base[i]);
+                // The planar depth: the hit distance times the ray's
+                // cosine to the view (`ifs_ray`).
+                let u = ((px as f32 + 0.5) / w as f32 - 0.5) * aspect * 2.0 * tan_half;
+                let v = ((py as f32 + 0.5) / h as f32 - 0.5) * 2.0 * tan_half;
+                let d = hit[i] / (1.0 + u * u + v * v).sqrt() - c.fog_start;
+                if d <= 0.0 {
+                    before = before.max(1.0 - t);
+                } else if d < 0.05 * reach {
+                    onset += ((1.0 - t) / (k * d)) as f64;
+                    onset_n += 1;
+                } else if d > 1.2 * reach && t > 1.0e-3 {
+                    far_worst = far_worst.max((-t.ln() / (k * d) - 1.0).abs());
+                    far_n += 1;
+                }
+            }
+        }
+        let onset = onset / onset_n.max(1) as f64;
+        println!("fog: {onset_n} pixels just past the start rise at {onset:.3} of the full rate; before it, at most {before:.2e}; past 1/k ({far_n} pixels) within {far_worst:.4} of exp(-k d)");
+        assert!(onset_n > 50 && far_n > 20, "the cube spans the fog: {onset_n}, {far_n}");
+        assert!(onset < 0.3, "the fog rises at {onset} of its rate where it begins: a line");
+        assert!(before < 1.0e-5, "fog before the start: {before}");
+        assert!(far_worst < 0.02, "past the ease the fog moved: {far_worst}");
+    }
+
     /// The procedural stars (`ifs_env_stars`): the Starfield sky seen past a
     /// cube, looking up. Hundreds of stars in the lit tier's backdrop, each
     /// a pixel or two -- at twice the resolution about as many pixels, not
