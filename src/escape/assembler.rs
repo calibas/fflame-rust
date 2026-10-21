@@ -7289,11 +7289,29 @@ fn ifs_rig(colour: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
     // the background as picked (sRGB); `rgb` is linear, so decode it
     // the way the tonemap does before it composites the background.
     if (ifs_fog_strength() > 0.0) {
-        let depth = t * dot(dir, ifs_forward());
-        let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+        let f = ifs_fog_amount(t * dot(dir, ifs_forward()));
         rgb = mix(rgb, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
     }
     return rgb;
+}
+
+// How much fog lies before a surface at view depth `depth`: 1 - exp(-k d),
+// k the fog's strength, d the depth past its start -- eased in over the
+// fog's own length 1/k past the start, d as d^2 (2r - d) / r^2 there:
+// none before the start, no corner where it begins or where the ease
+// meets the fog as it was. Taken straight from the start, the fog's rise
+// turned a corner there, and the lit tier drew it as a line (and the path
+// tracer, once Sky light left no noise to hide it; user-reported
+// 2026-10-21). Past 1/k, the fog is what it was.
+fn ifs_fog_amount(depth: f32) -> f32 {
+    let k = ifs_fog_strength();
+    let d = max(depth - ifs_fog_start(), 0.0);
+    let r = 1.0 / max(k, 1.0e-6);
+    var e = d;
+    if (d < r) {
+        e = d * d * (2.0 * r - d) / (r * r);
+    }
+    return 1.0 - exp(-k * e);
 }
 
 // The geometry record: what a walk found at a pixel that a relight
@@ -8921,8 +8939,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     // Fog toward the background, decoded from the sRGB it was picked in
     // to the linear `l` (as the lit tier's rig does): the fog is diffuse.
     if (ifs_fog_strength() > 0.0) {
-        let depth = t * dot(ray.d, ifs_forward());
-        let f = 1.0 - exp(-ifs_fog_strength() * max(depth - ifs_fog_start(), 0.0));
+        let f = ifs_fog_amount(t * dot(ray.d, ifs_forward()));
         l = mix(l, pow(max(ifs_fog_color(), vec3<f32>(0.0)), vec3<f32>(2.2)), f);
         pt_spec = pt_spec * (1.0 - f);
     }

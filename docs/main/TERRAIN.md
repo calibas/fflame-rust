@@ -87,7 +87,7 @@ What the last three share:
 | Tier | `escape.solid_tier`, default Lit | `escape.terrain.tier`, default Auto | `sim.terrain.tier`, default Auto |
 | Path settings | `escape.path` | `escape.path` | `sim.terrain.path` |
 | Lights | fixed in the fractal (or the camera's, a toggle) | world-fixed | world-fixed |
-| Fog | the flame's fog fields | the terrain's Far and Haze | Far and Haze on a repeated ground |
+| Fog | the flame's fog fields, in both tiers eased in over the fog's length 1/k past its start (`ifs_fog_amount`: no line where it begins) | the terrain's Far and Haze | Far and Haze on a repeated ground |
 
 Every one hands the tail an `Rgba32Float` image in the accumulator's
 layout: rgb linear, alpha coverage. Coverage 0 lets the tonemap's
