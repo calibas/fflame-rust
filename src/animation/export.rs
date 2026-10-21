@@ -2528,6 +2528,7 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
 /// limits. A frame short of the perturbation threshold renders direct and
 /// carries none. None when every frame fits.
 #[cfg(feature = "engine-escape")]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn deep_zoom_misfit(
     device: &wgpu::Device,
     width: u32,
