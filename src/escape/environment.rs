@@ -44,9 +44,13 @@ pub struct EnvDef {
     /// ([`EnvMap::median`], held here so settings need not decode it:
     /// `the_catalog_knows_each_skys_median`).
     pub median: f32,
-    /// The credit owed (CC0 asks none; Poly Haven asks for a link).
+    /// The credit owed (CC0 asks none; Poly Haven asks for a link); empty
+    /// for none.
     pub credit: &'static str,
     pub url: &'static str,
+    /// A night sky: choosing it in the panel brings the procedural stars
+    /// out (`PathTraceConfig::environment_stars`).
+    pub stars: bool,
 }
 
 /// The bundled skies, in the order the UI lists them.
@@ -59,6 +63,7 @@ pub const ENVIRONMENTS: &[EnvDef] = &[
         median: 0.280516,
         credit: "Sunflowers (Pure Sky), Poly Haven, CC0",
         url: "https://polyhaven.com/a/sunflowers_puresky",
+        stars: false,
     },
     EnvDef {
         id: "rogland_night",
@@ -68,6 +73,19 @@ pub const ENVIRONMENTS: &[EnvDef] = &[
         median: 0.29219,
         credit: "Rogland Clear Night, Poly Haven, CC0",
         url: "https://polyhaven.com/a/rogland_clear_night",
+        stars: true,
+    },
+    // Stars alone: no photograph, a black sky the stars are drawn over
+    // ([`load`] makes it).
+    EnvDef {
+        id: "starfield",
+        name: "Starfield",
+        file: "",
+        level: 0.0,
+        median: 1.0,
+        credit: "",
+        url: "",
+        stars: true,
     },
 ];
 
@@ -665,11 +683,11 @@ pub const ENV_FDATA_LEN: usize = 9;
 /// stars' brightness in the accumulator's units (0, none), and 0;
 /// [38..45] the irradiance's harmonics ([`irradiance_sh`]), 27 floats in
 /// order.
-pub fn env_fdata(gpu: &EnvGpu, set: &crate::escape::path_core::EnvSettings, stars: f32) -> [[f32; 4]; ENV_FDATA_LEN] {
+pub fn env_fdata(gpu: &EnvGpu, set: &crate::escape::path_core::EnvSettings) -> [[f32; 4]; ENV_FDATA_LEN] {
     let mut out = [[0.0f32; 4]; ENV_FDATA_LEN];
     let sh = gpu.irradiance(set.rotation, set.horizon);
     out[0] = [1.0, set.rotation, set.scale, if set.backdrop { 1.0 } else { 0.0 }];
-    out[1] = [set.horizon, gpu.lods as f32, stars.max(0.0), 0.0];
+    out[1] = [set.horizon, gpu.lods as f32, set.stars.max(0.0), 0.0];
     for (k, v) in sh.as_flattened().iter().enumerate() {
         out[2 + k / 4][k % 4] = *v;
     }
@@ -722,9 +740,103 @@ fn ifs_env_uv(s: vec3<f32>) -> vec2<f32> {
 }
 
 // The sky's radiance toward `s` (its frame) at reflection level `lod`, in
-// the accumulator's units. An explicit level, so from any control flow.
+// the accumulator's units, its stars over it. An explicit level, so from
+// any control flow.
 fn ifs_env(s: vec3<f32>, lod: f32) -> vec3<f32> {
-    return textureSampleLevel(ifs_env_tex, ifs_env_smp, ifs_env_uv(s), lod).rgb * params.fdata[36].z;
+    let uv = ifs_env_uv(s);
+    return textureSampleLevel(ifs_env_tex, ifs_env_smp, uv, lod).rgb * params.fdata[36].z + ifs_env_stars(uv, lod);
+}
+
+// Three uniform numbers from a cell (Jarzynski and Olano 2020's pcg3d).
+fn ifs_env_hash(c: vec3<u32>) -> vec3<f32> {
+    var v = c * 1664525u + vec3<u32>(1013904223u);
+    v.x = v.x + v.y * v.z;
+    v.y = v.y + v.z * v.x;
+    v.z = v.z + v.x * v.y;
+    v = v ^ (v >> vec3<u32>(16u));
+    v.x = v.x + v.y * v.z;
+    v.y = v.y + v.z * v.x;
+    v.z = v.z + v.x * v.y;
+    return vec3<f32>(v >> vec3<u32>(8u)) / 16777216.0;
+}
+
+// The procedural stars (fdata[37].z their brightness in the accumulator's
+// units, 0 for none) at the map's `uv`: fixed to the map, so they turn
+// and rise with it, and only above its horizon. The map's sphere in cells
+// -- a cube's faces, 160 by 160 -- a star in about one cell in eleven,
+// placed in it at random; its brightness by a power law (most faint, a
+// few at the full), its colour from orange through white to blue-white.
+// A star is a pixel across at any zoom (its radius 0.6 of the camera's
+// pixel, as a camera ray sees it; at most about a cell), and as bright:
+// sharp, and too faint to light anything. A rough reflection (`lod` past
+// half a level) shows none.
+fn ifs_env_stars(uv: vec2<f32>, lod: f32) -> vec3<f32> {
+    let k = params.fdata[37].z;
+    if (!(k > 0.0) || lod >= 0.5) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let phi = 6.283185307 * (fract(uv.x) - 0.5);
+    let theta = 3.141592654 * clamp(uv.y, 0.0, 1.0);
+    let m = vec3<f32>(sin(theta) * sin(phi), cos(theta), -sin(theta) * cos(phi));
+    if (m.y <= 0.0) {
+        return vec3<f32>(0.0, 0.0, 0.0);
+    }
+    let a = abs(m);
+    var face = 0u;
+    var st = vec2<f32>(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z) {
+        face = select(1u, 0u, m.x > 0.0);
+        st = vec2<f32>(m.y, m.z) / a.x;
+    } else if (a.y >= a.z) {
+        face = select(3u, 2u, m.y > 0.0);
+        st = vec2<f32>(m.x, m.z) / a.y;
+    } else {
+        face = select(5u, 4u, m.z > 0.0);
+        st = vec2<f32>(m.x, m.y) / a.z;
+    }
+    let n = 160.0;
+    let here = min(floor((st * 0.5 + vec2<f32>(0.5, 0.5)) * n), vec2<f32>(n - 1.0, n - 1.0));
+    let side = select(-1.0, 1.0, face % 2u == 0u);
+    let pixel = 2.0 * tan(ifs_fov() * 0.5) / f32(max(params.height, 1u));
+    let r = clamp(0.6 * pixel, 2.0e-5, 0.01);
+    var out = vec3<f32>(0.0, 0.0, 0.0);
+    // This cell's star and its neighbours': a disc a pixel across may
+    // reach past its cell's edge (a small view's pixel is near a cell).
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let cell = here + vec2<f32>(f32(dx), f32(dy));
+            if (any(cell < vec2<f32>(0.0, 0.0)) || any(cell > vec2<f32>(n - 1.0, n - 1.0))) {
+                continue;
+            }
+            let h = ifs_env_hash(vec3<u32>(u32(cell.x), u32(cell.y), face));
+            if (h.x > 0.09) {
+                continue;
+            }
+            let q = (cell + vec2<f32>(h.y, h.z)) / n * 2.0 - vec2<f32>(1.0, 1.0);
+            var sd = vec3<f32>(q.x, q.y, side);
+            if (face < 2u) {
+                sd = vec3<f32>(side, q.x, q.y);
+            } else if (face < 4u) {
+                sd = vec3<f32>(q.x, side, q.y);
+            }
+            let d = length(m - normalize(sd));
+            if (d >= r) {
+                continue;
+            }
+            let g = ifs_env_hash(vec3<u32>(u32(cell.x) + 7919u, u32(cell.y) + 104729u, face + 11u));
+            let bright = min(0.04 * pow(max(g.x, 1.0e-4), -0.8), 1.0);
+            // Orange through white to blue-white.
+            let t = g.y;
+            var tint = vec3<f32>(1.0, 1.0, 1.0);
+            if (t < 0.25) {
+                tint = mix(vec3<f32>(1.0, 0.76, 0.52), tint, t / 0.25);
+            } else if (t >= 0.6) {
+                tint = mix(tint, vec3<f32>(0.72, 0.82, 1.0), (t - 0.6) / 0.4);
+            }
+            out = out + tint * (bright * (1.0 - smoothstep(0.5 * r, r, d)));
+        }
+    }
+    return out * (k * (1.0 - 2.0 * lod) * smoothstep(0.0, 0.05, m.y));
 }
 
 // The irradiance's harmonic `i` (`environment::irradiance_sh`).
@@ -768,10 +880,127 @@ fn ifs_env_reflect(n: vec3<f32>, v: vec3<f32>, rough: f32) -> vec3<f32> {
 }
 "#;
 
+/// A pass's HDRI sky: its map on the GPU while one is in use, the settings
+/// it is read with, and the 1x1 stand-in and the sampler its bindings
+/// (`ENV_WGSL`'s 14 and 15) take either way. Mode D's renderer and a
+/// terrain's each hold one.
+#[derive(Default)]
+pub struct EnvSlot {
+    gpu: Option<EnvGpu>,
+    settings: Option<crate::escape::path_core::EnvSettings>,
+    stand_in: Option<(wgpu::Texture, wgpu::TextureView)>,
+    sampler: Option<wgpu::Sampler>,
+}
+
+impl EnvSlot {
+    /// The sky `settings` names, or none: its bundled map loaded and
+    /// uploaded when the id changes (desktop; the web build has none yet).
+    /// True when anything about it changed.
+    pub fn set(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, settings: Option<crate::escape::path_core::EnvSettings>) -> bool {
+        let id = settings.map(|s| s.def.id);
+        if self.gpu.as_ref().map(|e| e.id) != id {
+            if let Some(e) = self.gpu.take() {
+                e.texture.destroy();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(def) = settings.map(|s| s.def) {
+                match load(def) {
+                    Ok(map) => self.gpu = Some(EnvGpu::new(device, queue, def.id, &map)),
+                    Err(e) => log::warn!("environment {}: {e}", def.id),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = (device, queue);
+        }
+        let changed = self.settings != settings;
+        self.settings = settings;
+        changed
+    }
+
+    /// Test-only: `map` as the sky's map, read with `settings`, in place of
+    /// the bundled file its id names.
+    #[cfg(test)]
+    pub fn set_map(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, map: &EnvMap, settings: crate::escape::path_core::EnvSettings) {
+        if let Some(e) = self.gpu.take() {
+            e.texture.destroy();
+        }
+        self.gpu = Some(EnvGpu::new(device, queue, settings.def.id, map));
+        self.settings = Some(settings);
+    }
+
+    /// The sky a pass reads: its settings, when its map is loaded.
+    pub fn in_use(&self) -> Option<crate::escape::path_core::EnvSettings> {
+        self.gpu.as_ref().and(self.settings)
+    }
+
+    /// Its sun, with the settings it is read with, when one is in use.
+    pub fn sun(&self) -> Option<(EnvSun, crate::escape::path_core::EnvSettings)> {
+        Some((self.gpu.as_ref()?.sun?, self.in_use()?))
+    }
+
+    /// The view and the sampler bindings 14 and 15 take: the sky's map, or
+    /// the stand-in no pass reads.
+    pub fn bindings(&mut self, device: &wgpu::Device) -> (wgpu::TextureView, wgpu::Sampler) {
+        let sampler = self.sampler.get_or_insert_with(|| env_sampler(device)).clone();
+        let view = match &self.gpu {
+            Some(e) => e.view.clone(),
+            None => self.stand_in.get_or_insert_with(|| env_stand_in(device)).1.clone(),
+        };
+        (view, sampler)
+    }
+
+    /// What of the sky decides a walk's shadow rays: whether it has a sun
+    /// and where it stands. Empty with none.
+    pub fn key(&self) -> String {
+        match (&self.gpu, self.in_use()) {
+            (Some(e), Some(set)) => format!("|env:{}:{}:{}:{}", e.id, e.sun.is_some(), set.rotation, set.horizon),
+            _ => String::new(),
+        }
+    }
+
+    /// The sky into a pass's `fdata` (mode D's or a terrain's): its sun the
+    /// rig's next free light after the `fdata[7].z` there -- in place of an
+    /// `untouched` rig's stand-in, the sky lighting the scene -- in the
+    /// world's frame, z up (`ifs_env_dir` inverted), its intensity the
+    /// irradiance over pi (`pt_light`) and its colour the share of each
+    /// channel; and the rest of the map at [`ENV_FDATA`] ([`env_fdata`]).
+    /// Nothing without one.
+    pub fn pack(&self, fdata: &mut [[f32; 4]], untouched: bool) {
+        let (Some(e), Some(set)) = (&self.gpu, self.in_use()) else { return };
+        // An untouched rig's stand-in key gives way to the sky's sun; under
+        // a sky without one (a night's) it stays, or the scene is dark.
+        let mut n = if untouched && e.sun.is_some() { 0 } else { fdata[7][2] as usize };
+        if let Some(sun) = e.sun.filter(|_| n < 4) {
+            let s = turned(raised(sun.dir, set.horizon), set.rotation);
+            let d = [s[0], -s[2], s[1]];
+            let e3 = sun.power(set.scale);
+            let peak = e3.iter().cloned().fold(0.0f32, f32::max).max(1.0e-30);
+            fdata[11 + n * 2] = [d[0], d[1], d[2], peak];
+            fdata[12 + n * 2] = [e3[0] / peak, e3[1] / peak, e3[2] / peak, 0.0];
+            fdata[28 + n] = [0.0; 4];
+            n += 1;
+        }
+        fdata[7][2] = n as f32;
+        fdata[ENV_FDATA..ENV_FDATA + ENV_FDATA_LEN].copy_from_slice(&env_fdata(e, &set));
+    }
+
+    pub fn destroy(&mut self) {
+        if let Some(e) = self.gpu.take() {
+            e.texture.destroy();
+        }
+        if let Some((t, _)) = self.stand_in.take() {
+            t.destroy();
+        }
+    }
+}
+
 /// The bundled sky `def`'s file, decoded (desktop: from the shipped
 /// `assets/environments/`).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load(def: &EnvDef) -> Result<EnvMap, String> {
+    if def.file.is_empty() {
+        return Ok(EnvMap { width: 64, height: 32, texels: vec![[0.0; 3]; 64 * 32], sun: None, median: 1.0 });
+    }
     let path = crate::resources::resource_path(format!("assets/environments/{}", def.file));
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     EnvMap::decode(&bytes)
@@ -794,7 +1023,7 @@ mod tests {
     /// Every bundled sky decodes as a 2:1 map of finite radiance.
     #[test]
     fn the_bundled_skies_decode() {
-        for def in ENVIRONMENTS {
+        for def in ENVIRONMENTS.iter().filter(|d| !d.file.is_empty()) {
             let map = bundled(def.id);
             assert_eq!((map.width, map.height), (1024, 512), "{}", def.id);
             assert!(map.texels.iter().all(|c| c.iter().all(|v| v.is_finite() && *v >= 0.0)), "{}", def.id);
@@ -838,7 +1067,7 @@ mod tests {
     /// The catalog holds each sky's median as its file has it.
     #[test]
     fn the_catalog_knows_each_skys_median() {
-        for def in ENVIRONMENTS {
+        for def in ENVIRONMENTS.iter().filter(|d| !d.file.is_empty()) {
             let map = bundled(def.id);
             println!("{}: median {}", def.id, map.median);
             assert!((def.median - map.median).abs() <= 1.0e-3 * map.median, "{}: {} against {}", def.id, def.median, map.median);

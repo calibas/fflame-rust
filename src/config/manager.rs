@@ -2049,6 +2049,11 @@ impl ConfigManager {
             ConfigPath::SimTerrainTargetLift => Ok(ConfigValue::Float(config.sim.terrain.target_lift)),
             ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
             ConfigPath::SimPathNoiseThreshold => Ok(ConfigValue::Float(config.sim.terrain.path.noise_threshold)),
+            ConfigPath::SimPathEnvironmentMap => Ok(ConfigValue::String(config.sim.terrain.path.environment_map.clone())),
+            ConfigPath::SimPathEnvironmentRotation => Ok(config.sim.terrain.path.environment_rotation.into()),
+            ConfigPath::SimPathEnvironmentHorizon => Ok(config.sim.terrain.path.environment_horizon.into()),
+            ConfigPath::SimPathEnvironmentStars => Ok(config.sim.terrain.path.environment_stars.into()),
+            ConfigPath::SimPathEnvironmentBackdrop => Ok(config.sim.terrain.path.environment_backdrop.into()),
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
             // The material is the picture's, beside the lights
@@ -2218,6 +2223,7 @@ impl ConfigManager {
             ConfigPath::EscapePathEnvironmentMap => Ok(ConfigValue::String(config.escape.path.environment_map.clone())),
             ConfigPath::EscapePathEnvironmentRotation => Ok(config.escape.path.environment_rotation.into()),
             ConfigPath::EscapePathEnvironmentHorizon => Ok(config.escape.path.environment_horizon.into()),
+            ConfigPath::EscapePathEnvironmentStars => Ok(config.escape.path.environment_stars.into()),
             ConfigPath::EscapePathEnvironmentBackdrop => Ok(config.escape.path.environment_backdrop.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
@@ -3460,6 +3466,26 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.sim.terrain.path.noise_threshold = if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 };
             }
+            ConfigPath::SimPathEnvironmentMap => {
+                let v: String = value.try_into()?;
+                self.current.sim.terrain.path.environment_map = v;
+            }
+            ConfigPath::SimPathEnvironmentRotation => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment_rotation = if v.is_finite() { v.rem_euclid(360.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentHorizon => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment_horizon = if v.is_finite() { v.clamp(-80.0, 80.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentStars => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment_stars = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentBackdrop => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.environment_backdrop = v;
+            }
             ConfigPath::SimPathBounces => {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.bounces = v.min(16);
@@ -3931,6 +3957,10 @@ impl ConfigManager {
             ConfigPath::EscapePathEnvironmentHorizon => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.path.environment_horizon = if v.is_finite() { v.clamp(-80.0, 80.0) } else { 0.0 };
+            }
+            ConfigPath::EscapePathEnvironmentStars => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment_stars = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
             }
             ConfigPath::EscapePathEnvironmentBackdrop => {
                 let v: bool = value.try_into()?;

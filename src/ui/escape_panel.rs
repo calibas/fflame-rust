@@ -1456,6 +1456,12 @@ pub(crate) struct PathPaths {
     pub sky: ConfigPath,
     pub zenith: ConfigPath,
     pub studio: ConfigPath,
+    /// The HDRI sky's: its id, turn, horizon, stars and backdrop.
+    pub environment_map: ConfigPath,
+    pub environment_rotation: ConfigPath,
+    pub environment_horizon: ConfigPath,
+    pub environment_stars: ConfigPath,
+    pub environment_backdrop: ConfigPath,
 }
 
 /// The escape view's: a terrain's and a solid's.
@@ -1471,6 +1477,11 @@ pub(crate) fn escape_path_paths() -> PathPaths {
         zenith: ConfigPath::EscapePathZenith,
         studio: ConfigPath::EscapePathStudio,
         focus: ConfigPath::EscapePathFocus,
+        environment_map: ConfigPath::EscapePathEnvironmentMap,
+        environment_rotation: ConfigPath::EscapePathEnvironmentRotation,
+        environment_horizon: ConfigPath::EscapePathEnvironmentHorizon,
+        environment_stars: ConfigPath::EscapePathEnvironmentStars,
+        environment_backdrop: ConfigPath::EscapePathEnvironmentBackdrop,
     }
 }
 

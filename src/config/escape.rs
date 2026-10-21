@@ -2369,6 +2369,12 @@ pub struct PathTraceConfig {
     /// they were): to set a horizon against the solid.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub environment_horizon: f32,
+    /// Procedural stars over the sky (`environment::ENV_WGSL`), their
+    /// brightness: 1 shows the brightest at the display's white; 0, none.
+    /// Seen in the backdrop and in polished reflections, too faint to
+    /// light anything.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub environment_stars: f32,
     /// Whether the camera sees the sky (a skybox) or the background as
     /// before; the sky lights the scene either way.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -2425,6 +2431,7 @@ impl Default for PathTraceConfig {
             environment_map: String::new(),
             environment_rotation: 0.0,
             environment_horizon: 0.0,
+            environment_stars: 0.0,
             environment_backdrop: true,
         }
     }

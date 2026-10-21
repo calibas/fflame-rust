@@ -113,6 +113,11 @@ pub struct EnvSettings {
     /// `shown`, kept linear so the sun and the sky keep their ratio.
     pub scale: f32,
     pub backdrop: bool,
+    /// The procedural stars' brightness in the accumulator's units: the
+    /// config's (`environment_stars`) times what shows as the display's
+    /// white -- the stars are drawn display-referred, as a picked colour
+    /// is (`shown`); 0, none.
+    pub stars: f32,
 }
 
 /// The HDRI sky a path-tracing block names, when this build has it.
@@ -125,7 +130,8 @@ pub fn environment_settings(t: &crate::config::escape::PathTraceConfig, config: 
     let shown = def.level.clamp(0.0, 1.0).powf(2.2 * gamma) / config.exposure.max(1.0e-6);
     let rotation = if t.environment_rotation.is_finite() { t.environment_rotation / 360.0 } else { 0.0 };
     let horizon = if t.environment_horizon.is_finite() { t.environment_horizon.clamp(-80.0, 80.0).to_radians() } else { 0.0 };
-    Some(EnvSettings { def, rotation, horizon, scale: t.environment.max(0.0) * shown / def.median.max(1.0e-12), backdrop: t.environment_backdrop })
+    let stars = if t.environment_stars.is_finite() { t.environment_stars.max(0.0) } else { 0.0 } / config.exposure.max(1.0e-6);
+    Some(EnvSettings { def, rotation, horizon, scale: t.environment.max(0.0) * shown / def.median.max(1.0e-12), backdrop: t.environment_backdrop, stars })
 }
 
 impl PathSettings {

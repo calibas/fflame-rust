@@ -502,6 +502,13 @@ pub enum ConfigPath {
     SimPathSamples,
     /// Adaptive sampling's noise threshold (path-tracing-research V2).
     SimPathNoiseThreshold,
+    /// The simulation terrain's HDRI sky (as `EscapePathEnvironmentMap`
+    /// and the rest).
+    SimPathEnvironmentMap,
+    SimPathEnvironmentRotation,
+    SimPathEnvironmentHorizon,
+    SimPathEnvironmentStars,
+    SimPathEnvironmentBackdrop,
     SimPathBounces,
     SimPathEnvironment,
     SimPathGloss,
@@ -590,6 +597,8 @@ pub enum ConfigPath {
     EscapePathEnvironmentMap,
     EscapePathEnvironmentRotation,
     EscapePathEnvironmentHorizon,
+    /// Procedural stars over the sky, their brightness (0, none).
+    EscapePathEnvironmentStars,
     EscapePathEnvironmentBackdrop,
     EscapeTerrainInterior,
     /// How a count or a relief rises to its height, and the land
@@ -1246,6 +1255,11 @@ impl Display for ConfigPath {
             ConfigPath::SimTerrainTargetLift => write!(f, "Simulation Terrain Target Lift"),
             ConfigPath::SimPathSamples => write!(f, "Simulation Path Samples"),
             ConfigPath::SimPathNoiseThreshold => write!(f, "Simulation Noise Threshold"),
+            ConfigPath::SimPathEnvironmentMap => write!(f, "Simulation HDRI Sky"),
+            ConfigPath::SimPathEnvironmentRotation => write!(f, "Simulation Sky Rotation"),
+            ConfigPath::SimPathEnvironmentHorizon => write!(f, "Simulation Sky Horizon"),
+            ConfigPath::SimPathEnvironmentStars => write!(f, "Simulation Stars"),
+            ConfigPath::SimPathEnvironmentBackdrop => write!(f, "Simulation Sky as Backdrop"),
             ConfigPath::SimPathBounces => write!(f, "Simulation Path Bounces"),
             ConfigPath::SimPathEnvironment => write!(f, "Simulation Sky Light"),
             ConfigPath::SimPathGloss => write!(f, "Simulation Gloss"),
@@ -1313,6 +1327,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapePathEnvironmentMap => write!(f, "HDRI Sky"),
             ConfigPath::EscapePathEnvironmentRotation => write!(f, "Sky Rotation"),
             ConfigPath::EscapePathEnvironmentHorizon => write!(f, "Sky Horizon"),
+            ConfigPath::EscapePathEnvironmentStars => write!(f, "Stars"),
             ConfigPath::EscapePathEnvironmentBackdrop => write!(f, "Sky as Backdrop"),
             ConfigPath::EscapePathZenith => write!(f, "Zenith"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
@@ -1695,6 +1710,11 @@ impl ConfigPath {
             ConfigPath::SimTerrainTargetLift => I18nKey::simple("history.param.sim_terrain_target_lift"),
             ConfigPath::SimPathSamples => I18nKey::simple("history.param.sim_path_samples"),
             ConfigPath::SimPathNoiseThreshold => I18nKey::simple("history.param.sim_path_noise_threshold"),
+            ConfigPath::SimPathEnvironmentMap => I18nKey::simple("history.param.path_environment_map"),
+            ConfigPath::SimPathEnvironmentRotation => I18nKey::simple("history.param.path_environment_rotation"),
+            ConfigPath::SimPathEnvironmentHorizon => I18nKey::simple("history.param.path_environment_horizon"),
+            ConfigPath::SimPathEnvironmentStars => I18nKey::simple("history.param.path_environment_stars"),
+            ConfigPath::SimPathEnvironmentBackdrop => I18nKey::simple("history.param.path_environment_backdrop"),
             ConfigPath::SimPathBounces => I18nKey::simple("history.param.sim_path_bounces"),
             ConfigPath::SimPathEnvironment => I18nKey::simple("history.param.sim_path_environment"),
             ConfigPath::SimPathGloss => I18nKey::simple("history.param.sim_path_gloss"),
@@ -1775,6 +1795,7 @@ impl ConfigPath {
             ConfigPath::EscapePathEnvironmentMap => I18nKey::simple("history.param.path_environment_map"),
             ConfigPath::EscapePathEnvironmentRotation => I18nKey::simple("history.param.path_environment_rotation"),
             ConfigPath::EscapePathEnvironmentHorizon => I18nKey::simple("history.param.path_environment_horizon"),
+            ConfigPath::EscapePathEnvironmentStars => I18nKey::simple("history.param.path_environment_stars"),
             ConfigPath::EscapePathEnvironmentBackdrop => I18nKey::simple("history.param.path_environment_backdrop"),
             ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
@@ -3255,6 +3276,7 @@ impl ConfigPath {
             | ConfigPath::EscapePathEnvironmentMap
             | ConfigPath::EscapePathEnvironmentRotation
             | ConfigPath::EscapePathEnvironmentHorizon
+            | ConfigPath::EscapePathEnvironmentStars
             | ConfigPath::EscapePathEnvironmentBackdrop
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainCurve
@@ -3390,6 +3412,11 @@ impl ConfigPath {
             | ConfigPath::SimPathSky
             | ConfigPath::SimPathZenith
             | ConfigPath::SimPathStudio
+            | ConfigPath::SimPathEnvironmentMap
+            | ConfigPath::SimPathEnvironmentRotation
+            | ConfigPath::SimPathEnvironmentHorizon
+            | ConfigPath::SimPathEnvironmentStars
+            | ConfigPath::SimPathEnvironmentBackdrop
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
             // A bound grid's scale change resamples the live field
@@ -3702,6 +3729,11 @@ impl ConfigPath {
             ConfigPath::SimTerrainTargetLift => "Sim.Terrain.TargetLift".to_string(),
             ConfigPath::SimPathSamples => "Sim.Path.Samples".to_string(),
             ConfigPath::SimPathNoiseThreshold => "Sim.Path.NoiseThreshold".to_string(),
+            ConfigPath::SimPathEnvironmentMap => "Sim.Path.EnvironmentMap".to_string(),
+            ConfigPath::SimPathEnvironmentRotation => "Sim.Path.EnvironmentRotation".to_string(),
+            ConfigPath::SimPathEnvironmentHorizon => "Sim.Path.EnvironmentHorizon".to_string(),
+            ConfigPath::SimPathEnvironmentStars => "Sim.Path.EnvironmentStars".to_string(),
+            ConfigPath::SimPathEnvironmentBackdrop => "Sim.Path.EnvironmentBackdrop".to_string(),
             ConfigPath::SimPathBounces => "Sim.Path.Bounces".to_string(),
             ConfigPath::SimPathEnvironment => "Sim.Path.Environment".to_string(),
             ConfigPath::SimPathGloss => "Sim.Path.Gloss".to_string(),
@@ -3815,6 +3847,7 @@ impl ConfigPath {
             ConfigPath::EscapePathEnvironmentMap => "Escape.Path.EnvironmentMap".to_string(),
             ConfigPath::EscapePathEnvironmentRotation => "Escape.Path.EnvironmentRotation".to_string(),
             ConfigPath::EscapePathEnvironmentHorizon => "Escape.Path.EnvironmentHorizon".to_string(),
+            ConfigPath::EscapePathEnvironmentStars => "Escape.Path.EnvironmentStars".to_string(),
             ConfigPath::EscapePathEnvironmentBackdrop => "Escape.Path.EnvironmentBackdrop".to_string(),
             ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
@@ -4157,6 +4190,7 @@ impl ConfigPath {
                 ["Path", "EnvironmentMap"] => return Some(ConfigPath::EscapePathEnvironmentMap),
                 ["Path", "EnvironmentRotation"] => return Some(ConfigPath::EscapePathEnvironmentRotation),
                 ["Path", "EnvironmentHorizon"] => return Some(ConfigPath::EscapePathEnvironmentHorizon),
+                ["Path", "EnvironmentStars"] => return Some(ConfigPath::EscapePathEnvironmentStars),
                 ["Path", "EnvironmentBackdrop"] => return Some(ConfigPath::EscapePathEnvironmentBackdrop),
                 ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
@@ -4247,6 +4281,11 @@ impl ConfigPath {
                 ["Terrain", "TargetLift"] => return Some(ConfigPath::SimTerrainTargetLift),
                 ["Path", "Samples"] => return Some(ConfigPath::SimPathSamples),
                 ["Path", "NoiseThreshold"] => return Some(ConfigPath::SimPathNoiseThreshold),
+                ["Path", "EnvironmentMap"] => return Some(ConfigPath::SimPathEnvironmentMap),
+                ["Path", "EnvironmentRotation"] => return Some(ConfigPath::SimPathEnvironmentRotation),
+                ["Path", "EnvironmentHorizon"] => return Some(ConfigPath::SimPathEnvironmentHorizon),
+                ["Path", "EnvironmentStars"] => return Some(ConfigPath::SimPathEnvironmentStars),
+                ["Path", "EnvironmentBackdrop"] => return Some(ConfigPath::SimPathEnvironmentBackdrop),
                 ["Path", "Bounces"] => return Some(ConfigPath::SimPathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::SimPathEnvironment),
                 ["Path", "Gloss"] => return Some(ConfigPath::SimPathGloss),
@@ -4835,7 +4874,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimPathDenoise
         | ConfigPath::SimPathSky
         | ConfigPath::SimPathZenith
-        | ConfigPath::SimPathStudio => None,
+        | ConfigPath::SimPathStudio
+        | ConfigPath::SimPathEnvironmentMap
+        | ConfigPath::SimPathEnvironmentBackdrop => None,
 
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {
@@ -5037,6 +5078,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainTargetY
         | ConfigPath::SimTerrainTargetLift
         | ConfigPath::SimPathEnvironment
+        | ConfigPath::SimPathEnvironmentRotation
+        | ConfigPath::SimPathEnvironmentHorizon
+        | ConfigPath::SimPathEnvironmentStars
         | ConfigPath::SimPathGloss
         | ConfigPath::SimPathRoughness
         | ConfigPath::SimPathEmission
@@ -5092,6 +5136,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePathEnvironment
         | ConfigPath::EscapePathEnvironmentRotation
         | ConfigPath::EscapePathEnvironmentHorizon
+        | ConfigPath::EscapePathEnvironmentStars
         | ConfigPath::EscapePathGloss
         | ConfigPath::EscapePathRoughness
         | ConfigPath::EscapePathEmission
@@ -5947,6 +5992,7 @@ mod tests {
             (ConfigPath::EscapePathEnvironmentMap, ConfigValue::String("sunflowers".into()), false),
             (ConfigPath::EscapePathEnvironmentRotation, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapePathEnvironmentHorizon, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEnvironmentStars, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapePathEnvironmentBackdrop, ConfigValue::Bool(false), false),
             (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
@@ -6026,6 +6072,11 @@ mod tests {
             (ConfigPath::SimPathDenoise, ConfigValue::Bool(true), false),
             (ConfigPath::SimPathSky, ConfigValue::Bool(true), false),
             (ConfigPath::SimPathStudio, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathEnvironmentMap, ConfigValue::String("sunflowers".into()), false),
+            (ConfigPath::SimPathEnvironmentRotation, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEnvironmentHorizon, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEnvironmentStars, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEnvironmentBackdrop, ConfigValue::Bool(false), false),
             (ConfigPath::SimPathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
         ];
         let mut m = crate::config::ConfigManager::new(crate::config::FractalConfig::default());

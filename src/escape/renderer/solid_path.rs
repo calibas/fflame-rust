@@ -571,13 +571,13 @@ impl EscapeRenderer {
         let mut settings = path_core::path_settings(config, distance);
         // No sky's map loaded (this build cannot, or it failed): the
         // background lights, as it did.
-        if self.environment_in_use().is_none() {
+        if self.env.in_use().is_none() {
             settings.env = [0.0; 4];
         }
         // A sky's sun is a light the clamps follow (`path_settings` knows
         // the rig's alone): with the rig's lights it draws (an untouched
         // rig's stand-in gives way to it), as bright as their sum.
-        if let (Some(set), Some(sun)) = (self.environment_in_use(), self.environment.as_ref().and_then(|e| e.sun)) {
+        if let Some((sun, set)) = self.env.sun() {
             let rig = &config.solid_shading;
             let lights: f32 = if rig.rig_untouched() { 0.0 } else { rig.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum() };
             let brightest = lights + sun.power(set.scale).iter().cloned().fold(0.0f32, f32::max);
@@ -637,8 +637,7 @@ impl EscapeRenderer {
         let key = self.ensure_solid_path_pipeline(device, escape, def);
         let ifs_group = self.ifs_bind_group(device);
         let (env_view, env_sampler) = {
-            let (v, s) = self.environment_bindings(device);
-            (v.clone(), s.clone())
+            self.env.bindings(device)
         };
         let path = self.solid_path.as_mut().expect("made above");
         path.collect();
@@ -1874,6 +1873,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The procedural stars (`ifs_env_stars`): the Starfield sky seen past a
+    /// cube, looking up. Hundreds of stars in the lit tier's backdrop, each
+    /// a pixel or two -- at twice the resolution about as many pixels, not
+    /// four times (a star is a pixel across at any zoom); the path tracer
+    /// draws them too; turned with the sky they move; at brightness 0
+    /// none. `PT_STARS_PNG` writes the lit tier's picture to
+    /// `output/hdri/stars.png`.
+    #[test]
+    fn the_starfield_draws_sharp_stars() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.path.environment_map = "starfield".to_string();
+        c.escape.path.environment_stars = 1.0;
+        c.escape.cam_pitch = -0.5;
+        c.exposure = 1.0;
+        c.gamma = 1.0;
+        let lit = |c: &FractalConfig, w: u32, h: u32| {
+            let mut c = c.clone();
+            c.escape.solid_tier = RenderTier::Lit;
+            let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+            let mut r = renderer_for(&device, &c, w, h);
+            r.set_environment(&device, &queue, Some(set));
+            loop {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+                queue.submit(std::iter::once(enc.finish()));
+                if settled {
+                    break;
+                }
+            }
+            let out = read_texture(&device, &queue, &r.output_texture, w, h);
+            r.destroy();
+            out
+        };
+        // A star's pixel: covered by the backdrop, brighter than a faint
+        // star's tenth of white.
+        let stars = |px: &[[f32; 4]]| px.iter().filter(|p| p[3] >= 1.0 && p[0] + p[1] + p[2] > 0.1).count();
+        let small = lit(&c, 192, 128);
+        let large = lit(&c, 384, 256);
+        let (a, b) = (stars(&small), stars(&large));
+        println!("star pixels: {a} at 192x128, {b} at 384x256");
+        if std::env::var("PT_STARS_PNG").is_ok() {
+            let rgba: Vec<u8> = large.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8).into_iter().chain([255u8])).collect();
+            let _ = std::fs::create_dir_all("output/hdri");
+            image::save_buffer("output/hdri/stars.png", &rgba, 384, 256, image::ColorType::Rgba8).expect("write");
+        }
+        assert!(a > 100, "{a} star pixels");
+        assert!(b < a * 2 && b * 2 > a, "{a} at 192x128 against {b} at 384x256: a star is a pixel across at any zoom");
+        // Turned, they move.
+        let mut turned = c.clone();
+        turned.escape.path.environment_rotation = 20.0;
+        let moved = lit(&turned, 192, 128);
+        let same = small.iter().zip(&moved).filter(|(p, q)| p[0] + p[1] + p[2] > 0.1 && q[0] + q[1] + q[2] > 0.1).count();
+        println!("turned 20 degrees: {} star pixels, {same} where they were", stars(&moved));
+        assert!(same * 4 < a, "{same} of {a} star pixels stayed put");
+        // None at brightness 0.
+        let mut dark = c.clone();
+        dark.escape.path.environment_stars = 0.0;
+        assert_eq!(stars(&lit(&dark, 192, 128)), 0);
+        // The path tracer's backdrop has them too.
+        let mut p = c.clone();
+        p.escape.solid_tier = RenderTier::PathTraced;
+        let set = crate::escape::path_core::environment_settings(&p.escape.path, &p).expect("bundled");
+        let mut r = renderer_for(&device, &p, 192, 128);
+        r.set_environment(&device, &queue, Some(set));
+        r.render_solid_still(&device, &queue, &p, &palette, 16, || { wait(&device); true });
+        let traced = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), 192, 128);
+        r.destroy();
+        let lit_pt = traced.iter().filter(|q| q[3] >= 0.999 && q[0] + q[1] + q[2] > 0.1).count();
+        println!("path traced: {lit_pt} star pixels");
+        assert!(lit_pt * 3 > a && lit_pt < a * 3, "{lit_pt} against the lit tier's {a}");
     }
 
     /// Multiple importance sampling of the coat and the lights
