@@ -8294,14 +8294,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     // next free light, so both tiers shade and shadow it --
                     // in place of an untouched rig's stand-in key, the sky
                     // lighting the scene. Into the world from the sky's
-                    // frame (`ifs_studio_frame` inverted).
+                    // frame, the world's with z up (`pt_env_dir` inverted).
                     if let (Some(e), Some(set)) = (&self.environment, self.environment_settings) {
                         let untouched = self.solid_lighting.0.rig_untouched();
                         let mut n = if untouched { 0 } else { fdata[7][2] as usize };
                         if let Some(sun) = e.sun.filter(|_| n < 4) {
                             let s = super::environment::turned(sun.dir, set.rotation);
-                            let rows = if follow { [fdata[4], fdata[5], fdata[3].map(|v| -v)] } else { super::ifs::studio_basis() };
-                            let d: [f32; 3] = [0, 1, 2].map(|k| rows[0][k] * s[0] + rows[1][k] * s[1] - rows[2][k] * s[2]);
+                            let d = [s[0], -s[2], s[1]];
                             // The rig's intensity is the irradiance over pi
                             // (`pt_light`); its colour the share of each channel.
                             let e3 = sun.irradiance.map(|v| v * set.scale / std::f32::consts::PI);
