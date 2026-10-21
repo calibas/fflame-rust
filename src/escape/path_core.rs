@@ -83,7 +83,8 @@ pub struct PathSettings {
     pub display: [f32; 2],
     /// An HDRI sky ([`environment_settings`]): 1 when there is one, its
     /// turn about the up axis in turns, the accumulator's units a map
-    /// unit, and 1 when the camera sees it.
+    /// unit, and 1 when the camera sees it -- what restarts a sum; a pass
+    /// reads the sky from its `fdata` (`environment::env_fdata`).
     pub env: [f32; 4],
     /// Its horizon's elevation, radians (`EnvSettings::horizon`).
     pub env_horizon: f32,
@@ -191,7 +192,7 @@ pub fn path_settings_from(
 ) -> PathSettings {
     let ambient = path_ambient(&config.solid_shading);
     // An HDRI sky, or the studio's light, stands in for the sky's: the
-    // environment is the ambient alone, and the map (`pt_env`) or the
+    // environment is the ambient alone, and the map (`ifs_env`) or the
     // studio (`ifs_studio`) is added in the shader. The map over the
     // studio.
     let env_map = environment_settings(t, config);
@@ -347,7 +348,6 @@ pub(crate) struct PathParamsGpu {
     band: [u32; 4],
     sky: [f32; 4],
     list: [u32; 4],
-    envmap: [f32; 4],
     misc2: [f32; 4],
 }
 
@@ -382,8 +382,7 @@ impl PathParamsGpu {
             band: [band.0, band.1, u32::from(settings.denoise) | u32::from(settings.noise_threshold > 0.0) << 1, 0],
             sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
             list: [0; 4],
-            envmap: settings.env,
-            misc2: [settings.env_horizon, settings.clamp_indirect, 0.0, 0.0],
+            misc2: [settings.clamp_indirect, 0.0, 0.0, 0.0],
         }
     }
 
@@ -495,64 +494,19 @@ struct PtParams {
     // first, y of them -- a thread an entry, 64 a workgroup, the
     // workgroups in rows of `PT_LIST_ROW` -- in place of `band`'s rect.
     list: vec4<u32>,
-    // An HDRI sky (`pt_env`): x 1 when there is one, y its turn about the
-    // up axis in turns, z the accumulator's units a map unit, w 1 when
-    // the camera sees it.
-    envmap: vec4<f32>,
-    // x: an HDRI sky's horizon's elevation, radians (`pt_env`); y the
-    // most a sample's light from past its first surface brings
+    // x: the most a sample's light from past its first surface brings
     // (`pt_path`).
     misc2: vec4<f32>,
 };
-
-// The HDRI sky's map (docs/projects/hdri-environment.md): equirectangular,
-// its sun lifted out into the rig's lights (`escape::environment`); a 1x1
-// stand-in when there is none.
-@group(0) @binding(14) var pt_env_tex: texture_2d<f32>;
-@group(0) @binding(15) var pt_env_smp: sampler;
-
-// atan2, exact at a zero pair as IEEE has it (Metal's is not: CLAUDE.md),
-// for the map's azimuth -- straight up and down are a zero pair.
-fn pt_atan2(y: f32, x: f32) -> f32 {
-    if (y == 0.0 && x == 0.0) {
-        let pi = 3.14159265358979;
-        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
-        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
-    }
-    return atan2(y, x);
-}
-
-// A world direction in the HDRI sky's frame (x right, y up, -z ahead): the
-// world's, z up, whatever the lights follow -- a sky read in the studio's
-// frame (a camera's, at the solids' usual view) stood its horizon at the
-// camera's pitch, level only from that view's yaw.
-fn pt_env_dir(d: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(d.x, d.z, -d.y);
-}
-
-// The HDRI sky's radiance toward `s`, a direction in the sky's frame
-// (`pt_env_dir`): `environment::map_direction` inverted, turned. Sampled
-// at its finest level, so from any control flow.
-fn pt_env(s: vec3<f32>) -> vec3<f32> {
-    let u = pt_atan2(s.x, -s.z) / 6.283185307 + 0.5 - pt.envmap.y;
-    // The map's elevation for this one, the horizon raised to
-    // `misc2.x`: each side of it stretched to fit
-    // (`environment::warp_elevation`).
-    let half_pi = 1.570796327;
-    let h = pt.misc2.x;
-    let e = asin(clamp(s.y, -1.0, 1.0)) - h;
-    let em = e * half_pi / select(half_pi + h, half_pi - h, e >= 0.0);
-    let v = 0.5 - em / 3.141592654;
-    return textureSampleLevel(pt_env_tex, pt_env_smp, vec2<f32>(u, v), 0.0).rgb * pt.envmap.z;
-}
 
 // The environment's radiance from direction d: uniform, or the gradient
 // sky's -- the horizon's below and at the horizon, the zenith's
 // overhead, by the rig's own profile (`ifs_sky_t`).
 fn pt_sky(d: vec3<f32>) -> vec3<f32> {
-    // An HDRI sky: the ambient in `env`, and the map.
-    if (pt.envmap.x > 0.5) {
-        return pt.env.rgb + pt_env(pt_env_dir(d));
+    // An HDRI sky (`escape::environment`): the ambient in `env`, and the
+    // map.
+    if (ifs_env_on()) {
+        return pt.env.rgb + ifs_env(ifs_env_dir(d), 0.0);
     }
     // The studio (P4), in place of the sky's light: the ambient in
     // `env`, and the studio's radiance unblurred.
@@ -567,13 +521,10 @@ fn pt_sky(d: vec3<f32>) -> vec3<f32> {
 }
 
 // What a camera ray that meets nothing adds to the sum, (radiance times
-// coverage, coverage): an HDRI sky the camera sees, whole; the
-// gradient's zenith over the tonemap's background, at its share; nothing
-// for a flat sky.
+// coverage, coverage): what the rig's sky shows (`ifs_sky_seen`) -- an
+// HDRI sky the camera sees, whole; the gradient's zenith over the
+// tonemap's background, at its share; nothing for a flat sky.
 fn pt_sky_seen(d: vec3<f32>) -> vec4<f32> {
-    if (pt.envmap.w > 0.5) {
-        return vec4<f32>(pt_env(pt_env_dir(d)), 1.0);
-    }
     let s = ifs_sky_seen(d);
     return vec4<f32>(s.rgb * s.a, s.a);
 }
@@ -1265,7 +1216,7 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     // (`PathSettings::clamp_indirect`), before the specular share takes
     // its part of it.
     if (deep) {
-        radiance = direct + min(radiance - direct, vec3<f32>(pt.misc2.y));
+        radiance = direct + min(radiance - direct, vec3<f32>(pt.misc2.x));
     }
     if (spec_path) {
         pt_spec = pt_spec + (radiance - spec_from);
