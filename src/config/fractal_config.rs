@@ -1125,6 +1125,17 @@ pub struct SolidShadingSettings {
     /// colour's own strength. A material, like the coat: not the rig.
     #[serde(skip_serializing_if = "is_one_f32")]
     pub reflectance: f32,
+    /// How close a solid's rays leaving a surface -- its shadow rays in
+    /// every tier, the path tracer's bounces -- may pass the solid and
+    /// still count as hitting it, in multiples of the finest (a
+    /// ten-thousandth of the solid's ball). Coarser marches fewer steps
+    /// and is faster (path-tracing-research, *Found on the way*: at 3, 1.24
+    /// to 1.4 times; at 10, 1.5 to 2), at the price of fine shadows
+    /// darkened where a near miss now counts -- nothing on the Menger, the
+    /// most on the Mandelbulb, whose distance estimate is not a strict
+    /// bound. The UI offers 1, 3 and 10.
+    #[serde(skip_serializing_if = "is_one_f32")]
+    pub ray_tolerance: f32,
 }
 
 impl Default for SolidShadingSettings {
@@ -1152,6 +1163,7 @@ impl Default for SolidShadingSettings {
             glow: 0.0,
             metallic: 0.0,
             reflectance: 1.0,
+            ray_tolerance: 1.0,
         }
     }
 }
@@ -1173,6 +1185,7 @@ impl SolidShadingSettings {
             glow: d.glow,
             metallic: d.metallic,
             reflectance: d.reflectance,
+            ray_tolerance: d.ray_tolerance,
             lights_follow_camera: d.lights_follow_camera,
             ..self.clone()
         } == d

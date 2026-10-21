@@ -7078,6 +7078,10 @@ fn ifs_studio_level() -> f32 { return max(params.fdata[32].x, 0.0); }
 // the albedo every tier lights is the colour times this. Its complement
 // in the studio row's z, so a uniform that never wrote it reflects all.
 fn ifs_reflectance() -> f32 { return 1.0 - clamp(params.fdata[32].z, 0.0, 1.0); }
+// How close a ray leaving a surface may pass the solid and count as
+// hitting it, as a share of its ball: a ten-thousandth, times the ray
+// tolerance (`SolidShadingSettings::ray_tolerance`; fdata[32].w past 1).
+fn ifs_ray_tolerance() -> f32 { return 1.0e-4 * (1.0 + clamp(params.fdata[32].w, 0.0, 99.0)); }
 
 // A direction in the studio's frame: x right, y up, z toward the front.
 fn ifs_studio_frame(d: vec3<f32>) -> vec3<f32> {
@@ -8250,7 +8254,7 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32,
     // was made -- the geometric value is the smaller of the two and
     // nothing changes; where it is not, the hit test follows the bias
     // down and the ray can always clear its own surface.
-    let eps = max(min(ifs_radius() * 1e-4, bias * 0.1), 1e-30);
+    let eps = max(min(ifs_radius() * ifs_ray_tolerance(), bias * 0.1), 1e-30);
     var t = bias;
     var shade = 1.0;
     var i = 0u;
@@ -8831,7 +8835,7 @@ fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> f32 {
         return -1.0;
     }
     let e0 = pt_ifs_eps(travelled);
-    let eps = max(min(ifs_radius() * 1.0e-4, e0 * 0.4), 1.0e-30);
+    let eps = max(min(ifs_radius() * ifs_ray_tolerance(), e0 * 0.4), 1.0e-30);
     var t = max(e0 * 4.0, span.x);
     // The ball's exit or the light, whichever is nearer: one bound, so the
     // march's every step tests one number.

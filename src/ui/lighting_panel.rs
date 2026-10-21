@@ -249,7 +249,10 @@ fn shadows(ui: &mut egui::Ui, config_manager: &mut ConfigManager, config: &Fract
             }
         }
         #[cfg(feature = "engine-escape")]
-        ViewKind::Solid => solid_params(ui, config_manager, config, &["shadow", "shadow_sharpness"]),
+        ViewKind::Solid => {
+            solid_params(ui, config_manager, config, &["shadow", "shadow_sharpness"]);
+            ray_tolerance(ui, config_manager, config.solid_shading.ray_tolerance);
+        }
         #[cfg(feature = "terrain")]
         ViewKind::EscapeTerrain => {
             let t = &config.escape.terrain;
@@ -355,6 +358,31 @@ fn lit_tier_runs(config: &FractalConfig, view: ViewKind) -> bool {
         _ => return true,
     };
     tier != RenderTier::PathTraced
+}
+
+/// How close a solid's rays leaving a surface -- its shadows, the path
+/// tracer's bounces -- may pass it and count as a hit
+/// (`SolidShadingSettings::ray_tolerance`): Fine is the exact one,
+/// Medium and Coarse march fewer steps.
+#[cfg(feature = "engine-escape")]
+fn ray_tolerance(ui: &mut egui::Ui, config_manager: &mut ConfigManager, value: f32) {
+    const STEPS: [(f32, &str); 3] = [(1.0, "lighting.ray_tolerance_fine"), (3.0, "lighting.ray_tolerance_medium"), (10.0, "lighting.ray_tolerance_coarse")];
+    // The nearest step names a value a file holds between them.
+    let current = STEPS.iter().min_by(|a, b| (a.0 - value).abs().total_cmp(&(b.0 - value).abs())).map_or(STEPS[0].1, |s| s.1);
+    ui.horizontal(|ui| {
+        ui.label(t!("lighting.ray_tolerance"));
+        egui::ComboBox::from_id_salt("solid_ray_tolerance")
+            .selected_text(t!(current))
+            .show_ui(ui, |ui| {
+                for (v, key) in STEPS {
+                    if ui.selectable_label(current == key, t!(key)).clicked() && v != value {
+                        let _ = config_manager.update_param(ConfigPath::SolidRayTolerance, v.into());
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("lighting.ray_tolerance_tip"));
+    });
 }
 
 /// A solid's formula parameters named, from its def (its bounds and

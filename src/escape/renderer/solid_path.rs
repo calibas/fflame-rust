@@ -687,7 +687,12 @@ impl EscapeRenderer {
                         (Band { y0: 0, rows: h, x0: 0, cols: w, n, list: None }, f * n as f32)
                     }
                     None => {
-                        if path.band_rows == 0 {
+                        // A band not yet begun across is planned again when
+                        // the cap has fallen below it since (the path shift
+                        // halves it after a slow call or a lost device); one
+                        // part-way across finishes its rows, in tiles each
+                        // a share of the width.
+                        if path.band_rows == 0 || (path.col == 0 && path.band_rows > cap) {
                             path.band_rows = path.plan(path.row, frame_ms - spent, model_ms, cap).0;
                             path.col = 0;
                         }
@@ -2159,6 +2164,47 @@ mod tests {
         }
     }
 
+    /// The ray tolerance (`SolidShadingSettings::ray_tolerance`) reaches
+    /// both tiers' rays leaving a surface: at Coarse a near miss counts as
+    /// a hit, so the Mandelbulb -- whose distance estimate is not a strict
+    /// bound -- darkens in its fine shadows, lit and path traced, while
+    /// the Menger sponge, all flat faces, keeps its picture.
+    #[cfg(feature = "web-app")]
+    #[test]
+    fn the_ray_tolerance_reaches_both_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const N: u32 = 96;
+        let presets = crate::resources::load_presets_with_fallback();
+        let render = |c: &FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, N, N);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        let sum = |a: &[u8]| a.chunks(4).map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64).sum::<f64>();
+        for (scene, tier) in [("Mandelbulb", RenderTier::Lit), ("Mandelbulb", RenderTier::PathTraced), ("Menger Sponge", RenderTier::Lit), ("Menger Sponge", RenderTier::PathTraced)] {
+            let mut c = presets.iter().find(|c| c.flame.name == scene).expect("the preset").clone();
+            c.escape.solid_tier = tier;
+            c.escape.path.samples = 8;
+            c.escape.path.denoise = false;
+            let fine = render(&c);
+            c.solid_shading.ray_tolerance = 10.0;
+            let coarse = render(&c);
+            let apart = fine.chunks(4).zip(coarse.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2)).count();
+            let ratio = sum(&coarse) / sum(&fine).max(1.0);
+            println!("{scene} {tier:?}: {apart} of {} pixels apart, brightness {ratio:.4}", N * N);
+            // (Measured 2026-10-20: the Mandelbulb's lit tier 10 pixels
+            // apart, its path tracer 0.54% darker; the Menger's within
+            // 0.03%.)
+            match (scene, tier) {
+                ("Mandelbulb", RenderTier::Lit) => assert!(apart > 0, "the lit tier's shadows did not read the tolerance"),
+                ("Mandelbulb", _) => assert!(ratio < 0.999, "the path tracer did not darken: {ratio}"),
+                _ => assert!((ratio - 1.0).abs() < 0.003, "{scene} {tier:?} moved: {ratio}"),
+            }
+        }
+    }
+
     /// MEASUREMENT (escape-sim-followups, *the solid path tracer's speed*):
     /// a preset (`PT_PRESET`, the Menger Sponge) path traced at 320x180 --
     /// the time a sample takes as a still renders it, and how far
@@ -2412,7 +2458,7 @@ mod tests {
     /// - `cap`, `cap3`: that cap a thousandth, or three ten-thousandths,
     ///   of the solid's ball, not a ten-thousandth.
     fn cost_patch(name: &str) -> fn(String) -> String {
-        const LEAVE: &str = "let eps = max(min(ifs_radius() * 1.0e-4, e0 * 0.4), 1.0e-30);";
+        const LEAVE: &str = "let eps = max(min(ifs_radius() * ifs_ray_tolerance(), e0 * 0.4), 1.0e-30);";
         fn swap(s: String, from: &str, to: &str) -> String {
             assert_eq!(s.matches(from).count(), 1, "patch site: {from}");
             s.replace(from, to)
@@ -2430,7 +2476,7 @@ mod tests {
             )
         }
         fn wide(s: String) -> String {
-            swap(s, LEAVE, "let eps = max(min(ifs_radius() * 1.0e-4, e0 * 2.0), 1.0e-30);")
+            swap(s, LEAVE, "let eps = max(min(ifs_radius() * ifs_ray_tolerance(), e0 * 2.0), 1.0e-30);")
         }
         fn cap(s: String) -> String {
             swap(s, LEAVE, "let eps = max(min(ifs_radius() * 1.0e-3, e0 * 0.4), 1.0e-30);")
@@ -2864,9 +2910,12 @@ mod tests {
 
     /// No dispatch outgrows the model's band, whatever the measurements
     /// say: given all the time in the world, a 1080p solid still goes out
-    /// in bands -- rows times samples -- no larger than the cap, before
-    /// anything is measured and after. (Measurement alone once sent a
-    /// whole frame at 64 samples and lost the device.)
+    /// in bands -- rows times samples, times the share of the width a tile
+    /// across takes -- no larger than the cap, before anything is measured
+    /// and after. (Measurement alone once sent a whole frame at 64 samples
+    /// and lost the device.) The cap is the process's, which another test's
+    /// slow call can halve part-way: a band then begun across finishes its
+    /// rows in tiles.
     #[test]
     fn no_dispatch_outgrows_the_model() {
         let Some((device, queue)) = device() else {
@@ -2882,7 +2931,7 @@ mod tests {
             wait(&device);
         }
         let d = &r.solid_path.as_ref().expect("traced").dispatched;
-        let worst = d.iter().map(|&(units, cap, _)| units as f32 / cap as f32).fold(0.0f32, f32::max);
+        let worst = d.iter().map(|&(units, cap, cols)| units as f32 * cols as f32 / w as f32 / cap as f32).fold(0.0f32, f32::max);
         println!("{} dispatches, the largest {worst:.2} of its cap", d.len());
         assert!(d.len() > 1 && worst <= 1.0, "{worst}");
         r.destroy();
