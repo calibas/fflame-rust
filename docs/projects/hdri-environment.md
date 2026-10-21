@@ -68,6 +68,8 @@ app's download does not grow; the desktop install grows by those files.
 - **Config** (both path-tracing blocks, `escape.path` and
   `sim.terrain.path`; skip-if-default): `environment_map` (an id, empty
   for none), `environment_rotation` (degrees about the up axis),
+  `environment_horizon` (the elevation its horizon stands at, degrees;
+  added 2026-10-20 at the user's request, to align it with the fractal),
   `environment_backdrop` (the camera sees the sky, or the background as
   now). Sky light (`environment`) is its brightness. A file naming a sky
   this build does not have falls back to the background, with a notice.
@@ -157,8 +159,8 @@ seen.
 5. [ ] Procedural stars.
 6. [ ] Terrains (the world's frame) and the simulation terrain.
 7. [~] The UI: **built** -- the Sky section's HDRI sky (None and the
-   skies; a solid's only until terrains take one), Rotation, Show as
-   backdrop and the credit linked; the gradient and the studio rows hide
+   skies; a solid's only until terrains take one), Rotation, Horizon,
+   Show as backdrop and the credit linked; the gradient and the studio rows hide
    while a sky is chosen. Left: presets showing it.
 
 ## Decisions for the user

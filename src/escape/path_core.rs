@@ -85,6 +85,8 @@ pub struct PathSettings {
     /// turn about the up axis in turns, the accumulator's units a map
     /// unit, and 1 when the camera sees it.
     pub env: [f32; 4],
+    /// Its horizon's elevation, radians (`EnvSettings::horizon`).
+    pub env_horizon: f32,
 }
 
 /// An HDRI sky as a pass reads it: which, how far turned, how bright.
@@ -93,6 +95,10 @@ pub struct EnvSettings {
     pub def: &'static crate::escape::environment::EnvDef,
     /// Its turn about the up axis, in turns.
     pub rotation: f32,
+    /// The elevation its horizon stands at, radians: the sky above and
+    /// below stretched to fit, the zenith and the nadir fixed
+    /// (`environment::warp_elevation`).
+    pub horizon: f32,
     /// The accumulator's units a map unit: Sky light, times what shows the
     /// sky's median at its level (`EnvDef::level`) through the Linear tone
     /// map's exposure and gamma and the sRGB encoding -- a picked colour's
@@ -110,7 +116,8 @@ pub fn environment_settings(t: &crate::config::escape::PathTraceConfig, config: 
     let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
     let shown = def.level.clamp(0.0, 1.0).powf(2.2 * gamma) / config.exposure.max(1.0e-6);
     let rotation = if t.environment_rotation.is_finite() { t.environment_rotation / 360.0 } else { 0.0 };
-    Some(EnvSettings { def, rotation, scale: t.environment.max(0.0) * shown / def.median.max(1.0e-12), backdrop: t.environment_backdrop })
+    let horizon = if t.environment_horizon.is_finite() { t.environment_horizon.clamp(-80.0, 80.0).to_radians() } else { 0.0 };
+    Some(EnvSettings { def, rotation, horizon, scale: t.environment.max(0.0) * shown / def.median.max(1.0e-12), backdrop: t.environment_backdrop })
 }
 
 impl PathSettings {
@@ -146,6 +153,7 @@ impl Default for PathSettings {
             noise_threshold: 0.0,
             display: [1.0, 1.0 / 2.2],
             env: [0.0; 4],
+            env_horizon: 0.0,
         }
     }
 }
@@ -216,6 +224,7 @@ pub fn path_settings_from(
         noise_threshold: if t.noise_threshold.is_finite() { t.noise_threshold.max(0.0) } else { 0.0 },
         display: [config.exposure.max(1.0e-6), 1.0 / (2.2 * gamma)],
         env: env_map.map_or([0.0; 4], |e| [1.0, e.rotation, e.scale, if e.backdrop { 1.0 } else { 0.0 }]),
+        env_horizon: env_map.map_or(0.0, |e| e.horizon),
     }
 }
 
@@ -312,6 +321,7 @@ pub(crate) struct PathParamsGpu {
     sky: [f32; 4],
     list: [u32; 4],
     envmap: [f32; 4],
+    envmap2: [f32; 4],
 }
 
 impl PathParamsGpu {
@@ -346,6 +356,7 @@ impl PathParamsGpu {
             sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
             list: [0; 4],
             envmap: settings.env,
+            envmap2: [settings.env_horizon, 0.0, 0.0, 0.0],
         }
     }
 
@@ -461,6 +472,8 @@ struct PtParams {
     // up axis in turns, z the accumulator's units a map unit, w 1 when
     // the camera sees it.
     envmap: vec4<f32>,
+    // x: the elevation its horizon stands at, radians (`pt_env`).
+    envmap2: vec4<f32>,
 };
 
 // The HDRI sky's map (docs/projects/hdri-environment.md): equirectangular,
@@ -493,7 +506,14 @@ fn pt_env_dir(d: vec3<f32>) -> vec3<f32> {
 // at its finest level, so from any control flow.
 fn pt_env(s: vec3<f32>) -> vec3<f32> {
     let u = pt_atan2(s.x, -s.z) / 6.283185307 + 0.5 - pt.envmap.y;
-    let v = acos(clamp(s.y, -1.0, 1.0)) / 3.141592654;
+    // The map's elevation for this one, the horizon raised to
+    // `envmap2.x`: each side of it stretched to fit
+    // (`environment::warp_elevation`).
+    let half_pi = 1.570796327;
+    let h = pt.envmap2.x;
+    let e = asin(clamp(s.y, -1.0, 1.0)) - h;
+    let em = e * half_pi / select(half_pi + h, half_pi - h, e >= 0.0);
+    let v = 0.5 - em / 3.141592654;
     return textureSampleLevel(pt_env_tex, pt_env_smp, vec2<f32>(u, v), 0.0).rgb * pt.envmap.z;
 }
 

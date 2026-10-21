@@ -2217,6 +2217,7 @@ impl ConfigManager {
             ConfigPath::EscapePathStudio => Ok(config.escape.path.studio.into()),
             ConfigPath::EscapePathEnvironmentMap => Ok(ConfigValue::String(config.escape.path.environment_map.clone())),
             ConfigPath::EscapePathEnvironmentRotation => Ok(config.escape.path.environment_rotation.into()),
+            ConfigPath::EscapePathEnvironmentHorizon => Ok(config.escape.path.environment_horizon.into()),
             ConfigPath::EscapePathEnvironmentBackdrop => Ok(config.escape.path.environment_backdrop.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
@@ -3926,6 +3927,10 @@ impl ConfigManager {
             ConfigPath::EscapePathEnvironmentRotation => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.path.environment_rotation = if v.is_finite() { v.rem_euclid(360.0) } else { 0.0 };
+            }
+            ConfigPath::EscapePathEnvironmentHorizon => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment_horizon = if v.is_finite() { v.clamp(-80.0, 80.0) } else { 0.0 };
             }
             ConfigPath::EscapePathEnvironmentBackdrop => {
                 let v: bool = value.try_into()?;
