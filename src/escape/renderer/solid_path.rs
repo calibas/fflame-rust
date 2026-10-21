@@ -3281,6 +3281,48 @@ mod tests {
         }
     }
 
+    /// An HDRI sky's horizon is level from every side (user-reported
+    /// 2026-10-20: read in the studio's frame, a camera's at the solids'
+    /// usual view, it stood slanted about 45 degrees, level only at yaw 50
+    /// and -130). A sky bright above its horizon and dark below, seen as the
+    /// backdrop from four yaws: the horizon crosses the frame's left and
+    /// right edges at the same row -- a camera without bank sees a level
+    /// world's horizon as a level line.
+    #[test]
+    fn an_hdri_skys_horizon_is_level_from_every_side() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.path.environment_map = "sunflowers".to_string();
+        c.escape.path.bounces = 0;
+        c.escape.cam_pitch = 0.15;
+        let (mw, mh) = (64u32, 32u32);
+        let texels: Vec<[f32; 3]> = (0..mw * mh).map(|k| if k / mw < mh / 2 { [1.0; 3] } else { [0.01; 3] }).collect();
+        let map = crate::escape::environment::EnvMap { width: mw, height: mh, texels, sun: None, median: 1.0 };
+        for yaw in [0.0f32, 1.0, 2.2, -2.6] {
+            c.escape.cam_yaw = yaw;
+            let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+            let mut r = renderer_for(&device, &c, w, h);
+            r.set_environment_map_for_test(&device, &queue, &map, set);
+            r.solid_path = Some(SolidPath::new(&device, w, h));
+            while r.trace_solid(&device, &queue, &c, &palette, 1, 1.0e9) {
+                wait(&device);
+            }
+            let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            r.destroy();
+            let bright = set.scale * 0.5;
+            let horizon = |x: u32| (0..h).find(|&y| out[(y * w + x) as usize][1] < bright);
+            let (left, right) = (horizon(1), horizon(w - 2));
+            println!("yaw {yaw}: the horizon at row {left:?} on the left, {right:?} on the right");
+            let (l, r) = (left.expect("a horizon on the left"), right.expect("a horizon on the right"));
+            assert!(l.abs_diff(r) <= 1, "yaw {yaw}: rows {l} and {r}");
+        }
+    }
+
     /// The Sunflowers sun lifted out is the rig's: a cube with its lights
     /// off, under that sky, lit tier, has faces the sun lights -- brighter
     /// than under the same sky's map without its sun.

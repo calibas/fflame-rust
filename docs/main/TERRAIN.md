@@ -415,8 +415,9 @@ A photographed sky all round (docs/projects/hdri-environment.md):
 (`ENVIRONMENTS`) -- Poly Haven's Sunflowers (Pure Sky) and Rogland Clear
 Night, 1K equirectangular Radiance files, CC0. For a solid, for now:
 - **The path tracer** reads it as the sky's light (`pt_env`): in the
-  studio's frame (the fractal's, or the camera's when the lights follow
-  it), turned by Rotation, scaled so the sky's median shows at its
+  world's frame, z up, whatever the lights follow (`pt_env_dir`; read in
+  the studio's frame, a camera's at the solids' usual view, its horizon
+  stood at that camera's pitch), turned by Rotation, scaled so the sky's median shows at its
   catalog level (`EnvDef::level`) through the exposure and gamma -- a
   picked colour's `shown`, kept linear -- times Sky light. A camera ray
   that misses sees it (`pt_sky_seen`), unless Show as backdrop is off.

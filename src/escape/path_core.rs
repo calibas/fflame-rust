@@ -480,9 +480,17 @@ fn pt_atan2(y: f32, x: f32) -> f32 {
     return atan2(y, x);
 }
 
-// The HDRI sky's radiance toward `s`, a direction in the sky's frame (x
-// right, y up, -z ahead: `ifs_studio_frame`): `environment::map_direction`
-// inverted, turned. Sampled at its finest level, so from any control flow.
+// A world direction in the HDRI sky's frame (x right, y up, -z ahead): the
+// world's, z up, whatever the lights follow -- a sky read in the studio's
+// frame (a camera's, at the solids' usual view) stood its horizon at the
+// camera's pitch, level only from that view's yaw.
+fn pt_env_dir(d: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(d.x, d.z, -d.y);
+}
+
+// The HDRI sky's radiance toward `s`, a direction in the sky's frame
+// (`pt_env_dir`): `environment::map_direction` inverted, turned. Sampled
+// at its finest level, so from any control flow.
 fn pt_env(s: vec3<f32>) -> vec3<f32> {
     let u = pt_atan2(s.x, -s.z) / 6.283185307 + 0.5 - pt.envmap.y;
     let v = acos(clamp(s.y, -1.0, 1.0)) / 3.141592654;
@@ -495,7 +503,7 @@ fn pt_env(s: vec3<f32>) -> vec3<f32> {
 fn pt_sky(d: vec3<f32>) -> vec3<f32> {
     // An HDRI sky: the ambient in `env`, and the map.
     if (pt.envmap.x > 0.5) {
-        return pt.env.rgb + pt_env(ifs_studio_frame(d));
+        return pt.env.rgb + pt_env(pt_env_dir(d));
     }
     // The studio (P4), in place of the sky's light: the ambient in
     // `env`, and the studio's radiance unblurred.
@@ -515,7 +523,7 @@ fn pt_sky(d: vec3<f32>) -> vec3<f32> {
 // for a flat sky.
 fn pt_sky_seen(d: vec3<f32>) -> vec4<f32> {
     if (pt.envmap.w > 0.5) {
-        return vec4<f32>(pt_env(ifs_studio_frame(d)), 1.0);
+        return vec4<f32>(pt_env(pt_env_dir(d)), 1.0);
     }
     let s = ifs_sky_seen(d);
     return vec4<f32>(s.rgb * s.a, s.a);
