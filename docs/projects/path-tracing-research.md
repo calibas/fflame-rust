@@ -449,26 +449,30 @@ this order, each change measured before it lands:
 
 Measured while building V2, at the user's invitation to look for more
 ("if you find anything else worth researching or possible
-performance/quality wins"). Nothing here is built.
+performance/quality wins"). Built since: the ray tolerance.
 
-- **A ray leaving a surface is marched far finer than its pixel.** Its
-  hit tolerance is the smaller of 0.4 of its footprint and a
-  ten-thousandth of the solid's ball (`pt_ifs_leave`, as the walk's
-  shadows are), and at the presets' views the ball's term always binds --
-  two pixels of footprint in place of 0.4 (`wide`) changed nothing. Loosening that cap is
-  the largest saving found (`path_quality_against_a_reference` with
-  `PT_PATCH`, 1080p, 64 samples against 1024):
+- **A ray leaving a surface is marched far finer than its pixel** --
+  now a setting, **Ray tolerance** (built 2026-10-20 at the user's word,
+  TERRAIN.md *The UI*; Fine by default). Its hit tolerance is the smaller
+  of 0.4 of its footprint and a ten-thousandth of the solid's ball
+  (`pt_ifs_leave`, as the walk's shadows are), and at the presets' views
+  the ball's term always binds -- two pixels of footprint in place of 0.4
+  (`wide`) changed nothing. Loosening that cap is the largest saving
+  found (`path_quality_against_a_reference` with `PT_PATCH`, 1080p, 64
+  samples against 1024):
 
   | Cap | Mandelbulb | Mandelbox | Menger Sponge |
   |---|---|---|---|
-  | 3e-4 of the ball | 1.39x faster; RMSE 10.0% -> 14.5%, bias -1.1% | 1.24x; 2.8% -> 9.0%, -0.6% | 1.24x |
-  | 1e-3 of the ball | 1.89x; 10.0% -> 30.8%, -3.1% | 1.51x; 2.8% -> 19.7%, -1.4% | 1.59x |
+  | 3e-4 of the ball | 1.39x faster; RMSE 10.0% -> 14.5%, bias -1.1% | 1.24x; 2.8% -> 9.0%, -0.6% | 1.24x (640x360: 1.40x, RMSE 3.3% -> 3.3%) |
+  | 1e-3 of the ball | 1.89x; 10.0% -> 30.8%, -3.1% | 1.51x; 2.8% -> 19.7%, -1.4% | 1.59x (640x360: 2.03x, 3.3% -> 3.8%) |
 
   The cost: near-misses count as hits, so fine shadows and crevices
   darken -- most on the Mandelbulb, whose distance estimate is not a
-  strict bound. A quality-for-speed choice (a draft setting, or a cap per
-  solid by how exact its estimate is), **for your decision**; the lit
-  tier's shadows share the rule, so the tiers would part unless both move.
+  strict bound; the Menger's flat faces keep their picture. A tolerance
+  by the pixel instead was not tried: `ifs_shadow`'s comment records a
+  pixel-wide hit test erasing the Menger's sub-squares. The setting moves
+  both tiers' shadows, so Auto stays one picture (the lit tier changes
+  little: 10 pixels of 9216 at Coarse on the Mandelbulb).
 - **A hit's normal is not a cost.** Four distance calls at a
   tetrahedron's corners (`tetra`) in place of six were no faster, and
   moved the picture far more than a normal estimate should (RMSE 9% to

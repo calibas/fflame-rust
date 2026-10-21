@@ -8207,10 +8207,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     fdata[10][3] = self.solid_material[3];
                     // The studio, in the camera's frame when the lights
                     // follow it and fixed in the fractal's when not
-                    // (`ifs_studio_frame`, `ifs::studio_basis`), and the
-                    // reflectance's complement (`ifs_reflectance`).
+                    // (`ifs_studio_frame`, `ifs::studio_basis`), the
+                    // reflectance's complement (`ifs_reflectance`), and
+                    // the ray tolerance past the finest
+                    // (`ifs_ray_tolerance`).
                     let follow = self.solid_lighting.0.lights_follow_camera;
-                    fdata[32] = [self.solid_studio, if follow { 0.0 } else { 2.0 }, 1.0 - self.solid_material[4], 0.0];
+                    let tolerance = self.solid_lighting.0.ray_tolerance;
+                    let tolerance = if tolerance.is_finite() { tolerance.clamp(1.0, 100.0) } else { 1.0 };
+                    fdata[32] = [self.solid_studio, if follow { 0.0 } else { 2.0 }, 1.0 - self.solid_material[4], tolerance - 1.0];
                     if !follow {
                         fdata[33..36].copy_from_slice(&super::ifs::studio_basis());
                     }

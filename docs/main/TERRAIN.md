@@ -440,14 +440,30 @@ or a terrain:
   light*) and Intensity;
 - **Shading:** Shading Strength, Ambient, Occlusion Strength and
   Occlusion reach (a solid's formula parameter, a terrain's field);
-- **Shadows:** Shadows and Shadow sharpness (likewise);
+- **Shadows:** Shadows and Shadow sharpness (likewise); a solid's Ray
+  tolerance (below);
 - **Material:** Diffuse, Highlight, Highlight size, Gloss, Roughness,
   Glow;
 - **Surface** (an escape terrain): the surface texture, the lake's tint
   and roughness.
 
 The occlusion rows hide when the tier is Path traced: occlusion is the
-lit tier's stand-in for the sky the path tracer traces. An untouched
+lit tier's stand-in for the sky the path tracer traces.
+
+**Ray tolerance** (a solid's; `SolidShadingSettings::ray_tolerance`):
+how close a ray leaving a surface -- a shadow ray in either tier
+(`ifs_shadow`), the path tracer's bounces and shadows (`pt_ifs_leave`) --
+may pass the solid and count as hitting it. Its hit test is the smaller
+of a few pixels' share of the bias and the solid's ball times
+`ifs_ray_tolerance()`: a ten-thousandth at Fine (the default), three at
+Medium, ten at Coarse (rig `fdata[32].w`, the multiple less one). It is
+a fraction of the solid, not of a pixel, on purpose: a hit test at a
+pixel's width erased the Menger's sub-squares under grazing light
+(`ifs_shadow`'s comment). Measured (path-tracing-research, *Found on the
+way*): at 1080p Medium is 1.24-1.4 times faster, Coarse 1.5-1.9; the
+Menger keeps its picture (640x360: RMSE 3.3% at Fine and Medium, 3.8% at
+Coarse), the Mandelbulb's fine shadows darken (Coarse: 3.1%, its error
+10% to 31%). Fine is the pictures as they were, to the bit. An untouched
 rig's rows show what the first change makes it (UI.md). The View
 panel's Depth of Field shows the path tracer's Aperture and Focus, or a
 note that the lit tier draws everything sharp.

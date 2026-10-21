@@ -533,7 +533,7 @@ sections by the view:
 | Sky | sky colour (the background, as in Colors), gradient and zenith, Studio light, Sky light (not Lit, unless the studio is on) | the same | the same | -- |
 | Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only, once Shading strength is above 0 |
 | Shading | strength, ambient, occlusion strength and reach (not Path traced) | the same, the terrain's reach | the same, the terrain's reach | strength, ambient, SSAO strength and radius, normal smoothing, gap fill |
-| Shadows | Shadows, Shadow sharpness (formula parameters) | the terrain's | the terrain's | shadow maps' strength |
+| Shadows | Shadows, Shadow sharpness (formula parameters), Ray tolerance | the terrain's | the terrain's | shadow maps' strength |
 | Material | diffuse, highlight and its size, gloss, roughness, glow | the same | the same | the same, once lit |
 | Surface | -- | the surface texture; the lake's tint and roughness | -- | solid strength, surface thickness |
 

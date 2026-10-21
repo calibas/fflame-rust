@@ -264,6 +264,9 @@ pub enum ConfigPath {
     SolidMetallic,
     /// How much of its colour the material reflects.
     SolidReflectance,
+    /// A solid's rays leaving a surface: their hit tolerance, in
+    /// multiples of the finest.
+    SolidRayTolerance,
     SsaoStrength,
     SsaoRadius,
     NormalSmoothing,
@@ -1374,6 +1377,7 @@ impl Display for ConfigPath {
             ConfigPath::SolidGlow => write!(f, "Glow"),
             ConfigPath::SolidMetallic => write!(f, "Metallic"),
             ConfigPath::SolidReflectance => write!(f, "Reflectance"),
+            ConfigPath::SolidRayTolerance => write!(f, "Ray Tolerance"),
             ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
             ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
             ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
@@ -2108,6 +2112,7 @@ impl ConfigPath {
             ConfigPath::SolidGlow => I18nKey::simple("history.param.solid_glow"),
             ConfigPath::SolidMetallic => I18nKey::simple("history.param.solid_metallic"),
             ConfigPath::SolidReflectance => I18nKey::simple("history.param.solid_reflectance"),
+            ConfigPath::SolidRayTolerance => I18nKey::simple("history.param.solid_ray_tolerance"),
             ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
             ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
             ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
@@ -3020,6 +3025,7 @@ impl ConfigPath {
             | ConfigPath::SolidGlow
             | ConfigPath::SolidMetallic
             | ConfigPath::SolidReflectance
+            | ConfigPath::SolidRayTolerance
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
@@ -3858,6 +3864,7 @@ impl ConfigPath {
             ConfigPath::SolidGlow => "SolidGlow".to_string(),
             ConfigPath::SolidMetallic => "SolidMetallic".to_string(),
             ConfigPath::SolidReflectance => "SolidReflectance".to_string(),
+            ConfigPath::SolidRayTolerance => "SolidRayTolerance".to_string(),
             ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
             ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
             ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
@@ -4007,6 +4014,7 @@ impl ConfigPath {
             "SolidMetallic" => return Some(ConfigPath::SolidMetallic),
             "SolidLightsFollowCamera" => return Some(ConfigPath::SolidLightsFollowCamera),
             "SolidReflectance" => return Some(ConfigPath::SolidReflectance),
+            "SolidRayTolerance" => return Some(ConfigPath::SolidRayTolerance),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
             "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
@@ -4942,6 +4950,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::SolidLightEnabled { .. } | ConfigPath::SolidLightsFollowCamera => {
             json.as_bool().map(ConfigValue::Bool)
         }
+        // A render's precision, three steps apart: nothing between two to
+        // tween.
+        ConfigPath::SolidRayTolerance => None,
 
         // Effect parameters (float)
         ConfigPath::DensityEffectParam { .. }
@@ -5770,6 +5781,7 @@ mod tests {
             ConfigPath::SolidGlow,
             ConfigPath::SolidMetallic,
             ConfigPath::SolidReflectance,
+            ConfigPath::SolidRayTolerance,
             ConfigPath::SsaoStrength,
             ConfigPath::SsaoRadius,
             ConfigPath::NormalSmoothing,
