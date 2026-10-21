@@ -33,7 +33,9 @@ pub fn render_lighting_panel_content(ui: &mut egui::Ui, config_manager: &mut Con
             super::escape_panel::show_render_tier(ui, config_manager, &pt, &paths, tier_path.clone(), tier, id)
         });
         section(ui, "lighting.sky", &mut |ui| {
-            super::escape_panel::show_sky(ui, config_manager, config.background_color, &pt, &paths, tier)
+            // An HDRI sky: a solid's (terrains take none yet).
+            let mapped = view == ViewKind::Solid && environment(ui, config_manager, &pt);
+            super::escape_panel::show_sky(ui, config_manager, config.background_color, &pt, &paths, tier, mapped)
         });
     }
     section(ui, "lighting.lights", &mut |ui| lights(ui, config_manager, &config, view, &rig));
@@ -358,6 +360,46 @@ fn lit_tier_runs(config: &FractalConfig, view: ViewKind) -> bool {
         _ => return true,
     };
     tier != RenderTier::PathTraced
+}
+
+/// A solid's HDRI sky (docs/projects/hdri-environment.md): which bundled
+/// one, its turn, whether the camera sees it, and its credit. True when one
+/// is in force.
+#[cfg(feature = "engine-escape")]
+fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate::config::escape::PathTraceConfig) -> bool {
+    use crate::escape::environment::{get, ENVIRONMENTS};
+    let current = get(&pt.environment_map);
+    ui.horizontal(|ui| {
+        ui.label(t!("lighting.environment"));
+        let name = current.map_or_else(|| t!("lighting.environment_none").to_string(), |e| e.name.to_string());
+        egui::ComboBox::from_id_salt("solid_environment")
+            .selected_text(name)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), t!("lighting.environment_none")).clicked() && current.is_some() {
+                    let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentMap, ConfigValue::String(String::new()));
+                }
+                for e in ENVIRONMENTS {
+                    if ui.selectable_label(current.is_some_and(|c| c.id == e.id), e.name).clicked() && current.is_none_or(|c| c.id != e.id) {
+                        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentMap, ConfigValue::String(e.id.to_string()));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("lighting.environment_tip"));
+    });
+    let Some(def) = current else {
+        return false;
+    };
+    let mut turn = pt.environment_rotation;
+    if ui.add(super::VkbSlider::new(&mut turn, 0.0..=360.0).text(t!("lighting.environment_rotation").as_ref()).step_by(1.0)).on_hover_text(t!("lighting.environment_rotation_tip")).changed() {
+        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentRotation, turn.into());
+    }
+    let mut seen = pt.environment_backdrop;
+    if ui.checkbox(&mut seen, t!("lighting.environment_backdrop")).on_hover_text(t!("lighting.environment_backdrop_tip")).changed() {
+        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentBackdrop, seen.into());
+    }
+    ui.hyperlink_to(egui::RichText::new(t!("lighting.environment_credit", credit = def.credit)).small(), def.url);
+    true
 }
 
 /// How close a solid's rays leaving a surface -- its shadows, the path

@@ -81,6 +81,36 @@ pub struct PathSettings {
     /// the exposed value to -- its gamma and the sRGB encoding, `shown`
     /// inverted.
     pub display: [f32; 2],
+    /// An HDRI sky ([`environment_settings`]): 1 when there is one, its
+    /// turn about the up axis in turns, the accumulator's units a map
+    /// unit, and 1 when the camera sees it.
+    pub env: [f32; 4],
+}
+
+/// An HDRI sky as a pass reads it: which, how far turned, how bright.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnvSettings {
+    pub def: &'static crate::escape::environment::EnvDef,
+    /// Its turn about the up axis, in turns.
+    pub rotation: f32,
+    /// The accumulator's units a map unit: Sky light, times what shows the
+    /// sky's median at its level (`EnvDef::level`) through the Linear tone
+    /// map's exposure and gamma and the sRGB encoding -- a picked colour's
+    /// `shown`, kept linear so the sun and the sky keep their ratio.
+    pub scale: f32,
+    pub backdrop: bool,
+}
+
+/// The HDRI sky a path-tracing block names, when this build has it.
+pub fn environment_settings(t: &crate::config::escape::PathTraceConfig, config: &FractalConfig) -> Option<EnvSettings> {
+    if t.environment_map.is_empty() {
+        return None;
+    }
+    let def = crate::escape::environment::get(&t.environment_map)?;
+    let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
+    let shown = def.level.clamp(0.0, 1.0).powf(2.2 * gamma) / config.exposure.max(1.0e-6);
+    let rotation = if t.environment_rotation.is_finite() { t.environment_rotation / 360.0 } else { 0.0 };
+    Some(EnvSettings { def, rotation, scale: t.environment.max(0.0) * shown / def.median.max(1.0e-12), backdrop: t.environment_backdrop })
 }
 
 impl PathSettings {
@@ -115,6 +145,7 @@ impl Default for PathSettings {
             mis: true,
             noise_threshold: 0.0,
             display: [1.0, 1.0 / 2.2],
+            env: [0.0; 4],
         }
     }
 }
@@ -143,11 +174,13 @@ pub fn path_settings_from(
     lake_roughness: f32,
 ) -> PathSettings {
     let ambient = path_ambient(&config.solid_shading);
-    // The studio's light stands in for the sky's (the camera still sees
-    // the sky): the environment is the ambient alone, and the studio is
-    // added in the shader (`ifs_studio`).
-    let studio = studio_level(t, config);
-    let (env, sky) = if studio > 0.0 {
+    // An HDRI sky, or the studio's light, stands in for the sky's: the
+    // environment is the ambient alone, and the map (`pt_env`) or the
+    // studio (`ifs_studio`) is added in the shader. The map over the
+    // studio.
+    let env_map = environment_settings(t, config);
+    let studio = if env_map.is_some() { 0.0 } else { studio_level(t, config) };
+    let (env, sky) = if studio > 0.0 || env_map.is_some() {
         ([ambient; 3], None)
     } else {
         (
@@ -182,6 +215,7 @@ pub fn path_settings_from(
         mis: true,
         noise_threshold: if t.noise_threshold.is_finite() { t.noise_threshold.max(0.0) } else { 0.0 },
         display: [config.exposure.max(1.0e-6), 1.0 / (2.2 * gamma)],
+        env: env_map.map_or([0.0; 4], |e| [1.0, e.rotation, e.scale, if e.backdrop { 1.0 } else { 0.0 }]),
     }
 }
 
@@ -189,7 +223,8 @@ pub fn path_settings_from(
 /// a radiance of 1 reads white at any exposure, as the background's does
 /// (`shown` of white). 0 when the studio is off.
 pub fn studio_level(t: &crate::config::escape::PathTraceConfig, config: &FractalConfig) -> f32 {
-    if t.studio {
+    // An HDRI sky lights in its place.
+    if t.studio && environment_settings(t, config).is_none() {
         t.environment.max(0.0) / config.exposure.max(1.0e-6)
     } else {
         0.0
@@ -276,6 +311,7 @@ pub(crate) struct PathParamsGpu {
     band: [u32; 4],
     sky: [f32; 4],
     list: [u32; 4],
+    envmap: [f32; 4],
 }
 
 impl PathParamsGpu {
@@ -309,6 +345,7 @@ impl PathParamsGpu {
             band: [band.0, band.1, u32::from(settings.denoise) | u32::from(settings.noise_threshold > 0.0) << 1, 0],
             sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
             list: [0; 4],
+            envmap: settings.env,
         }
     }
 
@@ -420,12 +457,46 @@ struct PtParams {
     // first, y of them -- a thread an entry, 64 a workgroup, the
     // workgroups in rows of `PT_LIST_ROW` -- in place of `band`'s rect.
     list: vec4<u32>,
+    // An HDRI sky (`pt_env`): x 1 when there is one, y its turn about the
+    // up axis in turns, z the accumulator's units a map unit, w 1 when
+    // the camera sees it.
+    envmap: vec4<f32>,
 };
+
+// The HDRI sky's map (docs/projects/hdri-environment.md): equirectangular,
+// its sun lifted out into the rig's lights (`escape::environment`); a 1x1
+// stand-in when there is none.
+@group(0) @binding(14) var pt_env_tex: texture_2d<f32>;
+@group(0) @binding(15) var pt_env_smp: sampler;
+
+// atan2, exact at a zero pair as IEEE has it (Metal's is not: CLAUDE.md),
+// for the map's azimuth -- straight up and down are a zero pair.
+fn pt_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+// The HDRI sky's radiance toward `s`, a direction in the sky's frame (x
+// right, y up, -z ahead: `ifs_studio_frame`): `environment::map_direction`
+// inverted, turned. Sampled at its finest level, so from any control flow.
+fn pt_env(s: vec3<f32>) -> vec3<f32> {
+    let u = pt_atan2(s.x, -s.z) / 6.283185307 + 0.5 - pt.envmap.y;
+    let v = acos(clamp(s.y, -1.0, 1.0)) / 3.141592654;
+    return textureSampleLevel(pt_env_tex, pt_env_smp, vec2<f32>(u, v), 0.0).rgb * pt.envmap.z;
+}
 
 // The environment's radiance from direction d: uniform, or the gradient
 // sky's -- the horizon's below and at the horizon, the zenith's
 // overhead, by the rig's own profile (`ifs_sky_t`).
 fn pt_sky(d: vec3<f32>) -> vec3<f32> {
+    // An HDRI sky: the ambient in `env`, and the map.
+    if (pt.envmap.x > 0.5) {
+        return pt.env.rgb + pt_env(ifs_studio_frame(d));
+    }
     // The studio (P4), in place of the sky's light: the ambient in
     // `env`, and the studio's radiance unblurred.
     let studio = ifs_studio_level();
@@ -439,9 +510,13 @@ fn pt_sky(d: vec3<f32>) -> vec3<f32> {
 }
 
 // What a camera ray that meets nothing adds to the sum, (radiance times
-// coverage, coverage): the gradient's zenith over the tonemap's
-// background, at its share; nothing for a flat sky.
+// coverage, coverage): an HDRI sky the camera sees, whole; the
+// gradient's zenith over the tonemap's background, at its share; nothing
+// for a flat sky.
 fn pt_sky_seen(d: vec3<f32>) -> vec4<f32> {
+    if (pt.envmap.w > 0.5) {
+        return vec4<f32>(pt_env(ifs_studio_frame(d)), 1.0);
+    }
     let s = ifs_sky_seen(d);
     return vec4<f32>(s.rgb * s.a, s.a);
 }

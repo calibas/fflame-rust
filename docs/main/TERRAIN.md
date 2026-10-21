@@ -408,6 +408,31 @@ path tracer's settings. `lift_path_material` lifts them into
 `Sim.Path.Gloss`, and their roughness and emission) are aliases of
 `SolidGloss`, `SolidRoughness` and `SolidGlow`.
 
+### HDRI skies
+
+A photographed sky all round (docs/projects/hdri-environment.md):
+`escape::environment`, bundled in `assets/environments/` and named by id
+(`ENVIRONMENTS`) -- Poly Haven's Sunflowers (Pure Sky) and Rogland Clear
+Night, 1K equirectangular Radiance files, CC0. For a solid, for now:
+- **The path tracer** reads it as the sky's light (`pt_env`): in the
+  studio's frame (the fractal's, or the camera's when the lights follow
+  it), turned by Rotation, scaled so the sky's median shows at its
+  catalog level (`EnvDef::level`) through the exposure and gamma -- a
+  picked colour's `shown`, kept linear -- times Sky light. A camera ray
+  that misses sees it (`pt_sky_seen`), unless Show as backdrop is off.
+- **Its sun is lifted out of the map** (`EnvMap::sun`): the texels above
+  1000 times the sky's median, joined to the brightest, holding at least a
+  tenth of the light -- the Sunflowers sun is nine texels holding 47% of
+  it. It becomes the rig's next free light (directional, its irradiance
+  over pi), so both tiers shade and shadow it and polished reflections
+  meet it through the lights' own sampling; the map keeps the rest, the
+  sun's texels filled from around them. An untouched rig's stand-in key
+  gives way to it: the sky lights the scene.
+- **The lit tier** lights by the sun only, so far: the map's irradiance
+  and its reflections are the plan's next step, and until then Auto's
+  switch shows the difference.
+- The web build has no skies yet (its loading is a step of the plan).
+
 ### The walk and the relight
 
 The lit tier is two passes, as mode D's is:
@@ -512,6 +537,9 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 | `sky_gradient` | off | Gradient sky | the background alone, or a gradient to `zenith` overhead |
 | `zenith` | (0.22, 0.40, 0.72) | Zenith | the sky's colour straight up, picked in sRGB |
 | `studio` | off | Studio light | light from a photo studio in place of the sky's, Sky light its brightness (*The studio*) |
+| `environment_map` | none | HDRI sky | a bundled photographed sky that lights and is reflected, in place of the background's, the gradient's and the studio's light (*HDRI skies*; solids for now) |
+| `environment_rotation` | 0 | Rotation | the sky turned about the up axis, degrees |
+| `environment_backdrop` | on | Show as backdrop | the camera sees the sky (a skybox), or the background |
 
 `path_core::path_settings_from` turns the block into a pass's
 `PathSettings`:

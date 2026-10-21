@@ -2518,6 +2518,9 @@ pub struct TerrainRenderer {
     surface_image: Option<(String, Texture, TextureView)>,
     surface_dummy: (Texture, TextureView),
     surface_sampler: Sampler,
+    /// The path tracer's HDRI sky binding's stand-in (terrains take none
+    /// yet).
+    env_stand_in: (Texture, TextureView),
     surface_mip_layout: BindGroupLayout,
     surface_mip_pipeline: ComputePipeline,
     /// The nearest ground the view shows (`probe_main`, on the walk's
@@ -2688,6 +2691,15 @@ impl TerrainRenderer {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
+                // The path tracer's HDRI sky (`pt_env`): a stand-in until
+                // terrains take one (docs/projects/hdri-environment.md).
+                tex_filtered(14),
+                BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let surface_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2843,6 +2855,7 @@ impl TerrainRenderer {
             surface_image: None,
             surface_dummy,
             surface_sampler,
+            env_stand_in: super::environment::env_stand_in(device),
             surface_mip_layout,
             surface_mip_pipeline,
             probe_pipeline,
@@ -4208,7 +4221,9 @@ impl TerrainRenderer {
         self.path.poll(device);
         self.path.set_material(settings);
         let noise_threshold = if self.path.adaptive() { settings.noise_threshold } else { 0.0 };
-        let settings = &PathSettings { denoise: self.path.guided(), noise_threshold, ..*settings };
+        // No HDRI sky on a terrain yet (docs/projects/hdri-environment.md):
+        // the background lights it, as before.
+        let settings = &PathSettings { denoise: self.path.guided(), noise_threshold, env: [0.0; 4], ..*settings };
         let atlas = self.atlas.as_ref().expect("checked");
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
@@ -4247,6 +4262,8 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 11, resource: BindingResource::TextureView(&self.palette) },
                     BindGroupEntry { binding: 12, resource: BindingResource::TextureView(self.surface_view()) },
                     BindGroupEntry { binding: 13, resource: BindingResource::Sampler(&self.surface_sampler) },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&self.env_stand_in.1) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&self.surface_sampler) },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
