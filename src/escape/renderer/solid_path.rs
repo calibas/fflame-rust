@@ -237,6 +237,16 @@ impl SolidPath {
                         min_binding_size: None,
                     },
                 ),
+                // The HDRI sky's map and its sampler (`pt_env`).
+                entry(
+                    14,
+                    BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(15, BindingType::Sampler(SamplerBindingType::Filtering)),
             ],
         });
         let params = device.create_buffer(&BufferDescriptor {
@@ -559,6 +569,11 @@ impl EscapeRenderer {
         let eye = params.fdata[2];
         let distance = (eye[0] * eye[0] + eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
         let mut settings = path_core::path_settings(config, distance);
+        // No sky's map loaded (this build cannot, or it failed): the
+        // background lights, as it did.
+        if self.environment_in_use().is_none() {
+            settings.env = [0.0; 4];
+        }
         #[cfg(test)]
         {
             settings.seed = settings.seed.wrapping_add(self.path_seed_offset);
@@ -610,6 +625,10 @@ impl EscapeRenderer {
         }
         let key = self.ensure_solid_path_pipeline(device, escape, def);
         let ifs_group = self.ifs_bind_group(device);
+        let (env_view, env_sampler) = {
+            let (v, s) = self.environment_bindings(device);
+            (v.clone(), s.clone())
+        };
         let path = self.solid_path.as_mut().expect("made above");
         path.collect();
         #[cfg(test)]
@@ -728,6 +747,8 @@ impl EscapeRenderer {
                     BindGroupEntry { binding: 8, resource: path.sum.buffer().as_entire_binding() },
                     BindGroupEntry { binding: 9, resource: uniform.as_entire_binding() },
                     BindGroupEntry { binding: 10, resource: path.sum.guide_buffer().as_entire_binding() },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&env_view) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&env_sampler) },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Escape Solid Path") });
@@ -3184,6 +3205,120 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A cube under a sky alone (its lights off), path traced: with the
+    /// background's uniform light, or with an HDRI sky that `map` makes,
+    /// its settings the config's.
+    fn sky_lit_cube(device: &Device, queue: &Queue, map: Option<&crate::escape::environment::EnvMap>, backdrop: bool) -> Vec<[f32; 4]> {
+        let (w, h) = (48u32, 32u32);
+        let (_pt, palette) = white_palette(device, queue);
+        let mut c = cube_config();
+        c.solid_shading.lights[0].enabled = false;
+        c.solid_shading.shading_strength = 1.0;
+        c.solid_shading.ambient = 0.0;
+        c.background_color = [0.5, 0.6, 0.7];
+        c.escape.path.bounces = 2;
+        let mut r = renderer_for(device, &c, w, h);
+        if let Some(map) = map {
+            c.escape.path.environment_map = "sunflowers".to_string();
+            c.escape.path.environment_backdrop = backdrop;
+            let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+            r.set_environment_map_for_test(device, queue, map, set);
+        }
+        r.solid_path = Some(SolidPath::new(device, w, h));
+        while r.trace_solid(device, queue, &c, &palette, 16, 1.0e9) {
+            wait(device);
+        }
+        let out = read_texture(device, queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+        r.destroy();
+        out
+    }
+
+    /// A one-colour map as the uniform sky (docs/projects/hdri-environment.md):
+    /// an HDRI sky whose every texel is the uniform sky's radiance over the
+    /// map's scale lights the cube as the background's light does, to the
+    /// map's half-float rounding -- the lookup, its scale and the ambient
+    /// beside it are the sky's; and seen as the backdrop it covers the
+    /// pixels the cube does not, at that radiance.
+    #[test]
+    fn a_one_colour_sky_lights_as_the_uniform_sky() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut c = cube_config();
+        c.background_color = [0.5, 0.6, 0.7];
+        let uniform = crate::escape::path_core::path_settings(&c, 1.0).environment;
+        c.escape.path.environment_map = "sunflowers".to_string();
+        let scale = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled").scale;
+        let texel = uniform.map(|v| v / scale);
+        let map = crate::escape::environment::EnvMap { width: 8, height: 4, texels: vec![texel; 32], sun: None, median: 1.0 };
+        let plain = sky_lit_cube(&device, &queue, None, false);
+        let mapped = sky_lit_cube(&device, &queue, Some(&map), false);
+        let (mut worst, mut lit) = (0.0f32, 0usize);
+        for (a, b) in plain.iter().zip(&mapped) {
+            assert_eq!(a[3], b[3], "the coverage");
+            if a[3] > 0.0 {
+                lit += 1;
+                for k in 0..3 {
+                    worst = worst.max((a[k] - b[k]).abs() / a[k].abs().max(1.0e-3));
+                }
+            }
+        }
+        println!("{lit} covered pixels, the map's within {worst:e} of the uniform sky's");
+        assert!(lit > 100 && worst < 2.0e-3, "{worst}");
+        // The backdrop: every pixel covered, the sky's at its radiance.
+        let seen = sky_lit_cube(&device, &queue, Some(&map), true);
+        let expect = texel.map(|v| half::f16::from_f32(v).to_f32() * scale);
+        for (k, (p, q)) in plain.iter().zip(&seen).enumerate() {
+            assert_eq!(q[3], 1.0, "pixel {k}: the backdrop covers");
+            if p[3] == 0.0 {
+                for ch in 0..3 {
+                    assert!((q[ch] - expect[ch]).abs() <= 1.0e-5 * expect[ch].max(1.0), "pixel {k}: {q:?} against {expect:?}");
+                }
+            }
+        }
+    }
+
+    /// The Sunflowers sun lifted out is the rig's: a cube with its lights
+    /// off, under that sky, lit tier, has faces the sun lights -- brighter
+    /// than under the same sky's map without its sun.
+    #[test]
+    fn the_skys_sun_lights_the_lit_tier() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.solid_shading.lights[0].enabled = false;
+        c.solid_shading.shading_strength = 1.0;
+        c.escape.path.environment_map = "sunflowers".to_string();
+        c.escape.solid_tier = RenderTier::Lit;
+        let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+        let map = crate::escape::environment::load(set.def).expect("the bundled file");
+        assert!(map.sun.is_some());
+        let lit = |map: &crate::escape::environment::EnvMap| {
+            let mut r = renderer_for(&device, &c, w, h);
+            r.set_environment_map_for_test(&device, &queue, map, set);
+            loop {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+                queue.submit(std::iter::once(enc.finish()));
+                if settled {
+                    break;
+                }
+            }
+            let out = read_texture(&device, &queue, &r.output_texture, w, h);
+            r.destroy();
+            out.iter().map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>()
+        };
+        let with = lit(&map);
+        let without = lit(&crate::escape::environment::EnvMap { sun: None, ..map.clone() });
+        println!("lit tier: {with:.1} with the sun, {without:.1} without");
+        assert!(with > without * 1.2, "{with} against {without}");
     }
 
     /// A row no call has measured is priced at the model at least, not at

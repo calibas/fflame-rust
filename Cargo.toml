@@ -41,7 +41,7 @@ webbrowser = "1.0"
 # (API thumbnail upload) are the only codecs used. Default features
 # also pull AVIF encoding (ravif -> rav1e), which dragged in the old
 # rand 0.8 line — a dependency we neither use nor want to patch.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr"] }
 png = "0.17"
 futures = "0.3"
 quick-xml = "0.36"

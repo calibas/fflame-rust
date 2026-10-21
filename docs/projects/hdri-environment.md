@@ -97,24 +97,69 @@ app's download does not grow; the desktop install grows by those files.
   is scaled by the catalog's factor so Sky light 1 lights a white surface
   about as the backdrop shows the sky.
 
+## The user's choices (2026-10-20)
+
+"I found ones I like better" -- in `assets/environments/`, both Poly
+Haven CC0 at 1K (1024x512 Radiance RLE):
+- [**Sunflowers (Pure Sky)**](https://polyhaven.com/a/sunflowers_puresky):
+  midday, partly cloudy, high contrast, 1.48 MB.
+- [**Rogland Clear Night**](https://polyhaven.com/a/rogland_clear_night):
+  stars and the Milky Way, 1.69 MB -- not a pure sky: its lower half is
+  the photographed desert, a landscape below the horizon.
+
+The goals: "I want to be able to do high-quality reflections, doesn't
+have to be perfect mirror kind of quality, but I want shiny materials to
+look correct. And the other goal is skyboxes."
+
+**Their light, measured** (`scratchpad` decoder: luminance by solid
+angle):
+
+| Sky | peak | median | the brightest 0.01% of texels hold | the upper half holds |
+|---|---|---|---|---|
+| Sunflowers | 61 501 | 0.197 | **47.5%** of the light | 82% |
+| Rogland Clear Night | 37.2 | 0.080 | 0.4% (1% hold 5.6%) | 85% |
+
+So **the sun is half of Sunflowers' light in about 50 texels**: a bounce
+that does not aim at it finds it by chance, and half the light becomes
+fireflies; the lit tier, lighting by a smooth irradiance, would draw no
+sun shadow. Hence the sun is **lifted out of the map as a light** (as
+Blender's EEVEE does with a world's "sun threshold"): the texels above a
+threshold, gathered around the brightest, become a directional light --
+its direction their centroid, its colour and power their light, its
+angular size theirs -- **the rig's fifth light**, so both tiers shadow
+it with the code they have, and the map keeps the rest, smooth enough
+for the bounces' own sampling. Rogland needs nothing of the kind.
+
+**Skyboxes at 1K are soft** (about 170 of the map's pixels across a
+60-degree view). Good for light and glossy reflections; as a backdrop,
+the 4K versions would be sharper, kept only as a 4K JPEG (a few MB, made
+once by a script) -- for the user's decision once the 1K backdrop is
+seen.
+
 ## Order of work
 
-1. [ ] **Choose the skies** (the user): one cloudy -- overcast (soft,
-   shadowless, no sun to sample) or partly cloudy (a sun, sharper
-   shadows and highlights, needs step 3's sampling) -- and the night one
-   (Qwantani Night, or another of the five night pure skies). Credit
-   wording.
-2. [ ] Assets and loading: the catalog, the `hdr` feature, the 4K backdrop
-   script, desktop and web loading, the GPU texture (`rgba16float`).
-3. [ ] The path tracer: the map as the sky's light and the backdrop,
-   rotation; importance sampling or sun extraction, measured on a metal
-   and a glossy solid (`denoise_quality`'s cases under the new sky).
+1. [x] **Choose the skies**: Sunflowers and Rogland Clear Night (above).
+2. [~] Assets and loading: **built 2026-10-20 for the desktop** --
+   `escape::environment` (the catalog in code, `ENVIRONMENTS`; the `hdr`
+   feature; the sun lifted out; `rgba16float` on the GPU). Left: the web
+   build's loading (a binary fetch, as palette packs are fetched), and the
+   4K backdrop (for the user's decision).
+3. [~] The path tracer: **built for solids** -- the map as the sky's light
+   (`pt_env`, in the studio's frame, turned) and the backdrop
+   (`pt_sky_seen`); the sun in the rig's next free light (not a fifth: the
+   lit tier caches four shadow terms), in place of an untouched rig's
+   stand-in key. Tests: a one-colour map lights as the uniform sky to the
+   map's half-float rounding; the sun lights the lit tier; without a sky
+   the pictures are the same bits. Left: measuring metal and glossy
+   solids under the skies (`denoise_quality`'s cases).
 4. [ ] The lit tier: irradiance and prefiltered reflections, gated against
    the path tracer.
 5. [ ] Procedural stars.
 6. [ ] Terrains (the world's frame) and the simulation terrain.
-7. [ ] The UI (the Sky section: Background / Gradient / Studio / the
-   skies; rotation; show as backdrop), presets showing it, the docs.
+7. [~] The UI: **built** -- the Sky section's HDRI sky (None and the
+   skies; a solid's only until terrains take one), Rotation, Show as
+   backdrop and the credit linked; the gradient and the studio rows hide
+   while a sky is chosen. Left: presets showing it.
 
 ## Decisions for the user
 

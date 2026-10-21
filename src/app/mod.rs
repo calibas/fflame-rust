@@ -2906,6 +2906,13 @@ impl App {
                     if escape.set_solid_studio(crate::escape::path_core::studio_level(&final_config.escape.path, &final_config)) {
                         self.escape_dirty = true;
                     }
+                    if escape.set_environment(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        crate::escape::path_core::environment_settings(&final_config.escape.path, &final_config),
+                    ) {
+                        self.escape_dirty = true;
+                    }
                 }
                 // The interaction window. A mode-D walk at 1080p is
                 // hundreds of milliseconds; a drag that re-walks at

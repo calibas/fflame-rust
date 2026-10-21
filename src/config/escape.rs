@@ -2355,6 +2355,26 @@ pub struct PathTraceConfig {
     /// takes `samples`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub noise_threshold: f32,
+    /// An HDRI sky (docs/projects/hdri-environment.md): a bundled one's
+    /// id (`escape::environment::ENVIRONMENTS`), empty for none. It lights
+    /// the scene and is what reflections show, in place of the background,
+    /// the gradient and the studio; Sky light is its brightness.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub environment_map: String,
+    /// The sky turned about the up axis, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub environment_rotation: f32,
+    /// Whether the camera sees the sky (a skybox) or the background as
+    /// before; the sky lights the scene either way.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub environment_backdrop: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 /// A clear sky's blue overhead.
@@ -2397,6 +2417,9 @@ impl Default for PathTraceConfig {
             zenith: default_path_zenith(),
             studio: false,
             noise_threshold: 0.0,
+            environment_map: String::new(),
+            environment_rotation: 0.0,
+            environment_backdrop: true,
         }
     }
 }

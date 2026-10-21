@@ -44,6 +44,7 @@ pub mod surface;
 pub mod presets;
 pub mod twins;
 pub mod diag;
+pub mod environment;
 pub mod path_core;
 pub mod renderer;
 #[cfg(feature = "terrain")]

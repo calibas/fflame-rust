@@ -1561,6 +1561,7 @@ pub(crate) fn show_sky(
     pt: &crate::config::escape::PathTraceConfig,
     paths: &PathPaths,
     tier: crate::config::escape::RenderTier,
+    mapped: bool,
 ) {
     use crate::config::escape::RenderTier;
     ui.horizontal(|ui| {
@@ -1570,7 +1571,12 @@ pub(crate) fn show_sky(
         }
         ui.label(t!("lighting.sky_colour"));
     });
+    // An HDRI sky lights in place of the gradient and the studio.
+    let rows = !mapped;
     ui.horizontal(|ui| {
+        if !rows {
+            return;
+        }
         let mut on = pt.sky_gradient;
         if ui.checkbox(&mut on, t!("escape_panel.path_sky")).on_hover_text(t!("escape_panel.path_sky_tip")).changed() {
             let _ = config_manager.update_param(paths.sky.clone(), on.into());
@@ -1584,13 +1590,13 @@ pub(crate) fn show_sky(
         }
     });
     let mut studio = pt.studio;
-    if ui.checkbox(&mut studio, t!("lighting.studio")).on_hover_text(t!("lighting.studio_tip")).changed() {
+    if rows && ui.checkbox(&mut studio, t!("lighting.studio")).on_hover_text(t!("lighting.studio_tip")).changed() {
         let _ = config_manager.update_param(paths.studio.clone(), studio.into());
     }
     // The sky's light, which the lit tier does not trace -- but for the
-    // studio's, which it lights by too. The lens is the View panel's
-    // Depth of Field ([`show_path_dof`]).
-    if tier == RenderTier::Lit && !pt.studio {
+    // studio's and an HDRI sky's sun, which it lights by too. The lens is
+    // the View panel's Depth of Field ([`show_path_dof`]).
+    if tier == RenderTier::Lit && !pt.studio && !mapped {
         return;
     }
     ui.horizontal(|ui| {

@@ -585,6 +585,11 @@ pub enum ConfigPath {
     EscapePathZenith,
     /// The studio environment (3d-look-and-tools P4).
     EscapePathStudio,
+    /// An HDRI sky (docs/projects/hdri-environment.md): its id, its turn
+    /// about the up axis, whether the camera sees it.
+    EscapePathEnvironmentMap,
+    EscapePathEnvironmentRotation,
+    EscapePathEnvironmentBackdrop,
     EscapeTerrainInterior,
     /// How a count or a relief rises to its height, and the land
     /// inverted (docs/archive/terrain/terrain-height.md, H2).
@@ -1304,6 +1309,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapePathDenoise => write!(f, "Denoise"),
             ConfigPath::EscapePathSky => write!(f, "Gradient Sky"),
             ConfigPath::EscapePathStudio => write!(f, "Studio"),
+            ConfigPath::EscapePathEnvironmentMap => write!(f, "HDRI Sky"),
+            ConfigPath::EscapePathEnvironmentRotation => write!(f, "Sky Rotation"),
+            ConfigPath::EscapePathEnvironmentBackdrop => write!(f, "Sky as Backdrop"),
             ConfigPath::EscapePathZenith => write!(f, "Zenith"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainCurve => write!(f, "Terrain Curve"),
@@ -1762,6 +1770,9 @@ impl ConfigPath {
             ConfigPath::EscapePathDenoise => I18nKey::simple("history.param.escape_path_denoise"),
             ConfigPath::EscapePathSky => I18nKey::simple("history.param.escape_path_sky"),
             ConfigPath::EscapePathStudio => I18nKey::simple("history.param.path_studio"),
+            ConfigPath::EscapePathEnvironmentMap => I18nKey::simple("history.param.path_environment_map"),
+            ConfigPath::EscapePathEnvironmentRotation => I18nKey::simple("history.param.path_environment_rotation"),
+            ConfigPath::EscapePathEnvironmentBackdrop => I18nKey::simple("history.param.path_environment_backdrop"),
             ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainCurve => I18nKey::simple("history.param.escape_terrain_curve"),
@@ -3238,6 +3249,9 @@ impl ConfigPath {
             | ConfigPath::EscapePathSky
             | ConfigPath::EscapePathZenith
             | ConfigPath::EscapePathStudio
+            | ConfigPath::EscapePathEnvironmentMap
+            | ConfigPath::EscapePathEnvironmentRotation
+            | ConfigPath::EscapePathEnvironmentBackdrop
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainCurve
             | ConfigPath::EscapeTerrainInvert
@@ -3794,6 +3808,9 @@ impl ConfigPath {
             ConfigPath::EscapePathDenoise => "Escape.Path.Denoise".to_string(),
             ConfigPath::EscapePathSky => "Escape.Path.Sky".to_string(),
             ConfigPath::EscapePathStudio => "Escape.Path.Studio".to_string(),
+            ConfigPath::EscapePathEnvironmentMap => "Escape.Path.EnvironmentMap".to_string(),
+            ConfigPath::EscapePathEnvironmentRotation => "Escape.Path.EnvironmentRotation".to_string(),
+            ConfigPath::EscapePathEnvironmentBackdrop => "Escape.Path.EnvironmentBackdrop".to_string(),
             ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainCurve => "Escape.Terrain.Curve".to_string(),
@@ -4132,6 +4149,9 @@ impl ConfigPath {
                 ["Path", "Denoise"] => return Some(ConfigPath::EscapePathDenoise),
                 ["Path", "Sky"] => return Some(ConfigPath::EscapePathSky),
                 ["Path", "Studio"] => return Some(ConfigPath::EscapePathStudio),
+                ["Path", "EnvironmentMap"] => return Some(ConfigPath::EscapePathEnvironmentMap),
+                ["Path", "EnvironmentRotation"] => return Some(ConfigPath::EscapePathEnvironmentRotation),
+                ["Path", "EnvironmentBackdrop"] => return Some(ConfigPath::EscapePathEnvironmentBackdrop),
                 ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Curve"] => return Some(ConfigPath::EscapeTerrainCurve),
@@ -5064,6 +5084,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainHaze
         | ConfigPath::EscapeTerrainTargetLift
         | ConfigPath::EscapePathEnvironment
+        | ConfigPath::EscapePathEnvironmentRotation
         | ConfigPath::EscapePathGloss
         | ConfigPath::EscapePathRoughness
         | ConfigPath::EscapePathEmission
@@ -5110,6 +5131,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePathDenoise
         | ConfigPath::EscapePathSky
         | ConfigPath::EscapePathStudio
+        | ConfigPath::EscapePathEnvironmentMap
+        | ConfigPath::EscapePathEnvironmentBackdrop
         | ConfigPath::EscapeTerrainEnabled
         | ConfigPath::EscapeTerrainSource
         | ConfigPath::EscapeTerrainInterior
@@ -5914,6 +5937,9 @@ mod tests {
             (ConfigPath::EscapePathDenoise, ConfigValue::Bool(true), false),
             (ConfigPath::EscapePathSky, ConfigValue::Bool(true), false),
             (ConfigPath::EscapePathStudio, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathEnvironmentMap, ConfigValue::String("sunflowers".into()), false),
+            (ConfigPath::EscapePathEnvironmentRotation, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEnvironmentBackdrop, ConfigValue::Bool(false), false),
             (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainCurve, ConfigValue::String("mesa".into()), false),

@@ -2215,6 +2215,9 @@ impl ConfigManager {
             ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
             ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
             ConfigPath::EscapePathStudio => Ok(config.escape.path.studio.into()),
+            ConfigPath::EscapePathEnvironmentMap => Ok(ConfigValue::String(config.escape.path.environment_map.clone())),
+            ConfigPath::EscapePathEnvironmentRotation => Ok(config.escape.path.environment_rotation.into()),
+            ConfigPath::EscapePathEnvironmentBackdrop => Ok(config.escape.path.environment_backdrop.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainCurve => Ok(ConfigValue::String(config.escape.terrain.curve.as_str().to_string())),
@@ -3915,6 +3918,18 @@ impl ConfigManager {
             ConfigPath::EscapePathStudio => {
                 let v: bool = value.try_into()?;
                 self.current.escape.path.studio = v;
+            }
+            ConfigPath::EscapePathEnvironmentMap => {
+                let v: String = value.try_into()?;
+                self.current.escape.path.environment_map = v;
+            }
+            ConfigPath::EscapePathEnvironmentRotation => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment_rotation = if v.is_finite() { v.rem_euclid(360.0) } else { 0.0 };
+            }
+            ConfigPath::EscapePathEnvironmentBackdrop => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.environment_backdrop = v;
             }
             ConfigPath::EscapePathZenith => {
                 let v: [f32; 3] = value.try_into()?;
