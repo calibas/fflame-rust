@@ -116,7 +116,10 @@ pub fn render_escape_content(
     // which registry resolves the name routes everything downstream.
     let field = crate::escape::fields::get_field(&esc.formula);
     let ifs_def = crate::escape::ifs::get_ifs(&esc.formula);
-    let formula = crate::escape::get_formula(&esc.formula);
+    // A mode-A formula only when the name is neither a field nor a solid:
+    // looked up for those, it logged "Unknown escape formula" on every
+    // draw and highlighted the Mandelbrot it falls back to.
+    let formula = (field.is_none() && ifs_def.is_none()).then(|| crate::escape::get_formula(&esc.formula));
     let selected_label = formula_display_name(&esc.formula);
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
@@ -126,7 +129,7 @@ pub fn render_escape_content(
                 for f in crate::escape::FORMULAS {
                     if ui
                         .selectable_label(
-                            field.is_none() && f.name == formula.name,
+                            formula.is_some_and(|m| m.name == f.name),
                             f.display_name,
                         )
                         .clicked()
@@ -328,9 +331,9 @@ pub fn render_escape_content(
     let (formula_params, owner) = match (ifs_def, field) {
         (Some(d), _) => (d.parameters, d.name),
         (None, Some(f)) => (f.parameters, f.name),
-        (None, None) => (formula.parameters, formula.name),
+        (None, None) => formula.map_or((&[][..], ""), |m| (m.parameters, m.name)),
     };
-    let program = formula.has_feature(crate::escape::FormulaFeature::Program);
+    let program = formula.is_some_and(|m| m.has_feature(crate::escape::FormulaFeature::Program));
     for p in formula_params {
         // A compiled formula's `bailout` parameter is the bailout control
         // below (the renderer binds it), so it has no slider of its own.
