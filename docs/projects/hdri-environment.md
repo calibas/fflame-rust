@@ -146,22 +146,42 @@ seen.
    feature; the sun lifted out; `rgba16float` on the GPU). Left: the web
    build's loading (a binary fetch, as palette packs are fetched), and the
    4K backdrop (for the user's decision).
-3. [~] The path tracer: **built for solids** -- the map as the sky's light
+3. [x] The path tracer: **built for solids** -- the map as the sky's light
    (`pt_env`, in the studio's frame, turned) and the backdrop
    (`pt_sky_seen`); the sun in the rig's next free light (not a fifth: the
    lit tier caches four shadow terms), in place of an untouched rig's
    stand-in key. Tests: a one-colour map lights as the uniform sky to the
    map's half-float rounding; the sun lights the lit tier; without a sky
-   the pictures are the same bits. Left: measuring metal and glossy
-   solids under the skies (`denoise_quality`'s cases).
-4. [ ] The lit tier: irradiance and prefiltered reflections, gated against
-   the path tracer.
-5. [ ] Procedural stars.
-6. [ ] Terrains (the world's frame) and the simulation terrain.
+   the pictures are the same bits. (Measuring metal and glossy solids
+   under the skies became the speckle hunt: a polished metal's second
+   surface's glints, clamped apart since; PR.md section 35.)
+4. [x] The lit tier: **built 2026-10-21** -- the irradiance as nine
+   spherical harmonics, the reflections from the texture's mips (GGX
+   levels, the split sum), the backdrop; one text for both tiers
+   (`ENV_WGSL`). Gated against the path tracer: a convex cube's diffuse
+   within 1%, metals within 10%; the Mandelbulb 2-11% dark where its
+   occlusion estimate stands in (TERRAIN.md, *HDRI skies*).
+5. [x] Procedural stars: **built 2026-10-21** -- Stars in the panel (any
+   sky), and Starfield, stars alone; a pixel across at any zoom, in the
+   backdrop and polished reflections; a night sky brings them out.
+6. [x] Terrains: **built 2026-10-21**, the escape terrain and the
+   simulation's, both tiers (the world's frame is the solids' since the
+   horizon fix); a plane's diffuse within 1% of the path tracer's, metal
+   hills 9%.
 7. [~] The UI: **built** -- the Sky section's HDRI sky (None and the
    skies; a solid's only until terrains take one), Rotation, Horizon,
    Show as backdrop and the credit linked; the gradient and the studio rows hide
    while a sky is chosen. Left: presets showing it.
+
+## Decided 2026-10-21
+
+- **An untouched rig keeps its stand-in key under a sky without a sun**
+  (a night sky, Starfield): giving it up to the sky lit nothing.
+- **Procedural stars**: the user's choice ("I would like procedural
+  stars").
+- **The web build and the 4K question** wait on the user's plan for an
+  online library (Poly Haven and Fractals for All):
+  docs/projects/online-assets.md.
 
 ## Decisions for the user
 
