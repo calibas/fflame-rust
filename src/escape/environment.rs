@@ -321,6 +321,32 @@ pub fn env_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     })
 }
 
+/// The world's elevation (radians) a map's elevation `em` shows at, the
+/// map's horizon raised to `horizon`: above it the sky stretched from
+/// `[0, pi/2]` to `[horizon, pi/2]`, below likewise -- the zenith and the
+/// nadir fixed. `pt_env` reads the map by the inverse.
+pub fn warp_elevation(em: f32, horizon: f32) -> f32 {
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    if em >= 0.0 {
+        horizon + em * (half_pi - horizon) / half_pi
+    } else {
+        horizon + em * (half_pi + horizon) / half_pi
+    }
+}
+
+/// A sun in the map's frame, its horizon raised to `horizon` (radians:
+/// [`warp_elevation`]), the azimuth kept.
+pub fn raised(dir: [f32; 3], horizon: f32) -> [f32; 3] {
+    let em = dir[1].clamp(-1.0, 1.0).asin();
+    let e = warp_elevation(em, horizon);
+    let flat = (dir[0] * dir[0] + dir[2] * dir[2]).sqrt();
+    let (s, c) = e.sin_cos();
+    if flat <= 1.0e-12 {
+        return [0.0, s.signum(), 0.0];
+    }
+    [dir[0] / flat * c, s, dir[2] / flat * c]
+}
+
 /// A sun in the map's frame, turned by `rotation` (turns, about y: the
 /// map's azimuth grows by it, as `pt_env` reads it).
 pub fn turned(dir: [f32; 3], rotation: f32) -> [f32; 3] {
@@ -412,6 +438,25 @@ mod tests {
     fn the_night_sky_keeps_its_stars() {
         let map = bundled("rogland_night");
         assert!(map.sun.is_none(), "{:?}", map.sun);
+    }
+
+    /// The horizon's warp: the map's horizon at the elevation asked, its
+    /// zenith and nadir where they were, monotone between.
+    #[test]
+    fn the_horizon_is_raised_and_the_poles_stay() {
+        let h = 0.3f32;
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        assert!((warp_elevation(0.0, h) - h).abs() < 1.0e-6);
+        assert!((warp_elevation(half_pi, h) - half_pi).abs() < 1.0e-6);
+        assert!((warp_elevation(-half_pi, h) + half_pi).abs() < 1.0e-6);
+        let mut last = -half_pi;
+        for k in 0..=100 {
+            let e = warp_elevation(-half_pi + std::f32::consts::PI * k as f32 / 100.0, h);
+            assert!(e >= last - 1.0e-6);
+            last = e;
+        }
+        let up = raised(map_direction(0.6, 0.5), h);
+        assert!((up[1].asin() - h).abs() < 1.0e-5, "a horizon sun stands at the horizon: {up:?}");
     }
 
     /// `map_direction` is the equirectangular convention the shaders invert:

@@ -2364,6 +2364,11 @@ pub struct PathTraceConfig {
     /// The sky turned about the up axis, in degrees.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub environment_rotation: f32,
+    /// The elevation the sky's horizon stands at, in degrees (the sky above
+    /// it and below it stretched to fit, the zenith and the nadir where
+    /// they were): to set a horizon against the solid.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub environment_horizon: f32,
     /// Whether the camera sees the sky (a skybox) or the background as
     /// before; the sky lights the scene either way.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -2419,6 +2424,7 @@ impl Default for PathTraceConfig {
             noise_threshold: 0.0,
             environment_map: String::new(),
             environment_rotation: 0.0,
+            environment_horizon: 0.0,
             environment_backdrop: true,
         }
     }

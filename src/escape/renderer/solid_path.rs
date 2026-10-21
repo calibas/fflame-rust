@@ -3323,6 +3323,51 @@ mod tests {
         }
     }
 
+    /// The sky's horizon raised and lowered (user request 2026-10-20: "raise
+    /// /lower the apparent skybox ... align the horizon with the fractal"):
+    /// the half-bright, half-dark sky of the test above, its horizon set to
+    /// -8, 0 and 8 degrees -- the line in the picture moves down and up with
+    /// it, and stays level from two yaws.
+    #[test]
+    fn the_skys_horizon_rises_and_stays_level() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 64u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut c = cube_config();
+        c.escape.path.environment_map = "sunflowers".to_string();
+        c.escape.path.bounces = 0;
+        c.escape.cam_pitch = 0.15;
+        let (mw, mh) = (64u32, 32u32);
+        let texels: Vec<[f32; 3]> = (0..mw * mh).map(|k| if k / mw < mh / 2 { [1.0; 3] } else { [0.01; 3] }).collect();
+        let map = crate::escape::environment::EnvMap { width: mw, height: mh, texels, sun: None, median: 1.0 };
+        for yaw in [0.4f32, -2.0] {
+            c.escape.cam_yaw = yaw;
+            let mut rows = Vec::new();
+            for horizon in [-8.0f32, 0.0, 8.0] {
+                c.escape.path.environment_horizon = horizon;
+                let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+                let mut r = renderer_for(&device, &c, w, h);
+                r.set_environment_map_for_test(&device, &queue, &map, set);
+                r.solid_path = Some(SolidPath::new(&device, w, h));
+                while r.trace_solid(&device, &queue, &c, &palette, 1, 1.0e9) {
+                    wait(&device);
+                }
+                let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                r.destroy();
+                let bright = set.scale * 0.5;
+                let line = |x: u32| (0..h).find(|&y| out[(y * w + x) as usize][1] < bright).expect("a horizon in frame");
+                let (l, r) = (line(1), line(w - 2));
+                println!("yaw {yaw}, horizon {horizon}: rows {l} and {r}");
+                assert!(l.abs_diff(r) <= 1, "yaw {yaw}, horizon {horizon}: rows {l} and {r}");
+                rows.push(l);
+            }
+            assert!(rows[0] > rows[1] + 2 && rows[1] > rows[2] + 2, "yaw {yaw}: the line moves with the horizon: {rows:?}");
+        }
+    }
+
     /// The Sunflowers sun lifted out is the rig's: a cube with its lights
     /// off, under that sky, lit tier, has faces the sun lights -- brighter
     /// than under the same sky's map without its sun.

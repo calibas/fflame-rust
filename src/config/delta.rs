@@ -589,6 +589,7 @@ pub enum ConfigPath {
     /// about the up axis, whether the camera sees it.
     EscapePathEnvironmentMap,
     EscapePathEnvironmentRotation,
+    EscapePathEnvironmentHorizon,
     EscapePathEnvironmentBackdrop,
     EscapeTerrainInterior,
     /// How a count or a relief rises to its height, and the land
@@ -1311,6 +1312,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapePathStudio => write!(f, "Studio"),
             ConfigPath::EscapePathEnvironmentMap => write!(f, "HDRI Sky"),
             ConfigPath::EscapePathEnvironmentRotation => write!(f, "Sky Rotation"),
+            ConfigPath::EscapePathEnvironmentHorizon => write!(f, "Sky Horizon"),
             ConfigPath::EscapePathEnvironmentBackdrop => write!(f, "Sky as Backdrop"),
             ConfigPath::EscapePathZenith => write!(f, "Zenith"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
@@ -1772,6 +1774,7 @@ impl ConfigPath {
             ConfigPath::EscapePathStudio => I18nKey::simple("history.param.path_studio"),
             ConfigPath::EscapePathEnvironmentMap => I18nKey::simple("history.param.path_environment_map"),
             ConfigPath::EscapePathEnvironmentRotation => I18nKey::simple("history.param.path_environment_rotation"),
+            ConfigPath::EscapePathEnvironmentHorizon => I18nKey::simple("history.param.path_environment_horizon"),
             ConfigPath::EscapePathEnvironmentBackdrop => I18nKey::simple("history.param.path_environment_backdrop"),
             ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
@@ -3251,6 +3254,7 @@ impl ConfigPath {
             | ConfigPath::EscapePathStudio
             | ConfigPath::EscapePathEnvironmentMap
             | ConfigPath::EscapePathEnvironmentRotation
+            | ConfigPath::EscapePathEnvironmentHorizon
             | ConfigPath::EscapePathEnvironmentBackdrop
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainCurve
@@ -3810,6 +3814,7 @@ impl ConfigPath {
             ConfigPath::EscapePathStudio => "Escape.Path.Studio".to_string(),
             ConfigPath::EscapePathEnvironmentMap => "Escape.Path.EnvironmentMap".to_string(),
             ConfigPath::EscapePathEnvironmentRotation => "Escape.Path.EnvironmentRotation".to_string(),
+            ConfigPath::EscapePathEnvironmentHorizon => "Escape.Path.EnvironmentHorizon".to_string(),
             ConfigPath::EscapePathEnvironmentBackdrop => "Escape.Path.EnvironmentBackdrop".to_string(),
             ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
@@ -4151,6 +4156,7 @@ impl ConfigPath {
                 ["Path", "Studio"] => return Some(ConfigPath::EscapePathStudio),
                 ["Path", "EnvironmentMap"] => return Some(ConfigPath::EscapePathEnvironmentMap),
                 ["Path", "EnvironmentRotation"] => return Some(ConfigPath::EscapePathEnvironmentRotation),
+                ["Path", "EnvironmentHorizon"] => return Some(ConfigPath::EscapePathEnvironmentHorizon),
                 ["Path", "EnvironmentBackdrop"] => return Some(ConfigPath::EscapePathEnvironmentBackdrop),
                 ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
@@ -5085,6 +5091,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainTargetLift
         | ConfigPath::EscapePathEnvironment
         | ConfigPath::EscapePathEnvironmentRotation
+        | ConfigPath::EscapePathEnvironmentHorizon
         | ConfigPath::EscapePathGloss
         | ConfigPath::EscapePathRoughness
         | ConfigPath::EscapePathEmission
@@ -5939,6 +5946,7 @@ mod tests {
             (ConfigPath::EscapePathStudio, ConfigValue::Bool(true), false),
             (ConfigPath::EscapePathEnvironmentMap, ConfigValue::String("sunflowers".into()), false),
             (ConfigPath::EscapePathEnvironmentRotation, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEnvironmentHorizon, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapePathEnvironmentBackdrop, ConfigValue::Bool(false), false),
             (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),

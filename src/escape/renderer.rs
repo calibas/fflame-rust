@@ -4422,7 +4422,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // light, and where it stands.
         let mut k = format!("{}", s.rig_untouched());
         if let (Some(e), Some(set)) = (&self.environment, self.environment_settings) {
-            k.push_str(&format!("|env:{}:{}:{}", e.id, e.sun.is_some(), set.rotation));
+            k.push_str(&format!("|env:{}:{}:{}:{}", e.id, e.sun.is_some(), set.rotation, set.horizon));
         }
         for l in &s.lights {
             k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
@@ -8299,7 +8299,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         let untouched = self.solid_lighting.0.rig_untouched();
                         let mut n = if untouched { 0 } else { fdata[7][2] as usize };
                         if let Some(sun) = e.sun.filter(|_| n < 4) {
-                            let s = super::environment::turned(sun.dir, set.rotation);
+                            let s = super::environment::turned(super::environment::raised(sun.dir, set.horizon), set.rotation);
                             let d = [s[0], -s[2], s[1]];
                             // The rig's intensity is the irradiance over pi
                             // (`pt_light`); its colour the share of each channel.

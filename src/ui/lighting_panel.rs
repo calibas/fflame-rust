@@ -394,6 +394,10 @@ fn environment(ui: &mut egui::Ui, config_manager: &mut ConfigManager, pt: &crate
     if ui.add(super::VkbSlider::new(&mut turn, 0.0..=360.0).text(t!("lighting.environment_rotation").as_ref()).step_by(1.0)).on_hover_text(t!("lighting.environment_rotation_tip")).changed() {
         let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentRotation, turn.into());
     }
+    let mut horizon = pt.environment_horizon;
+    if ui.add(super::VkbSlider::new(&mut horizon, -45.0..=45.0).text(t!("lighting.environment_horizon").as_ref()).step_by(0.5)).on_hover_text(t!("lighting.environment_horizon_tip")).changed() {
+        let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentHorizon, horizon.into());
+    }
     let mut seen = pt.environment_backdrop;
     if ui.checkbox(&mut seen, t!("lighting.environment_backdrop")).on_hover_text(t!("lighting.environment_backdrop_tip")).changed() {
         let _ = config_manager.update_param(ConfigPath::EscapePathEnvironmentBackdrop, seen.into());

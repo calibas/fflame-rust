@@ -417,7 +417,10 @@ Night, 1K equirectangular Radiance files, CC0. For a solid, for now:
 - **The path tracer** reads it as the sky's light (`pt_env`): in the
   world's frame, z up, whatever the lights follow (`pt_env_dir`; read in
   the studio's frame, a camera's at the solids' usual view, its horizon
-  stood at that camera's pitch), turned by Rotation, scaled so the sky's median shows at its
+  stood at that camera's pitch), turned by Rotation, its horizon raised
+  or lowered by Horizon (the sky above and below the line stretched to
+  fit, the zenith and the nadir fixed: `environment::warp_elevation`; the
+  sun moves with it), scaled so the sky's median shows at its
   catalog level (`EnvDef::level`) through the exposure and gamma -- a
   picked colour's `shown`, kept linear -- times Sky light. A camera ray
   that misses sees it (`pt_sky_seen`), unless Show as backdrop is off.
@@ -540,6 +543,7 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 | `studio` | off | Studio light | light from a photo studio in place of the sky's, Sky light its brightness (*The studio*) |
 | `environment_map` | none | HDRI sky | a bundled photographed sky that lights and is reflected, in place of the background's, the gradient's and the studio's light (*HDRI skies*; solids for now) |
 | `environment_rotation` | 0 | Rotation | the sky turned about the up axis, degrees |
+| `environment_horizon` | 0 | Horizon | the elevation the sky's horizon stands at, degrees (the UI offers -45..45; the config holds -80..80): to set it against the solid |
 | `environment_backdrop` | on | Show as backdrop | the camera sees the sky (a skybox), or the background |
 
 `path_core::path_settings_from` turns the block into a pass's
