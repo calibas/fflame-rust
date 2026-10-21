@@ -22,7 +22,8 @@ which rewrites the references in code comments too).
 | [rhai-plugins.md](rhai-plugins.md) | The direction (2026-10-18): every plug-in a Rhai script -- variations, formulas, simulation rules, colourings -- carried in the `.fflame` and downloadable, parameters animatable; scripts as animation tracks. The design rules the scripting work keeps. |
 | [lights-in-the-fractal.md](lights-in-the-fractal.md) | Planned 2026-10-19: point lights and a headlamp for solids and terrains, in both tiers; Ambient in the path tracer (it did nothing there). |
 | [3d-look-and-tools.md](3d-look-and-tools.md) | Planned 2026-10-19: the user's list -- formula syntax highlighting (done), the 3D look and Lit matching Path traced, a Lighting & Material panel, metallic materials, flame variations in solids, fly-mode collisions and speed, path-tracing research. |
-| [path-tracing-research.md](path-tracing-research.md) | Researched 2026-10-19, nothing decided: what is wrong with the path tracer's denoiser and sampling, options ranked for speed and quality, gates, the order proposed. |
+| [path-tracing-research.md](path-tracing-research.md) | Researched 2026-10-19; the agreed order (2026-10-20) built: the denoiser fixes D1-D5, S1 measured and S2 parked, V2 adaptive sampling, the ray tolerance. Left for later: S2's deeper rewrite, a learned denoiser (D6). |
+| [hdri-environment.md](hdri-environment.md) | Planned 2026-10-20: bundled HDRI skies (a cloudy one, a starry one, 1-5 MB each) that light the path tracer and the lit tier and show in reflections; procedural stars. |
 
 ## Paused
 
