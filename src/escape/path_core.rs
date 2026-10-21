@@ -87,6 +87,13 @@ pub struct PathSettings {
     pub env: [f32; 4],
     /// Its horizon's elevation, radians (`EnvSettings::horizon`).
     pub env_horizon: f32,
+    /// The most a sample's light from past its first surface brings
+    /// (`clamp` is the whole sample's; Cycles' Clamp Indirect): a polished
+    /// metal's glints of a sun seen in a second surface are rare paths
+    /// far brighter than the picture, which a few samples keep as speckle
+    /// -- more of them the more samples, for a while (user-reported
+    /// 2026-10-20, in a gold solid's crevices under the Sunflowers sky).
+    pub clamp_indirect: f32,
 }
 
 /// An HDRI sky as a pass reads it: which, how far turned, how bright.
@@ -154,6 +161,7 @@ impl Default for PathSettings {
             display: [1.0, 1.0 / 2.2],
             env: [0.0; 4],
             env_horizon: 0.0,
+            clamp_indirect: 1.0e30,
         }
     }
 }
@@ -205,10 +213,28 @@ pub fn path_settings_from(
     let target = target.max(1.0e-30);
     let material = lit_material(config);
     let gamma = if config.gamma > 0.0 { config.gamma } else { 1.0 };
+    // The whole sample at ten times the brightest light, the light from
+    // past its first surface at the light's own: measured on a gold
+    // Mandelbulb under the Sunflowers sky (`a_gold_solids_glints_settle`),
+    // the speckle at 32 samples a third of the whole clamp's alone, the
+    // picture 1% darker. Test-only `PT_CLAMP` and `PT_CLAMP_INDIRECT` set
+    // them outright.
+    #[allow(unused_mut)]
+    let mut clamp = 10.0 * brightest.max(material[2]);
+    #[allow(unused_mut)]
+    let mut clamp_indirect = brightest.max(material[2]);
+    #[cfg(test)]
+    if let Some(v) = std::env::var("PT_CLAMP").ok().and_then(|s| s.trim().parse::<f32>().ok()) {
+        clamp = v;
+    }
+    #[cfg(test)]
+    if let Some(v) = std::env::var("PT_CLAMP_INDIRECT").ok().and_then(|s| s.trim().parse::<f32>().ok()) {
+        clamp_indirect = v;
+    }
     PathSettings {
         bounces: t.bounces.min(16),
         environment: env,
-        clamp: 10.0 * brightest.max(material[2]),
+        clamp,
         seed: 1,
         gloss: material[0],
         roughness: material[1],
@@ -225,6 +251,7 @@ pub fn path_settings_from(
         display: [config.exposure.max(1.0e-6), 1.0 / (2.2 * gamma)],
         env: env_map.map_or([0.0; 4], |e| [1.0, e.rotation, e.scale, if e.backdrop { 1.0 } else { 0.0 }]),
         env_horizon: env_map.map_or(0.0, |e| e.horizon),
+        clamp_indirect,
     }
 }
 
@@ -321,7 +348,7 @@ pub(crate) struct PathParamsGpu {
     sky: [f32; 4],
     list: [u32; 4],
     envmap: [f32; 4],
-    envmap2: [f32; 4],
+    misc2: [f32; 4],
 }
 
 impl PathParamsGpu {
@@ -356,7 +383,7 @@ impl PathParamsGpu {
             sky: settings.sky.map_or([0.0; 4], |z| [z[0], z[1], z[2], 1.0]),
             list: [0; 4],
             envmap: settings.env,
-            envmap2: [settings.env_horizon, 0.0, 0.0, 0.0],
+            misc2: [settings.env_horizon, settings.clamp_indirect, 0.0, 0.0],
         }
     }
 
@@ -472,8 +499,10 @@ struct PtParams {
     // up axis in turns, z the accumulator's units a map unit, w 1 when
     // the camera sees it.
     envmap: vec4<f32>,
-    // x: the elevation its horizon stands at, radians (`pt_env`).
-    envmap2: vec4<f32>,
+    // x: an HDRI sky's horizon's elevation, radians (`pt_env`); y the
+    // most a sample's light from past its first surface brings
+    // (`pt_path`).
+    misc2: vec4<f32>,
 };
 
 // The HDRI sky's map (docs/projects/hdri-environment.md): equirectangular,
@@ -507,10 +536,10 @@ fn pt_env_dir(d: vec3<f32>) -> vec3<f32> {
 fn pt_env(s: vec3<f32>) -> vec3<f32> {
     let u = pt_atan2(s.x, -s.z) / 6.283185307 + 0.5 - pt.envmap.y;
     // The map's elevation for this one, the horizon raised to
-    // `envmap2.x`: each side of it stretched to fit
+    // `misc2.x`: each side of it stretched to fit
     // (`environment::warp_elevation`).
     let half_pi = 1.570796327;
-    let h = pt.envmap2.x;
+    let h = pt.misc2.x;
     let e = asin(clamp(s.y, -1.0, 1.0)) - h;
     let em = e * half_pi / select(half_pi + h, half_pi - h, e >= 0.0);
     let v = 0.5 - em / 3.141592654;
@@ -1170,6 +1199,8 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
     pt_spec = vec3<f32>(0.0, 0.0, 0.0);
     var spec_from = vec3<f32>(0.0, 0.0, 0.0);
     var spec_path = false;
+    var direct = vec3<f32>(0.0, 0.0, 0.0);
+    var deep = false;
     for (var bounce = 0u; bounce <= pt.bounces; bounce = bounce + 1u) {
         let p = o + d * h.t;
         travelled = travelled + h.t;
@@ -1180,6 +1211,12 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
                 radiance = radiance + through * pt_sky(d);
             }
             break;
+        }
+        // What the first surface brought -- its lights, and the sky or
+        // the lights its bounce met -- and from here on, the rest.
+        if (bounce == 1u) {
+            direct = radiance;
+            deep = true;
         }
         let s = pt_shade(h, p, d, regular, bounce);
         // Its glow: the colour's own.
@@ -1223,6 +1260,12 @@ fn pt_path(o0: vec3<f32>, d0: vec3<f32>, first: PtHit) -> vec3<f32> {
             radiance = pt_escape(radiance, through, d, b.coat_pdf);
             break;
         }
+    }
+    // The light from past the first surface clamped on its own
+    // (`PathSettings::clamp_indirect`), before the specular share takes
+    // its part of it.
+    if (deep) {
+        radiance = direct + min(radiance - direct, vec3<f32>(pt.misc2.y));
     }
     if (spec_path) {
         pt_spec = pt_spec + (radiance - spec_from);

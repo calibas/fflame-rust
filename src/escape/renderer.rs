@@ -8303,7 +8303,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                             let d = [s[0], -s[2], s[1]];
                             // The rig's intensity is the irradiance over pi
                             // (`pt_light`); its colour the share of each channel.
-                            let e3 = sun.irradiance.map(|v| v * set.scale / std::f32::consts::PI);
+                            let e3 = sun.power(set.scale);
                             let peak = e3.iter().cloned().fold(0.0f32, f32::max).max(1.0e-30);
                             fdata[11 + n * 2] = [d[0], d[1], d[2], peak];
                             fdata[12 + n * 2] = [e3[0] / peak, e3[1] / peak, e3[2] / peak, 0.0];

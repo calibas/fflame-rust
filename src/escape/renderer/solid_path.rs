@@ -574,12 +574,23 @@ impl EscapeRenderer {
         if self.environment_in_use().is_none() {
             settings.env = [0.0; 4];
         }
+        // A sky's sun is a light the clamps follow (`path_settings` knows
+        // the rig's alone): with the rig's lights it draws (an untouched
+        // rig's stand-in gives way to it), as bright as their sum.
+        if let (Some(set), Some(sun)) = (self.environment_in_use(), self.environment.as_ref().and_then(|e| e.sun)) {
+            let rig = &config.solid_shading;
+            let lights: f32 = if rig.rig_untouched() { 0.0 } else { rig.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum() };
+            let brightest = lights + sun.power(set.scale).iter().cloned().fold(0.0f32, f32::max);
+            settings.clamp = settings.clamp.max(10.0 * brightest);
+            settings.clamp_indirect = settings.clamp_indirect.max(brightest);
+        }
         #[cfg(test)]
         {
             settings.seed = settings.seed.wrapping_add(self.path_seed_offset);
             settings.mis = !self.path_no_mis;
             if self.path_no_clamp {
                 settings.clamp = 1.0e30;
+                settings.clamp_indirect = 1.0e30;
             }
         }
         // The studio the bounces see, the config's (as the lit tier's).
@@ -3449,6 +3460,145 @@ mod tests {
             println!("{n} samples: {speckles} speckles");
             assert!(speckles <= last, "{n} samples: {speckles} speckles, more than the count before's {last}");
             last = speckles;
+        }
+    }
+
+    /// A polished gold Mandelbulb under the Sunflowers sky (user-reported
+    /// 2026-10-20: speckle in its crevices, more with more samples) is no
+    /// speckier denoised at more samples, from 8 to 32, and at 32 has few:
+    /// the sun's glints seen in a second surface are clamped on their own
+    /// (`PathSettings::clamp_indirect`). The pixels that stand out by 40
+    /// levels from 256 samples, at 8, 16 and 32: 322, 234 and 301 without
+    /// that clamp, 331, 183 and 106 with it.
+    #[test]
+    fn a_gold_solids_glints_settle() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (256u32, 144u32);
+        // The Gold Mandelbulb preset as the user set it: polished, under
+        // the sky, closer in.
+        let mut c = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == "Gold Mandelbulb").expect("the preset");
+        c.escape.solid_tier = RenderTier::PathTraced;
+        c.solid_shading.roughness = 0.05;
+        c.escape.path.environment_map = "sunflowers".to_string();
+        c.escape.cam_pitch = 0.12244971;
+        c.escape.cam_yaw = 0.4797994;
+        c.escape.cam_fov = 0.699877;
+        c.escape.cam_target_x = "-2.336204152037181392602510".to_string();
+        c.escape.cam_target_y = "-1.555330670520342686406838".to_string();
+        c.escape.cam_target_z = "0.250256241984536461452798".to_string();
+        let (_pt, palette) = config_palette(&device, &queue, &c);
+        let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+        let map = crate::escape::environment::load(set.def).expect("the bundled file");
+        let [exposure, power] = crate::escape::path_core::path_settings(&c, 1.0).display;
+        let level = |p: &[f32; 4]| {
+            let v = (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) * exposure;
+            if v > 0.0 { (255.0 * v.powf(power)).min(255.0) } else { 0.0 }
+        };
+        let picture = |samples: u32, denoise: bool, seed: u32| {
+            let mut c = c.clone();
+            c.escape.path.denoise = denoise;
+            let mut r = solid_renderer_for(&device, &c, w, h);
+            r.set_environment_map_for_test(&device, &queue, &map, set);
+            r.path_seed_offset = seed;
+            r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+            let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            r.destroy();
+            out
+        };
+        let reference = picture(256, false, 7919);
+        let pixels = (w * h) as usize;
+        let mut last = usize::MAX;
+        for n in [8u32, 16, 32] {
+            let out = picture(n, true, 0);
+            let speckles = out.iter().zip(&reference).filter(|(o, r)| level(o) - level(r) > 40.0).count();
+            println!("{n} samples: {speckles} speckles");
+            assert!(speckles <= last, "{n} samples: {speckles} speckles, more than the count before's {last}");
+            last = speckles;
+        }
+        assert!(last * 200 <= pixels, "{last} speckles at 32 samples");
+    }
+
+    /// Measurement: the speckles under an HDRI sky by the sun's threshold
+    /// (`environment::SUN_THRESHOLD`; user-reported 2026-10-20: an orange
+    /// glow in the crevices of a gold Mandelbulb under Sunflowers, speckled).
+    /// The scene from `PT_SCENE_FILE` (default the user's), at `PT_W` x
+    /// `PT_H` (256x144); for each threshold in `PT_SUN_THRESHOLDS`, the
+    /// sun's share, a 256-sample raw reference's mean against the first
+    /// threshold's, and at 8, 16 and 32 samples the pixels brighter than
+    /// the reference by more than 40 levels of 255, raw and denoised. The
+    /// 16-sample denoised pictures go to `output/hdri/sun-<t>-16.png`.
+    /// `PT_SUN_VARIANT`: `nosun` drops the sun lifted out, `nomap` blacks
+    /// the map and keeps the sun; `PT_BOUNCES` overrides the scene's.
+    #[test]
+    #[ignore = "measurement; needs a GPU"]
+    fn sun_threshold_speckles() {
+        let (device, queue) = device().expect("gpu");
+        let var = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let w: u32 = var("PT_W", "256").parse().expect("PT_W");
+        let h: u32 = var("PT_H", "144").parse().expect("PT_H");
+        let file = var("PT_SCENE_FILE", "output/hdri/gold-sunflowers-7samples.fflame");
+        let mut c = FractalConfig::from_json(&std::fs::read_to_string(&file).expect("the scene")).expect("parses");
+        if let Ok(b) = std::env::var("PT_BOUNCES") {
+            c.escape.path.bounces = b.parse().expect("PT_BOUNCES");
+        }
+        let variant = var("PT_SUN_VARIANT", "full");
+        let (_pt, palette) = config_palette(&device, &queue, &c);
+        let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("a bundled sky");
+        let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/environments").join(set.def.file)).expect("the sky");
+        let [exposure, power] = crate::escape::path_core::path_settings(&c, 1.0).display;
+        // As the display shows it: clipped at white.
+        let level = |p: &[f32; 4]| {
+            let v = (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) * exposure;
+            if v > 0.0 { (255.0 * v.powf(power)).min(255.0) } else { 0.0 }
+        };
+        let mut first_mean = None;
+        for t in var("PT_SUN_THRESHOLDS", "1000,300,100,30").split(',') {
+            let threshold: f32 = t.trim().parse().expect("a threshold");
+            let mut map = crate::escape::environment::EnvMap::decode_at(&bytes, threshold).expect("decodes");
+            match variant.as_str() {
+                "nosun" => map.sun = None,
+                "nomap" => map.texels.iter_mut().for_each(|t| *t = [0.0; 3]),
+                _ => {}
+            }
+            let share = map.sun.map_or(0.0, |s| {
+                let l = 0.2126 * s.irradiance[0] + 0.7152 * s.irradiance[1] + 0.0722 * s.irradiance[2];
+                l / (l + map.light())
+            });
+            let radius = map.sun.map_or(0.0, |s| s.radius.to_degrees());
+            let power = map.sun.map_or(0.0, |s| s.irradiance.iter().cloned().fold(0.0, f32::max) * set.scale / std::f32::consts::PI);
+            println!("the sun's power {power:.2}, the clamp {:.2}", crate::escape::path_core::path_settings(&c, 1.0).clamp);
+            let picture = |samples: u32, denoise: bool, seed: u32| {
+                let mut c = c.clone();
+                c.escape.path.denoise = denoise;
+                let mut r = solid_renderer_for(&device, &c, w, h);
+                r.set_environment_map_for_test(&device, &queue, &map, set);
+                r.path_seed_offset = seed;
+                r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+                let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                r.destroy();
+                out
+            };
+            let reference = picture(256, false, 7919);
+            let mean = reference.iter().map(|p| level(p) as f64).sum::<f64>() / reference.len() as f64;
+            let base = *first_mean.get_or_insert(mean);
+            let mut line = format!("{variant}, {} bounces, threshold {threshold}: sun", c.escape.path.bounces);
+            line.push_str(&format!(" {:.1}% (radius {radius:.2} deg), reference mean {mean:.1} ({:+.1}%);", share * 100.0, (mean / base - 1.0) * 100.0));
+            for n in [8u32, 16, 32] {
+                let count = |out: &[[f32; 4]]| out.iter().zip(&reference).filter(|(o, r)| level(o) - level(r) > 40.0).count();
+                let raw = picture(n, false, 0);
+                let dn = picture(n, true, 0);
+                line.push_str(&format!(" {n}: {} raw, {} denoised;", count(&raw), count(&dn)));
+                if n == 16 {
+                    let shown = |v: f32| (255.0 * (v * exposure).max(0.0).powf(power)).min(255.0) as u8;
+                    let rgba: Vec<u8> = dn.iter().flat_map(|p| [shown(p[0]), shown(p[1]), shown(p[2]), 255]).collect();
+                    let _ = std::fs::create_dir_all("output/hdri");
+                    image::save_buffer(format!("output/hdri/sun-{t}-16.png", t = t.trim()), &rgba, w, h, image::ColorType::Rgba8).expect("write");
+                }
+            }
+            println!("{line}");
         }
     }
 
