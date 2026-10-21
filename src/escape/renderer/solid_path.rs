@@ -237,7 +237,7 @@ impl SolidPath {
                         min_binding_size: None,
                     },
                 ),
-                // The HDRI sky's map and its sampler (`pt_env`).
+                // The HDRI sky's map and its sampler (`ifs_env`).
                 entry(
                     14,
                     BindingType::Texture {
@@ -1783,6 +1783,95 @@ mod tests {
                 };
                 assert!(n > 2000 && sum_path > 0.0, "{name} {material}: {n} pixels");
                 assert!((ratio - 1.0).abs() < tolerance, "{name} {material}: the lit tier's studio is {ratio} of the path tracer's");
+            }
+        }
+    }
+
+    /// An HDRI sky lights both tiers alike (docs/projects/hdri-environment.md,
+    /// step 4): the Sunflowers sky without its sun (which both tiers light
+    /// by as one of the rig's lights), no lights, no ambient, one bounce --
+    /// the lit tier's irradiance harmonics and reflection levels against
+    /// what the path tracer's bounces see, by the mean over the pixels
+    /// both cover. The cube is convex, so nothing hides the sky from it:
+    /// its diffuse and its gloss within 1% when built, a metal's flat
+    /// faces each reflecting one direction within 10%. The Mandelbulb at
+    /// the default occlusion strength (0.6), which stands in for the sky
+    /// its recesses hide: 2-11% dark, as the studio's is. Gated at 2%, 12%
+    /// and 15%. `PT_ENV_GATE=print` prints without asserting.
+    #[test]
+    fn an_hdri_sky_lights_both_tiers_alike() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (192u32, 128u32);
+        let (_pt, palette) = white_palette(&device, &queue);
+        let mut bulb = cube_config();
+        bulb.escape.formula = "mandelbulb_solid".to_string();
+        bulb.solid_shading.ssao_strength = 0.6;
+        let mut first = cube_config();
+        first.escape.path.environment_map = "sunflowers".to_string();
+        let set = crate::escape::path_core::environment_settings(&first.escape.path, &first).expect("bundled");
+        let map = crate::escape::environment::EnvMap { sun: None, ..crate::escape::environment::load(set.def).expect("the bundled file") };
+        let print_only = std::env::var("PT_ENV_GATE").is_ok_and(|v| v == "print");
+        for (name, base) in [("cube", cube_config()), ("bulb", bulb)] {
+            for (material, gloss, metallic, roughness) in [
+                ("diffuse", 0.0f32, 0.0f32, 0.5f32),
+                ("gloss 0.04/0.2", 0.04, 0.0, 0.2),
+                ("metal 0.1", 0.0, 1.0, 0.1),
+                ("metal 0.3", 0.0, 1.0, 0.3),
+                ("metal 0.7", 0.0, 1.0, 0.7),
+            ] {
+                let tolerance = match (name, metallic > 0.0) {
+                    ("cube", false) => 0.02f64,
+                    ("cube", true) => 0.12,
+                    _ => 0.15,
+                };
+                let mut c = base.clone();
+                c.solid_shading.lights[0].enabled = false;
+                c.solid_shading.ambient = 0.0;
+                c.solid_shading.shading_strength = 1.0;
+                c.solid_shading.gloss = gloss;
+                c.solid_shading.metallic = metallic;
+                c.solid_shading.roughness = roughness;
+                c.escape.path.environment_map = "sunflowers".to_string();
+                c.escape.path.environment_backdrop = false;
+                c.escape.path.bounces = 1;
+                let set = crate::escape::path_core::environment_settings(&c.escape.path, &c).expect("bundled");
+                c.escape.solid_tier = RenderTier::Lit;
+                let mut r = renderer_for(&device, &c, w, h);
+                r.set_environment_map_for_test(&device, &queue, &map, set);
+                loop {
+                    let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                    let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+                    queue.submit(std::iter::once(enc.finish()));
+                    if settled {
+                        break;
+                    }
+                }
+                let lit = read_texture(&device, &queue, &r.output_texture, w, h);
+                r.destroy();
+                c.escape.solid_tier = RenderTier::PathTraced;
+                let mut r = renderer_for(&device, &c, w, h);
+                r.set_environment_map_for_test(&device, &queue, &map, set);
+                r.render_solid_still(&device, &queue, &c, &palette, 64, || { wait(&device); true });
+                let path = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+                r.destroy();
+                let (mut n, mut sum_lit, mut sum_path) = (0usize, 0.0f64, 0.0f64);
+                for (p, q) in lit.iter().zip(&path) {
+                    if p[3] < 1.0 || q[3] < 0.999 {
+                        continue;
+                    }
+                    n += 1;
+                    sum_lit += (p[0] + p[1] + p[2]) as f64;
+                    sum_path += (q[0] + q[1] + q[2]) as f64;
+                }
+                let ratio = sum_lit / sum_path.max(1e-12);
+                println!("  sky {name} {material}: {n} pixels, path mean {:.4}, lit over path {ratio:.4}", sum_path / n.max(1) as f64 / 3.0);
+                if !print_only {
+                    assert!(n > 2000 && sum_path > 0.0, "{name} {material}: {n} pixels");
+                    assert!((ratio - 1.0).abs() < tolerance, "{name} {material}: the lit tier's sky is {ratio} of the path tracer's");
+                }
             }
         }
     }

@@ -1681,7 +1681,9 @@ impl EscapeRenderer {
         });
 
         // Recolor pass: coloring + palette from the cached records.
-        // Same front half as the direct layout, records read-only.
+        // Same front half as the direct layout, records read-only. The
+        // relight shares it, and reads the HDRI sky at 14 and 15
+        // (`environment::ENV_WGSL`); mode A's recolor binds the stand-in.
         let recolor_bind_group_layout =
             device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Escape Recolor Bind Group Layout"),
@@ -1755,6 +1757,22 @@ impl EscapeRenderer {
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -3758,6 +3776,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             });
             self.pipelines.insert(key.clone(), pipeline);
         }
+        let (env_view, env_sampler) = {
+            let (v, s) = self.environment_bindings(device);
+            (v.clone(), s.clone())
+        };
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Recolor Bind Group"),
             layout: &self.recolor_bind_group_layout,
@@ -3793,6 +3815,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 BindGroupEntry {
                     binding: 6,
                     resource: self.contrast_params.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(&env_view),
+                },
+                BindGroupEntry {
+                    binding: 15,
+                    resource: BindingResource::Sampler(&env_sampler),
                 },
             ],
         });
@@ -4775,6 +4805,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // contrast fit; the relight does not, but the binding must be
         // there. Identity.
         queue_contrast(queue, &self.contrast_params, &escape.contrast, None);
+        let (env_view, env_sampler) = {
+            let (v, s) = self.environment_bindings(device);
+            (v.clone(), s.clone())
+        };
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Relight Bind Group"),
             layout: &self.recolor_bind_group_layout,
@@ -4806,6 +4840,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 BindGroupEntry {
                     binding: 6,
                     resource: self.contrast_params.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(&env_view),
+                },
+                BindGroupEntry {
+                    binding: 15,
+                    resource: BindingResource::Sampler(&env_sampler),
                 },
             ],
         });
@@ -8294,7 +8336,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     // next free light, so both tiers shade and shadow it --
                     // in place of an untouched rig's stand-in key, the sky
                     // lighting the scene. Into the world from the sky's
-                    // frame, the world's with z up (`pt_env_dir` inverted).
+                    // frame, the world's with z up (`ifs_env_dir` inverted).
                     if let (Some(e), Some(set)) = (&self.environment, self.environment_settings) {
                         let untouched = self.solid_lighting.0.rig_untouched();
                         let mut n = if untouched { 0 } else { fdata[7][2] as usize };
@@ -8310,6 +8352,11 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                             n += 1;
                         }
                         fdata[7][2] = n as f32;
+                        // The rest of the map (`ifs_env`): the lit tier's
+                        // irradiance and reflections, the path tracer's
+                        // light, the backdrop.
+                        let slots = super::environment::env_fdata(e, &set, 0.0);
+                        fdata[super::environment::ENV_FDATA..super::environment::ENV_FDATA + super::environment::ENV_FDATA_LEN].copy_from_slice(&slots);
                     }
                 }
                 // A flame that is planar but not solid leaves the map

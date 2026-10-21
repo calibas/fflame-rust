@@ -6975,6 +6975,8 @@ fn ifs_light_at(i: u32, p: vec3<f32>) -> IfsLightAt {
 /// template and the relight template at `//__IFS_RIG__` so the two cannot
 /// drift. That they are one text is the basis of the cache being exact.
 const IFS_RIG: &str = r#"
+//__IFS_ENV__
+
 // The lighting rig, as ONE function spliced into both the walk and the
 // relight pass at `//__IFS_RIG__` -- so the two cannot drift, which is
 // the whole basis of the cache being exact. Blinn-Phong over the
@@ -6995,10 +6997,14 @@ fn ifs_sky_t(d: vec3<f32>) -> f32 {
     return 1.0 - u * u * u;
 }
 
-// What a ray that meets nothing shows, straight alpha: the zenith's
-// colour over the background at its share, which the tonemap's
-// background blend turns into the gradient. Nothing for a flat sky.
+// What a ray that meets nothing shows, straight alpha: an HDRI sky the
+// camera sees, whole (`escape::environment`); else the zenith's colour
+// over the background at its share, which the tonemap's background blend
+// turns into the gradient. Nothing for a flat sky.
 fn ifs_sky_seen(d: vec3<f32>) -> vec4<f32> {
+    if (ifs_env_on() && ifs_env_backdrop()) {
+        return vec4<f32>(ifs_env(ifs_env_dir(d), 0.0), 1.0);
+    }
     let s = params.fdata[20];
     if (!(s.w > 0.5)) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -7233,6 +7239,16 @@ fn ifs_rig(colour: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
         lit_rgb = lit_rgb + albedo * (studio * ao * ((1.0 - metal) * (1.0 - coat_v)) * ifs_studio_diffuse(ifs_studio_frame(n)));
         if (coated) {
             lit_rgb = lit_rgb + refl_v * (studio * ao * ifs_studio_reflect(ifs_studio_frame(n), ifs_studio_frame(v), rough));
+        }
+    }
+    // An HDRI sky (docs/projects/hdri-environment.md), as the path
+    // tracer's bounces see it, in place of the studio: its irradiance on
+    // the diffuse and its reflection levels on the coat, both occluded as
+    // the ambient is. Its sun is one of the lights below.
+    if (ifs_env_on()) {
+        lit_rgb = lit_rgb + albedo * (ao * ((1.0 - metal) * (1.0 - coat_v))) * ifs_env_irradiance(ifs_env_dir(n));
+        if (coated) {
+            lit_rgb = lit_rgb + refl_v * ao * ifs_env_reflect(n, v, rough);
         }
     }
     lit_rgb = lit_rgb + colour * max(ifs_glow(), 0.0);
@@ -8539,6 +8555,7 @@ fn ifs_rig(lens: Option<&str>, placed: bool) -> String {
     lens_apply_uv(&mut apply, lens, "uv");
     IFS_RIG
         .trim()
+        .replace("//__IFS_ENV__", super::environment::ENV_WGSL.trim())
         .replace("//__LENS_APPLY_RAY__", &apply.join("\n"))
         .replace("//__IFS_LIGHT_AT__", light_at(placed))
         .replace("//__COAT_ENERGY__", &crate::renderer::coat::coat_energy_wgsl("ifs_coat_"))
@@ -8562,6 +8579,7 @@ fn light_at(placed: bool) -> &'static str {
 pub(crate) fn ifs_rig_jittered(placed: bool) -> String {
     IFS_RIG
         .trim()
+        .replace("//__IFS_ENV__", super::environment::ENV_WGSL.trim())
         .replace(
             "//__LENS_APPLY_RAY__",
             "uv = uv + params.jitter / vec2<f32>(f32(params.width), f32(params.height));",

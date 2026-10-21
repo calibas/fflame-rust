@@ -82,8 +82,9 @@ struct TerrainParamsGpu {
     /// Mode D's rig slots: [2].w the FOV, [3] forward, [4] right, [5]
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
     /// two per light (direction and power, colour), [20] the sky, [21]
-    /// the colour by the height, [32] the studio (`ifs_studio`).
-    fdata: [[f32; 4]; 36],
+    /// the colour by the height, [32] the studio (`ifs_studio`), [36..45]
+    /// an HDRI sky (`environment::env_fdata`).
+    fdata: [[f32; 4]; 48],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -695,7 +696,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 36>,
+    fdata: array<vec4<f32>, 48>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -2305,7 +2306,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 36]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 48]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -2658,6 +2659,14 @@ impl TerrainRenderer {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
+                // The HDRI sky (`environment::ENV_WGSL`).
+                tex_filtered(14),
+                BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let albedo_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2691,8 +2700,7 @@ impl TerrainRenderer {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
-                // The path tracer's HDRI sky (`pt_env`): a stand-in until
-                // terrains take one (docs/projects/hdri-environment.md).
+                // The HDRI sky (`environment::ENV_WGSL`).
                 tex_filtered(14),
                 BindGroupLayoutEntry {
                     binding: 15,
@@ -3998,7 +4006,7 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 36];
+        let mut fdata = [[0.0f32; 4]; 48];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
@@ -4144,6 +4152,8 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
                     BindGroupEntry { binding: 8, resource: BindingResource::TextureView(self.surface_view()) },
                     BindGroupEntry { binding: 9, resource: BindingResource::Sampler(&self.surface_sampler) },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&self.env_stand_in.1) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&self.surface_sampler) },
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Relight"), timestamp_writes: None });
@@ -4516,10 +4526,11 @@ mod tests {
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, three vec4s (eye, misc, tile), and the 36 vec4s of
-        // `fdata` (the lights' third slots at 28..32, the studio at 32).
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 576);
-        assert!(WALK_COMMON.contains("fdata: array<vec4<f32>, 36>"));
+        // 8 words, three vec4s (eye, misc, tile), and the 48 vec4s of
+        // `fdata` (the lights' third slots at 28..32, the studio at 32, an
+        // HDRI sky at 36..45).
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 768);
+        assert!(WALK_COMMON.contains("fdata: array<vec4<f32>, 48>"));
     }
 
     #[test]

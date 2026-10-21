@@ -17,6 +17,14 @@
 //! sample and shadow already (as Blender's EEVEE does with a world's "sun
 //! threshold") -- and the map keeps the rest, the sun's place filled from
 //! the texels around it.
+//!
+//! **The lit tier** traces no rays, so it reads the rest of the map
+//! prefiltered: its diffuse light as nine spherical harmonics of the
+//! irradiance ([`irradiance_sh`], Ramamoorthi and Hanrahan 2001), and a
+//! coat's reflection from the texture's mips, level k the map seen through
+//! a GGX lobe of roughness k / [`ENV_LODS`] ([`EnvMap::reflection_levels`],
+//! Karis 2013's split sum, by filtered importance sampling). [`ENV_WGSL`]
+//! reads both, and the map itself for the path tracer and the backdrop.
 
 /// A bundled sky.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -267,41 +275,74 @@ impl EnvMap {
     }
 }
 
-/// A sky on the GPU: its map, filterable (`rgba16float`), and its sun.
+/// A sky on the GPU: its map, filterable (`rgba16float`), its reflection
+/// levels in the mips, and its sun; and the map small, for the
+/// irradiance's harmonics, which the sky's rotation and horizon move.
 pub struct EnvGpu {
     pub id: &'static str,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub sun: Option<EnvSun>,
+    /// The reflection levels its mips hold: [`ENV_LODS`], or fewer for a
+    /// map too small for them.
+    pub lods: u32,
+    small: EnvLevel,
+    sh: std::sync::Mutex<Option<([u32; 2], [[f32; 3]; 9])>>,
 }
 
 impl EnvGpu {
-    /// `map`, uploaded.
+    /// `map`, uploaded with its reflection levels.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, id: &'static str, map: &EnvMap) -> Self {
-        let (texture, view) = env_texture(device, queue, map.width, map.height, &map.texels);
-        EnvGpu { id, texture, view, sun: map.sun }
+        let mut levels = vec![map.level()];
+        levels.extend(map.reflection_levels());
+        // A texture's mips stop at 1x1.
+        levels.truncate((32 - map.width.max(map.height).leading_zeros()) as usize);
+        let lods = levels.len() as u32 - 1;
+        let (texture, view) = env_texture(device, queue, &levels);
+        EnvGpu { id, texture, view, sun: map.sun, lods, small: map.small(), sh: std::sync::Mutex::new(None) }
+    }
+
+    /// The irradiance's harmonics with the sky turned by `rotation` (turns)
+    /// and its horizon at `horizon` (radians): [`irradiance_sh`], kept for
+    /// the last pair asked.
+    pub fn irradiance(&self, rotation: f32, horizon: f32) -> [[f32; 3]; 9] {
+        let key = [rotation.to_bits(), horizon.to_bits()];
+        let mut memo = self.sh.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((k, sh)) = *memo {
+            if k == key {
+                return sh;
+            }
+        }
+        let sh = irradiance_sh(&self.small, rotation, horizon);
+        *memo = Some((key, sh));
+        sh
     }
 }
 
-/// An `rgba16float` texture of `texels` (w by h).
-pub fn env_texture(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, texels: &[[f32; 3]]) -> (wgpu::Texture, wgpu::TextureView) {
+/// An `rgba16float` texture of `levels`, each a mip: each half the one
+/// before.
+pub fn env_texture(device: &wgpu::Device, queue: &wgpu::Queue, levels: &[EnvLevel]) -> (wgpu::Texture, wgpu::TextureView) {
+    let (w, h) = (levels[0].width, levels[0].height);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Environment"),
         size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: 1,
+        mip_level_count: levels.len() as u32,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba16Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let data: Vec<u16> = texels.iter().flat_map(|c| [c[0], c[1], c[2], 1.0]).map(|v| half::f16::from_f32(v.min(65000.0)).to_bits()).collect();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        bytemuck::cast_slice(&data),
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
+    for (k, l) in levels.iter().enumerate() {
+        debug_assert_eq!((l.width, l.height), ((w >> k).max(1), (h >> k).max(1)));
+        let data: Vec<u16> = l.texels.iter().flat_map(|c| [c[0], c[1], c[2], 1.0]).map(|v| half::f16::from_f32(v.min(65000.0)).to_bits()).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: k as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            bytemuck::cast_slice(&data),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(l.width * 8), rows_per_image: Some(l.height) },
+            wgpu::Extent3d { width: l.width, height: l.height, depth_or_array_layers: 1 },
+        );
+    }
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
 }
@@ -324,7 +365,7 @@ pub fn env_stand_in(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView)
 }
 
 /// The sampler a map is read with: around in azimuth, clamped at the
-/// poles, linear.
+/// poles, linear -- between the reflection levels too.
 pub fn env_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("Environment"),
@@ -332,6 +373,7 @@ pub fn env_sampler(device: &wgpu::Device) -> wgpu::Sampler {
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     })
 }
@@ -370,6 +412,361 @@ pub fn turned(dir: [f32; 3], rotation: f32) -> [f32; 3] {
     // Azimuth from -z toward +x: (x, -z) turns by a.
     [dir[0] * c - dir[2] * s, dir[1], dir[2] * c + dir[0] * s]
 }
+
+/// The reflection levels past the map: level k of the texture's mips is
+/// the sky seen through a GGX lobe of roughness k / `ENV_LODS` (its alpha
+/// the square), level 0 the map. The lit tier reads a coat of roughness r
+/// at level r times this (`ifs_env_reflect`).
+pub const ENV_LODS: u32 = 5;
+
+/// One level of a map: linear radiance, row-major from the zenith.
+#[derive(Debug, Clone)]
+pub struct EnvLevel {
+    pub width: u32,
+    pub height: u32,
+    pub texels: Vec<[f32; 3]>,
+}
+
+impl EnvLevel {
+    /// Read at `(u, v)` as the sampler reads: linear, around in u,
+    /// clamped in v.
+    pub fn bilinear(&self, u: f32, v: f32) -> [f32; 3] {
+        let (w, h) = (self.width as f32, self.height as f32);
+        let x = u * w - 0.5;
+        let y = (v * h - 0.5).clamp(0.0, h - 1.0);
+        let (x0, y0) = (x.floor(), y.floor());
+        let (fx, fy) = (x - x0, y - y0);
+        let col = |k: f32| (k as i64).rem_euclid(self.width as i64) as u32;
+        let (xa, xb) = (col(x0), col(x0 + 1.0));
+        let ya = y0 as u32;
+        let yb = (ya + 1).min(self.height - 1);
+        let at = |x: u32, y: u32| self.texels[(y * self.width + x) as usize];
+        let (a, b, c, d) = (at(xa, ya), at(xb, ya), at(xa, yb), at(xb, yb));
+        [0, 1, 2].map(|k| (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy) + (c[k] * (1.0 - fx) + d[k] * fx) * fy)
+    }
+
+    /// Half the size, each texel the mean of four by their solid angles:
+    /// a row nearer a pole covers less of the sky, and an even mean
+    /// over-weighted the poles -- 3.5% of the Sunflowers sky's light lost
+    /// by its fourth reflection level.
+    fn halved(&self) -> EnvLevel {
+        let (w, h) = ((self.width / 2).max(1), (self.height / 2).max(1));
+        let row = |y: u32| y.min(self.height - 1);
+        let at = |x: u32, y: u32| self.texels[(row(y) * self.width + x.min(self.width - 1)) as usize];
+        let texels = (0..w * h)
+            .map(|i| {
+                let (x, y) = (2 * (i % w), 2 * (i / w));
+                let (sa, sb) = (texel_solid_angle(row(y), self.width, self.height), texel_solid_angle(row(y + 1), self.width, self.height));
+                let q = [at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1)];
+                [0, 1, 2].map(|k| ((q[0][k] + q[1][k]) * sa + (q[2][k] + q[3][k]) * sb) / (2.0 * (sa + sb)).max(1.0e-30))
+            })
+            .collect();
+        EnvLevel { width: w, height: h, texels }
+    }
+}
+
+/// A direction's `(u, v)` in a map ([`map_direction`] inverted).
+pub fn map_uv(d: [f32; 3]) -> (f32, f32) {
+    let u = (d[0].atan2(-d[2]) / std::f32::consts::TAU + 0.5).rem_euclid(1.0);
+    (u, d[1].clamp(-1.0, 1.0).acos() / std::f32::consts::PI)
+}
+
+/// Where in the map a direction `s` of the sky's frame (x right, y up, -z
+/// ahead) reads, the sky turned by `rotation` (turns) and its horizon at
+/// `horizon` (radians): `ifs_env_uv`, in Rust.
+pub fn env_uv(s: [f32; 3], rotation: f32, horizon: f32) -> (f32, f32) {
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    let u = s[0].atan2(-s[2]) / std::f32::consts::TAU + 0.5 - rotation;
+    let e = s[1].clamp(-1.0, 1.0).asin() - horizon;
+    let em = e * half_pi / if e >= 0.0 { half_pi - horizon } else { half_pi + horizon };
+    (u.rem_euclid(1.0), 0.5 - em / std::f32::consts::PI)
+}
+
+/// An orthonormal pair about `n`.
+fn basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let up = if n[1].abs() < 0.999 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let t = [up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]];
+    let l = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+    let t = t.map(|v| v / l);
+    let b = [n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2], n[0] * t[1] - n[1] * t[0]];
+    (t, b)
+}
+
+/// An ordered map over `0..n`, in parallel off the web (as `bla`'s).
+#[cfg(not(target_arch = "wasm32"))]
+fn par_map<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
+    use rayon::prelude::*;
+    (0..n).into_par_iter().map(f).collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn par_map<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
+    (0..n).map(f).collect()
+}
+
+/// The samples a reflection level takes of each texel's lobe: fewer
+/// where the lobe is narrow and its texels many.
+const LEVEL_SAMPLES: [u32; ENV_LODS as usize + 1] = [1, 48, 64, 96, 128, 128];
+
+impl EnvMap {
+    /// The map as a level.
+    pub fn level(&self) -> EnvLevel {
+        EnvLevel { width: self.width, height: self.height, texels: self.texels.clone() }
+    }
+
+    /// The map halved down to its smallest: `[0]` the map.
+    fn pyramid(&self) -> Vec<EnvLevel> {
+        let mut out = vec![self.level()];
+        while out.last().is_some_and(|l| l.width > 4 && l.height > 2) {
+            let next = out.last().expect("one").halved();
+            out.push(next);
+        }
+        out
+    }
+
+    /// The map 128 wide (or its own width below that): what the
+    /// irradiance's harmonics are taken over, smooth as they are.
+    fn small(&self) -> EnvLevel {
+        let mut l = self.level();
+        while l.width > 128 && l.height > 2 {
+            l = l.halved();
+        }
+        l
+    }
+
+    /// The reflection levels 1 to [`ENV_LODS`], each half the one before
+    /// (the texture's mips): level k is the map seen through a GGX lobe of
+    /// roughness k / `ENV_LODS`, the normal, the view and the reflection
+    /// one (Karis 2013's split sum) -- each texel the lobe's directions
+    /// drawn by a fixed Hammersley set, weighted by their cosine, each read
+    /// from the level of the map's pyramid whose texel is the sample's
+    /// share of the lobe (Krivanek and Colbert 2008's filtered importance
+    /// sampling), so a few dozen samples leave no grain.
+    pub fn reflection_levels(&self) -> Vec<EnvLevel> {
+        let pyramid = self.pyramid();
+        let last = (pyramid.len() - 1) as f32;
+        let texel = 4.0 * std::f32::consts::PI / (self.width as f32 * self.height as f32);
+        let read = |d: [f32; 3], lod: f32| {
+            let lod = lod.clamp(0.0, last);
+            let (u, v) = map_uv(d);
+            let k = lod.floor() as usize;
+            let a = pyramid[k].bilinear(u, v);
+            if k as f32 >= last {
+                return a;
+            }
+            let f = lod - k as f32;
+            let b = pyramid[k + 1].bilinear(u, v);
+            [0, 1, 2].map(|c| a[c] * (1.0 - f) + b[c] * f)
+        };
+        (1..=ENV_LODS)
+            .map(|k| {
+                let (w, h) = ((self.width >> k).max(1), (self.height >> k).max(1));
+                let rough = k as f32 / ENV_LODS as f32;
+                let a2 = (rough * rough) * (rough * rough);
+                let m = LEVEL_SAMPLES[k as usize];
+                // The lobe's samples about +z: the direction, its cosine,
+                // and the pyramid's level for its share.
+                let set: Vec<([f32; 3], f32, f32)> = (0..m)
+                    .filter_map(|i| {
+                        let u1 = (i as f32 + 0.5) / m as f32;
+                        let u2 = (i.reverse_bits() as f64 / 4294967296.0) as f32;
+                        let cos_h = ((1.0 - u1) / (1.0 + (a2 - 1.0) * u1)).sqrt();
+                        let sin_h = (1.0 - cos_h * cos_h).max(0.0).sqrt();
+                        let phi = std::f32::consts::TAU * u2;
+                        let nl = 2.0 * cos_h * cos_h - 1.0;
+                        if nl <= 0.0 {
+                            return None;
+                        }
+                        let l = [2.0 * cos_h * sin_h * phi.cos(), 2.0 * cos_h * sin_h * phi.sin(), nl];
+                        let q = cos_h * cos_h * (a2 - 1.0) + 1.0;
+                        let pdf = a2 / (std::f32::consts::PI * q * q) / 4.0;
+                        let lod = (0.5 * (1.0 / (m as f32 * pdf * texel)).log2() + 1.0).max(0.0);
+                        Some((l, nl, lod))
+                    })
+                    .collect();
+                let texels = par_map((w * h) as usize, |i| {
+                    let (x, y) = (i as u32 % w, i as u32 / w);
+                    let n = map_direction((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
+                    let (t, b) = basis(n);
+                    let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
+                    for &(l, nl, lod) in &set {
+                        let d = [0, 1, 2].map(|c| t[c] * l[0] + b[c] * l[1] + n[c] * l[2]);
+                        let r = read(d, lod);
+                        for c in 0..3 {
+                            sum[c] += r[c] * nl;
+                        }
+                        weight += nl;
+                    }
+                    sum.map(|v| v / weight.max(1.0e-30))
+                });
+                EnvLevel { width: w, height: h, texels }
+            })
+            .collect()
+    }
+}
+
+/// The real spherical harmonics to band 2 at a unit direction `s`.
+pub fn sh9(s: [f32; 3]) -> [f32; 9] {
+    let [x, y, z] = s;
+    [
+        0.282095,
+        0.488603 * y,
+        0.488603 * z,
+        0.488603 * x,
+        1.092548 * x * y,
+        1.092548 * y * z,
+        0.315392 * (3.0 * z * z - 1.0),
+        1.092548 * x * z,
+        0.546274 * (x * x - y * y),
+    ]
+}
+
+/// The irradiance over pi a surface facing `s` (the sky's frame) receives
+/// from `map`, the sky turned by `rotation` (turns) and its horizon at
+/// `horizon` (radians), as nine coefficients per channel of [`sh9`]: the
+/// radiance projected, each band scaled by the cosine lobe's (pi, 2 pi /
+/// 3, pi / 4; Ramamoorthi and Hanrahan 2001) over pi. A white Lambertian
+/// surface's radiance, in the map's units; `ifs_env_irradiance` sums it.
+pub fn irradiance_sh(map: &EnvLevel, rotation: f32, horizon: f32) -> [[f32; 3]; 9] {
+    // Over the sky's own directions, 128 by 64, each its solid angle.
+    let (gw, gh) = (128u32, 64u32);
+    let mut c = [[0.0f64; 3]; 9];
+    for gy in 0..gh {
+        let sa = texel_solid_angle(gy, gw, gh) as f64;
+        for gx in 0..gw {
+            let s = map_direction((gx as f32 + 0.5) / gw as f32, (gy as f32 + 0.5) / gh as f32);
+            let (u, v) = env_uv(s, rotation, horizon);
+            let l = map.bilinear(u, v);
+            for (k, y) in sh9(s).into_iter().enumerate() {
+                for ch in 0..3 {
+                    c[k][ch] += l[ch] as f64 * y as f64 * sa;
+                }
+            }
+        }
+    }
+    let band = [1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25];
+    let mut out = [[0.0f32; 3]; 9];
+    for k in 0..9 {
+        for ch in 0..3 {
+            out[k][ch] = (c[k][ch] * band[k]) as f32;
+        }
+    }
+    out
+}
+
+/// The sky's slots in a pass's `fdata` (both mode D's and a terrain's):
+/// from [`ENV_FDATA`], [`ENV_FDATA_LEN`] of them -- what [`ENV_WGSL`] reads.
+pub const ENV_FDATA: usize = 36;
+pub const ENV_FDATA_LEN: usize = 9;
+
+/// The sky's slots: [36] 1, its turn (turns), the accumulator's units a
+/// map unit, and 1 when the camera sees it; [37] its horizon's elevation
+/// (radians), the reflection levels its mips hold (`EnvGpu::lods`), the
+/// stars' brightness in the accumulator's units (0, none), and 0;
+/// [38..45] the irradiance's harmonics ([`irradiance_sh`]), 27 floats in
+/// order.
+pub fn env_fdata(gpu: &EnvGpu, set: &crate::escape::path_core::EnvSettings, stars: f32) -> [[f32; 4]; ENV_FDATA_LEN] {
+    let mut out = [[0.0f32; 4]; ENV_FDATA_LEN];
+    let sh = gpu.irradiance(set.rotation, set.horizon);
+    out[0] = [1.0, set.rotation, set.scale, if set.backdrop { 1.0 } else { 0.0 }];
+    out[1] = [set.horizon, gpu.lods as f32, stars.max(0.0), 0.0];
+    for (k, v) in sh.as_flattened().iter().enumerate() {
+        out[2 + k / 4][k % 4] = *v;
+    }
+    out
+}
+
+/// The sky as every pass that lights with the rig reads it (spliced into
+/// the rig, `assembler::ifs_rig`): its map and reflection levels at group
+/// 0's bindings 14 and 15 -- a 1x1 stand-in when there is none -- and its
+/// slots of `params.fdata` ([`env_fdata`]). A pass that never reads it
+/// leaves the bindings out of its layout.
+pub const ENV_WGSL: &str = r#"
+// The HDRI sky (escape::environment): its map, and in the mips the map
+// seen through GGX lobes of growing roughness.
+@group(0) @binding(14) var ifs_env_tex: texture_2d<f32>;
+@group(0) @binding(15) var ifs_env_smp: sampler;
+
+fn ifs_env_on() -> bool { return params.fdata[36].x > 0.5; }
+fn ifs_env_backdrop() -> bool { return params.fdata[36].w > 0.5; }
+
+// atan2, exact at a zero pair as IEEE has it (Metal's is not: CLAUDE.md),
+// for the map's azimuth -- straight up and down are a zero pair.
+fn ifs_env_atan2(y: f32, x: f32) -> f32 {
+    if (y == 0.0 && x == 0.0) {
+        let pi = 3.14159265358979;
+        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    }
+    return atan2(y, x);
+}
+
+// A world direction in the sky's frame (x right, y up, -z ahead): the
+// world's, z up, whatever the lights follow -- a sky read in the studio's
+// frame (a camera's, at the solids' usual view) stood its horizon at the
+// camera's pitch, level only from that view's yaw.
+fn ifs_env_dir(d: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(d.x, d.z, -d.y);
+}
+
+// Where in the map `s` (the sky's frame) reads: `environment::map_uv`
+// turned by fdata[36].y, the horizon raised to fdata[37].x -- each side
+// of it stretched to fit (`environment::warp_elevation`).
+fn ifs_env_uv(s: vec3<f32>) -> vec2<f32> {
+    let u = ifs_env_atan2(s.x, -s.z) / 6.283185307 + 0.5 - params.fdata[36].y;
+    let half_pi = 1.570796327;
+    let h = params.fdata[37].x;
+    let e = asin(clamp(s.y, -1.0, 1.0)) - h;
+    let em = e * half_pi / select(half_pi + h, half_pi - h, e >= 0.0);
+    return vec2<f32>(u, 0.5 - em / 3.141592654);
+}
+
+// The sky's radiance toward `s` (its frame) at reflection level `lod`, in
+// the accumulator's units. An explicit level, so from any control flow.
+fn ifs_env(s: vec3<f32>, lod: f32) -> vec3<f32> {
+    return textureSampleLevel(ifs_env_tex, ifs_env_smp, ifs_env_uv(s), lod).rgb * params.fdata[36].z;
+}
+
+// The irradiance's harmonic `i` (`environment::irradiance_sh`).
+fn ifs_env_sh(i: u32) -> vec3<f32> {
+    let k = 3u * i;
+    return vec3<f32>(
+        params.fdata[38u + k / 4u][k % 4u],
+        params.fdata[38u + (k + 1u) / 4u][(k + 1u) % 4u],
+        params.fdata[38u + (k + 2u) / 4u][(k + 2u) % 4u],
+    );
+}
+
+// What the sky lights a surface facing `s` (its frame) with, over pi: a
+// white Lambertian surface's radiance (`environment::sh9`).
+fn ifs_env_irradiance(s: vec3<f32>) -> vec3<f32> {
+    let x = s.x;
+    let y = s.y;
+    let z = s.z;
+    let e = ifs_env_sh(0u) * 0.282095
+        + ifs_env_sh(1u) * (0.488603 * y)
+        + ifs_env_sh(2u) * (0.488603 * z)
+        + ifs_env_sh(3u) * (0.488603 * x)
+        + ifs_env_sh(4u) * (1.092548 * x * y)
+        + ifs_env_sh(5u) * (1.092548 * y * z)
+        + ifs_env_sh(6u) * (0.315392 * (3.0 * z * z - 1.0))
+        + ifs_env_sh(7u) * (1.092548 * x * z)
+        + ifs_env_sh(8u) * (0.546274 * (x * x - y * y));
+    return max(e, vec3<f32>(0.0, 0.0, 0.0)) * params.fdata[36].z;
+}
+
+// What a coat of roughness `rough` reflects of the sky toward `v` at `n`
+// (the world's frame; its Fresnel is the caller's): the reflection level
+// for the roughness, read about the lobe's dominant direction, which
+// leans to the normal as the coat roughens (Lagarde and de Rousiers 2014,
+// as `ifs_studio_reflect`).
+fn ifs_env_reflect(n: vec3<f32>, v: vec3<f32>, rough: f32) -> vec3<f32> {
+    let r = 2.0 * dot(n, v) * n - v;
+    let s = (1.0 - rough) * (sqrt(1.0 - rough) + rough);
+    let d = normalize(n + (r - n) * s);
+    return ifs_env(ifs_env_dir(d), clamp(rough, 0.0, 1.0) * params.fdata[37].y);
+}
+"#;
 
 /// The bundled sky `def`'s file, decoded (desktop: from the shipped
 /// `assets/environments/`).
@@ -453,6 +850,108 @@ mod tests {
     fn the_night_sky_keeps_its_stars() {
         let map = bundled("rogland_night");
         assert!(map.sun.is_none(), "{:?}", map.sun);
+    }
+
+    /// A uniform sky is itself at every reflection level, and lights every
+    /// face alike with its own radiance (over pi, a white surface's).
+    #[test]
+    fn a_uniform_sky_is_its_own_at_every_level() {
+        let c = [0.5f32, 1.0, 2.0];
+        let map = EnvMap { width: 64, height: 32, texels: vec![c; 64 * 32], sun: None, median: 1.0 };
+        let levels = map.reflection_levels();
+        assert_eq!(levels.len(), ENV_LODS as usize);
+        for (k, l) in levels.iter().enumerate() {
+            assert_eq!((l.width, l.height), (64 >> (k + 1), 32 >> (k + 1)));
+            for t in &l.texels {
+                for ch in 0..3 {
+                    assert!((t[ch] - c[ch]).abs() <= 1.0e-4 * c[ch], "level {}: {t:?}", k + 1);
+                }
+            }
+        }
+        let sh = irradiance_sh(&map.level(), 0.3, 0.2);
+        for s in [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.6, 0.0, -0.8]] {
+            let y = sh9(s);
+            for ch in 0..3 {
+                let e: f32 = (0..9).map(|k| sh[k][ch] * y[k]).sum();
+                assert!((e - c[ch]).abs() <= 2.0e-3 * c[ch], "{s:?}: {e} against {}", c[ch]);
+            }
+        }
+    }
+
+    /// The map read through `env_uv` with no turn and a level horizon is
+    /// the map read through `map_uv`; turned a quarter, a quarter round.
+    #[test]
+    fn the_skys_frame_is_the_maps_untouched() {
+        for s in [[0.3f32, 0.5, -0.81], [-0.7, -0.2, 0.68], [0.0, 1.0, 0.0]] {
+            let n = (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]).sqrt();
+            let s = s.map(|v| v / n);
+            let (a, b) = (env_uv(s, 0.0, 0.0), map_uv(s));
+            assert!((a.0 - b.0).abs() < 1.0e-5 && (a.1 - b.1).abs() < 1.0e-5, "{a:?} against {b:?}");
+            let q = env_uv(s, 0.25, 0.0);
+            if s[1].abs() < 0.99 {
+                assert!(((q.0 - a.0).rem_euclid(1.0) - 0.75).abs() < 1.0e-5, "{q:?} against {a:?}");
+            }
+        }
+    }
+
+    /// The harmonics light as the sky does: on the Sunflowers sky without
+    /// its sun, a white surface's radiance by the nine coefficients against
+    /// the cosine-weighted integral over the whole map, facing up, down
+    /// and to six sides -- within 6% of the sky's brightest face.
+    #[test]
+    fn the_irradiance_harmonics_light_as_the_sky() {
+        let map = bundled("sunflowers");
+        let small = map.small();
+        let sh = irradiance_sh(&small, 0.0, 0.0);
+        let faces = [[0.0f32, 1.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.6, 0.6, 0.53], [-0.5, -0.4, 0.77]];
+        let mut results = Vec::new();
+        for n in faces {
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let n = n.map(|v| v / l);
+            let mut e = 0.0f64;
+            for y in 0..map.height {
+                let sa = texel_solid_angle(y, map.width, map.height) as f64;
+                for x in 0..map.width {
+                    let d = map_direction((x as f32 + 0.5) / map.width as f32, (y as f32 + 0.5) / map.height as f32);
+                    let c = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]).max(0.0) as f64;
+                    e += lum(map.texels[(y * map.width + x) as usize]) as f64 * c * sa;
+                }
+            }
+            let truth = (e / std::f64::consts::PI) as f32;
+            let y = sh9(n);
+            let got: f32 = (0..9).map(|k| lum(sh[k]) * y[k]).sum();
+            results.push((n, truth, got));
+        }
+        let top = results.iter().map(|r| r.1).fold(0.0f32, f32::max);
+        for (n, truth, got) in &results {
+            println!("face {n:?}: integral {truth:.4}, harmonics {got:.4}");
+            assert!((got - truth).abs() <= 0.06 * top, "face {n:?}: {got} against {truth}");
+        }
+    }
+
+    /// The reflection levels keep the sky's light: each level's whole
+    /// (luminance by solid angle) within 1.5% of the map's, and the Sunflowers
+    /// sky's levels made in well under a second.
+    #[test]
+    fn the_reflection_levels_keep_the_light() {
+        let map = bundled("sunflowers");
+        let t = std::time::Instant::now();
+        let levels = map.reflection_levels();
+        println!("reflection levels in {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+        let whole = |l: &EnvLevel| -> f64 {
+            (0..l.height)
+                .map(|y| {
+                    let sa = texel_solid_angle(y, l.width, l.height) as f64;
+                    (0..l.width).map(|x| lum(l.texels[(y * l.width + x) as usize]) as f64).sum::<f64>() * sa
+                })
+                .sum()
+        };
+        let base = whole(&map.level());
+        for (k, l) in levels.iter().enumerate() {
+            let r = whole(l) / base;
+            println!("level {}: {}x{}, light {:.4} of the map's", k + 1, l.width, l.height, r);
+            assert!((r - 1.0).abs() < 0.015, "level {}: {r}", k + 1);
+        }
     }
 
     /// The horizon's warp: the map's horizon at the elevation asked, its
