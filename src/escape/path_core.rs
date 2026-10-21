@@ -1408,6 +1408,16 @@ struct DenoiseParams {
     split_spec: u32,
     spec_pass: u32,
     rough: f32,
+    // The confidence bound (`finish`): how many of a pixel's standard
+    // errors it may move, the samples it starts from, and over how many
+    // more it eases in (`DenoiseTrust`).
+    trust: f32,
+    trust_from: f32,
+    trust_ramp: f32,
+    // The neighbourhood clamp's test (`prepare`): a pixel past the cap is
+    // clamped while its excess is within this many of its standard errors
+    // -- noise -- and kept past them, a real glint (0: always clamped).
+    clamp_z: f32,
 };
 @group(0) @binding(0) var<uniform> dp: DenoiseParams;
 @group(0) @binding(1) var<storage, read> pt_sum: array<vec4<f32>>;
@@ -1424,15 +1434,10 @@ struct DenoiseParams {
 // The albedo's luminance below which the variance is not divided by it.
 const DN_FLOOR: f32 = 0.01;
 
-// How many of a pixel's standard errors the filter may move it by (at
-// 16 samples and more; more below), and from how many samples.
-const DN_TRUST: f32 = 1.0;
-const DN_TRUST_FROM: u32 = 8u;
 
-// How many times its neighbours' brightest a pixel's light may be (D3),
-// to `DN_CLAMP_FULL` samples; past them, more in proportion.
+// How many times its neighbours' brightest a pixel's light may be (D3);
+// past `dp.clamp_full` samples, more in proportion.
 const DN_CLAMP_FACTOR: f32 = 2.0;
-const DN_CLAMP_FULL: u32 = 16u;
 
 fn dn_lum(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -1631,10 +1636,15 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // An outlier: no brighter than `DN_CLAMP_FACTOR` times the brightest
     // of its neighbours on the same surface (D3), so one rare path -- a
-    // bounce that found a small light, a glint -- does not stand out of
-    // the filter as a dot. Loosening past `DN_CLAMP_FULL` samples in
-    // proportion, so it fades rather than switching off, and a picture of
-    // many samples keeps the spiky light a metal really has.
+    // bounce that found a small light -- does not stand out of the filter
+    // as a dot. But only while its excess is within its own noise (a few
+    // of its standard errors, `dp.clamp_z`; at under four samples, always):
+    // a rare path is one sample far from the rest, so its pixel's spread is
+    // as large as its excess, where a metal's real glint is bright in every
+    // sample. (It loosened by the sample count before: from 16 samples a
+    // pixel could be the count over 8 times its neighbours, and paths
+    // clamped at 16 came through at 32 as speckles -- user-reported, more
+    // speckle with more samples.)
     var light = p.light;
     var spec = p.spec;
     let nc = dn_n(gid.x, gid.y);
@@ -1660,8 +1670,10 @@ fn prepare(@builtin(global_invocation_id) gid: vec3<u32>) {
         // share clipped a highlight a few pixels wide (the matte
         // Mandelbulb's, measured).
         let l = dn_lum(light + spec);
-        let cap = DN_CLAMP_FACTOR * max(1.0, f32(nc) / f32(DN_CLAMP_FULL)) * top;
-        if (found && l > cap) {
+        let cap = DN_CLAMP_FACTOR * top;
+        let whole = sqrt(select(variance, variance + spec_variance, dp.split_spec != 0u));
+        let noise = nc < 4u || dp.clamp_z <= 0.0 || l - cap <= dp.clamp_z * whole;
+        if (found && l > cap && noise) {
             light = light * (cap / l);
             spec = spec * (cap / l);
         }
@@ -1779,26 +1791,34 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let filtered = light * p.albedo;
     // The filter may move a pixel from its own mean by no more than
-    // `DN_TRUST` of that mean's standard errors (its samples' luminance
+    // `dp.trust` of that mean's standard errors (its samples' luminance
     // moments over their coverage): within them the change is noise
     // removed; past them it is the picture's detail averaged away --
     // a fractal's sub-pixel relief and colouring, which neighbours cannot
     // stand in for -- left as blotches. As the samples gather the bound
     // closes, and the picture converges to the samples' own.
     // (path-tracing-research: measured against 1024 samples, filtering
-    // more made solids worse.) Below `DN_TRUST_FROM` samples the moments
-    // are too few to judge by, and the filter stands; past it the bound is
-    // `sqrt(16 / n)` errors, at least one, as the moments firm up.
+    // more made solids worse.) Below `dp.trust_from` samples the moments
+    // are too few to judge by, and the filter stands; past it the bound
+    // eases in (`DenoiseTrust`).
     var out = filtered;
-    if (n >= DN_TRUST_FROM) {
+    if (f32(n) >= dp.trust_from) {
         let s = pt_sum[u32(px.y) * dp.width + u32(px.x)];
         let raw = s.rgb / s.a;
         let se = sqrt((dn_var(p.m1, p.m2) + dn_var(p.s1, p.s2)) / max(p.cover, 1.0));
         let gap = abs(filtered - raw);
         let off = max(gap.r, max(gap.g, gap.b));
-        let allowed = DN_TRUST * max(sqrt(16.0 / f32(n)), 1.0) * se;
+        // A constant multiple of the error: shrinking with it, so a noisy
+        // pixel's remainder only falls as samples gather. (Times
+        // `max(1, sqrt(16 / n))`, as it was, the bound shrank as 1 / n, faster
+        // than the noise, and from 8 to 16 samples a pixel kept more of its
+        // noise with every sample.)
+        let allowed = dp.trust * se;
         let r = allowed / max(off, 1.0e-30);
-        out = raw + (filtered - raw) * select(1.0, r * r, off > allowed);
+        // Eased in over `trust_ramp` samples from its start, so one more
+        // sample never takes the filter away at once.
+        let ease = clamp((f32(n) - dp.trust_from + 1.0) / max(dp.trust_ramp, 1.0), 0.0, 1.0);
+        out = raw + (filtered - raw) * mix(1.0, select(1.0, r * r, off > allowed), ease);
     }
     textureStore(out_tex, px, vec4<f32>(out, p.cover / f32(n)));
 }
@@ -1942,6 +1962,43 @@ fn next_adaptive_check(count: u32, min: u32) -> u32 {
 /// 8 on a terrain and two solids at 4 and 16 samples, it was the best or
 /// within 0.03 of it everywhere.
 const DENOISE_SIGMA: f32 = 4.0;
+
+/// The denoiser's confidence bound (`finish`, path-tracing-research D2):
+/// how many of a pixel's standard errors the filter may move it by, from
+/// how many samples, eased in over how many more. User-reported
+/// 2026-10-20, "noise increases with more samples": the bound was one
+/// error times `max(1, sqrt(16 / n))`, switched on whole at 8 -- so one
+/// more sample took the filter away at once, and from 8 to 16 it tightened
+/// faster than the noise fell. Now 1.5 errors, eased in over 24 samples:
+/// measured, speckle never rises with the count (`more_samples_are_never_speckier`),
+/// at 1.7% more of the gate's mean error (0.879 of raw against 0.864),
+/// most on a metal Mandelbox's sub-pixel glints at 64 samples. Test-only
+/// `PT_DN_TRUST` (`trust,from,ramp`) measures others.
+#[derive(Debug, Clone, Copy)]
+struct DenoiseTrust {
+    trust: f32,
+    from: f32,
+    ramp: f32,
+}
+
+fn denoise_trust() -> DenoiseTrust {
+    #[cfg(test)]
+    if let Some(v) = std::env::var("PT_DN_TRUST").ok().map(|s| s.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 3) {
+        return DenoiseTrust { trust: v[0], from: v[1], ramp: v[2] };
+    }
+    DenoiseTrust { trust: 1.5, from: 8.0, ramp: 24.0 }
+}
+
+/// The neighbourhood clamp's test (`prepare`): how many of a pixel's
+/// standard errors its excess over the cap may be and still be clamped as
+/// noise (0, always clamped). Test-only `PT_DN_CLAMP` measures others.
+fn denoise_clamp_z() -> f32 {
+    #[cfg(test)]
+    if let Some(v) = std::env::var("PT_DN_CLAMP").ok().and_then(|s| s.trim().parse::<f32>().ok()) {
+        return v;
+    }
+    2.0
+}
 
 /// The samples to which the filter keeps that width; past them it
 /// narrows as `sqrt(DENOISE_FULL / n)`. Where a pixel's light varies
@@ -2614,11 +2671,12 @@ impl PathSum {
         let ([sa, sb], _) = d.spec.as_ref().expect("made above");
         let split = u32::from(split_on);
         let rough = self.rough;
+        let trust = denoise_trust();
         let guide = self.guide.as_ref().expect("guided");
         let params = |step: u32, spec_pass: bool| {
             let buf = device.create_buffer(&BufferDescriptor {
                 label: Some("Path Denoise Params"),
-                size: 48,
+                size: 64,
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -2627,7 +2685,24 @@ impl PathSum {
             queue.write_buffer(
                 &buf,
                 0,
-                bytemuck::cast_slice(&[w, h, self.count, at.row, step, sigma.to_bits(), at.band_end, at.col, adaptive, split, u32::from(spec_pass), rough.to_bits()]),
+                bytemuck::cast_slice(&[
+                    w,
+                    h,
+                    self.count,
+                    at.row,
+                    step,
+                    sigma.to_bits(),
+                    at.band_end,
+                    at.col,
+                    adaptive,
+                    split,
+                    u32::from(spec_pass),
+                    rough.to_bits(),
+                    trust.trust.to_bits(),
+                    trust.from.to_bits(),
+                    trust.ramp.to_bits(),
+                    denoise_clamp_z().to_bits(),
+                ]),
             );
             buf
         };

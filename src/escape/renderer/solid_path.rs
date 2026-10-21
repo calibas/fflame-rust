@@ -3363,6 +3363,50 @@ mod tests {
         assert!(with > without * 1.2, "{with} against {without}");
     }
 
+    /// More samples are never speckier, denoised (user-reported 2026-10-20:
+    /// "noise increases with more samples. There's certainly more
+    /// speckles"). The confidence bound switched on whole at 8 samples, and
+    /// the neighbourhood clamp loosened by the count from 16, so a rare
+    /// bright path clamped at 16 came through at 32. A metal Mandelbulb,
+    /// denoised at 7 to 64 samples: the pixels far brighter than 256
+    /// undenoised samples show them -- as the display shows them, by more
+    /// than 40 levels of 255 -- never more at a count than at the one before.
+    #[test]
+    fn more_samples_are_never_speckier() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (128u32, 72u32);
+        let base = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == "Mandelbulb").expect("the preset");
+        let c = gate_variant(&base, "metal");
+        let (_pt, palette) = config_palette(&device, &queue, &c);
+        let [exposure, power] = crate::escape::path_core::path_settings(&c, 1.0).display;
+        let level = |p: &[f32; 4]| {
+            let v = (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) * exposure;
+            if v > 0.0 { 255.0 * v.powf(power) } else { 0.0 }
+        };
+        let picture = |samples: u32, denoise: bool, seed: u32| {
+            let mut c = c.clone();
+            c.escape.path.denoise = denoise;
+            let mut r = solid_renderer_for(&device, &c, w, h);
+            r.path_seed_offset = seed;
+            r.render_solid_still(&device, &queue, &c, &palette, samples, || { wait(&device); true });
+            let out = read_texture(&device, &queue, r.solid_path_texture_for_test().expect("traced"), w, h);
+            r.destroy();
+            out
+        };
+        let reference = picture(256, false, 7919);
+        let mut last = usize::MAX;
+        for n in [7u32, 8, 16, 32, 64] {
+            let out = picture(n, true, 0);
+            let speckles = out.iter().zip(&reference).filter(|(o, r)| level(o) - level(r) > 40.0).count();
+            println!("{n} samples: {speckles} speckles");
+            assert!(speckles <= last, "{n} samples: {speckles} speckles, more than the count before's {last}");
+            last = speckles;
+        }
+    }
+
     /// A row no call has measured is priced at the model at least, not at
     /// twice the costliest row yet: the first pass meets the sky's rows
     /// first, a tenth of a millisecond each, and priced off them the next

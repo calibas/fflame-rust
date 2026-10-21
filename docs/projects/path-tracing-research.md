@@ -404,6 +404,25 @@ this order, each change measured before it lands:
    - **For your decision: the default.** Off keeps every picture as it
      was. On at 4 would make most solids faster to a given noise, and the
      Mandelbulb about as fast.
+   **Revised 2026-10-20 after the user's report** ("noise increases with
+   more samples. There's certainly more speckles"): on a gold Mandelbulb
+   under the Sunflowers sky, strong speckles (pixels 50 levels brighter
+   than 256 samples) went 1362, 1619, 1290, 1696, 680 at 7, 8, 16, 32 and
+   64 samples -- up at 8 (the confidence bound switched on whole) and at 32
+   (the neighbourhood clamp loosened by the count from 16). Two causes in
+   the bound: switched on at once, and as one error times
+   `max(1, sqrt(16 / n))` it shrank as 1 / n, faster than the noise, so
+   below 16 samples a noisy pixel kept more of its noise with every
+   sample. Now: 1.5 errors (constant), eased in from 8 samples over 24;
+   and the clamp holds at every count but only while a pixel's excess is
+   within two of its standard errors (a rare path is one sample far from
+   the rest; a real glint is bright in every sample). Speckles then
+   1363, 1204, 862, 795, 208, falling at every count
+   (`more_samples_are_never_speckier`); the gate's mean 0.879 of raw from
+   0.864 -- the price, most on the metal Mandelbox's sub-pixel glints at 64
+   samples (+16%). Measured and not kept: the bound eased but as before
+   (8 to 16 still rose on the metal Mandelbulb), 2 errors (0.883), no
+   bound (0.905).
 7. [x] **D5 specular and diffuse denoised apart** -- built 2026-10-20, on
    for a coated or metal material (TERRAIN.md, *Resolve and the
    denoiser*). The specular share is a sample's first surface's coat and
