@@ -2465,32 +2465,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod diag_tmp {
-    use super::super::builtins::C64;
-    use super::super::interp::{run, run_perturbed, Env, ParamValues};
-    #[test]
-    #[ignore = "diagnostic"]
-    fn barnsley_divergence() {
-        let (file, _) = super::super::parser::parse_file("B {\ninit:\n z = #pixel\nloop:\n if real(z) >= 0\n  z = (z - 1) * #pixel\n else\n  z = (z + 1) * #pixel\n endif\nbailout:\n |z| < 4\n}");
-        let (p, _) = super::super::check::check(&file.entries[0], super::super::EntryKind::Formula, super::super::Dialect::UltraFractal);
-        let p = p.unwrap();
-        let d = super::with_derived_equations(&p).unwrap();
-        let reference = C64::new(0.21939449458901822, 1.2720237674442672);
-        let px = C64::new(0.21939459458901822, 1.2720237674442672);
-        for m in 1..150u32 {
-            let env = Env::at(px, m);
-            let a = run(&p, &ParamValues::defaults(&p), None, &env).z;
-            let b = run_perturbed(&d, &ParamValues::defaults(&d), &env, reference, false).unwrap().z;
-            let r = run(&p, &ParamValues::defaults(&p), None, &Env::at(reference, m)).z;
-            if b.sub(a).abs() > 1e-9 * a.abs().max(1.0) || m % 20 == 0 {
-                println!("m {m}: direct {a:?}, perturbed {b:?}, reference {r:?}");
-                if b.sub(a).abs() > 1e-6 { break; }
-            }
-        }
-    }
-}
-
 /// Whether `y` is `-x`, `x` an operand [`same_operand`] tells.
 fn negation_of(y: &IExpr, x: &IExpr) -> bool {
     matches!(&y.kind, IExprKind::Unary(UnOp::Neg, inner) if same_operand(inner, x))
