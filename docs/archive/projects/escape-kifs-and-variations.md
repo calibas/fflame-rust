@@ -1,5 +1,7 @@
 # KIFS solids, and flame variations in escape-time
 
+> **Archived 2026-10-21** -- finished: A1-A5, B, C1, C1e, C2 and C4 built 2026-10-17..19 -- KIFS, Mandelbox and Mandelbulb solids, Rhai variations for flames and escape-time, transformations. C3 and what else is left are in [rhai-plugins.md](../../projects/rhai-plugins.md) (*Left from the KIFS and variations plan*). Read [ESCAPE.md](../../main/ESCAPE.md) and [VARIATIONS.md](../../main/VARIATIONS.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Planned 2026-10-17. Three parts, in this order of work: **A** the
 distance-estimated solids mode D was built to take (KIFS first, then
 the Mandelbox and the Mandelbulb), **C** flame variations written in
@@ -10,19 +12,19 @@ are.
 
 The direction this serves -- every plug-in a Rhai script, carried in
 the config, parameters animatable -- is recorded in
-[rhai-plugins.md](rhai-plugins.md) (2026-10-18), with the design rules
+[rhai-plugins.md](../../projects/rhai-plugins.md) (2026-10-18), with the design rules
 C keeps.
 
 Background: mode D's distance functions
-([docs/main/ESCAPE.md](../main/ESCAPE.md), `escape::ifs`), the formula
-language ([escape-formula-language.md](escape-formula-language.md)), the
+([docs/main/ESCAPE.md](../../main/ESCAPE.md), `escape::ifs`), the formula
+language ([escape-formula-language.md](../../projects/escape-formula-language.md)), the
 camera lens (`escape::lens`), the variation registry
-([docs/main/VARIATIONS.md](../main/VARIATIONS.md)).
+([docs/main/VARIATIONS.md](../../main/VARIATIONS.md)).
 
 ## A. Solids by distance estimate (mode D)
 
 Mode D's registry was made for these: the ifs-distance plan
-([docs/archive/escape-time/ifs-distance-rendering.md](../archive/escape-time/ifs-distance-rendering.md),
+([docs/archive/escape-time/ifs-distance-rendering.md](../escape-time/ifs-distance-rendering.md),
 end of §5) names the Mandelbulb, Mandelbox and KIFS distance functions
 as `IfsDef`s that need no flame, "catalogue work the day phase 3
 lands", so nobody plans a second marcher. Phase 3 landed, and the
@@ -195,7 +197,7 @@ on the CPU building configs and cannot run per sample.)
 **C1. The transformation entry kind**, Rhai only: `fn variation(p,
 params)` from a point to a point, with `PARAMS` as a formula's (the
 plan's "Later: transformations as flame variations" in
-[escape-formula-language.md](escape-formula-language.md)).
+[escape-formula-language.md](../../projects/escape-formula-language.md)).
 - *For flames*: compiled to a `VariationDef`, 2D WGSL reading its
   parameters through `get_param`, its 3D WGSL passing `z` through as
   JWildfire's 2D variations do; registered at runtime as plug-ins and
@@ -203,7 +205,7 @@ plan's "Later: transformations as flame variations" in
   order). The flame config carries the source, as an escape config
   carries a custom formula's; a `.flame` export cannot (JWildfire has
   no such variation) and says so; the API repository is told
-  ([docs/RELEASE.md](../RELEASE.md) §3).
+  ([docs/RELEASE.md](../../RELEASE.md) §3).
 - *For escape-time*: callable from a formula as a user function (IR
   inlined), so deep zoom and distance estimation follow where the
   rules derive them; and offered as a lens.

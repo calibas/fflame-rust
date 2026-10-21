@@ -645,7 +645,7 @@ pub enum ShadingField {
     /// A folding formula's paper (`FormulaFeature::Creases`): the height
     /// rises or falls with the distance from each crease, and the slope
     /// is exact, carried through the folds (`CreaseSettings`;
-    /// docs/projects/origami-creases.md). Flat on a formula without
+    /// docs/archive/projects/origami-creases.md). Flat on a formula without
     /// creases.
     Creases,
 }
@@ -709,7 +709,7 @@ impl CreasePattern {
 }
 
 /// A folding formula's paper, for the Creases relief field and terrain
-/// source (docs/projects/origami-creases.md). Each fold is a crease; the
+/// source (docs/archive/projects/origami-creases.md). Each fold is a crease; the
 /// paper rises or falls in a straight line with the distance from it,
 /// the same slope on both sides. Fold i's crease weighs `decay^i`, so the
 /// first is the main crease and each later one finer. A crease is a
@@ -742,7 +742,7 @@ pub const CREASE_DECAY_RANGE: (f32, f32) = (0.05, 1.0);
 /// slopes, so its creases run on unbounded; a terrain fits its heights
 /// to the whole range it sees, out to the horizon, where an unbounded
 /// rise would dwarf every crease near the camera
-/// (docs/projects/origami-creases.md).
+/// (docs/archive/projects/origami-creases.md).
 pub const CREASE_TERRAIN_REACH: f32 = 1.0;
 
 impl Default for CreaseSettings {
@@ -2355,7 +2355,7 @@ pub struct PathTraceConfig {
     /// takes `samples`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub noise_threshold: f32,
-    /// An HDRI sky (docs/projects/hdri-environment.md): a bundled one's
+    /// An HDRI sky (docs/archive/projects/hdri-environment.md): a bundled one's
     /// id (`escape::environment::ENVIRONMENTS`), empty for none. It lights
     /// the scene and is what reflections show, in place of the background,
     /// the gradient and the studio; Sky light is its brightness.

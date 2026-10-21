@@ -5493,7 +5493,7 @@ pub(crate) mod gpu_tests {
         }
     }
 
-    /// An HDRI sky on a terrain (docs/projects/hdri-environment.md, step 6),
+    /// An HDRI sky on a terrain (docs/archive/projects/hdri-environment.md, step 6),
     /// the world's with z up, under it alone (the Sunflowers sky without its
     /// sun; no lights, no ambient): a flat plane's diffuse is the path
     /// tracer's to the harmonics' error (it sees the whole upper sky); a

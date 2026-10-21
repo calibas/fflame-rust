@@ -816,7 +816,7 @@ fn formula_step(z: vec2<f32>, c: vec2<f32>, i: u32) -> vec2<f32> {
 }
 
 // The paper's creases (FormulaFeature::Creases; see
-// docs/projects/origami-creases.md): the folded paper's height at a
+// docs/archive/projects/origami-creases.md): the folded paper's height at a
 // starting point and the height's gradient there, from the folds the
 // orbit makes. Fold i is a crease weighing decay^i: the paper rises (a
 // valley, toward the viewer) or falls in a straight line with the

@@ -1,5 +1,7 @@
 # HDRI environments: skies that light and are reflected
 
+> **Archived 2026-10-21** -- finished for the desktop 2026-10-21: bundled skies light solids and terrains in both tiers, with procedural stars and Starfield. The web build's skies and skies past 1K go on in [online-assets.md](../../projects/online-assets.md), presets showing skies in [escape-sim-followups.md](../../projects/escape-sim-followups.md). Read [TERRAIN.md](../../main/TERRAIN.md) (*HDRI skies*) for how it works now; this is the record of what was planned and measured when it was written.
+
 Planned 2026-10-20 at the user's request: "I do want quality reflections,
 so I'd like to plan on HDRI support. I'd like to include a couple
 skyboxes, like one with a cloudy sky and another with stars ... most of

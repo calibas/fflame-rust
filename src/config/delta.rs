@@ -592,7 +592,7 @@ pub enum ConfigPath {
     EscapePathZenith,
     /// The studio environment (3d-look-and-tools P4).
     EscapePathStudio,
-    /// An HDRI sky (docs/projects/hdri-environment.md): its id, its turn
+    /// An HDRI sky (docs/archive/projects/hdri-environment.md): its id, its turn
     /// about the up axis, whether the camera sees it.
     EscapePathEnvironmentMap,
     EscapePathEnvironmentRotation,

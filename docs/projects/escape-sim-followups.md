@@ -76,6 +76,28 @@ would need to carry a flat track onto layer 0.
 
 ## TODO: the solid path tracer's speed
 
+**Since (2026-10-20):** researched and the agreed order built -- the
+denoiser's fixes, adaptive sampling, specular and diffuse denoised
+apart, the ray tolerance, the fused march measured slower and parked
+([path-tracing-research.md](../archive/projects/path-tracing-research.md), archived; TERRAIN.md
+for how it works now). The record below is where that work started.
+Left, for the user's decision or later:
+- **S2's deeper rewrite** (the march fused with the path's state; parked
+  slower as built) and **S3, a wavefront path tracer** (a pass per
+  bounce) -- the speed levers left.
+- **D6, a learned denoiser** (Intel Open Image Denoise, or a small
+  network of our own): a model and a library.
+- **V3, blue-noise sampling** (Ahmed and Wonka 2020); **V4, Russian
+  roulette on shadow rays past the first surface** (5-10%, some noise),
+  and from the first bounce rather than the second -- a crevice's long
+  paths are the costly ones.
+- **S4, more compiled in or out** (the coat, MIS, the shadow rays) and
+  **S5, a coarse distance cache** (speculative).
+- **Zirr et al. 2018's outlier re-weighting** for stills (three to six
+  vec4 a pixel more).
+- **Adaptive sampling's default**: off (as shipped), or on at a
+  threshold of 4.
+
 **Where it stands** (GTX 1660 SUPER, the shipped Menger Sponge at
 1080p, default settings -- two bounces, two lights, shadows 0.7): a
 sample takes **6.2 s** in the viewport, **4.7 s** in an export; the lit
@@ -176,6 +198,27 @@ call budget, whole frames at 640 wide or less; `MENGER_W`,
 `PACE_W`, `PACE_SHIFT`). Measure small: a band near two seconds
 resets the display driver for the whole desktop.
 
+## 3D views: not built
+
+From finished plans, archived 2026-10-21:
+- **From [3d-look-and-tools.md](../archive/projects/3d-look-and-tools.md):** underlining a
+  formula check's errors in the Formula Editor's text (it keeps the
+  messages, not their spans; P1); a light's size apart from its shadow
+  sharpness -- a broad highlight under a sharp shadow, left for the user
+  (P4); Iteration transformations for every solid, which needs a step
+  factor (the built-ins' distance estimates cannot know a variation's
+  stretch; P5).
+- **From [lights-in-the-fractal.md](../archive/projects/lights-in-the-fractal.md):** a point
+  light on a terrain (its world moves with the view; it needs a fixed
+  frame -- greyed in the panel now); more than four lights (the geometry
+  record holds four shadow terms); placing a light by clicking a surface,
+  or a fly-mode key to drop one; emissive geometry (Glow lights nothing
+  else).
+- **From [origami-creases.md](../archive/projects/origami-creases.md):** a Paper preset.
+- **From [hdri-environment.md](../archive/projects/hdri-environment.md):** presets that show
+  the skies; the web build's skies and skies past 1K are in
+  [online-assets.md](online-assets.md).
+
 ## Known gaps, not fixed in PR #129
 
 - ~~The video's deep-zoom memory check looks only at the base config, not
@@ -188,8 +231,8 @@ resets the display driver for the whole desktop.
   picture.
 - The Spanish, Japanese and Chinese locales fall back to English for
   most panels.
-- The animation picker's View and Rendering categories are not yet
-  gated by render mode -- deferred to the camera/View panel work.
+- ~~The animation picker's View and Rendering categories are not yet
+  gated by render mode.~~ They are (`target_selector.rs`).
 
 ## The escape engine: not built
 
@@ -223,6 +266,10 @@ else in that record is built. These are not:
 - **GPU reference-orbit computation (the NTT direction)** —
   measurement-gated go/no-go, never run. See
   [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md).
+- **Mode C, the escape-time IFS buffer** -- closed for affine maps by
+  decision D9 (2026-09-10; ESCAPE.md, the modes' table): mode D gives
+  its level in one pass. Folds and non-invertible maps would be its only
+  ground, should it be revived.
 - **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
   since before 2026-09-02; verified pre-existing against a stashed
   tree. Unrelated to the tiers.

@@ -1,4 +1,4 @@
-//! Fly mode's clearance (docs/projects/3d-look-and-tools.md, P6): how far
+//! Fly mode's clearance (docs/archive/projects/3d-look-and-tools.md, P6): how far
 //! the eye is from a solid's surface -- the solid's own distance estimate
 //! there, `ifs_distance_at` at the eye, for every solid kind and a Rhai
 //! one alike, at the render's precision -- measured by one GPU thread and

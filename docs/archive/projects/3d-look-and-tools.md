@@ -1,5 +1,7 @@
 # 3D look, lighting panel and tools
 
+> **Archived 2026-10-21** -- finished: P1-P7 built by 2026-10-19 -- formula syntax highlighting, the 3D look, the Lighting & Material panel, metallic and polished materials, flame variations in solids, fly-mode collisions and speed, the path-tracing research. What was left is in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*3D views: not built*). Read [TERRAIN.md](../../main/TERRAIN.md), [UI.md](../../main/UI.md) and [CAMERA.md](../../main/CAMERA.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Planned 2026-10-19 from the user's list (in their words where quoted),
 worked on while they were away. Each project has its steps, its gates and
 its status; the order of work is at the end. Lighting and material work is

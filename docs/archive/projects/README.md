@@ -1,7 +1,7 @@
 # Archived project docs
 
 Finished, superseded and abandoned plans from [docs/projects/](../../projects/),
-under the names they had there. Each archived on 2026-10-10 carries a
+under the names they had there. Each archived since 2026-10-10 carries a
 banner saying which; for how a system works now, read
 [docs/main/](../../main/). These are the records of what was planned,
 decided and measured -- the place to look before re-attempting something.
@@ -14,7 +14,8 @@ decided and measured -- the place to look before re-attempting something.
 | Flame model and variations | linked-transforms, per-transform-linked-and-final, per-transform-linked-and-final-pr, final-transform-implementation, subflames, preserve-z-semantics, multi-emit-stereograms, variation-bulk-port (with variation-port-candidates.txt and variation-upstream-only.txt), VARIATIONS_BULK_METADATA_IMPORT, variation-math-probe, variation-reachability-census, apophysis-remaining-features |
 | Deep zoom, superseded | ifs-measure-by-inverse-walk, ifs-perturbation-delta, ifs-nonlinear-perturbation (the live family is in [projects/deep-zoom/](../../projects/deep-zoom/)) |
 | Simulation | simulation-fractals, simulation-pipeline, simulation-integration, simulation-layers, simulation-panel, simulation-derived-fields, mccabe-multiscale, sim-textures, texture-sampling, video-loop-and-sim-timeline |
-| 3D views | materials (the terrain and camera records are in [../terrain/](../terrain/) and [../3d-camera/](../3d-camera/)) |
+| 3D views | materials, 3d-look-and-tools, lights-in-the-fractal, path-tracing-research, hdri-environment (the terrain and camera records are in [../terrain/](../terrain/) and [../3d-camera/](../3d-camera/)) |
+| Escape-time | escape-kifs-and-variations, uf-transforms-review, origami-creases (the engine's own records are in [../escape-time/](../escape-time/)) |
 | Animation and audio | animation-system, animation-overhaul, audio-system, signal-panel, track-editor, embedded-animation-config |
 | UI | ui-render-modes, ui-improvements-docking, dynamic-docking-refactor, mouse-input-routing, mobile-ui-redesign, ux-improvements, fractal-browser, random-generator-panel, presets |
 | Config | config-v2-migration (closed without a value migration) |

@@ -108,7 +108,7 @@ pub enum FormulaFeature {
     /// paper's height at a starting point and the height's gradient
     /// there, in the plane's units, from the settings in
     /// `params.crease` (`CreaseSettings`). The Creases relief field and
-    /// terrain source draw it (docs/projects/origami-creases.md);
+    /// terrain source draw it (docs/archive/projects/origami-creases.md);
     /// without the flag neither is offered, and the assembler never
     /// calls the function.
     Creases,

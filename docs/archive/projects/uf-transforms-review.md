@@ -1,13 +1,15 @@
 # Ultra Fractal transformations vs. our flame variations
 
+> **Archived 2026-10-21** -- finished: the review of Ultra Fractal's 192 transformation classes against our variations, 2026-10-18. The maps it found missing are an open pick in [rhai-plugins.md](../../projects/rhai-plugins.md); this is the record of what was reviewed when it was written.
+
 Reviewed 2026-10-18 for the KIFS plan's item 8
 ([escape-kifs-and-variations.md](escape-kifs-and-variations.md)), at the
 user's request once C (Rhai variations, their hooks) was done: what UF's
 transformations cover, and which our variations already do. UF
 transformations themselves stay unsupported (UF support is paused,
-[escape-formula-language.md](escape-formula-language.md)); the maps
+[escape-formula-language.md](../../projects/escape-formula-language.md)); the maps
 worth having are candidates for Rhai variations
-([rhai-plugins.md](rhai-plugins.md)). The library was UF's public
+([rhai-plugins.md](../../projects/rhai-plugins.md)). The library was UF's public
 formula download, read as text for measurement only and never bundled;
 nothing here is UF code, only descriptions and the maths.
 

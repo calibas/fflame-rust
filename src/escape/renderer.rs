@@ -4359,7 +4359,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         true
     }
 
-    /// An HDRI sky (docs/projects/hdri-environment.md), or none: its map
+    /// An HDRI sky (docs/archive/projects/hdri-environment.md), or none: its map
     /// loaded and uploaded when it changes (`environment::EnvSlot`), its
     /// sun the rig's next free light. True when anything about it changed
     /// -- its sun's shadow is a walk input (`lighting_key`).

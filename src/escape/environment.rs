@@ -1,4 +1,4 @@
-//! HDRI environments (docs/projects/hdri-environment.md): a sky photographed
+//! HDRI environments (docs/archive/projects/hdri-environment.md): a sky photographed
 //! all round, that lights a solid or a terrain, is what its reflections
 //! show, and is the backdrop the camera sees.
 //!

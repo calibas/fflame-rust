@@ -80,7 +80,7 @@ resolves the name decides the mode.
 | --- | --- | --- | --- |
 | A — iterate & classify | an orbit of `z ← f(z, c)`, ended by escape, convergence or `max_iter`, coloured from its summary | `FORMULAS`, `COLORINGS` | built |
 | B — field | a finite sum or a finite-orbit statistic; no escape, no classification | `fields::FIELDS`, `fields::FIELD_COLORINGS` | built |
-| C — escape-time IFS | the Hepting–Hart escape buffer: an image-space fixed point over ping-pong textures | — | **planned, not built**; design record §6 and [escape-time-ifs.md](../archive/escape-time/escape-time-ifs.md) |
+| C — escape-time IFS | the Hepting–Hart escape buffer: an image-space fixed point over ping-pong textures | — | **closed for affine maps** (decision D9, 2026-09-10, [ifs-distance-rendering.md](../archive/escape-time/ifs-distance-rendering.md)): mode D's beam walk gives its level in one pass -- short of the buffer's on 0.7% of points by at most 2 levels, never over (`the_beams_level_against_what_the_escape_buffer_would_give`) -- and its Escape Level colouring is Hepting–Hart's E(x). Folds and non-invertible maps would be its only ground; the design is §6 of the archived record and [escape-time-ifs.md](../archive/escape-time/escape-time-ifs.md) |
 | D — distance | the distance from the pixel to a set, by inverse iteration (the loaded flame) or a distance estimator (a solid) | `ifs::IFS_DEFS`, `ifs::IFS_COLORINGS` | built |
 
 **Routing.** `EscapeRenderer::ensure_pipeline` asks `ifs::get_ifs` first,
@@ -1304,7 +1304,7 @@ built-in Mandelbox under the trap colouring, and
 `prepare`, a function parameter and vector helpers, covering the
 built-in's pixels exactly (`rhai_solids_render_as_the_builtins`).
 
-**KIFS (Solid)** ([escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md),
+**KIFS (Solid)** ([escape-kifs-and-variations.md](../archive/projects/escape-kifs-and-variations.md),
 A1) takes its folds from Syntopia's "Folding Space" (2011): the
 Sierpinski tetrahedron's three plane folds, `abs` of each axis
 (cubic), those and a descending sort (octahedral), and the sponge's
@@ -1411,7 +1411,7 @@ the measure colouring, [ifs-measure-by-inverse-walk.md](../archive/projects/ifs-
 ## Transformations
 
 Flame variations applied to the fractal rather than the camera (the
-KIFS plan, C4; [escape-kifs-and-variations.md](../projects/escape-kifs-and-variations.md)),
+KIFS plan, C4; [escape-kifs-and-variations.md](../archive/projects/escape-kifs-and-variations.md)),
 `EscapeConfig::transforms`, edited in the Escape panel's
 Transformations section for mode A's formulas. Each is a variation (any
 registered one with a 2D body, built-in or the user's -- the flame
