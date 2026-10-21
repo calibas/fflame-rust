@@ -318,7 +318,11 @@ fn angle_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, label: &str,
 }
 
 /// A pinhole camera's vertical field of view in degrees, 3..170 (the
-/// renderers clamp what is typed beyond).
+/// renderers clamp what is typed beyond). Clamped on edits only: egui's
+/// default clamps -- and rounds to the one decimal shown -- the value it
+/// is handed on every draw, so the default 0.7 rad (40.107 degrees) was
+/// written back as 40.1 whenever the View panel showed, and every solid
+/// and terrain drew again (user-reported 2026-10-21).
 fn fov_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPath, radians: f32) {
     let mut deg = radians.to_degrees();
     if ui
@@ -326,7 +330,8 @@ fn fov_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPa
             egui::Slider::new(&mut deg, 3.0..=170.0)
                 .text(t!("escape_panel.camera_fov").as_ref())
                 .suffix("°")
-                .fixed_decimals(1),
+                .fixed_decimals(1)
+                .clamping(egui::SliderClamping::Edits),
         )
         .on_hover_text(t!("escape_panel.camera_fov_tip"))
         .changed()

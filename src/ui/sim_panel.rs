@@ -538,7 +538,8 @@ pub fn render_sim_content(
                     .add(
                         egui::Slider::new(&mut zoom, 0.98..=1.02)
                             .text(t!("sim_panel.warp_zoom").as_ref())
-                            .fixed_decimals(4),
+                            .fixed_decimals(4)
+                            .clamping(egui::SliderClamping::Edits),
                     )
                     .on_hover_text(t!("sim_panel.warp_zoom_tip"))
                     .changed()
@@ -582,7 +583,8 @@ pub fn render_sim_content(
                     .add(
                         egui::Slider::new(&mut flow, -0.05..=0.05)
                             .text(t!("sim_panel.warp_flow").as_ref())
-                            .fixed_decimals(4),
+                            .fixed_decimals(4)
+                            .clamping(egui::SliderClamping::Edits),
                     )
                     .on_hover_text(t!("sim_panel.warp_flow_tip"))
                     .changed()
@@ -830,7 +832,7 @@ fn render_scale_warp_target(ui: &mut egui::Ui, config_manager: &mut ConfigManage
             _ => t!("sim_panel.warp_flow"),
         };
         if ui
-            .add(egui::Slider::new(&mut v, def.min..=def.max).text(text.as_ref()).fixed_decimals(4))
+            .add(egui::Slider::new(&mut v, def.min..=def.max).text(text.as_ref()).fixed_decimals(4).clamping(egui::SliderClamping::Edits))
             .on_hover_text(def.tooltip)
             .changed()
         {
@@ -1749,7 +1751,8 @@ fn render_model_section(
                             .add(
                                 egui::Slider::new(&mut strength, -2.0..=2.0)
                                     .text(t!("sim_panel.coupling_strength").as_ref())
-                                    .fixed_decimals(3),
+                                    .fixed_decimals(3)
+                                    .clamping(egui::SliderClamping::Edits),
                             )
                             .on_hover_text(t!("sim_panel.coupling_strength_tip"))
                             .changed()

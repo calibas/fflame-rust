@@ -841,7 +841,7 @@ pub fn render_escape_content(
                     ui.label(t!("escape_panel.contrast_clip"));
                     let mut v = ct.clip;
                     if ui
-                        .add(egui::Slider::new(&mut v, 0.0..=0.25).fixed_decimals(3))
+                        .add(egui::Slider::new(&mut v, 0.0..=0.25).fixed_decimals(3).clamping(egui::SliderClamping::Edits))
                         .on_hover_text(t!("escape_panel.tooltip_contrast_clip"))
                         .changed()
                     {
@@ -1539,7 +1539,7 @@ pub(crate) fn show_render_tier(
         ui.label(t!("escape_panel.path_noise_threshold"));
         let mut v = pt.noise_threshold;
         if ui
-            .add(egui::Slider::new(&mut v, 0.0..=16.0).step_by(0.25))
+            .add(egui::Slider::new(&mut v, 0.0..=16.0).step_by(0.25).clamping(egui::SliderClamping::Edits))
             .on_hover_text(t!("escape_panel.path_noise_threshold_tip"))
             .changed()
         {
@@ -1922,7 +1922,7 @@ fn show_terrain_section(
                 let mut v = t.softness;
                 // Each step re-renders the ground: a coarse step.
                 let r = ui
-                    .add(egui::Slider::new(&mut v, 0.0..=crate::config::escape::MAX_TERRAIN_SOFTNESS).step_by(0.25))
+                    .add(egui::Slider::new(&mut v, 0.0..=crate::config::escape::MAX_TERRAIN_SOFTNESS).step_by(0.25).clamping(egui::SliderClamping::Edits))
                     .on_hover_text(t!("escape_panel.terrain_softness_tip"));
                 if r.changed() {
                     let _ = config_manager.update_param(ConfigPath::EscapeTerrainSoftness, v.into());
