@@ -375,7 +375,7 @@ fn overlay_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager, has_t
         let mut v = ov.power;
         let (lo, hi) = crate::config::escape::OVERLAY_POWER_RANGE;
         if ui
-            .add(egui::Slider::new(&mut v, lo..=hi).step_by(1.0).fixed_decimals(0))
+            .add(egui::Slider::new(&mut v, lo..=hi).step_by(1.0).fixed_decimals(0).clamping(egui::SliderClamping::Edits))
             .on_hover_text(t!("textures_panel.power_tip"))
             .changed()
         {

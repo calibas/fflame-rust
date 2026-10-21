@@ -302,6 +302,101 @@ mod tests {
         }
     }
 
+    /// The leaves of a config's JSON that differ between two configs, by
+    /// their dotted paths.
+    fn differences(a: &serde_json::Value, b: &serde_json::Value, at: &str, out: &mut Vec<String>) {
+        match (a, b) {
+            (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+                for k in x.keys().chain(y.keys().filter(|k| !x.contains_key(*k))) {
+                    let n = serde_json::Value::Null;
+                    differences(x.get(k).unwrap_or(&n), y.get(k).unwrap_or(&n), &format!("{at}.{k}"), out);
+                }
+            }
+            (serde_json::Value::Array(x), serde_json::Value::Array(y)) if x.len() == y.len() => {
+                for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                    differences(p, q, &format!("{at}[{i}]"), out);
+                }
+            }
+            _ if a != b => out.push(format!("{at}: {a} -> {b}")),
+            _ => {}
+        }
+    }
+
+    /// Showing the View panel writes nothing (user-reported 2026-10-21:
+    /// switching to it redrew 3D scenes -- its field of view slider
+    /// rounded the default 40.107 degrees to the 40.1 it shows), nor does
+    /// the Lighting & Material panel: every bundled preset in a 3D view,
+    /// each view's default, and a solid under a sky whose horizon and
+    /// stars are past their sliders' ranges, drawn for two frames -- no
+    /// change to the config, nothing for the renderer to do.
+    #[test]
+    fn showing_the_view_panel_writes_nothing() {
+        use crate::scene::transforms::RenderMode;
+        let mut configs: Vec<(String, FractalConfig)> = crate::resources::load_presets_with_fallback()
+            .into_iter()
+            .filter(|c| c.render_mode != RenderMode::TwoD)
+            .map(|c| (c.flame.name.clone(), c))
+            .collect();
+        let mut d = FractalConfig::default();
+        d.render_mode = RenderMode::ThreeD;
+        configs.push(("default 3D".into(), d));
+        #[cfg(feature = "engine-escape")]
+        {
+            let mut e = FractalConfig::default();
+            e.render_mode = RenderMode::Escape;
+            e.escape.formula = "quaternion_julia_solid".to_string();
+            configs.push(("default solid".into(), e.clone()));
+            e.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
+            e.escape.path.environment_map = "sunflowers".to_string();
+            e.escape.path.environment_horizon = 60.0;
+            e.escape.path.environment_stars = 8.0;
+            configs.push(("solid under a sky past its sliders".into(), e));
+            #[cfg(feature = "terrain")]
+            {
+                let mut t = FractalConfig::default();
+                t.render_mode = RenderMode::Escape;
+                t.escape.terrain.enabled = true;
+                configs.push(("default terrain".into(), t));
+            }
+        }
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut s = FractalConfig::default();
+            s.render_mode = RenderMode::Simulation;
+            s.sim.terrain.enabled = true;
+            configs.push(("default simulation terrain".into(), s));
+        }
+        let mut offenders = Vec::new();
+        for (name, config) in configs {
+            let before = serde_json::to_value(&config).expect("serializes");
+            let ctx = egui::Context::default();
+            let mut manager = ConfigManager::new(config);
+            manager.clear_pending_actions();
+            let flame = manager.active_config().flame.clone();
+            let deep = super::super::DeepZoom::default();
+            let mut toggle = false;
+            for _ in 0..2 {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut open = false;
+                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None, &mut open);
+                        super::super::lighting_panel::render_lighting_panel_content(ui, &mut manager);
+                    });
+                });
+            }
+            let after = serde_json::to_value(manager.active_config()).expect("serializes");
+            let mut diff = Vec::new();
+            differences(&before, &after, "", &mut diff);
+            let acted = format!("{:?}", manager.get_pending_actions()) != format!("{:?}", crate::config::UpdateAction::none());
+            if !diff.is_empty() || acted || manager.history_len() > 0 {
+                offenders.push(format!("{name}: {diff:?}, history {}, actions {:?}", manager.history_len(), manager.get_pending_actions()));
+            }
+        }
+        assert!(offenders.is_empty(), "showing the View and Lighting panels wrote:
+{}", offenders.join("
+"));
+    }
+
     #[test]
     fn the_view_panel_lays_out_in_every_view() {
         use crate::scene::transforms::RenderMode;
