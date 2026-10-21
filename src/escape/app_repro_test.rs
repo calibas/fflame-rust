@@ -1747,7 +1747,7 @@ mod tests {
                 while zoom < 9.0 {
                     esc.center_re = format!("{cx:.17}");
                     esc.center_im = format!("{cy:.17}");
-                    esc.zoom_log2 = zoom;
+                    esc.zoom_log2 = zoom.into();
                     let recs = records_on(&esc, ww, wh, false, false, true);
                     let mx = esc.max_iter as u32;
                     // Interior pixels hold n = max_iter; the boundary
@@ -2791,6 +2791,91 @@ mod tests {
             assert!(escaped > truth.len() / 4, "digit set {digit_set}: the view escapes too little");
             assert!(right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set}: {right} of {}", truth.len());
             assert!(deep_right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set} floatexp: {deep_right} of {}", truth.len());
+        }
+    }
+
+    /// Fractint's Frothy Basin, Volterra-Lotka and Unity, written in Rhai
+    /// (`assets/formulas`; that they run as Fractint's loops is
+    /// `escape::legacy`'s): on the GPU at their home views the direct path,
+    /// and at zoom 30 on a boundary (`escape::legacy::print_boundary_views`)
+    /// the perturbed path on both rungs, count as the program does in big
+    /// floats -- within 8% of the pixels f64 itself gets right, which is
+    /// what a chaotic map allows. Measured (of 439 sampled):
+    /// Volterra-Lotka 439 everywhere, as f64. Unity 430 at home (f64 433);
+    /// at depth on its escaping side 399 on both rungs (f64 411) -- its
+    /// circle test asks for |r^2 - 1| under a pixel, which nothing short of
+    /// big floats resolves at depth (f64: 0 of 439 on a settling boundary),
+    /// so a deep view settles wrong there. Frothy Basin 407 at home in f32
+    /// (f64 439: its landing test is 1e-6 on a chaotic orbit); at depth 318
+    /// scaled, 347 floatexp (f64 351): riddled basins. `PT_LEGACY=print`
+    /// prints only.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_fractint_legacy_formulas_render_and_deep_zoom() {
+        let print_only = std::env::var("PT_LEGACY").is_ok_and(|v| v == "print");
+        // (file, bailout, home centre and zoom, the deep view's centre)
+        let cases: &[(&str, f32, (&str, &str), f32, (&str, &str))] = &[
+            ("volterra-lotka.rhai", 256.0, ("3.0", "2.25"), -0.169925, ("0.30524156307476624", "2.0")),
+            ("unity.rhai", 4.0, ("0.0", "0.0"), 0.415037, ("-1.40535280925440076", "0.13")),
+            ("frothy-basin.rhai", 7.0, ("0.0", "-0.255"), -0.070389, ("-0.59099555910093771", "-0.6")),
+        ];
+        for &(file, bailout, home, home_zoom, deep) in cases {
+            let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
+            let src = crate::config::escape::CustomSource {
+                dialect: crate::config::escape::CustomDialect::Rhai,
+                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                source: text.to_string(),
+                variations: Vec::new(),
+            };
+            let prog = std::sync::Arc::new(crate::escape::lang::rhai::program(text).unwrap());
+            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    values.values[i].0 = f64::from(bailout);
+                }
+            }
+            let values = as_on_the_gpu(values);
+            for (centre, zoom, max_iter) in [(home, home_zoom, 150u32), (deep, 30.0, 300)] {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                esc.custom_formula = Some(src.clone());
+                esc.center_re = centre.0.into();
+                esc.center_im = centre.1.into();
+                esc.zoom_log2 = zoom.into();
+                esc.max_iter = max_iter;
+                esc.bailout = bailout;
+                crate::escape::custom::ensure(&esc);
+                let truth = truth_counts_of(prog.clone(), values.clone(), centre, f64::from(zoom), max_iter, (64, 48), 7, 6);
+                let distinct = truth.iter().map(|(_, n)| *n).collect::<std::collections::BTreeSet<_>>().len();
+                // f64 itself, unperturbed, at the same pixels: the bar a
+                // chaotic map sets.
+                let (cx, cy) = (centre.0.parse::<f64>().unwrap(), centre.1.parse::<f64>().unwrap());
+                let span_y = 4.0 / f64::from(zoom).exp2();
+                let span_x = span_y * 64.0 / 48.0;
+                let f64_right = truth
+                    .iter()
+                    .filter(|(idx, n)| {
+                        let (px, py) = (*idx as u32 % 64, *idx as u32 / 64);
+                        let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
+                        let mut env = crate::escape::lang::interp::Env::at(c, max_iter);
+                        env.magn = f64::from(zoom).exp2();
+                        crate::escape::lang::interp::run(&prog, &values, None, &env).n == *n
+                    })
+                    .count();
+                println!("{file} at zoom {zoom}: f64 {f64_right} of {} right", truth.len());
+                let rungs: &[(bool, bool)] = if zoom < 1.0 { &[(false, false)] } else { &[(false, true), (true, true)] };
+                for &(floatexp, perturbed) in rungs {
+                    let got = records_on(&esc, 64, 48, floatexp, perturbed, !perturbed);
+                    let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                    let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+                    let how = if !perturbed { "direct" } else if floatexp { "floatexp" } else { "scaled" };
+                    println!("{file} at zoom {zoom}, {how}: {right} of {} right, {near} within one ({distinct} distinct counts)", truth.len());
+                    if !print_only {
+                        assert!(distinct > 3, "{file} at zoom {zoom}: the view shows too little");
+                        assert!(right + truth.len() * 8 / 100 >= f64_right, "{file} at zoom {zoom}, {how}: {right} of {}, f64 {f64_right}", truth.len());
+                    }
+                }
+            }
         }
     }
 
@@ -4066,7 +4151,7 @@ final:
             while zoom < 15.0 {
                 esc.center_re = format!("{cx:.17}");
                 esc.center_im = format!("{cy:.17}");
-                esc.zoom_log2 = zoom;
+                esc.zoom_log2 = zoom.into();
                 let recs = records_on(&esc, w, h, false, false, true);
                 let Some((i, _)) = recs.iter().enumerate().filter(|(_, r)| r.n < 1000).max_by_key(|(_, r)| r.n) else { break };
                 let (px, py) = (i as u32 % w, i as u32 / w);

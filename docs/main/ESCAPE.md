@@ -251,6 +251,41 @@ A toggle, not a list of formulas: `julia` on makes the pixel `z₀` with
 
 Each def's doc comment cites its source and the convention it pins.
 
+**Fractint's Frothy Basin, Volterra–Lotka and Unity** are formulas in
+Rhai, not built-ins (`assets/formulas/frothy-basin.rhai` with its
+colouring `frothy-basin-coloring.rhai`, `volterra-lotka.rhai`,
+`unity.rhai`; 2026-10-21): Formula Editor examples, and presets of their
+own, which carry the sources. Each is ported from Xfractint 20.04p16's
+source and runs as its loop does, pixel for pixel in f64
+(`escape::legacy`, against the loops written out):
+- **Frothy Basin** (`calcfroth`): `z² + conj((−1 + a i) z)` in Fractint's
+  arithmetic and order (the orbits are chaotic, and a rounding's order
+  moves a count), mapped once or twice a pass (three basins or six); an
+  orbit stops when it lands within 1e-6 of an attractor's line -- `y =
+  a/2` and its turns by 120° -- or leaves. Fractint's critical `a`
+  (1.02871376821872) rounds past itself in a parameter's f32, so the test
+  allows the rounding: at the default there are three basins. Its
+  colouring takes the basin as a band of the palette and the count as the
+  shade within it, Fractint's two schemes; its `a` and Mapping are the
+  formula's, set alike.
+- **Volterra–Lotka** (`VLfpFractal`, The Beauty of Fractals pp. 125–127):
+  the predator–prey equations stepped by Fractint's scheme, `h` and `p`
+  clamped to 0..1, bailout 256.
+- **Unity** (`UnityfpFractal`, Mark Peterson's): `y ← (2 − r²)x`, then `x
+  ← (2 − r²)y` with the new `y`; it stops past `r² > 2` or within a pixel
+  of the unit circle, testing each point before it maps it, as Fractint
+  does. The pixel is a row of the view at Rows rows (Fractint's 480), so
+  the picture does not change with the window, and deep zoom (which
+  refuses a formula reading the image's size) takes it.
+
+All three deep-zoom by derived equations
+(`the_fractint_legacy_formulas_render_and_deep_zoom`, of 439 pixels
+against big floats at zoom 30): Volterra–Lotka on all, both rungs. Unity
+on its escaping side 399 (f64 itself 411); its circle test asks for `|r²
+− 1|` under a pixel, which nothing short of big floats resolves at depth,
+so deep views settle wrong. Frothy Basin 318 scaled, 347 floatexp (f64
+351): its basins are riddled.
+
 ### The colourings
 
 | name | display name | what it shows |
@@ -423,7 +458,9 @@ fn escaped(s, p) {
   serves both languages unchanged; messages carry the script's names
   and positions.
 - Examples: `assets/formulas/mandelbrot.rhai`, `burning-ship.rhai`,
-  `phoenix.rhai` (the editor's New starts a Rhai formula). Tests:
+  `phoenix.rhai` (the editor's New starts a Rhai formula); Fractint's
+  `frothy-basin.rhai`, `volterra-lotka.rhai` and `unity.rhai` (*The
+  formulas*, above). Tests:
   `tests/formulas/rhai/` (every construct, the function names, the
   plane, a cycle), run on the GPU as the interpreter does; a Rhai
   formula runs as its UF twin, renders as its built-in, and deep-zooms

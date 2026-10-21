@@ -43,6 +43,10 @@ pub mod formulas;
 pub mod surface;
 pub mod presets;
 pub mod twins;
+/// Tests: Fractint's Frothy Basin, Volterra-Lotka and Unity, written in
+/// Rhai (`assets/formulas`), run as Fractint does.
+#[cfg(test)]
+mod legacy;
 pub mod diag;
 pub mod environment;
 pub mod path_core;
