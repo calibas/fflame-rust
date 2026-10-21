@@ -697,22 +697,28 @@ frames:
    the filter sees the light alone and the colouring's detail, which
    lives in the albedo, is multiplied back untouched. That light no
    brighter than twice its brightest neighbour's on the same surface
-   (normals within 37 degrees), the bound loosening in proportion past
-   16 samples (`DN_CLAMP_FACTOR`, `DN_CLAMP_FULL`): one rare path -- a
-   bounce that found a small light -- does not stand out of the filter
-   as a dot. With it, the light's variance and the features: the normal
+   (normals within 37 degrees; `DN_CLAMP_FACTOR`) while its excess is
+   within two of its standard errors (`clamp_z`; always under four
+   samples): one rare path -- a bounce that found a small light, one
+   sample far from the rest -- does not stand out of the filter as a dot,
+   and a metal's real glint, bright in every sample, stays. (It loosened
+   by the sample count before, and paths clamped at 16 samples came
+   through at 32 as speckle.) With it, the light's variance and the features: the normal
    and the distance, with the distance's gradient.
 2. **`atrous`** at strides 1, 2, 4, 8, 16 -- 16 dropped from 8 samples on,
    8 from 32 (`denoise_steps`) -- a 5x5 B3 kernel whose taps are weighted
    by the normals' agreement, the distances' against the gradient, and
    the lights' against the noise.
 3. **`finish`:** the light times the albedo, with the resolve's coverage
-   -- moved from the pixel's own mean by no more than its standard error
-   (its samples' luminance moments) times `max(1, sqrt(16 / n))`, judged on
-   its largest channel; past that the move shrinks as (bound / gap)^2, so
-   detail the filter would average away goes back to the samples' own,
-   and the picture converges to their mean (`DN_TRUST`, from 8 samples,
-   `DN_TRUST_FROM`).
+   -- moved from the pixel's own mean by no more than 1.5 of its standard
+   errors (its samples' luminance moments), judged on its largest
+   channel; past that the move shrinks as (bound / gap)^2, so detail the
+   filter would average away goes back to the samples' own, and the
+   picture converges to their mean. From 8 samples, eased in over 24
+   (`DenoiseTrust`): switched on whole, and as one error times
+   `max(1, sqrt(16 / n))` -- a bound shrinking faster than the noise --
+   more samples showed more speckle (user-reported 2026-10-20;
+   `more_samples_are_never_speckier`).
 
 Measured (path-tracing-research.md, the `denoise_quality` gate: three
 solids matte, glossy and metal at 4, 16 and 64 samples, against 4096
