@@ -24,7 +24,7 @@ which rewrites the references in code comments too).
 | [3d-look-and-tools.md](3d-look-and-tools.md) | Planned 2026-10-19: the user's list -- formula syntax highlighting (done), the 3D look and Lit matching Path traced, a Lighting & Material panel, metallic materials, flame variations in solids, fly-mode collisions and speed, path-tracing research. |
 | [path-tracing-research.md](path-tracing-research.md) | Researched 2026-10-19; the agreed order (2026-10-20) built: the denoiser fixes D1-D5, S1 measured and S2 parked, V2 adaptive sampling, the ray tolerance. Left for later: S2's deeper rewrite, a learned denoiser (D6). |
 | [hdri-environment.md](hdri-environment.md) | Planned 2026-10-20: bundled HDRI skies that light the path tracer and the lit tier and show in reflections. Built 2026-10-21 for solids and terrains, both tiers, with procedural stars; the web build's skies wait on online-assets.md. |
-| [online-assets.md](online-assets.md) | Drafted 2026-10-21 for the user's decisions, nothing built: skies and textures downloaded from Poly Haven and/or Fractals for All -- the options, the terms, what the app needs, the 4K backdrop question. |
+| [online-assets.md](online-assets.md) | Planned 2026-10-21, decided the same day, not started: skies and textures listed by providers (Poly Haven first), downloaded and kept locally; every resolution; textures on solids and terrains with valley, slope and plateau targets. |
 
 ## Paused
 
