@@ -1,162 +1,182 @@
-# Online skies and textures: Poly Haven and Fractals for All
+# Online skies and textures: Poly Haven first, other providers later
 
-Drafted 2026-10-21 for discussion, at the user's word: "For the web
-build, and the 4K question, I'm considering an online API integration
-with Poly Haven and our Fractals for All site. You'd select from a list,
-and download HDRIs and textures. Discuss and plan this first with me
-before building anything." **Nothing here is built.** The decisions at
-the end are the user's; the order of work follows from them.
+Drafted 2026-10-21 at the user's word: "I'm considering an online API
+integration with Poly Haven and our Fractals for All site. You'd select
+from a list, and download HDRIs and textures. Discuss and plan this
+first with me before building anything." Decided the same day (below).
+**Nothing here is built yet.**
 
-It reopens, for assets named by id (as the bundled skies did), the
-2026-10-02 decision to skip image files. The reasons that decision gave
--- a path that breaks on other machines, a bloated `.fflame`, a
-read-only `assets/`, a shared file reading a private image
-(docs/archive/projects/sim-textures.md) -- are about user files, and none
-apply to an asset a config names and any machine can fetch.
+It reopens, for assets named by provider and id, the 2026-10-02 decision
+to skip image files. That decision's reasons -- a path that breaks on
+other machines, a bloated `.fflame`, a read-only `assets/`, a shared
+file reading a private image (docs/archive/projects/sim-textures.md) --
+are about user files; an asset a config names, which any machine can
+fetch from its provider, has none of them.
 
-## What is there to build on
+## Decided (2026-10-21)
 
-**Poly Haven** (read 2026-10-21; scratch responses kept out of the repo):
+The user's answers, in order:
+1. **Providers' lists, downloaded and kept locally.** "Get HDRI/texture
+   lists from Poly Haven, and other APIs later on, the user can select
+   from whatever is offered, then it's downloaded from that site and
+   stored locally." The app talks to each provider directly; our site is
+   not in the path. Poly Haven is the first provider, behind an interface
+   the next ones implement.
+2. **Everything a provider offers**, skies with ground included. (The
+   first draft had leaned to "pure skies" for a floating fractal: an
+   aesthetic assumption, not a limit -- a photographed ground lights from
+   below and reflects correctly; Horizon moves it.)
+3. **Every resolution the provider offers**, the user's choice.
+4. **The web build keeps downloads for the session only**, for now. The
+   desktop keeps them in its data folder.
+5. **Textures on solids and terrains**, with separate targets for
+   valleys, slopes and plateaus, each replacing the colouring's colour or
+   blended with it.
+6. **Contacting Poly Haven** (their API page asks it): the user's.
+
+## Poly Haven, as read 2026-10-21
+
 - **The API**: `https://api.polyhaven.com` -- `/assets?type=hdris` (or
-  `textures`; `&category=pure-skies`), `/info/{id}`, `/files/{id}`,
-  `/categories`, `/search`. 997 HDRIs (59 pure skies, 299 skies, 61
-  night) and 869 textures. A `/files` entry lists each resolution and
+  `textures`; `&categories=` to filter), `/info/{id}`, `/files/{id}`,
+  `/categories/{type}`, `/search`. 997 HDRIs and 869 textures. A
+  `/files` entry lists each resolution (1K up to 16K, some 24K) and
   format with its URL, size and md5; our two bundled skies are
   byte-identical to their 1K files.
-- **Sizes** (Sunflowers): `.hdr` 1K 1.5 MB, 2K 5.7 MB, 4K 21 MB, 8K 76 MB;
-  `.exr` about four times that. A texture is a set of maps (diffuse, two
-  normal conventions, roughness, AO, displacement, an ARM pack), each
-  1K-8K in jpg, png or exr: a 1K diffuse jpg 0.2 MB, a 4K one 2.9 MB.
+- **Sizes** (Sunflowers): `.hdr` 1K 1.5 MB, 2K 5.7 MB, 4K 21 MB, 8K 76 MB,
+  16K 266 MB; `.exr` about four times that. A texture is a set of maps
+  -- diffuse, normal (OpenGL and DirectX), roughness, AO, displacement,
+  an ARM pack -- each 1K-8K in jpg, png or exr: a 1K diffuse jpg 0.2 MB,
+  4K 2.9 MB.
 - **Thumbnails** from their CDN, resized on request:
-  `cdn.polyhaven.com/asset_img/thumbs/{id}.png?width=256&height=256&format=jpg`
+  `cdn.polyhaven.com/asset_img/thumbs/{id}.png?width=256&height=256&format=jpg`,
   about 11 KB (we decode png, jpeg and hdr; not webp).
 - **Terms** ([API ToS](https://github.com/Poly-Haven/Public-API/blob/master/ToS.md),
   changed 2026-07 to allow any use): "free to access and use by anyone
   ... including commercial use, at no charge" (2.1); calls "must be made
   with a unique "Referer" header or user-agent that matches your software
   name" (2.4); surfacing content from the live API, "you must make it
-  clear to your users where that content comes from" -- a label naming
-  Poly Haven, or "Powered by Poly Haven" near the content (2.5), which
-  "does not apply to the CC0 assets themselves once downloaded or
-  self-hosted"; nothing that degrades the API (2.6); no rate limit
-  published. [Their API page](https://polyhaven.com/our-api) asks a tool
-  integrating it on the user's side to contact them, since endpoints may
-  change. The assets are CC0: redistributing and mirroring them is
-  allowed.
+  clear to your users where that content comes from" -- "Powered by Poly
+  Haven" near the content is enough (2.5), which "does not apply to the
+  CC0 assets themselves once downloaded or self-hosted"; nothing that
+  degrades the API (2.6); no rate limit published. The assets are CC0.
 - **The browser can reach it**: the API, the file host (`dl.polyhaven.org`)
-  and the thumbnail CDN all answer `Access-Control-Allow-Origin: *`. A
-  browser cannot set a User-Agent, but sends the page's origin as the
-  Referer (2.4 accepts either). Our signed-in fetch (`credentials:
-  include`) cannot be used against a `*` origin; the plain resource fetch
-  can.
+  and the CDN answer `Access-Control-Allow-Origin: *`. A browser cannot
+  set a User-Agent but sends the page's origin as the Referer (2.4
+  accepts either). Our signed-in fetch (`credentials: include`) fails
+  against a `*` origin; a plain fetch works.
 
-**Our side** (the code as of 2026-10-21):
-- The Fractals for All API (`src/api/`, docs/main/ONLINE.md) has flames,
-  animations, palettes, scripts, variations and effects; no skies or
-  textures, and its only binary payloads are thumbnails. Its desktop
-  client sets no User-Agent (ureq's own) and reads text only, capped at
-  10 MiB.
-- No binary HTTP download exists yet, on either platform. The desktop
-  data folder holds caches as files; the web build has localStorage only
-  (5-10 MB for the whole origin, text): a sky would not fit. IndexedDB
-  and the Cache API are not wired.
-- A sky today is a `'static` catalog entry (`escape::environment::EnvDef`)
-  whose display level is hand-set; the renderer loads it synchronously
-  from `assets/`. An online sky needs a catalog built at runtime, bytes
-  in place of a path, a level chosen by rule, and loading that does not
-  block a frame.
+## Design
 
-## The options for where the assets come from
+**Providers** (`src/assets/`, new): a provider lists its HDRIs and its
+textures (id, name, categories, tags, authors, a thumbnail), lists one
+asset's files (each resolution and format: URL, size, md5), and names
+the credit its terms ask for. Poly Haven implements it over its API;
+the next provider implements the same. The lists are fetched when the
+picker opens and kept for the session.
 
-| | A. Poly Haven, live | B. Our site hosts a curated mirror | C. Our catalog, Poly Haven's files |
-|---|---|---|---|
-| What the app asks | their API for the list, their CDN for files | our API for both | our catalog for the list, their CDN for files |
-| Choice | all 997 skies and 869 textures, their categories and search | what we put up | what we list |
-| Our cost | none | storage and bandwidth (a 4K sky 21 MB a download) | a JSON file |
-| Their terms | identify the app, credit in the picker, tell them | none past CC0 (we credit anyway) | identify the app; the credit (we would show it) |
-| What only it can do | -- | our own derived files: a 4K JPEG backdrop (2-3 MB), precomputed levels; our own and users' skies | curation and our metadata (level, stars) without hosting |
-| If they change their API | the picker breaks until we follow | nothing | nothing for the list; files by URL |
+**A config names an asset, never holds it**: the sky as
+`polyhaven:<id>` (the bundled ones keep their short ids) and the
+resolution chosen (`environment_resolution`, e.g. `4k`); a texture
+likewise. The `.fflame` stays small and opens anywhere that can fetch
+it. Opening one whose asset is not stored: with online mode on, it is
+downloaded (a notice, a progress bar) and the picture fills in; without,
+the background stands in, as for a missing bundled sky now.
 
-A config would name an asset the same way under any of them -- its source
-and id, e.g. `polyhaven:sunflowers_puresky` -- never the image, so a
-`.fflame` stays small and opens anywhere that can fetch it. A sky it
-names but cannot get falls back to the background, with a notice, as a
-missing bundled sky already does.
+**Fetching and keeping** (any provider):
+- Desktop: ureq on a background thread, identified as
+  `FractalArtEditor/<version>` (ToS 2.4), bodies past ureq's 10 MiB text
+  cap read as bytes; stored under the data folder,
+  `downloads/<provider>/<kind>/<id>/<file>`, checked against the md5. A
+  Downloads list in the picker shows what is stored and what it takes,
+  with Delete.
+- Web: `fetch` to an `ArrayBuffer`, no credentials (the Referer
+  identifies us), kept in memory for the session (decision 4); the two
+  bundled skies are fetched from `pkg/assets/environments/` when picked,
+  so the web app's download does not grow.
+- Downloads run off the frame, with progress and cancel, as exports do.
+  Only in online mode (`SystemSettings::online_mode`), as every other
+  network call.
 
-**Recommendation: A, with the two bundled skies kept, and C's catalog
-left for later.** It needs nothing of the API repository; the whole
-library browses in the app; the terms ask only what we would do anyway.
-Our site comes in when we want what only it can do -- curation, our own
-skies, the 4K JPEG backdrops -- and a config's `polyhaven:` names stay
-valid when it does. We should write to Poly Haven before release, as
-their page asks.
+**Every resolution, made usable** (decision 3). What a GPU and memory
+hold sets two limits a large file meets: WebGPU's default texture side is
+8192 (most desktop adapters allow 16384), and a 16K sky decoded whole in
+f32 is 1.6 GB. So:
+- **A streaming Radiance decoder** that reads the file's run-length
+  scanlines and reduces as it reads: memory is a few rows, not the image
+  (the `image` crate decodes whole). EXR is not decoded (its decoder is
+  large); `.hdr` is offered for every sky.
+- **Two maps from one file**: the light at 1K as now -- the sun lifted
+  out, the irradiance's harmonics, the reflection levels -- and, when the
+  file is larger, a **backdrop** at its own resolution, reduced to the
+  device's texture limit, read by camera rays only. Lighting costs the
+  same at any resolution; a sharper sky costs only its texture (4K: 64 MB
+  in half floats; 8K: 256 MB).
+- The picker lists every resolution with its download size, and marks
+  those past the device's texture limit as reduced on loading.
 
-## What the app would need, any option
+**The sky's level** (how bright its median shows): measured on loading,
+set by rule -- a provider's night category, or a median far below a
+day's, at 0.2; others 0.6, as the bundled ones -- and Sky light adjusts
+it.
 
-1. **Fetching bytes**: desktop through ureq, identified as
-   `FractalArtEditor/<version>`, bodies past 10 MiB; web through `fetch`
-   to an `ArrayBuffer`, no credentials. Off the frame: a download runs in
-   the background with progress, as exports do; the md5 from `/files`
-   checks it.
-2. **A cache that survives restarts**: desktop, files in the data folder
-   (`environments/`, `textures/`) with a size cap; web, the Cache API
-   (keyed by URL, a quota in the hundreds of MB where localStorage has a
-   few). The two bundled skies stay in the install; on the web they are
-   fetched from `pkg/assets/environments/` when picked (the web app's
-   download does not grow).
-3. **A runtime catalog**: `EnvDef` owned rather than `'static`, from the
-   bundled entries and the downloaded ones; an online sky's display level
-   by rule (night skies -- Poly Haven's `night` category -- at 0.2, others
-   at 0.6, as the bundled ones are) and its median measured on loading.
-4. **The picker**: a window of thumbnails by category (Pure skies,
-   Skies, Night, Studio, ...) and search; each with its name, author and
-   download size; Download, then it is in the Sky list. "Powered by Poly
-   Haven" on it, and the sky's credit link under the choice as now.
-5. **Loading off the frame**: decoding a sky and making its reflection
-   levels takes about 0.2 s on the desktop (a 1K sky), longer on the web;
-   a worker or a frame-spread job, the old sky kept until the new one is
-   ready.
+**The picker**: a window -- provider, then Skies or Textures; categories
+and search; a grid of thumbnails (jpg from the provider's CDN), each with
+its name, authors and sizes; the resolution, Download, then Use. The
+provider's credit on the window ("Powered by Poly Haven") and under a
+chosen sky, as now.
 
-## The 4K question, online
+**Loading off the frame**: decoding and making the reflection levels
+takes about 0.2 s for a 1K sky on the desktop, more for a large file and
+on the web; it runs as a background job, the old sky drawn until the new
+one is ready.
 
-At 1K the light and the reflections are right, and the backdrop is soft
-(about 170 of the map's pixels across a 60-degree view). Online, a sky
-could carry a separate **backdrop** at a higher resolution, fetched only
-when Show as backdrop is on:
-- **2K or 4K `.hdr` from Poly Haven** (5.7 or 21 MB): no hosting; on the
-  GPU 4K is 64 MB in half floats, too much for some browsers and phones;
-  the light map stays 1K either way (made from it), so lighting costs
-  nothing more.
-- **A 4K 8-bit JPEG we make** (2-3 MB, 32 MB on the GPU, sRGB like the
-  background colour): smaller and sharper per byte, but only option B can
-  serve it.
+## Textures on solids and terrains (decision 5)
 
-## Textures
+Downloading a texture is the machinery above. Using one is a rendering
+project of its own: its plan is to be written once the sky half is in,
+with these starting points.
+- **Its maps**: the diffuse as the albedo, the normal map as bump, the
+  roughness into the coat, AO into the occlusion. Displacement moves a
+  surface, which a distance field cannot take from an image: read as
+  bump, or left out.
+- **Placement**: our surfaces have no UV coordinates. A terrain's ground
+  takes a texture in the plane, its steep faces from the side
+  (triplanar); a solid takes it from three sides in the fractal's frame,
+  so it stays put as the camera moves.
+- **Targets**: valleys, slopes and plateaus each their own texture. On a
+  terrain: a slope by its steepness (the normal's tilt); valley and
+  plateau by the ground's curvature or its height against its
+  neighbours (concave or low; convex or high and flat); blended across
+  the boundaries. On a solid, the same three by the fractal's up
+  direction and its concavity (crevices as valleys) -- to settle with the
+  user.
+- **Replace or blend**: per target, the texture's colour in place of the
+  colouring's, or mixed with it (multiplied, overlaid, or by a weight).
+- **Both tiers**: the lit tier and the path tracer read the same maps,
+  as they read the same material now.
 
-Downloading them is the same machinery; using them is a rendering project
-of its own, to plan once we know what they are for. Our surfaces have no
-UV coordinates: a solid would take a texture by triplanar projection (in
-the fractal's frame or the world's), a terrain on its ground plane. Each
-map has its place: the diffuse as the albedo (in place of the palette, or
-blended with it), the normal map as bump (as the surface texture already
-bumps terrains), roughness into the coat, AO into the occlusion,
-displacement perhaps never (it would move a distance field). Which
-surfaces, and how a texture and the escape colouring share the colour,
-are questions for the user first.
+## Order of work
 
-## Decisions for the user
+1. **Fetching and keeping**: binary download on both platforms (desktop
+   background thread, user agent, md5; web `fetch`), the store (desktop
+   folder, web session), progress and cancel.
+2. **The provider interface and Poly Haven's**: lists, files,
+   thumbnails, credit.
+3. **The sky picker**, and configs naming `provider:id` with a
+   resolution; a missing asset fetched on opening.
+4. **The streaming decoder, the backdrop map, the level rule**: every
+   resolution usable.
+5. **The web build's skies**: the bundled ones from `pkg/`, downloads for
+   the session.
+6. **Texture downloads** in the picker (the maps a texture needs, at the
+   chosen resolution).
+7. **Texture materials**: their own plan first (above), then terrains
+   with the three targets, then solids.
 
-1. **Where assets come from**: A (Poly Haven live, recommended), B (our
-   site hosts a curated mirror), or C (our catalog, their files). And
-   whether our site's role later is curation, hosting our own and users'
-   skies, or the 4K backdrops.
-2. **How much of Poly Haven's library**: everything (including studio
-   and landscape HDRIs, which reflect well but have a ground below), or
-   skies only (pure skies, skies, night).
-3. **The backdrop's resolution**: 1K only; a choice of 2K/4K `.hdr`
-   downloads; or 4K JPEGs (needs B).
-4. **The web cache**: the Cache API (persistent), or downloads kept for
-   the session only.
-5. **Textures**: on solids, terrains, or both; replacing the palette's
-   colour or blended with it; which maps.
-6. **Contacting Poly Haven** before release, as their API page asks.
+## Still open
+
+- **A solid's targets**: the same three by orientation and concavity, as
+  above, or one texture all over.
+- **Our site's part**, for later: none in the path now (decision 1); a
+  provider of its own one day (curated or user skies), through the same
+  interface.

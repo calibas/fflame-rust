@@ -179,9 +179,10 @@ seen.
   (a night sky, Starfield): giving it up to the sky lit nothing.
 - **Procedural stars**: the user's choice ("I would like procedural
   stars").
-- **The web build and the 4K question** wait on the user's plan for an
-  online library (Poly Haven and Fractals for All):
-  docs/projects/online-assets.md.
+- **The web build and the 4K question** go to the online library
+  (docs/projects/online-assets.md, decided 2026-10-21): skies from
+  providers' lists at every resolution they offer, kept locally; the web
+  build's bundled skies fetched from `pkg/` when picked.
 
 ## Decisions for the user
 
