@@ -559,8 +559,17 @@ the escape terrain, `sim.terrain.path` for a simulation's.
   that distance times `focus` (1 when 0).
 - **A sample's radiance is clamped** at ten times the brightest light:
   the enabled lights' summed intensity, the environment, the zenith, the
-  glow, and at least 1. That removes the fireflies a rare bright path
-  would scatter.
+  glow, and at least 1 -- an HDRI sky's sun counted with the lights it
+  draws beside (`solid_path`). That removes the fireflies a rare bright
+  path would scatter. **The light from past the first surface is clamped
+  apart, at the brightest light itself** (`clamp_indirect`; Cycles' Clamp
+  Indirect): a polished metal's glints of a sun seen in a second surface
+  are rare and far brighter than the picture, and at the whole clamp
+  alone they stood out more the more samples, for a while (user-reported
+  2026-10-20, in a gold solid's crevices). Measured on that scene: the
+  pixels standing out at 32 samples 301 -> 106, the picture 1% darker
+  (`a_gold_solids_glints_settle`, the measurement
+  `sun_threshold_speckles`).
 - **Bounces** are capped at 16; the seed is fixed at 1.
 
 ### A sample

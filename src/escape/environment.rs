@@ -90,6 +90,15 @@ pub struct EnvSun {
     pub radius: f32,
 }
 
+impl EnvSun {
+    /// The sun as the rig's light: its intensity per channel (the
+    /// irradiance over pi, `pt_light`), the map scaled by `scale`
+    /// (`EnvSettings::scale`).
+    pub fn power(&self, scale: f32) -> [f32; 3] {
+        self.irradiance.map(|v| v * scale / std::f32::consts::PI)
+    }
+}
+
 /// A sky decoded, its sun lifted out.
 #[derive(Debug, Clone)]
 pub struct EnvMap {
@@ -125,6 +134,12 @@ fn texel_solid_angle(y: u32, w: u32, h: u32) -> f32 {
 impl EnvMap {
     /// A Radiance `.hdr`, decoded, its sun lifted out.
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
+        Self::decode_at(bytes, SUN_THRESHOLD)
+    }
+
+    /// [`decode`](Self::decode), the sun's texels those above `threshold`
+    /// times the median.
+    pub fn decode_at(bytes: &[u8], threshold: f32) -> Result<Self, String> {
         let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Hdr).map_err(|e| format!("not a Radiance HDR: {e}"))?;
         let img = img.into_rgb32f();
         let (width, height) = img.dimensions();
@@ -134,7 +149,7 @@ impl EnvMap {
         let texels: Vec<[f32; 3]> = img.pixels().map(|p| [p.0[0].max(0.0), p.0[1].max(0.0), p.0[2].max(0.0)]).map(|c| if c.iter().all(|v| v.is_finite()) { c } else { [0.0; 3] }).collect();
         let mut map = EnvMap { width, height, texels, sun: None, median: 0.0 };
         map.median = map.upper_median();
-        map.sun = map.lift_sun();
+        map.sun = map.lift_sun(threshold);
         Ok(map)
     }
 
@@ -152,10 +167,10 @@ impl EnvMap {
     /// to the brightest (8-connected, across the seam), when they hold at
     /// least [`SUN_MIN_SHARE`] of the light. Their light above the texels
     /// around them becomes the sun's; they keep that surround.
-    fn lift_sun(&mut self) -> Option<EnvSun> {
+    fn lift_sun(&mut self, threshold: f32) -> Option<EnvSun> {
         let (w, h) = (self.width, self.height);
         let at = |x: u32, y: u32| (y * w + x) as usize;
-        let threshold = SUN_THRESHOLD * self.median.max(1.0e-12);
+        let threshold = threshold * self.median.max(1.0e-12);
         let (peak, _) = self.texels.iter().enumerate().map(|(i, &c)| (i, lum(c))).max_by(|a, b| a.1.total_cmp(&b.1))?;
         if lum(self.texels[peak]) <= threshold {
             return None;

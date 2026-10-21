@@ -497,6 +497,25 @@ performance/quality wins"). Built since: the ray tolerance.
   moved the picture far more than a normal estimate should (RMSE 9% to
   56% on the Mandelbulb at 320x180): the solids' estimates are not smooth
   at that scale. Not worth more.
+- **A polished metal's speckle under a sky's sun is its second
+  surface's glints** (user-reported 2026-10-20: an orange glow in a gold
+  Mandelbulb's crevices, speckled, more speckled with more samples). By
+  elimination (`sun_threshold_speckles`, the Gold Mandelbulb preset at
+  roughness 0.05 under Sunflowers): not the sun's aureole left in the map
+  (lifting it into the sun at 30-1000 times the median changed nothing),
+  not the map (without the sun the speckle falls with samples), not the
+  last surface's light samples unweighted by MIS (weighting them, with a
+  coat sample there toward the lights, changed nothing); at 0 bounces
+  the sun alone leaves 61-70 speckles, at 1 bounce 267-325 rising with
+  samples -- the sun seen in a second gold surface, a glint far smaller
+  than a pixel, kept at the whole clamp's ten times the light. **Built:**
+  the light from past the first surface clamped apart at the brightest
+  light (`clamp_indirect`), the sky's sun counted in it: speckle at 8,
+  16, 32 samples 320, 240, 306 -> 331, 183, 106, the picture 1% darker.
+  At 8 samples it does not help (the glint is still 1/8 of the clamp);
+  there the denoiser carries it. The orange is physical: gold's
+  reflectance falls from red to blue, and light reflected twice in it
+  is gold squared.
 - **Noise and cost go together on these solids** (V2 above): a pixel
   still noisy late costs 3-5 times the average sample. Anything that
   shortens a crevice's path -- Russian roulette from the first bounce
