@@ -106,8 +106,8 @@ mod tests {
             ..Default::default()
         };
         let mut out = (egui::Rect::NOTHING, false);
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 let (r, changed) = on_release(ui, egui::Id::new("slow"), value, |ui, v| ui.add(egui::Slider::new(v, 0.0..=100.0)));
                 out = (r.rect, changed);
             });

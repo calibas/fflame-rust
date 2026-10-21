@@ -3337,6 +3337,7 @@ fn user_d_source() -> String {
 }
 
 /// What the templates provide, enough to validate a program alone.
+#[cfg(not(target_arch = "wasm32"))]
 const HARNESS: &str = "
 struct OrbitSummary {
     z: vec2<f32>,

@@ -2621,7 +2621,7 @@ mod tests {
                 // six times the steps here, where coarse ones hid it.
                 c.escape.terrain.detail = 4.0;
                 let mut engines = crate::renderer::render::RenderEngines::default();
-                let mut frame = |engines: &mut crate::renderer::render::RenderEngines| {
+                let frame = |engines: &mut crate::renderer::render::RenderEngines| {
                     let _ = pollster::block_on(crate::renderer::render(
                         &device,
                         &queue,

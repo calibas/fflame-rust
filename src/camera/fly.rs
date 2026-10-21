@@ -243,6 +243,7 @@ fn flame_look_pivot(config: &FractalConfig, conv: Convention, from: Angles, to: 
 /// The pitch an orbit's floor keeps the eye above a terrain's target at
 /// rest: the height a terrain's flight keeps it above its floor, in
 /// distances to the target (its sine).
+#[cfg_attr(not(feature = "terrain"), allow(dead_code))]
 const FLOOR_PITCH: f64 = 0.02;
 
 /// What a terrain's flight keeps its eye above, and how it paces it: the
