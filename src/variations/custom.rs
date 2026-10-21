@@ -1,5 +1,5 @@
 //! Variations written in the formula language's Rhai (the KIFS plan, C1:
-//! [docs/projects/escape-kifs-and-variations.md](../../docs/projects/escape-kifs-and-variations.md)).
+//! [docs/archive/projects/escape-kifs-and-variations.md](../../docs/projects/escape-kifs-and-variations.md)).
 //!
 //! A transformation -- a Rhai source with `fn variation(z, p)` -- compiles
 //! to the payload a plug-in is ([`VariationDownload`]: its parameters, its

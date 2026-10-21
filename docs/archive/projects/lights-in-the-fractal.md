@@ -1,5 +1,7 @@
 # Lights in the fractal
 
+> **Archived 2026-10-21** -- finished: L1-L7 built 2026-10-19 -- Ambient in the path tracer, point lights and a headlamp in both tiers, a terrain's headlamp. A terrain's point light and the rest left are in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*3D views: not built*). Read [TERRAIN.md](../../main/TERRAIN.md) (*Kinds of light*) and [CAMERA.md](../../main/CAMERA.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Planned 2026-10-19, at the user's request: "I want to be able to place
 lights freely inside the fractal space, not just outside. I want an
 option for a 'headlamp', so adjustable light that's attached to the

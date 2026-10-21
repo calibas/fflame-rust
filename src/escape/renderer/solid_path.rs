@@ -1786,7 +1786,7 @@ mod tests {
         }
     }
 
-    /// An HDRI sky lights both tiers alike (docs/projects/hdri-environment.md,
+    /// An HDRI sky lights both tiers alike (docs/archive/projects/hdri-environment.md,
     /// step 4): the Sunflowers sky without its sun (which both tiers light
     /// by as one of the rig's lights), no lights, no ambient, one bounce --
     /// the lit tier's irradiance harmonics and reflection levels against
@@ -3411,7 +3411,7 @@ mod tests {
         out
     }
 
-    /// A one-colour map as the uniform sky (docs/projects/hdri-environment.md):
+    /// A one-colour map as the uniform sky (docs/archive/projects/hdri-environment.md):
     /// an HDRI sky whose every texel is the uniform sky's radiance over the
     /// map's scale lights the cube as the background's light does, to the
     /// map's half-float rounding -- the lookup, its scale and the ambient

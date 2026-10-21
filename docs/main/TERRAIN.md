@@ -182,7 +182,7 @@ normal smoothing, gap fill, shadow maps) are the 3D flame's alone.
 ### Kinds of light
 
 A `SolidLight` is one of three kinds (`LightKind`;
-[lights-in-the-fractal.md](../projects/lights-in-the-fractal.md)):
+[lights-in-the-fractal.md](../archive/projects/lights-in-the-fractal.md)):
 
 | Kind | Where it is | Where it is offered |
 |---|---|---|
@@ -410,7 +410,7 @@ path tracer's settings. `lift_path_material` lifts them into
 
 ### HDRI skies
 
-A photographed sky all round (docs/projects/hdri-environment.md):
+A photographed sky all round (docs/archive/projects/hdri-environment.md):
 `escape::environment`, bundled in `assets/environments/` and named by id
 (`ENVIRONMENTS`) -- Poly Haven's Sunflowers (Pure Sky) and Rogland Clear
 Night, 1K equirectangular Radiance files, CC0 -- and **Starfield**, stars
@@ -462,7 +462,7 @@ group 0's bindings 14 and 15), each renderer holding the sky in an
   roughness 0.1. Choosing a night sky in the panel (`EnvDef::stars`)
   brings them out at 1.
 - The web build has no skies yet (its loading is for the user's
-  decision: docs/projects/hdri-environment.md).
+  decision: docs/archive/projects/hdri-environment.md).
 
 ### The walk and the relight
 

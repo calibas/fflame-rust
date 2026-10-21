@@ -2165,7 +2165,7 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 };
 
 /// A kaleidoscopic IFS as a solid, needing no flame (the KIFS plan,
-/// [docs/projects/escape-kifs-and-variations.md] A1): Knighty's fold
+/// [docs/archive/projects/escape-kifs-and-variations.md] A1): Knighty's fold
 /// fractals (Fractal Forums, 2010), each iteration a rotation, a fold of
 /// space into one piece of it, a rotation and a scaling about the
 /// offset, `z = s z - o (s - 1)`. The folds follow Syntopia's
@@ -2181,7 +2181,7 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 /// the origin (`standalone_radius`). Slots 0-6 are the solid
 /// template's, as the quaternion Julia's.
 ///
-/// [docs/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+/// [docs/archive/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
 pub static IFS_KIFS: IfsDef = IfsDef {
     name: "kifs_solid",
     display_name: "KIFS (Solid)",
@@ -2596,14 +2596,14 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 };
 
 /// The Mandelbox as a solid, needing no flame (the KIFS plan,
-/// [docs/projects/escape-kifs-and-variations.md] A2): Tom Lowe's
+/// [docs/archive/projects/escape-kifs-and-variations.md] A2): Tom Lowe's
 /// (2010) box fold, sphere fold and scaling, `z = s fold(z) + c` with
 /// `c` the point (the Mandelbox) or a constant (its Julia), as Syntopia
 /// writes it in "Distance Estimated 3D Fractals (VI): The Mandelbox"
 /// (2011): the distance `|z| / |dr|`, `dr` the running scale. The ball
 /// is `mandelbox_radius`'s. Coloured by the plan's "Colouring solids".
 ///
-/// [docs/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+/// [docs/archive/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
 pub static IFS_MANDELBOX: IfsDef = IfsDef {
     name: "mandelbox_solid",
     display_name: "Mandelbox (Solid)",
@@ -2879,14 +2879,14 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 };
 
 /// The Mandelbulb as a solid, needing no flame (the KIFS plan,
-/// [docs/projects/escape-kifs-and-variations.md] A3): White and
+/// [docs/archive/projects/escape-kifs-and-variations.md] A3): White and
 /// Nylander's (2009) power in spherical coordinates, `z = z^n + c`, `c`
 /// the point (the Mandelbulb) or a constant (its Julia), as Syntopia
 /// writes it in "Distance Estimated 3D Fractals (V): The Mandelbulb"
 /// (2011), with Hart's half of the estimate as the quaternion Julia's.
 /// Coloured by the plan's "Colouring solids".
 ///
-/// [docs/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+/// [docs/archive/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
 pub static IFS_MANDELBULB: IfsDef = IfsDef {
     name: "mandelbulb_solid",
     display_name: "Mandelbulb (Solid)",
@@ -7172,7 +7172,7 @@ mod tests {
             // frame at 1080p against 20. Both are one click away for
             // a still.
             c.solid_shading.shading_strength = 1.0;
-            // No ambient: the 3D look (docs/projects/3d-look-and-tools.md,
+            // No ambient: the 3D look (docs/archive/projects/3d-look-and-tools.md,
             // P2) -- shadows are dark, as the path tracer draws them.
             c.solid_shading.ambient = 0.0;
             c.solid_shading.diffuse = 0.95;

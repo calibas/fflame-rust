@@ -520,7 +520,7 @@ beyond (`view_controls::angle_slider`); the config stores radians.
 
 Every lit 3D view's light in one place (`PanelType::SolidLighting`, the
 name saved layouts know; [lighting_panel.rs](../../src/ui/lighting_panel.rs);
-[3d-look-and-tools.md](../projects/3d-look-and-tools.md), P3). It was
+[3d-look-and-tools.md](../archive/projects/3d-look-and-tools.md), P3). It was
 the View panel's Lighting & Material section from camera-unification C5
 until 2026-10-19, with a solid's shadows among the Escape panel's
 formula parameters and a terrain's texture and lake in the Escape

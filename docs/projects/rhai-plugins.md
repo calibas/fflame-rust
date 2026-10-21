@@ -2,7 +2,7 @@
 
 Recorded 2026-10-18 from the user's statement of where the program is
 going. It is the frame the scripting work is designed in -- the KIFS
-plan's C items ([escape-kifs-and-variations.md](escape-kifs-and-variations.md)),
+plan's C items ([escape-kifs-and-variations.md](../archive/projects/escape-kifs-and-variations.md)),
 the formula language ([escape-formula-language.md](escape-formula-language.md))
 and whatever follows -- so each step complements it rather than
 building something that has to be undone. Not a plan with steps: the
@@ -105,3 +105,23 @@ an export renders frames out of order or skips them (a pure function of
 time, or state re-run from zero), and how a script declares the targets
 it writes (for the timeline's display and for conflicts with keyframe
 tracks on the same target).
+
+## Left from the KIFS and variations plan
+
+From [escape-kifs-and-variations.md](../archive/projects/escape-kifs-and-variations.md),
+archived 2026-10-21 (built: A1-A5, B, C1, C1e, C2, C4):
+- **C3**: a built-in WGSL variation as a step in a formula (`vary`
+  takes the name as a string so it could), as the user wants it; and the
+  maps [uf-transforms-review.md](../archive/projects/uf-transforms-review.md) (archived)
+  found missing, written as Rhai variations -- the user's pick.
+- A formula's Live re-apply does not follow an edit to a variation it
+  calls (Use the formula again); a hybrid's member that calls a variation
+  does not carry it.
+- In a Rhai variation: its state inside a formula (refused), state
+  arrays, `rand()` in `init`, writing RGB (`WritesRgb`).
+- Transformations (C4): none in mode B; in mode D the Orbit stage only
+  (a solid's colouring, 3d-look-and-tools P5 -- Iteration for every
+  solid is in escape-sim-followups.md); clipping (UF's `#solid` from a
+  transformation); a colouring's own start reading the Orbit map.
+- A function parameter named as a built-in's takes that built-in's value
+  when a config switches between them.

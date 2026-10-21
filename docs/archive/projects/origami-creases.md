@@ -1,5 +1,7 @@
 # Origami creases: relief and terrain from the folds
 
+> **Archived 2026-10-21** -- finished: the crease relief and the terrain source built 2026-10-12. A Paper preset, the one thing left, is in [escape-sim-followups.md](../../projects/escape-sim-followups.md). Read [ESCAPE.md](../../main/ESCAPE.md) and [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 **Status 2026-10-12:** built on branch `escape-expansion` (the relief
 field, the terrain source, the settings, tests, docs). After the user's
 first review, the model became the continuous one: the first version's
@@ -157,4 +159,4 @@ range. Beyond the cap the paper levels into plateaus.
 - A Paper preset (the user is reviewing presets).
 - The two terrain bugs found while reviewing this (Invert's march, and
   the low camera's sections) are fixed on the same branch; see
-  [TERRAIN.md](../main/TERRAIN.md).
+  [TERRAIN.md](../../main/TERRAIN.md).

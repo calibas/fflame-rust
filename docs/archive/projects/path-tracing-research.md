@@ -1,13 +1,15 @@
 # Path tracing: research and plan
 
+> **Archived 2026-10-21** -- finished: the agreed order built by 2026-10-20 -- the denoiser's fixes (D1-D5), adaptive sampling (V2), the ray tolerance; S1 measured, S2 built slower and parked. What is left is in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*TODO: the solid path tracer's speed*). Read [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+
 Researched 2026-10-19 at the user's request -- "anything to speed up or
 improve the quality of Path Tracing is something we should plan on doing
 ... the denoiser speeds up rendering, but can also make areas look a little
 odd and sometimes speckled ... I'd like to research this more before we
 make any major decisions that rewrite Path Tracing." **Research and plan
 only**: nothing here is built except where a line says so. The tracer as
-it is: [TERRAIN.md](../main/TERRAIN.md), *The path tracer*; its speed so far:
-[escape-sim-followups.md](escape-sim-followups.md), *the solid path
+it is: [TERRAIN.md](../../main/TERRAIN.md), *The path tracer*; its speed so far:
+[escape-sim-followups.md](../../projects/escape-sim-followups.md), *the solid path
 tracer's speed*. Weighed against the Mandelbulb as well as the Menger: the
 sponge's flat faces hide what the filter and the materials do on a curve.
 

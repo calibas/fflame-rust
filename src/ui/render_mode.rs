@@ -27,7 +27,7 @@ pub fn surface_3d(config: &FractalConfig) -> bool {
     }
 }
 
-/// The 3D look (docs/projects/3d-look-and-tools.md, P2), for a config
+/// The 3D look (docs/archive/projects/3d-look-and-tools.md, P2), for a config
 /// that `after` enters a lit 3D view `before` did not draw: the tone map
 /// Linear at exposure 2 and gamma 1 -- the escape image is linear light
 /// and the tone map encodes sRGB itself, so gamma 1 is the one correct

@@ -17,7 +17,7 @@ Per pixel, per fold i (the formula's own loop):
 `layered=True` reverses a crease on a face-down layer (par, the earlier
 folds that reflected the point, mod 2) -- the flat-folded assignment the
 first version used. It tears the height wherever a crease crosses an
-earlier one (docs/projects/origami-creases.md).
+earlier one (docs/archive/projects/origami-creases.md).
 
 The first fold is the biggest crease; each later one is finer, laid on
 top. Run from the repo root; writes output/origami/*.png.

@@ -7241,7 +7241,7 @@ fn ifs_rig(colour: vec3<f32>, n: vec3<f32>, ao_raw: f32, sun: vec4<f32>, dir: ve
             lit_rgb = lit_rgb + refl_v * (studio * ao * ifs_studio_reflect(ifs_studio_frame(n), ifs_studio_frame(v), rough));
         }
     }
-    // An HDRI sky (docs/projects/hdri-environment.md), as the path
+    // An HDRI sky (docs/archive/projects/hdri-environment.md), as the path
     // tracer's bounces see it, in place of the studio: its irradiance on
     // the diffuse and its reflection levels on the coat, both occluded as
     // the ambient is. Its sun is one of the lights below.

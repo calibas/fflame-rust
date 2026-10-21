@@ -886,7 +886,7 @@ fn default_surface_thickness() -> f32 {
     super::defaults::DEFAULT_SURFACE_THICKNESS
 }
 
-/// What a light is (docs/projects/lights-in-the-fractal.md, L2).
+/// What a light is (docs/archive/projects/lights-in-the-fractal.md, L2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LightKind {
@@ -1620,7 +1620,7 @@ impl FractalConfig {
                 }
                 // v4 -> v5: the Shadows of a solid (its `shadow` formula
                 // parameter) and of the escape and simulation terrains
-                // rose from 0.7 to 0.98 (docs/projects/3d-look-and-tools.md,
+                // rose from 0.7 to 0.98 (docs/archive/projects/3d-look-and-tools.md,
                 // P2). A file saved before omitted 0.7 as the default, so
                 // absent means 0.7 there. A solid is told by its formula's
                 // name, or a Rhai one by its carried source's `distance`.

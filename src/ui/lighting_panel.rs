@@ -2,7 +2,7 @@ use crate::camera::gesture::ViewKind;
 use crate::config::{ConfigManager, ConfigPath, ConfigValue, FractalConfig, SolidShadingSettings};
 use rust_i18n::t;
 
-/// The Lighting & Material panel (docs/projects/3d-look-and-tools.md, P3):
+/// The Lighting & Material panel (docs/archive/projects/3d-look-and-tools.md, P3):
 /// every lit 3D view's lighting, shadows, material and surface in one
 /// place, in sections -- Rendering, Sky, Lights, Shading, Shadows,
 /// Material, Surface -- each drawn where the view has it. A solid's
@@ -362,7 +362,7 @@ fn lit_tier_runs(config: &FractalConfig, view: ViewKind) -> bool {
     tier != RenderTier::PathTraced
 }
 
-/// A solid's HDRI sky (docs/projects/hdri-environment.md): which bundled
+/// A solid's HDRI sky (docs/archive/projects/hdri-environment.md): which bundled
 /// one, its turn, whether the camera sees it, and its credit. True when one
 /// is in force.
 #[cfg(feature = "engine-escape")]
