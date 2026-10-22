@@ -243,11 +243,15 @@ Detail: [UI.md](main/UI.md).
 
 - All UI is dockable panels (egui_dock). `PanelType` in
   `src/ui/workspace.rs` defines 32 panels; `WorkspaceLayout` holds the
-  presets (Standard, Animation, Scripting, Escape Time, Simulation,
-  Compact). Layouts are session-only: switching layout keeps the one
-  left in memory, and nothing about the dock tree is written to disk.
-- Menu bar: File, Edit, View, Mode, Rendering, Window, Help, plus a
-  language selector. The Mode menu is built from `RenderMode::ALL`.
+  presets (Standard, Animation, Scripting, Compact). One workspace
+  serves every mode: Transforms, Escape and Simulation are left-dock
+  tabs, a mode change brings its editor forward, and every panel is
+  drawn in every mode, one the mode does not use saying so at its top
+  (`docs/projects/one-workspace.md`). Nothing about the dock tree is
+  written to disk.
+- Menu bar: File, Edit, View, Rendering, Window, Help, then the four
+  render modes as a row (built from `RenderMode::ALL`), plus a language
+  selector.
   `src/ui/compact_menu.rs` is the small-screen equivalent.
 - Panels return a `UiResponse` (`src/ui/response.rs`) for actions that
   are not config edits (file I/O, palette library, transport, exports);

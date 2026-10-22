@@ -3,16 +3,19 @@ _version: 1
 app:
   title: "Fractal Flame Renderer"
 
-# Why a panel or control is offered but disabled. One string per
-# reason, so nothing has to claim a panel "edits the flame" when it
-# does not.
+# Why a panel does not act on the picture in this mode (its banner),
+# or why a control is disabled. One string per reason, so nothing has
+# to claim a panel "edits the flame" when it does not.
 visibility:
-  flame_only: "Edits the flame. The active mode renders a different engine, so this has nothing to act on."
-  needs_surface: "Lights a surface: a 3D flame, an escape-time 3D solid or terrain, or a simulation terrain. What is loaded now renders no surface."
-  other_engine: "Belongs to the other engine. A fractal is in exactly one mode at a time, so switch modes to use this."
-  escape_textures: "Textures are used by escape-time fractals, and made in Simulation mode with Save as texture. Switch to either to see them."
-  escape_hybrids: "The Hybrid Designer writes escape-time formulas. Switch to Escape mode (Mode menu) to use it."
-  makes_a_flame: "Generates flames. Using it here would replace what you have and leave the current mode."
+  inactive_heading: "Not used in %{mode} mode"
+  switch_to: "Switch to %{mode}"
+  flame_only: "This edits the flame, which this mode does not draw. Your changes are kept for the flame modes."
+  needs_surface: "This lights a surface: a 3D flame, an escape-time solid or terrain, or a simulation terrain. The picture has none: switch to 3D Flame, pick a solid in the Escape panel, or turn on a terrain."
+  escape_engine: "This sets up an escape-time fractal. Changes here are kept; picking a formula, a preset or a colouring switches to Escape Time."
+  sim_engine: "This sets up a simulation. Changes here are kept; picking a model or a preset switches to Simulation."
+  escape_textures: "Textures go into escape-time fractals (Simulation mode makes them, with Save as texture). Picking one switches to Escape Time."
+  escape_hybrids: "This writes escape-time formulas. Use and Use Preset switch to Escape Time."
+  chaos_game: "Configures the flame's chaos game, which this mode does not run."
   log_only: "Only the logarithmic tone mapping reads this. The active mode writes a unit-range image and renders through the linear mapping."
   linear_only: "Linear is the only mapping that behaves here: the other two divide by a sample density that only the chaos game produces."
   alpha_blend_inert: "Blends between two alpha curves that are identical under the linear mapping, so it has no effect in this mode."
@@ -90,7 +93,7 @@ menu:
   window_performance: "📊 Performance"
   window_rendering: "⚙ Rendering"
   window_view: "🔍 View"
-  window_escape: "∞ Escape Fractal"
+  window_escape: "∞ Escape"
   window_textures: "▦ Textures"
   window_formula_editor: "ƒ Formula Editor"
   window_hybrid_designer: "⧉ Hybrid Designer"
@@ -257,7 +260,7 @@ panels:
   variations: "Variations"
   subflames: "Subflames"
   scripts: "Scripts"
-  escape: "Escape Fractal"
+  escape: "Escape"
   textures: "Textures"
   formula_editor: "Formula Editor"
   hybrid_designer: "Hybrid Designer"
@@ -2392,7 +2395,6 @@ textures_panel:
   bump_needs_relief: "Turn on Relief in the Escape panel for the bump to show (a 3D terrain shows it either way)."
   trap_hint: "The Image Trap colouring (Escape panel) traps the orbit in this texture too."
   trap_in_use: "The Image Trap colouring is trapping the orbit in this texture."
-  browse_only: "Textures are used by escape-time fractals: pick one there. Here you can see and manage the library."
 sim_panel:
   terrain: "3D terrain"
   terrain_enabled: "Show as a 3D terrain"
@@ -2436,9 +2438,6 @@ sim_panel:
   texture_name_hint: "texture name"
   texture_saved: "Saved as texture \"%{name}\""
   texture_save_failed: "Could not save the texture: %{error}"
-  toggle_on: "Switch to Simulation mode"
-  toggle_tip: "Replace the flame engine with a neighbour-coupled simulation (reaction-diffusion, cellular automata, growth). Use the Mode menu to come back."
-  inactive_hint: "Simulation mode is off. The controls appear once it is enabled."
   run: "▶ Run"
   pause: "⏸ Pause"
   step: "⏭ Step"
@@ -2704,7 +2703,6 @@ escape_panel:
   tooltip_shading_field: "Value: the coloring's number before the palette wraps it — smooth terrain relief. Palette bands: the wrapped coordinate, so every band edge becomes a step — an engraved, contour-map look. Texture layer: the layer's value, so the relief follows one field while the colour follows another; without a layer, the coloring's own value. Distance estimate (analytic): the slope of the distance to the set, taken from the derivative rather than from neighbouring pixels, as Kalles Fraktaler does: sharper and free of stencil artefacts, on formulas with a derivative, at any depth. Softness, the slope stencil and the height curve do not apply to it. Offset orbits: the coloring's value at points a small step beside each pixel, run as orbits of their own, as Ultra Fractal's Slope does: relief that belongs to the fractal, the same at any output size, at three orbits a pixel. Embossed contours: Ultra Fractal's Embossed, two orbits either side of each pixel along the light, each reduced to a whole number; where the two differ the pixel is a shadow or a highlight, which draws bevelled contour lines. The model, elevation, height, softness, stencil and height curve do not apply to it; the shadow and highlight do, and a black Multiply shadow with a white Screen highlight, both at 0.6, is Ultra Fractal's Hard Light merge. Paper creases: a folding formula's paper (Origami), rising or falling in a straight line with the distance from each fold's crease and lit by its exact slope, so every facet is flat; offered only for formulas that fold. Softness, the slope stencil and the height curve do not apply to it."
   tooltip_shading_strength: "How far toward the blended result to travel. 0 leaves the image exactly untouched; past 1 the layer saturates sooner rather than going further. Values above 1 are for DARK images, where a pixel sits close to black and so moves much less toward black than toward white — that gap is the image's dynamic range, not the blend, and this is the control that compensates."
   tooltip_shading_blend: "How the layer composites: Multiply only darkens, Screen only lightens, Overlay keeps the palette's own contrast, Mix tints flatly."
-  not_active_hint: "Switch to Escape mode above to edit the escape-time fractal."
   open_escape_panel: "Open Escape Fractal panel"
   formula: "Formula"
   reference_section: "Reference orbit (engine)"
@@ -2887,8 +2885,6 @@ escape_panel:
   ifs_rejected_solid_tip: "A solid walks the flame in THREE dimensions, which is a different question from the plane: every transform must contract in z as well, so an Apophysis-style transform (an XY affine with a z offset) never qualifies however good a planar map it is. Each must compose to an invertible contracting 3D affine, or to one julia3D / julia3Dz / quaternion_julia around affines, with no xaos. A quaternion_julia must be in inverse mode with the Vector or Depth projection."
   ifs_rejected_tip: "Every transform must compose to an invertible affine map that contracts in every direction, or to one julia / julian root around affines, with no xaos."
   coloring_use: "Use %{name}"
-  toggle_on: "Switch to Escape mode"
-  toggle_tip: "Escape-time fractals (Mandelbrot and kin) use a different engine from flames: the transform list, triangle editor and 2D/3D choice do not apply. Use the Mode menu to come back."
   auto_scale: "Auto scale"
   auto_scale_tip: "Set the colour scale to %{value}, a starting point for this iteration count. The useful value depends on how long pixels actually take to escape, which is not visible from the panel."
   auto_scale_hint: "suggested: %{value}"

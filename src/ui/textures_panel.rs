@@ -154,13 +154,11 @@ impl TexturesPanel {
 
     pub fn render(&mut self, ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
         self.refresh();
+        // Only an escape-time fractal takes a texture. Drawn in every
+        // mode (one-workspace plan): Simulation mode makes textures and
+        // shows the library to manage them, and picking one, from any
+        // mode, enters Escape with it.
         let current = config_manager.config().escape.texture.clone();
-        // Simulation mode shows the library to browse and manage what it
-        // saved; only an escape-time fractal takes a texture.
-        let can_pick = config_manager.config().render_mode == crate::scene::transforms::RenderMode::Escape;
-        if !can_pick {
-            ui.weak(t!("textures_panel.browse_only"));
-        }
 
         ui.horizontal(|ui| {
             ui.label(t!("textures_panel.current"));
@@ -191,14 +189,12 @@ impl TexturesPanel {
                 }
             }
         });
-        if can_pick {
-            overlay_controls(ui, config_manager, current.is_some());
-            bump_controls(ui, config_manager);
-            // The third use is a colouring, picked in the Escape panel.
-            let trapping = crate::escape::get_coloring(&config_manager.config().escape.coloring)
-                .has_feature(crate::escape::ColoringFeature::TextureInLoop);
-            ui.weak(if trapping { t!("textures_panel.trap_in_use") } else { t!("textures_panel.trap_hint") });
-        }
+        overlay_controls(ui, config_manager, current.is_some());
+        bump_controls(ui, config_manager);
+        // The third use is a colouring, picked in the Escape panel.
+        let trapping = crate::escape::get_coloring(&config_manager.config().escape.coloring)
+            .has_feature(crate::escape::ColoringFeature::TextureInLoop);
+        ui.weak(if trapping { t!("textures_panel.trap_in_use") } else { t!("textures_panel.trap_hint") });
         ui.separator();
 
         // Textures waiting to be asked for: one button for all of them.
@@ -318,7 +314,7 @@ impl TexturesPanel {
             }
         });
 
-        if let Some(entry) = pick.filter(|_| can_pick) {
+        if let Some(entry) = pick {
             let texture = EscapeTexture { name: entry.name, config: Box::new(entry.config) };
             set_texture(config_manager, Some(texture), "history.action.texture_pick");
         }
@@ -475,13 +471,43 @@ fn bump_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     });
 }
 
-/// Put a texture in the config (or take it out), as one undo step.
+/// Put a texture in the config (or take it out), as one undo step. A
+/// texture put in enters Escape, the mode that draws it (one-workspace
+/// plan, decision 4).
 fn set_texture(config_manager: &mut ConfigManager, texture: Option<EscapeTexture>, description: &str) {
     let before = config_manager.config().clone();
     let mut after = before.clone();
+    let picked = texture.is_some();
     after.escape.texture = texture;
+    if picked {
+        super::render_mode::enter_snapshot(&before, &mut after, crate::scene::transforms::RenderMode::Escape);
+    }
     let change = ConfigChange::full_config_snapshot(before, after, description.to_string());
     if let Err(e) = config_manager.apply_structural_change(change) {
         log::error!("could not set the texture: {e:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::RenderMode;
+
+    /// Picking a texture, from any mode, enters Escape, the mode that
+    /// draws it, in one undo step; clearing one leaves the mode alone.
+    #[test]
+    fn picking_a_texture_enters_escape() {
+        let mut cm = ConfigManager::new(FractalConfig::default());
+        let texture = EscapeTexture { name: "t".into(), config: Box::new(FractalConfig::default()) };
+        set_texture(&mut cm, Some(texture), "history.action.texture_pick");
+        assert_eq!(cm.config().render_mode, RenderMode::Escape);
+        assert!(cm.config().escape.texture.is_some());
+        cm.undo().unwrap();
+        assert_eq!(cm.config().render_mode, RenderMode::TwoD, "one undo step");
+        assert!(cm.config().escape.texture.is_none());
+        cm.redo().unwrap();
+        crate::ui::render_mode::switch_render_mode(&mut cm, RenderMode::TwoD).unwrap();
+        set_texture(&mut cm, None, "history.action.texture_clear");
+        assert_eq!(cm.config().render_mode, RenderMode::TwoD, "a clear is no choice");
     }
 }

@@ -345,8 +345,11 @@ impl FormulaEditorPanel {
                 }
             }
         }
-        // A solid put to use from a plane: the 3D look with it.
-        match super::render_mode::apply_with_look(cm, changes, description) {
+        // Using one enters Escape (one-workspace plan, decision 4): from
+        // a flame, a colouring is drawn over the escape formula the config
+        // already has (the Mandelbrot unless one was chosen). A solid put
+        // to use from a plane brings the 3D look with it.
+        match super::render_mode::choose(cm, changes, description, crate::scene::transforms::RenderMode::Escape) {
             Ok(_) => {
                 self.in_use.retain(|(k, _, _)| *k != kind);
                 self.in_use.push((kind, self.file.clone(), src.entry.clone()));
@@ -505,9 +508,11 @@ impl FormulaEditorPanel {
             self.adopt(None, name.to_string(), text);
         }
 
-        // In a flame mode the editor makes variations; a formula or a
-        // colouring is the escape engine's.
-        let flame_mode = matches!(cm.config().render_mode, crate::scene::transforms::RenderMode::TwoD | crate::scene::transforms::RenderMode::ThreeD);
+        // Every Use in every mode (one-workspace plan): a formula, a
+        // colouring or a solid is the escape engine's, and using one
+        // enters Escape; a transformation is the flame's variation, or in
+        // Escape the camera lens.
+        let escape_mode = cm.config().render_mode == crate::scene::transforms::RenderMode::Escape;
 
         // ---- Files ----
         ui.horizontal_wrapped(|ui| {
@@ -540,8 +545,8 @@ impl FormulaEditorPanel {
                 self.open_example(i);
             }
             if ui.button(t!("formula_editor.new")).on_hover_text(t!("formula_editor.new_tip")).clicked() {
-                // In a flame mode a new file is a variation.
-                let text = if flame_mode { NEW_VARIATION } else { NEW_FILE };
+                // Outside Escape a new file is a variation.
+                let text = if escape_mode { NEW_FILE } else { NEW_VARIATION };
                 self.adopt(None, "untitled.rhai".to_string(), text.to_string());
             }
         });
@@ -649,17 +654,12 @@ impl FormulaEditorPanel {
                     EntryKind::Solid => [EntryKind::Solid, EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform],
                 };
                 for kind in order {
-                    // A flame mode uses variations; the escape mode,
-                    // formulas, colourings, and a variation as the lens.
-                    if flame_mode && kind != EntryKind::Transform {
-                        continue;
-                    }
                     let ok = row.errors(kind).is_empty();
                     let label = match kind {
                         EntryKind::Formula => t!("formula_editor.use_formula"),
                         EntryKind::Coloring => t!("formula_editor.use_coloring"),
-                        EntryKind::Transform if flame_mode => t!("formula_editor.use_variation"),
-                        EntryKind::Transform => t!("formula_editor.use_lens"),
+                        EntryKind::Transform if escape_mode => t!("formula_editor.use_lens"),
+                        EntryKind::Transform => t!("formula_editor.use_variation"),
                         EntryKind::Solid => t!("formula_editor.use_solid"),
                     };
                     // The kind it is not is offered only when it compiles
@@ -784,3 +784,38 @@ fn escaped(s, p) {
     s.z.norm_sqr() > p.bailout
 }
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::transforms::RenderMode;
+
+    /// Every Use in every mode (one-workspace plan, decision 4): from a
+    /// flame, using an escape-time entry enters Escape in one undo step --
+    /// a colouring over the formula the config already has.
+    #[test]
+    fn using_an_escape_entry_from_a_flame_enters_escape() {
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        assert_eq!(cm.config().render_mode, RenderMode::TwoD, "fixture assumption");
+        let formula = cm.config().escape.formula.clone();
+        let mut panel = FormulaEditorPanel::new();
+        panel.adopt(None, "frothy-basin-coloring.rhai".into(), include_str!("../../assets/formulas/frothy-basin-coloring.rhai").into());
+        panel.recheck();
+        let before = cm.history_len();
+        panel.use_entry(&mut cm, EntryKind::Coloring, 0);
+        let c = cm.config();
+        assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
+        assert!(c.escape.coloring.starts_with(custom::PREFIX), "{}", c.escape.coloring);
+        assert_eq!(c.escape.formula, formula, "over the formula the config had");
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().render_mode, RenderMode::TwoD);
+
+        panel.adopt(None, "volterra-lotka.rhai".into(), include_str!("../../assets/formulas/volterra-lotka.rhai").into());
+        panel.recheck();
+        panel.use_entry(&mut cm, EntryKind::Formula, 0);
+        let c = cm.config();
+        assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
+        assert!(c.escape.formula.starts_with(custom::PREFIX), "{}", c.escape.formula);
+    }
+}
