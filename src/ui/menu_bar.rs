@@ -181,7 +181,7 @@ pub fn render_menu_bar(
             // (pause, reset accumulation, iterations per thread), and
             // "Reset to Defaults" resets exactly those parameters. Always
             // there: a menu that came and went with the mode moved the
-            // mode row after it. Outside the flame modes it says why its
+            // mode button after it. Outside the flame modes it says why its
             // rows are disabled.
             let chaos_game = super::visibility::control(
                 super::visibility::Control::ChaosGame,
@@ -256,10 +256,14 @@ pub fn render_menu_bar(
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
                 rows_do_not_wrap(ui);
-                // Reset Workspace: the one layout, built fresh, the mode's
+                // Reset Workspace: the layout up, built fresh, the mode's
                 // editor in front (`Workspace::show_main_panel`)
                 if ui.button(t!("menu.reset_workspace")).clicked() {
-                    workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
+                    let layout = match workspace.current_layout {
+                        super::workspace::WorkspaceLayout::Compact => super::workspace::WorkspaceLayout::Standard,
+                        other => other,
+                    };
+                    workspace.apply_layout(layout);
                 }
 
                 if ui.button(t!("menu.layout_compact")).clicked() {
@@ -300,6 +304,18 @@ pub fn render_menu_bar(
                     // }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, t!("menu.layout_standard").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
+                    }
+                    // Each engine's own arrangement. Picked here, never by
+                    // a mode change: a switch in one brings the new mode's
+                    // editor in beside the one there.
+                    for (layout, key) in [
+                        (super::workspace::WorkspaceLayout::Flames, "menu.layout_flames"),
+                        (super::workspace::WorkspaceLayout::EscapeTime, "menu.layout_escape"),
+                        (super::workspace::WorkspaceLayout::Simulation, "menu.layout_simulation"),
+                    ] {
+                        if ui.selectable_label(current == layout, t!(key).as_ref()).clicked() {
+                            workspace.apply_layout(layout);
+                        }
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Animation, t!("menu.layout_animation").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Animation);
@@ -342,20 +358,29 @@ pub fn render_menu_bar(
             });
 
             // The render mode, in the bar itself (one-workspace plan,
-            // decision 5): the four engines as peers, the active one
+            // decision 5): a framed button naming the current mode,
+            // whose menu lists the four engines as peers, the active one
             // selected, each with what it renders on hover. A switch
             // brings the mode's editor forward and closes nothing.
             ui.separator();
-            for m in RenderMode::ALL {
-                let label = t!(super::render_mode::mode_label_key(*m));
-                if ui
-                    .selectable_label(menu_state.render_mode == *m, label.as_ref())
-                    .on_hover_text(t!(super::render_mode::mode_tip_key(*m)))
-                    .clicked()
-                {
-                    menu_actions.set_mode = Some(*m);
+            let current = t!(super::render_mode::mode_label_key(menu_state.render_mode));
+            // Outlined as the Fly Mode button is: the bar's own style
+            // draws no frame, and without one it reads as a menu title.
+            let button = egui::Button::new(format!("{current} ⏷")).stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(110)));
+            let (response, _) = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+                rows_do_not_wrap(ui);
+                for m in RenderMode::ALL {
+                    let label = t!(super::render_mode::mode_label_key(*m));
+                    if ui
+                        .selectable_label(menu_state.render_mode == *m, label.as_ref())
+                        .on_hover_text(t!(super::render_mode::mode_tip_key(*m)))
+                        .clicked()
+                    {
+                        menu_actions.set_mode = Some(*m);
+                    }
                 }
-            }
+            });
+            response.on_hover_text(t!("menu.mode_tip"));
 
             // Push right-side controls (right-to-left: language, then auth status)
             // Hide when window is too narrow to prevent overlap with left-side menus.

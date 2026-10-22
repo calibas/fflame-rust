@@ -835,7 +835,7 @@ fn get_view_items(config: &FractalConfig) -> Vec<TargetItem> {
     items
 }
 
-/// The Lighting & Material panel's animatable settings: the shade pass's, and
+/// The Lighting panel's animatable settings: the shade pass's, and
 /// what a solid's or a terrain's lit tier reads of them.
 fn lighting_items(config: &FractalConfig) -> Vec<TargetItem> {
     let mut items = vec![

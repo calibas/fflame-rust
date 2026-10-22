@@ -90,10 +90,12 @@ fn render_compact_menu_items(
     save_online_dialog_state: &mut super::save_online_dialog::SaveOnlineDialogState,
 ) {
     // --- The render mode ---
-    // A row of four at the top, as in the desktop bar (one-workspace
-    // plan, decision 5): without it the only way into Escape or
-    // Simulation on a phone would be the panels' own buttons.
-    ui.horizontal_wrapped(|ui| {
+    // First, named by the current mode, as the desktop bar's button
+    // (one-workspace plan, decision 5): without it the only way into
+    // Escape or Simulation on a phone would be the panels' own buttons.
+    let current = t!(super::render_mode::mode_label_key(menu_state.render_mode));
+    ui.menu_button(format!("{}: {current}", t!("menu.mode")), |ui| {
+        rows_do_not_wrap(ui);
         for m in crate::scene::transforms::RenderMode::ALL {
             let label = t!(super::render_mode::mode_label_key(*m));
             if ui.selectable_label(menu_state.render_mode == *m, label.as_ref()).clicked() {

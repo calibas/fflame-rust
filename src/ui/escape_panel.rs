@@ -324,8 +324,8 @@ pub fn render_escape_content(
         if program && matches!(p.name, "bailout" | "bailout.re" | "bailout.im") {
             continue;
         }
-        // A solid's shadows and occlusion are the Lighting & Material
-        // panel's (3d-look-and-tools P3): formula parameters in the file,
+        // A solid's shadows and occlusion are the Lighting panel's
+        // (3d-look-and-tools P3): formula parameters in the file,
         // drawn with the rest of the light.
         if ifs_def.is_some() && crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name) {
             continue;
@@ -1116,7 +1116,7 @@ pub fn render_escape_content(
                 );
             });
             // The surface texture: the relief's and the 3D terrain's alike.
-            // A terrain's is the Lighting & Material panel's Surface (P3).
+            // A terrain's is the Lighting panel's Surface (P3).
             ui.separator();
             if esc.terrain_active() {
                 ui.label(egui::RichText::new(t!("escape_panel.texture_elsewhere")).small().weak());
@@ -1550,7 +1550,7 @@ pub(crate) fn show_render_tier(
 
 /// The sky, which every tier draws -- the background colour alone, or a
 /// gradient from it at the horizon to the zenith's colour -- and its
-/// light, the path tracer's: the Lighting & Material panel's Sky section.
+/// light, the path tracer's: the Lighting panel's Sky section.
 /// The background is the Colors panel's too (a 2D picture's backdrop).
 pub(crate) fn show_sky(
     ui: &mut egui::Ui,

@@ -58,7 +58,7 @@ pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath
 }
 
 /// What an untouched lighting rig becomes when a lit 3D view takes it
-/// over -- on entry (the 3D look) and at the Lighting & Material panel's
+/// over -- on entry (the 3D look) and at the Lighting panel's
 /// first change of it: full strength and no ambient (3d-look-and-tools
 /// P2), the rest as stored, and light 0 where the untouched rig's key
 /// light was, so taking the rig over does not swing it: on a terrain the
