@@ -397,9 +397,13 @@ fn print_boundary_views() {
 fn presets() -> Vec<serde_json::Value> {
     use crate::config::escape::{CustomDialect, CustomSource};
     use super::lang::EntryKind;
+    // With LF line ends whatever the checkout gave the file: the name is
+    // the source's hash, and Git on Windows checks the examples out with
+    // CRLF, so the presets were otherwise each written with the ends the
+    // file happened to have and failed on the other checkouts.
     let source = |file: &str| {
-        let text = example(file);
-        CustomSource { dialect: CustomDialect::Rhai, entry: rhai::title(text).unwrap_or_default(), source: text.to_string(), variations: Vec::new() }
+        let text = example(file).replace("\r\n", "\n");
+        CustomSource { dialect: CustomDialect::Rhai, entry: rhai::title(&text).unwrap_or_default(), source: text, variations: Vec::new() }
     };
     let stops = |s: &[(f32, [f32; 3])]| serde_json::Value::Array(s.iter().map(|(p, c)| serde_json::json!({ "color": c, "position": p })).collect());
     // Three ramps, a basin each: bright where an orbit lands fast, darker
