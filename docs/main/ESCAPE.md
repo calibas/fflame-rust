@@ -611,6 +611,34 @@ fn escaped(s, p) {
   taken part by part, each part the real part of `f` of it. A vector
   `prepare` gives is read as `p.name` as any. `escaped` stays one test:
   a helper there may give a vector from `let`s, not from an `if`.
+- **Quaternions** (`rhai/vec.rs`, the same machinery: a vector is a kind
+  and its parts; [quaternions.md](../projects/quaternions.md)), in
+  solids and in 3D variations: `quat(w, x, y, z)`, `quat(w, v)` (`v` a
+  `vec3`) or `quat(w)`, `w` the scalar part; `q.w`, `q.x`, `q.y`, `q.z`
+  read and set, `q.v` the vector part (a `vec3`, settable); `+` and `-`
+  (a number to or from the scalar part), unary `-`, `*` Hamilton's
+  product or a scaling, `/` by a number (`q / r` is refused: `q * inv(r)`
+  and `inv(r) * q` differ); `dot`, `length`, `normalize`, `conj`, `inv`;
+  `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `exp`, `ln` (`log` base 10,
+  as Rhai's), `sqrt`, `pow(q, n)` and `q ** n` -- each the complex
+  function `g` of `t + i r` (`t` the scalar part, `r` the vector part's
+  length) carried back along the vector part (`a + i b` gives
+  `a + b v / r`; exact for functions with real coefficients, and
+  Halayka's (2009) equations (17)-(21)); `q.complex()` that `t + i r`. A
+  `PARAMS` entry `quat(...)` is four float parameters, `name_w` first;
+  a solid's state `z` may be a quaternion (the trap reads its vector
+  part, the walk's escape test its whole length). Such a function
+  stretches space by at most `max(|g'|, |Im g| / r)` at `t + i r`, which
+  is what a solid's running derivative reads. Examples:
+  `solid-halayka-quaternions.rhai`, Halayka's six non-standard sets (the
+  set, its complement, or the surface between them, cut to his box; its
+  estimate's caps and their tests are in the file), and
+  `variation-escape-paths.rhai`, his (2018) escape paths as a 3D flame's
+  variation (`escape::halayka` holds their presets). Gates:
+  `quaternions_run_as_the_algebra_says` (every operation against the
+  algebra written independently in f64), `halaykas_sets_hold_what_the_paper_says`,
+  `halaykas_sets_are_never_stepped_through`,
+  `the_escape_paths_lie_on_their_orbits_paths`.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to
