@@ -8,13 +8,13 @@
 //! one-line stub -- and the stub's text was a single shared string that
 //! was wrong in two of the three places it appeared.
 //!
-//! See `docs/archive/projects/ui-render-modes.md` section 3.2. Panels depend on
-//! the render mode alone; controls also depend on the tone-map mode,
+//! Every panel is drawn in every mode (`docs/projects/one-workspace.md`):
+//! [`panel`] says whether it acts on the picture, and one that does not
+//! wears a banner saying so ([`inactive_banner`]) above its controls,
+//! which stay editable. Controls depend on the tone-map mode too,
 //! because some of the tonemap's own parameters are read by one branch
-//! of it and not the others. There is room for the skill level that
-//! `ux-improvements.md` section 2 proposes and for the compact flag
-//! already threaded through `PanelViewerContext`, without either being
-//! built.
+//! of it and not the others; a dead control is greyed or hidden
+//! ([`control`]; `docs/archive/projects/ui-render-modes.md` section 3.2).
 
 use super::workspace::PanelType;
 use crate::scene::tonemap::ToneMapMode;
@@ -29,9 +29,8 @@ pub enum Vis {
     /// looks for a control finds out why it is not available rather
     /// than wondering whether it exists.
     Grey(&'static str),
-    /// Do not draw it at all. Reserved for whole sections inside a
-    /// panel (plan phase 4); no PANEL is ever hidden, because hiding
-    /// its menu row would make it unreachable AND undiscoverable.
+    /// Do not draw it at all. Reserved for whole sections and controls
+    /// inside a panel; a PANEL is never hidden (nor greyed: [`panel`]).
     #[allow(dead_code)]
     Hide,
 }
@@ -49,14 +48,16 @@ const FLAME_ONLY: &str = "visibility.flame_only";
 /// and for simulation terrains, and the old wording sent the user to
 /// the wrong mode.
 const NEEDS_SURFACE: &str = "visibility.needs_surface";
-/// The other non-flame engine's editing surface.
-const OTHER_ENGINE: &str = "visibility.other_engine";
+/// The Escape panel: it sets up an escape-time fractal.
+const ESCAPE_ENGINE: &str = "visibility.escape_engine";
+/// The Simulation panel: it sets up a simulation.
+const SIM_ENGINE: &str = "visibility.sim_engine";
 /// The Texture panel: only an escape-time fractal uses a texture so far.
 const ESCAPE_TEXTURES: &str = "visibility.escape_textures";
 /// The Hybrid Designer writes escape-time formulas.
 const ESCAPE_HYBRIDS: &str = "visibility.escape_hybrids";
-/// Produces a flame, so using it would leave this mode.
-const MAKES_A_FLAME: &str = "visibility.makes_a_flame";
+/// The Rendering menu: it configures the chaos game.
+pub const CHAOS_GAME: &str = "visibility.chaos_game";
 /// Only the logarithmic tone mapping reads it.
 const LOG_ONLY: &str = "visibility.log_only";
 /// Only the linear tone mapping behaves in this mode.
@@ -132,13 +133,32 @@ impl Solid {
         };
         if yes { Solid::Yes } else { Solid::No }
     }
+}
 
-    fn is_yes(self) -> bool {
-        self == Solid::Yes
+/// Whether a panel acts on the picture in a mode.
+///
+/// Every panel is drawn in every mode, its controls live (one-workspace
+/// plan, decision 3): one that does not act says so at its top -- why,
+/// and the modes it is for, each a button into it ([`inactive_banner`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelUse {
+    Active,
+    /// `reason` is a `visibility.*` locale key; `enter`, the modes the
+    /// panel acts in that a button can switch to (none when no mode
+    /// switch would make it act, as for lighting over a plane).
+    Inactive { reason: &'static str, enter: &'static [RenderMode] },
+}
+
+impl PanelUse {
+    pub fn is_active(self) -> bool {
+        matches!(self, PanelUse::Active)
     }
 }
 
-/// Is this panel meaningful in this mode?
+const FLAMES: &[RenderMode] = &[RenderMode::TwoD, RenderMode::ThreeD];
+const ESCAPE: &[RenderMode] = &[RenderMode::Escape];
+
+/// Does this panel act on the picture in this mode?
 ///
 /// Exhaustive by construction -- there is no `_` arm, so a new panel
 /// or a new mode does not compile until someone has decided what it
@@ -147,9 +167,10 @@ impl Solid {
 /// `solid` is the one thing the mode does not settle: lighting belongs
 /// to whatever renders a surface, and in escape mode that is a
 /// property of the formula.
-pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
+pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse {
     use PanelType as P;
     use RenderMode as M;
+    let inactive = |reason, enter| PanelUse::Inactive { reason, enter };
     match p {
         // The picture, and everything that reads the shared tail:
         // both non-flame engines write an image in the flame
@@ -182,16 +203,21 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         // attractor as a distance field — so in both, editing a
         // transform edits the picture. In mode A and mode B the flame
         // is inert, but the panel is how you prepare one before
-        // switching, and greying it there would be a per-FORMULA
-        // answer from a per-mode policy.
+        // switching, and a banner there would be a per-FORMULA answer
+        // from a per-mode policy.
         | P::Transforms
         | P::TriangleEditor
-        | P::Variations => Vis::Show,
+        | P::Variations
+        // A generated flame loads with its own mode, from any mode.
+        | P::RandomGenerator
+        // Formulas, colourings and solids for Escape (using one enters
+        // it), variations for the flame: something for every mode.
+        | P::FormulaEditor => PanelUse::Active,
 
         // Flame-only editing surfaces.
         P::XaosEditor | P::Subflames | P::Paths => match m {
-            M::TwoD | M::ThreeD => Vis::Show,
-            M::Escape | M::Simulation => Vis::Grey(FLAME_ONLY),
+            M::TwoD | M::ThreeD => PanelUse::Active,
+            M::Escape | M::Simulation => inactive(FLAME_ONLY, FLAMES),
         },
 
         // Lighting belongs to whatever renders a SURFACE, and two
@@ -199,63 +225,74 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         // distance marcher. Both read these same settings, so both
         // offer the same panel -- a marcher lights itself rather than
         // going through the shade pass, but the vocabulary is one.
-        P::SolidLighting => {
-            // The one rule written against `solid` alone rather than
-            // against the mode, because the mode is not what decides
-            // it -- `Solid::of` already answers for the 3D flame
-            // pipeline and for the escape marcher, and having the
-            // mode answer TOO would be two rules that can disagree.
-            let _ = m;
-            if solid.is_yes() {
-                Vis::Show
-            } else {
-                Vis::Grey(NEEDS_SURFACE)
-            }
-        }
-
-        // It works, but everything it produces is a flame, so using it
-        // silently leaves the mode you are in.
-        P::RandomGenerator => match m {
-            M::TwoD | M::ThreeD => Vis::Show,
-            M::Escape | M::Simulation => Vis::Grey(MAKES_A_FLAME),
+        //
+        // Written against `solid` rather than the mode, because the mode
+        // is not what decides it -- `Solid::of` already answers for the
+        // 3D flame pipeline and for the escape marcher. A 2D flame is a
+        // switch away from a surface; a plane in the other engines is a
+        // solid or a terrain away, which the reason names.
+        P::SolidLighting => match (solid, m) {
+            (Solid::Yes, _) => PanelUse::Active,
+            (Solid::No, M::TwoD) => inactive(NEEDS_SURFACE, &[M::ThreeD]),
+            (Solid::No, M::ThreeD | M::Escape | M::Simulation) => inactive(NEEDS_SURFACE, &[]),
         },
 
-        // The two non-flame editors. Each is the way INTO its mode, so
-        // both are offered from a flame mode; each hides the other,
-        // because a config is exactly one mode and showing both would
-        // read as though they compose.
+        // Each engine's editor: drawn everywhere, so a formula or a
+        // model can be looked at and chosen from any mode -- choosing
+        // enters the mode (`render_mode::choose`).
         P::Escape => match m {
-            M::TwoD | M::ThreeD | M::Escape => Vis::Show,
-            M::Simulation => Vis::Grey(OTHER_ENGINE),
+            M::Escape => PanelUse::Active,
+            M::TwoD | M::ThreeD | M::Simulation => inactive(ESCAPE_ENGINE, ESCAPE),
         },
         P::Simulation => match m {
-            M::TwoD | M::ThreeD | M::Simulation => Vis::Show,
-            M::Escape => Vis::Grey(OTHER_ENGINE),
+            M::Simulation => PanelUse::Active,
+            M::TwoD | M::ThreeD | M::Escape => inactive(SIM_ENGINE, &[M::Simulation]),
         },
 
         // Textures go into an escape-time fractal (sim-textures plan:
-        // escape first). Simulation mode makes them, with Save as
-        // texture, so it shows the library too -- to browse and manage
-        // what it saved; picking does nothing there.
+        // escape first); Simulation makes them, with Save as texture.
+        // Picking one enters Escape.
         P::Textures => match m {
-            M::Escape | M::Simulation => Vis::Show,
-            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_TEXTURES),
+            M::Escape => PanelUse::Active,
+            M::TwoD | M::ThreeD | M::Simulation => inactive(ESCAPE_TEXTURES, ESCAPE),
         },
 
-        // Its formulas and colourings are escape-time ones; its
-        // transformations are the flame's variations (the KIFS plan, C1).
-        P::FormulaEditor => match m {
-            M::Escape | M::TwoD | M::ThreeD => Vis::Show,
-            M::Simulation => Vis::Grey(OTHER_ENGINE),
-        },
-
-        // So are its hybrids.
+        // Its hybrids are escape-time formulas; Use enters Escape.
         P::HybridDesigner => match m {
-            M::Escape => Vis::Show,
-            M::Simulation => Vis::Grey(OTHER_ENGINE),
-            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_HYBRIDS),
+            M::Escape => PanelUse::Active,
+            M::TwoD | M::ThreeD | M::Simulation => inactive(ESCAPE_HYBRIDS, ESCAPE),
         },
     }
+}
+
+/// The top of a panel that does not act on the picture in `mode`
+/// (one-workspace plan, decision 3): a framed note that says so, why
+/// (`reason`), and a button into each mode of `enter`. Returns the mode
+/// a button asked for.
+pub fn inactive_banner(ui: &mut egui::Ui, mode: RenderMode, reason: &'static str, enter: &[RenderMode]) -> Option<RenderMode> {
+    use super::render_mode::mode_label_key;
+    let warn = ui.visuals().warn_fg_color;
+    let mut picked = None;
+    egui::Frame::group(ui.style())
+        .stroke(egui::Stroke::new(1.0, warn))
+        .fill(warn.gamma_multiply(0.08))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let heading = rust_i18n::t!("visibility.inactive_heading", mode = rust_i18n::t!(mode_label_key(mode)));
+            ui.label(egui::RichText::new(heading).strong().color(warn));
+            ui.label(rust_i18n::t!(reason));
+            if !enter.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    for m in enter {
+                        if ui.button(rust_i18n::t!("visibility.switch_to", mode = rust_i18n::t!(mode_label_key(*m)))).clicked() {
+                            picked = Some(*m);
+                        }
+                    }
+                });
+            }
+        });
+    ui.add_space(4.0);
+    picked
 }
 
 /// A control, or a group of controls that share a fate.
@@ -610,10 +647,10 @@ mod tests {
         assert_eq!(solid_of("ifs_flame"), Solid::No, "the planar walk renders no surface");
         assert_eq!(solid_of("mandelbrot"), Solid::No);
 
-        assert!(panel(PanelType::SolidLighting, M::Escape, Solid::Yes).is_show());
-        assert!(!panel(PanelType::SolidLighting, M::Escape, Solid::No).is_show());
+        assert!(panel(PanelType::SolidLighting, M::Escape, Solid::Yes).is_active());
+        assert!(!panel(PanelType::SolidLighting, M::Escape, Solid::No).is_active());
         // The flame side is the same question, answered by the same flag.
-        assert!(panel(PanelType::SolidLighting, M::ThreeD, Solid::Yes).is_show());
+        assert!(panel(PanelType::SolidLighting, M::ThreeD, Solid::Yes).is_active());
         // TwoD never reports Solid::Yes, so the flag alone deciding is
         // not a licence for the 2D mode to show it -- `Solid::of` is.
         assert_eq!(Solid::of(&crate::config::FractalConfig::default()), Solid::No);
@@ -668,9 +705,12 @@ mod tests {
     #[test]
     fn every_reason_resolves_to_real_text() {
         let mut checked = 0;
+        for key in ["visibility.inactive_heading", "visibility.switch_to", CHAOS_GAME] {
+            assert_ne!(t!(key).as_ref(), key, "missing locale key {key}");
+        }
         for m in RenderMode::ALL {
             for p in ALL_PANELS {
-                if let Vis::Grey(key) = panel(*p, *m, Solid::No) {
+                if let PanelUse::Inactive { reason: key, .. } = panel(*p, *m, Solid::No) {
                     let text = t!(key);
                     assert_ne!(text.as_ref(), key, "{p:?}/{m:?}: missing locale key {key}");
                     assert!(text.len() > 10, "{key} is too terse to explain anything");
@@ -789,66 +829,66 @@ mod tests {
         );
     }
 
-    /// The flame modes offer everything except what is not theirs:
-    /// Lighting & Material is 3D alone, and Textures go into an escape-time
-    /// fractal (sim-textures plan: escape first).
+    /// The panels each mode does not use, pinned: a panel quietly
+    /// changing status is the failure this module exists to prevent.
+    /// (Every panel is DRAWN in every mode; these wear the banner.)
     #[test]
-    fn the_flame_modes_offer_everything_but_solid_in_two_d() {
-        for p in ALL_PANELS {
-            let escape_only = matches!(*p, PanelType::Textures | PanelType::HybridDesigner);
-            assert_eq!(
-                panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
-                !escape_only,
-                "{p:?} in 3D"
-            );
-            let want = *p != PanelType::SolidLighting && !escape_only;
-            assert_eq!(panel(*p, RenderMode::TwoD, Solid::No).is_show(), want, "{p:?} in 2D");
-        }
-    }
-
-    /// Escape and Simulation grey exactly the panels the plan's
-    /// section 1.2 table says, and nothing else. Pinning the set is
-    /// the regression guard: a panel quietly dropping out of a mode is
-    /// the failure this whole module exists to prevent.
-    #[test]
-    fn each_non_flame_mode_greys_exactly_its_documented_set() {
-        let greyed = |m: RenderMode| -> Vec<String> {
+    fn each_mode_leaves_exactly_its_documented_panels_unused() {
+        let unused = |m: RenderMode, solid: Solid| -> Vec<String> {
             let mut v: Vec<String> = ALL_PANELS
                 .iter()
-                .filter(|p| !panel(**p, m, Solid::No).is_show())
+                .filter(|p| !panel(**p, m, solid).is_active())
                 .map(|p| format!("{p:?}"))
                 .collect();
             v.sort();
             v
         };
+        fn sorted(mut v: Vec<&str>) -> Vec<String> {
+            v.sort();
+            v.into_iter().map(String::from).collect()
+        }
+        let engines = ["Escape", "Simulation", "Textures", "HybridDesigner"];
+        let mut two_d = engines.to_vec();
+        two_d.push("SolidLighting");
+        assert_eq!(unused(RenderMode::TwoD, Solid::No), sorted(two_d), "2D");
+        assert_eq!(unused(RenderMode::ThreeD, Solid::Yes), sorted(engines.to_vec()), "3D");
         // The transform editors are NOT here: escape mode D renders
         // the flame's attractor as a distance field, so editing a
         // transform edits the picture.
-        let mut want_escape = vec![
-            "XaosEditor",
-            "Subflames", "Paths", "SolidLighting", "RandomGenerator", "Simulation",
-        ];
-        want_escape.sort();
-        assert_eq!(greyed(RenderMode::Escape), want_escape, "Escape");
-
-        let mut want_sim = vec![
-            "XaosEditor", "Subflames", "Paths", "SolidLighting",
-            "RandomGenerator", "Escape", "FormulaEditor", "HybridDesigner",
-        ];
-        want_sim.sort();
-        assert_eq!(greyed(RenderMode::Simulation), want_sim, "Simulation");
+        let flame_only = ["XaosEditor", "Subflames", "Paths"];
+        let mut escape = vec!["Simulation"];
+        escape.extend(flame_only);
+        assert_eq!(unused(RenderMode::Escape, Solid::Yes), sorted(escape), "Escape");
+        let mut sim = vec!["Escape", "Textures", "HybridDesigner"];
+        sim.extend(flame_only);
+        assert_eq!(unused(RenderMode::Simulation, Solid::Yes), sorted(sim), "Simulation");
     }
 
-    /// The two engines hide each other, and each is reachable from a
-    /// flame mode -- otherwise there would be no way in.
+    /// An unused panel's buttons lead where it is used: every mode it
+    /// offers makes it act. And each mode's editor acts in its mode --
+    /// a mode change brings it forward (`render_mode::main_panel_for`).
     #[test]
-    fn each_engine_is_reachable_from_a_flame_mode_and_hides_the_other() {
-        assert!(panel(PanelType::Escape, RenderMode::TwoD, Solid::No).is_show());
-        assert!(panel(PanelType::Simulation, RenderMode::TwoD, Solid::No).is_show());
-        assert!(!panel(PanelType::Escape, RenderMode::Simulation, Solid::No).is_show());
-        assert!(!panel(PanelType::Simulation, RenderMode::Escape, Solid::No).is_show());
-        assert!(panel(PanelType::Escape, RenderMode::Escape, Solid::No).is_show());
-        assert!(panel(PanelType::Simulation, RenderMode::Simulation, Solid::No).is_show());
+    fn an_unused_panel_leads_where_it_acts() {
+        for m in RenderMode::ALL {
+            for p in ALL_PANELS {
+                for solid in [Solid::No, Solid::Yes] {
+                    if let PanelUse::Inactive { enter, .. } = panel(*p, *m, solid) {
+                        for to in enter {
+                            assert_ne!(to, m, "{p:?} in {m:?} offers its own mode");
+                            // Entering 3D from 2D makes a surface.
+                            let solid_there = if *to == RenderMode::ThreeD { Solid::Yes } else { solid };
+                            assert!(panel(*p, *to, solid_there).is_active(), "{p:?}: {m:?} leads to {to:?}, where it does not act");
+                        }
+                    }
+                }
+            }
+            let main = super::super::render_mode::main_panel_for(*m);
+            assert!(panel(main, *m, Solid::No).is_active(), "{m:?}'s editor");
+        }
+        // The engines' editors lead into their engines from every mode.
+        for m in [RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Simulation] {
+            assert_eq!(panel(PanelType::Escape, m, Solid::No), PanelUse::Inactive { reason: ESCAPE_ENGINE, enter: ESCAPE });
+        }
     }
 
     /// Fly mode is every 3D camera's and no 2D view's.

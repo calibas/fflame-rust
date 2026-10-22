@@ -476,9 +476,6 @@ pub struct PanelContext<'a> {
     pub open_save_online_dialog: &'a mut bool,
     pub load_api_animation_id: &'a mut Option<String>,
     pub clear_variation_cache_requested: &'a mut bool,
-    /// A panel asking for a different workspace layout (the Escape
-    /// toggle brings its own layout with it).
-    pub workspace_layout_requested: &'a mut Option<super::workspace::WorkspaceLayout>,
     /// Simulation transport, owned by App. It is view state rather than
     /// config -- like the playhead, not like a parameter -- so it is
     /// passed through rather than stored in the FractalConfig, and a
@@ -689,18 +686,20 @@ fn apply_camera_edit(config_manager: &mut crate::config::ConfigManager, edit: Op
 impl<'a> PanelViewer<'a> {
     fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
         // What the mode makes available lives in one place
-        // (ui-render-modes plan, section 3.2). A panel that is not
-        // available says WHY, in words chosen for its own case -- this
-        // used to be one shared string that claimed every panel
-        // "edits the flame and is inactive in Escape mode", including
-        // in Simulation, and including for the two engine panels,
-        // which edit no flame at all.
+        // (`visibility::panel`). Every panel is drawn in every mode
+        // (one-workspace plan); one that does not act on the picture
+        // says so at its top, WHY, in words chosen for its own case, and
+        // offers the way into a mode it is for. Its controls follow,
+        // editable: what they set is kept for that mode.
         let config = self.context.config_manager.active_config();
         let mode = config.render_mode;
         let solid = super::visibility::Solid::of(config);
-        if let super::visibility::Vis::Grey(reason) = super::visibility::panel(*tab, mode, solid) {
-            ui.label(t!(reason));
-            return;
+        if let super::visibility::PanelUse::Inactive { reason, enter } = super::visibility::panel(*tab, mode, solid) {
+            if let Some(to) = super::visibility::inactive_banner(ui, mode, reason, enter) {
+                if let Err(e) = super::render_mode::switch_render_mode(self.context.config_manager, to) {
+                    log::error!("Failed to switch render mode: {e}");
+                }
+            }
         }
         match tab {
             PanelType::FractalViewport => {
@@ -795,7 +794,6 @@ impl<'a> PanelViewer<'a> {
                 super::escape_panel::render_escape_content(
                     ui,
                     self.context.config_manager,
-                    self.context.workspace_layout_requested,
                     self.context.terrain_range,
                     self.context.formula_editor,
                     self.context.open_formula_editor,
@@ -823,7 +821,6 @@ impl<'a> PanelViewer<'a> {
                 super::sim_panel::render_sim_content(
                     ui,
                     self.context.config_manager,
-                    self.context.workspace_layout_requested,
                     super::sim_panel::SimUiState {
                         running: self.context.sim_running,
                         step_once: self.context.sim_step_once,

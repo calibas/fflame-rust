@@ -38,7 +38,7 @@ here, with deep zoom by perturbation to effectively unlimited depth.
   `orbit_store.rs` in `src/escape/` — deep zoom
 - [src/escape/presets.rs](../../src/escape/presets.rs) — generated presets
 - [src/config/escape.rs](../../src/config/escape.rs) — `EscapeConfig`
-- [src/ui/escape_panel.rs](../../src/ui/escape_panel.rs) — the Escape Fractal panel
+- [src/ui/escape_panel.rs](../../src/ui/escape_panel.rs) — the Escape panel
 
 ---
 

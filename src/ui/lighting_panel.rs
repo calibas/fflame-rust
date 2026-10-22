@@ -668,7 +668,7 @@ mod tests {
     #[cfg(feature = "engine-escape")]
     fn escape_text(config: &FractalConfig) -> Vec<String> {
         let mut m = ConfigManager::new(config.clone());
-        drawn(&mut m, &mut |ui, m| super::super::escape_panel::render_escape_content(ui, m, &mut None, None, &mut None, &mut false))
+        drawn(&mut m, &mut |ui, m| super::super::escape_panel::render_escape_content(ui, m, None, &mut None, &mut false))
     }
 
     fn view_text(config: &FractalConfig) -> Vec<String> {
