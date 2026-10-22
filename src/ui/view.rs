@@ -325,7 +325,7 @@ mod tests {
     /// Showing the View panel writes nothing (user-reported 2026-10-21:
     /// switching to it redrew 3D scenes -- its field of view slider
     /// rounded the default 40.107 degrees to the 40.1 it shows), nor does
-    /// the Lighting & Material panel: every bundled preset in a 3D view,
+    /// the Lighting panel: every bundled preset in a 3D view,
     /// each view's default, and a solid under a sky whose horizon and
     /// stars are past their sliders' ranges, drawn for two frames -- no
     /// change to the config, nothing for the renderer to do.

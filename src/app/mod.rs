@@ -1596,44 +1596,13 @@ impl App {
         }
     }
 
-    fn follow_loaded_render_mode(&mut self) {
-        use crate::ui::workspace::{PanelType, WorkspaceLayout};
+    /// The mode's editor to the front (one-workspace plan): every mode
+    /// works in the one workspace, so a mode change swaps and closes
+    /// nothing -- it brings Transforms, Escape or Simulation forward.
+    fn show_mode_panel(&mut self) {
         let mode = self.config_manager.active_config().render_mode;
-        let compact = self
-            .config_manager
-            .system_settings()
-            .compact_mode
-            .unwrap_or(false);
-        // Each non-flame mode brings its own workspace, and loading a
-        // flame leaves whichever one is up. Written as a table rather
-        // than nested ifs because a third mode made the branching the
-        // part most likely to gain a hole -- "leaving" has to cover
-        // every layout that is not the one being entered.
-        let want: Option<(WorkspaceLayout, PanelType)> =
-            crate::ui::render_mode::layout_for(mode);
-        match want {
-            Some((layout, panel)) => {
-                if compact {
-                    let ctx = self.egui_layer.ctx.clone();
-                    self.workspace.open_compact_panel(panel, &ctx);
-                } else if self.workspace.current_layout != layout {
-                    log::info!("A {mode:?} fractal: switching to its workspace");
-                    self.workspace.switch_layout(layout);
-                }
-            }
-            None => {
-                if !compact
-                    && matches!(
-                        self.workspace.current_layout,
-                        WorkspaceLayout::EscapeTime | WorkspaceLayout::Simulation
-                    )
-                {
-                    log::info!("A flame: leaving the {:?} workspace",
-                        self.workspace.current_layout);
-                    self.workspace.switch_layout(WorkspaceLayout::Standard);
-                }
-            }
-        }
+        let ctx = self.egui_layer.ctx.clone();
+        self.workspace.show_main_panel(crate::ui::render_mode::main_panel_for(mode), &ctx);
     }
 
     fn update(&mut self) {
@@ -1915,42 +1884,26 @@ impl App {
             self.cache_saved_texture_from_run(name);
         }
 
-        // A panel asked for a different workspace. Applied here rather
-        // than in the panel because the workspace is borrowed by the
-        // UI for the whole frame -- switching mid-draw would rebuild
-        // the dock tree the caller is still walking.
-        if let Some(layout) = ui_response.workspace_layout_requested {
-            if self.workspace.current_layout != layout {
-                self.workspace.apply_layout(layout);
-            }
-        }
-
-        // A newly loaded fractal may be a different KIND of fractal
-        // than the layout in front of the user. Escape-time controls
-        // live in a panel the Standard layout does not carry, so an
-        // escape fractal opened from a file or the online browser
-        // used to arrive with nothing on screen that could edit it.
-        //
-        // Placed here for the same reason the request above is: the
-        // workspace is borrowed by the UI for the whole frame, and
-        // switching mid-draw would rebuild the dock tree the caller
-        // is still walking.
         let load_gen = self.config_manager.load_generation();
         if self.last_load_generation != load_gen {
             self.last_load_generation = load_gen;
-            self.follow_loaded_render_mode();
             self.log_wasm_memory_after_load(load_gen);
         }
-        // The workspace follows the mode WHENEVER it changes, not only
-        // when a file brought it: a Mode menu switch and an undo of one
-        // both land here (ui-render-modes plan, section 3.3). It used
-        // to hang off the load generation alone, so a manual switch out
-        // of Escape left the Escape workspace up.
+        // The mode's editor comes forward WHENEVER the mode changes: the
+        // menu bar's switch, a panel's choice, a load, an undo. And once
+        // after a layout is built, which does not know the mode, so a
+        // reset or a boot in Escape opens on the Escape tab. Here rather
+        // than in the UI because the workspace is borrowed by the UI for
+        // the whole frame -- changing its tree mid-draw would move the
+        // tabs the caller is still walking.
         let mode_now = self.config_manager.active_config().render_mode;
+        let new_layout = self.workspace.take_needs_main_panel();
         if self.last_render_mode != mode_now {
             self.last_render_mode = mode_now;
-            self.follow_loaded_render_mode();
+            self.show_mode_panel();
             self.release_inactive_engines(mode_now);
+        } else if new_layout {
+            self.show_mode_panel();
         }
 
         // Consume fly-mode responses produced by the UI this frame: a

@@ -11,7 +11,7 @@ use rust_i18n::t;
 /// screen. `Extend` makes each row report its true width, so the popup
 /// sizes to its longest row and flips to the left of its button when
 /// there is no room to the right -- which is what started happening to
-/// Window once the Mode menu pushed it further along the bar.
+/// Window once a Mode menu pushed it further along the bar.
 pub(super) fn rows_do_not_wrap(ui: &mut egui::Ui) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 }
@@ -177,102 +177,93 @@ pub fn render_menu_bar(
                 });
             }
 
-            // Mode Menu — the four engines as peers. The View menu used
-            // to carry a 2D/3D pair, which could not name the other two
-            // and claimed "3D" was selected while you were in Escape.
-            // The View PANEL keeps its 2D/3D switch: choosing between
-            // the flame's two projections is a view-level decision and
-            // belongs next to the camera.
-            ui.menu_button(t!("menu.mode"), |ui| {
-                rows_do_not_wrap(ui);
-                for m in RenderMode::ALL {
-                    let label = t!(super::render_mode::mode_label_key(*m));
-                    if ui
-                        .selectable_label(menu_state.render_mode == *m, label.as_ref())
-                        .on_hover_text(t!(super::render_mode::mode_tip_key(*m)))
-                        .clicked()
-                    {
-                        menu_actions.set_mode = Some(*m);
-                    }
-                }
-            });
-
             // Rendering Menu -- every item configures the chaos game
             // (pause, reset accumulation, iterations per thread), and
-            // "Reset to Defaults" resets exactly those parameters, so
-            // the whole menu is inert in a non-flame mode.
-            if super::visibility::control(
+            // "Reset to Defaults" resets exactly those parameters. Always
+            // there: a menu that came and went with the mode moved the
+            // mode button after it. Outside the flame modes it says why its
+            // rows are disabled.
+            let chaos_game = super::visibility::control(
                 super::visibility::Control::ChaosGame,
                 menu_state.render_mode,
                 menu_state.tonemap_mode,
-            ) != super::visibility::Vis::Hide
-            {
+            ) == super::visibility::Vis::Show;
             ui.menu_button(t!("menu.rendering"), |ui| {
                 rows_do_not_wrap(ui);
-                // Pause/Resume
-                let pause_text = if menu_state.is_paused {
-                    t!("menu.resume")
-                } else {
-                    t!("menu.pause")
-                };
-                if ui.button(pause_text).clicked() {
-                    menu_actions.rendering.pause_toggle = true;
+                if !chaos_game {
+                    ui.weak(t!(super::visibility::CHAOS_GAME));
+                    ui.separator();
                 }
-
-                // Reset Accumulation
-                if ui.button(t!("menu.reset_accumulation")).clicked() {
-                    menu_actions.rendering.reset_accumulation = true;
-                }
-
-                ui.separator();
-
-                // Iterations per Thread submenu
-                ui.menu_button(t!("menu.iterations_per_thread"), |ui| {
-                    rows_do_not_wrap(ui);
-                    for &ipt in &[128, 256, 512, 1024, 2048, 4096] {
-                        if ui.button(format!("{}", ipt)).clicked() {
-                            menu_actions.rendering.set_iterations_per_thread = Some(ipt);
-                        }
+                ui.add_enabled_ui(chaos_game, |ui| {
+                    // Pause/Resume
+                    let pause_text = if menu_state.is_paused {
+                        t!("menu.resume")
+                    } else {
+                        t!("menu.pause")
+                    };
+                    if ui.button(pause_text).clicked() {
+                        menu_actions.rendering.pause_toggle = true;
                     }
-                });
 
-                // The frame-time governor, and the dispatch when it is off
-                let mut governor = menu_state.frame_governor;
-                if ui
-                    .checkbox(&mut governor, t!("menu.frame_governor"))
-                    .on_hover_text(t!("menu.tooltip_frame_governor"))
-                    .changed()
-                {
-                    menu_actions.rendering.set_frame_governor = Some(governor);
-                }
-                ui.add_enabled_ui(!menu_state.frame_governor, |ui| {
-                    ui.menu_button(format!("{}: {}", t!("menu.workgroups"), menu_state.manual_workgroups), |ui| {
+                    // Reset Accumulation
+                    if ui.button(t!("menu.reset_accumulation")).clicked() {
+                        menu_actions.rendering.reset_accumulation = true;
+                    }
+
+                    ui.separator();
+
+                    // Iterations per Thread submenu
+                    ui.menu_button(t!("menu.iterations_per_thread"), |ui| {
                         rows_do_not_wrap(ui);
-                        for &w in &[1u32, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
-                            if ui.radio(menu_state.manual_workgroups == w, format!("{w}")).clicked() {
-                                menu_actions.rendering.set_manual_workgroups = Some(w);
+                        for &ipt in &[128, 256, 512, 1024, 2048, 4096] {
+                            if ui.button(format!("{}", ipt)).clicked() {
+                                menu_actions.rendering.set_iterations_per_thread = Some(ipt);
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text(t!("menu.tooltip_workgroups"));
+                    });
+
+                    // The frame-time governor, and the dispatch when it is off
+                    let mut governor = menu_state.frame_governor;
+                    if ui
+                        .checkbox(&mut governor, t!("menu.frame_governor"))
+                        .on_hover_text(t!("menu.tooltip_frame_governor"))
+                        .changed()
+                    {
+                        menu_actions.rendering.set_frame_governor = Some(governor);
+                    }
+                    ui.add_enabled_ui(!menu_state.frame_governor, |ui| {
+                        ui.menu_button(format!("{}: {}", t!("menu.workgroups"), menu_state.manual_workgroups), |ui| {
+                            rows_do_not_wrap(ui);
+                            for &w in &[1u32, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024] {
+                                if ui.radio(menu_state.manual_workgroups == w, format!("{w}")).clicked() {
+                                    menu_actions.rendering.set_manual_workgroups = Some(w);
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(t!("menu.tooltip_workgroups"));
+                    });
+
+                    ui.separator();
+
+                    // Reset Rendering to Defaults
+                    if ui.button(t!("menu.reset_rendering")).clicked() {
+                        menu_actions.rendering.reset_to_defaults = true;
+                    }
                 });
-
-                ui.separator();
-
-                // Reset Rendering to Defaults
-                if ui.button(t!("menu.reset_rendering")).clicked() {
-                    menu_actions.rendering.reset_to_defaults = true;
-                }
             });
-            }
 
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
                 rows_do_not_wrap(ui);
-                // Reset Workspace: the mode's own layout, built fresh
+                // Reset Workspace: the layout up, built fresh, the mode's
+                // editor in front (`Workspace::show_main_panel`)
                 if ui.button(t!("menu.reset_workspace")).clicked() {
-                    workspace.apply_layout(super::render_mode::workspace_for(menu_state.render_mode));
+                    let layout = match workspace.current_layout {
+                        super::workspace::WorkspaceLayout::Compact => super::workspace::WorkspaceLayout::Standard,
+                        other => other,
+                    };
+                    workspace.apply_layout(layout);
                 }
 
                 if ui.button(t!("menu.layout_compact")).clicked() {
@@ -281,11 +272,9 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Every row comes from the shared table, and asks
-                // the visibility policy whether it means anything in
-                // this mode. Before this, the menu offered all 22
-                // unconditionally -- in Escape, eight of them opened
-                // onto a stub with no warning in the menu itself.
+                // Every row comes from the shared table, and opens its
+                // panel in every mode (one-workspace plan): one the mode
+                // does not use says so on hover, and at its own top.
                 let mode = menu_state.render_mode;
                 for row in super::visibility::WINDOW_MENU {
                     if row.online_only {
@@ -296,17 +285,12 @@ pub fn render_menu_bar(
                     }
                     let open = workspace.panel_exists(row.panel);
                     let label = t!(row.label_key);
-                    match super::visibility::panel(row.panel, mode, menu_state.solid) {
-                        super::visibility::Vis::Show => {
-                            if ui.selectable_label(open, label.as_ref()).clicked() {
-                                workspace.open_floating_panel(row.panel, ctx);
-                            }
-                        }
-                        super::visibility::Vis::Grey(reason) => {
-                            ui.add_enabled(false, egui::Button::new(label.as_ref()))
-                                .on_disabled_hover_text(t!(reason));
-                        }
-                        super::visibility::Vis::Hide => {}
+                    let mut r = ui.selectable_label(open, label.as_ref());
+                    if let super::visibility::PanelUse::Inactive { reason, .. } = super::visibility::panel(row.panel, mode, menu_state.solid) {
+                        r = r.on_hover_text(t!(reason));
+                    }
+                    if r.clicked() {
+                        workspace.open_floating_panel(row.panel, ctx);
                     }
                 }
 
@@ -321,20 +305,24 @@ pub fn render_menu_bar(
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, t!("menu.layout_standard").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
                     }
+                    // Each engine's own arrangement. Picked here, never by
+                    // a mode change: a switch in one brings the new mode's
+                    // editor in beside the one there.
+                    for (layout, key) in [
+                        (super::workspace::WorkspaceLayout::Flames, "menu.layout_flames"),
+                        (super::workspace::WorkspaceLayout::EscapeTime, "menu.layout_escape"),
+                        (super::workspace::WorkspaceLayout::Simulation, "menu.layout_simulation"),
+                    ] {
+                        if ui.selectable_label(current == layout, t!(key).as_ref()).clicked() {
+                            workspace.apply_layout(layout);
+                        }
+                    }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Animation, t!("menu.layout_animation").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Animation);
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Scripting, t!("menu.layout_scripting").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Scripting);
                     }
-                    // The Escape Time and Simulation layouts are NOT
-                    // offered here. They rearranged panels without
-                    // changing the mode, so they read as mode switches
-                    // that did half the job; and since the workspace
-                    // follows the mode on its own, picking the mode is
-                    // now the way to get its layout. The layouts
-                    // themselves still exist -- `render_mode::layout_for`
-                    // is what asks for them.
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                     //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
                     // }
@@ -368,6 +356,31 @@ pub fn render_menu_bar(
                     let _ = webbrowser::open("https://github.com/calibas/fflame-rust");
                 }
             });
+
+            // The render mode, in the bar itself (one-workspace plan,
+            // decision 5): a framed button naming the current mode,
+            // whose menu lists the four engines as peers, the active one
+            // selected, each with what it renders on hover. A switch
+            // brings the mode's editor forward and closes nothing.
+            ui.separator();
+            let current = t!(super::render_mode::mode_label_key(menu_state.render_mode));
+            // Outlined as the Fly Mode button is: the bar's own style
+            // draws no frame, and without one it reads as a menu title.
+            let button = egui::Button::new(format!("{current} ⏷")).stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(110)));
+            let (response, _) = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+                rows_do_not_wrap(ui);
+                for m in RenderMode::ALL {
+                    let label = t!(super::render_mode::mode_label_key(*m));
+                    if ui
+                        .selectable_label(menu_state.render_mode == *m, label.as_ref())
+                        .on_hover_text(t!(super::render_mode::mode_tip_key(*m)))
+                        .clicked()
+                    {
+                        menu_actions.set_mode = Some(*m);
+                    }
+                }
+            });
+            response.on_hover_text(t!("menu.mode_tip"));
 
             // Push right-side controls (right-to-left: language, then auth status)
             // Hide when window is too narrow to prevent overlap with left-side menus.

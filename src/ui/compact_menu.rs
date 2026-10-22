@@ -89,28 +89,36 @@ fn render_compact_menu_items(
     menu_state: &MenuState,
     save_online_dialog_state: &mut super::save_online_dialog::SaveOnlineDialogState,
 ) {
+    // --- The render mode ---
+    // First, named by the current mode, as the desktop bar's button
+    // (one-workspace plan, decision 5): without it the only way into
+    // Escape or Simulation on a phone would be the panels' own buttons.
+    let current = t!(super::render_mode::mode_label_key(menu_state.render_mode));
+    ui.menu_button(format!("{}: {current}", t!("menu.mode")), |ui| {
+        rows_do_not_wrap(ui);
+        for m in crate::scene::transforms::RenderMode::ALL {
+            let label = t!(super::render_mode::mode_label_key(*m));
+            if ui.selectable_label(menu_state.render_mode == *m, label.as_ref()).clicked() {
+                menu_actions.set_mode = Some(*m);
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
+
     // --- Window submenu ---
     ui.menu_button(t!("menu.window"), |ui| {
         rows_do_not_wrap(ui);
         // Order is this menu's own -- touch priority, transforms
-        // first -- but the labels and the mode policy come from the
-        // shared table, so the two menus cannot drift apart.
-        let mode = menu_state.render_mode;
+        // first -- but the labels come from the shared table, so the two
+        // menus cannot drift apart. Every row opens its panel, in every
+        // mode (one-workspace plan).
         for panel_type in super::visibility::COMPACT_WINDOW_MENU {
             let is_open = workspace.panel_exists(*panel_type);
             let label = t!(super::visibility::label_key_of(*panel_type));
-            match super::visibility::panel(*panel_type, mode, menu_state.solid) {
-                super::visibility::Vis::Show => {
-                    if ui.selectable_label(is_open, label.as_ref()).clicked() {
-                        workspace.open_compact_panel(*panel_type, ctx);
-                        ui.close();
-                    }
-                }
-                super::visibility::Vis::Grey(reason) => {
-                    ui.add_enabled(false, egui::Button::new(label.as_ref()))
-                        .on_disabled_hover_text(t!(reason));
-                }
-                super::visibility::Vis::Hide => {}
+            if ui.selectable_label(is_open, label.as_ref()).clicked() {
+                workspace.open_compact_panel(*panel_type, ctx);
+                ui.close();
             }
         }
     });
@@ -219,26 +227,6 @@ fn render_compact_menu_items(
 
     });
 
-    // --- Mode submenu ---
-    // The same four rows as the desktop Mode menu. Without this the
-    // only way into Escape or Simulation on a phone would be the
-    // panels' own buttons.
-    ui.menu_button(t!("menu.mode"), |ui| {
-        rows_do_not_wrap(ui);
-        for m in crate::scene::transforms::RenderMode::ALL {
-            let label = t!(super::render_mode::mode_label_key(*m));
-            if ui
-                .selectable_label(menu_state.render_mode == *m, label.as_ref())
-                .clicked()
-            {
-                menu_actions.set_mode = Some(*m);
-                ui.close();
-            }
-        }
-    });
-
-    ui.separator();
-
     // --- Animation transport ---
     // Play/pause/stop drive the ANIMATION, not the renderer. These used
     // to toggle the render pause, which on a phone reads as "the app
@@ -305,8 +293,8 @@ fn render_compact_menu_items(
     // --- Layout switch ---
     ui.separator();
     if ui.button(t!("menu.desktop_view")).clicked() {
-        // The mode's own desktop workspace, not always Standard.
-        workspace.apply_layout(super::render_mode::workspace_for(menu_state.render_mode));
+        // The one desktop workspace, the mode's editor in front.
+        workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
         ui.close();
     }
 }

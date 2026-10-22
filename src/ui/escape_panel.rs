@@ -1,6 +1,6 @@
-//! Escape Fractal panel — the whole editing surface for escape-time
-//! mode (the flame-only panels stay hidden rather than learning a
-//! second vocabulary; see docs/archive/escape-time/escape-time-fractals.md §3).
+//! Escape panel — the whole editing surface for escape-time mode,
+//! drawn in every mode: outside Escape its choices enter the mode
+//! (`render_mode::choose`; docs/projects/one-workspace.md).
 //!
 //! Every control writes through `config_manager.update_param` with an
 //! `Escape*` ConfigPath, so undo/redo, coalescing, animation tracks and
@@ -32,7 +32,7 @@ fn edit_as_formula(
         (ConfigPath::EscapeCustomFormula, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
         (ConfigPath::EscapeFormula, ConfigValue::String(name)),
     ];
-    if config_manager.update_batch(changes, "history.action.edit_as_formula".to_string()).is_err() {
+    if super::render_mode::choose(config_manager, changes, "history.action.edit_as_formula", RenderMode::Escape).is_err() {
         return;
     }
     let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
@@ -40,11 +40,10 @@ fn edit_as_formula(
     *open_formula_editor = true;
 }
 
-/// Render the Escape Fractal panel.
+/// Render the Escape panel.
 pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
     terrain_range: Option<[f32; 2]>,
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
@@ -55,39 +54,19 @@ pub fn render_escape_content(
     // registered before anything below resolves its name.
     crate::escape::custom::ensure(&esc);
 
-    // ---- A way in, not a toggle ----
-    //
-    // The Mode menu owns switching (ui-render-modes plan, section
-    // 3.1), so this button only ENTERS. It used to toggle, and leaving
-    // was hardcoded to 3D -- so turning Escape on from 2D and off
-    // again left you somewhere you had never been.
+    // Drawn in every mode (one-workspace plan). Outside Escape the
+    // dispatcher's banner says the panel is not used; its controls edit
+    // the config's escape-time fractal all the same, and a choice -- a
+    // formula, a preset, a colouring -- enters the mode (`choose`).
     let active = config.render_mode == RenderMode::Escape;
-    if !active {
-        if ui
-            .add(egui::Button::new(t!("escape_panel.toggle_on").as_ref()))
-            .on_hover_text(t!("escape_panel.toggle_tip"))
-            .clicked()
-        {
-            if let Err(e) =
-                super::render_mode::switch_render_mode(config_manager, RenderMode::Escape)
-            {
-                log::error!("Failed to switch render mode: {e}");
-            } else {
-                // Entering: bring the workspace with it.
-                workspace_request.replace(super::workspace::WorkspaceLayout::EscapeTime);
-            }
-        }
-        ui.separator();
-        ui.label(t!("escape_panel.not_active_hint"));
-        return;
-    }
 
     // Whether the picture on screen is finished. An escape render
     // arrives in chunks, and a screenshot of an unsettled frame has
     // been reported as a render bug more than once -- the panel should
     // say which it is rather than leaving the user to guess from the
-    // noise level.
+    // noise level. Outside Escape there is no render to report.
     match crate::escape::renderer::render_progress() {
+        _ if !active => {}
         Some((done, want)) if want > 0 => {
             let pct = (done as f32 / want as f32 * 100.0).clamp(0.0, 100.0);
             ui.label(
@@ -145,9 +124,11 @@ pub fn render_escape_content(
                                 let _ = apply_preset(config_manager, f, p);
                             }
                             None => {
-                                let _ = config_manager.update_param(
-                                    ConfigPath::EscapeFormula,
-                                    ConfigValue::String(f.name.to_string()),
+                                let _ = super::render_mode::choose(
+                                    config_manager,
+                                    vec![(ConfigPath::EscapeFormula, ConfigValue::String(f.name.to_string()))],
+                                    "history.param.escape_formula",
+                                    RenderMode::Escape,
                                 );
                             }
                         }
@@ -170,9 +151,11 @@ pub fn render_escape_content(
                                 let _ = apply_field_preset(config_manager, f, p);
                             }
                             None => {
-                                let _ = config_manager.update_param(
-                                    ConfigPath::EscapeFormula,
-                                    ConfigValue::String(f.name.to_string()),
+                                let _ = super::render_mode::choose(
+                                    config_manager,
+                                    vec![(ConfigPath::EscapeFormula, ConfigValue::String(f.name.to_string()))],
+                                    "history.param.escape_formula",
+                                    RenderMode::Escape,
                                 );
                             }
                         }
@@ -194,7 +177,7 @@ pub fn render_escape_content(
                         && esc.formula != d.name
                     {
                         // A solid from a plane: the 3D look with it.
-                        let _ = super::render_mode::apply_with_look(
+                        let _ = super::render_mode::choose(
                             config_manager,
                             vec![
                                 (
@@ -207,6 +190,7 @@ pub fn render_escape_content(
                                 ),
                             ],
                             "history.param.escape_formula",
+                            RenderMode::Escape,
                         );
                     }
                 }
@@ -340,8 +324,8 @@ pub fn render_escape_content(
         if program && matches!(p.name, "bailout" | "bailout.re" | "bailout.im") {
             continue;
         }
-        // A solid's shadows and occlusion are the Lighting & Material
-        // panel's (3d-look-and-tools P3): formula parameters in the file,
+        // A solid's shadows and occlusion are the Lighting panel's
+        // (3d-look-and-tools P3): formula parameters in the file,
         // drawn with the rest of the light.
         if ifs_def.is_some() && crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name) {
             continue;
@@ -1132,7 +1116,7 @@ pub fn render_escape_content(
                 );
             });
             // The surface texture: the relief's and the 3D terrain's alike.
-            // A terrain's is the Lighting & Material panel's Surface (P3).
+            // A terrain's is the Lighting panel's Surface (P3).
             ui.separator();
             if esc.terrain_active() {
                 ui.label(egui::RichText::new(t!("escape_panel.texture_elsewhere")).small().weak());
@@ -1356,7 +1340,7 @@ fn pick_coloring(
             changes.push((ConfigPath::EscapeBailout, b.into()));
         }
     }
-    let _ = config_manager.update_batch(changes, "history.param.escape_coloring".to_string());
+    let _ = super::render_mode::choose(config_manager, changes, "history.param.escape_coloring", RenderMode::Escape);
 }
 
 /// The Palette mapping section: the value transfer and its pivot, the
@@ -1566,7 +1550,7 @@ pub(crate) fn show_render_tier(
 
 /// The sky, which every tier draws -- the background colour alone, or a
 /// gradient from it at the horizon to the zenith's colour -- and its
-/// light, the path tracer's: the Lighting & Material panel's Sky section.
+/// light, the path tracer's: the Lighting panel's Sky section.
 /// The background is the Colors panel's too (a 2D picture's backdrop).
 pub(crate) fn show_sky(
     ui: &mut egui::Ui,
@@ -2398,9 +2382,11 @@ fn show_coloring_section(
                             .clicked()
                             && c.name != coloring.name
                         {
-                            let _ = config_manager.update_param(
-                                ConfigPath::EscapeColoring,
-                                ConfigValue::String(c.name.to_string()),
+                            let _ = super::render_mode::choose(
+                                config_manager,
+                                vec![(ConfigPath::EscapeColoring, ConfigValue::String(c.name.to_string()))],
+                                "history.param.escape_coloring",
+                                RenderMode::Escape,
                             );
                         }
                     }
@@ -2430,9 +2416,11 @@ fn show_coloring_section(
                             .clicked()
                             && c.name != coloring.name
                         {
-                            let _ = config_manager.update_param(
-                                ConfigPath::EscapeColoring,
-                                ConfigValue::String(c.name.to_string()),
+                            let _ = super::render_mode::choose(
+                                config_manager,
+                                vec![(ConfigPath::EscapeColoring, ConfigValue::String(c.name.to_string()))],
+                                "history.param.escape_coloring",
+                                RenderMode::Escape,
                             );
                         }
                     }
@@ -2827,9 +2815,7 @@ pub fn apply_preset(
             v.into(),
         ));
     }
-    config_manager
-        .update_batch(changes, "history.action.escape_preset".to_string())
-        .map(|_| ())
+    super::render_mode::choose(config_manager, changes, "history.action.escape_preset", RenderMode::Escape).map(|_| ())
 }
 
 /// [`apply_preset`] for a mode-B field.
@@ -2875,9 +2861,7 @@ pub fn apply_field_preset(
             v.into(),
         ));
     }
-    config_manager
-        .update_batch(changes, "history.action.escape_preset".to_string())
-        .map(|_| ())
+    super::render_mode::choose(config_manager, changes, "history.action.escape_preset", RenderMode::Escape).map(|_| ())
 }
 
 /// Magnification as a readable factor, formatted FROM THE LOG.
@@ -2971,7 +2955,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run_ui(Default::default(), |ui| {
                 egui::CentralPanel::default().show_inside(ui, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None, None, &mut None, &mut false);
+                    render_escape_content(ui, &mut manager, None, &mut None, &mut false);
                 });
             });
             labels = out
@@ -3004,10 +2988,23 @@ mod tests {
         assert_eq!(esc.formula_params.get("variant"), Some(&3.0), "the variant carries over");
         assert_eq!((esc.center_re.as_str(), esc.zoom_log2), ("-1.75", 7.5), "the view stays");
         assert!(open && editor.is_some(), "the editor opens");
+        assert_eq!(manager.config().render_mode, RenderMode::Escape, "a choice, from a flame, enters Escape");
         crate::escape::custom::ensure(esc);
         assert!(crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Program));
         let _ = manager.undo();
         assert_eq!(manager.config().escape.formula, "burning_ship", "one undo step");
+        assert_eq!(manager.config().render_mode, RenderMode::TwoD);
+    }
+
+    /// Drawn in every mode (one-workspace plan): outside Escape the panel
+    /// lays out its controls as it does in it.
+    #[test]
+    fn the_panel_lays_out_in_every_mode() {
+        for m in RenderMode::ALL {
+            let mut config = crate::config::FractalConfig::default();
+            config.render_mode = *m;
+            lay_out(config);
+        }
     }
 
     /// The Transformations section (the KIFS plan, C4) lays out with one

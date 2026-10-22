@@ -239,7 +239,7 @@ config.set("sim.terrain.height", h * 1.5);
 ## The `escape` object
 
 Escape-time fractals (Mandelbrot and kin). **Touching `escape` at all
-switches the config to escape rendering** — and, as the Mode menu does,
+switches the config to escape rendering** — and, as a mode switch does,
 a Log-calibrated tone map becomes Linear at escape's calibration
 (exposure 2, gamma 1), because flame presets carry Log-calibrated
 values under which escape output renders black.
@@ -292,7 +292,7 @@ values under which escape output renders black.
 
 Neighbour-coupled simulations: reaction–diffusion, cellular automata,
 growth. **Touching `sim` at all switches the config to simulation
-rendering** — and, as the Mode menu does, a Log-calibrated tone map
+rendering** — and, as a mode switch does, a Log-calibrated tone map
 becomes Linear at the flame defaults (exposure 1, gamma 4), for the
 same reason `escape` does: flame presets carry Log-calibrated values
 under which a unit-range field renders black.

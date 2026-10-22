@@ -4,7 +4,6 @@
 //! for different workflows (Beginner, Standard, Advanced, Export).
 
 use egui_dock::{DockState};
-use std::collections::HashMap;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
@@ -120,27 +119,42 @@ impl std::fmt::Display for PanelType {
     }
 }
 
-/// Workspace layout presets
+/// Workspace layout presets. None belongs to a render mode: every mode
+/// works in the one in front of the user, and a mode change brings its
+/// panel forward there (`show_main_panel`; one-workspace plan).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkspaceLayout {
-    /// Standard: Fractal + Transform Editor + Appearance + View
+    /// Standard: the viewport; Transforms, Escape and Simulation as
+    /// left-dock tabs (each mode's editor); appearance and the view on
+    /// the right.
     Standard,
+    /// Flames: Standard without the other engines' editors.
+    Flames,
+    /// Escape Time: the Escape panel on the left; on the right Lighting
+    /// where Standard has the Triangle Editor, and no Rendering panel
+    /// (the chaos game's). Picked from the menu, never by a mode change.
+    EscapeTime,
+    /// Simulation: Escape Time's shape around the Simulation panel.
+    Simulation,
     /// Animation: Standard layout with Animation panel at bottom
     Animation,
     /// Scripting: Scripts panel left, Fractal Browser right — write a
     /// script, run it, browse what it generated.
     Scripting,
-    /// Escape Time: the Escape panel where Transforms sits in
-    /// Standard, because in escape mode the transform list is not
-    /// what is being edited — the formula is. Colors and History to
-    /// the right, since coloring is most of the work once a formula
-    /// and a view are chosen.
-    EscapeTime,
-    /// Simulation: the sim panel left, viewport centre, colours right.
-    Simulation,
     /// Compact: Full-screen viewport only (mobile / small screens)
     Compact,
 }
+
+/// The left dock's tabs in Standard and Animation: each mode's editor
+/// (`render_mode::main_panel_for`), Transforms first.
+const MAIN_PANELS: [PanelType; 3] = [PanelType::Transforms, PanelType::Escape, PanelType::Simulation];
+
+/// The right dock's tabs in Standard, Animation and Flames.
+const FLAME_RIGHT: [PanelType; 5] = [PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History];
+
+/// The right dock's tabs in Escape Time and Simulation: Lighting in the
+/// Triangle Editor's place, and no Rendering.
+const ENGINE_RIGHT: [PanelType; 4] = [PanelType::Colors, PanelType::View, PanelType::SolidLighting, PanelType::History];
 
 /// Manages the docking workspace state
 pub struct Workspace {
@@ -152,14 +166,11 @@ pub struct Workspace {
     /// window size — the first frame that does know it applies the
     /// side-dock minimums (`apply_startup_dock_minimums`).
     needs_startup_dock_widths: bool,
-    /// What each layout looked like when it was last left, so that
-    /// returning to a render mode restores the arrangement instead of
-    /// rebuilding it from code (ui-render-modes plan, section 3.3).
-    ///
-    /// Session-only: nothing is persisted, so a restart still opens on
-    /// the built-in layouts. Keyed by layout rather than by mode
-    /// because 2D and 3D share the Standard workspace.
-    stashed: HashMap<WorkspaceLayout, DockState<PanelType>>,
+    /// A layout was just built, and does not know the render mode: the
+    /// app brings the mode's panel forward on the next frame
+    /// (`take_needs_main_panel`), so a reset or a boot in Escape opens
+    /// on the Escape tab.
+    needs_main_panel: bool,
 }
 
 impl Workspace {
@@ -168,6 +179,10 @@ impl Workspace {
     /// panels — clips its controls below this. Startup only: the user
     /// can drag the separator below it freely afterwards.
     const MIN_SIDE_DOCK_POINTS: f32 = 260.0;
+    /// The left dock's: wide enough for its three tabs, Transforms,
+    /// Escape and Simulation, to show their names (at 270 points the
+    /// third read "Sim").
+    const MIN_LEFT_DOCK_POINTS: f32 = 325.0;
 
     /// Create a new workspace with default Standard layout
     pub fn new() -> Self {
@@ -175,7 +190,7 @@ impl Workspace {
             dock_state: Self::create_standard_layout(),
             current_layout: WorkspaceLayout::Standard,
             needs_startup_dock_widths: true,
-            stashed: HashMap::new(),
+            needs_main_panel: true,
         }
     }
 
@@ -188,8 +203,9 @@ impl Workspace {
     /// 960-point default window that was 180 points of Transforms
     /// panel, with controls cut off.
     ///
-    /// Raises each side dock to `MIN_SIDE_DOCK_POINTS` and touches
-    /// nothing already wider, so large screens keep their proportions.
+    /// Raises the right dock to `MIN_SIDE_DOCK_POINTS` and the left to
+    /// `MIN_LEFT_DOCK_POINTS`, and touches nothing already wider, so
+    /// large screens keep their proportions.
     pub fn apply_startup_dock_minimums(&mut self, dock_width: f32) {
         if !self.needs_startup_dock_widths {
             return;
@@ -222,7 +238,7 @@ impl Workspace {
         // `min`, same half-cap.
         if tree.len() > 1 {
             if let Node::Horizontal(split) = &mut tree[NodeIndex::root().left()] {
-                split.fraction = split.fraction.max(min / remaining).min(0.5);
+                split.fraction = split.fraction.max(Self::MIN_LEFT_DOCK_POINTS / remaining).min(0.5);
             }
         }
     }
@@ -272,36 +288,56 @@ impl Workspace {
         let help_was_open = self.panel_exists(PanelType::Help);
         self.dock_state = match layout {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
+            WorkspaceLayout::Flames => Self::with_help(Self::side_docks(vec![PanelType::Transforms], FLAME_RIGHT.to_vec()), help_was_open),
+            WorkspaceLayout::EscapeTime => Self::with_help(Self::side_docks(vec![PanelType::Escape], ENGINE_RIGHT.to_vec()), help_was_open),
+            WorkspaceLayout::Simulation => Self::with_help(Self::side_docks(vec![PanelType::Simulation], ENGINE_RIGHT.to_vec()), help_was_open),
             WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
-            WorkspaceLayout::EscapeTime => Self::create_escape_layout(help_was_open),
-            WorkspaceLayout::Simulation => Self::create_simulation_layout(help_was_open),
             WorkspaceLayout::Scripting => Self::create_scripting_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
         self.needs_startup_dock_widths = true;
+        self.needs_main_panel = true;
     }
 
-    /// Move to another layout, keeping what this one looked like.
+    /// Whether a layout was built since the last call: the app then
+    /// brings the mode's panel forward (`show_main_panel`).
+    pub fn take_needs_main_panel(&mut self) -> bool {
+        std::mem::take(&mut self.needs_main_panel)
+    }
+
+    /// Bring a mode's editor forward (`render_mode::main_panel_for`), as a
+    /// mode change does: its tab to the front wherever it is. Closed, it
+    /// opens as a tab beside another mode's editor, or floating when none
+    /// is open (the Scripting layout). Nothing else moves or closes.
     ///
-    /// What a mode switch calls. `apply_layout` is the FORCING version
-    /// -- "Reset Workspace" and the Workspace Layout menu mean "build
-    /// it fresh" -- and this one is the remembering version, so that
-    /// switching away and back does not throw away a panel you moved.
-    pub fn switch_layout(&mut self, layout: WorkspaceLayout) {
-        if self.current_layout == layout {
+    /// Compact (a phone, where the screen is the picture): a tab that is
+    /// there comes to the front, and Escape and Simulation open docked;
+    /// a flame mode opens nothing.
+    pub fn show_main_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
+        if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
+            let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(surface_index, node_index, tab_index));
             return;
         }
-        self.stashed.insert(self.current_layout, self.dock_state.clone());
-        match self.stashed.remove(&layout) {
-            Some(saved) => {
-                self.dock_state = saved;
-                self.current_layout = layout;
-                // Widths came back with it; the startup minimums would
-                // undo whatever the user dragged.
-                self.needs_startup_dock_widths = false;
+        if self.is_compact() {
+            if panel_type != PanelType::Transforms {
+                self.open_compact_panel(panel_type, ctx);
             }
-            None => self.apply_layout(layout),
+            return;
+        }
+        let beside = MAIN_PANELS.iter().find_map(|p| self.find_tab(*p));
+        match beside {
+            Some((surface_index, node_index, _)) => {
+                if let Some(surface) = self.dock_state.get_surface_mut(surface_index) {
+                    if let Some(tree) = surface.node_tree_mut() {
+                        tree[node_index].append_tab(panel_type);
+                    }
+                }
+                if let Some((si, ni, ti)) = self.find_tab(panel_type) {
+                    let _ = self.dock_state.set_active_tab(egui_dock::TabPath::new(si, ni, ti));
+                }
+            }
+            None => self.open_floating_panel(panel_type, ctx),
         }
     }
 
@@ -508,74 +544,34 @@ impl Workspace {
 
     /// Create Standard layout: Fractal in center, controls on sides
     fn create_standard_layout() -> DockState<PanelType> {
+        Self::side_docks(MAIN_PANELS.to_vec(), FLAME_RIGHT.to_vec())
+    }
+
+    /// The viewport between a left and a right dock of tabs: Standard's
+    /// shape, and the Flames, Escape Time and Simulation layouts' too.
+    fn side_docks(left: Vec<PanelType>, right: Vec<PanelType>) -> DockState<PanelType> {
         // Start with FractalViewport in the center
         let mut state = DockState::new(vec![PanelType::FractalViewport]);
 
-        // Split left for Transforms
+        // Split left
         let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
             egui_dock::NodeIndex::root(),
             0.25, // 25% width for left panel
-            vec![PanelType::Transforms],
+            left,
         );
 
-        // Split right for other controls (Colors, View, Triangle Editor, Rendering, History)
+        // Split right
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.75, // Right panel starts at 75% (takes remaining 25%)
-            vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],
+            right,
         );
 
         state
     }
 
-    /// Create Escape Time layout: the Escape panel in the left dock
-    /// where Standard puts Transforms, Colors and History on the
-    /// right.
-    ///
-    /// Deliberately NOT a copy of Standard with one panel swapped:
-    /// Transforms and the Triangle Editor edit a flame, and in escape
-    /// mode they are either inert or actively misleading. What is left
-    /// is the formula, the picture and how it is seen (the View panel,
-    /// every mode's camera), and the colouring of it.
-    fn create_escape_layout(preserve_help: bool) -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::FractalViewport]);
-
-        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
-            egui_dock::NodeIndex::root(),
-            0.28,
-            vec![PanelType::Escape],
-        );
-
-        let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
-            egui_dock::NodeIndex::root(),
-            0.72,
-            vec![PanelType::Colors, PanelType::View, PanelType::Textures, PanelType::History],
-        );
-
-        if preserve_help {
-            state.add_window(vec![PanelType::Help]);
-        }
-        state
-    }
-
-    /// Simulation layout: the same shape as the escape one, because
-    /// the job is the same -- one editing surface, the picture, and the
-    /// colour controls. Deliberately not a new arrangement to learn.
-    fn create_simulation_layout(preserve_help: bool) -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::FractalViewport]);
-
-        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
-            egui_dock::NodeIndex::root(),
-            0.28,
-            vec![PanelType::Simulation],
-        );
-
-        let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
-            egui_dock::NodeIndex::root(),
-            0.72,
-            vec![PanelType::Colors, PanelType::View, PanelType::Textures, PanelType::History],
-        );
-
+    /// `state`, with the Help panel floating again if it was open.
+    fn with_help(mut state: DockState<PanelType>, preserve_help: bool) -> DockState<PanelType> {
         if preserve_help {
             state.add_window(vec![PanelType::Help]);
         }
@@ -599,11 +595,11 @@ impl Workspace {
             vec![PanelType::Animation],
         );
 
-        // Split left for Transforms
+        // Split left for each mode's editor, as tabs
         let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
             egui_dock::NodeIndex::root(),
             0.25, // 25% width for left panel
-            vec![PanelType::Transforms],
+            MAIN_PANELS.to_vec(),
         );
 
         // Split right for other controls (Colors, View, Triangle Editor, Rendering, History)
@@ -672,36 +668,19 @@ mod layout_tests {
         let cases: &[(WorkspaceLayout, &[PanelType])] = &[
             (
                 WorkspaceLayout::Standard,
-                &[PanelType::FractalViewport, PanelType::Transforms, PanelType::Colors],
+                &[PanelType::FractalViewport, PanelType::Transforms, PanelType::Escape, PanelType::Simulation, PanelType::Colors, PanelType::View],
             ),
             (
                 WorkspaceLayout::Animation,
-                &[PanelType::FractalViewport, PanelType::Animation, PanelType::Transforms],
+                &[PanelType::FractalViewport, PanelType::Animation, PanelType::Transforms, PanelType::Escape, PanelType::Simulation],
             ),
             (
                 WorkspaceLayout::Scripting,
                 &[PanelType::FractalViewport, PanelType::Scripts, PanelType::FractalBrowser],
             ),
-            (
-                WorkspaceLayout::EscapeTime,
-                &[
-                    PanelType::FractalViewport,
-                    PanelType::Escape,
-                    PanelType::Colors,
-                    PanelType::Textures,
-                    PanelType::History,
-                ],
-            ),
-            (
-                WorkspaceLayout::Simulation,
-                &[
-                    PanelType::FractalViewport,
-                    PanelType::Simulation,
-                    PanelType::Colors,
-                    PanelType::Textures,
-                    PanelType::History,
-                ],
-            ),
+            (WorkspaceLayout::Flames, &[PanelType::FractalViewport, PanelType::Transforms, PanelType::TriangleEditor]),
+            (WorkspaceLayout::EscapeTime, &[PanelType::FractalViewport, PanelType::Escape, PanelType::SolidLighting]),
+            (WorkspaceLayout::Simulation, &[PanelType::FractalViewport, PanelType::Simulation, PanelType::SolidLighting]),
             (WorkspaceLayout::Compact, &[PanelType::FractalViewport]),
         ];
         for (layout, panels) in cases {
@@ -713,129 +692,114 @@ mod layout_tests {
         }
     }
 
-    /// Loading a fractal of the other KIND must move the workspace,
-    /// in both directions.
-    ///
-    /// The app watches `ConfigManager::load_generation` and calls
-    /// into `apply_layout`; what this holds is the property that
-    /// makes the switch worth making -- each layout carries the
-    /// panel that edits its own kind of fractal and not the other's.
-    /// If that ever stopped being true the switch would be pointless
-    /// churn, and nothing else would notice.
+    /// The engine layouts hold what was asked for (2026-10-22): Flames
+    /// is Standard without the other engines' editors; Escape Time and
+    /// Simulation hold their engine's editor alone on the left, and on
+    /// the right Lighting where the Triangle Editor was, no Rendering.
     #[test]
-    fn each_layout_carries_the_editor_for_its_own_fractal() {
-        let mut ws = Workspace::default();
-
-        ws.apply_layout(WorkspaceLayout::EscapeTime);
-        assert!(
-            ws.panel_exists(PanelType::Escape),
-            "the Escape layout must carry the Escape panel"
-        );
-        assert!(
-            !ws.panel_exists(PanelType::Transforms),
-            "the Escape layout must not carry the flame transform editor"
-        );
-
-        ws.apply_layout(WorkspaceLayout::Standard);
-        assert!(
-            ws.panel_exists(PanelType::Transforms),
-            "the Standard layout must carry the flame transform editor"
-        );
-        assert!(
-            !ws.panel_exists(PanelType::Escape),
-            "the Standard layout has no Escape panel -- which is why an              escape fractal loaded into it had nothing to edit it with"
-        );
+    fn the_engine_layouts_hold_their_engines_panels() {
+        let tabs = |layout: WorkspaceLayout| -> Vec<Vec<PanelType>> {
+            let mut ws = Workspace::new();
+            ws.apply_layout(layout);
+            ws.dock_state
+                .main_surface()
+                .iter()
+                .filter_map(|n| n.get_leaf().map(|l| l.tabs().to_vec()))
+                .filter(|t| t.as_slice() != [PanelType::FractalViewport])
+                .collect()
+        };
+        use PanelType as P;
+        let flame_right = vec![P::Colors, P::View, P::TriangleEditor, P::Rendering, P::History];
+        let engine_right = vec![P::Colors, P::View, P::SolidLighting, P::History];
+        // In tree order: the right dock's node, then the left's.
+        assert_eq!(tabs(WorkspaceLayout::Standard), vec![flame_right.clone(), MAIN_PANELS.to_vec()]);
+        assert_eq!(tabs(WorkspaceLayout::Flames), vec![flame_right, vec![P::Transforms]]);
+        assert_eq!(tabs(WorkspaceLayout::EscapeTime), vec![engine_right.clone(), vec![P::Escape]]);
+        assert_eq!(tabs(WorkspaceLayout::Simulation), vec![engine_right, vec![P::Simulation]]);
     }
 
-    /// Switching away from a layout and back restores what it looked
-    /// like, rather than rebuilding it from code.
-    ///
-    /// This is what makes a Mode menu usable: without it every switch
-    /// threw away any panel the user had opened or moved, and with a
-    /// four-way picker in the menu bar that would happen constantly.
+    /// A mode change in an engine's layout adds the mode's editor beside
+    /// the one there, and closes nothing: the layouts are picked, never
+    /// forced by a mode.
     #[test]
-    fn switching_away_and_back_restores_the_arrangement() {
-        let mut ws = Workspace::default();
-        assert!(!ws.panel_exists(PanelType::Signal), "fixture assumption");
-        // Stand in for "the user arranged something": put a panel in
-        // the Standard layout that its default does not carry.
-        ws.dock_state.push_to_focused_leaf(PanelType::Signal);
-        assert!(ws.panel_exists(PanelType::Signal));
-
-        ws.switch_layout(WorkspaceLayout::Simulation);
-        assert!(ws.panel_exists(PanelType::Simulation), "the sim layout arrived");
-        assert!(!ws.panel_exists(PanelType::Signal), "and it is its own layout");
-
-        ws.switch_layout(WorkspaceLayout::Standard);
-        assert!(
-            ws.panel_exists(PanelType::Signal),
-            "returning to a layout must restore the arrangement, not rebuild it"
-        );
-    }
-
-    /// `apply_layout` is still the forcing version: Reset Workspace
-    /// and the Workspace Layout menu mean "build it fresh", and must
-    /// not hand back a stashed arrangement.
-    #[test]
-    fn apply_layout_still_rebuilds_from_scratch() {
-        let mut ws = Workspace::default();
-        ws.dock_state.push_to_focused_leaf(PanelType::Signal);
-        ws.switch_layout(WorkspaceLayout::Simulation);
-        ws.apply_layout(WorkspaceLayout::Standard);
-        assert!(
-            !ws.panel_exists(PanelType::Signal),
-            "apply_layout must rebuild, not restore"
-        );
-    }
-
-    /// Switching to the layout already up changes nothing -- and in
-    /// particular must not stash over what is on screen.
-    #[test]
-    fn switching_to_the_current_layout_is_a_no_op() {
-        let mut ws = Workspace::default();
-        ws.dock_state.push_to_focused_leaf(PanelType::Signal);
-        ws.switch_layout(WorkspaceLayout::Standard);
-        assert!(ws.panel_exists(PanelType::Signal));
-    }
-
-    /// The Escape layout must not carry the flame-only editors.
-    ///
-    /// Their presence is exactly the confusion this layout exists to
-    /// remove: Transforms and the Triangle Editor edit a flame, and
-    /// neither does anything in escape mode. The View panel is every
-    /// mode's camera, and is there.
-    #[test]
-    fn escape_layout_omits_the_flame_only_editors() {
+    fn a_mode_change_in_an_engine_layout_adds_its_editor_beside() {
+        let ctx = egui::Context::default();
         let mut ws = Workspace::new();
         ws.apply_layout(WorkspaceLayout::EscapeTime);
-        for p in [PanelType::Transforms, PanelType::TriangleEditor] {
-            assert!(
-                !ws.panel_exists(p),
-                "{p:?} is a flame-only editor and must not be in the Escape layout"
-            );
-        }
-        assert!(ws.panel_exists(PanelType::View), "the View panel is the escape view's camera");
+        ws.show_main_panel(PanelType::Transforms, &ctx);
+        assert_eq!(ws.current_layout, WorkspaceLayout::EscapeTime);
+        assert!(ws.panel_exists(PanelType::Escape) && ws.panel_exists(PanelType::SolidLighting));
+        assert_eq!(
+            ws.find_tab(PanelType::Transforms).map(|(s, n, _)| (s, n)),
+            ws.find_tab(PanelType::Escape).map(|(s, n, _)| (s, n))
+        );
     }
 
-    /// The simulation layout drops the flame-only editors for the same
-    /// reason the escape one does: none of them edits anything a
-    /// simulation consumes, and a panel that silently does nothing is
-    /// worse than an absent one.
+    /// Each mode's editor shares the left dock as a tab, Transforms in
+    /// front: one workspace for every mode (one-workspace plan).
     #[test]
-    fn simulation_layout_omits_the_flame_only_editors() {
+    fn the_modes_editors_share_the_left_dock() {
+        let ws = Workspace::new();
+        let nodes: Vec<_> = MAIN_PANELS.iter().map(|p| ws.find_tab(*p).map(|(s, n, _)| (s, n))).collect();
+        assert!(nodes.iter().all(|n| n.is_some() && *n == nodes[0]), "one node holds all three: {nodes:?}");
+        let (s, n) = nodes[0].unwrap();
+        let leaf = ws.dock_state[s][n].get_leaf().expect("a leaf");
+        assert_eq!(leaf.tabs()[leaf.active.0], PanelType::Transforms);
+    }
+
+    /// A mode change brings its editor forward and moves nothing else:
+    /// the tab where it is; closed, a tab beside another mode's editor;
+    /// with none open, a floating window. Something the user opened
+    /// stays open.
+    #[test]
+    fn a_mode_brings_its_editor_forward_and_closes_nothing() {
+        let ctx = egui::Context::default();
+        let active = |ws: &Workspace, p: PanelType| {
+            let (s, n, t) = ws.find_tab(p).expect("open");
+            ws.dock_state[s][n].get_leaf().is_some_and(|l| l.active == t)
+        };
         let mut ws = Workspace::new();
-        ws.apply_layout(WorkspaceLayout::Simulation);
-        for p in [
-            PanelType::Transforms,
-            PanelType::TriangleEditor,
-            PanelType::Escape,
-        ] {
-            assert!(
-                !ws.panel_exists(p),
-                "{p:?} must not be in the Simulation layout"
-            );
-        }
-        assert!(ws.panel_exists(PanelType::View), "the View panel is the simulation's camera");
+        ws.open_floating_panel(PanelType::FormulaEditor, &ctx);
+        ws.show_main_panel(PanelType::Escape, &ctx);
+        assert!(active(&ws, PanelType::Escape) && !active(&ws, PanelType::Transforms));
+        assert!(ws.panel_exists(PanelType::FormulaEditor) && ws.panel_exists(PanelType::Transforms), "nothing closed");
+
+        // Closed, it comes back beside the others.
+        let (s, n, t) = ws.find_tab(PanelType::Simulation).unwrap();
+        ws.dock_state.remove_tab(egui_dock::TabPath::new(s, n, t));
+        assert!(!ws.panel_exists(PanelType::Simulation));
+        ws.show_main_panel(PanelType::Simulation, &ctx);
+        assert_eq!(ws.find_tab(PanelType::Simulation).map(|(s, n, _)| (s, n)), ws.find_tab(PanelType::Transforms).map(|(s, n, _)| (s, n)));
+        assert!(active(&ws, PanelType::Simulation));
+
+        // With no editor open (Scripting), floating.
+        ws.apply_layout(WorkspaceLayout::Scripting);
+        ws.show_main_panel(PanelType::Escape, &ctx);
+        assert!(ws.find_tab(PanelType::Escape).is_some_and(|(s, _, _)| !s.is_main()), "a floating window");
+    }
+
+    /// On a phone a flame mode opens nothing -- the screen is the
+    /// picture -- and the other two dock their editor, as before.
+    #[test]
+    fn compact_docks_the_engines_editors_alone() {
+        let ctx = egui::Context::default();
+        let mut ws = Workspace::new();
+        ws.apply_layout(WorkspaceLayout::Compact);
+        ws.show_main_panel(PanelType::Transforms, &ctx);
+        assert!(!ws.panel_exists(PanelType::Transforms));
+        ws.show_main_panel(PanelType::Escape, &ctx);
+        assert!(ws.find_tab(PanelType::Escape).is_some_and(|(s, _, _)| s.is_main()), "docked");
+    }
+
+    /// A layout built anew asks for the mode's editor once, so a reset
+    /// or a boot in Escape opens on the Escape tab.
+    #[test]
+    fn a_new_layout_asks_for_the_modes_editor_once() {
+        let mut ws = Workspace::new();
+        assert!(ws.take_needs_main_panel(), "at boot");
+        assert!(!ws.take_needs_main_panel(), "once");
+        ws.apply_layout(WorkspaceLayout::Standard);
+        assert!(ws.take_needs_main_panel(), "after a reset");
     }
 
     /// Help stays open across a layout switch — the layouts that
@@ -845,6 +809,7 @@ mod layout_tests {
         for layout in [
             WorkspaceLayout::Animation,
             WorkspaceLayout::Scripting,
+            WorkspaceLayout::Flames,
             WorkspaceLayout::EscapeTime,
             WorkspaceLayout::Simulation,
         ] {
@@ -884,6 +849,9 @@ mod layout_tests {
     fn startup_dock_minimums_hold_on_a_laptop_and_leave_desktops_alone() {
         for layout in [
             WorkspaceLayout::Standard,
+            WorkspaceLayout::Flames,
+            WorkspaceLayout::EscapeTime,
+            WorkspaceLayout::Simulation,
             WorkspaceLayout::Animation,
             WorkspaceLayout::Scripting,
         ] {
@@ -893,7 +861,7 @@ mod layout_tests {
             ws.apply_startup_dock_minimums(960.0);
             let (left, right) = dock_widths(&mut ws, 960.0);
             assert!(
-                left >= Workspace::MIN_SIDE_DOCK_POINTS - 0.5,
+                left >= Workspace::MIN_LEFT_DOCK_POINTS - 0.5,
                 "{layout:?}: left dock {left:.0}pt on a 960pt window"
             );
             assert!(

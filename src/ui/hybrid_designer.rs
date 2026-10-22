@@ -55,7 +55,11 @@ impl HybridDesignerPanel {
     /// multiplier's parameter set to the hybrid's value (a structural
     /// edit renames operators, and a stale value must not follow a
     /// name to another operator).
-    fn apply(&mut self, cm: &mut ConfigManager, h: Hybrid) {
+    ///
+    /// `enter`: Use and Use Preset choose the hybrid, which enters Escape
+    /// (one-workspace plan, decision 4); re-applying the one in use after
+    /// a structural edit is a tweak, and leaves the mode.
+    fn apply(&mut self, cm: &mut ConfigManager, h: Hybrid, enter: bool) {
         let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
         let name = custom::name_of(EntryKind::Formula, &src);
         if let Err(d) = custom::compile_formula(&src, &name) {
@@ -99,7 +103,8 @@ impl HybridDesignerPanel {
             changes.push((ConfigPath::EscapeCenterIm, ConfigValue::String("0".into())));
             changes.push((ConfigPath::EscapeZoomLog2, 0.0f32.into()));
         }
-        match cm.update_batch(changes, "history.action.use_hybrid".to_string()) {
+        let mode = if enter { crate::scene::transforms::RenderMode::Escape } else { cm.config().render_mode };
+        match super::render_mode::choose(cm, changes, "history.action.use_hybrid", mode) {
             Ok(_) => {
                 self.hybrid = h;
                 self.status = None;
@@ -155,7 +160,7 @@ impl HybridDesignerPanel {
                 });
             if ui.button(t!("hybrid_designer.use_preset")).on_hover_text(t!("hybrid_designer.use_preset_tip")).clicked() {
                 if let Some((_, h)) = presets.get(self.preset) {
-                    self.apply(cm, h.clone());
+                    self.apply(cm, h.clone(), true);
                 }
             }
         });
@@ -164,7 +169,7 @@ impl HybridDesignerPanel {
                 ui.label(t!("hybrid_designer.not_in_use"));
                 if ui.button(t!("hybrid_designer.use")).clicked() {
                     let h = self.hybrid.clone();
-                    self.apply(cm, h);
+                    self.apply(cm, h, true);
                 }
             });
         }
@@ -327,7 +332,7 @@ impl HybridDesignerPanel {
 
         if structural {
             if live.is_some() {
-                self.apply(cm, next);
+                self.apply(cm, next, false);
             } else {
                 self.hybrid = next;
             }
@@ -449,8 +454,8 @@ mod tests {
 
     /// The panel draws with and without a hybrid in use; using one puts
     /// it in the config as the formula, one undo step, with each
-    /// multiplier's parameter; a structural edit keeps a dragged
-    /// multiplier.
+    /// multiplier's parameter, and enters Escape from a flame; a
+    /// structural edit keeps a dragged multiplier, and the mode.
     #[test]
     fn a_hybrid_goes_into_the_config_and_back_out() {
         let ctx = egui::Context::default();
@@ -460,8 +465,10 @@ mod tests {
         assert!(in_use(&cm).is_none());
 
         let (_, alternating) = hybrid::presets().into_iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap();
-        panel.apply(&mut cm, alternating.clone());
+        assert_eq!(cm.config().render_mode, crate::scene::transforms::RenderMode::TwoD, "fixture assumption");
+        panel.apply(&mut cm, alternating.clone(), true);
         assert_eq!(in_use(&cm), Some(alternating.clone()), "{:?}", panel.status);
+        assert_eq!(cm.config().render_mode, crate::scene::transforms::RenderMode::Escape, "Use enters Escape");
         let escape = &cm.config().escape;
         assert!(custom::formula(&escape.formula).is_some(), "compiled and registered");
         let a = |cm: &ConfigManager, p: &str| f32::try_from(cm.get_value(&ConfigPath::EscapeFormulaParam { param: p.into() }).unwrap()).unwrap();
@@ -473,7 +480,9 @@ mod tests {
         let mut more = panel.with_live_multipliers(&cm);
         assert_eq!(more.groups[1].lines[0].one.mul, [0.5, 0.0]);
         more.groups[1].repeats = 3;
-        panel.apply(&mut cm, more);
+        super::super::render_mode::switch_render_mode(&mut cm, crate::scene::transforms::RenderMode::TwoD).unwrap();
+        panel.apply(&mut cm, more, false);
+        assert_eq!(cm.config().render_mode, crate::scene::transforms::RenderMode::TwoD, "a structural edit is a tweak");
         let now = in_use(&cm).unwrap();
         assert_eq!((now.groups[1].repeats, now.groups[1].lines[0].one.mul), (3, [0.5, 0.0]));
         frame(&ctx, &mut panel, &mut cm);
@@ -498,7 +507,7 @@ mod tests {
         };
         let lines = Group::of_lines(1, vec![Line { one: Operator::default(), two: None, combine: Combine::Add }]);
         let h = Hybrid { groups: vec![lines.clone(), twin("burning_ship")], loop_start: 0 };
-        panel.apply(&mut cm, h.clone());
+        panel.apply(&mut cm, h.clone(), true);
         assert_eq!(in_use(&cm), Some(h.clone()), "{:?}", panel.status);
         let escape = &cm.config().escape;
         let def = custom::formula(&escape.formula).expect("compiled and registered");
@@ -511,13 +520,13 @@ mod tests {
         cm.update_param(ConfigPath::EscapeFormulaParam { param: "g2_variant".into() }, 3.0f32.into()).unwrap();
         let mut more = h.clone();
         more.groups[1].repeats = 2;
-        panel.apply(&mut cm, more.clone());
+        panel.apply(&mut cm, more.clone(), false);
         assert_eq!(get(&cm, "g2_variant"), 3.0);
 
         // The group given another formula: the Tricorn's power starts at
         // its default, and the Ship's variant is gone.
         more.groups[1] = Group { repeats: 2, ..twin("tricorn") };
-        panel.apply(&mut cm, more);
+        panel.apply(&mut cm, more, false);
         assert_eq!(get(&cm, "g2_power"), 2.0);
         assert!(formula_line(in_use(&cm).as_ref().unwrap()).contains("×[Tricorn]"));
         frame(&ctx, &mut panel, &mut cm);
