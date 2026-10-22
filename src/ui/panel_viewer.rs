@@ -311,7 +311,7 @@ pub struct PanelContext<'a> {
     /// A panel put a formula in the Formula Editor (the Escape panel's
     /// Edit as Formula): the app opens it.
     pub open_formula_editor: &'a mut bool,
-    /// The View panel's Lighting & Material button.
+    /// The View panel's Lighting button.
     pub open_lighting_panel: &'a mut bool,
 
     // UI state
@@ -978,7 +978,7 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render the Lighting & Material panel (`PanelType::SolidLighting`)
+    /// Render the Lighting panel (`PanelType::SolidLighting`)
     fn render_solid_lighting_panel(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])

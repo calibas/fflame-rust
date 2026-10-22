@@ -93,7 +93,7 @@ pub struct UiResponse {
     pub open_random_generator: bool,
     /// Open the Formula Editor, which a panel just gave a formula to.
     pub open_formula_editor: bool,
-    /// Open the Lighting & Material panel (the View panel's button).
+    /// Open the Lighting panel (the View panel's button).
     pub open_lighting_panel: bool,
 
     // Fractal viewport size (for matching texture dimensions to panel)

@@ -32,15 +32,31 @@ switch workspaces when changing modes."
    default).
 5. **The mode switcher is in the menu bar**, and the Mode menu goes.
 
+Then, the same day, after a first look:
+
+6. **The mode is a button showing the current mode**; clicking it lists
+   the four.
+7. **Flames, Escape Time and Simulation return as workspace layouts**,
+   picked from Window ▸ Workspace Layout and never applied by a mode
+   change. Flames is Standard without the Escape and Simulation panels.
+   Escape Time and Simulation are Standard without the other engines'
+   editors, Transforms, the Triangle Editor and Rendering, with the
+   Lighting panel where the Triangle Editor was. The Lighting & Material
+   panel is renamed **Lighting**.
+
 ## The design
 
 ### The workspace (`src/ui/workspace.rs`)
 
-- `WorkspaceLayout` loses `EscapeTime` and `Simulation`, their builders,
-  and the per-layout stash (`switch_layout`, `stashed`). Standard and
+- `WorkspaceLayout` loses the per-layout stash (`switch_layout`,
+  `stashed`), and no layout follows the mode. Standard (the default) and
   Animation carry the three main panels as left-dock tabs: Transforms,
   Escape, Simulation. The right dock is unchanged: Colors, View, Triangle
   Editor, Rendering, History. Textures stays in the Window menu.
+- Flames, Escape Time and Simulation (decision 7) are presets in the
+  Workspace Layout menu: Transforms with Standard's right dock; Escape,
+  or Simulation, with Colors, View, Lighting, History. Reset Workspace
+  rebuilds the layout that is up.
 - `Workspace::show_main_panel(panel, ctx)`: the panel's tab to the front
   where it is; if closed, a tab beside another main panel, or a floating
   window when none is open (the Scripting layout). In the compact
@@ -83,7 +99,7 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse;
 | Simulation | 2D, 3D, Escape | Simulation |
 | Textures | 2D, 3D, Simulation | Escape |
 | Hybrid Designer | 2D, 3D, Simulation | Escape |
-| Lighting & Material | no surface (`Solid::of`) | 3D from 2D; otherwise none (the reason says to pick a solid or turn on a terrain) |
+| Lighting | no surface (`Solid::of`) | 3D from 2D; otherwise none (the reason says to pick a solid or turn on a terrain) |
 
 - Active everywhere now: Random Generator (a generated flame loads with
   its own mode already) and the Formula Editor (it makes formulas,
@@ -119,10 +135,12 @@ undo step. In the mode already, it is `apply_with_look`.
 
 ### Menus
 
-- The menu bar draws the four modes as a row after Help, the active one
-  selected, each with its hover description. The Mode menu goes.
-- The compact menu's Mode submenu becomes the same row at the top of
-  its popup.
+- The menu bar draws the mode as a button after Help, named by the
+  current mode and outlined as Fly Mode is; its menu lists the four, the
+  active one selected, each with its hover description. The Mode menu
+  goes.
+- The compact menu's first row is the same: "Mode: *current*", a
+  submenu of the four.
 - The Rendering menu is always present; outside the flame modes its
   rows are disabled with the reason on hover (it configures the chaos
   game). A menu that came and went moved everything after it.
@@ -136,7 +154,7 @@ undo step. In the mode already, it is `apply_with_look`.
 3. The panels: `PanelUse`, the banner, the Window menus, each panel's
    contents in every mode.
 4. Choosing enters: the sites above.
-5. The menu bar switcher, the compact row, the Rendering menu; the
+5. The menu bar switcher, the compact menu's, the Rendering menu; the
    panel renamed Escape.
 6. Docs: UI.md (layouts, menus, render modes and the UI), ARCHITECTURE.md,
    CLAUDE.md, and the Mode menu's mentions in ESCAPE.md, SCRIPTING.md and

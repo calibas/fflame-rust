@@ -3326,7 +3326,7 @@ pub fn get_ifs(name: &str) -> Option<&'static IfsDef> {
 
 /// A solid's formula parameters that are its light's rather than its
 /// shape's -- Shadows, Shadow Sharpness, Occlusion Reach -- drawn by the
-/// Lighting & Material panel, not the Escape panel's parameter list
+/// Lighting panel, not the Escape panel's parameter list
 /// (3d-look-and-tools P3). Every solid def has them, the Rhai template's
 /// included.
 pub const LIGHTING_PARAMS: &[&str] = &["shadow", "shadow_sharpness", "occlusion"];

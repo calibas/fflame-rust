@@ -37,7 +37,7 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 | The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
 | The other engines | Escape, Formula Editor, Hybrid Designer, Simulation, Textures |
 | Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
-| Light, every 3D view's | Lighting & Material (see [The Lighting & Material panel](#the-lighting--material-panel)) |
+| Light, every 3D view's | Lighting (see [The Lighting panel](#the-lighting-panel)) |
 | Workflow | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
 
 **Every panel is drawn in every render mode**; one the mode does not
@@ -50,24 +50,33 @@ use says so at its top — see
 
 One workspace serves every mode
 ([one-workspace.md](../projects/one-workspace.md)). `WorkspaceLayout`
-(same file) holds four presets:
+(same file) holds seven presets:
 
 | Layout | Left dock (tabs) | Right dock (tabs) | Other |
 |---|---|---|---|
-| Standard | Transforms, Escape, Simulation | Colors, View, Triangle Editor, Rendering, History | |
+| Standard | Transforms, Escape, Simulation | Colors, View, Triangle Editor, Rendering, History | the default |
+| Flames | Transforms | Colors, View, Triangle Editor, Rendering, History | |
+| Escape Time | Escape | Colors, View, Lighting, History | |
+| Simulation | Simulation | Colors, View, Lighting, History | |
 | Animation | Transforms, Escape, Simulation | Colors, View, Triangle Editor, Rendering, History | Animation docked below the viewport |
 | Scripting | Scripts | Fractal Browser | |
 | Compact | — | — | the viewport alone |
+
+**No layout belongs to a mode.** Flames, Escape Time and Simulation are
+each engine's own arrangement, picked from the menu; a mode change never
+applies one.
 
 - **A mode change brings the mode's editor forward and closes nothing.**
   `render_mode::main_panel_for` names it (Transforms for 2D and 3D,
   Escape, Simulation), and `Workspace::show_main_panel` brings its tab
   to the front where it is; closed, it opens as a tab beside another
-  mode's editor, or floating when none is open (Scripting). In Compact
-  a flame mode opens nothing and the other two dock their editor.
-- Window ▸ Workspace Layout offers Standard, Animation and Scripting.
-  Window ▸ Reset Workspace rebuilds Standard, as does the compact menu's
-  Desktop View; Window ▸ Mobile View applies Compact. A layout built
+  mode's editor (in Escape Time, Transforms joins Escape), or floating
+  when none is open (Scripting). In Compact a flame mode opens nothing
+  and the other two dock their editor.
+- Window ▸ Workspace Layout offers Standard, Flames, Escape Time,
+  Simulation, Animation and Scripting. Window ▸ Reset Workspace rebuilds
+  the layout that is up; the compact menu's Desktop View builds
+  Standard; Window ▸ Mobile View applies Compact. A layout built
   anew brings the mode's editor forward on its next frame
   (`Workspace::take_needs_main_panel`), so a reset, or a boot, in Escape
   opens on the Escape tab.
@@ -75,7 +84,7 @@ One workspace serves every mode
   floating window if it was open.
 - A newly built layout raises the right dock to at least 260 points
   (`MIN_SIDE_DOCK_POINTS`) and the left to 325 (`MIN_LEFT_DOCK_POINTS`,
-  room for its three tab names) on its first frame, once, so a laptop
+  room for Standard's three tab names) on its first frame, once, so a laptop
   window does not open on a clipped panel.
 
 `Workspace::apply_layout` rebuilds from code; it is what Reset Workspace
@@ -103,10 +112,12 @@ actions by folding them into the frame's `UiResponse`.
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout |
 | Help | Help, Keyboard Shortcuts, Report Bug, About |
 
-**The render mode is a row in the bar itself**, after Help: the four
-modes built from `RenderMode::ALL`, the active one selected, each with
-its hover description (`mode_label_key`, `mode_tip_key`). There is no
-Mode menu. The compact menu draws the same row at the top of its popup.
+**The render mode is a button in the bar itself**, after Help, outlined
+as the Fly Mode button is and named by the current mode ("2D Flame ⏷").
+Its menu lists the four modes built from `RenderMode::ALL`, the active
+one selected, each with its hover description (`mode_label_key`,
+`mode_tip_key`). There is no Mode menu. The compact menu's first row is
+the same, "Mode: 2D Flame", a submenu of the four.
 
 Right-aligned, when the window is at least 500 points wide, from the
 right: the progress bar, the language picker (a globe menu; see
@@ -189,7 +200,7 @@ with the mode change into one undo entry. Switching between the two
 non-flame modes does not reset, and **leaving does not restore**; the
 function's doc comment records why.
 
-The mode row in the menu bar (desktop and compact), an unused panel's
+The mode button in the menu bar (desktop and compact), an unused panel's
 Switch button, and the View panel's 2D/3D switch all go through
 `switch_render_mode`. A script sets the mode in the config it returns,
 applying the same tone-map rule (`entry_tone_mapping`), and that config
@@ -269,7 +280,7 @@ Panels the modes do not use (every other panel acts in every mode):
 | Simulation | 2D, 3D, Escape | Simulation |
 | Textures | 2D, 3D, Simulation | Escape Time |
 | Hybrid Designer (Kalles Fraktaler-style hybrid formulas; [ESCAPE.md](ESCAPE.md#the-formula-language)) | 2D, 3D, Simulation | Escape Time |
-| Lighting & Material (follows `Solid::of`, not the mode) | any view with no surface | 3D Flame from 2D; otherwise none (the reason says to pick a solid or turn on a terrain) |
+| Lighting (follows `Solid::of`, not the mode) | any view with no surface | 3D Flame from 2D; otherwise none (the reason says to pick a solid or turn on a terrain) |
 
 - **The transform editors act in every mode.** Escape mode D renders the
   flame's attractor as a distance field, and a simulation uses the
@@ -393,7 +404,7 @@ contract.
 | Subflames | [subflames.rs](../../src/ui/subflames.rs) | which flame the editors operate on |
 | Paths | [paths_panel.rs](../../src/ui/paths_panel.rs) | Focused Rendering's plan as a tree of paths; see [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) |
 | View | [view.rs](../../src/ui/view.rs), [view_controls.rs](../../src/ui/view_controls.rs) | below |
-| Lighting & Material | [lighting_panel.rs](../../src/ui/lighting_panel.rs) | below |
+| Lighting | [lighting_panel.rs](../../src/ui/lighting_panel.rs) | below |
 | Escape | [escape_panel.rs](../../src/ui/escape_panel.rs) | below |
 | Simulation | [sim_panel.rs](../../src/ui/sim_panel.rs) | below |
 | Textures | [textures_panel.rs](../../src/ui/textures_panel.rs) | below |
@@ -431,9 +442,9 @@ have no effect in 2D.
 
 See [The View panel](#the-view-panel).
 
-### Lighting & Material
+### Lighting
 
-See [The Lighting & Material panel](#the-lighting--material-panel).
+See [The Lighting panel](#the-lighting-panel).
 
 ### Escape
 
@@ -531,7 +542,7 @@ in [CAMERA.md](CAMERA.md).
 | 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A camera that stores a target shows its eye as a readout; a terrain's target has a lift |
 | Camera Lens | an escape plane or solid | a variation used as a lens on the pixels or rays |
 | Image | every escape view; a 2D simulation | escape: antialiasing (supersampling) and how the samples combine; simulation: the resolve filters (upscale, fit, downscale) and tiling a periodic field |
-| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting & Material panel |
+| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting panel |
 | Deep Zoom | flames (`Control::DeepZoom`) | auto exposure and the Focused Rendering switch |
 | Render Mode, Preserve Z, post symmetry | flames | the 2D/3D switch (through `switch_render_mode`), JWildfire's `preserve_z` (3D), post symmetry |
 
@@ -540,7 +551,7 @@ beyond (`view_controls::angle_slider`); the config stores radians.
 
 ---
 
-## The Lighting & Material panel
+## The Lighting panel
 
 Every lit 3D view's light in one place (`PanelType::SolidLighting`, the
 name saved layouts know; [lighting_panel.rs](../../src/ui/lighting_panel.rs);

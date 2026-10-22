@@ -103,7 +103,7 @@ and render a terrain config as its 2D picture.
 ## Render tiers
 
 `RenderTier` (`src/config/escape.rs`) says how a solid or a terrain is
-rendered. The Lighting & Material panel's Rendering section shows it
+rendered. The Lighting panel's Rendering section shows it
 as **Render tier**: Auto, Lit, Path traced.
 
 | Tier | Viewport | Export |
@@ -160,7 +160,7 @@ normal smoothing, gap fill, shadow maps) are the 3D flame's alone.
   azimuth counter-clockwise about its z axis from +x, elevation above its
   xy plane, a terrain's convention -- so they stay put as the camera
   orbits or flies. `SolidShadingSettings::lights_follow_camera` (the
-  Lighting & Material panel's "Lights follow the camera") puts them in
+  Lighting panel's "Lights follow the camera") puts them in
   the camera's space instead: azimuth 0, elevation 0 a headlight, the
   lights turning with every orbit, as every solid was lit before. Config
   v6: a solid saved before loads with it on and renders as it did; the
@@ -486,8 +486,8 @@ lens.
 
 ### The UI
 
-The **Lighting & Material panel** (`ui::lighting_panel`; its sections by
-view in [UI.md](UI.md#the-lighting--material-panel)) holds, for a solid
+The **Lighting panel** (`ui::lighting_panel`; its sections by
+view in [UI.md](UI.md#the-lighting-panel)) holds, for a solid
 or a terrain:
 - **Rendering:** the render tier and the path tracer's samples, noise
   threshold (adaptive sampling), bounces and denoiser;
@@ -1403,14 +1403,14 @@ animatable (`Escape.Terrain.*`):
 | `de_width` | 1/150 | Flank width (Escape, distance only) |
 | `curve`, `invert` | Auto, off | Curve, Invert (Escape) |
 | `locked`, `lock_zoom`, `lock_range` | off | Lock height at this zoom, Lock here, Range (Escape) |
-| `interior`, `lake_tint`, `lake_roughness` | Plateau, (0.02, 0.05, 0.07), 0.05 | Interior (Escape); Lake tint, Lake roughness (Lighting & Material: Surface) |
+| `interior`, `lake_tint`, `lake_roughness` | Plateau, (0.02, 0.05, 0.07), 0.05 | Interior (Escape); Lake tint, Lake roughness (Lighting: Surface) |
 | `detail` | 1 | Detail (Escape) |
 | `prefilter` | 1 | Prefilter: Off, 2x2, 3x3 (Escape) |
 | `smooth` | off | Smooth surface (Escape) |
 | `softness` | 0 | Softness (Escape) |
 | `far`, `haze` | 8, 1 | Far, Haze (View: Atmosphere) |
-| `tier` | Auto | Render tier (Lighting & Material: Rendering) |
-| `shadow`, `shadow_sharpness`, `occlusion` | 0.98, 12, 0.006 | Shadows, Shadow sharpness (Lighting & Material: Shadows); Occlusion reach (Lighting & Material: Shading) |
+| `tier` | Auto | Render tier (Lighting: Rendering) |
+| `shadow`, `shadow_sharpness`, `occlusion` | 0.98, 12, 0.006 | Shadows, Shadow sharpness (Lighting: Shadows); Occlusion reach (Lighting: Shading) |
 | `target_lift` | 0 | Target lift (View: 3D Camera) |
 
 The camera angles are mode D's (`cam_pitch`, `cam_yaw`, `cam_bank`,
@@ -1482,7 +1482,7 @@ path tracer reads `sim.terrain.path` (`Sim.Path.*`).
 `channel`, `softness` (1), `height` (0.1) and `tiling` in the Simulation
 panel; `far` (8) and `haze` (1), `tier` (Auto), `shadow` (0.98),
 `shadow_sharpness` (12), `occlusion` (0.02) and the path block in the
-Lighting & Material panel; the camera in the View panel.
+Lighting panel; the camera in the View panel.
 
 ---
 
