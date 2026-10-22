@@ -1804,9 +1804,12 @@ fn sim_kernel_taps() -> u32 {
     // Pyramid accessors: seven sampled levels above the field, and
     // the trilinear read the wide-radius models use.
     let pyramid = if model.has(ModelFeature::NeedsPyramid) {
-        PYRAMID_ACCESSORS
+        format!("{EXACT_ACCESSORS}{PYRAMID_ACCESSORS}")
+    } else if model.has(ModelFeature::ExactDiscs) {
+        // The exact averages alone: no pyramid is built for it.
+        EXACT_ACCESSORS.to_string()
     } else {
-        ""
+        String::new()
     };
     // The previous step's global range, for the models that
     // renormalise.
@@ -1881,7 +1884,7 @@ fn sim_kernel_taps() -> u32 {
             ("//__STEP_CALL__", &call),
             ("//__COUPLING__", coupling),
             ("//__KERNEL__", kernel),
-            ("//__PYRAMID__", pyramid),
+            ("//__PYRAMID__", &pyramid),
             ("//__MINMAX__", minmax),
             ("//__DEPOSIT__", deposit),
             ("//__MEMORY__", memory),
@@ -1958,7 +1961,7 @@ fn sim_scratch_write(p: vec2<i32>, k: i32, v: vec4<f32>) {
 
 /// Spliced into the step shader of a model that declares
 /// [`ModelFeature::NeedsPyramid`].
-const PYRAMID_ACCESSORS: &str = r#"
+const EXACT_ACCESSORS: &str = r#"
 // Exact averages (mccabe-multiscale plan, section 6b): per scale, the
 // activator-minus-inhibitor field the spectral stage made this step,
 // when the renderer made one for this layer -- `xform.w` is its first
@@ -1995,6 +1998,11 @@ fn pyr_diff(i: i32, pos: vec2<f32>) -> f32 {
     return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
 }
 
+"#;
+
+/// Spliced into the step shader of a model that declares
+/// [`ModelFeature::NeedsPyramid`], after [`EXACT_ACCESSORS`].
+const PYRAMID_ACCESSORS: &str = r#"
 @group(0) @binding(6) var pyr1: texture_2d<f32>;
 @group(0) @binding(7) var pyr2: texture_2d<f32>;
 @group(0) @binding(8) var pyr3: texture_2d<f32>;

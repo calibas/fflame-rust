@@ -1,0 +1,143 @@
+comment {
+  The formula language's test colourings, Ultra Fractal's dialect:
+  between them, every construct a colouring has. Each compiles, and on
+  the GPU colours as the f64 interpreter does (escape::lang tests).
+  Written for this project; no third-party colourings.
+}
+
+Average {
+; Real state carried across iterations, read in final.
+init:
+  float sum = 0
+  float count = 0
+loop:
+  sum = sum + cabs(#z)
+  count = count + 1
+final:
+  #index = sum / count * @scale
+default:
+  float param scale
+    default = 0.5
+  endparam
+}
+
+Trap(OUTSIDE) {
+; Complex state: the closest the orbit comes to a point.
+init:
+  float best = 1e20
+  complex at = 0
+loop:
+  float d = |#z - @point|
+  if d < best
+    best = d
+    at = #z
+  endif
+final:
+  #index = sqrt(best) + atan2(at) * 0.1
+default:
+  param point
+    default = (0.25, 0.1)
+  endparam
+}
+
+Inside(INSIDE) {
+; The inside only: the outside is left to the background.
+final:
+  #index = cabs(#z) * 0.5
+}
+
+Solid {
+; #solid set by a test, the iteration count read in final.
+final:
+  if #numiter < 5
+    #solid = true
+  else
+    #index = #numiter * 0.02 + real(#pixel) * 0.1
+  endif
+}
+
+Counted {
+; An int and a bool in the state, each one float.
+init:
+  int crossings = 0
+  bool above = false
+loop:
+  bool now = imag(#z) > 0
+  if now != above
+    crossings = crossings + 1
+  endif
+  above = now
+final:
+  #index = crossings * 0.05
+}
+
+GlobalScale {
+; A value computed once per image, after the parameters in their block.
+global:
+  float s = @scale * 2 + #maxiter * 0
+  complex shift = (0.1, 0.2)
+final:
+  #index = real(#z + shift) * s
+default:
+  float param scale
+    default = 0.25
+  endparam
+}
+
+Extended {
+; State past the accumulator's four floats (here 13: three complex, an
+; int, a bool, and five floats), every one read in final.
+init:
+  complex lo = (1e10, 1e10)
+  complex hi = (-1e10, -1e10)
+  complex total = 0
+  int steps = 0
+  bool crossed = false
+  float a = 0
+  float b = 0
+  float c = 0
+  float d = 0
+  float e = 0
+loop:
+  if real(#z) < real(lo)
+    lo = #z
+  endif
+  if real(#z) > real(hi)
+    hi = #z
+  endif
+  total = total + #z
+  steps = steps + 1
+  crossed = crossed || imag(#z) < 0
+  a = a + cabs(#z)
+  b = b + real(#z) * real(#z)
+  c = c + imag(#z)
+  if cabs(#z) > d
+    d = cabs(#z)
+  endif
+  e = e + atan2(#z)
+final:
+  #index = cabs(lo - hi) * 0.1 + cabs(total) / steps + (a + b - c + d + e) * 0.01 \
+           + (crossed) * 0.5
+}
+
+Unlabelled {
+  #index = cabs(#z) * 0.1 + #numiter * 0.01
+}
+
+Ring {
+; A colouring's arrays: weights built once per image, the last three
+; magnitudes carried across iterations.
+global:
+  float w[3]
+  w[0] = 0.5
+  w[1] = 0.3
+  w[2] = 0.2
+init:
+  float last[3]
+loop:
+  last[2] = last[1]
+  last[1] = last[0]
+  last[0] = cabs(#z)
+final:
+  #index = (last[0] * w[0] + last[1] * w[1] + last[2] * w[2]) * 0.1
+}

@@ -186,8 +186,9 @@ fn saved_meta(path: &Path) -> Option<(u32, u32)> {
 pub fn save_to(dir: &Path, orbit: &ReferenceOrbit) -> bool {
     // The big-float families carry live state the file format has no
     // slot for (a BigComplex, not fixed point), and their orbits are
-    // short: never stored, so never loaded.
-    if super::reference::map_is_big(orbit.ship, orbit.ship_variant) {
+    // short: never stored, so never loaded. A custom formula's machines
+    // have their own section (`ReferenceOrbit::to_bytes`).
+    if super::reference::map_is_big(orbit.ship, orbit.ship_variant) && orbit.ship_variant != super::reference::MAP_CUSTOM {
         return false;
     }
     let name = key_for(
@@ -262,13 +263,16 @@ pub fn load_from(
         zoom_log2,
         height_px,
     );
-    if exact.is_some() {
-        return exact;
-    }
-    load_nearby(
-        dir, center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
-        zoom_log2, height_px,
-    )
+    let mut orbit = match exact {
+        Some(o) => o,
+        None => load_nearby(
+            dir, center_re, center_im, n_limbs, julia_c, power, ship, ship_variant, map_params,
+            zoom_log2, height_px,
+        )?,
+    };
+    // A custom formula's machines, from its identity (plan, phase 4, the
+    // speed work): a formula this session has not compiled is a miss.
+    orbit.restore_custom().then_some(orbit)
 }
 
 /// One file, by exact identity.
@@ -449,7 +453,9 @@ pub fn maybe_save_to(dir: &Path, orbit: &mut ReferenceOrbit) {
     if !orbit.store_grown {
         return;
     }
-    if super::reference::map_is_big(orbit.ship, orbit.ship_variant) {
+    // The big-float families keep no state a stored orbit could deepen
+    // from -- but a custom formula keeps its machines' (`to_bytes`).
+    if super::reference::map_is_big(orbit.ship, orbit.ship_variant) && orbit.ship_variant != super::reference::MAP_CUSTOM {
         return;
     }
     let limbs = orbit.n_limbs as u64;

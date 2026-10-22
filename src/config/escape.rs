@@ -123,6 +123,17 @@ pub struct EscapeConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub coloring_params: BTreeMap<String, f32>,
 
+    /// The formula's SOURCE, when `formula` names one compiled from it
+    /// (`custom-...`, `escape::lang`): carried whole, so the file renders
+    /// on any machine without a formula library or the API. Kept when
+    /// another formula is picked, so undo and switching back find it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_formula: Option<CustomSource>,
+
+    /// The colouring's source, the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_coloring: Option<CustomSource>,
+
     /// The **camera lens**: a variation applied to the normalised
     /// screen offset before the view scale, by name. Empty is no lens.
     ///
@@ -155,6 +166,15 @@ pub struct EscapeConfig {
     /// the first-order inverse of the map.
     #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
     pub lens_amount: f32,
+
+    /// Transformations (the KIFS plan, C4): variations applied to the
+    /// sample point in the fractal's coordinates (`Plane`, UF's
+    /// transformations), to each orbit value the colouring accumulates
+    /// (`Orbit`, UF's trap position), or to `z` after every step
+    /// (`Iteration`), in order within each stage. They share the lens's
+    /// maps flame (`escape::lens`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transforms: Vec<EscapeTransform>,
 
 
     /// Where a solid render looks: the point the camera orbits and
@@ -367,7 +387,60 @@ impl TextureOverlay {
     }
 }
 
+/// Which polar part of a complex formula parameter `name.r` or
+/// `name.angle` reads.
+#[derive(Clone, Copy)]
+enum Polar {
+    Radius,
+    Angle,
+}
+
+/// `name.r` / `name.angle`: the complex parameter `name` as a point in
+/// polar form.
+fn polar_part(name: &str) -> Option<(&str, Polar)> {
+    if let Some(base) = name.strip_suffix(".r") {
+        return Some((base, Polar::Radius));
+    }
+    name.strip_suffix(".angle").map(|base| (base, Polar::Angle))
+}
+
 impl EscapeConfig {
+    /// A formula parameter's value, `default` giving an unset one's.
+    /// `name.r` and `name.angle` read a complex parameter `name` (held
+    /// as `name.re` and `name.im`) as a point in polar form, its radius
+    /// and its angle in degrees, so it can animate around the origin as
+    /// well as along x and y (phase 4, step 8).
+    pub fn formula_param(&self, name: &str, default: impl Fn(&str) -> Option<f32>) -> Option<f32> {
+        let get = |p: &str| self.formula_params.get(p).copied().or_else(|| default(p));
+        match polar_part(name) {
+            Some((base, part)) => {
+                let (re, im) = (get(&format!("{base}.re"))?, get(&format!("{base}.im"))?);
+                Some(match part {
+                    Polar::Radius => re.hypot(im),
+                    Polar::Angle => im.atan2(re).to_degrees(),
+                })
+            }
+            None => get(name),
+        }
+    }
+
+    /// What setting a formula parameter writes: the parameter itself,
+    /// or for `name.r` / `name.angle` the complex parameter's two parts,
+    /// its other polar part kept.
+    pub fn formula_param_writes(&self, name: &str, v: f32, default: impl Fn(&str) -> Option<f32>) -> Vec<(String, f32)> {
+        let Some((base, part)) = polar_part(name) else {
+            return vec![(name.to_string(), v)];
+        };
+        let (re_k, im_k) = (format!("{base}.re"), format!("{base}.im"));
+        let get = |p: &str| self.formula_params.get(p).copied().or_else(|| default(p)).unwrap_or(0.0);
+        let (re, im) = (get(&re_k), get(&im_k));
+        let (r, a) = match part {
+            Polar::Radius => (v, im.atan2(re)),
+            Polar::Angle => (re.hypot(im), v.to_radians()),
+        };
+        vec![(re_k, r * a.cos()), (im_k, r * a.sin())]
+    }
+
     /// Whether anything draws with the texture, so it has to be on the
     /// GPU: the overlay, the relief's bump, or a colouring that reads it
     /// (the image trap).
@@ -378,10 +451,21 @@ impl EscapeConfig {
             .any(|c| c.name == self.coloring && c.has_feature(crate::escape::ColoringFeature::TextureInLoop));
         #[cfg(not(feature = "engine-escape"))]
         let coloring = false;
-        self.texture.is_some()
-            && (self.texture_overlay.enabled
-                || coloring
-                || (self.shading.enabled && self.shading.texture_kind == ShadingTexture::Simulation))
+        // The relief's simulation micro-texture, or a terrain's (which
+        // lights its own surface whether the 2D relief is on or not).
+        let surface = self.shading.texture_kind == ShadingTexture::Simulation
+            && (self.shading.enabled || self.terrain_active());
+        self.texture.is_some() && (self.texture_overlay.enabled || coloring || surface)
+    }
+
+    /// Whether the 3D terrain carries the surface texture: a kind at a
+    /// strength (docs/projects/surface-textures.md). It has its own
+    /// lighting, so the 2D relief's switch does not enter.
+    pub fn surface_texture_active(&self) -> bool {
+        self.terrain_active()
+            && self.shading.texture_kind != ShadingTexture::None
+            && self.shading.texture_strength > 0.0
+            && (self.shading.texture_kind != ShadingTexture::Simulation || self.texture.is_some())
     }
 }
 
@@ -558,6 +642,12 @@ pub enum ShadingField {
     /// shadow or a highlight by which came out higher. Bevelled contour
     /// lines, a fixed fraction of the view wide. Direct path only.
     Embossed,
+    /// A folding formula's paper (`FormulaFeature::Creases`): the height
+    /// rises or falls with the distance from each crease, and the slope
+    /// is exact, carried through the folds (`CreaseSettings`;
+    /// docs/archive/projects/origami-creases.md). Flat on a formula without
+    /// creases.
+    Creases,
 }
 
 impl ShadingField {
@@ -569,7 +659,112 @@ impl ShadingField {
             ShadingField::Analytic => 3,
             ShadingField::Offset => 4,
             ShadingField::Embossed => 5,
+            // 3 or more: a stored slope, which the texture overlay must
+            // leave its channels to (`overlay_owns_blue`).
+            ShadingField::Creases => 6,
         }
+    }
+}
+
+/// The direction each fold of a folding formula takes before a
+/// face-down layer of the wad reverses it (`CreaseSettings`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreasePattern {
+    /// Every fold a valley: each flap folds toward the viewer.
+    #[default]
+    Valley,
+    /// Valley, mountain, valley, and so on.
+    Alternate,
+    /// Each fold's direction from the formula's line seed.
+    Random,
+}
+
+impl CreasePattern {
+    pub const ALL: [CreasePattern; 3] = [CreasePattern::Valley, CreasePattern::Alternate, CreasePattern::Random];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CreasePattern::Valley => "valley",
+            CreasePattern::Alternate => "alternate",
+            CreasePattern::Random => "random",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "alternate" => CreasePattern::Alternate,
+            "random" => CreasePattern::Random,
+            _ => CreasePattern::Valley,
+        }
+    }
+    pub fn to_gpu(self) -> f32 {
+        match self {
+            CreasePattern::Valley => 0.0,
+            CreasePattern::Alternate => 1.0,
+            CreasePattern::Random => 2.0,
+        }
+    }
+    fn is_default(v: &CreasePattern) -> bool {
+        *v == CreasePattern::Valley
+    }
+}
+
+/// A folding formula's paper, for the Creases relief field and terrain
+/// source (docs/archive/projects/origami-creases.md). Each fold is a crease; the
+/// paper rises or falls in a straight line with the distance from it,
+/// the same slope on both sides. Fold i's crease weighs `decay^i`, so the
+/// first is the main crease and each later one finer. A crease is a
+/// valley on one face of the paper and a mountain on the other, so a
+/// layer an odd number of earlier folds turned face down reverses it.
+///
+/// There is no depth: the relief's Height scales the slope, and a
+/// terrain fits its heights to its own range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreaseSettings {
+    #[serde(default, skip_serializing_if = "CreasePattern::is_default")]
+    pub pattern: CreasePattern,
+    /// How much finer each later crease is (`CREASE_DECAY_RANGE`).
+    #[serde(default = "default_crease_decay", skip_serializing_if = "is_default_crease_decay")]
+    pub decay: f32,
+    /// Swaps mountain and valley.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip: bool,
+}
+
+fn default_crease_decay() -> f32 {
+    0.6
+}
+fn is_default_crease_decay(v: &f32) -> bool {
+    *v == default_crease_decay()
+}
+pub const CREASE_DECAY_RANGE: (f32, f32) = (0.05, 1.0);
+/// How far from its crease a terrain's paper slopes before it levels
+/// off, in paper sizes (Origami's line spread). The 2D relief lights
+/// slopes, so its creases run on unbounded; a terrain fits its heights
+/// to the whole range it sees, out to the horizon, where an unbounded
+/// rise would dwarf every crease near the camera
+/// (docs/archive/projects/origami-creases.md).
+pub const CREASE_TERRAIN_REACH: f32 = 1.0;
+
+impl Default for CreaseSettings {
+    fn default() -> Self {
+        Self { pattern: CreasePattern::Valley, decay: default_crease_decay(), flip: false }
+    }
+}
+
+impl CreaseSettings {
+    fn is_default(v: &CreaseSettings) -> bool {
+        *v == CreaseSettings::default()
+    }
+    /// The escape uniform's `crease` row: the decay, the pattern, the
+    /// flip as a sign, and the reach (`CREASE_TERRAIN_REACH` for a
+    /// terrain, else 0).
+    pub fn to_gpu(&self, terrain: bool) -> [f32; 4] {
+        [
+            self.decay.clamp(CREASE_DECAY_RANGE.0, CREASE_DECAY_RANGE.1),
+            self.pattern.to_gpu(),
+            if self.flip { -1.0 } else { 1.0 },
+            if terrain { CREASE_TERRAIN_REACH } else { 0.0 },
+        ]
     }
 }
 
@@ -646,6 +841,7 @@ pub fn shading_field_to_str(m: ShadingField) -> &'static str {
         ShadingField::Analytic => "analytic",
         ShadingField::Offset => "offset",
         ShadingField::Embossed => "embossed",
+        ShadingField::Creases => "creases",
     }
 }
 
@@ -656,6 +852,7 @@ pub fn shading_field_from_str(s: &str) -> ShadingField {
         "analytic" => ShadingField::Analytic,
         "offset" => ShadingField::Offset,
         "embossed" => ShadingField::Embossed,
+        "creases" => ShadingField::Creases,
         _ => ShadingField::Smooth,
     }
 }
@@ -1331,6 +1528,10 @@ pub struct EscapeShading {
     /// Which field the slope is taken from.
     #[serde(default, skip_serializing_if = "ShadingField::is_default")]
     pub field: ShadingField,
+    /// The paper a folding formula's Creases field and terrain source
+    /// draw.
+    #[serde(default, skip_serializing_if = "CreaseSettings::is_default")]
+    pub creases: CreaseSettings,
 
     /// Colour applied where the surface faces away from the light.
     #[serde(default = "default_shadow_color")]
@@ -1379,6 +1580,15 @@ pub struct EscapeShading {
     /// Feature size in DISPLAY pixels — how coarse the grain is.
     #[serde(default = "default_texture_scale")]
     pub texture_scale: f32,
+    /// Where the texture applies, by slope (`TextureWhere`), and the
+    /// slope it turns at, ± its softness (degrees). The 3D terrain and the
+    /// 2D relief share them (docs/projects/surface-textures.md).
+    #[serde(default, skip_serializing_if = "TextureWhere::is_default")]
+    pub texture_where: TextureWhere,
+    #[serde(default = "default_texture_angle", skip_serializing_if = "is_default_texture_angle")]
+    pub texture_angle: f32,
+    #[serde(default = "default_texture_angle_soft", skip_serializing_if = "is_default_texture_angle_soft")]
+    pub texture_angle_soft: f32,
 
     /// How a slope becomes light: the signed tilt (the default, and
     /// every picture before this option) or Lambert's law.
@@ -1499,6 +1709,7 @@ impl Default for EscapeShading {
             light_angle: default_light_angle(),
             height: default_relief_height(),
             field: ShadingField::default(),
+            creases: CreaseSettings::default(),
             shadow_color: default_shadow_color(),
             shadow_strength: default_shadow_strength(),
             shadow_blend: ShadingBlend::Multiply,
@@ -1509,6 +1720,9 @@ impl Default for EscapeShading {
             texture_kind: ShadingTexture::None,
             texture_strength: 0.0,
             texture_scale: default_texture_scale(),
+            texture_where: TextureWhere::Everywhere,
+            texture_angle: default_texture_angle(),
+            texture_angle_soft: default_texture_angle_soft(),
             model: ReliefModel::default(),
             elevation: default_relief_elevation(),
             ambient: 0.0,
@@ -1531,6 +1745,10 @@ impl EscapeShading {
     pub fn wants_derivative(&self) -> bool {
         self.enabled && self.field == ShadingField::Analytic
     }
+    /// Whether the relief draws a folding formula's creases.
+    pub fn wants_creases(&self) -> bool {
+        self.enabled && self.field == ShadingField::Creases
+    }
     /// Whether the relief runs orbits beside each pixel's own.
     pub fn wants_offset_orbits(&self) -> bool {
         self.enabled && matches!(self.field, ShadingField::Offset | ShadingField::Embossed)
@@ -1540,7 +1758,7 @@ impl EscapeShading {
     /// orbits), 2 Embossed's stored response.
     pub fn stored_relief(&self) -> u32 {
         match self.field {
-            ShadingField::Analytic | ShadingField::Offset => 1,
+            ShadingField::Analytic | ShadingField::Offset | ShadingField::Creases => 1,
             ShadingField::Embossed => 2,
             _ => 0,
         }
@@ -1599,6 +1817,105 @@ pub const LENS_AMOUNT_LIMIT: f32 = 5.0;
 /// A lens at full strength. One rather than zero so that choosing a
 /// lens shows it: a default of nothing would look like a broken
 /// picker.
+/// Where an escape-time transformation acts (the KIFS plan, C4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransformStage {
+    /// The sample point, in the fractal's coordinates, before the
+    /// formula: the picture warped as the fractal is, zoom with it.
+    #[default]
+    Plane,
+    /// Each orbit value the colouring accumulates (trap and average
+    /// colourings), not the final `z` an escape count reads.
+    Orbit,
+    /// `z` after every step of the formula: a change to the fractal.
+    Iteration,
+}
+
+impl TransformStage {
+    pub const ALL: [TransformStage; 3] = [TransformStage::Plane, TransformStage::Orbit, TransformStage::Iteration];
+}
+
+/// One escape-time transformation: a variation at a stage, its amount
+/// (0 the identity, 1 the variation, as the lens's) and its parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscapeTransform {
+    /// Session-local identity, so an animation track follows its
+    /// transformation through a move or a removal, as a flame
+    /// transform's or an effect's does (`crate::scene::transforms::next_id`).
+    /// Never in a file; the list's undo values carry it
+    /// ([`transforms_to_wire`]).
+    #[serde(skip)]
+    pub id: u64,
+    #[serde(default)]
+    pub stage: TransformStage,
+    pub variation: String,
+    #[serde(default = "default_lens_amount", skip_serializing_if = "is_one")]
+    pub amount: f32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+}
+
+// Equality ignores the runtime-only `id`, as `EffectInstance`'s does.
+impl PartialEq for EscapeTransform {
+    fn eq(&self, other: &Self) -> bool {
+        self.stage == other.stage && self.variation == other.variation && self.amount == other.amount && self.params == other.params
+    }
+}
+
+impl EscapeTransform {
+    /// A transformation with a fresh id and no parameters set.
+    pub fn new(stage: TransformStage, variation: &str, amount: f32) -> Self {
+        Self { id: crate::scene::transforms::next_id(), stage, variation: variation.to_string(), amount, params: BTreeMap::new() }
+    }
+}
+
+/// The transformation list as `ConfigPath::EscapeTransforms` carries it:
+/// the file's JSON with each entry's `id` too, so an undo or redo of a
+/// structural edit brings back the same ids and a track bound to one
+/// keeps it.
+pub fn transforms_to_wire(list: &[EscapeTransform]) -> String {
+    let entries: Vec<serde_json::Value> = list
+        .iter()
+        .map(|t| {
+            let mut v = serde_json::to_value(t).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("id".to_string(), t.id.into());
+            }
+            v
+        })
+        .collect();
+    serde_json::to_string(&entries).unwrap_or_default()
+}
+
+/// [`transforms_to_wire`]'s inverse. An entry without an id (a script's,
+/// a file's) or repeating one already read gets a fresh one.
+pub fn transforms_from_wire(s: &str) -> Result<Vec<EscapeTransform>, serde_json::Error> {
+    if s.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries: Vec<serde_json::Value> = serde_json::from_str(s)?;
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .map(|v| {
+            let id = v.get("id").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let mut t: EscapeTransform = serde_json::from_value(v)?;
+            t.id = if id != 0 && seen.insert(id) { id } else { crate::scene::transforms::next_id() };
+            Ok(t)
+        })
+        .collect()
+}
+
+impl EscapeConfig {
+    /// Whether a transformation moves an absolute coordinate -- the
+    /// sample point or the iterate -- which the perturbation path cannot
+    /// follow (C4).
+    pub fn transforms_absolute(&self) -> bool {
+        self.transforms.iter().any(|t| t.stage != TransformStage::Orbit && t.amount != 0.0)
+    }
+}
+
 fn default_lens_amount() -> f32 {
     1.0
 }
@@ -1703,15 +2020,21 @@ pub enum ShadingTexture {
     /// luminance as the micro-relief (docs/archive/projects/sim-textures.md,
     /// phase 3). Nothing without a texture.
     Simulation,
+    /// Ridged octaves with a fractal falloff: weathered stone, for
+    /// roughening cliffs (docs/projects/surface-textures.md).
+    Rock,
 }
 
 impl ShadingTexture {
+    pub const ALL: [ShadingTexture; 5] =
+        [ShadingTexture::None, ShadingTexture::Grain, ShadingTexture::Paper, ShadingTexture::Rock, ShadingTexture::Simulation];
     pub fn to_gpu(self) -> u32 {
         match self {
             ShadingTexture::None => 0,
             ShadingTexture::Grain => 1,
             ShadingTexture::Paper => 2,
             ShadingTexture::Simulation => 3,
+            ShadingTexture::Rock => 4,
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -1720,6 +2043,7 @@ impl ShadingTexture {
             ShadingTexture::Grain => "grain",
             ShadingTexture::Paper => "paper",
             ShadingTexture::Simulation => "simulation",
+            ShadingTexture::Rock => "rock",
         }
     }
     pub fn from_str_or_default(s: &str) -> Self {
@@ -1727,9 +2051,67 @@ impl ShadingTexture {
             "grain" => ShadingTexture::Grain,
             "paper" => ShadingTexture::Paper,
             "simulation" => ShadingTexture::Simulation,
+            "rock" => ShadingTexture::Rock,
             _ => ShadingTexture::None,
         }
     }
+}
+
+/// Where on the surface the texture applies, by its slope: everywhere,
+/// on the steep faces (cliffs), or on the flats. The slope is the 3D
+/// terrain's true normal's, or the 2D relief's tilt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TextureWhere {
+    #[default]
+    Everywhere,
+    Steep,
+    Flat,
+}
+
+impl TextureWhere {
+    pub const ALL: [TextureWhere; 3] = [TextureWhere::Everywhere, TextureWhere::Steep, TextureWhere::Flat];
+    pub fn to_gpu(self) -> u32 {
+        match self {
+            TextureWhere::Everywhere => 0,
+            TextureWhere::Steep => 1,
+            TextureWhere::Flat => 2,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TextureWhere::Everywhere => "everywhere",
+            TextureWhere::Steep => "steep",
+            TextureWhere::Flat => "flat",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "steep" => TextureWhere::Steep,
+            "flat" => TextureWhere::Flat,
+            _ => TextureWhere::Everywhere,
+        }
+    }
+    fn is_default(v: &TextureWhere) -> bool {
+        *v == TextureWhere::Everywhere
+    }
+}
+
+/// The slope where Steep begins, in degrees (`EscapeShading::texture_angle`).
+pub const TEXTURE_ANGLE_RANGE: (f32, f32) = (0.0, 90.0);
+/// The half-width of the change about it.
+pub const TEXTURE_ANGLE_SOFT_RANGE: (f32, f32) = (0.0, 45.0);
+fn default_texture_angle() -> f32 {
+    45.0
+}
+fn is_default_texture_angle(v: &f32) -> bool {
+    *v == default_texture_angle()
+}
+fn default_texture_angle_soft() -> f32 {
+    10.0
+}
+fn is_default_texture_angle_soft(v: &f32) -> bool {
+    *v == default_texture_angle_soft()
 }
 
 fn default_texture_scale() -> f32 {
@@ -1764,32 +2146,39 @@ pub enum TerrainSource {
     /// The 2D relief's own height source (the Escape panel's relief
     /// field: the colouring's value, banded, a layer's).
     Relief,
+    /// A folding formula's paper: the Creases field's height
+    /// (`CreaseSettings`), whatever the 2D relief draws.
+    Creases,
 }
 
 impl TerrainSource {
-    pub const ALL: [TerrainSource; 3] = [TerrainSource::Distance, TerrainSource::EscapeCount, TerrainSource::Relief];
+    pub const ALL: [TerrainSource; 4] =
+        [TerrainSource::Distance, TerrainSource::EscapeCount, TerrainSource::Relief, TerrainSource::Creases];
     pub fn as_str(self) -> &'static str {
         match self {
             TerrainSource::Distance => "distance",
             TerrainSource::EscapeCount => "escape_count",
             TerrainSource::Relief => "relief",
+            TerrainSource::Creases => "creases",
         }
     }
-    /// The iterate pass's height mode for it: the shaders' relief
-    /// source codes, past the relief's own (0-5), for the two the
-    /// terrain adds.
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "escape_count" => TerrainSource::EscapeCount,
             "relief" => TerrainSource::Relief,
+            "creases" => TerrainSource::Creases,
             _ => TerrainSource::Distance,
         }
     }
+    /// The iterate pass's height mode for it: the shaders' relief
+    /// source codes -- the relief's own (0-6), and 8 and 9 for the two
+    /// the terrain adds. Creases is the relief's code.
     pub fn shade_flags(self, relief: ShadingField) -> u32 {
         match self {
             TerrainSource::Distance => 8,
             TerrainSource::EscapeCount => 9,
             TerrainSource::Relief => relief.to_gpu(),
+            TerrainSource::Creases => ShadingField::Creases.to_gpu(),
         }
     }
 }
@@ -1951,6 +2340,52 @@ pub struct PathTraceConfig {
     pub sky_gradient: bool,
     #[serde(default = "default_path_zenith", skip_serializing_if = "is_default_path_zenith")]
     pub zenith: [f32; 3],
+    /// The studio (3d-look-and-tools P4): reflections and bounces see a
+    /// lit studio -- an overhead softbox, two strips behind, dim walls and
+    /// floor -- in place of the sky's light, while the camera still sees
+    /// the background or the gradient. Sky light is its brightness. A
+    /// solid's turns with the camera, as its lights do; a terrain's is
+    /// the world's. Off by default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub studio: bool,
+    /// Adaptive sampling (path-tracing-research V2): a pixel stops taking
+    /// samples once its noise -- its mean's standard error as the display
+    /// shows it, in levels of 255 -- and its neighbours' are under this;
+    /// `samples` is then the most any pixel takes. 0, off: every pixel
+    /// takes `samples`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub noise_threshold: f32,
+    /// An HDRI sky (docs/archive/projects/hdri-environment.md): a bundled one's
+    /// id (`escape::environment::ENVIRONMENTS`), empty for none. It lights
+    /// the scene and is what reflections show, in place of the background,
+    /// the gradient and the studio; Sky light is its brightness.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub environment_map: String,
+    /// The sky turned about the up axis, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub environment_rotation: f32,
+    /// The elevation the sky's horizon stands at, in degrees (the sky above
+    /// it and below it stretched to fit, the zenith and the nadir where
+    /// they were): to set a horizon against the solid.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub environment_horizon: f32,
+    /// Procedural stars over the sky (`environment::ENV_WGSL`), their
+    /// brightness: 1 shows the brightest at the display's white; 0, none.
+    /// Seen in the backdrop and in polished reflections, too faint to
+    /// light anything.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub environment_stars: f32,
+    /// Whether the camera sees the sky (a skybox) or the background as
+    /// before; the sky lights the scene either way.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub environment_backdrop: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 /// A clear sky's blue overhead.
@@ -1991,6 +2426,13 @@ impl Default for PathTraceConfig {
             denoise: false,
             sky_gradient: false,
             zenith: default_path_zenith(),
+            studio: false,
+            noise_threshold: 0.0,
+            environment_map: String::new(),
+            environment_rotation: 0.0,
+            environment_horizon: 0.0,
+            environment_stars: 0.0,
+            environment_backdrop: true,
         }
     }
 }
@@ -2143,8 +2585,10 @@ fn default_terrain_haze() -> f32 {
 fn is_default_terrain_haze(v: &f32) -> bool {
     *v == default_terrain_haze()
 }
+/// 0.98 since config v5 (3d-look-and-tools P2; 0.7 before, which the
+/// migration keeps for files that omitted it).
 fn default_terrain_shadow() -> f32 {
-    0.7
+    0.98
 }
 fn is_default_terrain_shadow(v: &f32) -> bool {
     *v == default_terrain_shadow()
@@ -2257,6 +2701,14 @@ impl EscapeConfig {
         self.shading.wants_derivative() || (self.terrain_active() && self.terrain.source == TerrainSource::Distance)
     }
 
+    /// Whether the iterate pass draws a folding formula's creases: the
+    /// relief's Creases field, or a terrain made of them. The pass then
+    /// always runs whole -- the recolour shortcut, which has no formula
+    /// code, cannot recompute them.
+    pub fn wants_creases(&self) -> bool {
+        self.shading.wants_creases() || (self.terrain_active() && self.terrain.source == TerrainSource::Creases)
+    }
+
     /// Whether the 3D terrain is in force: switched on, for a formula
     /// that draws a plane (a solid IFS is already 3D, mode D's own),
     /// in a build that carries it. The gallery modules are built
@@ -2272,6 +2724,38 @@ impl EscapeConfig {
             false
         }
     }
+}
+
+/// One entry of a formula file, as a config carries it: the language
+/// it is written in, the entry's name, and the entry's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomSource {
+    pub dialect: CustomDialect,
+    pub entry: String,
+    pub source: String,
+    /// The user's variations the entry calls with `vary` (a Rhai entry;
+    /// the KIFS plan, C1e), each as its source -- `entry` its name -- as
+    /// it was when the entry was used: the entry compiles against these,
+    /// so the config carries everything it needs. Flat: a variation one
+    /// of them calls is listed here too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<CustomSource>,
+}
+
+/// The language of a [`CustomSource`]: Ultra Fractal's (`.ufm`, `.ucl`),
+/// or Fractint's (`.frm`), which differs in its numeric conventions; or
+/// a Kalles Fraktaler-style hybrid, its `source` the hybrid's JSON
+/// (`escape::lang::hybrid`), a formula only; or a Rhai formula
+/// (`escape::lang::rhai`), the language's own since phase 4, one formula
+/// to a source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomDialect {
+    #[default]
+    UltraFractal,
+    Fractint,
+    Hybrid,
+    Rhai,
 }
 
 impl Default for EscapeConfig {
@@ -2301,9 +2785,12 @@ impl Default for EscapeConfig {
             coloring: default_coloring(),
             formula_params: BTreeMap::new(),
             coloring_params: BTreeMap::new(),
+            custom_formula: None,
+            custom_coloring: None,
             lens: String::new(),
             lens_params: BTreeMap::new(),
             lens_amount: default_lens_amount(),
+            transforms: Vec::new(),
             supersample: 1,
             downsample: DownsampleMode::Box,
             reference_period: None,
@@ -2454,6 +2941,9 @@ mod shading_tests {
             texture_kind: ShadingTexture::Paper,
             texture_strength: 0.6,
             texture_scale: 3.5,
+            texture_where: TextureWhere::Steep,
+            texture_angle: 60.0,
+            texture_angle_soft: 5.0,
             model: ReliefModel::Lambert,
             elevation: 55.0,
             ambient: 0.3,
@@ -2464,6 +2954,7 @@ mod shading_tests {
             offset: 0.002,
             emboss: EmbossType::SmallestMagnitude,
             emboss_sections: 5,
+            creases: CreaseSettings { pattern: CreasePattern::Random, decay: 0.8, flip: true },
         };
         let json = serde_json::to_string(&esc).unwrap();
         let back: EscapeConfig = serde_json::from_str(&json).unwrap();
@@ -2505,11 +2996,24 @@ mod shading_tests {
             ShadingField::Analytic,
             ShadingField::Offset,
             ShadingField::Embossed,
+            ShadingField::Creases,
         ] {
             assert_eq!(shading_field_from_str(shading_field_to_str(f)), f);
         }
         for t in EmbossType::ALL {
             assert_eq!(EmbossType::from_name(t.as_str()), t);
+        }
+        for p in CreasePattern::ALL {
+            assert_eq!(CreasePattern::from_name(p.as_str()), p);
+        }
+        for k in ShadingTexture::ALL {
+            assert_eq!(ShadingTexture::from_str_or_default(k.as_str()), k);
+        }
+        for w in TextureWhere::ALL {
+            assert_eq!(TextureWhere::from_name(w.as_str()), w);
+        }
+        for s in TerrainSource::ALL {
+            assert_eq!(TerrainSource::from_str_or_default(s.as_str()), s);
         }
         // The GPU discriminants must be distinct, or two blend modes
         // would render identically.
@@ -2560,6 +3064,35 @@ mod tests {
         assert_eq!(old.light_angle, 315.0);
         let json = serde_json::to_string(&EscapeShading { enabled: true, ..EscapeShading::default() }).unwrap();
         assert!(json.contains("\"light_angle\":135.0"), "the light must be written: {json}");
+    }
+
+    /// The crease settings are skipped while default -- a shading block
+    /// that never drew creases does not mention them -- and each one set
+    /// is written on its own.
+    #[test]
+    fn crease_settings_are_written_only_when_set() {
+        let on = EscapeShading { enabled: true, field: ShadingField::Creases, ..EscapeShading::default() };
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(json.contains("\"field\":\"creases\""), "{json}");
+        assert!(!json.contains("\"creases\":{"), "default creases must not be written: {json}");
+        let mut set = on.clone();
+        set.creases.decay = 0.85;
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains("\"creases\":{\"decay\":0.85}"), "{json}");
+        let back: EscapeShading = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.creases, set.creases);
+        // The uniform row: decay, pattern, flip as a sign, the reach.
+        let s = CreaseSettings { pattern: CreasePattern::Alternate, decay: 0.7, flip: true };
+        assert_eq!(s.to_gpu(false), [0.7, 1.0, -1.0, 0.0]);
+        assert_eq!(s.to_gpu(true), [0.7, 1.0, -1.0, CREASE_TERRAIN_REACH]);
+        // The relief and the terrain source share the code, and a terrain
+        // made of creases asks for them whatever the relief draws.
+        assert_eq!(TerrainSource::Creases.shade_flags(ShadingField::Smooth), ShadingField::Creases.to_gpu());
+        let mut esc = EscapeConfig::default();
+        assert!(!esc.wants_creases());
+        esc.terrain.enabled = true;
+        esc.terrain.source = TerrainSource::Creases;
+        assert_eq!(esc.wants_creases(), esc.terrain_active());
     }
 
     /// The palette map is skipped while it is the identity, and a set
@@ -2622,6 +3155,27 @@ mod tests {
             }
             assert_eq!(PaletteCurve::from_name(curve.as_str()), curve);
         }
+    }
+
+    /// A complex formula parameter as a point in polar form (phase 4,
+    /// step 8): `seed.r` and `seed.angle` read and set `seed.re` and
+    /// `seed.im` through the manager, and undo as any edit.
+    #[test]
+    fn a_complex_parameter_reads_and_sets_as_a_point() {
+        use crate::config::{ConfigManager, ConfigPath};
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.formula_params.insert("seed.re".into(), 1.0);
+        config.escape.formula_params.insert("seed.im".into(), 0.0);
+        let mut mgr = ConfigManager::new(config);
+        let get = |mgr: &ConfigManager, p: &str| f32::try_from(mgr.get_value(&ConfigPath::EscapeFormulaParam { param: p.into() }).unwrap()).unwrap();
+        assert_eq!((get(&mgr, "seed.r"), get(&mgr, "seed.angle")), (1.0, 0.0));
+        mgr.update_param(ConfigPath::EscapeFormulaParam { param: "seed.angle".into() }, 90.0f32.into()).unwrap();
+        assert!(get(&mgr, "seed.re").abs() < 1e-6 && (get(&mgr, "seed.im") - 1.0).abs() < 1e-6);
+        mgr.update_param(ConfigPath::EscapeFormulaParam { param: "seed.r".into() }, 2.0f32.into()).unwrap();
+        assert!((get(&mgr, "seed.im") - 2.0).abs() < 1e-5 && (get(&mgr, "seed.angle") - 90.0).abs() < 1e-3);
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        assert!((get(&mgr, "seed.re") - 1.0).abs() < 1e-6 && get(&mgr, "seed.im").abs() < 1e-6, "undone");
     }
 
     #[test]
@@ -2687,6 +3241,8 @@ mod tests {
             ConfigPath::EscapeBailout,
             ConfigPath::EscapeBiomorph,
             ConfigPath::EscapeColoring,
+            ConfigPath::EscapeCustomFormula,
+            ConfigPath::EscapeCustomColoring,
             ConfigPath::EscapeFormulaParam { param: "power".into() },
             ConfigPath::EscapeColoringParam { param: "trap_radius".into() },
             ConfigPath::EscapeLens,
@@ -2796,5 +3352,40 @@ mod tests {
         assert!(json.contains("escape"), "touched escape must serialize");
         let back = crate::config::FractalConfig::from_json(&json).unwrap();
         assert_eq!(back.escape, config.escape);
+    }
+}
+
+#[cfg(test)]
+mod transform_id_tests {
+    use super::*;
+
+    /// The id rides the list's wire form and nothing else: a file never
+    /// holds it, a round trip keeps it, and an entry without one or
+    /// repeating one gets a fresh one.
+    #[test]
+    fn a_transformations_id_rides_the_wire_and_never_the_file() {
+        let a = EscapeTransform::new(TransformStage::Plane, "julian", 0.5);
+        let b = EscapeTransform::new(TransformStage::Orbit, "swirl", 1.0);
+        assert_ne!(a.id, b.id);
+        let list = vec![a.clone(), b.clone()];
+        let back = transforms_from_wire(&transforms_to_wire(&list)).unwrap();
+        assert_eq!(back.iter().map(|t| t.id).collect::<Vec<_>>(), vec![a.id, b.id]);
+        assert_eq!(back, list);
+
+        let file = serde_json::to_string(&list).unwrap();
+        assert!(!file.contains("\"id\""), "a file holds the id: {file}");
+        let read = transforms_from_wire(&file).unwrap();
+        assert!(read.iter().all(|t| t.id != 0) && read[0].id != read[1].id, "fresh ids for a file's entries");
+
+        let twice = transforms_to_wire(&[a.clone(), a.clone()]);
+        let read = transforms_from_wire(&twice).unwrap();
+        assert_eq!(read[0].id, a.id);
+        assert_ne!(read[1].id, a.id, "a repeated id is replaced");
+        assert!(transforms_from_wire("").unwrap().is_empty());
+
+        // Equality is the content's, as an effect's.
+        let mut c = a.clone();
+        c.id = 0;
+        assert_eq!(c, a);
     }
 }

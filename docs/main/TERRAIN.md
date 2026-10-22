@@ -86,8 +86,8 @@ What the last three share:
 | Path tracer | `path_core` with the distance field (`solid_path.rs`) | `path_core` with the height field (`PATH_WGSL`) | the same as the escape terrain |
 | Tier | `escape.solid_tier`, default Lit | `escape.terrain.tier`, default Auto | `sim.terrain.tier`, default Auto |
 | Path settings | `escape.path` | `escape.path` | `sim.terrain.path` |
-| Lights | camera space | world-fixed | world-fixed |
-| Fog | the flame's fog fields | the terrain's Far and Haze | Far and Haze on a repeated ground |
+| Lights | fixed in the fractal (or the camera's, a toggle) | world-fixed | world-fixed |
+| Fog | the flame's fog fields, in both tiers eased in over the fog's length 1/k past its start (`ifs_fog_amount`: no line where it begins) | the terrain's Far and Haze | Far and Haze on a repeated ground |
 
 Every one hands the tail an `Rgba32Float` image in the accumulator's
 layout: rgb linear, alpha coverage. Coverage 0 lets the tonemap's
@@ -103,8 +103,8 @@ and render a terrain config as its 2D picture.
 ## Render tiers
 
 `RenderTier` (`src/config/escape.rs`) says how a solid or a terrain is
-rendered. The View panel's Lighting & Material section shows it as
-**Rendering**: Auto, Lit, Path traced.
+rendered. The Lighting & Material panel's Rendering section shows it
+as **Render tier**: Auto, Lit, Path traced.
 
 | Tier | Viewport | Export |
 |---|---|---|
@@ -148,19 +148,105 @@ Every 3D view reads `FractalConfig::solid_shading`
 (`SolidShadingSettings`):
 - **The rig:** shading strength, ambient, diffuse, specular and shininess
   (the highlight), the occlusion strength (`ssao_strength`), and up to
-  four directional lights (`SolidLight`: azimuth, elevation, intensity,
-  colour).
+  four lights (`SolidLight`: a kind, intensity and colour, and the
+  kind's own settings -- *Kinds of light* below).
 - **The material:** `gloss`, `roughness` and `glow`.
 
 The splat-only settings (solid strength, surface thickness, SSAO radius,
 normal smoothing, gap fill, shadow maps) are the 3D flame's alone.
 
 **The lights' space differs:**
-- **Flames and mode D:** camera space. Azimuth 0, elevation 0 is a
-  headlight. Mode D rotates them into the world once, in `pack_rig3`.
+- **Mode D (2026-10-19):** fixed in the fractal's space by default --
+  azimuth counter-clockwise about its z axis from +x, elevation above its
+  xy plane, a terrain's convention -- so they stay put as the camera
+  orbits or flies. `SolidShadingSettings::lights_follow_camera` (the
+  Lighting & Material panel's "Lights follow the camera") puts them in
+  the camera's space instead: azimuth 0, elevation 0 a headlight, the
+  lights turning with every orbit, as every solid was lit before. Config
+  v6: a solid saved before loads with it on and renders as it did; the
+  3D look turns it off on entering a solid; the View panel's Fly Mode
+  section shows **Fix lights in the fractal** for a solid with it on
+  (`ui::render_mode::lights_to_world`: each directional light's angles
+  turned into the fractal's at this camera, `ifs::camera_light_to_world`
+  -- the picture as it stands, 0 pixels apart in both tiers -- and the
+  flag off, one undo step). Switching the toggle itself converts nothing:
+  the angles are read in the other space, and the light moves. Both
+  spaces are turned into world directions in `pack_rig3`. Points and the
+  headlamp are not affected.
+- **Flames:** camera space, always: the shade pass lights the projected
+  picture (`visibility::light_frame` greys the toggle).
 - **Terrains:** world-fixed, the 2D relief's light. Azimuth is
   counter-clockwise from east on the plane, elevation is above it
   (`terrain::light_direction`).
+
+### Kinds of light
+
+A `SolidLight` is one of three kinds (`LightKind`;
+[lights-in-the-fractal.md](../archive/projects/lights-in-the-fractal.md)):
+
+| Kind | Where it is | Where it is offered |
+|---|---|---|
+| **Directional** | a direction at infinity: azimuth and elevation, in the spaces above | every 3D view |
+| **Point** | `position` in the world (mode D's coordinates, f64) | mode D's solids |
+| **Headlamp** | the camera's eye, lifted by `lift` camera distances, aimed down the view | solids and both terrains |
+
+A point's and a headlamp's power at distance `d` is
+`intensity / (1 + (d / reach)^2)`: the inverse square far off, finite at
+the light, half at the reach. A point's reach is in world units; a
+headlamp's is in **camera distances** (the eye's distance to its
+target), so the lamp keeps its reach as the camera zooms. A headlamp's
+`cone` is its beam's half-angle (180 lights all round), softened over
+the outer tenth. `visibility::light_kind` answers which view offers
+which kind; a kind a view does not offer is off there, and the panel
+says why. A terrain's world is the view's -- its origin and unit move
+with every pan and zoom -- so a light placed in it would not stay put;
+the 3D flame's splat pass lights in screen space, directional alone
+(`SolidLight::directional_on`).
+
+How it is drawn:
+- **GPU:** a light's first `vec4` holds its direction or its position
+  (in mode D an offset from the target, as every position there is), its
+  second `vec4`'s `w` its kind (0, 1, 2), and `fdata[28 + i]` its reach
+  in the world's units and its cone's cosines. The CPU places the
+  headlamp and turns its reach into world units (`ifs::pack_rig3`,
+  `terrain::pack_rig`; the terrain's `fdata` is 32 slots for it).
+- **The rig's** `ifs_light_at(i, p)` gives a light's direction, distance
+  and gain at a point -- the offset scaled before it is squared, for deep
+  views -- and `ifs_rig` takes the surface's position, which the relight
+  rebuilds as the eye plus the ray times the hit distance.
+- **Compiled in only when used:** unless a light that lights is a point
+  or a headlamp (`SolidShadingSettings::placed_lights`), the rig's
+  `ifs_light_at` is the directional one (`assembler::ifs_rig`). The
+  positional code costs registers wherever it sits: the Menger's path-
+  traced sample took 158 ms at 320x180 with it present and unused,
+  against 130 without -- the beam's lesson (`IFS_MAX_BEAM`) again. Mode
+  D's walk, relight and path pipelines carry it in their keys; a
+  terrain builds its placed-light walk, relight and path tracer the
+  first time a view has such a light (`TerrainRenderer::ensure_placed`).
+  The first point or headlamp is a recompile.
+- **Shadow rays stop at the light:** the walk's `ifs_shadow`, the
+  terrain walk's trace and both geometries' `pt_scene_visible` take the
+  light's distance as their end. A directional light's end is past
+  everything, so its numbers are as they were.
+- **The walk's key** holds each light's kind, position and lift beside
+  its direction (they decide the shadow rays); reach and cone only scale
+  what reaches, a relight.
+
+**The panel** (`ui::lighting_panel`, Lights): each light's Kind;
+Directional, its Azimuth and Elevation; Point, its Position (dragged at
+the camera's scale), **Place at Camera** (the eye's position and a reach
+of the camera's distance -- fly inside, drop a light; a light first made
+a point is placed so), and Reach on a log scale about the camera's
+distance; Headlamp, its Reach, Cone and Lift; every light, Intensity.
+The animation picker offers each light's parameters by its kind.
+
+Gates: a point light far off with a reach past everything is the
+directional light it approaches; inside the sponge's central cavity a
+headlamp's shadows-on picture is its shadows-off one (98.5%; 0 if the
+shadow ray ran past the lamp) and a narrow cone darkens the frame's edge;
+a point-lit cube and a headlamp-lit plane path trace to their lit tiers;
+a headlamp-lit plane is its closed form to 4.1e-6
+(`renderer::solid_path` and `terrain` tests).
 
 **An untouched rig is a default light.** For a flame, an untouched rig
 (shading strength 0) means classic unlit colour. For a solid or a terrain
@@ -168,8 +254,11 @@ it would be a flat silhouette, so `SolidShadingSettings::rig_untouched`
 switches in a default instead:
 - **A terrain** gets a default sun, `DEFAULT_SUN` = azimuth 135°,
   elevation 30°, white at intensity 1;
-- **mode D** gets a key light at the panel's light-0 default (35°, 40°,
-  camera space).
+- **mode D** gets a key light at the panel's light-0 default (35°, 40°)
+  in camera space when its lights follow the camera; fixed in the
+  fractal, the same light as the default camera (yaw 0, pitch 0.42) sees
+  it, to the degree (`ifs::default_world_key`), which taking the rig
+  over writes to light 0 (`render_mode::rig_taken_over`).
 
 Either way the rig is strength 1, ambient 0.12, diffuse 0.88, no
 highlight, occlusion strength 1. The material is left out of the test,
@@ -182,23 +271,198 @@ fully lit colour (1). The path tracer lights a touched rig fully at any
 strength. The highlight is weighted by the strength in both tiers: at 0
 neither draws it, at 1 both draw it whole.
 
+**Ambient** is light from every direction. The lit tier adds
+`albedo x ambient x occlusion`; the path tracer adds the ambient to the
+sky its bounces see (`path_core::path_ambient`), so an open surface gets
+the same `albedo x ambient` and the geometry occludes it. An untouched
+rig adds none to the path tracer: its default ambient stands in for the
+sky there. At 0 bounces the path tracer has no ambient, as it has no sky.
+(Until 2026-10-19 the path tracer read no ambient, and the slider did
+nothing in a path-traced view; `the_path_tracer_sees_the_ambient`.)
+
+**Occlusion** darkens the ambient only. A direct light's occluder is its
+shadow ray, in both tiers; the occlusion estimate stands in for the sky
+and the bounces the path tracer traces. Until 2026-10-19 it darkened the
+lit tier's direct light as well, which the path tracer has no
+counterpart for: the lit tier's recesses came out darker than the path
+tracer's (the sponge's direct light 3.5% short in all,
+`occlusion_leaves_the_direct_light_alone`). An indirect-light
+approximation -- the albedo times the occluded share -- was measured and
+left out: it moved the lit tier further from the path tracer.
+
+**The 3D look.** A view entered as a solid or a terrain from one that is
+neither (`ui::render_mode::look_3d`; UI.md) gets Linear tone mapping at
+exposure 2.0 and gamma 1.0, saturation 1.0, and, when the rig is
+untouched, strength 1.0 and ambient 0.0 -- a touched rig whose light 0
+is the default key light. The solid presets carry the same.
+
 **The material** (`path_core::lit_material`) is the same in every tier:
 - **Gloss** (0 to 1): a clear coat's reflectance head on. 0, the default,
   is no coat; 0.04 is a dielectric's.
+- **Metallic** (0 to 1; 2026-10-19): how much of the surface is metal.
+  The coat's reflectance head on is `mix(gloss, albedo, metallic)`, a
+  colour, and the diffuse is times `1 - metallic`: a metal reflects in its
+  own colour with nothing under it. A coat exists where Gloss or Metallic
+  is above 0. In the fog row's w (`ifs_metallic`, `fdata[10].w`) for the
+  rig's shaders; `metallic` in the 3D flame's shade pass.
 - **Roughness** (0.02 to 1): the coat's GGX roughness (alpha is its
   square).
-- **Glow:** the albedo's own light.
+- **Glow:** the colour's own light.
+- **Reflectance** (0 to 1, default 1; 2026-10-19): how much of its colour
+  the surface reflects. The albedo every tier lights is the colour times
+  it -- the diffuse, a metal's coat colour and every bounce -- while the
+  glow and the unshaded colour (Shading strength below 1) keep the
+  colour's own strength, and a dielectric coat's highlight does not
+  depend on it. In the studio row's z as its complement
+  (`ifs_reflectance`, `fdata[32].z`: a uniform that never wrote it
+  reflects all), read by `ifs_rig` and the path tracer (`pt_path`,
+  `pt_first`'s guide); solids and terrains, not the 3D flame (its shade
+  pass has no bounces; the panel hides the row there). The Lit tier and
+  the path tracer's direct light scale by it exactly; a bounce brings the
+  square or less, so with the exposure raised by its inverse the lit
+  faces hold and the shadows the bounces alone light fall by it. Why it
+  exists: a palette at full strength is a surface no real material is,
+  and in an enclosed view its bounced light fills the shadows (a Fire
+  palette's red bounces almost without loss). Gates:
+  `reflectance_darkens_the_bounced_light_faster` (the Mandelbulb: Lit and
+  the direct light 0.500 at 0.5, the bounce-lit shadows 0.236; the glow to
+  the byte), and the terrain's flat plane at 0.5 (to 1.5e-8).
 
-Both tiers evaluate the coat alike on the direct light: GGX's
-distribution, Smith's masking and Schlick's Fresnel, the diffuse taking
-what the Fresnel does not. The lit tier's coat also reflects the ambient,
-standing in for the sky the path tracer's bounces see.
+Every tier evaluates the coat alike on the direct light -- both escape
+and simulation tiers and the 3D flame's shade pass: GGX's distribution,
+Smith's separable masking and Schlick's Fresnel (per channel for a
+metal), the diffuse taking what the Fresnel does not. The lit tiers'
+coat also reflects the ambient, standing in for the sky the path
+tracer's bounces see. The path tracer's bounce picks the coat's lobe by
+its Fresnel at the view, leaning to it by the metallic (wholly at 1).
+
+**Energy compensation.** One scattering off GGX's microfacets loses the
+light that bounces between them: a white metal at roughness 0.7 under a
+uniform sky returned 69% of it (measured), and at roughness 1 the
+integral says about a third. The coat's
+lobe is scaled by `1 + F0 (1 / E - 1)` (Kulla and Conty 2017; Turquin
+2019), E its directional albedo at reflectance 1, in every tier
+(`ifs_coat_energy`, `coat_energy`). E is a 16-term fit to the coat's own
+integral (`renderer::coat::COAT_ESS_FIT`, `coat_energy_wgsl` generates the
+WGSL for every shader): the compensation within 1.6% from cos 0.2 up and
+-11% to +5% at a glance (`the_coat_albedo_fit_is_the_integral`). Karis's
+EnvBRDFApprox, fitted to height-correlated masking, was up to half off
+for ours. Under a uniform sky a white metal now returns it within 0.5%
+at roughness 0.3 to 1 (`the_coat_and_the_glow`); a metal's direct light
+is the lit tier's and the path tracer's alike within 0.3% on the sponge
+and the Mandelbulb (`a_metal_is_lit_alike_in_both_tiers`).
+
+### The studio
+
+A polished or metal surface shows what it reflects, and under a dark
+uniform sky that is nothing: a metal reads black. **Studio light** (the
+path block's `studio`, 2026-10-19) lights the scene from a procedural
+photo studio in place of the sky's light, while the camera still sees
+the background or the gradient (`ifs_studio` in the rig):
+- an overhead **softbox** a little behind the subject (radius 0.65 rad,
+  radiance 2) -- what a top face seen from above mirrors;
+- two **strips** behind to either side (0.22 rad, 1.2) -- the rims;
+- a dim **fill** panel behind the camera (0.8 rad, 0.35);
+- **walls** at 0.06 and a **floor** at 0.02, neutral white throughout.
+
+Its brightness is Sky light over the exposure (`path_core::studio_level`),
+so a radiance of 1 reads white at any exposure, as the background does.
+Its frame (`fdata[32].y`): a solid's turns with the camera when its
+lights do (0: x right, y up, z toward the viewer); fixed in the fractal
+when they are (2), its basis in `fdata[33..35]` the camera's at the
+solids' usual view, yaw 0.9 and pitch 0.42 (`ifs::studio_basis`), where
+the shipped solid presets stand, so they keep their look; a terrain's is
+the world's with z up (1). In `fdata[32]` for both tiers (the terrain's
+uniform grew from 32 vec4s to 36).
+
+- **The path tracer:** a bounce that escapes sees the studio plus the
+  ambient (`pt_sky`; the environment is then the ambient alone).
+- **The lit tier** traces no rays, so it has closed forms, each
+  occluded as the ambient is:
+  - the diffuse: the walls and floor each a half-space's share, each
+    light's irradiance clipped by the surface's horizon (Lagarde and de
+    Rousiers 2014) -- within 1.3% of the integral. Solid angle times
+    cosine was 8% high for the softbox and gave a face beside it half its
+    light;
+  - the coat's reflection (`ifs_studio_reflect`), times its Fresnel at
+    the view: the lobe as a cone of radius 0.5 alpha about the mirror
+    direction, each light's share of it (its radiance where the cone is
+    inside it, its solid angle over the cone's where the cone is wider,
+    smoothed across the edge), blended toward the irradiance about the
+    lobe's dominant direction as the coat roughens. Fitted to the path
+    tracer's integral: within 5% in the mean at every roughness. A flat
+    face reflects a single direction and can be a third to a half off
+    near a light's edge (a Menger's top face, a flat terrain). Spherical
+    Gaussians, tried first, were 8% off in the mean and twice the
+    softbox's radiance at its centre.
+
+Measured against the path tracer (`the_studio_lights_both_tiers_alike`,
+`a_plane_under_the_studio_is_lit_alike`): the cube's diffuse 1.001, its
+metals 1.11 and 0.87; the Mandelbulb at the default occlusion 0.97, 1.06
+and 1.04; a flat plane's diffuse 0.999; rolling ground's metal 0.986.
+Off, neither tier takes the studio's code path.
 
 A picture saved before the material moved kept its coat and glow in a
 path tracer's settings. `lift_path_material` lifts them into
 `solid_shading` on load. The old paths (`Escape.Path.Gloss`,
 `Sim.Path.Gloss`, and their roughness and emission) are aliases of
 `SolidGloss`, `SolidRoughness` and `SolidGlow`.
+
+### HDRI skies
+
+A photographed sky all round (docs/archive/projects/hdri-environment.md):
+`escape::environment`, bundled in `assets/environments/` and named by id
+(`ENVIRONMENTS`) -- Poly Haven's Sunflowers (Pure Sky) and Rogland Clear
+Night, 1K equirectangular Radiance files, CC0 -- and **Starfield**, stars
+alone, no file. For solids and both terrains, in both tiers; one text
+reads it everywhere (`ENV_WGSL`, spliced into the rig: `fdata[36..45]`,
+group 0's bindings 14 and 15), each renderer holding the sky in an
+`EnvSlot`.
+- **Its frame** is the world's, z up, whatever the lights follow
+  (`ifs_env_dir`; read in the studio's frame, a camera's at the solids'
+  usual view, its horizon stood at that camera's pitch), turned by
+  Rotation, its horizon raised or lowered by Horizon (the sky above and
+  below the line stretched to fit, the zenith and the nadir fixed:
+  `environment::warp_elevation`; the sun moves with it). It is scaled so
+  the sky's median shows at its catalog level (`EnvDef::level`) through
+  the exposure and gamma -- a picked colour's `shown`, kept linear --
+  times Sky light. A camera ray that misses sees it (`ifs_sky_seen`), in
+  both tiers, unless Show as backdrop is off.
+- **Its sun is lifted out of the map** (`EnvMap::sun`): the texels above
+  1000 times the sky's median, joined to the brightest, holding at least a
+  tenth of the light -- the Sunflowers sun is nine texels holding 47% of
+  it. It becomes the rig's next free light (directional, its irradiance
+  over pi), so both tiers shade and shadow it and polished reflections
+  meet it through the lights' own sampling; the map keeps the rest, the
+  sun's texels filled from around them. An untouched rig's stand-in key
+  (a terrain's default sun) gives way to it; under a sky without one (a
+  night's) the stand-in stays, or the scene would be dark.
+- **The path tracer** reads the map at its finest level (`ifs_env`).
+- **The lit tier** reads it prefiltered: its diffuse light as nine
+  spherical harmonics of the irradiance (`irradiance_sh`, taken on
+  loading over the map at 128x64 and again when the sky turns or its
+  horizon moves; within 2% of the integral on Sunflowers' faces), and a
+  coat's reflection from the texture's mips -- level k the map seen
+  through a GGX lobe of roughness k/5 (`EnvMap::reflection_levels`, the
+  split sum by filtered importance sampling, 170 ms for a 1K sky on
+  loading), read about the lobe's dominant direction (`ifs_env_reflect`).
+  Against the path tracer (`an_hdri_sky_lights_both_tiers_alike`,
+  `a_plane_under_an_hdri_sky_is_lit_alike`): a convex cube's diffuse and
+  gloss within 1%, its metals within 10%; a flat plane's diffuse within
+  1%, metal hills 9%; the Mandelbulb 2-11% dark, where the occlusion
+  estimate stands in for its recesses, as the studio's does.
+- **Stars** (`ifs_env_stars`, Stars in the panel; `environment_stars`):
+  procedural, fixed to the map -- they turn and rise with it, above its
+  horizon only. The sphere in cube-face cells, 160 by 160 a face, a star
+  in about one cell in eleven; its brightness by a power law, its colour
+  orange through white to blue-white. A star is a pixel across at any
+  zoom (its radius 0.6 of the camera's pixel) and display-referred (1
+  shows the brightest at white, at any exposure): sharp, and too faint to
+  light anything. Polished reflections show them, fading out by
+  roughness 0.1. Choosing a night sky in the panel (`EnvDef::stars`)
+  brings them out at 1.
+- The web build has no skies yet (its loading is for the user's
+  decision: docs/archive/projects/hdri-environment.md).
 
 ### The walk and the relight
 
@@ -222,19 +486,43 @@ lens.
 
 ### The UI
 
-The View panel's **Lighting & Material** section
-(`view_controls::lighting_3d`) holds, for a solid or a terrain:
-- Rendering, the sky and the path tracer's settings;
-- a terrain's Shadows, Shadow sharpness and Occlusion reach;
-- the rig (`solid_panel::lighting_rig`): Shading Strength, Ambient,
-  Occlusion Strength, Light 1 to 4 with Azimuth, Elevation and Intensity;
-- the Material block: Diffuse, Highlight, Highlight size, Gloss,
-  Roughness, Glow.
+The **Lighting & Material panel** (`ui::lighting_panel`; its sections by
+view in [UI.md](UI.md#the-lighting--material-panel)) holds, for a solid
+or a terrain:
+- **Rendering:** the render tier and the path tracer's samples, noise
+  threshold (adaptive sampling), bounces and denoiser;
+- **Sky:** the sky colour (the background), the gradient, Sky light;
+- **Lights:** Light 1 to 4 with their Kind and its settings (*Kinds of
+  light*) and Intensity;
+- **Shading:** Shading Strength, Ambient, Occlusion Strength and
+  Occlusion reach (a solid's formula parameter, a terrain's field);
+- **Shadows:** Shadows and Shadow sharpness (likewise); a solid's Ray
+  tolerance (below);
+- **Material:** Diffuse, Highlight, Highlight size, Gloss, Roughness,
+  Glow;
+- **Surface** (an escape terrain): the surface texture, the lake's tint
+  and roughness.
 
-Occlusion reach hides when the tier is Path traced: occlusion is the lit
-tier's stand-in for the sky the path tracer traces. Depth of Field shows
-the path tracer's Aperture and Focus, or a note that the lit tier draws
-everything sharp.
+The occlusion rows hide when the tier is Path traced: occlusion is the
+lit tier's stand-in for the sky the path tracer traces.
+
+**Ray tolerance** (a solid's; `SolidShadingSettings::ray_tolerance`):
+how close a ray leaving a surface -- a shadow ray in either tier
+(`ifs_shadow`), the path tracer's bounces and shadows (`pt_ifs_leave`) --
+may pass the solid and count as hitting it. Its hit test is the smaller
+of a few pixels' share of the bias and the solid's ball times
+`ifs_ray_tolerance()`: a ten-thousandth at Fine (the default), three at
+Medium, ten at Coarse (rig `fdata[32].w`, the multiple less one). It is
+a fraction of the solid, not of a pixel, on purpose: a hit test at a
+pixel's width erased the Menger's sub-squares under grazing light
+(`ifs_shadow`'s comment). Measured (path-tracing-research, *Found on the
+way*): at 1080p Medium is 1.24-1.4 times faster, Coarse 1.5-1.9; the
+Menger keeps its picture (640x360: RMSE 3.3% at Fine and Medium, 3.8% at
+Coarse), the Mandelbulb's fine shadows darken (Coarse: 3.1%, its error
+10% to 31%). Fine is the pictures as they were, to the bit. An untouched
+rig's rows show what the first change makes it (UI.md). The View
+panel's Depth of Field shows the path tracer's Aperture and Focus, or a
+note that the lit tier draws everything sharp.
 
 ---
 
@@ -270,7 +558,8 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 
 | Field | Default | UI | Means |
 |---|---|---|---|
-| `samples` | 256 | Samples (1 to 4096) | the viewport's target, and an export's count |
+| `samples` | 256 | Samples (1 to 4096) | the viewport's target, and an export's count; sampling adaptively, the most any pixel takes |
+| `noise_threshold` | 0 (off) | Noise threshold (0 to 16) | adaptive sampling: a pixel stops once its noise, in display levels of 255, and its neighbours' are under this (*Adaptive sampling*) |
 | `bounces` | 2 | Bounces (0 to 8) | bounces after the first surface; 0 is direct light only |
 | `environment` | 1.0 | Sky light (0 to 4) | the sky's brightness as a light |
 | `aperture` | 0 | Aperture (0 to 0.2) | the lens radius, a fraction of the distance to the target; 0 is a pinhole |
@@ -278,6 +567,12 @@ the escape terrain, `sim.terrain.path` for a simulation's.
 | `denoise` | off | Denoise | filter the noise (below) |
 | `sky_gradient` | off | Gradient sky | the background alone, or a gradient to `zenith` overhead |
 | `zenith` | (0.22, 0.40, 0.72) | Zenith | the sky's colour straight up, picked in sRGB |
+| `studio` | off | Studio light | light from a photo studio in place of the sky's, Sky light its brightness (*The studio*) |
+| `environment_map` | none | HDRI sky | a bundled photographed sky that lights and is reflected, in place of the background's, the gradient's and the studio's light (*HDRI skies*), or Starfield |
+| `environment_rotation` | 0 | Rotation | the sky turned about the up axis, degrees |
+| `environment_horizon` | 0 | Horizon | the elevation the sky's horizon stands at, degrees (the UI offers -45..45; the config holds -80..80): to set it against the solid |
+| `environment_stars` | 0 | Stars | procedural stars over the sky, their brightness (1, the brightest at white; 0, none) |
+| `environment_backdrop` | on | Show as backdrop | the camera sees the sky (a skybox), or the background |
 
 `path_core::path_settings_from` turns the block into a pass's
 `PathSettings`:
@@ -292,8 +587,17 @@ the escape terrain, `sim.terrain.path` for a simulation's.
   that distance times `focus` (1 when 0).
 - **A sample's radiance is clamped** at ten times the brightest light:
   the enabled lights' summed intensity, the environment, the zenith, the
-  glow, and at least 1. That removes the fireflies a rare bright path
-  would scatter.
+  glow, and at least 1 -- an HDRI sky's sun counted with the lights it
+  draws beside (`solid_path`). That removes the fireflies a rare bright
+  path would scatter. **The light from past the first surface is clamped
+  apart, at the brightest light itself** (`clamp_indirect`; Cycles' Clamp
+  Indirect): a polished metal's glints of a sun seen in a second surface
+  are rare and far brighter than the picture, and at the whole clamp
+  alone they stood out more the more samples, for a while (user-reported
+  2026-10-20, in a gold solid's crevices). Measured on that scene: the
+  pixels standing out at 32 samples 301 -> 106, the picture 1% darker
+  (`a_gold_solids_glints_settle`, the measurement
+  `sun_threshold_speckles`).
 - **Bounces** are capped at 16; the seed is fixed at 1.
 
 ### A sample
@@ -314,10 +618,38 @@ the escape terrain, `sim.terrain.path` for a simulation's.
    2018), chosen with the coat's Fresnel probability; otherwise
    cosine-weighted Lambert. Russian roulette from the second bounce.
 5. **A ray that escapes** sees the sky: the environment, or the gradient
-   by the rig's profile (`ifs_sky_t`).
+   by the rig's profile (`ifs_sky_t`), or the studio (*The studio*).
+   One that left by the coat's lobe and escapes inside a directional
+   light's cone also meets the light (below).
 
 A hole (albedo alpha 0) ends the path. Past the first surface it sees the
 sky through the hole.
+
+**Path regularisation** (Kaplanyan and Dachsbacher 2013; Cycles' Filter
+Glossy; 2026-10-20): past a diffuse bounce a coat is no sharper than
+roughness 0.4 (`PT_REGULAR_ROUGH`) -- light that found a glossy surface
+after a diffuse one is the rare bright path a few samples keep as a
+firefly. Measured against unclamped references, glossy solids came out
+1-4% nearer; a metal, which never bounces diffusely, is untouched.
+
+**Multiple importance sampling** (Veach and Guibas 1995; 2026-10-19). A
+polished coat's peak is narrower than a light's cone, so the lights' own
+samples rarely land in it, and when they do they are worth a thousand
+times the light and the firefly clamp clips them: a polished metal under
+one light read 0.068 against the truth's 0.42 (`mis_keeps_the_picture_and_lowers_its_noise`).
+Now a bounce by the coat's lobe that escapes inside a directional
+light's cone adds the light's radiance -- its irradiance pi I spread over
+the cone's solid angle (`pt_light_pdf`) -- and the coat's share of each
+estimate is weighted by the power heuristic against the other's density
+(`pt_coat_pdf`: the lobe's choice times the visible normals' G1(v) D(h)
+/ 4 n.v). The diffuse stays the lights' alone (its density never nears
+a light's), a point or a headlamp has no area to meet, and at shadow
+strength 0 -- the lights reaching through the solid, where no bounce can
+see them do so -- it is off. Under a partial shadow strength the part of
+a light that reaches is weighted and the part let through the solid is
+whole. Unbiased: with and without (and no clamp) within 0.3%; the noise
+at 16 samples 4.7 times lower on a polished metal, 1.9 at roughness 0.3.
+Gloss 0 and metallic 0 take no part.
 
 ### Random numbers and reproducibility
 
@@ -337,6 +669,61 @@ and however the frame is split into tiles:
 `path_samples_are_batch_invariant` and `a_still_in_tiles_is_the_still_whole`
 hold this.
 
+### Adaptive sampling
+
+With a noise threshold (`noise_threshold`, levels of 255; 0 is off) a
+pixel stops taking samples once it is clean enough, and the time goes to
+the noisy ones (path-tracing-research.md, V2):
+- **Each pixel keeps statistics** beside its sum, in the same buffer
+  after the frame's sums (no new binding; the solid path tracer is near
+  a browser's storage-buffer count): its samples' luminance squared, its
+  odd samples' luminance, its own count -- negative once converged -- and
+  its noise at the last check.
+- **The check** (`PATH_ADAPT_WGSL`, `PathSum::check_if_due`) runs at
+  fixed counts -- `ADAPTIVE_MIN_SAMPLES` (16), then each time the count
+  has grown by an eighth -- so a picture does not depend on how its
+  samples were batched. `error` measures each pixel's noise: its mean's
+  standard error from the moments, as the display shows it -- how far one
+  error above the mean lands through the Linear tone map's exposure and
+  the display's power on it (`PathSettings::display`, `shown` inverted).
+  `converge` flags a pixel converged where its noise and its eight
+  neighbours' are under the threshold, so an unconverged pixel keeps its
+  neighbours sampling and a converged one wakes when a neighbour's noise
+  rises; it lists the pixels still sampling, a workgroup's together, after
+  the statistics, and `publish` writes the list's length at its head. The
+  count comes back without waiting.
+- **The trace takes the list.** Once a check has run, `main` takes a
+  list entry a thread (`PathParamsGpu::from_list`) in place of a band's
+  rect, so a warp's 32 lanes are pixels that all still sample. A pixel
+  draws from its own count, so its samples are the same stream however
+  the frame is dealt: each pixel's sum is the plain tracer's at its count,
+  to the bit. (A workgroup sharing out its own block's pixels needs a
+  barrier, and a barrier in this kernel made the march 3.4 times slower on
+  a GTX 1660 SUPER, so the check lists them instead.)
+- **The resolve and the denoiser** read each pixel's count.
+- **Done** is the samples asked for, or the check's count of pixels still
+  sampling coming back as none. A new threshold does not restart the
+  picture: the next dispatch checks under it (`PathSum::retune`).
+- **The solid's driver** prices a pass over the list per entry-sample,
+  measured (the pixels still sampling are the costly ones: a crevice's
+  long marches, about five times the frame's average on the Mandelbulb),
+  by the last list length that came back until the newest does, and sends
+  the whole list at several samples a dispatch where it fits. A
+  terrain's sends the whole list a dispatch.
+- A still drawn in tiles converges tile by tile: a pixel at a seam does
+  not see its neighbour across it, so it may stop a check sooner or later
+  than the whole frame would stop it -- noise, not a seam.
+
+Measured (`adaptive_quality`, 2026-10-20; path-tracing-research.md has
+the table): the time even sampling takes to the adaptive picture's error,
+over the adaptive picture's time, at thresholds 8, 4 and 2 with at most
+256 samples. At 4, averaged over the Menger, the Mandelbulb and the
+Mandelbox matte, glossy and metal: 1.95x by the gate's error (linear
+luminance), 1.44x by the error as the display shows it. It pays where a
+few pixels hold the noise -- the glossy Mandelbox 4.1x (2.8x as shown) --
+and breaks even on the Mandelbulb, whose noisy pixels are its costly
+ones. Off by default.
+
 ### Resolve and the denoiser
 
 **The resolve** (`PATH_RESOLVE_WGSL`) writes the premultiplied mean over
@@ -349,13 +736,54 @@ guidance (Schied et al. 2017), over one accumulation rather than over
 frames:
 1. **`prepare`:** each pixel's mean light divided by its mean albedo, so
    the filter sees the light alone and the colouring's detail, which
-   lives in the albedo, is multiplied back untouched. With it, the
-   light's variance and the features: the normal and the distance, with
-   the distance's gradient.
-2. **`atrous`**, five times at strides 1, 2, 4, 8, 16: a 5x5 B3 kernel
-   whose taps are weighted by the normals' agreement, the distances'
-   against the gradient, and the lights' against the noise.
-3. **`finish`:** the light times the albedo, with the resolve's coverage.
+   lives in the albedo, is multiplied back untouched. That light no
+   brighter than twice its brightest neighbour's on the same surface
+   (normals within 37 degrees; `DN_CLAMP_FACTOR`) while its excess is
+   within two of its standard errors (`clamp_z`; always under four
+   samples): one rare path -- a bounce that found a small light, one
+   sample far from the rest -- does not stand out of the filter as a dot,
+   and a metal's real glint, bright in every sample, stays. (It loosened
+   by the sample count before, and paths clamped at 16 samples came
+   through at 32 as speckle.) With it, the light's variance and the features: the normal
+   and the distance, with the distance's gradient.
+2. **`atrous`** at strides 1, 2, 4, 8, 16 -- 16 dropped from 8 samples on,
+   8 from 32 (`denoise_steps`) -- a 5x5 B3 kernel whose taps are weighted
+   by the normals' agreement, the distances' against the gradient, and
+   the lights' against the noise.
+3. **`finish`:** the light times the albedo, with the resolve's coverage
+   -- moved from the pixel's own mean by no more than 1.5 of its standard
+   errors (its samples' luminance moments), judged on its largest
+   channel; past that the move shrinks as (bound / gap)^2, so detail the
+   filter would average away goes back to the samples' own, and the
+   picture converges to their mean. From 8 samples, eased in over 24
+   (`DenoiseTrust`): switched on whole, and as one error times
+   `max(1, sqrt(16 / n))` -- a bound shrinking faster than the noise --
+   more samples showed more speckle (user-reported 2026-10-20;
+   `more_samples_are_never_speckier`).
+
+Measured (path-tracing-research.md, the `denoise_quality` gate: three
+solids matte, glossy and metal at 4, 16 and 64 samples, against 4096
+unclamped samples): the denoised error averaged 0.866 of the raw, from
+0.986 before the bound and the neighbourhood clamp; on a fractal solid
+most of what remains is the colouring's sub-pixel variation, which no
+filter of the light reaches.
+
+**Specular and diffuse apart** (D5), where the material has a coat or a
+metal: a sample's specular share -- its first surface's coat and metal
+terms of the direct light, and all a first bounce brings back when it
+took the coat's lobe (`pt_spec`; the Blinn-Phong highlight stays with the
+diffuse, being no lobe a bounce samples) -- is gathered with the guides,
+each share with its own luminance moment. `prepare` demodulates both by
+the same albedo, `atrous` filters each by its own noise, the specular's
+passes reaching by the roughness (none below 0.1, as the diffuse's from
+0.5) but whole while samples are few (at least `4 / n`), and `finish`
+adds them back; the neighbourhood clamp and the confidence bound act on
+the whole. A polished reflection is the view's own, not its neighbours':
+filtered with the diffuse it blotched. Measured: never more than 2.3%
+worse than not splitting, up to 7.7% better, the glossy Mandelbulb's
+coarse error 14-15% lower at 16 and 64 samples; a matte surface is the
+same picture. The guides are 48 bytes a pixel (`GUIDE_BYTES`); the two
+specular lights are textures of their own, made only when split.
 
 Two lights may differ by four of the noise's standard deviations and
 still be averaged (`DENOISE_SIGMA`). Past 8 samples (`DENOISE_FULL`) that
@@ -367,7 +795,10 @@ The guides are gathered with the samples:
   the coat, plus the coat's own share;
 - the direct light the albedo does not shape (a highlight, a coat's
   glint), taken as white. Divided by a saturated albedo's near-zero
-  channels it came back as bands of the wrong colour.
+  channels it came back as bands of the wrong colour. Its share is
+  reckoned from the light's centre, the lobe widened by the light's
+  size, with no shadow ray: the same every sample, so the guide holds no
+  noise of its own.
 
 The filter costs about a sample of a terrain at 1080p, so it runs on a
 schedule: every count up to 4, then whenever the count has grown by a
@@ -461,9 +892,23 @@ A smooth surface needs a different level 0 (`BUILD_WGSL`):
   that is not linear. The map is monotone and the spline a non-negative
   weighting of its 4x4 real samples, so their extreme bounds it.
 
-`hf_bound` maps a node's extreme to a height. An inverted map is not
-increasing, so its bound is the relief's top. That stays tight, because
-an inverted terrain stands near its top almost everywhere.
+**Which extreme** a node keeps is the raw value the map takes highest.
+For a tile or a simulation's heights that is the maximum. An escape
+terrain's sections rank their values by height (`rank` in the build):
+- the plateau's sentinel first;
+- then the land, in the map's direction: a distance falls as the raw
+  value rises, a count or a relief rises, and **Invert** turns each the
+  other way;
+- then a hole's sentinel;
+- a lake's last, so the land round a lake still bounds its block.
+
+`hf_bound` is the kept value's height. Turning Invert or the smooth
+surface on or off builds every section's mips again and re-renders
+none. Inverted terrains used to keep the plain map's extreme and bound
+every node by the relief's top instead. Below that top the walk could
+never skip a node, so it marched cell by cell, many times the steps,
+slow enough to lose the device and restart over and over
+(`an_inverted_terrain_walks_as_fast_as_a_plain_one`).
 
 ### The walk
 
@@ -561,6 +1006,47 @@ Their raw values sort so that a mipmap's extreme still bounds the highest
 point. For a distance the plateau is −1e30, not the set's own 0, so an
 inverted map can tell it from land at distance 0 and leave it on top.
 
+### The surface texture
+
+The escape relief's texture (`EscapeShading`: Grain, Paper, Rock or the
+simulation texture, its strength and scale, and Where) is bumped into
+an escape terrain's surface: the shading normal tilts, the geometry
+does not ([surface-textures.md](../projects/surface-textures.md)). A
+simulation's terrain has none. A terrain's is drawn in the Lighting &
+Material panel's Surface section, a plane's relief's in the Escape
+panel.
+- **Mapping:** triplanar. Each of the three axis projections is
+  evaluated where its weight (|n|⁴, normalised) counts, its gradient
+  lifted into the world.
+- **Anchored to the plane:** octave *k* has wavelength 2^*k* of the
+  plane. Its phase is the world's origin (the eye's ground point) in its
+  cells, mod 1024: the anchor's exact bits (`FixedPoint::bits_mod`)
+  plus the eye's offset in f64 (`footprint::surface_texture`). A
+  pan, a turn or an anchor change keeps every point's texture;
+  heights need no phase.
+- **Its size:** `texture_scale` pixels of a 1080-line view at the
+  target. As the view zooms, the kind's octave window slides over the
+  fixed octaves (`kind_window`: Grain 1 octave, Paper 3, Rock 4, with a
+  fractal falloff), so the texture keeps its size on screen and never
+  steps.
+- **Filtered:** an octave fades out between four and two pixel
+  footprints a wavelength (the relight's and the path tracer's `foot`).
+  The simulation texture is copied from the section renderer's on the
+  GPU, with a mip chain, and sampled at the footprint's level.
+- **Masked** by the true normal's slope (Where).
+- **The bump:** the surface gradient, scaled so the tilt does not change
+  with the scale (`SURFACE_BUMP`).
+- **Lit tier:** the relight bumps the normal it unpacks. A light the
+  true surface faces away from stays dark, since the walk's shadow test
+  was the true surface's. The ambient takes the sky the tilted normal
+  faces over the true one's, so a face in shade shows the texture too.
+- **Path tracer:** `pt_surface` bumps the normal before the two-sided
+  flip. `PtHit::ng` keeps the true normal: the next ray leaves along it,
+  and no light or bounce passes under it.
+- **Cost:** a texture edit relights and re-walks nothing (not in
+  `walk_key`); `picture_key` ignores it, so no section re-renders.
+  Nothing at all with the kind None.
+
 ### Relight, albedo and fog
 
 **The albedo** is filtered over a ray's share of a pixel at the hit
@@ -593,7 +1079,7 @@ Lit tier:
   through the same ground (`hf_trace` with a softness). The ray measures
   how close it passed the surface relative to its distance, a penumbra
   as mode D's shadow rays measure one: **Shadow sharpness** (default 12)
-  is the inverse of the light's size. **Shadows** (default 0.7) is how
+  is the inverse of the light's size. **Shadows** (default 0.98; 0.7 before config v5) is how
   dark a shadow goes; 0 traces no shadow rays. The ray starts off the
   surface by a bias that grows with the distance from the origin and the
   eye, or the surface shadows itself in speckles.
@@ -754,6 +1240,28 @@ camera, light or path-tracer edit re-renders no section.
 3. **Past the cap**, coarsen: the texel target is multiplied by 1.5 until
    the set fits.
 
+**The nearest ground in view** floors every distance in step 2. A box
+knows only the relief's slab. With the eye inside the slab (a low
+**Target lift**), every box under the eye contains the eye, at distance
+0, and split to the finest level. That column lies under and behind the
+camera where no pixel looks, and on a measured view it was 50 of 59
+sections. The viewport fills sections nearest first, so the ground in
+view waited behind the column, coarse, and started over with every turn.
+- **The probe:** `TerrainRenderer::probe_nearest` traces one primary ray
+  per 8x8 block, each block's last row and column, so the frame's bottom
+  row is included. It reads the nearest hit back without waiting. It
+  runs whenever what the walk reads changes.
+- **The floor** (`next_near_floor`) is half that hit, rounded down to a
+  power of two. It falls at once and rises only once the ground has drawn
+  back fourfold, so a wavering measure cannot flip the sections between
+  two splits.
+- **Settling:** `update` stays busy while a probe is in flight, so an
+  export's loop settles on a ground the floor has seen. On the desktop
+  that loop waits on the GPU between updates, so the sequence is the
+  same every time. A browser's export loop never yields to the event
+  loop a read lands on, so there an export settles without the floor,
+  as before it, and the viewport's frames apply it.
+
 The result is ordered roots first, then nearest first. The planner works
 in 3D, from the eye, and culls by the frustum, so a lifted target or an
 eye looking up needs nothing extra.
@@ -817,6 +1325,14 @@ A terrain needs at least 64 texture array layers on the device
   toward the set.
 - **Relief field:** the 2D relief's own height source, the field chosen
   in the Escape panel's relief settings; linear by default.
+- **Paper creases:** a folding formula's paper (Origami's; see
+  [ESCAPE.md](ESCAPE.md), relief shading), whatever the 2D relief draws,
+  linear by default. A crease's slope runs out to one paper size (the
+  line spread) and then levels off (`CREASE_TERRAIN_REACH`). Unbounded,
+  the rise out to the horizon would set the measured range and flatten
+  every crease near the camera. The sheet is continuous: every crease
+  keeps its fold's direction along its whole length. Offered only for
+  formulas with creases.
 
 **Interior** (`TerrainInterior`): **Plateau** (flat at the top, in the
 interior's colour), **Hole** (transparent, sunk to the floor) or **Lake**
@@ -850,8 +1366,21 @@ measures its own finer sections.
 
 The camera's target still rests on the relief's top, so zooming in on a
 locked terrain approaches a point at the peaks' altitude: a valley falls
-away, and past the lock out of reach (Target lift brings the camera
-down).
+away, and past the lock out of reach. The top is `height` lock widths,
+which is 2^(zoom − lock_zoom) times that in current widths. Four zooms
+past a lock at height 0.3, it stands about 5 view widths above the plain.
+Ground that far below the eye is in the haze, which thickens from about
+a third of `far` (8 widths) and ends at `far`. So the picture darkens
+as you zoom and then goes to the background. A relief whose ground lies
+mostly below its top shows this soonest; Origami's paper creases are
+such a relief.
+
+Ways down, by decision (2026-10-12) rather than a camera that follows
+the land:
+- type a negative **Target lift**, about −0.3 × 2^(zoom − lock_zoom)
+  to reach the plain;
+- **Lock here** at the new zoom;
+- or unlock.
 
 ### Atmosphere
 
@@ -874,14 +1403,14 @@ animatable (`Escape.Terrain.*`):
 | `de_width` | 1/150 | Flank width (Escape, distance only) |
 | `curve`, `invert` | Auto, off | Curve, Invert (Escape) |
 | `locked`, `lock_zoom`, `lock_range` | off | Lock height at this zoom, Lock here, Range (Escape) |
-| `interior`, `lake_tint`, `lake_roughness` | Plateau, (0.02, 0.05, 0.07), 0.05 | Interior, Lake tint, Lake roughness (Escape) |
+| `interior`, `lake_tint`, `lake_roughness` | Plateau, (0.02, 0.05, 0.07), 0.05 | Interior (Escape); Lake tint, Lake roughness (Lighting & Material: Surface) |
 | `detail` | 1 | Detail (Escape) |
 | `prefilter` | 1 | Prefilter: Off, 2x2, 3x3 (Escape) |
 | `smooth` | off | Smooth surface (Escape) |
 | `softness` | 0 | Softness (Escape) |
 | `far`, `haze` | 8, 1 | Far, Haze (View: Atmosphere) |
-| `tier` | Auto | Rendering (View: Lighting & Material) |
-| `shadow`, `shadow_sharpness`, `occlusion` | 0.7, 12, 0.006 | Shadows, Shadow sharpness, Occlusion reach (View) |
+| `tier` | Auto | Render tier (Lighting & Material: Rendering) |
+| `shadow`, `shadow_sharpness`, `occlusion` | 0.98, 12, 0.006 | Shadows, Shadow sharpness (Lighting & Material: Shadows); Occlusion reach (Lighting & Material: Shading) |
 | `target_lift` | 0 | Target lift (View: 3D Camera) |
 
 The camera angles are mode D's (`cam_pitch`, `cam_yaw`, `cam_bank`,
@@ -951,9 +1480,9 @@ path tracer reads `sim.terrain.path` (`Sim.Path.*`).
 
 `SimTerrainConfig` (`sim.terrain`, `Sim.Terrain.*`): `enabled`, `layer`,
 `channel`, `softness` (1), `height` (0.1) and `tiling` in the Simulation
-panel; `far` (8) and `haze` (1), `tier` (Auto), `shadow` (0.7),
-`shadow_sharpness` (12), `occlusion` (0.02), the camera and the path
-block in the View panel.
+panel; `far` (8) and `haze` (1), `tier` (Auto), `shadow` (0.98),
+`shadow_sharpness` (12), `occlusion` (0.02) and the path block in the
+Lighting & Material panel; the camera in the View panel.
 
 ---
 

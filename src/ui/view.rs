@@ -11,6 +11,7 @@ pub fn render_view_content(
     fly_mode_toggle_requested: &mut bool,
     deep_zoom: &super::DeepZoom,
     escape_aa: Option<super::EscapeAa>,
+    open_lighting_panel: &mut bool,
 ) {
     // Clone config to avoid borrow conflicts
     let config = config_manager.active_config().clone();
@@ -60,8 +61,9 @@ pub fn render_view_content(
         _ => {}
     }
 
-    // ── Every 3D view's: what lies between the eye and the picture, its
-    // focus, and how it is lit and what it is made of.
+    // ── Every 3D view's: what lies between the eye and the picture, and
+    // its focus. How it is lit and what it is made of is the Lighting &
+    // Material panel's (3d-look-and-tools P3).
     if kind.is_3d() {
         egui::CollapsingHeader::new(t!("view.atmosphere").as_ref())
             .default_open(false)
@@ -69,9 +71,13 @@ pub fn render_view_content(
         egui::CollapsingHeader::new(t!("view.depth_of_field").as_ref())
             .default_open(false)
             .show(ui, |ui| super::view_controls::depth_of_field_3d(ui, config_manager));
-        egui::CollapsingHeader::new(t!("view.lighting_material").as_ref())
-            .default_open(false)
-            .show(ui, |ui| super::view_controls::lighting_3d(ui, config_manager));
+        if ui
+            .button(t!("view.open_lighting_panel").as_ref())
+            .on_hover_text(t!("view.open_lighting_panel_tip"))
+            .clicked()
+        {
+            *open_lighting_panel = true;
+        }
     }
     if !matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d) {
         return;
@@ -264,6 +270,13 @@ mod tests {
         let mut lit = config.clone();
         lit.solid_shading.shading_strength = 0.5;
         lit.solid_shading.lights[1].enabled = true;
+        // A light of each kind (lights-in-the-fractal, L6): the kind
+        // picker and each kind's controls, offered or said to be off.
+        lit.solid_shading.lights[2].enabled = true;
+        lit.solid_shading.lights[2].kind = crate::config::LightKind::Point;
+        lit.solid_shading.lights[2].position = [0.1, 0.2, 0.3];
+        lit.solid_shading.lights[3].enabled = true;
+        lit.solid_shading.lights[3].kind = crate::config::LightKind::Headlamp;
         lit.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
         lit.escape.terrain.tier = crate::config::escape::RenderTier::PathTraced;
         lit.sim.terrain.tier = crate::config::escape::RenderTier::PathTraced;
@@ -276,17 +289,112 @@ mod tests {
             for _ in 0..2 {
                 let _ = ctx.run_ui(Default::default(), |ui| {
                     egui::CentralPanel::default().show_inside(ui, |ui| {
-                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None);
+                        let mut open = false;
+                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None, &mut open);
                         ui.separator();
                         use super::super::view_controls as vc;
                         vc::atmosphere_3d(ui, &mut manager);
                         vc::depth_of_field_3d(ui, &mut manager);
-                        vc::lighting_3d(ui, &mut manager);
-                        super::super::solid_panel::render_solid_panel_content(ui, &mut manager);
+                        super::super::lighting_panel::render_lighting_panel_content(ui, &mut manager);
                     });
                 });
             }
         }
+    }
+
+    /// The leaves of a config's JSON that differ between two configs, by
+    /// their dotted paths.
+    fn differences(a: &serde_json::Value, b: &serde_json::Value, at: &str, out: &mut Vec<String>) {
+        match (a, b) {
+            (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+                for k in x.keys().chain(y.keys().filter(|k| !x.contains_key(*k))) {
+                    let n = serde_json::Value::Null;
+                    differences(x.get(k).unwrap_or(&n), y.get(k).unwrap_or(&n), &format!("{at}.{k}"), out);
+                }
+            }
+            (serde_json::Value::Array(x), serde_json::Value::Array(y)) if x.len() == y.len() => {
+                for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                    differences(p, q, &format!("{at}[{i}]"), out);
+                }
+            }
+            _ if a != b => out.push(format!("{at}: {a} -> {b}")),
+            _ => {}
+        }
+    }
+
+    /// Showing the View panel writes nothing (user-reported 2026-10-21:
+    /// switching to it redrew 3D scenes -- its field of view slider
+    /// rounded the default 40.107 degrees to the 40.1 it shows), nor does
+    /// the Lighting & Material panel: every bundled preset in a 3D view,
+    /// each view's default, and a solid under a sky whose horizon and
+    /// stars are past their sliders' ranges, drawn for two frames -- no
+    /// change to the config, nothing for the renderer to do.
+    #[test]
+    fn showing_the_view_panel_writes_nothing() {
+        use crate::scene::transforms::RenderMode;
+        let mut configs: Vec<(String, FractalConfig)> = crate::resources::load_presets_with_fallback()
+            .into_iter()
+            .filter(|c| c.render_mode != RenderMode::TwoD)
+            .map(|c| (c.flame.name.clone(), c))
+            .collect();
+        let mut d = FractalConfig::default();
+        d.render_mode = RenderMode::ThreeD;
+        configs.push(("default 3D".into(), d));
+        #[cfg(feature = "engine-escape")]
+        {
+            let mut e = FractalConfig::default();
+            e.render_mode = RenderMode::Escape;
+            e.escape.formula = "quaternion_julia_solid".to_string();
+            configs.push(("default solid".into(), e.clone()));
+            e.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
+            e.escape.path.environment_map = "sunflowers".to_string();
+            e.escape.path.environment_horizon = 60.0;
+            e.escape.path.environment_stars = 8.0;
+            configs.push(("solid under a sky past its sliders".into(), e));
+            #[cfg(feature = "terrain")]
+            {
+                let mut t = FractalConfig::default();
+                t.render_mode = RenderMode::Escape;
+                t.escape.terrain.enabled = true;
+                configs.push(("default terrain".into(), t));
+            }
+        }
+        #[cfg(feature = "engine-sim")]
+        {
+            let mut s = FractalConfig::default();
+            s.render_mode = RenderMode::Simulation;
+            s.sim.terrain.enabled = true;
+            configs.push(("default simulation terrain".into(), s));
+        }
+        let mut offenders = Vec::new();
+        for (name, config) in configs {
+            let before = serde_json::to_value(&config).expect("serializes");
+            let ctx = egui::Context::default();
+            let mut manager = ConfigManager::new(config);
+            manager.clear_pending_actions();
+            let flame = manager.active_config().flame.clone();
+            let deep = super::super::DeepZoom::default();
+            let mut toggle = false;
+            for _ in 0..2 {
+                let _ = ctx.run_ui(Default::default(), |ui| {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        let mut open = false;
+                        render_view_content(ui, &mut manager, &flame, false, &mut toggle, &deep, None, &mut open);
+                        super::super::lighting_panel::render_lighting_panel_content(ui, &mut manager);
+                    });
+                });
+            }
+            let after = serde_json::to_value(manager.active_config()).expect("serializes");
+            let mut diff = Vec::new();
+            differences(&before, &after, "", &mut diff);
+            let acted = format!("{:?}", manager.get_pending_actions()) != format!("{:?}", crate::config::UpdateAction::none());
+            if !diff.is_empty() || acted || manager.history_len() > 0 {
+                offenders.push(format!("{name}: {diff:?}, history {}, actions {:?}", manager.history_len(), manager.get_pending_actions()));
+            }
+        }
+        assert!(offenders.is_empty(), "showing the View and Lighting panels wrote:
+{}", offenders.join("
+"));
     }
 
     #[test]

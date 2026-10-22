@@ -848,7 +848,7 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a shadowed surface goes. 0 skips the shadow march \
@@ -915,6 +915,27 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
                       there moved 94. The criterion above shows the measured \
                       value; set it here to hold it through an animation.",
             choices: &[],
+        },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first inverse maps the orbit trap and the escape level \
+                      read. The surface is drawn a pixel from the set, and past a few levels \
+                      that pixel decides where the walk escapes, so deeper colours change with \
+                      the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "address_start",
+            display_name: "Address Start",
+            default: 0.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Which inverse map the branch address starts from. From the second, every                       copy of the set's first pieces is coloured alike (the sponge's twenty                       cubes, the tetrahedron's four); from the third, their pieces too.",
+            choices: &["First map", "Second map", "Third map"],
         },
     ],
     wgsl: r#"
@@ -1463,9 +1484,92 @@ fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
     return ifs_walk3(delta, eps).distance;
 }
 
+// The colourings' walk (the KIFS plan, A5, "Colouring solids"): the
+// orbit trap and the escape level from the start of the inverse walk,
+// not from where it escapes. The march stops a pixel from the set, and
+// that pixel decides the walk's tail -- the level it escapes at, the
+// point it escapes to -- so colours read there followed the camera.
+//
+// It walks from the sample's own point, never from a link: a sample
+// near the target starts the main walk several levels down, and a
+// window counted from there would part neighbouring pixels along the
+// links' edges. Link 0 is the sample's own point (with the final
+// transform undone), so it starts there. At each level it takes the
+// child the walk's ranking puts first -- the nearest the centre, or by
+// the weighted key, whose parent factor is the same for every sibling
+// -- which is the main walk's own path for a beam of one (the chain's
+// prefix is, by its construction, the path every sample it carries
+// agrees on). The trap is the closest approach to the ball's centre
+// within `colour_depth` levels; the level the band of that approach.
+fn ifs_colour_walk3(delta: vec3<f32>, res: ptr<function, IfsResult>) {
+    let c = ifs_ball_centre();
+    let radius = ifs_radius();
+    let n = ifs_count();
+    if (n == 0u) {
+        return;
+    }
+    let depth = u32(clamp(round(fparam(8u)), 1.0, 12.0));
+    var q = delta + ifs_target_offset() + c;
+    if (ifs_link_levels() > 0u) {
+        q = ifs_link_point(ifs_links[0u], delta);
+    }
+    var w = ifs_slice_w();
+    var last = IFS_NO_LAST;
+    var trap_r = 1.0e30;
+    var trap_k = 0u;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    for (var k = 1u; k <= depth; k = k + 1u) {
+        var pick = n;
+        var pick_key = 0.0;
+        var pick_s = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        for (var i = 0u; i < n; i = i + 1u) {
+            if (!ifs_admits(i, last)) {
+                continue;
+            }
+            let s = ifs_inv_step3(i, q, w);
+            var key = ifs_radius4(s.xyz, s.w, c);
+            if (ifs_weighted_key()) {
+                key = key * ifs_inv_sigma3(i, q, w);
+            }
+            if (!(key <= 1e37)) {
+                key = 1e38;
+            }
+            if (pick == n || key < pick_key) {
+                pick = i;
+                pick_key = key;
+                pick_s = s;
+            }
+        }
+        if (pick == n) {
+            break;
+        }
+        q = pick_s.xyz;
+        w = pick_s.w;
+        last = pick;
+        let r = ifs_radius4(q, w, c);
+        if (!(r <= 1e37)) {
+            break;
+        }
+        // What the trap measures: the point, through the Orbit
+        // transformations when there are any (3d-look-and-tools P5).
+        let qt = ifs_trap_point(q);
+        let rt = ifs_radius4(qt, w, c);
+        if (rt < trap_r) {
+            trap_r = rt;
+            trap_k = k;
+            trap_p = qt.xy;
+        }
+        if (r > radius) {
+            break;
+        }
+    }
+    (*res).point = trap_p;
+    (*res).level = f32(trap_k) + clamp(trap_r / radius, 0.0, 0.999);
+}
+
 // What the marcher colours with, at the offset it stopped at. Full
-// depth: the colourings want the level and the address, which are only
-// known once a candidate escapes.
+// depth for the address, which is only known once a candidate escapes;
+// the trap and the level from the colourings' walk above.
 //
 // The march stops on the surface's OUTSIDE, within its tolerance. Where
 // the attractor touches its bounding sphere -- a Menger sponge's corners
@@ -1492,7 +1596,18 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
             d = delta - rel * (1.0 - limit / len);
         }
     }
-    return ifs_walk3(d, 0.0);
+    var res = ifs_walk3(d, 0.0);
+    ifs_colour_walk3(d, &res);
+    // The address from a later map: its first digits shifted out, so
+    // every copy of a piece reads alike. The last branch at every level
+    // rounds the address up to 1.0 (the address colouring's note), which
+    // shifted is 0, the palette's other end: it stays at the end.
+    let start = round(clamp(fparam(9u), 0.0, 2.0));
+    if (start > 0.5) {
+        let shifted = res.address * pow(f32(max(ifs_count(), 1u)), start);
+        res.address = select(fract(shifted), 0.99999994, res.address >= 0.99999994);
+    }
+    return res;
 }
 "#,
 };
@@ -1735,7 +1850,7 @@ fn ifs_color(res: IfsResult) -> IfsShade {
 
 /// Ordered mode-D registry. **Append-only** — same contract as
 /// [`super::FORMULAS`].
-pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA];
+pub static IFS_DEFS: &[&IfsDef] = &[&IFS_FLAME, &IFS_FLAME_3D, &IFS_QUATERNION_JULIA, &IFS_KIFS, &IFS_MANDELBOX, &IFS_MANDELBULB];
 
 /// A quaternion Julia set as a solid, needing no flame (plan §8.11,
 /// step 1): `q ↦ qⁿ + c` in ℍ on a 3D slice, by the escape-time
@@ -1789,7 +1904,7 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
         EscapeParamDef {
             name: "shadow",
             display_name: "Shadows",
-            default: 0.7,
+            default: 0.98,
             min: 0.0,
             max: 1.0,
             tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
@@ -1899,6 +2014,19 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
                       through the 4D solid.",
             choices: &[],
         },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach, the level's bands and the address's angle. The \
+                      surface is drawn a pixel from the set, and past a few iterations that \
+                      pixel decides the orbit, so deeper colours change with the camera. \
+                      Raise it when zoomed in.",
+            choices: &[],
+        },
     ],
     wgsl: r#"
 // The quaternion as (scalar, i, j, k) in a vec4's (x, y, z, w). A
@@ -1952,10 +2080,25 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
 
     // dq is |dq_k / dq_0|, a scalar because the quaternion norm is
     // multiplicative: each step multiplies it by n |q|^(n-1) (Q1).
+    // The colourings read the start of the orbit (the KIFS's note):
+    // the closest approach to the origin within the first `depth`
+    // iterations, and the orbit's angle at `depth`, both in terms the
+    // set's own symmetry keeps -- rotations about the axis of c's
+    // vector part commute with q -> q^n + c, so what is kept is the
+    // scalar part, the part along that axis and the rest's length.
+    let depth = u32(clamp(round(fparam(16u)), 1.0, 12.0));
+    let vlen = length(c.yzw);
+    let axis_v = select(vec3<f32>(1.0, 0.0, 0.0), c.yzw / vlen, vlen > 1e-12);
+    var trap_r = 1.0e30;
+    var trap_k = 0u;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var address = 0.0;
+    var place = 0.5;
+    var spread = 1.0;
+
     var dq = 1.0;
     var mag = length(q);
     var escape_k = -1.0;
-    var escape_mag = 0.0;
     var k = 0u;
     loop {
         if (k >= levels || mag > 1.0e4) {
@@ -1965,28 +2108,1012 @@ fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
         q = qj_pow(q, n) + c;
         mag = length(q);
         k = k + 1u;
+        if (k <= depth) {
+            spread = dq;
+            let along = dot(q.yzw, axis_v);
+            // What the trap measures: the vector part through the Orbit
+            // transformations when there are any (3d-look-and-tools P5).
+            let qt = vec4<f32>(q.x, ifs_trap_point(q.yzw));
+            let mag_t = length(qt);
+            if (mag_t < trap_r) {
+                trap_r = mag_t;
+                trap_k = k;
+                trap_p = vec2<f32>(qt.x, dot(qt.yzw, axis_v));
+            }
+            // The address: a binary digit each iteration, which side of
+            // the plane across the axis the orbit falls on (the binary
+            // decomposition, in terms the symmetry keeps); at `depth`,
+            // the vector part's angle from the axis fills the rest.
+            let angle = ff_atan2(length(q.yzw - along * axis_v), along) * 0.31830988618;
+            if (k < depth) {
+                address = address + select(0.0, place, along < 0.0);
+                place = place * 0.5;
+            } else {
+                address = address + angle * place;
+            }
+        }
         if (escape_k < 0.0 && mag > bail) {
             escape_k = f32(k);
-            escape_mag = mag;
         }
     }
+    res.point = trap_p;
+    res.address = address;
+    // The level: how much the first `depth` iterations stretch the
+    // neighbourhood, log2 of the running derivative there -- the
+    // surface's own scale, where the escape count was the pixel's.
+    res.level = log2(max(spread, 1.0));
 
     if (escape_k >= 0.0) {
         res.escaped = 1u;
         // Hart's estimate, with his half for the march's sake.
         res.distance = 0.5 * mag * log(mag) / max(dq, 1e-30);
-        // The smooth escape count, rising toward the set.
-        let smooth_k = escape_k + 1.0 - log(max(log(escape_mag), 1e-30) / log(bail)) / log(n);
-        res.level = max(f32(levels) - smooth_k, 0.0);
         res.depth = u32(max(f32(levels) - escape_k, 0.0));
-        // The binary decomposition: the escaped quaternion's azimuth
-        // in the (i, j) plane.
-        res.address = fract(ff_atan2(q.z, q.y) / 6.28318530718 + 0.5);
-        res.point = q.yz;
     } else {
-        res.level = f32(levels);
         res.depth = levels;
-        res.point = q.yz;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
+/// A kaleidoscopic IFS as a solid, needing no flame (the KIFS plan,
+/// [docs/archive/projects/escape-kifs-and-variations.md] A1): Knighty's fold
+/// fractals (Fractal Forums, 2010), each iteration a rotation, a fold of
+/// space into one piece of it, a rotation and a scaling about the
+/// offset, `z = s z - o (s - 1)`. The folds follow Syntopia's
+/// "Distance Estimated 3D Fractals (III): Folding Space" (2011): the
+/// Sierpinski tetrahedron's plane folds, the cubic and octahedral
+/// mirrors, and the Menger sponge's correction.
+///
+/// The distance is `(|z_n| - |o|) s^-n` once `z` passes `|o|`: every
+/// fold and rotation is 1-Lipschitz and fixes the origin, so the set
+/// lies within `|o|` and the estimate is a lower bound, as a march
+/// wants (the sponge's correction is a conditional translation, for
+/// which that holds in practice, not by proof). The ball is `|o|` at
+/// the origin (`standalone_radius`). Slots 0-6 are the solid
+/// template's, as the quaternion Julia's.
+///
+/// [docs/archive/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+pub static IFS_KIFS: IfsDef = IfsDef {
+    name: "kifs_solid",
+    display_name: "KIFS (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_level",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many folds and scalings before calling the point part of the set. Each one \
+                      resolves the set a scale finer: past about a dozen the detail is below a pixel.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: a fold has one orbit. Kept so the march, shadow and occlusion slots \
+                      line up with the flame solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 128.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.98,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here: a KIFS is three-dimensional. Kept for the slot.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "fold",
+            display_name: "Fold",
+            default: 3.0,
+            min: 0.0,
+            max: 5.0,
+            tooltip: "How each iteration folds space into one piece of it: the tetrahedron's three plane \
+                      folds (the Sierpinski tetrahedron), each axis's mirror (cubic), the mirrors and \
+                      the diagonal ones (octahedral), those with the sponge's correction (Menger), or \
+                      the mirrors of the icosahedron or the dodecahedron (golden-ratio planes).",
+            choices: &["Tetrahedral", "Cubic", "Octahedral", "Menger", "Icosahedral", "Dodecahedral"],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 3.0,
+            min: 1.1,
+            max: 4.0,
+            tooltip: "How much each iteration enlarges space about the offset. 2 for the tetrahedron, 3 \
+                      for the sponge; between, the pieces overlap or part.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset_x",
+            display_name: "Offset X",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The point each iteration scales about: the set's corner.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset_y",
+            display_name: "Offset Y",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The offset's y.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "offset_z",
+            display_name: "Offset Z",
+            default: 1.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The offset's z.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot1_x",
+            display_name: "Pre-Fold Rotation X",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about x before each fold (Knighty's rotation): small angles twist the set \
+                      into new shapes.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot1_y",
+            display_name: "Pre-Fold Rotation Y",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about y before each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot1_z",
+            display_name: "Pre-Fold Rotation Z",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about z before each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot2_x",
+            display_name: "Post-Fold Rotation X",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about x after each fold, before the scaling.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot2_y",
+            display_name: "Post-Fold Rotation Y",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about y after each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "rot2_z",
+            display_name: "Post-Fold Rotation Z",
+            default: 0.0,
+            min: -180.0,
+            max: 180.0,
+            tooltip: "Degrees about z after each fold.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach and the level's bands. The surface is drawn a pixel \
+                      from the set, and past a few iterations that pixel decides the orbit, so \
+                      deeper colours change with the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "address_symmetry",
+            display_name: "Address Symmetry",
+            default: 1.0,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Which folds the branch address starts from. Mirror images share their \
+                      orbit after the first fold, so starting after it colours every mirror \
+                      copy alike; after the second, each piece's copies too.",
+            choices: &["Off", "Whole object", "Each piece"],
+        },
+    ],
+    wgsl: r#"
+// A rotation by Euler angles in degrees, x first, then y, then z
+// (`kifs::rotation` on the CPU is the same).
+fn kifs_rotation(deg: vec3<f32>) -> mat3x3<f32> {
+    let r = deg * 0.017453292519943295;
+    let cx = cos(r.x);
+    let sx = sin(r.x);
+    let cy = cos(r.y);
+    let sy = sin(r.y);
+    let cz = cos(r.z);
+    let sz = sin(r.z);
+    let rx = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, cx, sx), vec3<f32>(0.0, -sx, cx));
+    let ry = mat3x3<f32>(vec3<f32>(cy, 0.0, -sy), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(sy, 0.0, cy));
+    let rz = mat3x3<f32>(vec3<f32>(cz, sz, 0.0), vec3<f32>(-sz, cz, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    return rz * ry * rx;
+}
+
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 64.0));
+    let fold = u32(clamp(round(fparam(7u)), 0.0, 5.0));
+    // The icosahedral and dodecahedral mirrors (the KIFS plan, A4), as
+    // Syntopia's Fragmentarium examples Icosahedron.frag and
+    // Dodecahedron.frag (2010) write them after Knighty's kaleidoscopic
+    // IFS, with the golden ratio exact where their slider holds 1.618.
+    let phi = 1.618033988749895;
+    let ico_n1 = normalize(vec3<f32>(-phi, phi - 1.0, 1.0));
+    let ico_n2 = normalize(vec3<f32>(1.0, -phi, phi + 1.0));
+    let ico_n3 = vec3<f32>(0.0, 0.0, -1.0);
+    let dod_n1 = normalize(vec3<f32>(-1.0, phi - 1.0, 1.0 / (phi - 1.0)));
+    let dod_n2 = normalize(vec3<f32>(phi - 1.0, 1.0 / (phi - 1.0), -1.0));
+    let dod_n3 = normalize(vec3<f32>(1.0 / (phi - 1.0), -1.0, phi - 1.0));
+    let s = clamp(fparam(8u), 1.1, 4.0);
+    let o = vec3<f32>(fparam(9u), fparam(10u), fparam(11u));
+    let a1 = vec3<f32>(fparam(12u), fparam(13u), fparam(14u));
+    let a2 = vec3<f32>(fparam(15u), fparam(16u), fparam(17u));
+    let turn1 = any(a1 != vec3<f32>(0.0));
+    let turn2 = any(a2 != vec3<f32>(0.0));
+    let r1 = kifs_rotation(a1);
+    let r2 = kifs_rotation(a2);
+    // Every fold and rotation is an isometry fixing the origin, so a
+    // point past |o| escapes and the set lies within it.
+    let radius = max(length(o), 1.0e-3);
+    // The colourings read the start of the orbit: the surface is drawn
+    // a pixel from the set, and that pixel decides the orbit's tail
+    // (where and when it escapes), so a colour from the tail changes
+    // with the camera. The closest approach to the origin within the
+    // first `depth` iterations is the orbit trap; the iteration it
+    // falls on, the level's band. The address starts after `skip`
+    // folds: mirror images share their orbit after the first.
+    let depth = u32(clamp(round(fparam(18u)), 1.0, 12.0));
+    let skip = u32(clamp(round(fparam(19u)), 0.0, 2.0));
+    var trap_r = 1.0e30;
+    var trap_k = 0u;
+    var trap_p = vec2<f32>(0.0, 0.0);
+
+    var z = delta + ifs_target_offset();
+    var k = 0u;
+    var escape_k = -1;
+    var address = 0.0;
+    var place = 0.125;
+    loop {
+        if (k >= levels) {
+            break;
+        }
+        if (turn1) {
+            z = r1 * z;
+        }
+        // The fold, and which of its three mirrors fired: a base-8
+        // digit of the address.
+        var digit = 0u;
+        if (fold == 4u) {
+            // The icosahedral fold: once, into the group's fundamental
+            // domain (abs, then n1, n2, n3, n2), then each iteration abs
+            // and n1 -- each mirror reflecting a point on its positive
+            // side. The digit: how many signs abs flipped, and n1.
+            if (k == 0u) {
+                z = abs(z);
+                z = z - 2.0 * max(dot(z, ico_n1), 0.0) * ico_n1;
+                z = z - 2.0 * max(dot(z, ico_n2), 0.0) * ico_n2;
+                z = z - 2.0 * max(dot(z, ico_n3), 0.0) * ico_n3;
+                z = z - 2.0 * max(dot(z, ico_n2), 0.0) * ico_n2;
+            }
+            digit = u32(z.x < 0.0) + u32(z.y < 0.0) + u32(z.z < 0.0);
+            z = abs(z);
+            let t = dot(z, ico_n1);
+            if (t > 0.0) {
+                z = z - 2.0 * t * ico_n1;
+                digit = digit + 4u;
+            }
+        } else if (fold == 5u) {
+            // The dodecahedral fold: three passes of its three mirrors,
+            // each reflecting a point on its negative side. The digit:
+            // which mirrors the first pass fired.
+            for (var round_ = 0u; round_ < 3u; round_ = round_ + 1u) {
+                let t1 = dot(z, dod_n1);
+                if (t1 < 0.0) {
+                    z = z - 2.0 * t1 * dod_n1;
+                    digit = digit | select(0u, 1u, round_ == 0u);
+                }
+                let t2 = dot(z, dod_n2);
+                if (t2 < 0.0) {
+                    z = z - 2.0 * t2 * dod_n2;
+                    digit = digit | select(0u, 2u, round_ == 0u);
+                }
+                let t3 = dot(z, dod_n3);
+                if (t3 < 0.0) {
+                    z = z - 2.0 * t3 * dod_n3;
+                    digit = digit | select(0u, 4u, round_ == 0u);
+                }
+            }
+        } else if (fold == 0u) {
+            if (z.x + z.y < 0.0) {
+                z = vec3<f32>(-z.y, -z.x, z.z);
+                digit = digit | 1u;
+            }
+            if (z.x + z.z < 0.0) {
+                z = vec3<f32>(-z.z, z.y, -z.x);
+                digit = digit | 2u;
+            }
+            if (z.y + z.z < 0.0) {
+                z = vec3<f32>(z.x, -z.z, -z.y);
+                digit = digit | 4u;
+            }
+        } else {
+            digit = select(0u, 1u, z.x < 0.0) | select(0u, 2u, z.y < 0.0) | select(0u, 4u, z.z < 0.0);
+            z = abs(z);
+            if (fold >= 2u) {
+                // Descending, by the three diagonal mirrors.
+                if (z.x < z.y) {
+                    z = z.yxz;
+                }
+                if (z.x < z.z) {
+                    z = z.zyx;
+                }
+                if (z.y < z.z) {
+                    z = z.xzy;
+                }
+            }
+        }
+        if (turn2) {
+            z = r2 * z;
+        }
+        z = s * z - o * (s - 1.0);
+        // The sponge: the middle layer's cubes move back up.
+        if (fold == 3u && z.z < -0.5 * o.z * (s - 1.0)) {
+            z.z = z.z + o.z * (s - 1.0);
+        }
+        if (k >= skip && k < skip + 8u) {
+            address = address + f32(digit) * place;
+            place = place * 0.125;
+        }
+        if (k == skip) {
+            res.color = (f32(digit) + 0.5) * 0.125;
+        }
+        k = k + 1u;
+        let r = length(z);
+        // What the trap measures: the iterate, through the Orbit
+        // transformations when there are any (3d-look-and-tools P5).
+        if (k <= depth) {
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {
+                trap_r = rt;
+                trap_k = k;
+                trap_p = zt.xy;
+            }
+        }
+        if (escape_k < 0 && r > radius) {
+            escape_k = i32(k);
+        }
+        // Past the set, a few more for the estimate's sake.
+        if (r > 1.0e3 * radius) {
+            break;
+        }
+    }
+
+    let r = length(z);
+    res.address = address;
+    res.point = trap_p;
+    // The band: the iteration of the closest approach, and how close it
+    // came across it.
+    res.level = f32(trap_k) + clamp(trap_r / radius, 0.0, 0.999);
+    if (escape_k >= 0) {
+        res.escaped = 1u;
+        // A lower bound: each step stretches distances by at most s.
+        res.distance = max(r - radius, 0.0) * pow(s, -f32(k));
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    } else {
+        res.depth = levels;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
+/// The Mandelbox as a solid, needing no flame (the KIFS plan,
+/// [docs/archive/projects/escape-kifs-and-variations.md] A2): Tom Lowe's
+/// (2010) box fold, sphere fold and scaling, `z = s fold(z) + c` with
+/// `c` the point (the Mandelbox) or a constant (its Julia), as Syntopia
+/// writes it in "Distance Estimated 3D Fractals (VI): The Mandelbox"
+/// (2011): the distance `|z| / |dr|`, `dr` the running scale. The ball
+/// is `mandelbox_radius`'s. Coloured by the plan's "Colouring solids".
+///
+/// [docs/archive/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+pub static IFS_MANDELBOX: IfsDef = IfsDef {
+    name: "mandelbox_solid",
+    display_name: "Mandelbox (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_trap",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 16.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many folds and scalings before calling the point part of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: the set has one orbit per point. Kept so the march, shadow and \
+                      occlusion slots line up with the flame solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 192.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.98,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here: the set is three-dimensional. Kept for the slot.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "scale",
+            display_name: "Scale",
+            default: 2.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "How much each iteration enlarges space after the folds. 2 is Lowe's box; \
+                      negative scales (-1.5 is the classic) turn it inside out. Between -1 and 1 \
+                      nothing escapes, so the magnitude is held to 1.05 at least.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "min_radius",
+            display_name: "Minimum Radius",
+            default: 0.5,
+            min: 0.0,
+            max: 2.0,
+            tooltip: "Inside this radius the sphere fold scales linearly; between it and the fixed \
+                      radius, it inverts.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "fixed_radius",
+            display_name: "Fixed Radius",
+            default: 1.0,
+            min: 0.1,
+            max: 3.0,
+            tooltip: "The radius the sphere fold inverts in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "fold_limit",
+            display_name: "Folding Limit",
+            default: 1.0,
+            min: 0.1,
+            max: 3.0,
+            tooltip: "Where the box fold reflects each axis.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Mode",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The Mandelbox adds the point itself each iteration; its Julia adds the \
+                      constant below, the same for every point.",
+            choices: &["Mandelbox", "Julia"],
+        },
+        EscapeParamDef {
+            name: "cx",
+            display_name: "Julia X",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The Julia constant's x.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cy",
+            display_name: "Julia Y",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The Julia constant's y.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cz",
+            display_name: "Julia Z",
+            default: 0.0,
+            min: -4.0,
+            max: 4.0,
+            tooltip: "The Julia constant's z.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach, the level's stretch and the address. The surface is drawn \
+                      a pixel from the set, and past a few iterations that pixel decides the \
+                      orbit, so deeper colours change with the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 64.0));
+    // |s| at least 1.05, its sign kept: between -1 and 1 nothing escapes.
+    let s_in = fparam(7u);
+    let s = select(max(s_in, 1.05), min(s_in, -1.05), s_in < 0.0);
+    let min_r = max(fparam(8u), 0.0);
+    let fixed_r = max(fparam(9u), 0.1);
+    let min_r2 = max(min(min_r * min_r, fixed_r * fixed_r), 1.0e-6);
+    let fixed_r2 = fixed_r * fixed_r;
+    let limit = max(fparam(10u), 0.1);
+    let julia = fparam(11u) > 0.5;
+    let depth = u32(clamp(round(fparam(15u)), 1.0, 12.0));
+    let radius = ifs_radius();
+
+    let p = delta + ifs_target_offset();
+    let c = select(p, vec3<f32>(fparam(12u), fparam(13u), fparam(14u)), julia);
+    var z = p;
+    var dr = 1.0;
+    var r = length(z);
+    // The colourings read the start of the orbit (the KIFS's note): the
+    // closest approach within `depth`, the running scale there, and per
+    // iteration how many axes the box fold reflected and which of the
+    // sphere fold's three cases applied -- both kept by the cube's
+    // symmetries, which commute with the folds.
+    var trap_r = 1.0e30;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var spread = 1.0;
+    var address = 0.0;
+    var place = 1.0 / 12.0;
+    var k = 0u;
+    var escape_k = -1;
+    loop {
+        if (k >= levels || r > 100.0) {
+            break;
+        }
+        let axes = u32(abs(z.x) > limit) + u32(abs(z.y) > limit) + u32(abs(z.z) > limit);
+        z = clamp(z, vec3<f32>(-limit), vec3<f32>(limit)) * 2.0 - z;
+        let r2 = dot(z, z);
+        var case_ = 0u;
+        if (r2 < min_r2) {
+            let t = fixed_r2 / min_r2;
+            z = z * t;
+            dr = dr * t;
+            case_ = 2u;
+        } else if (r2 < fixed_r2) {
+            let t = fixed_r2 / r2;
+            z = z * t;
+            dr = dr * t;
+            case_ = 1u;
+        }
+        z = s * z + c;
+        dr = dr * abs(s) + select(1.0, 0.0, julia);
+        r = length(z);
+        k = k + 1u;
+        if (k <= depth) {
+            spread = dr;
+            // What the trap measures: the iterate, through the Orbit
+            // transformations when there are any (3d-look-and-tools P5).
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {
+                trap_r = rt;
+                // In units of the ball: the box is a dozen across where
+                // the other solids are two, and the trap's palette scale
+                // is per unit.
+                let a = abs(zt) / radius;
+                trap_p = vec2<f32>(max(max(a.x, a.y), a.z), min(min(a.x, a.y), a.z));
+            }
+            address = address + f32(axes * 3u + case_) * place;
+            place = place / 12.0;
+        }
+        if (escape_k < 0 && r > radius) {
+            escape_k = i32(k);
+        }
+    }
+    res.point = trap_p;
+    res.address = address;
+    res.color = address;
+    res.level = log2(max(abs(spread), 1.0));
+    // Lowe's estimate, as Syntopia writes it, at 0.95 of itself: whole it
+    // was measured up to a percent over the distance at a negative scale
+    // (`the_solid_distances_are_lower_bounds`), where a march wants it
+    // never over.
+    res.distance = 0.95 * r / max(abs(dr), 1.0e-30);
+    if (escape_k >= 0) {
+        res.escaped = 1u;
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    } else {
+        res.depth = levels;
+    }
+    return res;
+}
+
+fn ifs_distance_at(delta: vec3<f32>, eps: f32) -> f32 {
+    return ifs_walk3(delta, eps).distance;
+}
+
+fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
+    return ifs_walk3(delta, 0.0);
+}
+"#,
+};
+
+/// The Mandelbulb as a solid, needing no flame (the KIFS plan,
+/// [docs/archive/projects/escape-kifs-and-variations.md] A3): White and
+/// Nylander's (2009) power in spherical coordinates, `z = z^n + c`, `c`
+/// the point (the Mandelbulb) or a constant (its Julia), as Syntopia
+/// writes it in "Distance Estimated 3D Fractals (V): The Mandelbulb"
+/// (2011), with Hart's half of the estimate as the quaternion Julia's.
+/// Coloured by the plan's "Colouring solids".
+///
+/// [docs/archive/projects/escape-kifs-and-variations.md]: ../../docs/projects/escape-kifs-and-variations.md
+pub static IFS_MANDELBULB: IfsDef = IfsDef {
+    name: "mandelbulb_solid",
+    display_name: "Mandelbulb (Solid)",
+    solid: true,
+    needs_flame: false,
+    default_coloring: "ifs_trap",
+    presets: &[],
+    parameters: &[
+        EscapeParamDef {
+            name: "levels",
+            display_name: "Iterations",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "How many powers before calling the point part of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "beam",
+            display_name: "Beam Width",
+            default: 1.0,
+            min: 1.0,
+            max: 8.0,
+            tooltip: "Unused here: the set has one orbit per point. Kept so the march, shadow and \
+                      occlusion slots line up with the flame solid's.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "steps",
+            display_name: "March Steps",
+            default: 160.0,
+            min: 4.0,
+            max: 512.0,
+            tooltip: "How many times a ray may step before giving up.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow",
+            display_name: "Shadows",
+            default: 0.98,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How dark a traced shadow is. 0 skips the shadow march.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "shadow_sharpness",
+            display_name: "Shadow Sharpness",
+            default: 12.0,
+            min: 1.0,
+            max: 64.0,
+            tooltip: "Penumbra width: higher is harder-edged.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "occlusion",
+            display_name: "Occlusion Reach",
+            default: 0.15,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How far the ambient occlusion probes, as a fraction of the set.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "w_slice",
+            display_name: "Slice Value",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "Unused here: the set is three-dimensional. Kept for the slot.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "power",
+            display_name: "Power",
+            default: 8.0,
+            min: 2.0,
+            max: 16.0,
+            tooltip: "The n in White and Nylander's power: 8 is the bulb everyone knows, 2 the \
+                      quadratic one.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "mode",
+            display_name: "Mode",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "The Mandelbulb adds the point itself each iteration; its Julia adds the \
+                      constant below, the same for every point.",
+            choices: &["Mandelbulb", "Julia"],
+        },
+        EscapeParamDef {
+            name: "cx",
+            display_name: "Julia X",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The Julia constant's x.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cy",
+            display_name: "Julia Y",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The Julia constant's y.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "cz",
+            display_name: "Julia Z",
+            default: 0.0,
+            min: -2.0,
+            max: 2.0,
+            tooltip: "The Julia constant's z.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "colour_depth",
+            display_name: "Colour Depth",
+            default: 3.0,
+            min: 1.0,
+            max: 12.0,
+            tooltip: "How many of the first iterations the colourings read: the orbit trap's \
+                      closest approach, the level's stretch and the address. The surface is drawn \
+                      a pixel from the set, and past a few iterations that pixel decides the \
+                      orbit, so deeper colours change with the camera. Raise it when zoomed in.",
+            choices: &[],
+        },
+        EscapeParamDef {
+            name: "step_factor",
+            display_name: "Step Factor",
+            default: 1.0,
+            min: 0.25,
+            max: 1.0,
+            tooltip: "Scales the distance the march steps by. The bulb's estimate is not a                       bound: beside thin parts it was measured at 1.7 times the true distance,                       so a ray can step past a hair. Lower it if thin parts break up, at the                       cost of more steps.",
+            choices: &[],
+        },
+    ],
+    wgsl: r#"
+fn ifs_walk3(delta: vec3<f32>, eps: f32) -> IfsResult {
+    var res: IfsResult;
+    res.distance = 0.0;
+    res.level = 0.0;
+    res.address = 0.0;
+    res.color = 0.5;
+    res.point = vec2<f32>(0.0, 0.0);
+    res.escaped = 0u;
+    res.depth = 0u;
+
+    let levels = u32(clamp(fparam(0u), 1.0, 64.0));
+    let n = clamp(fparam(7u), 2.0, 16.0);
+    let step_factor = clamp(fparam(13u), 0.25, 1.0);
+    let julia = fparam(8u) > 0.5;
+    let depth = u32(clamp(round(fparam(12u)), 1.0, 12.0));
+    // Past the ball the orbit escapes; the estimate is taken further out,
+    // where `ln r` has settled (stopping at 4, it was over by a percent
+    // near the set), and short of where a power of 16 overflows f32.
+    let radius = ifs_radius();
+    let bail = max(2.0 * radius, 64.0);
+
+    let p = delta + ifs_target_offset();
+    let c = select(p, vec3<f32>(fparam(9u), fparam(10u), fparam(11u)), julia);
+    var z = p;
+    var dr = 1.0;
+    var r = length(z);
+    // The colourings read the start of the orbit: the closest approach
+    // within `depth` as (z, |xy|), the running derivative there, and
+    // which hemisphere each iterate falls in, then its polar angle --
+    // all kept by the bulb's turns about the z axis.
+    var trap_r = 1.0e30;
+    var trap_p = vec2<f32>(0.0, 0.0);
+    var spread = 1.0;
+    var address = 0.0;
+    var place = 0.5;
+    var k = 0u;
+    var escape_k = -1;
+    loop {
+        if (k >= levels || r > bail) {
+            break;
+        }
+        let theta = acos(clamp(z.z / max(r, 1.0e-30), -1.0, 1.0));
+        let phi = ff_atan2(z.y, z.x);
+        dr = select(0.0, pow(r, n - 1.0), r > 0.0) * n * dr + select(1.0, 0.0, julia);
+        let zr = select(0.0, pow(r, n), r > 0.0);
+        let th = theta * n;
+        let ph = phi * n;
+        z = zr * vec3<f32>(sin(th) * cos(ph), sin(ph) * sin(th), cos(th)) + c;
+        r = length(z);
+        k = k + 1u;
+        if (k <= depth) {
+            spread = dr;
+            // What the trap measures: the iterate, through the Orbit
+            // transformations when there are any (3d-look-and-tools P5).
+            let zt = ifs_trap_point(z);
+            let rt = length(zt);
+            if (rt < trap_r) {
+                trap_r = rt;
+                trap_p = vec2<f32>(zt.z, length(zt.xy));
+            }
+            if (k < depth) {
+                address = address + select(0.0, place, z.z < 0.0);
+                place = place * 0.5;
+            } else {
+                address = address + acos(clamp(z.z / max(r, 1.0e-30), -1.0, 1.0)) * 0.31830988618 * place;
+            }
+        }
+        if (escape_k < 0 && r > radius) {
+            escape_k = i32(k);
+        }
+    }
+    res.point = trap_p;
+    res.address = address;
+    // Per power of r: the derivative carries r^(n-1) each step, so at
+    // power 8 its log moved seven times as fast over the surface as the
+    // quaternion's.
+    res.level = log2(max(spread, 1.0)) / (n - 1.0);
+    if (escape_k >= 0) {
+        res.escaped = 1u;
+        // Hart's estimate, with his half, as the quaternion Julia's; not a
+        // bound for the bulb, so the step factor is the user's margin.
+        res.distance = step_factor * max(0.5 * log(r) * r / max(dr, 1.0e-30), 0.0);
+        res.depth = u32(max(f32(levels) - f32(escape_k), 0.0));
+    } else {
+        res.depth = levels;
     }
     return res;
 }
@@ -2006,13 +3133,7 @@ fn ifs_evaluate3(delta: vec3<f32>) -> IfsResult {
 /// what frames the camera and bounds the march. Everything downstream
 /// -- `set_ifs`, the globals, the keys -- works as for a flame.
 pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> PackedIfs {
-    let radius = def
-        .parameters
-        .iter()
-        .find(|p| p.name == "bailout")
-        .map(|p| escape.formula_params.get("bailout").copied().unwrap_or(p.default) as f64)
-        .unwrap_or(2.0)
-        .max(1e-3);
+    let radius = standalone_radius(def, escape);
     let ball2 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0], radius };
     let ball3 = crate::scene::ifs_analysis::Ball { centre: [0.0, 0.0, 0.0], radius };
     let ifs = crate::scene::ifs_analysis::Ifs { maps: Vec::new(), final_map: None, frame_radius: ball2.radius, ball: ball2, aux_centre: 0.0, xaos: None };
@@ -2031,6 +3152,66 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
         },
         xaos: vec![0.0; 4],
         solid: Some((ifs3, Vec::new())),
+    }
+}
+
+/// The radius of the ball a def that needs no flame frames and bounds
+/// its march by, which its set lies within: a KIFS's offset's length,
+/// the Mandelbox's and the Mandelbulb's escape bounds, else the bailout
+/// (the quaternion Julia's).
+pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> f64 {
+    let value = |name: &str| -> Option<f64> {
+        let p = def.parameters.iter().find(|p| p.name == name)?;
+        Some(escape.formula_params.get(name).copied().unwrap_or(p.default) as f64)
+    };
+    let julia = || value("mode").unwrap_or(0.0) > 0.5;
+    let constant = || [value("cx"), value("cy"), value("cz")].map(|v| v.unwrap_or(0.0));
+    if def.name == IFS_KIFS.name {
+        let o = [value("offset_x"), value("offset_y"), value("offset_z")].map(|v| v.unwrap_or(1.0));
+        return (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt().max(1e-3);
+    }
+    if def.name == IFS_MANDELBOX.name {
+        let c = julia().then(constant);
+        return mandelbox_radius(value("scale").unwrap_or(2.0), value("fold_limit").unwrap_or(1.0), c);
+    }
+    if def.name == IFS_MANDELBULB.name {
+        let c = julia().then(constant);
+        return mandelbulb_radius(value("power").unwrap_or(8.0), c);
+    }
+    // A user's solid gives its ball as a parameter (B3).
+    if let Some(r) = value("radius") {
+        return r.max(1e-3);
+    }
+    value("bailout").unwrap_or(2.0).max(1e-3)
+}
+
+/// The Mandelbox's ball, as the walk holds its scale (`|s| >= 1.05`).
+/// Once every coordinate's size is past `m`, the box fold takes at most
+/// `2L` from it and the sphere fold leaves it, so the next is at least
+/// `|s| (m - 2L) - |c|`, larger than `m` past `(2L|s| + |c|) / (|s| - 1)`:
+/// that for a Julia's constant, and for the Mandelbox, whose `c` is the
+/// point, Lowe's `2L(|s| + 1) / (|s| - 1)`, in the cube's largest
+/// coordinate -- the ball reaches its corners. (Held by
+/// `the_solids_lie_within_their_balls`.)
+pub fn mandelbox_radius(scale: f64, limit: f64, julia: Option<[f64; 3]>) -> f64 {
+    let s = scale.abs().max(1.05);
+    let l = limit.max(0.1);
+    let cube = match julia {
+        Some(c) => (2.0 * l * s + c.iter().fold(0.0f64, |m, x| m.max(x.abs()))) / (s - 1.0),
+        None => 2.0 * l * (s + 1.0) / (s - 1.0),
+    };
+    (cube * 3f64.sqrt()).min(256.0)
+}
+
+/// The Mandelbulb's ball: past `2^(1/(n-1))` a point's orbit grows (each
+/// `|z|` at least `|z| (|z|^(n-1) - 1)`), and for a Julia also past
+/// `1 + |c|`.
+pub fn mandelbulb_radius(power: f64, julia: Option<[f64; 3]>) -> f64 {
+    let n = power.clamp(2.0, 16.0);
+    let bulb = 2f64.powf(1.0 / (n - 1.0));
+    match julia {
+        Some(c) => bulb.max(1.0 + (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()),
+        None => bulb,
     }
 }
 
@@ -2138,7 +3319,39 @@ pub static IFS_COLORINGS: &[&IfsColoringDef] =
 /// Look up a mode-D distance function by name. `None` = the name
 /// belongs to another mode (or is unknown).
 pub fn get_ifs(name: &str) -> Option<&'static IfsDef> {
-    IFS_DEFS.iter().find(|f| f.name == name).copied()
+    IFS_DEFS.iter().find(|f| f.name == name).copied().or_else(|| {
+        custom_solids().read().ok().and_then(|c| c.iter().find(|f| f.name == name).copied())
+    })
+}
+
+/// A solid's formula parameters that are its light's rather than its
+/// shape's -- Shadows, Shadow Sharpness, Occlusion Reach -- drawn by the
+/// Lighting & Material panel, not the Escape panel's parameter list
+/// (3d-look-and-tools P3). Every solid def has them, the Rhai template's
+/// included.
+pub const LIGHTING_PARAMS: &[&str] = &["shadow", "shadow_sharpness", "occlusion"];
+
+/// The solids the user wrote (the KIFS plan, B3), compiled by
+/// `escape::custom::compile_solid` under their `custom-` names: found by
+/// [`get_ifs`] as the built-ins are, never listed beside them.
+fn custom_solids() -> &'static std::sync::RwLock<Vec<&'static IfsDef>> {
+    static S: std::sync::OnceLock<std::sync::RwLock<Vec<&'static IfsDef>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Register a user's solid; one of the same name is replaced.
+pub fn register_custom_solid(def: &'static IfsDef) {
+    if let Ok(mut c) = custom_solids().write() {
+        c.retain(|f| f.name != def.name);
+        c.push(def);
+    }
+}
+
+/// The parameters every solid starts with, the template's (levels,
+/// beam, steps, shadow, shadow sharpness, occlusion, slice): a user's
+/// solid takes them as the built-ins do, its own from slot 7.
+pub fn template_parameters() -> &'static [EscapeParamDef] {
+    &IFS_MANDELBOX.parameters[..7]
 }
 
 /// Resolve the coloring for a mode-D render, falling back to the
@@ -5071,24 +6284,49 @@ fn pack_rig3(
         if any && (!l.enabled || l.intensity <= 0.0) {
             continue;
         }
+        // A point or a headlamp (lights-in-the-fractal, L2): its
+        // position as an offset from the target, as every position the
+        // shader holds is -- in f64 until then, since a light and the
+        // target are near each other in a deep view.
+        if any && l.kind != crate::config::LightKind::Directional {
+            let (pos, reach) = if l.kind == crate::config::LightKind::Point {
+                (
+                    [l.position[0] - cam.target[0], l.position[1] - cam.target[1], l.position[2] - cam.target[2]],
+                    l.reach as f64,
+                )
+            } else {
+                let lift = l.lift as f64 * cam.distance;
+                (
+                    [cam.eye_rel[0] + cam.up[0] * lift, cam.eye_rel[1] + cam.up[1] * lift, cam.eye_rel[2] + cam.up[2] * lift],
+                    l.reach as f64 * cam.distance,
+                )
+            };
+            let (kind, extra) = light_extra(l, reach);
+            out[11 + n * 2] = [pos[0] as f32, pos[1] as f32, pos[2] as f32, l.intensity.max(0.0)];
+            out[12 + n * 2] = [l.color[0], l.color[1], l.color[2], kind];
+            out[28 + n] = extra;
+            n += 1;
+            if n == 4 {
+                break;
+            }
+            continue;
+        }
+        // In the camera's space when the lights follow it, else fixed in
+        // the fractal's (`SolidShadingSettings::lights_follow_camera`).
+        let follow = shading.lights_follow_camera;
         let (az, el) = if any {
-            (l.azimuth.to_radians() as f64, l.elevation.to_radians() as f64)
+            (l.azimuth, l.elevation)
+        } else if follow {
+            // The panel's own light-0 default, so "untouched" and "light 0
+            // as it ships" are the same picture.
+            (35.0, 40.0)
         } else {
-            // The panel's own light-0 default, so "untouched" and
-            // "light 0 as it ships" are the same picture.
-            (35f32.to_radians() as f64, 40f32.to_radians() as f64)
+            // The world's default key, which taking the rig over writes to
+            // light 0 (`ui::render_mode::rig_taken_over`).
+            default_world_key()
         };
-        // Camera space: azimuth 0, elevation 0 is a headlight, azimuth
-        // swings about the vertical and elevation tilts up. Rotated to
-        // world through the camera's own basis -- +z in camera space
-        // points BACK at the eye, which is -forward.
-        let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
-        let dir = [
-            cam.right[0] * c[0] + cam.up[0] * c[1] - cam.forward[0] * c[2],
-            cam.right[1] * c[0] + cam.up[1] * c[1] - cam.forward[1] * c[2],
-            cam.right[2] * c[0] + cam.up[2] * c[1] - cam.forward[2] * c[2],
-        ];
-        let dir = normalize3(dir);
+        let (az, el) = (az.to_radians() as f64, el.to_radians() as f64);
+        let dir = if follow { camera_light_dir(cam.right, cam.up, cam.forward, az, el) } else { world_light_dir(az, el) };
         let (colour, intensity) = if any {
             (l.color, l.intensity.max(0.0))
         } else {
@@ -5102,6 +6340,68 @@ fn pack_rig3(
         }
     }
     out[7][2] = n as f32;
+}
+
+/// A light at `az`, `el` (radians) in the solid camera's space as a world
+/// direction: azimuth 0, elevation 0 is a headlight, azimuth swings about
+/// the vertical and elevation tilts up. Rotated to world through the
+/// camera's own basis -- +z in camera space points BACK at the eye, which
+/// is -forward.
+fn camera_light_dir(right: [f64; 3], up: [f64; 3], forward: [f64; 3], az: f64, el: f64) -> [f64; 3] {
+    let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+    normalize3([
+        right[0] * c[0] + up[0] * c[1] - forward[0] * c[2],
+        right[1] * c[0] + up[1] * c[1] - forward[1] * c[2],
+        right[2] * c[0] + up[2] * c[1] - forward[2] * c[2],
+    ])
+}
+
+/// A light fixed in the fractal's space: `az` (radians) around its z axis
+/// from +x, `el` above its xy plane -- a terrain's convention
+/// (`terrain::light_direction`).
+fn world_light_dir(az: f64, el: f64) -> [f64; 3] {
+    [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()]
+}
+
+/// The fractal's-space angles, in degrees, of a light at `azimuth`,
+/// `elevation` degrees in this view's camera space: the same direction,
+/// so a picture whose lights stop following the camera is unchanged where
+/// it stands (`ui::render_mode::lights_to_world`).
+pub fn camera_light_to_world(escape: &crate::config::escape::EscapeConfig, azimuth: f32, elevation: f32) -> (f32, f32) {
+    let (right, up, forward) = solid_frame(escape.cam_pitch as f64, escape.cam_yaw as f64, escape.cam_bank as f64, escape.rotation as f64);
+    let d = camera_light_dir(right, up, forward, azimuth.to_radians() as f64, elevation.to_radians() as f64);
+    (d[1].atan2(d[0]).to_degrees() as f32, d[2].clamp(-1.0, 1.0).asin().to_degrees() as f32)
+}
+
+/// The view a solid's studio is fixed to when its lights are the fractal's
+/// (`ifs_studio_frame`'s third frame): the camera's at the solids' usual
+/// view, yaw 0.9 and pitch 0.42 -- where the shipped solid presets stand --
+/// so the studio lights them as the camera's studio did, and stays put as
+/// the camera moves. Its right, up and forward, for `fdata[33..35]`.
+pub fn studio_basis() -> [[f32; 4]; 3] {
+    let (right, up, forward) = solid_frame(0.42f32 as f64, 0.9f32 as f64, 0.0, 0.0);
+    [right, up, forward].map(|v| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0])
+}
+
+/// A solid's key light in the fractal's space for an untouched rig, to the
+/// degree: the camera's key (35, 40) as the default camera sees it, so a
+/// solid seen from where it starts is lit as an untouched one always was.
+pub fn default_world_key() -> (f32, f32) {
+    let (az, el) = camera_light_to_world(&crate::config::escape::EscapeConfig::default(), 35.0, 40.0);
+    (az.round(), el.round())
+}
+
+/// A point's or a headlamp's kind and its `fdata[28 + i]` (the rig's
+/// `ifs_light_at`): (its reach in the world's units, its cone's outer
+/// and inner cosines, 0). A headlamp without a cone (180 degrees) is a
+/// point at the eye; with one, its edge softens over the outer tenth.
+pub(crate) fn light_extra(l: &crate::config::SolidLight, reach: f64) -> (f32, [f32; 4]) {
+    if l.kind == crate::config::LightKind::Headlamp && l.cone < 180.0 {
+        let outer = (l.cone.clamp(1.0, 180.0) as f64).to_radians();
+        (2.0, [reach as f32, outer.cos() as f32, (outer * 0.9).cos() as f32, 0.0])
+    } else {
+        (1.0, [reach as f32, -1.0, -1.0, 0.0])
+    }
 }
 
 fn normalize3(v: [f64; 3]) -> [f64; 3] {
@@ -5400,6 +6700,54 @@ pub fn pack_maps(
 
 #[cfg(test)]
 mod tests {
+    /// A solid's directional lights (2026-10-19): fixed in the fractal's
+    /// space, the rig's light rows are the same from every camera; following
+    /// the camera, they turn with it -- as they did before, to the bit. And a
+    /// light's angles turned into the fractal's space at a camera keep its
+    /// direction there (`camera_light_to_world`, the Fly Mode section's
+    /// conversion).
+    #[test]
+    fn a_solids_lights_are_the_fractals_or_the_cameras() {
+        use super::{camera_light_dir, camera_light_to_world, pack_rig3, solid_frame, world_light_dir, SolidCamera};
+        let camera = |pitch: f64, yaw: f64, bank: f64| {
+            let (right, up, forward) = solid_frame(pitch, yaw, bank, 0.0);
+            SolidCamera { eye: [0.0; 3], target: [0.0; 3], forward, right, up, fov: 0.7, distance: 2.0, eye_rel: forward.map(|f| -2.0 * f) }
+        };
+        let rows = |cam: &SolidCamera, shading: &crate::config::SolidShadingSettings| {
+            let mut out = [[0.0f32; 4]; 36];
+            pack_rig3(cam, shading, (0.0, 0.0, [0.0; 3]), &mut out);
+            [out[11], out[13]]
+        };
+        let mut shading = crate::config::SolidShadingSettings { shading_strength: 1.0, ..Default::default() };
+        shading.lights[1].enabled = true;
+        let (a, b) = (camera(0.4, 0.9, 0.0), camera(-0.3, 2.5, 0.4));
+        assert_eq!(rows(&a, &shading), rows(&b, &shading), "fixed in the fractal: the same from every camera");
+        let (az, el) = (shading.lights[0].azimuth.to_radians() as f64, shading.lights[0].elevation.to_radians() as f64);
+        let d = world_light_dir(az, el);
+        assert_eq!(rows(&a, &shading)[0][..3], [d[0] as f32, d[1] as f32, d[2] as f32], "the fractal's angles: z up, azimuth from +x");
+        shading.lights_follow_camera = true;
+        assert_ne!(rows(&a, &shading), rows(&b, &shading), "following the camera: turned with it");
+        // As before 2026-10-19, to the bit.
+        let c = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
+        let old = super::normalize3(std::array::from_fn(|k| a.right[k] * c[0] + a.up[k] * c[1] - a.forward[k] * c[2]));
+        assert_eq!(rows(&a, &shading)[0][..3], [old[0] as f32, old[1] as f32, old[2] as f32]);
+        // The conversion keeps the direction, at any camera and angle.
+        let mut worst = 0.0f64;
+        for (pitch, yaw, bank) in [(0.4f32, 0.9f32, 0.0f32), (-1.2, 3.0, 0.7), (1.5, -2.0, -0.3)] {
+            let mut e = crate::config::escape::EscapeConfig::default();
+            (e.cam_pitch, e.cam_yaw, e.cam_bank) = (pitch, yaw, bank);
+            let (r, u, f) = solid_frame(pitch as f64, yaw as f64, bank as f64, 0.0);
+            for (az, el) in [(35.0f32, 40.0f32), (-95.0, 10.0), (170.0, -60.0), (0.0, 0.0)] {
+                let want = camera_light_dir(r, u, f, az.to_radians() as f64, el.to_radians() as f64);
+                let (waz, wel) = camera_light_to_world(&e, az, el);
+                let got = world_light_dir(waz.to_radians() as f64, wel.to_radians() as f64);
+                worst = worst.max((0..3).map(|k| (got[k] - want[k]).abs()).fold(0.0, f64::max));
+            }
+        }
+        println!("  the conversion's worst direction error: {worst:.1e}");
+        assert!(worst < 1.0e-6, "{worst}");
+    }
+
     /// The user's Extent reaches the packed ball, and 0 leaves the
     /// measured one alone.
     #[test]
@@ -5824,7 +7172,9 @@ mod tests {
             // frame at 1080p against 20. Both are one click away for
             // a still.
             c.solid_shading.shading_strength = 1.0;
-            c.solid_shading.ambient = 0.2;
+            // No ambient: the 3D look (docs/archive/projects/3d-look-and-tools.md,
+            // P2) -- shadows are dark, as the path tracer draws them.
+            c.solid_shading.ambient = 0.0;
             c.solid_shading.diffuse = 0.95;
             c.solid_shading.specular = 0.0;
             c.solid_shading.ssao_strength = 1.0;
@@ -5834,6 +7184,7 @@ mod tests {
                 elevation: 35.0,
                 intensity: 1.0,
                 color: [1.0, 1.0, 1.0],
+                ..Default::default()
             };
             c.solid_shading.lights[1] = crate::config::SolidLight {
                 enabled: true,
@@ -5841,10 +7192,11 @@ mod tests {
                 elevation: 10.0,
                 intensity: 0.35,
                 color: [1.0, 1.0, 1.0],
+                ..Default::default()
             };
 
             c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
-            c.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            c.exposure = crate::config::defaults::ESCAPE_EXPOSURE;
             // Not the default gamma of 4, which is a curve for
             // DENSITY. A solid render is not an accumulation being
             // rescued from the dark; it is already an image, and the
@@ -5855,8 +7207,10 @@ mod tests {
             // lifts the darks until the shading is gone: at gamma 4
             // the eightfold drop from a lit surface to the ambient
             // floor lands inside two deciles of output, which is a
-            // sponge with no shadows in its holes.
-            c.gamma = 2.2;
+            // sponge with no shadows in its holes. And not 2.2 either:
+            // the tone map encodes sRGB itself after the gamma, so 1 is
+            // the one encode (the 3D look, 3d-look-and-tools P2).
+            c.gamma = crate::config::defaults::ESCAPE_GAMMA;
             c
         })
         .collect()
@@ -5878,6 +7232,22 @@ mod tests {
             .chain(super::gpu_tests::julia_presets())
             .chain(super::gpu_tests::kernel_presets())
             .chain(super::gpu_tests::quaternion_presets())
+            .chain(super::gpu_tests::kifs_presets())
+            .chain(super::gpu_tests::box_bulb_presets())
+            // Every solid in the 3D look (3d-look-and-tools P2): what the
+            // panel gives one entered from a plane.
+            .map(|mut c| {
+                if formula_is_solid(&c.escape.formula) {
+                    let flat = c.clone();
+                    let mut plane = c.clone();
+                    plane.escape.formula = "mandelbrot".to_string();
+                    for (path, value) in crate::ui::render_mode::look_3d(&plane, &flat) {
+                        let _ = crate::config::ConfigManager::apply_value_detached(&mut c, crate::config::EditingTarget::Main, &path, value);
+                    }
+                    c.solid_shading.ambient = 0.0;
+                }
+                c
+            })
             .collect::<Vec<_>>()
             .iter()
             .map(|c| {
@@ -8060,6 +9430,13 @@ mod gpu_tests {
             if let Some(f) = fov {
                 c.escape.cam_fov = f;
             }
+            // The tone the colour test below was calibrated in. The
+            // preset's 3D look (exposure 2, gamma 1, no ambient) draws
+            // the top face's low addresses -- violet between the blue
+            // start and the next stop, rightly -- blue enough to pass.
+            c.exposure = 1.0;
+            c.gamma = 2.2;
+            c.solid_shading.ambient = 0.2;
             c.palette.stops[0].color = [0.0, 0.0, 1.0];
             let job = crate::renderer::RenderJob::new(&c, w, h);
             let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress))
@@ -12147,15 +13524,1574 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }
 
     /// The presets that ship from plan 8.11 step 1: Bourke's
-    /// `c = (-1, 0.2, 0, 0)` on the k slice, under the escape-level
-    /// colouring. Inspected before shipping
+    /// `c = (-1, 0.2, 0, 0)` on the k slice, under the orbit trap (the
+    /// escape level until the solids' colourings were made the
+    /// surface's). Inspected before shipping
     /// (`render_the_quaternion_julia_for_inspection`).
     pub(super) fn quaternion_presets() -> Vec<crate::config::FractalConfig> {
-        let mut c = quaternion_config([-1.0, 0.2, 0.0, 0.0], 3.0, "ifs_level");
+        // The orbit trap: the colour that is the surface's and shows its
+        // rings (the KIFS plan, "Colouring solids").
+        let mut c = quaternion_config([-1.0, 0.2, 0.0, 0.0], 3.0, "ifs_trap");
         // The ball is the bailout's radius and the set is about half
-        // of it: a closer frame than the ball's own.
-        c.escape.zoom_log2 = 0.7;
+        // of it: a closer frame than the ball's own, though not so close
+        // that the long lobes leave it (0.7 cut the left one).
+        c.escape.zoom_log2 = 0.4;
         vec![c]
+    }
+
+    // ---- KIFS (the KIFS plan, A1) ------------------------------------
+
+    /// `IFS_KIFS`'s walk on the CPU, in f64, step for step as its WGSL:
+    /// the twin its gates hold it to.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct Kifs {
+        pub fold: u32,
+        pub s: f64,
+        pub o: [f64; 3],
+        pub a1: [f64; 3],
+        pub a2: [f64; 3],
+        pub levels: u32,
+        /// The colour depth and the address's start (`colour_depth`,
+        /// `address_symmetry`).
+        pub depth: u32,
+        pub skip: u32,
+    }
+
+    /// What a solid's colourings read at a point: the level, the
+    /// address and the trap point as the walk gives them now, and the
+    /// level and trap point it used to give (from where the orbit
+    /// escapes), for the measurement that retired them.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(super) struct SolidColour {
+        pub level: f64,
+        pub address: f64,
+        pub point: [f64; 2],
+        pub tail_level: f64,
+        pub tail_point: [f64; 2],
+    }
+
+    fn norm3(v: [f64; 3]) -> f64 {
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    }
+
+    impl Kifs {
+        pub(super) fn new(fold: u32, s: f64, o: [f64; 3]) -> Kifs {
+            Kifs { fold, s, o, a1: [0.0; 3], a2: [0.0; 3], levels: 12, depth: 3, skip: 1 }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            norm3(self.o).max(1e-3)
+        }
+
+        /// Euler angles in degrees, about x, then y, then z.
+        fn rotate(deg: [f64; 3], z: [f64; 3]) -> [f64; 3] {
+            if deg == [0.0; 3] {
+                return z;
+            }
+            let r = deg.map(f64::to_radians);
+            let (sx, cx) = r[0].sin_cos();
+            let (sy, cy) = r[1].sin_cos();
+            let (sz, cz) = r[2].sin_cos();
+            let z = [z[0], cx * z[1] - sx * z[2], sx * z[1] + cx * z[2]];
+            let z = [cy * z[0] + sy * z[2], z[1], -sy * z[0] + cy * z[2]];
+            [cz * z[0] - sz * z[1], sz * z[0] + cz * z[1], z[2]]
+        }
+
+        /// One iteration -- the `k`th, from 0 -- rotate, fold, rotate,
+        /// scale about the offset.
+        pub(super) fn step(&self, z: [f64; 3], k: u32) -> [f64; 3] {
+            self.step_digit(z, k).0
+        }
+
+        /// The icosahedral and dodecahedral mirrors, as the walk's (A4).
+        fn mirrors() -> ([[f64; 3]; 3], [[f64; 3]; 3]) {
+            let phi = (1.0 + 5f64.sqrt()) / 2.0;
+            let unit = |v: [f64; 3]| {
+                let n = norm3(v);
+                v.map(|x| x / n)
+            };
+            let ico = [unit([-phi, phi - 1.0, 1.0]), unit([1.0, -phi, phi + 1.0]), [0.0, 0.0, -1.0]];
+            let dod = [unit([-1.0, phi - 1.0, 1.0 / (phi - 1.0)]), unit([phi - 1.0, 1.0 / (phi - 1.0), -1.0]), unit([1.0 / (phi - 1.0), -1.0, phi - 1.0])];
+            (ico, dod)
+        }
+
+        /// `z` reflected in the plane through the origin normal to `n`.
+        fn reflect(z: [f64; 3], n: [f64; 3], t: f64) -> [f64; 3] {
+            [z[0] - 2.0 * t * n[0], z[1] - 2.0 * t * n[1], z[2] - 2.0 * t * n[2]]
+        }
+
+        /// One iteration and its address digit: which of the fold's
+        /// mirrors fired.
+        fn step_digit(&self, z: [f64; 3], k: u32) -> ([f64; 3], u32) {
+            let mut z = Self::rotate(self.a1, z);
+            let mut digit = 0;
+            let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let (ico, dod) = Self::mirrors();
+            if self.fold == 4 {
+                if k == 0 {
+                    z = z.map(f64::abs);
+                    for n in [ico[0], ico[1], ico[2], ico[1]] {
+                        let t = dot(z, n).max(0.0);
+                        z = Self::reflect(z, n, t);
+                    }
+                }
+                digit = u32::from(z[0] < 0.0) + u32::from(z[1] < 0.0) + u32::from(z[2] < 0.0);
+                z = z.map(f64::abs);
+                let t = dot(z, ico[0]);
+                if t > 0.0 {
+                    z = Self::reflect(z, ico[0], t);
+                    digit += 4;
+                }
+            } else if self.fold == 5 {
+                for pass in 0..3 {
+                    for (bit, n) in dod.iter().enumerate() {
+                        let t = dot(z, *n);
+                        if t < 0.0 {
+                            z = Self::reflect(z, *n, t);
+                            if pass == 0 {
+                                digit |= 1 << bit;
+                            }
+                        }
+                    }
+                }
+            } else if self.fold == 0 {
+                if z[0] + z[1] < 0.0 {
+                    z = [-z[1], -z[0], z[2]];
+                    digit |= 1;
+                }
+                if z[0] + z[2] < 0.0 {
+                    z = [-z[2], z[1], -z[0]];
+                    digit |= 2;
+                }
+                if z[1] + z[2] < 0.0 {
+                    z = [z[0], -z[2], -z[1]];
+                    digit |= 4;
+                }
+            } else {
+                digit = u32::from(z[0] < 0.0) | u32::from(z[1] < 0.0) << 1 | u32::from(z[2] < 0.0) << 2;
+                z = z.map(f64::abs);
+                if self.fold >= 2 {
+                    if z[0] < z[1] {
+                        z = [z[1], z[0], z[2]];
+                    }
+                    if z[0] < z[2] {
+                        z = [z[2], z[1], z[0]];
+                    }
+                    if z[1] < z[2] {
+                        z = [z[0], z[2], z[1]];
+                    }
+                }
+            }
+            let z = Self::rotate(self.a2, z);
+            let s = self.s;
+            let mut z = [s * z[0] - self.o[0] * (s - 1.0), s * z[1] - self.o[1] * (s - 1.0), s * z[2] - self.o[2] * (s - 1.0)];
+            if self.fold == 3 && z[2] < -0.5 * self.o[2] * (s - 1.0) {
+                z[2] += self.o[2] * (s - 1.0);
+            }
+            (z, digit)
+        }
+
+        /// The colourings' quantities at `p`, as the walk computes them.
+        pub(super) fn colour(&self, p: [f64; 3]) -> SolidColour {
+            let radius = self.radius();
+            let mut out = SolidColour::default();
+            let (mut z, mut k, mut escaped) = (p, 0u32, false);
+            let (mut trap_r, mut trap_k, mut place) = (f64::INFINITY, 0u32, 0.125);
+            while k < self.levels {
+                let (next, digit) = self.step_digit(z, k);
+                z = next;
+                if k >= self.skip && k < self.skip + 8 {
+                    out.address += f64::from(digit) * place;
+                    place *= 0.125;
+                }
+                k += 1;
+                let r = norm3(z);
+                if k <= self.depth && r < trap_r {
+                    trap_r = r;
+                    trap_k = k;
+                    out.point = [z[0], z[1]];
+                }
+                if !escaped && r > radius {
+                    escaped = true;
+                    out.tail_point = [z[0], z[1]];
+                }
+                if r > 1.0e3 * radius {
+                    break;
+                }
+            }
+            out.level = f64::from(trap_k) + (trap_r / radius).clamp(0.0, 0.999);
+            let r = norm3(z);
+            out.tail_level = if escaped {
+                let smooth_k = f64::from(k) - ((r - radius) / radius).max(1e-30).ln() / self.s.ln();
+                (f64::from(self.levels) - smooth_k).clamp(0.0, f64::from(self.levels))
+            } else {
+                f64::from(self.levels)
+            };
+            out
+        }
+
+        /// The distance's lower bound, as the walk computes it.
+        pub(super) fn distance(&self, p: [f64; 3]) -> f64 {
+            let radius = self.radius();
+            let (mut z, mut k, mut escaped) = (p, 0u32, false);
+            while k < self.levels {
+                z = self.step(z, k);
+                k += 1;
+                let r = norm3(z);
+                escaped |= r > radius;
+                if r > 1.0e3 * radius {
+                    break;
+                }
+            }
+            if escaped {
+                (norm3(z) - radius).max(0.0) * self.s.powi(-(k as i32))
+            } else {
+                0.0
+            }
+        }
+
+        /// Whether `p`'s orbit stays within the radius for `m` steps.
+        pub(super) fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            let radius = self.radius();
+            let mut z = p;
+            for k in 0..m {
+                z = self.step(z, k);
+                if norm3(z) > radius {
+                    return false;
+                }
+            }
+            true
+        }
+
+        pub(super) fn config(&self, coloring: &str) -> crate::config::FractalConfig {
+            let mut cfg = crate::config::FractalConfig::default();
+            cfg.render_mode = RenderMode::Escape;
+            cfg.flame.name = "KIFS".to_string();
+            cfg.escape.formula = IFS_KIFS.name.to_string();
+            cfg.escape.coloring = coloring.to_string();
+            let p = &mut cfg.escape.formula_params;
+            for (name, v) in [
+                ("levels", self.levels as f64),
+                ("fold", self.fold as f64),
+                ("scale", self.s),
+                ("offset_x", self.o[0]),
+                ("offset_y", self.o[1]),
+                ("offset_z", self.o[2]),
+                ("rot1_x", self.a1[0]),
+                ("rot1_y", self.a1[1]),
+                ("rot1_z", self.a1[2]),
+                ("rot2_x", self.a2[0]),
+                ("rot2_y", self.a2[1]),
+                ("rot2_z", self.a2[2]),
+                ("colour_depth", f64::from(self.depth)),
+                ("address_symmetry", f64::from(self.skip)),
+            ] {
+                p.insert(name.to_string(), v as f32);
+            }
+            cfg.escape.cam_yaw = 0.9;
+            cfg.escape.cam_pitch = 0.42;
+            cfg.escape.zoom_log2 = 0.0;
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            cfg.gamma = crate::config::defaults::DEFAULT_GAMMA;
+            cfg
+        }
+    }
+
+    /// `IFS_QUATERNION_JULIA`'s walk on the CPU, in f64: its distance and
+    /// its colourings' quantities, for the colour measurement.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct QuatJulia {
+        pub c: [f64; 4],
+        pub n: f64,
+        pub bail: f64,
+        pub slice: f64,
+        pub levels: u32,
+        pub depth: u32,
+    }
+
+    impl QuatJulia {
+        /// Bourke's set on the k slice, the shipped preset's.
+        pub(super) fn bourke() -> QuatJulia {
+            QuatJulia { c: [-1.0, 0.2, 0.0, 0.0], n: 2.0, bail: 2.0, slice: 0.0, levels: 32, depth: 3 }
+        }
+
+        fn pow(q: [f64; 4], n: f64) -> [f64; 4] {
+            let mag = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            if mag < 1e-30 {
+                return [0.0; 4];
+            }
+            let rad = mag.powf(n);
+            let ang = (q[0] / mag).clamp(-1.0, 1.0).acos() * n;
+            let vlen = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            let nhat = if vlen > 1e-12 { [q[1] / vlen, q[2] / vlen, q[3] / vlen] } else { [1.0, 0.0, 0.0] };
+            [rad * ang.cos(), rad * ang.sin() * nhat[0], rad * ang.sin() * nhat[1], rad * ang.sin() * nhat[2]]
+        }
+
+        /// The walk at a point of the k slice: Hart's distance, and the
+        /// colour quantities.
+        pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
+            let mut q = [p[0], p[1], p[2], self.slice];
+            let len4 = |q: [f64; 4]| (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+            let vlen = norm3([self.c[1], self.c[2], self.c[3]]);
+            let axis = if vlen > 1e-12 { [self.c[1] / vlen, self.c[2] / vlen, self.c[3] / vlen] } else { [1.0, 0.0, 0.0] };
+            let mut out = SolidColour::default();
+            let (mut trap_r, mut spread) = (f64::INFINITY, 1.0f64);
+            let (mut dq, mut mag, mut k, mut escape) = (1.0f64, len4(q), 0u32, None);
+            while k < self.levels && mag <= 1.0e4 {
+                dq *= self.n * mag.powf(self.n - 1.0);
+                let qn = Self::pow(q, self.n);
+                q = [qn[0] + self.c[0], qn[1] + self.c[1], qn[2] + self.c[2], qn[3] + self.c[3]];
+                mag = len4(q);
+                k += 1;
+                if k <= self.depth {
+                    spread = dq;
+                    let along = q[1] * axis[0] + q[2] * axis[1] + q[3] * axis[2];
+                    if mag < trap_r {
+                        trap_r = mag;
+                        out.point = [q[0], along];
+                    }
+                    let perp = norm3([q[1] - along * axis[0], q[2] - along * axis[1], q[3] - along * axis[2]]);
+                    let angle = perp.atan2(along) / std::f64::consts::PI;
+                    let place = 0.5f64.powi(k as i32);
+                    if k < self.depth {
+                        out.address += if along < 0.0 { place } else { 0.0 };
+                    } else {
+                        out.address += angle * place;
+                    }
+                }
+                if escape.is_none() && mag > self.bail {
+                    escape = Some((k, mag));
+                    out.tail_point = [q[1], q[2]];
+                }
+            }
+            out.level = spread.max(1.0).log2();
+            match escape {
+                Some((ek, em)) => {
+                    let smooth_k = f64::from(ek) + 1.0 - (em.ln().max(1e-30) / self.bail.ln()).ln() / self.n.ln();
+                    out.tail_level = (f64::from(self.levels) - smooth_k).max(0.0);
+                    (0.5 * mag * mag.ln() / dq.max(1e-30), out)
+                }
+                None => {
+                    out.tail_level = f64::from(self.levels);
+                    (0.0, out)
+                }
+            }
+        }
+    }
+
+    const MANDELBOX_DE_FACTOR: f64 = 0.95;
+
+    /// `IFS_MANDELBOX`'s walk on the CPU, in f64, step for step.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct Mandelbox {
+        pub s: f64,
+        pub min_r: f64,
+        pub fixed_r: f64,
+        pub limit: f64,
+        pub julia: Option<[f64; 3]>,
+        pub levels: u32,
+        pub depth: u32,
+    }
+
+    impl Mandelbox {
+        pub(super) fn new(s: f64) -> Mandelbox {
+            Mandelbox { s, min_r: 0.5, fixed_r: 1.0, limit: 1.0, julia: None, levels: 16, depth: 3 }
+        }
+
+        fn scale(&self) -> f64 {
+            if self.s < 0.0 { self.s.min(-1.05) } else { self.s.max(1.05) }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            mandelbox_radius(self.s, self.limit, self.julia)
+        }
+
+        /// One iteration from `z` with constant `c`, the running scale,
+        /// and its address digit.
+        fn step(&self, z: [f64; 3], c: [f64; 3], dr: f64) -> ([f64; 3], f64, u32) {
+            let fixed_r = self.fixed_r.max(0.1);
+            let (fixed_r2, limit) = (fixed_r * fixed_r, self.limit.max(0.1));
+            let min_r = self.min_r.max(0.0);
+            let min_r2 = (min_r * min_r).min(fixed_r2).max(1e-6);
+            let axes = z.iter().filter(|v| v.abs() > limit).count() as u32;
+            let mut z = z.map(|v| v.clamp(-limit, limit) * 2.0 - v);
+            let mut dr = dr;
+            let r2 = z[0] * z[0] + z[1] * z[1] + z[2] * z[2];
+            let mut case = 0;
+            if r2 < min_r2 {
+                let t = fixed_r2 / min_r2;
+                z = z.map(|v| v * t);
+                dr *= t;
+                case = 2;
+            } else if r2 < fixed_r2 {
+                let t = fixed_r2 / r2;
+                z = z.map(|v| v * t);
+                dr *= t;
+                case = 1;
+            }
+            let s = self.scale();
+            let z = [s * z[0] + c[0], s * z[1] + c[1], s * z[2] + c[2]];
+            (z, dr * s.abs() + if self.julia.is_some() { 0.0 } else { 1.0 }, axes * 3 + case)
+        }
+
+        pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
+            let c = self.julia.unwrap_or(p);
+            let radius = self.radius();
+            let (mut z, mut dr, mut r, mut k) = (p, 1.0f64, norm3(p), 0u32);
+            let mut out = SolidColour::default();
+            let (mut trap_r, mut spread, mut place, mut escaped) = (f64::INFINITY, 1.0f64, 1.0 / 12.0, false);
+            while k < self.levels && r <= 100.0 {
+                let (next, next_dr, digit) = self.step(z, c, dr);
+                (z, dr) = (next, next_dr);
+                r = norm3(z);
+                k += 1;
+                if k <= self.depth {
+                    spread = dr;
+                    if r < trap_r {
+                        trap_r = r;
+                        let a = z.map(|v| v.abs() / radius);
+                        out.point = [a[0].max(a[1]).max(a[2]), a[0].min(a[1]).min(a[2])];
+                    }
+                    out.address += f64::from(digit) * place;
+                    place /= 12.0;
+                }
+                if !escaped && r > radius {
+                    escaped = true;
+                    out.tail_point = [z[0], z[1]];
+                }
+            }
+            out.level = spread.abs().max(1.0).log2();
+            (MANDELBOX_DE_FACTOR * r / dr.abs().max(1e-30), out)
+        }
+
+        /// Whether `p`'s orbit stays within the ball for `m` steps.
+        fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            let (c, radius) = (self.julia.unwrap_or(p), self.radius());
+            let mut z = p;
+            (0..m).all(|_| {
+                z = self.step(z, c, 1.0).0;
+                norm3(z) <= radius
+            })
+        }
+
+        /// Whether `p`'s orbit runs off to infinity (far past the ball).
+        fn escapes(&self, p: [f64; 3]) -> bool {
+            let (c, far) = (self.julia.unwrap_or(p), 1e4 * self.radius().max(1.0));
+            let mut z = p;
+            (0..400).any(|_| {
+                z = self.step(z, c, 1.0).0;
+                norm3(z) > far
+            })
+        }
+    }
+
+    /// `IFS_MANDELBULB`'s walk on the CPU, in f64, step for step.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) struct Mandelbulb {
+        pub n: f64,
+        pub julia: Option<[f64; 3]>,
+        pub levels: u32,
+        pub depth: u32,
+    }
+
+    impl Mandelbulb {
+        pub(super) fn new(n: f64) -> Mandelbulb {
+            Mandelbulb { n, julia: None, levels: 12, depth: 3 }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            mandelbulb_radius(self.n, self.julia)
+        }
+
+        fn power(&self, z: [f64; 3]) -> [f64; 3] {
+            let n = self.n.clamp(2.0, 16.0);
+            let r = norm3(z);
+            if r <= 0.0 {
+                return [0.0; 3];
+            }
+            let theta = (z[2] / r.max(1e-30)).clamp(-1.0, 1.0).acos() * n;
+            let phi = z[1].atan2(z[0]) * n;
+            let zr = r.powf(n);
+            [zr * theta.sin() * phi.cos(), zr * phi.sin() * theta.sin(), zr * theta.cos()]
+        }
+
+        pub(super) fn walk(&self, p: [f64; 3]) -> (f64, SolidColour) {
+            let n = self.n.clamp(2.0, 16.0);
+            let c = self.julia.unwrap_or(p);
+            let radius = self.radius();
+            let bail = (2.0 * radius).max(64.0);
+            let (mut z, mut dr, mut r, mut k) = (p, 1.0f64, norm3(p), 0u32);
+            let mut out = SolidColour::default();
+            let (mut trap_r, mut spread, mut place, mut escaped) = (f64::INFINITY, 1.0f64, 0.5, false);
+            while k < self.levels && r <= bail {
+                dr = if r > 0.0 { r.powf(n - 1.0) } else { 0.0 } * n * dr + if self.julia.is_some() { 0.0 } else { 1.0 };
+                let zn = self.power(z);
+                z = [zn[0] + c[0], zn[1] + c[1], zn[2] + c[2]];
+                r = norm3(z);
+                k += 1;
+                if k <= self.depth {
+                    spread = dr;
+                    if r < trap_r {
+                        trap_r = r;
+                        out.point = [z[2], (z[0] * z[0] + z[1] * z[1]).sqrt()];
+                    }
+                    if k < self.depth {
+                        out.address += if z[2] < 0.0 { place } else { 0.0 };
+                        place *= 0.5;
+                    } else {
+                        out.address += (z[2] / r.max(1e-30)).clamp(-1.0, 1.0).acos() / std::f64::consts::PI * place;
+                    }
+                }
+                if !escaped && r > radius {
+                    escaped = true;
+                    out.tail_point = [z[0], z[1]];
+                }
+            }
+            out.level = spread.max(1.0).log2() / (n - 1.0);
+            let d = if escaped { (0.5 * r.ln() * r / dr.max(1e-30)).max(0.0) } else { 0.0 };
+            (d, out)
+        }
+
+        fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            let (c, radius) = (self.julia.unwrap_or(p), self.radius());
+            let mut z = p;
+            (0..m).all(|_| {
+                let zn = self.power(z);
+                z = [zn[0] + c[0], zn[1] + c[1], zn[2] + c[2]];
+                norm3(z) <= radius
+            })
+        }
+
+        fn escapes(&self, p: [f64; 3]) -> bool {
+            let (c, far) = (self.julia.unwrap_or(p), 1e4 * self.radius().max(1.0));
+            let mut z = p;
+            (0..400).any(|_| {
+                let zn = self.power(z);
+                z = [zn[0] + c[0], zn[1] + c[1], zn[2] + c[2]];
+                norm3(z) > far
+            })
+        }
+    }
+
+    /// The flame-less solids' twins as one, for the gates every one of
+    /// them passes.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) enum Solid {
+        Kifs(Kifs),
+        Quat(QuatJulia),
+        Box(Mandelbox),
+        Bulb(Mandelbulb),
+    }
+
+    impl Solid {
+        pub(super) fn def(&self) -> &'static IfsDef {
+            match self {
+                Solid::Kifs(_) => &IFS_KIFS,
+                Solid::Quat(_) => &IFS_QUATERNION_JULIA,
+                Solid::Box(_) => &IFS_MANDELBOX,
+                Solid::Bulb(_) => &IFS_MANDELBULB,
+            }
+        }
+
+        pub(super) fn distance(&self, p: [f64; 3]) -> f64 {
+            match self {
+                Solid::Kifs(k) => k.distance(p),
+                Solid::Quat(q) => q.walk(p).0,
+                Solid::Box(b) => b.walk(p).0,
+                Solid::Bulb(b) => b.walk(p).0,
+            }
+        }
+
+        pub(super) fn colour(&self, p: [f64; 3]) -> SolidColour {
+            match self {
+                Solid::Kifs(k) => k.colour(p),
+                Solid::Quat(q) => q.walk(p).1,
+                Solid::Box(b) => b.walk(p).1,
+                Solid::Bulb(b) => b.walk(p).1,
+            }
+        }
+
+        pub(super) fn radius(&self) -> f64 {
+            match self {
+                Solid::Kifs(k) => k.radius(),
+                Solid::Quat(q) => q.bail,
+                Solid::Box(b) => b.radius(),
+                Solid::Bulb(b) => b.radius(),
+            }
+        }
+
+        fn levels(&self) -> u32 {
+            match self {
+                Solid::Kifs(k) => k.levels,
+                Solid::Quat(q) => q.levels,
+                Solid::Box(b) => b.levels,
+                Solid::Bulb(b) => b.levels,
+            }
+        }
+
+        fn set_depth(&mut self, depth: u32) {
+            match self {
+                Solid::Kifs(k) => k.depth = depth,
+                Solid::Quat(q) => q.depth = depth,
+                Solid::Box(b) => b.depth = depth,
+                Solid::Bulb(b) => b.depth = depth,
+            }
+        }
+
+        /// Whether `p`'s orbit stays within the ball for `m` steps: as the
+        /// walk sees the set at depth `m`.
+        fn bounded(&self, p: [f64; 3], m: u32) -> bool {
+            match self {
+                Solid::Kifs(k) => k.bounded(p, m),
+                Solid::Box(b) => b.bounded(p, m),
+                Solid::Bulb(b) => b.bounded(p, m),
+                Solid::Quat(_) => unreachable!("the quaternion Julia's bound is gated by its unit ball"),
+            }
+        }
+
+        /// How much a depth-`m` view of the set can stand off it: the
+        /// KIFS's `2 |o| s^-m`; the others' sets are the bounded orbits
+        /// themselves, so none.
+        fn shrink(&self, m: u32) -> f64 {
+            match self {
+                Solid::Kifs(k) => 2.0 * k.radius() * k.s.powi(-(m as i32)),
+                _ => 0.0,
+            }
+        }
+
+        /// How much of the promised ball the lower-bound gate holds the
+        /// estimate to: a percent short of all of it, for the estimates
+        /// that are bounds (the KIFS's) or made one (the Mandelbox's at
+        /// 0.95); half for the Mandelbulb, whose Hart estimate is no bound
+        /// (it is not conformal): beside a thin part it was measured at
+        /// 1.7 times the distance to points that stay in the ball for
+        /// 2,000 iterations, where the query point leaves in two. The
+        /// gate catches a lost factor there; the bulb's `step_factor` is
+        /// the user's margin.
+        fn tolerance(&self) -> f64 {
+            match self {
+                Solid::Bulb(_) => 0.5,
+                _ => 0.99,
+            }
+        }
+
+        /// The march's step budget, the def's default.
+        fn steps(&self) -> u32 {
+            self.def().parameters.iter().find(|p| p.name == "steps").map_or(128, |p| p.default as u32)
+        }
+
+        pub(super) fn config(&self, coloring: &str) -> crate::config::FractalConfig {
+            let mut cfg = match self {
+                Solid::Kifs(k) => return k.config(coloring),
+                Solid::Quat(q) => return quaternion_config(q.c.map(|v| v as f32), 3.0, coloring),
+                _ => crate::config::FractalConfig::default(),
+            };
+            cfg.render_mode = RenderMode::Escape;
+            cfg.flame.name = self.def().display_name.to_string();
+            cfg.escape.formula = self.def().name.to_string();
+            cfg.escape.coloring = coloring.to_string();
+            let mut set = |name: &str, v: f64| {
+                cfg.escape.formula_params.insert(name.to_string(), v as f32);
+            };
+            match self {
+                Solid::Box(b) => {
+                    for (name, v) in [("levels", f64::from(b.levels)), ("scale", b.s), ("min_radius", b.min_r), ("fixed_radius", b.fixed_r), ("fold_limit", b.limit), ("colour_depth", f64::from(b.depth))] {
+                        set(name, v);
+                    }
+                    set("mode", if b.julia.is_some() { 1.0 } else { 0.0 });
+                    for (name, v) in ["cx", "cy", "cz"].iter().zip(b.julia.unwrap_or([0.0; 3])) {
+                        set(name, v);
+                    }
+                }
+                Solid::Bulb(b) => {
+                    for (name, v) in [("levels", f64::from(b.levels)), ("power", b.n), ("colour_depth", f64::from(b.depth))] {
+                        set(name, v);
+                    }
+                    set("mode", if b.julia.is_some() { 1.0 } else { 0.0 });
+                    for (name, v) in ["cx", "cy", "cz"].iter().zip(b.julia.unwrap_or([0.0; 3])) {
+                        set(name, v);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            cfg.escape.cam_yaw = 0.9;
+            cfg.escape.cam_pitch = 0.42;
+            // A box at a negative scale fills about a fifth of its ball
+            // (Lowe's bound is loose there).
+            cfg.escape.zoom_log2 = if matches!(self, Solid::Box(b) if b.s < 0.0) { 1.6 } else { 0.0 };
+            cfg.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+            cfg.exposure = crate::config::defaults::DEFAULT_EXPOSURE;
+            cfg.gamma = crate::config::defaults::DEFAULT_GAMMA;
+            cfg
+        }
+    }
+
+    /// `IFS_FLAME_3D`'s colourings' walk on the CPU (`ifs_colour_walk3`),
+    /// with its address and its tail from the reference walk
+    /// (`ifs_estimate`): from the point with the final transform undone,
+    /// the child the walk's ranking puts first at each level, the
+    /// closest approach to the ball's centre within `depth` levels.
+    pub(super) fn flame_solid_colour(ifs: &crate::scene::ifs_analysis::Ifs3, p: [f64; 3], levels: u32, depth: u32, start: usize) -> SolidColour {
+        use crate::scene::ifs_analysis::Map3;
+        use crate::scene::ifs_estimate::{admits, estimate_aux, resolved_key, IfsSpace, RankKey};
+        let est = estimate_aux(ifs, p, ifs.aux_centre, levels, 1);
+        let mut out = SolidColour {
+            address: crate::scene::ifs_estimate::address_fraction(est.address.get(start..).unwrap_or(&[]), ifs.maps.len() as u32),
+            tail_level: est.level,
+            tail_point: [est.point[0], est.point[1]],
+            ..SolidColour::default()
+        };
+        let weighted = resolved_key(ifs, RankKey::Auto) == RankKey::Weighted;
+        let centre = ifs.ball.centre;
+        let radius4 = |q: [f64; 3], aux: f64| <Map3 as IfsSpace>::distance(q, centre).hypot(aux - ifs.aux_centre);
+        let mut q = match &ifs.final_map {
+            Some(f) => f.inverse.apply(p),
+            None => p,
+        };
+        let (mut aux, mut last) = (ifs.aux_centre, None);
+        let (mut trap_r, mut trap_k) = (f64::INFINITY, 0u32);
+        for k in 1..=depth {
+            let mut pick: Option<(f64, usize, [f64; 3], f64)> = None;
+            for (i, m) in ifs.maps.iter().enumerate() {
+                if !admits(ifs, i, last) {
+                    continue;
+                }
+                let (cq, caux, sigma) = m.inverse.step(q, aux, m.sigma_min);
+                let mut key = radius4(cq, caux);
+                if weighted {
+                    key *= sigma;
+                }
+                if !(key <= 1e37) {
+                    key = 1e38;
+                }
+                if pick.as_ref().is_none_or(|(best, ..)| key < *best) {
+                    pick = Some((key, i, cq, caux));
+                }
+            }
+            let Some((_, i, cq, caux)) = pick else { break };
+            (q, aux, last) = (cq, caux, Some(i as u32));
+            let r = radius4(q, aux);
+            if !(r <= 1e37) {
+                break;
+            }
+            if r < trap_r {
+                trap_r = r;
+                trap_k = k;
+                out.point = [q[0], q[1]];
+            }
+            if r > ifs.ball.radius {
+                break;
+            }
+        }
+        out.level = f64::from(trap_k) + (trap_r / ifs.ball.radius).clamp(0.0, 0.999);
+        out
+    }
+
+    /// The shipped flame solids' sets (the Sierpinski tetrahedron, the
+    /// Menger sponge), analysed as the renderer does.
+    fn flame_solid_cases() -> Vec<(String, crate::scene::ifs_analysis::Ifs3)> {
+        let registry = global_registry();
+        crate::resources::presets::load_embedded_presets()
+            .expect("presets parse")
+            .into_iter()
+            .filter(|c| c.escape.formula == IFS_FLAME_3D.name)
+            .map(|c| {
+                let ifs = crate::scene::ifs_analysis::analyse_3d(&c.flame, &registry).expect("a shipped solid qualifies");
+                (c.flame.name.to_ascii_lowercase().replace(' ', "-"), ifs)
+            })
+            .collect()
+    }
+
+    /// The colour quantities the measurement compares, at their
+    /// colourings' default palette scales.
+    const SOLID_FIELDS: [(&str, fn(&SolidColour) -> f64); 5] = [
+        ("tail level", |c| c.tail_level * 0.12),
+        ("tail trap", |c| (c.tail_point[0].powi(2) + c.tail_point[1].powi(2)).sqrt()),
+        ("level", |c| c.level * 0.12),
+        ("trap", |c| (c.point[0].powi(2) + c.point[1].powi(2)).sqrt()),
+        ("address", |c| c.address),
+    ];
+
+    /// How each solid's colours follow the camera (the KIFS plan,
+    /// "Colouring solids"): a surface is drawn where the march stops, a
+    /// pixel's width from the set, and that width is the camera's (its
+    /// distance, the zoom, the resolution). Each ray -- from an eye on
+    /// the framing sphere toward a point near the centre -- is marched
+    /// to a pixel at 448 pixels, then to an eighth and a sixty-fourth of
+    /// one: the same surface seen eight and sixty-four times closer.
+    /// Each quantity's mean change between the steps, in palette units
+    /// at its default scale: a quantity that is the surface's settles as
+    /// the view refines (the second change a fraction of the first); one
+    /// that is the pixel's changes as much at every step. Per set (every
+    /// solid case and Bourke's quaternion Julia, at `depth` or each def's
+    /// default colour depth): its name, the rays that hit, and the two
+    /// changes for each of [`SOLID_FIELDS`].
+    fn solid_colour_settling(depth: Option<u32>) -> Vec<(String, usize, [f64; 5], [f64; 5])> {
+        let px = 2.0 * (0.35f64).tan() / 448.0;
+        let march = |de: &dyn Fn([f64; 3]) -> f64, o: [f64; 3], dir: [f64; 3], radius: f64, f: f64| -> Option<[f64; 3]> {
+            let b = o[0] * dir[0] + o[1] * dir[1] + o[2] * dir[2];
+            let disc = b * b - (norm3(o).powi(2) - radius * radius);
+            if disc < 0.0 {
+                return None;
+            }
+            let (mut t, t_max) = ((-b - disc.sqrt()).max(0.0), -b + disc.sqrt());
+            for _ in 0..2000 {
+                if t > t_max {
+                    return None;
+                }
+                let p = [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
+                let d = de(p);
+                if d < f * t {
+                    return Some(p);
+                }
+                t += d;
+            }
+            None
+        };
+        let measure = |name: String, de: &dyn Fn([f64; 3]) -> f64, colour: &dyn Fn([f64; 3]) -> SolidColour, centre: [f64; 3], radius: f64| {
+            let mut rng = XorShift(0x2545_F491_4F6C_DD1D);
+            let (mut coarse, mut fine) = ([0.0f64; 5], [0.0f64; 5]);
+            let mut hits = 0;
+            // The march works about the origin; the set is moved there.
+            let de = |p: [f64; 3]| de([p[0] + centre[0], p[1] + centre[1], p[2] + centre[2]]);
+            let colour = |p: [f64; 3]| colour([p[0] + centre[0], p[1] + centre[1], p[2] + centre[2]]);
+            let de: &dyn Fn([f64; 3]) -> f64 = &de;
+            for _ in 0..400 {
+                let e = rng.in_ball([0.0; 3], 1.0, true);
+                let eye = e.map(|x| x * 3.2 * radius);
+                let aim = rng.in_ball([0.0; 3], 0.4 * radius, false);
+                let d = [aim[0] - eye[0], aim[1] - eye[1], aim[2] - eye[2]];
+                let dir = d.map(|x| x / norm3(d));
+                let (Some(a), Some(b), Some(c)) =
+                    (march(de, eye, dir, radius, px), march(de, eye, dir, radius, px / 8.0), march(de, eye, dir, radius, px / 64.0))
+                else {
+                    continue;
+                };
+                hits += 1;
+                let (ca, cb, cc) = (colour(a), colour(b), colour(c));
+                for (i, (_, f)) in SOLID_FIELDS.iter().enumerate() {
+                    coarse[i] += (f(&ca) - f(&cb)).abs();
+                    fine[i] += (f(&cb) - f(&cc)).abs();
+                }
+            }
+            let h = hits.max(1) as f64;
+            (name, hits, coarse.map(|x| x / h), fine.map(|x| x / h))
+        };
+        let mut rows = Vec::new();
+        for (name, mut solid) in solid_cases().into_iter().chain([("quaternion", Solid::Quat(QuatJulia::bourke()))]) {
+            let default = solid.def().parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default as u32).expect("a colour depth");
+            solid.set_depth(depth.unwrap_or(default));
+            rows.push(measure(name.to_string(), &|p| solid.distance(p), &|p| solid.colour(p), [0.0; 3], solid.radius()));
+        }
+        // The flame solids (the KIFS plan, A5), at their defaults: the
+        // walk's depth and a beam of one, the march's distance the
+        // reference walk's.
+        let param = |name: &str| IFS_FLAME_3D.parameters.iter().find(|p| p.name == name).map(|p| p.default as u32).expect(name);
+        let (levels, flame_depth) = (param("levels"), depth.unwrap_or(param("colour_depth")));
+        for (name, ifs) in flame_solid_cases() {
+            let de = |p: [f64; 3]| crate::scene::ifs_estimate::estimate_aux(&ifs, p, ifs.aux_centre, levels, 1).distance;
+            let colour = |p: [f64; 3]| flame_solid_colour(&ifs, p, levels, flame_depth, param("address_start") as usize);
+            rows.push(measure(format!("flame {name}"), &de, &colour, ifs.ball.centre, ifs.ball.radius));
+        }
+        rows
+    }
+
+    /// [`solid_colour_settling`] at colour depths 2 to 6, printed.
+    #[test]
+    #[ignore = "prints a measurement"]
+    fn which_solid_colours_follow_the_camera() {
+        for depth in 2..=6 {
+            println!("colour depth {depth}:");
+            for (name, hits, coarse, fine) in solid_colour_settling(Some(depth)) {
+                let row: Vec<String> = SOLID_FIELDS.iter().enumerate().map(|(i, (n, _))| format!("{n} {:.3} > {:.3}", coarse[i], fine[i])).collect();
+                println!("  {name} ({hits} hits): {}", row.join(", "));
+            }
+        }
+    }
+
+    /// The solids' colours are the surface's (the KIFS plan, "Colouring
+    /// solids"): at the default colour depth the level, the trap and
+    /// the address move little as the view refines eight times, and
+    /// less again the next eight -- where the escape level and the
+    /// escaped point they replaced moved a fifth to a whole palette
+    /// cycle at every step.
+    #[test]
+    fn the_solids_colours_settle_as_the_view_refines() {
+        for (name, hits, coarse, fine) in solid_colour_settling(None) {
+            if hits < 50 {
+                continue;
+            }
+            for i in 2..5 {
+                let what = SOLID_FIELDS[i].0;
+                println!("{name} {what}: {:.3} then {:.3}", coarse[i], fine[i]);
+                assert!(coarse[i] < 0.15, "{name}: the {what} moves {:.3} as the view refines", coarse[i]);
+                assert!(fine[i] <= 0.6 * coarse[i] + 0.005, "{name}: the {what} does not settle ({:.3}, then {:.3})", coarse[i], fine[i]);
+            }
+        }
+    }
+
+    /// The gates' sets: each fold at its usual scale and offset, and two
+    /// turned by the rotations.
+    fn kifs_cases() -> Vec<(&'static str, Kifs)> {
+        let turned = |mut k: Kifs, a1: [f64; 3], a2: [f64; 3]| {
+            k.a1 = a1;
+            k.a2 = a2;
+            k
+        };
+        vec![
+            ("tetrahedron", Kifs::new(0, 2.0, [1.0, 1.0, 1.0])),
+            ("cantor-dust", Kifs::new(1, 3.0, [1.0, 1.0, 1.0])),
+            ("octahedron-flake", Kifs::new(2, 2.0, [1.0, 0.0, 0.0])),
+            ("menger", Kifs::new(3, 3.0, [1.0, 1.0, 1.0])),
+            ("turned-tetrahedron", turned(Kifs::new(0, 2.0, [1.0, 1.0, 1.0]), [12.0, 0.0, 25.0], [0.0, 18.0, 0.0])),
+            ("turned-octahedral", turned(Kifs::new(2, 2.3, [1.0, 0.8, 0.4]), [0.0, 0.0, 30.0], [20.0, 0.0, 0.0])),
+            ("turned-menger", turned(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]), [8.0, 0.0, 0.0], [0.0, 10.0, 0.0])),
+            // The sources' own defaults (A4).
+            ("icosahedron", Kifs::new(4, 2.0, [0.850650808, 0.525731112, 0.0])),
+            ("dodecahedron", Kifs::new(5, 2.617924, [1.0, 1.0, 1.0])),
+        ]
+    }
+
+    /// **The golden folds are the icosahedron's mirrors** (A4): every
+    /// plane of each fold maps an icosahedron's twelve vertices onto
+    /// themselves, so the fold keeps the group's symmetry -- the
+    /// dodecahedral fold's the icosahedron (0, +-1, +-phi) and its cyclic
+    /// turns, the icosahedral fold's its mirror image (0, +-phi, +-1) and
+    /// turns (the two sources use the two orientations); and the
+    /// icosahedral fold's three meet at H3's Coxeter angles, pi/2, pi/3
+    /// and pi/5, so its prefold lands in the fundamental domain. Checked
+    /// here, not taken from the source.
+    #[test]
+    fn the_golden_folds_are_the_icosahedrons_mirrors() {
+        let phi = (1.0 + 5f64.sqrt()) / 2.0;
+        let icosahedron = |swap: bool| {
+            let mut vertices = Vec::new();
+            for a in [-1.0, 1.0] {
+                for b in [-phi, phi] {
+                    let (a, b) = if swap { (b, a) } else { (a, b) };
+                    vertices.extend([[0.0, a, b], [a, b, 0.0], [b, 0.0, a]]);
+                }
+            }
+            vertices
+        };
+        let (ico, dod) = Kifs::mirrors();
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        for (which, n) in ico.iter().map(|n| ("icosahedral", n)).chain(dod.iter().map(|n| ("dodecahedral", n))) {
+            let vertices = icosahedron(which == "icosahedral");
+            assert!((norm3(*n) - 1.0).abs() < 1e-12);
+            for v in &vertices {
+                let r = Kifs::reflect(*v, *n, dot(*v, *n));
+                let hit = vertices.iter().any(|w| norm3([r[0] - w[0], r[1] - w[1], r[2] - w[2]]) < 1e-12);
+                assert!(hit, "the {which} mirror {n:?} sends {v:?} to {r:?}, no vertex");
+            }
+        }
+        let angle = |a: [f64; 3], b: [f64; 3]| std::f64::consts::PI - dot(a, b).clamp(-1.0, 1.0).acos();
+        let pi = std::f64::consts::PI;
+        assert!((angle(ico[0], ico[1]) - pi / 2.0).abs() < 1e-12);
+        assert!((angle(ico[0], ico[2]) - pi / 3.0).abs() < 1e-12);
+        assert!((angle(ico[1], ico[2]) - pi / 5.0).abs() < 1e-12);
+    }
+
+    /// The gates' sets: the KIFS's, and the Mandelbox and the Mandelbulb
+    /// each at its usual values, at a second, and as a Julia.
+    pub(super) fn solid_cases() -> Vec<(&'static str, Solid)> {
+        let mut out: Vec<(&'static str, Solid)> = kifs_cases().into_iter().map(|(n, k)| (n, Solid::Kifs(k))).collect();
+        let box_julia = Mandelbox { julia: Some([0.6, 0.3, -0.4]), ..Mandelbox::new(2.0) };
+        let bulb_julia = Mandelbulb { julia: Some([-0.2, 0.6, 0.3]), ..Mandelbulb::new(8.0) };
+        out.extend([
+            ("mandelbox", Solid::Box(Mandelbox::new(2.0))),
+            ("mandelbox-negative", Solid::Box(Mandelbox::new(-1.5))),
+            ("mandelbox-julia", Solid::Box(box_julia)),
+            ("mandelbulb", Solid::Bulb(Mandelbulb::new(8.0))),
+            ("mandelbulb-power-3", Solid::Bulb(Mandelbulb::new(3.0))),
+            ("mandelbulb-julia", Solid::Bulb(bulb_julia)),
+        ]);
+        out
+    }
+
+    /// A small deterministic stream for the gates' samples.
+    struct XorShift(u64);
+    impl XorShift {
+        fn unit(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+        /// A point uniformly in the ball of radius `r` about `c`, or on
+        /// its sphere when `surface`.
+        fn in_ball(&mut self, c: [f64; 3], r: f64, surface: bool) -> [f64; 3] {
+            loop {
+                let v = [self.unit() * 2.0 - 1.0, self.unit() * 2.0 - 1.0, self.unit() * 2.0 - 1.0];
+                let n = norm3(v);
+                if n > 1e-9 && n <= 1.0 {
+                    let scale = if surface { r / n } else { r * self.unit().cbrt() / n };
+                    return [c[0] + v[0] * scale, c[1] + v[1] * scale, c[2] + v[2] * scale];
+                }
+            }
+        }
+    }
+
+    /// The KIFS plan A1, gate 2 on the CPU, for every flame-less solid:
+    /// the distance is a lower bound. Around points near each set,
+    /// nothing in the ball the distance promises is in the set as a
+    /// deeper walk sees it (its orbit within the ball for forty more
+    /// steps than the walk takes: at sixteen, a Mandelbulb point that
+    /// escapes later counted as the set; for a KIFS, which puts it within
+    /// `2 |o| s^-m` of the set, the ball is shrunk by that). A wrong fold,
+    /// a distance that forgot a power of the scale or a ball the set
+    /// exceeds would all put set points inside. The Mandelbox's `|z| /
+    /// |dr|` needs 0.95 of itself to pass (`MANDELBOX_DE_FACTOR`: it was
+    /// 0.2-1% over at a negative scale).
+    #[test]
+    fn the_solid_distances_are_lower_bounds() {
+        for (case, (name, solid)) in solid_cases().into_iter().enumerate() {
+            // Each case its own stream, so one case's samples do not
+            // depend on how many the cases before it drew.
+            let mut rng = XorShift(0x9E37_79B9_7F4A_7C15 ^ ((case as u64 + 1) << 32));
+            let m = solid.levels() + 40;
+            let shrink = solid.shrink(m);
+            let radius = solid.radius();
+            let (mut checked, mut near, mut violations) = (0usize, 0usize, Vec::new());
+            for i in 0..3000 {
+                // Two thirds from the whole ball, a third from its inner
+                // part, where a set much smaller than its ball (the
+                // Mandelbox at a negative scale) lies.
+                let q = rng.in_ball([0.0; 3], if i % 3 < 2 { 1.2 } else { 0.3 } * radius, false);
+                let d = solid.distance(q);
+                // Close to the set: most of these sets have no volume,
+                // so a sample is near one, not in it.
+                near += usize::from(d < 0.05 * radius);
+                // Within a thousandth of the ball (a fifth of a pixel at a
+                // default view, where the march stops a pixel out), no
+                // march acts on the distance, and two estimates are
+                // rough there: the Mandelbox's `|z| / |dr|` is tiny but
+                // not zero where the orbit stays within the walk's
+                // iterations, and Hart's estimate for the Mandelbulb was
+                // measured 15% over at 1.3e-4 of the ball, where escape is
+                // slow.
+                if d <= 1e-3 * radius {
+                    continue;
+                }
+                // Short of the whole ball by the solid's tolerance (half
+                // the samples are on the sphere itself): what the gate is
+                // for (a lost power of the scale, a ball too small) is off
+                // by factors, not percent.
+                let r = (d - shrink) * solid.tolerance();
+                if r <= 0.0 {
+                    continue;
+                }
+                checked += 1;
+                for i in 0..48 {
+                    let p = rng.in_ball(q, r, i % 2 == 0);
+                    if solid.bounded(p, m) {
+                        violations.push((q, d, p));
+                        break;
+                    }
+                }
+            }
+            println!("{name}: {checked} points checked, {near} near the set, {} violations", violations.len());
+            assert!(violations.is_empty(), "{name}: set points inside the promised ball: {:?}", &violations[..violations.len().min(3)]);
+            assert!(checked > 600 && near > 30, "{name}: the samples missed the set ({checked} checked, {near} near it)");
+        }
+    }
+
+    /// Every flame-less solid's set lies within the ball its camera
+    /// frames and its march is bounded by (`standalone_radius`): every
+    /// point a little past it runs off to infinity.
+    #[test]
+    fn the_solids_lie_within_their_balls() {
+        for (case, (name, solid)) in solid_cases().into_iter().enumerate() {
+            let escapes = |p: [f64; 3]| match &solid {
+                Solid::Box(b) => b.escapes(p),
+                Solid::Bulb(b) => b.escapes(p),
+                // A KIFS point past |o| escapes by the bound's own
+                // argument (A1); the lower-bound gate covers it.
+                _ => true,
+            };
+            let mut rng = XorShift(0xD1B5_4A32_D192_ED03 ^ ((case as u64 + 1) << 32));
+            let radius = solid.radius();
+            let stays: Vec<[f64; 3]> = (0..2000)
+                .map(|_| {
+                    let on = rng.in_ball([0.0; 3], 1.0, true);
+                    let r = radius * (1.0 + 0.5 * rng.unit());
+                    on.map(|v| v * r)
+                })
+                .filter(|p| !escapes(*p))
+                .collect();
+            println!("{name}: ball {radius:.3}, {} of 2000 points past it stay", stays.len());
+            assert!(stays.is_empty(), "{name}: points past the ball of {radius:.3} stay: {:?}", &stays[..stays.len().min(3)]);
+        }
+    }
+
+    /// A pixel's ray as the solid template's `ifs_ray` makes it, and the
+    /// eye it starts from (`eye_rel`, the target at the ball's centre).
+    fn solid_rays(cfg: &crate::config::FractalConfig, n: u32) -> (SolidCamera, Vec<[f64; 3]>) {
+        let def = get_ifs(&cfg.escape.formula).expect("a mode-D def");
+        let packed = pack_standalone(def, &cfg.escape);
+        let ifs3 = packed.solid.as_ref().map(|(i, _)| i).expect("standalone solid");
+        let cam = solid_camera(&cfg.escape, ifs3);
+        let tan_half = (cam.fov as f64 * 0.5).tan();
+        let mut rays = Vec::with_capacity((n * n) as usize);
+        for py in 0..n {
+            for px in 0..n {
+                let u = (px as f64 + 0.5) / n as f64 - 0.5;
+                let v = (py as f64 + 0.5) / n as f64 - 0.5;
+                let d: [f64; 3] = std::array::from_fn(|i| cam.forward[i] + cam.right[i] * (u * 2.0 * tan_half) - cam.up[i] * (v * 2.0 * tan_half));
+                let len = norm3(d);
+                rays.push(d.map(|x| x / len));
+            }
+        }
+        (cam, rays)
+    }
+
+    /// Which pixels of a GPU render show the solid: a flat white palette
+    /// and no shadow or occlusion, so every hit is bright and the
+    /// background is not.
+    fn solid_gpu_coverage(device: &wgpu::Device, queue: &wgpu::Queue, cfg: &crate::config::FractalConfig, n: u32) -> Vec<bool> {
+        let mut cfg = cfg.clone();
+        cfg.escape.formula_params.insert("shadow".to_string(), 0.0);
+        cfg.escape.formula_params.insert("occlusion".to_string(), 0.0);
+        let white = crate::scene::palette::ColorStop { position: 0.0, color: [1.0, 1.0, 1.0] };
+        cfg.palette = crate::scene::palette::Palette {
+            name: "White".to_string(),
+            stops: vec![white.clone(), crate::scene::palette::ColorStop { position: 1.0, ..white }],
+            locked: false,
+            built_in: false,
+        };
+        let job = crate::renderer::RenderJob::new(&cfg, n, n);
+        let out = pollster::block_on(crate::renderer::render(device, queue, job, &mut crate::renderer::NoProgress)).expect("render");
+        out.rgba_data.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24).collect()
+    }
+
+    // ---- solids written in Rhai (the KIFS plan, B3) -------------------------
+
+    /// The Mandelbox written as a Rhai solid: Lowe's folds, Syntopia's
+    /// estimate at 0.95, as the built-in.
+    const RHAI_BOX: &str = r#"
+const PARAMS = #{ scale: 2.0, min_radius: 0.5, fixed_radius: 1.0, fold_limit: 1.0 };
+const INFO = #{ title: "Mandelbox (Rhai)", radius: 13.86 };
+fn start(pos, p) { #{ z: pos, c: pos, dr: 1.0 } }
+fn step(s, p) {
+    let lim = p.fold_limit;
+    let z = clamp(s.z, -lim, lim) * 2.0 - s.z;
+    let r2 = dot(z, z);
+    let fr2 = p.fixed_radius * p.fixed_radius;
+    let mr2 = max(min(p.min_radius * p.min_radius, fr2), 1e-6);
+    let t = 1.0;
+    if r2 < mr2 {
+        t = fr2 / mr2;
+    } else if r2 < fr2 {
+        t = fr2 / r2;
+    }
+    s.z = z * t * p.scale + s.c;
+    s.dr = s.dr * t * abs(p.scale) + 1.0;
+    s
+}
+fn escaped(s, p) { length(s.z) > 100.0 }
+fn distance(s, p) { 0.95 * length(s.z) / abs(s.dr) }
+"#;
+
+    /// The Mandelbulb written as a Rhai solid: White and Nylander's power,
+    /// Hart's estimate, zero where the orbit never left the ball (2^(1/7)
+    /// at power 8), as the built-in.
+    const RHAI_BULB: &str = r#"
+const PARAMS = #{ power: 8.0, step_factor: 1.0 };
+const INFO = #{ title: "Mandelbulb (Rhai)", radius: 1.1040895 };
+fn start(pos, p) { #{ z: pos, c: pos, dr: 1.0, out: false } }
+fn step(s, p) {
+    let n = p.power;
+    let r = length(s.z);
+    let theta = acos(clamp(s.z.z / max(r, 1e-30), -1.0, 1.0));
+    let phi = atan2(s.z.y, s.z.x);
+    let rn1 = 0.0;
+    let rn = 0.0;
+    if r > 0.0 {
+        rn1 = r ** (n - 1.0);
+        rn = r ** n;
+    }
+    s.dr = rn1 * n * s.dr + 1.0;
+    let th = theta * n;
+    let ph = phi * n;
+    s.z = vec3(sin(th) * cos(ph), sin(ph) * sin(th), cos(th)) * rn + s.c;
+    if length(s.z) > 1.1040895 {
+        s.out = true;
+    }
+    s
+}
+fn escaped(s, p) { length(s.z) > 64.0 }
+fn distance(s, p) {
+    let r = length(s.z);
+    if s.out { p.step_factor * max(0.5 * ln(r) * r / max(s.dr, 1e-30), 0.0) } else { 0.0 }
+}
+"#;
+
+    /// The KIFS Menger written as a Rhai solid (B's leftovers): its fold a
+    /// function parameter of a vector (`abs`, part by part; not named
+    /// `fold`, which the built-in's config carries as its fold type), its mirrors a
+    /// helper giving a vector whose arms are vector `if` values, its ball
+    /// and shift what `prepare` computes once -- a vector among them --
+    /// and the sponge's middle layer a vector `if`. As the built-in's
+    /// fold 3 at scale 3 and offset (1, 1, 1).
+    const RHAI_MENGER: &str = r#"
+const PARAMS = #{
+    scale: 3.0,
+    offset: #{ value: vec3(1.0, 1.0, 1.0), caption: "Offset" },
+    mirror: #{ function: "abs", caption: "Mirror" },
+};
+const INFO = #{ title: "KIFS Menger (Rhai)", radius: 1.7320508 };
+fn prepare(p) {
+    #{ radius: max(length(p.offset), 1e-3), shift: p.offset * (p.scale - 1.0) }
+}
+// The parts in descending order: the three diagonal mirrors.
+fn sorted(v) {
+    let a = if v.x < v.y { vec3(v.y, v.x, v.z) } else { v };
+    let b = if a.x < a.z { vec3(a.z, a.y, a.x) } else { a };
+    if b.y < b.z { vec3(b.x, b.z, b.y) } else { b }
+}
+fn start(pos, p) { #{ z: pos, k: 0, out: false } }
+fn step(s, p) {
+    let z = sorted(p.mirror(s.z)) * p.scale - p.shift;
+    // The sponge: the middle layer's cubes move back up.
+    s.z = if z.z < -0.5 * p.shift.z { vec3(z.x, z.y, z.z + p.shift.z) } else { z };
+    s.k += 1;
+    if length(s.z) > p.radius {
+        s.out = true;
+    }
+    s
+}
+fn escaped(s, p) { length(s.z) > 1000.0 * p.radius }
+fn distance(s, p) {
+    if s.out { max(length(s.z) - p.radius, 0.0) * p.scale ** (-s.k.to_float()) } else { 0.0 }
+}
+"#;
+
+    /// **A solid written in Rhai walks as the built-in** (B3's gate, on
+    /// the CPU): the Mandelbox's, the Mandelbulb's and the KIFS Menger's
+    /// Rhai twins, run by the interpreter, give the f64 twins' distances at
+    /// points in and around their balls; and each compiles to a walk that
+    /// validates.
+    #[test]
+    fn rhai_solids_walk_as_the_builtins() {
+        use crate::escape::lang::interp::{solid, ParamValues};
+        let cases: [(&str, &str, Solid); 3] = [
+            ("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))),
+            ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0))),
+            ("kifs-menger", RHAI_MENGER, Solid::Kifs(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]))),
+        ];
+        for (what, src, twin) in cases {
+            let p = crate::escape::lang::rhai::solid(src).unwrap_or_else(|d| panic!("{what}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+            let params = ParamValues::defaults(&p);
+            let levels = match &twin {
+                Solid::Box(b) => b.levels,
+                Solid::Bulb(b) => b.levels,
+                Solid::Kifs(k) => k.levels,
+                _ => unreachable!(),
+            };
+            let mut rng = XorShift(0x5EED_0000 + what.len() as u64);
+            let radius = twin.radius();
+            let mut worst = 0.0f64;
+            for _ in 0..400 {
+                let pos = rng.in_ball([0.0; 3], radius * 1.2, false);
+                let (want, got) = (twin.distance(pos), solid(&p, &params, pos, levels));
+                worst = worst.max((want - got).abs() / want.abs().max(1e-6));
+            }
+            println!("{what}: the Rhai walk's distance against the twin's, worst relative difference {worst:.2e}");
+            assert!(worst < 1e-9, "{what}: {worst}");
+            let base = template_parameters().len();
+            let wgsl = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("a walk");
+            crate::escape::lang::wgsl::validate_solid(&wgsl).expect("valid WGSL");
+        }
+    }
+
+    /// **A solid written in Rhai renders as the built-in** (B3's gate, on
+    /// the GPU): the Rhai twins of the Mandelbox, the Mandelbulb and the
+    /// KIFS Menger -- the last with its `prepare` computed on the CPU and
+    /// its function parameter -- carried as the config's custom formula and
+    /// registered as mode-D entries, cover the pixels the built-ins cover,
+    /// the same camera and ball.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn rhai_solids_render_as_the_builtins() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        const N: u32 = 160;
+        let (device, queue) = device();
+        let cases: [(&str, &str, Solid); 3] = [
+            ("mandelbox", RHAI_BOX, Solid::Box(Mandelbox::new(2.0))),
+            ("mandelbulb", RHAI_BULB, Solid::Bulb(Mandelbulb::new(8.0))),
+            ("kifs-menger", RHAI_MENGER, Solid::Kifs(Kifs::new(3, 3.0, [1.0, 1.0, 1.0]))),
+        ];
+        let mut failures = Vec::new();
+        for (what, src, solid) in cases {
+            let cfg = solid.config("ifs_level");
+            let builtin = solid_gpu_coverage(&device, &queue, &cfg, N);
+            let mut twin = cfg.clone();
+            let source = CustomSource { dialect: CustomDialect::Rhai, entry: what.to_string(), source: src.to_string(), variations: Vec::new() };
+            twin.escape.formula = crate::escape::custom::name_of(EntryKind::Solid, &source);
+            twin.escape.custom_formula = Some(source);
+            twin.escape.formula_params.insert("radius".to_string(), standalone_radius(solid.def(), &cfg.escape) as f32);
+            let got = solid_gpu_coverage(&device, &queue, &twin, N);
+            assert!(get_ifs(&twin.escape.formula).is_some_and(|d| d.solid), "{what}: not registered as a solid");
+            let covered = builtin.iter().filter(|b| **b).count();
+            let (differ, on_edges) = coverage_mismatch(&builtin, &got, N);
+            println!("{what}: the built-in covers {covered} of {} pixels; the Rhai twin differs on {differ}, {on_edges} of them at an edge", N * N);
+            if covered < (N * N / 20) as usize {
+                failures.push(format!("{what}: the view shows too little ({covered})"));
+            }
+            if differ > (N * N / 400) as usize || differ > on_edges {
+                failures.push(format!("{what}: {differ} pixels apart, {on_edges} at an edge"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Pixels where two coverages differ, and how many of those have a
+    /// neighbour where the first changes (an edge pixel).
+    fn coverage_mismatch(a: &[bool], b: &[bool], n: u32) -> (usize, usize) {
+        let n = n as i64;
+        let at = |x: i64, y: i64| a[(y.clamp(0, n - 1) * n + x.clamp(0, n - 1)) as usize];
+        let (mut differ, mut on_edges) = (0, 0);
+        for y in 0..n {
+            for x in 0..n {
+                let i = (y * n + x) as usize;
+                if a[i] != b[i] {
+                    differ += 1;
+                    let here = a[i];
+                    if [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)].iter().any(|&(dx, dy)| at(x + dx, y + dy) != here) {
+                        on_edges += 1;
+                    }
+                }
+            }
+        }
+        (differ, on_edges)
+    }
+
+    /// The KIFS plan A1, gate 2's exact half: with cubic folds, scale 2
+    /// and offset (1, 1, 1), every point of the cube maps into the cube
+    /// and every point outside it escapes, so the set is exactly the
+    /// solid cube. Its silhouette, cast through each pixel's ray against
+    /// the box, is what the GPU must draw, grown by the march's pixel of
+    /// tolerance: a wrong fold, scale, offset, ball or distance would
+    /// move the edges.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_kifs_of_cubic_folds_at_scale_two_is_the_cube() {
+        const N: u32 = 256;
+        let (device, queue) = device();
+        let k = Kifs::new(1, 2.0, [1.0, 1.0, 1.0]);
+        let gpu = solid_gpu_coverage(&device, &queue, &k.config("ifs_level"), N);
+        let (cam, rays) = solid_rays(&k.config("ifs_level"), N);
+        let exact: Vec<bool> = rays
+            .iter()
+            .map(|d| {
+                // The slab test against [-1, 1]^3.
+                let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
+                for i in 0..3 {
+                    let (o, dir) = (cam.eye_rel[i], d[i]);
+                    if dir.abs() < 1e-15 {
+                        if o.abs() > 1.0 {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let (a, b) = ((-1.0 - o) / dir, (1.0 - o) / dir);
+                    t0 = t0.max(a.min(b));
+                    t1 = t1.min(a.max(b));
+                }
+                t0 <= t1
+            })
+            .collect();
+        let lit = exact.iter().filter(|x| **x).count();
+        let (differ, on_edges) = coverage_mismatch(&exact, &gpu, N);
+        // The march stops where the surface is within a pixel's width
+        // (the solid template's rule), so a ray grazing an edge hits: the
+        // drawn silhouette is the box's grown by up to a pixel, never
+        // shrunk. The ring one pixel outside the box bounds the growth.
+        let grown = exact.iter().zip(&gpu).filter(|(e, g)| !**e && **g).count();
+        let shrunk = exact.iter().zip(&gpu).filter(|(e, g)| **e && !**g).count();
+        let n = N as i64;
+        let ring = (0..n * n)
+            .filter(|&i| {
+                let (x, y) = (i % n, i / n);
+                !exact[i as usize]
+                    && [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
+                        .iter()
+                        .any(|&(dx, dy)| (0..n).contains(&(x + dx)) && (0..n).contains(&(y + dy)) && exact[((y + dy) * n + x + dx) as usize])
+            })
+            .count();
+        println!("the cube: {lit} pixels by the box, {differ} differ ({grown} grown, {shrunk} shrunk, {on_edges} on its edges); the ring outside it has {ring}");
+        assert!(lit > 4000, "the cube fills too little of the frame ({lit})");
+        assert_eq!(differ, on_edges, "a pixel away from the cube's edges differs");
+        assert_eq!(shrunk, 0, "the drawn cube is smaller than the box");
+        assert!(grown <= ring, "the cube grew by more than a pixel: {grown} of a {ring}-pixel ring");
+    }
+
+    /// The KIFS plan A1, gate 2's twin half, for every flame-less solid:
+    /// each set the GPU draws is the one its CPU twin's march finds, ray
+    /// for ray as the solid template marches (entering at the ball,
+    /// stopping within a pixel of the surface) -- every KIFS fold and both
+    /// rotations, the Mandelbox and Mandelbulb and their Julias. Only
+    /// edge pixels may differ, where f32 and f64 part over a pixel.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_solids_render_as_their_twins() {
+        const N: u32 = 192;
+        let (device, queue) = device();
+        for (name, solid) in solid_cases() {
+            let cfg = solid.config("ifs_level");
+            let gpu = solid_gpu_coverage(&device, &queue, &cfg, N);
+            let (cam, rays) = solid_rays(&cfg, N);
+            let tan_half = (cam.fov as f64 * 0.5).tan();
+            let px_at = 2.0 * tan_half / N as f64;
+            let radius = solid.radius();
+            let steps = solid.steps();
+            let twin: Vec<bool> = rays
+                .iter()
+                .map(|dir| {
+                    let o = cam.eye_rel;
+                    let b = o[0] * dir[0] + o[1] * dir[1] + o[2] * dir[2];
+                    let disc = b * b - (norm3(o).powi(2) - radius * radius);
+                    if disc < 0.0 {
+                        return false;
+                    }
+                    let (mut t, t_max) = ((-b - disc.sqrt()).max(0.0), -b + disc.sqrt());
+                    for _ in 0..steps {
+                        if t > t_max {
+                            return false;
+                        }
+                        let p = [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
+                        let d = solid.distance(p);
+                        if d < (px_at * t).max(1e-30) {
+                            return true;
+                        }
+                        t += d;
+                    }
+                    false
+                })
+                .collect();
+            let lit = twin.iter().filter(|x| **x).count();
+            let (differ, on_edges) = coverage_mismatch(&twin, &gpu, N);
+            println!("{name}: {lit} pixels by the twin, {differ} differ, {on_edges} of them on edges");
+            assert!(lit > 1000, "{name}: the set fills too little of the frame ({lit})");
+            assert!(differ * 25 <= lit, "{name}: {differ} pixels differ of {lit}");
+            assert!(on_edges * 10 >= differ * 9, "{name}: {} pixels away from edges differ", differ - on_edges);
+        }
+    }
+
+    /// The KIFS cases under the level colouring, for inspection before a
+    /// preset ships (the KIFS plan A1, gate 3).
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/kifs-*.png"]
+    fn render_kifs_for_inspection() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        let mut cases: Vec<(String, crate::config::FractalConfig)> =
+            solid_cases().into_iter().map(|(name, solid)| (name.to_string(), solid.config("ifs_trap"))).collect();
+        cases.extend(
+            kifs_presets()
+                .into_iter()
+                .chain(quaternion_presets())
+                .chain(box_bulb_presets())
+                .map(|c| (format!("preset-{}", c.flame.name.to_ascii_lowercase().replace(' ', "-")), c)),
+        );
+        for (name, cfg) in cases {
+            let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+            let path = dir.join(format!("kifs-{name}.png"));
+            image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+            println!("    {}", path.display());
+        }
+    }
+
+    /// The golden folds' candidates (A4): each fold at its source's
+    /// defaults and two variations, under the level, trap and address
+    /// colourings, for picking presets.
+    #[test]
+    #[ignore = "needs a GPU; writes output/ifs/golden-*.png"]
+    fn render_golden_kifs_candidates() {
+        let dir = std::path::Path::new("output/ifs");
+        std::fs::create_dir_all(dir).expect("output dir");
+        let (device, queue) = device();
+        let turned = |mut k: Kifs, a1: [f64; 3], a2: [f64; 3]| {
+            k.a1 = a1;
+            k.a2 = a2;
+            k
+        };
+        let ico = [0.850650808, 0.525731112, 0.0];
+        let cases = [
+            ("ico", Kifs::new(4, 2.0, ico)),
+            ("ico-s25", Kifs::new(4, 2.5, ico)),
+            ("ico-turned", turned(Kifs::new(4, 2.0, ico), [0.0, 0.0, 12.0], [0.0, 8.0, 0.0])),
+            ("dod", Kifs::new(5, 2.617924, [1.0, 1.0, 1.0])),
+            ("dod-s22", Kifs::new(5, 2.2, [1.0, 1.0, 1.0])),
+            ("dod-turned", turned(Kifs::new(5, 2.617924, [1.0, 1.0, 1.0]), [0.0; 3], [0.0, 0.0, 15.0])),
+        ];
+        for (name, k) in cases {
+            for coloring in ["ifs_level", "ifs_trap", "ifs_address"] {
+                let cfg = k.config(coloring);
+                let job = crate::renderer::RenderJob::new(&cfg, 448, 448);
+                let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render");
+                let path = dir.join(format!("golden-{name}-{}.png", &coloring[4..]));
+                image::save_buffer(&path, &out.rgba_data, 448, 448, image::ColorType::Rgba8).expect("write png");
+            }
+        }
+    }
+
+    /// The Mandelbox and Mandelbulb presets (the KIFS plan A2, A3),
+    /// picked from two rounds of rendered candidates under each
+    /// colouring and inspected before they ship
+    /// (`render_kifs_for_inspection`).
+    pub(super) fn box_bulb_presets() -> Vec<crate::config::FractalConfig> {
+        let named = |name: &str, solid: Solid, coloring: &str, zoom: f64| {
+            let mut c = solid.config(coloring);
+            c.flame.name = name.to_string();
+            c.escape.zoom_log2 = zoom;
+            c
+        };
+        vec![
+            named("Mandelbox", Solid::Box(Mandelbox::new(2.0)), "ifs_trap", 0.0),
+            named("Mandelbox Scale 3", Solid::Box(Mandelbox::new(3.0)), "ifs_address", 0.3),
+            named("Mandelbox Inverted", Solid::Box(Mandelbox::new(-2.0)), "ifs_level", 1.6),
+            named("Mandelbox Julia", Solid::Box(Mandelbox { julia: Some([1.2, 0.8, -0.6]), ..Mandelbox::new(3.0) }), "ifs_address", 0.3),
+            named("Mandelbulb", Solid::Bulb(Mandelbulb::new(8.0)), "ifs_trap", -0.15),
+            named("Mandelbulb Power 4", Solid::Bulb(Mandelbulb::new(4.0)), "ifs_address", 0.0),
+            named("Mandelbulb Julia", Solid::Bulb(Mandelbulb { julia: Some([-0.2, 0.6, 0.3]), ..Mandelbulb::new(8.0) }), "ifs_level", 0.6),
+        ]
+    }
+
+    /// The KIFS presets (the KIFS plan A1): the Menger sponge, the
+    /// Sierpinski tetrahedron, the octahedron flake, and three turned by
+    /// the rotations or off the symmetric offset -- picked from rendered
+    /// candidates and inspected before they ship
+    /// (`render_kifs_for_inspection`).
+    pub(super) fn kifs_presets() -> Vec<crate::config::FractalConfig> {
+        let named = |name: &str, k: Kifs, coloring: &str, zoom: f64| {
+            let mut c = k.config(coloring);
+            c.flame.name = name.to_string();
+            c.escape.zoom_log2 = zoom;
+            c
+        };
+        let turned = |fold: u32, s: f64, o: [f64; 3], a1: [f64; 3], a2: [f64; 3]| {
+            let mut k = Kifs::new(fold, s, o);
+            k.a1 = a1;
+            k.a2 = a2;
+            k
+        };
+        vec![
+            named("KIFS Menger", Kifs::new(3, 3.0, [1.0, 1.0, 1.0]), "ifs_address", 0.0),
+            named("KIFS Tetrahedron", Kifs::new(0, 2.0, [1.0, 1.0, 1.0]), "ifs_level", 0.2),
+            named("KIFS Octahedron", Kifs::new(2, 2.0, [1.0, 0.0, 0.0]), "ifs_level", 0.0),
+            named("KIFS Turned", turned(3, 3.0, [1.0, 1.0, 1.0], [8.0, 0.0, 0.0], [0.0, 10.0, 0.0]), "ifs_address", 0.1),
+            named("KIFS Bloom", turned(2, 2.0, [1.0, 0.3, 0.0], [0.0; 3], [0.0, 0.0, 25.0]), "ifs_level", 0.1),
+            named("KIFS Columns", turned(1, 2.2, [1.0, 1.0, 1.0], [0.0, 30.0, 0.0], [0.0; 3]), "ifs_level", 0.1),
+            // The golden folds (A4), picked from `render_golden_kifs_candidates`.
+            named("KIFS Icosahedron", Kifs::new(4, 2.0, [0.850650808, 0.525731112, 0.0]), "ifs_level", 0.0),
+            named("KIFS Icosahedral Flake", Kifs::new(4, 2.5, [0.850650808, 0.525731112, 0.0]), "ifs_address", 0.0),
+            named("KIFS Dodecahedron", Kifs::new(5, 2.617924, [1.0, 1.0, 1.0]), "ifs_level", 0.0),
+        ]
     }
 
     /// Plan 8.11 gate 2, the math: with `c = 0` the orbit of `q` is
@@ -13462,7 +16398,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 cfg.flame.name
             );
         }
-        assert_eq!(seen, 11, "expected eleven IFS presets (four classical, two solid, three julia, one blob, one quaternion), found {seen}");
+        assert_eq!(
+            seen, 27,
+            "expected 27 mode-D presets (four classical, two flame solids, three julia, one blob, one quaternion,              nine KIFS, four Mandelbox, three Mandelbulb), found {seen}"
+        );
     }
 
     /// A 3D flame: the XY affine is identity plus a translation and

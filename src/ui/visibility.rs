@@ -53,6 +53,8 @@ const NEEDS_SURFACE: &str = "visibility.needs_surface";
 const OTHER_ENGINE: &str = "visibility.other_engine";
 /// The Texture panel: only an escape-time fractal uses a texture so far.
 const ESCAPE_TEXTURES: &str = "visibility.escape_textures";
+/// The Hybrid Designer writes escape-time formulas.
+const ESCAPE_HYBRIDS: &str = "visibility.escape_hybrids";
 /// Produces a flame, so using it would leave this mode.
 const MAKES_A_FLAME: &str = "visibility.makes_a_flame";
 /// Only the logarithmic tone mapping reads it.
@@ -63,6 +65,40 @@ const LINEAR_ONLY: &str = "visibility.linear_only";
 const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 /// Focused Rendering plans in the plane.
 const TWO_D_ONLY: &str = "visibility.two_d_only";
+const LIGHT_FLAME: &str = "visibility.light_flame";
+const POINT_LIGHT_TERRAIN: &str = "visibility.point_light_terrain";
+/// A 3D flame's lights turn with its camera, always.
+const LIGHT_FRAME_FLAME: &str = "visibility.light_frame_flame";
+
+/// Whether a view offers a kind of light (lights-in-the-fractal, L6): a
+/// directional light everywhere; a point where the world holds still --
+/// mode D's solids (a terrain's world is the view's, moving with every
+/// pan and zoom); a headlamp in every escape and simulation 3D view. The
+/// 3D flame's shade pass lights in screen space, directional alone.
+pub fn light_kind(kind: crate::config::LightKind, view: crate::camera::gesture::ViewKind) -> Vis {
+    use crate::camera::gesture::ViewKind;
+    use crate::config::LightKind;
+    match (kind, view) {
+        (LightKind::Directional, _) => Vis::Show,
+        (LightKind::Point, ViewKind::Solid) => Vis::Show,
+        (LightKind::Headlamp, ViewKind::Solid | ViewKind::EscapeTerrain | ViewKind::SimTerrain) => Vis::Show,
+        (LightKind::Point, ViewKind::EscapeTerrain | ViewKind::SimTerrain) => Vis::Grey(POINT_LIGHT_TERRAIN),
+        _ => Vis::Grey(LIGHT_FLAME),
+    }
+}
+
+/// Whether a view's directional lights may follow the camera
+/// (`SolidShadingSettings::lights_follow_camera`): a solid's choose; a 3D
+/// flame's always do (its shade pass lights the projected picture); a
+/// terrain's never do, so it has nothing to choose.
+pub fn light_frame(view: crate::camera::gesture::ViewKind) -> Vis {
+    use crate::camera::gesture::ViewKind;
+    match view {
+        ViewKind::Solid => Vis::Show,
+        ViewKind::Flame3d => Vis::Grey(LIGHT_FRAME_FLAME),
+        _ => Vis::Hide,
+    }
+}
 
 /// Whether the loaded config renders a SOLID SURFACE.
 ///
@@ -204,6 +240,20 @@ pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis {
         P::Textures => match m {
             M::Escape | M::Simulation => Vis::Show,
             M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_TEXTURES),
+        },
+
+        // Its formulas and colourings are escape-time ones; its
+        // transformations are the flame's variations (the KIFS plan, C1).
+        P::FormulaEditor => match m {
+            M::Escape | M::TwoD | M::ThreeD => Vis::Show,
+            M::Simulation => Vis::Grey(OTHER_ENGINE),
+        },
+
+        // So are its hybrids.
+        P::HybridDesigner => match m {
+            M::Escape => Vis::Show,
+            M::Simulation => Vis::Grey(OTHER_ENGINE),
+            M::TwoD | M::ThreeD => Vis::Grey(ESCAPE_HYBRIDS),
         },
     }
 }
@@ -407,12 +457,15 @@ pub static WINDOW_MENU: &[WindowMenuRow] = &[
     row(PanelType::Performance, "menu.window_performance"),
     row(PanelType::Rendering, "menu.window_rendering"),
     row(PanelType::View, "menu.window_view"),
+    // Every lit 3D view's lighting, shadows, material and surface
+    // (3d-look-and-tools P3; it was the View panel's Lighting & Material
+    // section from camera-unification C5 until then).
+    row(PanelType::SolidLighting, "menu.window_solid_lighting"),
     row(PanelType::Escape, "menu.window_escape"),
     row(PanelType::Simulation, "menu.window_simulation"),
     row(PanelType::Textures, "menu.window_textures"),
-    // No Solid Lighting row: its controls are the View panel's Lighting
-    // & Material section (camera-unification C5). The panel type stays
-    // so a saved layout that docks it still loads, and draws that section.
+    row(PanelType::FormulaEditor, "menu.window_formula_editor"),
+    row(PanelType::HybridDesigner, "menu.window_hybrid_designer"),
     row(PanelType::Transforms, "menu.window_transforms"),
     row(PanelType::TriangleEditor, "menu.window_triangle_editor"),
     row(PanelType::Colors, "menu.window_colors"),
@@ -446,6 +499,7 @@ pub static COMPACT_WINDOW_MENU: &[PanelType] = &[
     PanelType::TriangleEditor,
     PanelType::Colors,
     PanelType::View,
+    PanelType::SolidLighting,
     PanelType::Rendering,
     PanelType::FractalBrowser,
     PanelType::Variations,
@@ -474,6 +528,25 @@ pub fn label_key_of(p: PanelType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each view's kinds of light: a point where the world holds still
+    /// (a solid), a headlamp in every escape and simulation 3D view, and
+    /// a flame's shade pass directional alone.
+    #[test]
+    fn each_view_offers_its_kinds_of_light() {
+        use crate::camera::gesture::ViewKind;
+        use crate::config::LightKind;
+        for view in [ViewKind::Flame2d, ViewKind::Flame3d, ViewKind::EscapePlane, ViewKind::Solid, ViewKind::EscapeTerrain, ViewKind::Sim2d, ViewKind::SimTerrain] {
+            assert!(light_kind(LightKind::Directional, view).is_show(), "{view:?}");
+        }
+        assert!(light_kind(LightKind::Point, ViewKind::Solid).is_show());
+        assert!(!light_kind(LightKind::Point, ViewKind::EscapeTerrain).is_show());
+        assert!(!light_kind(LightKind::Point, ViewKind::Flame3d).is_show());
+        for view in [ViewKind::Solid, ViewKind::EscapeTerrain, ViewKind::SimTerrain] {
+            assert!(light_kind(LightKind::Headlamp, view).is_show(), "{view:?}");
+        }
+        assert!(!light_kind(LightKind::Headlamp, ViewKind::Flame3d).is_show());
+    }
     use rust_i18n::t;
 
     /// Every panel this build knows about, so the tests below cannot
@@ -509,6 +582,8 @@ mod tests {
         PanelType::Escape,
         PanelType::Simulation,
         PanelType::Textures,
+        PanelType::FormulaEditor,
+        PanelType::HybridDesigner,
     ];
 
     /// The list above is the whole enum. `PanelType` has no iterator,
@@ -568,7 +643,7 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), ALL_PANELS.len(), "duplicate entry in ALL_PANELS");
-        assert_eq!(ALL_PANELS.len(), 30, "a panel was added; decide what it means per mode");
+        assert_eq!(ALL_PANELS.len(), 32, "a panel was added; decide what it means per mode");
     }
 
     /// Every control this build knows about.
@@ -715,12 +790,12 @@ mod tests {
     }
 
     /// The flame modes offer everything except what is not theirs:
-    /// Solid & Lighting is 3D alone, and Textures go into an escape-time
+    /// Lighting & Material is 3D alone, and Textures go into an escape-time
     /// fractal (sim-textures plan: escape first).
     #[test]
     fn the_flame_modes_offer_everything_but_solid_in_two_d() {
         for p in ALL_PANELS {
-            let escape_only = *p == PanelType::Textures;
+            let escape_only = matches!(*p, PanelType::Textures | PanelType::HybridDesigner);
             assert_eq!(
                 panel(*p, RenderMode::ThreeD, Solid::Yes).is_show(),
                 !escape_only,
@@ -758,7 +833,7 @@ mod tests {
 
         let mut want_sim = vec![
             "XaosEditor", "Subflames", "Paths", "SolidLighting",
-            "RandomGenerator", "Escape",
+            "RandomGenerator", "Escape", "FormulaEditor", "HybridDesigner",
         ];
         want_sim.sort();
         assert_eq!(greyed(RenderMode::Simulation), want_sim, "Simulation");

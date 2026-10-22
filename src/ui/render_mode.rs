@@ -9,9 +9,128 @@
 //! escape-calibrated exposure. See `docs/archive/projects/ui-render-modes.md`
 //! section 3.1.
 
-use crate::config::delta::ConfigPath;
-use crate::config::manager::{ConfigError, ConfigManager};
+use crate::config::delta::{ConfigPath, ConfigValue, UpdateType};
+use crate::config::manager::{ConfigError, ConfigManager, EditingTarget};
+use crate::config::FractalConfig;
 use crate::scene::transforms::RenderMode;
+
+/// Whether a config draws a lit 3D surface of the escape or the
+/// simulation engine: a solid formula, or a terrain. A 3D flame is not
+/// one -- its look is the flame's own.
+pub fn surface_3d(config: &FractalConfig) -> bool {
+    match config.render_mode {
+        #[cfg(feature = "engine-escape")]
+        RenderMode::Escape => crate::escape::ifs::formula_is_solid(&config.escape.formula) || config.escape.terrain_active(),
+        #[cfg(feature = "engine-sim")]
+        RenderMode::Simulation => cfg!(feature = "terrain") && config.sim.terrain_active(),
+        _ => false,
+    }
+}
+
+/// The 3D look (docs/archive/projects/3d-look-and-tools.md, P2), for a config
+/// that `after` enters a lit 3D view `before` did not draw: the tone map
+/// Linear at exposure 2 and gamma 1 -- the escape image is linear light
+/// and the tone map encodes sRGB itself, so gamma 1 is the one correct
+/// encode -- saturation 1 and no hue shift, none of which a flame's values
+/// suit; and, when the lighting rig is untouched (a flame's default, no
+/// lighting at all), the rig taken over ([`rig_taken_over`]). Nothing
+/// when it enters no such view, or was in one already.
+pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    use crate::config::defaults::{DEFAULT_HUE_SHIFT, DEFAULT_SATURATION, ESCAPE_EXPOSURE, ESCAPE_GAMMA};
+    if surface_3d(before) || !surface_3d(after) {
+        return Vec::new();
+    }
+    let mut changes = vec![
+        (ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()),
+        (ConfigPath::Exposure, ESCAPE_EXPOSURE.into()),
+        (ConfigPath::Gamma, ESCAPE_GAMMA.into()),
+        (ConfigPath::Saturation, DEFAULT_SATURATION.into()),
+        (ConfigPath::HueShift, DEFAULT_HUE_SHIFT.into()),
+    ];
+    if after.solid_shading.rig_untouched() {
+        changes.extend(rig_taken_over(after));
+    }
+    // A new solid's lights are the fractal's, whatever an older file left.
+    if after.solid_shading.lights_follow_camera {
+        changes.push((ConfigPath::SolidLightsFollowCamera, false.into()));
+    }
+    changes
+}
+
+/// What an untouched lighting rig becomes when a lit 3D view takes it
+/// over -- on entry (the 3D look) and at the Lighting & Material panel's
+/// first change of it: full strength and no ambient (3d-look-and-tools
+/// P2), the rest as stored, and light 0 where the untouched rig's key
+/// light was, so taking the rig over does not swing it: on a terrain the
+/// sun (`DEFAULT_SUN`; light 0 ships at mode D's camera key light), on a
+/// solid whose lights are the fractal's the world's key
+/// (`ifs::default_world_key`).
+pub fn rig_taken_over(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    #[allow(unused_mut)]
+    let mut changes = vec![(ConfigPath::ShadingStrength, 1.0f32.into()), (ConfigPath::SolidAmbient, 0.0f32.into())];
+    #[allow(unused_variables)]
+    let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
+    #[cfg(feature = "engine-escape")]
+    if crate::camera::gesture::view_kind(config) == crate::camera::gesture::ViewKind::Solid && !config.solid_shading.lights_follow_camera {
+        let (azimuth, elevation) = crate::escape::ifs::default_world_key();
+        changes.push((light("azimuth"), azimuth.into()));
+        changes.push((light("elevation"), elevation.into()));
+    }
+    #[cfg(feature = "terrain")]
+    {
+        use crate::camera::gesture::{view_kind, ViewKind};
+        if matches!(view_kind(config), ViewKind::EscapeTerrain | ViewKind::SimTerrain) {
+            let (azimuth, elevation) = crate::escape::terrain::DEFAULT_SUN;
+            changes.push((light("azimuth"), azimuth.into()));
+            changes.push((light("elevation"), elevation.into()));
+        }
+    }
+    #[cfg(not(any(feature = "terrain", feature = "engine-escape")))]
+    let _ = config;
+    changes
+}
+
+/// A solid's lights fixed in the fractal's space where they are now (the
+/// View panel's Fly Mode section, for a solid saved while lights turned
+/// with the camera): each directional light's angles turned from the
+/// camera's space into the fractal's at this camera, and
+/// `lights_follow_camera` off -- the picture as it stands, and from then on
+/// the lights stay put as the camera moves. An untouched rig is taken
+/// over first: its key light is light 0 as it ships.
+#[cfg(feature = "engine-escape")]
+pub fn lights_to_world(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)> {
+    let mut changes = Vec::new();
+    if config.solid_shading.rig_untouched() {
+        changes.extend(rig_taken_over(config));
+    }
+    for (index, l) in config.solid_shading.lights.iter().enumerate() {
+        if l.kind != crate::config::LightKind::Directional {
+            continue;
+        }
+        let (azimuth, elevation) = crate::escape::ifs::camera_light_to_world(&config.escape, l.azimuth, l.elevation);
+        changes.push((ConfigPath::SolidLightParam { index, param: "azimuth".to_string() }, azimuth.into()));
+        changes.push((ConfigPath::SolidLightParam { index, param: "elevation".to_string() }, elevation.into()));
+    }
+    changes.push((ConfigPath::SolidLightsFollowCamera, false.into()));
+    changes
+}
+
+/// `changes` as one undo step, with the 3D look ([`look_3d`]) when they
+/// take the config into a lit 3D view: the formula picker choosing a
+/// solid, a terrain switched on, a Rhai solid put to use.
+pub fn apply_with_look(
+    config_manager: &mut ConfigManager,
+    mut changes: Vec<(ConfigPath, ConfigValue)>,
+    description: &str,
+) -> Result<UpdateType, ConfigError> {
+    let before = config_manager.active_config().clone();
+    let mut after = before.clone();
+    for (path, value) in &changes {
+        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
+    }
+    changes.extend(look_3d(&before, &after));
+    config_manager.update_batch(changes, description.to_string())
+}
 
 /// Change the render mode.
 ///
@@ -57,6 +176,16 @@ pub fn switch_render_mode(
     let config = config_manager.active_config();
     if config.render_mode == mode {
         return Ok(());
+    }
+    // Into a lit 3D view (a solid, a terrain): its look, which includes
+    // the tone map's reset, in the same undo step.
+    let mut after = config.clone();
+    let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, &ConfigPath::RenderMode, mode.into());
+    let look = look_3d(config, &after);
+    if !look.is_empty() {
+        let mut changes = vec![(ConfigPath::RenderMode, mode.into())];
+        changes.extend(look);
+        return config_manager.update_batch(changes, "history.param.render_mode".to_string()).map(|_| ());
     }
     // Escape output has its own calibration; a simulation keeps the flame
     // defaults (`entry_tone_mapping`, shared with the script handles).
@@ -182,10 +311,105 @@ mod tests {
     use crate::config::FractalConfig;
     use crate::scene::tonemap::ToneMapMode;
 
+    /// A solid's lights on entry (2026-10-19): the 3D look leaves them the
+    /// fractal's whatever an older file left; an untouched rig taken over
+    /// keeps its key light where it was -- the world's key when the lights
+    /// are the fractal's, light 0 as it ships when they follow the camera.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn a_solid_enters_with_its_lights_in_the_fractal() {
+        let mut solid = FractalConfig::default();
+        solid.render_mode = RenderMode::Escape;
+        solid.escape.formula = "mandelbulb_solid".to_string();
+        let mut plane = solid.clone();
+        plane.escape.formula = "mandelbrot".to_string();
+        let mut old = solid.clone();
+        old.solid_shading.lights_follow_camera = true;
+        assert!(look_3d(&plane, &old).contains(&(ConfigPath::SolidLightsFollowCamera, false.into())), "entering: the fractal's");
+        assert!(!look_3d(&plane, &solid).iter().any(|(p, _)| *p == ConfigPath::SolidLightsFollowCamera), "already the fractal's");
+        let light = |param: &str| ConfigPath::SolidLightParam { index: 0, param: param.to_string() };
+        let (azimuth, elevation) = crate::escape::ifs::default_world_key();
+        let taken = rig_taken_over(&solid);
+        assert!(taken.contains(&(light("azimuth"), azimuth.into())) && taken.contains(&(light("elevation"), elevation.into())));
+        assert!(!rig_taken_over(&old).iter().any(|(p, _)| matches!(p, ConfigPath::SolidLightParam { .. })), "the camera's key stays");
+    }
+
     fn manager_in(mode: RenderMode) -> ConfigManager {
         let mut config = FractalConfig::default();
         config.render_mode = mode;
         ConfigManager::new(config)
+    }
+
+    /// Entering a lit 3D view gives it the 3D look (3d-look-and-tools P2),
+    /// one undo step: by the mode switch with a solid formula, by the
+    /// formula picker, by a terrain switched on. A touched rig is the
+    /// user's and stays; a view already 3D keeps what it has.
+    #[cfg(all(feature = "engine-escape", feature = "terrain"))]
+    #[test]
+    fn entering_a_3d_view_gives_it_the_3d_look() {
+        use crate::config::ConfigValue;
+        let looks_3d = |c: &FractalConfig, rig: bool| {
+            c.tonemap_mode == ToneMapMode::Linear
+                && c.exposure == 2.0
+                && c.gamma == 1.0
+                && c.saturation == 1.0
+                && c.hue_shift == 0.0
+                && (!rig || (c.solid_shading.shading_strength == 1.0 && c.solid_shading.ambient == 0.0))
+        };
+        // From a flame, its saturation a flame's, into Escape on a solid.
+        let mut flame = FractalConfig::default();
+        flame.saturation = 1.8;
+        flame.escape.formula = "mandelbulb_solid".to_string();
+        let mut m = ConfigManager::new(flame);
+        switch_render_mode(&mut m, RenderMode::Escape).expect("switch");
+        assert!(looks_3d(m.active_config(), true), "the mode switch into a solid");
+        m.undo().expect("undo");
+        assert_eq!(m.active_config().render_mode, RenderMode::TwoD);
+        assert_eq!(m.active_config().saturation, 1.8, "one undo step");
+
+        // The formula picker, from a plane.
+        let mut plane = FractalConfig::default();
+        plane.render_mode = RenderMode::Escape;
+        plane.exposure = 3.0;
+        let mut m = ConfigManager::new(plane.clone());
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("kifs_solid".into()))], "history.param.escape_formula").unwrap();
+        assert!(looks_3d(m.active_config(), true), "the picker");
+        // ... and from it to another solid: nothing.
+        let mut c = m.active_config().clone();
+        c.exposure = 3.0;
+        let mut m = ConfigManager::new(c);
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("mandelbox_solid".into()))], "history.param.escape_formula").unwrap();
+        assert_eq!(m.active_config().exposure, 3.0, "a solid to a solid keeps its look");
+
+        // A terrain switched on; a touched rig kept.
+        let mut touched = plane;
+        touched.solid_shading.shading_strength = 0.5;
+        touched.solid_shading.ambient = 0.3;
+        let mut m = ConfigManager::new(touched);
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeTerrainEnabled, true.into())], "history.param.escape_terrain_enabled").unwrap();
+        assert!(looks_3d(m.active_config(), false), "the terrain");
+        assert_eq!((m.active_config().solid_shading.shading_strength, m.active_config().solid_shading.ambient), (0.5, 0.3), "a touched rig stays");
+        // An untouched rig on a terrain: light 0 takes the default sun's
+        // place, so the sun does not swing.
+        let mut m = ConfigManager::new({
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c
+        });
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeTerrainEnabled, true.into())], "history.param.escape_terrain_enabled").unwrap();
+        let c = m.active_config();
+        assert!(looks_3d(c, true), "an untouched terrain");
+        assert_eq!((c.solid_shading.lights[0].azimuth, c.solid_shading.lights[0].elevation), crate::escape::terrain::DEFAULT_SUN);
+        assert!(c.solid_shading.lights[0].enabled);
+        // A plane is no 3D view: the picker choosing another plane changes nothing else.
+        let mut m = ConfigManager::new({
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.exposure = 3.0;
+            c
+        });
+        apply_with_look(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("burning_ship".into()))], "history.param.escape_formula").unwrap();
+        assert_eq!(m.active_config().exposure, 3.0);
     }
 
     /// Every ordered pair of modes: the switch lands where it was told.

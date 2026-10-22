@@ -2853,6 +2853,9 @@ impl App {
                 if escape.resize(&self.gpu.device, renderer.width, renderer.height, aa_factor) {
                     self.escape_dirty = true;
                 }
+                crate::escape::set_viewport_render_lines(
+                    renderer.height.saturating_mul(escape.effective_supersample()),
+                );
                 // The viewport's corner says what it is drawn at, and why
                 // that is below the setting when it is.
                 self.egui_layer.update_escape_aa(Some(aa_governor::readout(
@@ -2898,6 +2901,16 @@ impl App {
                         self.escape_dirty = true;
                     }
                     if escape.set_solid_material(crate::escape::path_core::lit_material(&final_config)) {
+                        self.escape_dirty = true;
+                    }
+                    if escape.set_solid_studio(crate::escape::path_core::studio_level(&final_config.escape.path, &final_config)) {
+                        self.escape_dirty = true;
+                    }
+                    if escape.set_environment(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        crate::escape::path_core::environment_settings(&final_config.escape.path, &final_config),
+                    ) {
                         self.escape_dirty = true;
                     }
                 }
@@ -2983,6 +2996,13 @@ impl App {
                         }
                     }
                 }
+                // The path tracer's call: short while the user is at it, so
+                // the UI keeps about twenty frames a second; the export's
+                // once nothing has been touched for two seconds and nothing
+                // plays, which fills the card (`IDLE_FRAME_MS`).
+                let idle = !self.animation_controller.is_playing()
+                    && self.last_input_time.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(2));
+                let frame_ms = if idle { crate::escape::renderer::IDLE_FRAME_MS } else { crate::escape::renderer::VIEWPORT_FRAME_MS };
                 if solid_tier != crate::config::escape::RenderTier::Lit
                     && !self.escape_dirty
                     && escape.trace_solid_viewport(
@@ -2990,6 +3010,7 @@ impl App {
                         &self.gpu.queue,
                         &final_config,
                         renderer.escape_palette_view(final_config.escape.palette_map.stepped),
+                        frame_ms,
                     )
                 {
                     self.window.request_redraw();
@@ -3129,6 +3150,11 @@ impl App {
                 if final_config.sim.terrain_active() {
                     let device = &self.gpu.device;
                     let queue = &self.gpu.queue;
+                    // Fly mode's floor: the ground under the eye (P6).
+                    let fly_ground = self.fly_mode && {
+                        let s = self.config_manager.system_settings();
+                        s.fly_collisions || s.fly_proximity
+                    };
                     let terrain = self
                         .sim_terrain
                         .get_or_insert_with(|| crate::sim::terrain::SimTerrain::new(device, w, h));
@@ -3137,6 +3163,9 @@ impl App {
                     // An export in the background has the GPU meanwhile;
                     // its own cadence redraws the window.
                     let exporting = self.export_status.lock().map(|s| s.active).unwrap_or(false);
+                    if !exporting && fly_ground {
+                        terrain.probe_ground(device, queue, &final_config);
+                    }
                     if !exporting && terrain.render_viewport(device, queue, &final_config) {
                         self.window.request_redraw();
                     }

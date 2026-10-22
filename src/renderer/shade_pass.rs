@@ -22,6 +22,13 @@ struct ShadeLight {
     color: [f32; 4],
 }
 
+/// `shaders/shade.wgsl` with the coat's albedo fit spliced in at
+/// `//__COAT_ENERGY__` (`renderer::coat::coat_energy_wgsl`, the path
+/// tracer's and the rig's own text).
+fn shade_wgsl() -> String {
+    include_str!("../../shaders/shade.wgsl").replace("//__COAT_ENERGY__", &crate::renderer::coat::coat_energy_wgsl("coat_"))
+}
+
 /// Mirrors WGSL `ShadeParams` (shade.wgsl) — 20 scalars + 4 camera
 /// vec4s + 2 scalar quads (shadow/ema/fog + background) + shadow fit
 /// vec4 + a shadow scalar quad + the material quad + 4 lights × 32 B =
@@ -72,7 +79,7 @@ struct ShadeParams {
     gloss: f32,
     roughness: f32,
     glow: f32,
-    _pad_mat: f32,
+    metallic: f32,
     lights: [ShadeLight; 4],
 }
 
@@ -224,7 +231,7 @@ impl ShadePass {
     pub fn new(device: &Device, width: u32, height: u32) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Solid Shade Shader"),
-            source: ShaderSource::Wgsl(include_str!("../../shaders/shade.wgsl").into()),
+            source: ShaderSource::Wgsl(shade_wgsl().into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -686,7 +693,9 @@ impl ShadePass {
                 el.sin(),
                 el.cos() * az.cos(),
             ];
-            let intensity = if l.enabled { l.intensity.max(0.0) } else { 0.0 };
+            // The splat pass lights in screen space: a point or a headlamp
+            // has no world to sit in here, and is off.
+            let intensity = if l.directional_on() { l.intensity.max(0.0) } else { 0.0 };
             lights[i] = ShadeLight {
                 dir_intensity: [dir[0], dir[1], dir[2], intensity],
                 color: [l.color[0], l.color[1], l.color[2], 0.0],
@@ -774,7 +783,7 @@ impl ShadePass {
             gloss: shading.gloss.clamp(0.0, 1.0),
             roughness: shading.roughness.clamp(0.02, 1.0),
             glow: shading.glow.max(0.0),
-            _pad_mat: 0.0,
+            metallic: shading.metallic.clamp(0.0, 1.0),
             lights,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1082,7 +1091,7 @@ mod tests {
             "gloss: f32,",
             "roughness: f32,",
             "glow: f32,",
-            "_pad_mat: f32,",
+            "metallic: f32,",
             "lights: array<ShadeLight, 4>,",
         ];
         let mut at = 0usize;

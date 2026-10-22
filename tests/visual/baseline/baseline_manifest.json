@@ -4,7 +4,7 @@
     120
   ],
   "generated_by": "tests/visual/run_tests.py --update-baseline",
-  "git_hash": "b94d602b",
+  "git_hash": "2bf0d82f",
   "images": {
     "2d-plastic-sierpinski.png": {
       "bytes": 35102,
@@ -110,9 +110,13 @@
       "bytes": 38653,
       "sha256": "838d103b70d74885745c315424146ceebb7ce69f897f6211a76bd9e8443a3663"
     },
+    "escape-custom-sine-ring.png": {
+      "bytes": 440787,
+      "sha256": "bd7275be3de98cd075c5c6b7d1f216d043b6cec1527048d72b0338170bff0955"
+    },
     "escape-deep-threshold-direct.png": {
-      "bytes": 42510,
-      "sha256": "fe226e582f4605a0654ead23489487f071af47a4e3f80de8908a3d638166fc40"
+      "bytes": 391090,
+      "sha256": "0feae5567434ca6f136cf8698ca8c99ac4d271e1e0f848f6d9f0088ab209ec12"
     },
     "escape-deep-threshold-perturbed.png": {
       "bytes": 38810,
@@ -177,6 +181,10 @@
     "escape-feather.png": {
       "bytes": 11665,
       "sha256": "6fb96b097dcdadc224b0031d93ac98e8ba29b62a7898513815077dbf0aaa43d4"
+    },
+    "escape-hybrid-deep-phases.png": {
+      "bytes": 22872,
+      "sha256": "637eef740e1810756d009b7b9264603b41f365ab5562e1c59f8d7f394a93ab31"
     },
     "escape-ifs-solid-tetrahedron-path.png": {
       "bytes": 9047,
@@ -466,9 +474,25 @@
       "bytes": 46892,
       "sha256": "9163c274dc035c311e03fe72d68efa96c7fde839073d3eb0a613c1ed200c9115"
     },
+    "escape-origami-creases-terrain-rock.png": {
+      "bytes": 20170,
+      "sha256": "4c6011de1aa8c4e925eb8393c09f700dc23917cd1c8d9e2e49a31af14dc6af9f"
+    },
+    "escape-origami-creases-terrain.png": {
+      "bytes": 16591,
+      "sha256": "8d3c6c2bee0804b419f864a889db58c5e1a9772f81eeaa7be649654dc360934d"
+    },
+    "escape-origami-creases.png": {
+      "bytes": 43830,
+      "sha256": "720c06172e4a36d09a4ce9881b1026fe50ffe8ffcf028049fa4b612c8539cf40"
+    },
     "escape-origami-relief-paper.png": {
       "bytes": 49653,
       "sha256": "7420367ac397e62b9a964742e9ff56c7b12883ad93ce0151d07d4b23e0db0d4d"
+    },
+    "escape-origami-relief-rock.png": {
+      "bytes": 46595,
+      "sha256": "9b85c6f2cdc60686015668692f2b3a6deabbd57231258008435960aaa6c51f64"
     },
     "escape-origami-relief-soft.png": {
       "bytes": 47324,
@@ -499,8 +523,8 @@
       "sha256": "d97ec26312b50362c154706e80fb523bdbda41e6df7f49887d74b2a437fe5e50"
     },
     "escape-ship-deep-floatexp.png": {
-      "bytes": 40199,
-      "sha256": "de04c243a47095f00cdf6210a84e552674e3d0d54c4654b2eeb022c54685e77a"
+      "bytes": 40135,
+      "sha256": "82f80a93ddaa2160bd7639eb6a34ab1873afa53edcc636b78695d2c1d5028b6f"
     },
     "escape-ship-deep-perturbed.png": {
       "bytes": 14679,
@@ -551,8 +575,8 @@
       "sha256": "2c824a2a8ffcdbd854ea68f78bee2577314b66b12e903bf41083998ea900a27b"
     },
     "escape-tricorn-deep.png": {
-      "bytes": 46881,
-      "sha256": "e5b37f57fcfd8cb94439cdd35ca61b2f70622fca31deb309a81b1824bedeecb9"
+      "bytes": 46868,
+      "sha256": "25d28a48bd11305c1892418575bc2ed68ae4183ba0f2a12a5aff69966cbfae2c"
     },
     "escape-tricorn.png": {
       "bytes": 3765,
@@ -1127,8 +1151,8 @@
       "sha256": "7120c40534fe0cbc80e126a60f2c9c7a5a039b9b6f555317b7b6de2213808fd4"
     },
     "variations-circle_rand_misc-smoke.png": {
-      "bytes": 34737,
-      "sha256": "7bf5e6003c509e42e9785e971def44c1741c09f1049b673bc692d4f475a02cca"
+      "bytes": 35146,
+      "sha256": "89879c9337dd9fd36b6d783b3a5c90dd7dd6467a8f3bc34edc1afd768f32a21d"
     },
     "variations-circlecrop-exblur-smoke.png": {
       "bytes": 443,
@@ -1351,8 +1375,8 @@
       "sha256": "e33c512393d6f00e1d9881bbdc7a2adf0495a1e6a749ec5fe02fad2cdf7e2a3e"
     },
     "variations-pointgrid_misc-smoke.png": {
-      "bytes": 34622,
-      "sha256": "0479749cf370bbfe32a662ca5d3a2002eb0734cafb3eacc05956cf27d0474f4f"
+      "bytes": 34902,
+      "sha256": "68bebc5437fb7c9e3f3d5d67581791f24fbb2ee7d1b09e2cf9efea9b51c172bf"
     },
     "variations-popcorn2_3d-smoke.png": {
       "bytes": 633,

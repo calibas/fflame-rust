@@ -754,6 +754,9 @@ impl FlameRenderer {
         palette_size: u32,
         state: (u32, u32),
     ) -> Self {
+        // The variations the user wrote, as `load_config` registers them.
+        #[cfg(feature = "engine-escape")]
+        crate::variations::custom::ensure(flame);
         let pipelines = FlamePipelines::new(device, surface_format, flame);
         let buffers = FlameBuffers::with_palette_size(device, queue, state.0, state.1, flame, palette_size);
 
@@ -2145,7 +2148,8 @@ impl FlameRenderer {
         let rows = crate::renderer::shade_pass::effective_camera_rows(
             camera_rotation_x, camera_rotation_y, camera_bank);
         for (i, l) in self.solid_shading.lights.iter().enumerate().take(4) {
-            if !(l.enabled && l.intensity > 0.0) {
+            // A point or a headlamp has no world to sit in here.
+            if !(l.directional_on() && l.intensity > 0.0) {
                 continue;
             }
             let az = l.azimuth.to_radians();
@@ -2595,6 +2599,10 @@ impl FlameRenderer {
         // disagree. A fresh renderer has an empty sticky set, so one-shot
         // paths (CLI export, visual tests, probe, census) see a plain
         // clone and compile specialized, unchanged.
+        // The variations the user wrote, registered before anything reads
+        // the registry for this flame (the KIFS plan, C1).
+        #[cfg(feature = "engine-escape")]
+        crate::variations::custom::ensure(&config.flame);
         let sticky_config;
         let config: &FractalConfig = if self.sticky.enabled() {
             let mut c = config.clone();
@@ -2714,12 +2722,7 @@ impl FlameRenderer {
         // 3. Update density and background
         self.density_scale = config.density_scale;
         self.white_level = config.white_level;
-        self.highlight_mode = match config.highlight_mode {
-            crate::scene::tonemap::HighlightMode::Clip => 0,
-            crate::scene::tonemap::HighlightMode::MaxNorm => 1,
-            crate::scene::tonemap::HighlightMode::Reinhard => 2,
-            crate::scene::tonemap::HighlightMode::Filmic => 3,
-        };
+        self.highlight_mode = config.highlight_mode.shader_code();
         self.background_color = config.background_color;
         // The depth fog's target, which every per-frame GpuParams write
         // (compute_pass, update_iterations, ...) and the shade pass read.
@@ -2907,6 +2910,9 @@ impl FlameRenderer {
     pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
         self.flame_hash = Self::orbit_flame_hash(flame);
         self.orbit_refresh_period = orbit_refresh_period_of(flame);
+        // The variations the user wrote, as `load_config` registers them.
+        #[cfg(feature = "engine-escape")]
+        crate::variations::custom::ensure(flame);
         // Sticky superset (Layer B): same shadowing as load_config, for
         // the editor's incremental path — this is what makes toggling a
         // variation off and back on a cache hit instead of two rebuilds.
@@ -3580,12 +3586,7 @@ impl FlameRenderer {
         // update_background_color → update_tonemap_state) don't reset
         // white_level / highlight_mode back to their defaults on the next refresh.
         self.white_level = white_level;
-        self.highlight_mode = match highlight_mode {
-            crate::scene::tonemap::HighlightMode::Clip => 0,
-            crate::scene::tonemap::HighlightMode::MaxNorm => 1,
-            crate::scene::tonemap::HighlightMode::Reinhard => 2,
-            crate::scene::tonemap::HighlightMode::Filmic => 3,
-        };
+        self.highlight_mode = highlight_mode.shader_code();
 
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,

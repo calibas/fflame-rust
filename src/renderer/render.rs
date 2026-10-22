@@ -169,13 +169,19 @@ pub struct RenderOutput {
 /// which in the app comes with a warning -- and from the CLI was a
 /// Mandelbrot saved under the unknown formula's name, exit code 0.
 pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
+    // A variation the flame carries the source of is known (a lens).
+    #[cfg(feature = "engine-escape")]
+    crate::variations::custom::ensure(&config.flame);
     #[allow(unused_mut)]
     let mut out = Vec::new();
     match config.render_mode {
         #[cfg(feature = "engine-escape")]
         crate::scene::transforms::RenderMode::Escape => {
             let e = &config.escape;
-            let a = crate::escape::FORMULAS.iter().any(|f| f.name == e.formula);
+            // Sources the config carries name entries of their own: a
+            // source that compiles is known; one that does not is not.
+            crate::escape::custom::ensure(e);
+            let a = crate::escape::find_formula(&e.formula).is_some();
             let b = crate::escape::fields::get_field(&e.formula).is_some();
             let d = crate::escape::ifs::get_ifs(&e.formula).is_some();
             if !(a || b || d) {
@@ -185,7 +191,7 @@ pub fn unknown_names(config: &crate::config::FractalConfig) -> Vec<String> {
             // after a switch, and its default draws; one in no registry
             // is unknown.
             let colouring = |name: &str| {
-                crate::escape::COLORINGS.iter().any(|c| c.name == name)
+                crate::escape::find_coloring(name).is_some()
                     || crate::escape::fields::FIELD_COLORINGS.iter().any(|c| c.name == name)
                     || crate::escape::ifs::IFS_COLORINGS.iter().any(|c| c.name == name)
             };
@@ -440,6 +446,10 @@ pub async fn render_with(
         return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
     }
     let start_time = web_time::Instant::now();
+    // The variations the flame carries the source of, registered for
+    // every engine: a flame's, an escape lens, a simulation's warp.
+    #[cfg(feature = "engine-escape")]
+    crate::variations::custom::ensure(&job.config.flame);
 
     // Escape-time mode is a different generator with the same tail:
     // one compute pass instead of the chaos-game loop, then the shared
@@ -1148,6 +1158,9 @@ async fn render_escape(
     progress: &mut dyn RenderProgress,
     start_time: web_time::Instant,
 ) -> Result<RenderOutput, RenderError> {
+    // A formula or colouring the config carries as source, compiled
+    // before anything below resolves its name.
+    crate::escape::custom::ensure(&job.config.escape);
     log::info!(
         "Render: escape-time {}x{}, formula '{}', coloring '{}', max_iter {}",
         job.width,
@@ -1506,6 +1519,8 @@ async fn prepare_escape(
         );
         escape_renderer.set_solid_sky(crate::escape::path_core::sky_seen(&config.escape.path, config));
         escape_renderer.set_solid_material(crate::escape::path_core::lit_material(config));
+        escape_renderer.set_solid_studio(crate::escape::path_core::studio_level(&config.escape.path, config));
+        escape_renderer.set_environment(device, queue, crate::escape::path_core::environment_settings(&config.escape.path, config));
     }
     // The texture's image (docs/archive/projects/sim-textures.md): the
     // config carries the recipe, and the image comes from the cache or

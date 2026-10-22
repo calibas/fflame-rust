@@ -23,6 +23,7 @@ pub mod resource_store;
 pub mod effect_cache;
 pub mod plugins;
 pub mod effect_catalog;
+pub mod formula_store;
 pub mod variation_cache;
 pub mod variation_catalog;
 

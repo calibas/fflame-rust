@@ -388,6 +388,8 @@ pub fn render_colors_content(
                             HighlightMode::MaxNorm => t!("tonemap.highlight_maxnorm"),
                             HighlightMode::Reinhard => t!("tonemap.highlight_reinhard"),
                             HighlightMode::Filmic => t!("tonemap.highlight_filmic"),
+                            HighlightMode::AgX => t!("tonemap.highlight_agx"),
+                            HighlightMode::AgXPunchy => t!("tonemap.highlight_agx_punchy"),
                         };
                         ui.horizontal(|ui| {
                             ui.label(t!("tonemap.highlight_mode"));
@@ -399,6 +401,8 @@ pub fn render_colors_content(
                                         (HighlightMode::MaxNorm,  t!("tonemap.highlight_maxnorm"),  t!("tonemap.tooltip_highlight_maxnorm")),
                                         (HighlightMode::Reinhard, t!("tonemap.highlight_reinhard"), t!("tonemap.tooltip_highlight_reinhard")),
                                         (HighlightMode::Filmic,   t!("tonemap.highlight_filmic"),   t!("tonemap.tooltip_highlight_filmic")),
+                                        (HighlightMode::AgX,      t!("tonemap.highlight_agx"),      t!("tonemap.tooltip_highlight_agx")),
+                                        (HighlightMode::AgXPunchy, t!("tonemap.highlight_agx_punchy"), t!("tonemap.tooltip_highlight_agx_punchy")),
                                     ] {
                                         let resp = ui.selectable_label(current_highlight_mode == mode, label)
                                             .on_hover_text(tooltip);

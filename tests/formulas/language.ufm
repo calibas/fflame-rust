@@ -1,0 +1,252 @@
+comment {
+  The formula language's test entries, Ultra Fractal's dialect: between
+  them, every construct the checker accepts. Each compiles, and on the
+  GPU runs as the f64 interpreter does (escape::lang tests). Written for
+  this project; no third-party formulas.
+}
+
+Types {
+; Every type, every conversion and every operator.
+init:
+  bool b = true
+  int i = 7
+  float f = 2.5
+  complex c = (0.25, -0.5)
+  z = #pixel
+loop:
+  int j = i % 3 - (-i) % 4 + i * 2
+  float g = i / 2 + f * 0.5 - f^2 / 8 + -f^2 / 16
+  b = (j > 2 && g <= 9) || !(f == 2.5) && i != 0
+  if b
+    z = z * c + g * 0.01 + 2i * 0.001
+  else
+    z = z - (f, j) * 0.001
+  endif
+  z = z^2 + z^3 * 0.5 + z^(0.5, 0.25) * 0.1 + (1.5)^z * 0.01 + |z| * 0.01 + #pixel
+bailout:
+  |z| < 1e6 && b == b
+}
+
+Functions {
+; Every built-in on a complex argument, and the real ones on floats.
+init:
+  z = #pixel
+loop:
+  complex w = z * 0.5 + (0.3, 0.2)
+  float x = real(w) + 1.5
+  z = sin(w) + cos(w) + tan(w) * 0.1 + cotan(w) * 0.01 + sinh(w) + cosh(w) * 0.5 \
+      + tanh(w) + cotanh(w) * 0.01 + asin(w) + acos(w) * 0.5 + atan(w) + asinh(w) \
+      + acosh(w) * 0.5 + atanh(w) * 0.5 + sqr(w) + sqrt(w) + log(w) * 0.5 + exp(w) * 0.1 \
+      + abs(w) + cabs(w) + recip(w) * 0.01 + ident(w) + zero(w) + round(w * 3) * 0.1 \
+      + trunc(w * 3) * 0.1 + ceil(w * 3) * 0.1 + floor(w * 3) * 0.1 + real(w) + imag(w) \
+      + conj(w) + flip(w) + atan2(w) + cosxx(w) * 0.1
+  z = z * 0.01 + sqrt(x) + log(x) + exp(-x) + sin(x) + cos(x) + atan(x) + round(x) \
+      + trunc(x) + floor(x) + ceil(x) + abs(-x) + sqr(x) * 0.1 + #pixel
+  if isnan(z) || isinf(z)
+    z = 0
+  endif
+bailout:
+  |z| < 1e6
+}
+
+Control {
+; Branches, both loops, nesting.
+init:
+  z = #pixel
+  int n = 0
+loop:
+  int k = 0
+  while k < 3
+    if k == 0
+      z = z * 0.9
+    elseif k == 1
+      z = z + 0.01
+    else
+      z = z - (0, 0.01)
+    endif
+    k = k + 1
+  endwhile
+  repeat
+    k = k - 1
+    z = z + 0.001 * k
+  until k <= 0
+  n = n + 1
+  z = sqr(z) + #pixel
+bailout:
+  |z| < 4 && n < 1000
+}
+
+Params {
+; A parameter of every kind, a user function, an enum compared with an
+; item's name, and the bailout the panel drives.
+init:
+  z = @start
+loop:
+  if @mode == "Square"
+    z = sqr(z)
+  elseif @mode == "Cube"
+    z = z^3
+  else
+    z = @fn(z)
+  endif
+  if @flip && @count > 2
+    z = conj(z)
+  endif
+  z = z * @scale + #pixel
+bailout:
+  |z| < @bailout
+default:
+  title = "Parameters"
+  center = (-0.5, 0)
+  maxiter = 200
+  complex param start
+    caption = "Start"
+    default = (0, 0)
+  endparam
+  int param mode
+    caption = "Mode"
+    enum = "Square" "Cube" "Function"
+    default = 0
+  endparam
+  func fn
+    caption = "Function"
+    default = sin()
+  endfunc
+  bool param flip
+    default = false
+  endparam
+  int param count
+    default = 3
+    min = 0
+    max = 10
+  endparam
+  float param scale, default = 1.0, min = 0.5, max = 2, endparam
+  float param bailout
+    default = 4
+  endparam
+}
+
+Globals {
+; Values computed once per image, read-only in the other sections.
+global:
+  float k = 2 * #pi / @petals
+  complex rot = (cos(k), sin(k))
+  int twice = @petals * 2
+init:
+  z = #pixel
+loop:
+  z = sqr(z) * rot + #pixel * 0.5 + twice * 0.001
+bailout:
+  |z| < 4
+default:
+  int param petals
+    default = 5
+  endparam
+}
+
+Directives {
+; UF's compiler directives, and a hint continued over lines.
+$define SMOOTH
+init:
+  z = 0
+loop:
+$ifdef VER40
+  z = sqr(z) + #pixel
+$else
+  z = z^3 + #pixel
+$endif
+$ifdef SMOOTH
+  z = z * 0.99
+$endif
+$undef SMOOTH
+$ifdef SMOOTH
+  z = z * 1000
+$endif
+bailout:
+  |z| < 4
+default:
+  float param unused
+    hint = "A hint long enough to continue \
+            on the next line."
+    default = 1
+  endparam
+}
+
+SwitchM {
+; A Mandelbrot whose switch: names its Julia: the Julia toggle.
+init:
+  z = 0
+loop:
+  z = sqr(z) + #pixel
+bailout:
+  |z| < @bailout
+default:
+  float param bailout
+    default = 4
+  endparam
+switch:
+  type = "SwitchJ"
+  seed = #pixel
+  @bailout = @bailout
+}
+
+SwitchJ {
+init:
+  z = #pixel
+loop:
+  z = sqr(z) + @seed
+bailout:
+  |z| < @bailout
+default:
+  param seed
+    default = (-0.75, 0.1)
+  endparam
+  float param bailout
+    default = 4
+  endparam
+}
+
+FractintNames {
+; Fractint's screen names, which UF reads too.
+init:
+  z = #pixel + whitesq * 0.1 + scrnpix * 0.001 + scrnmax * 0.0001
+loop:
+  z = sqr(z) + pixel + p1
+bailout:
+  |z| < 4
+}
+
+Shape(XAXIS) {
+; Fractint's shape in a UF file: an empty label starts the loop, and
+; its last statement is the test.
+  z = 0, c = #pixel:
+  z = sqr(z) + c
+  |z| < 4
+}
+
+Arrays {
+; Static arrays: a table built once per image, a two-dimensional one,
+; the last iterates carried in a ring, a whole-array copy.
+global:
+  float k[4]
+  int i = 0
+  while i < 4
+    k[i] = 1.0 / (i + 2)
+    i = i + 1
+  endwhile
+  complex m[2, 2]
+  m[0, 1] = (0.1, 0.2)
+  m[1, 0] = (-0.05, 0)
+init:
+  z = 0
+  complex last[3]
+  complex prev[3]
+loop:
+  prev = last
+  last[2] = last[1]
+  last[1] = last[0]
+  last[0] = z
+  z = sqr(z) + #pixel + (prev[2] * k[1] + m[0, 1] * k[3] + m[1, 0]) * 0.1
+bailout:
+  |z| < 4
+}

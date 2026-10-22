@@ -24,25 +24,77 @@ use egui_wgpu::wgpu::{
 
 use crate::config::escape::EscapeConfig;
 
-use super::assembler::{self, PARAM_VEC4S};
+use super::assembler::{self, LAYER_PARAM_VEC4S, PARAM_VEC4S};
 use super::reference::OrbitCache;
 
+mod clearance;
 mod solid_path;
-pub use solid_path::{EXPORT_FRAME_MS, VIEWPORT_FRAME_MS};
+pub use solid_path::{EXPORT_FRAME_MS, IDLE_FRAME_MS, VIEWPORT_FRAME_MS};
 
-/// Above this zoom the direct path's f32 pixel mapping visibly
-/// pixelates: the center's f32 ulp (~6e-8 near |c| = 1) stops
-/// resolving pixel spacing a couple of octaves before it equals it —
-/// field-observed at zoom 16, so the switch sits at 14. The scaled
-/// f32 delta pipeline holds to roughly zoom 54 (w-squared overflow);
-/// the floatexp rung takes over beyond [`PERTURB_FLOATEXP_ZOOM`].
 /// Highest supersampling factor offered: 8x is 64 samples per display
 /// pixel. Whether a given view can actually have it is decided by the
 /// render-pixel budget in [`EscapeRenderer::resize`], which reduces
 /// the factor rather than failing.
 pub use crate::config::escape::MAX_SUPERSAMPLE;
 
+/// The deepest the direct path ever runs: past this zoom a view with
+/// a perturbation tier always perturbs, whatever its size. Shallower,
+/// [`EscapeRenderer::direct_limit_zoom`] decides by the render's own
+/// pixel spacing, and switches EARLIER for a tall render or a high
+/// supersample. The scaled f32 delta pipeline holds to roughly zoom 54
+/// (w-squared overflow); the floatexp rung takes over beyond
+/// [`PERTURB_FLOATEXP_ZOOM`].
 pub const PERTURB_MIN_ZOOM: f64 = 14.0;
+
+/// The shallowest a view ever perturbs. A choice, not a limit: every
+/// tier measured agrees with the direct path at zoom 4 and 6. It keeps
+/// the presets and the whole-set views on the direct path, the faster
+/// one, at any size -- where even the most sensitive Julia view
+/// measured would show f32 error only at 4K with 8x supersampling
+/// (A / r about 0.25 at zoom 6, against the 1/16 aimed for).
+pub const PERTURB_FLOOR_ZOOM: f64 = 6.0;
+
+/// How many f32 ulps of the centre a render pixel must span for the
+/// direct path's error to stay invisible: a parameter plane's, then a
+/// Julia plane's.
+///
+/// Measured. The direct path's error is fixed in the plane -- each
+/// step rounds at the ulp of the iterate -- so what makes it visible
+/// is its size against the colour step from one pixel to the next.
+/// That ratio is `A / r`, `r` the pixel spacing in ulps of the centre
+/// and `A` the view's sensitivity, and it held to a few percent across
+/// zooms and render heights (`diag_tier_sensitivity`, 2026-10-13):
+/// every parameter plane measured A = 0.11 to 1.34 (Multibrot 4 and
+/// Feather the highest), Julia planes 0.12 to 15 -- a Julia orbit
+/// starts AT the pixel, and one that passes near the critical point
+/// shrinks the pixel's signal while the rounding stays. The Phoenix
+/// view reported as blurring before the switch was the 15, the
+/// Mandelbrot dragon 4.7. Both constants are A over a target ratio of
+/// 1/16, at A = 2 and A = 16.
+pub const DIRECT_ULPS_PLANE: f64 = 32.0;
+pub const DIRECT_ULPS_JULIA: f64 = 256.0;
+
+/// The viewport's escape render height in render pixels, for the
+/// panel's notes on which path the view takes -- which depends on its
+/// size ([`EscapeRenderer::wants_perturbation`]). Written by the app
+/// when it sizes the viewport's renderer, and by nothing else: a
+/// thumbnail or an export renders at its own size and decides for
+/// itself.
+static VIEWPORT_RENDER_LINES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// See [`VIEWPORT_RENDER_LINES`].
+pub fn set_viewport_render_lines(lines: u32) {
+    VIEWPORT_RENDER_LINES.store(lines, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The viewport's render height ([`VIEWPORT_RENDER_LINES`]); 1080
+/// before the viewport has rendered an escape frame.
+pub fn viewport_render_lines() -> u32 {
+    match VIEWPORT_RENDER_LINES.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => 1080,
+        n => n,
+    }
+}
 
 /// Above this zoom the scaled-f32 delta rung approaches its w-squared
 /// overflow (~zoom 54) and the floatexp rung takes over. Below it the
@@ -544,7 +596,7 @@ const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
-/// boundary, total 1312 bytes).
+/// boundary, total 1328 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EscapeParamsGpu {
@@ -579,15 +631,19 @@ struct EscapeParamsGpu {
     /// The value-to-palette map's two curves (`PaletteMap::gpu_flags`).
     /// Occupies a padding word.
     pmap_flags: u32,
-    /// x: the transfer's pivot (`PaletteMap::gpu_pivot`); yzw spare.
+    /// The transfer's pivot (`PaletteMap::gpu_pivot`), the texture
+    /// layer's weight, the relief orbits' step, the relief light's
+    /// azimuth.
     pmap: [f32; 4],
     fparams: [[f32; 4]; PARAM_VEC4S],
     cparams: [[f32; 4]; PARAM_VEC4S],
     /// The texture layer's colouring parameters (`ColoringLayer`).
-    lparams: [[f32; 4]; PARAM_VEC4S],
+    lparams: [[f32; 4]; LAYER_PARAM_VEC4S],
     /// CPU-derived formula data (`FormulaDef::derived_data`),
     /// vec4-packed; zero for formulas without the hook.
     fdata: [[f32; 4]; FDATA_VEC4S],
+    /// A folding formula's crease settings (`CreaseSettings::to_gpu`).
+    crease: [f32; 4],
 }
 
 /// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
@@ -644,9 +700,15 @@ struct ShadeParamsGpu {
     overlay_ratio: f32,
     overlay_tile: f32,
     overlay_blue: u32,
+    /// Where the texture applies by the relief's tilt (`TextureWhere`),
+    /// and the tilt it turns at ± its softness, in radians -- the 3D
+    /// terrain's mask, on the 2D relief (surface-textures.md).
+    texture_where: u32,
+    texture_angle: f32,
+    texture_soft: f32,
     /// std140 rounds the struct up to a multiple of its largest member
-    /// alignment (vec3 -> 16): WGSL sees 144 bytes.
-    _pad: [u32; 2],
+    /// alignment (vec3 -> 16): WGSL sees 160 bytes.
+    _pad: [u32; 3],
 }
 
 /// Uniform for the perturbed pipeline — must match `PerturbParams`
@@ -697,6 +759,30 @@ struct PerturbParamsGpu {
 /// change, and cache-loaded orbits get it for free. 2^-48 relative is
 /// the perturbation pipeline's own reference precision, so nothing
 /// downstream can tell the difference from an exact channel.
+/// The entries a reference orbit needs for `max_iter` passes: one a
+/// pass, or with a hybrid's references one per reference a pass, all
+/// interleaved (`reference::ORBIT_PAD_E`).
+/// The tiers that perturb on the deep rung at every depth: Manowar (see
+/// the render path's note: its history carries the deviation forward
+/// with coefficient 1, and f32 error accumulates), and for the same
+/// reason a custom formula whose equations carry a value besides z
+/// (phase 4, step 5). Measured on the Manowar twin at zoom 26 against
+/// the big-float truth: 337 of 439 sampled pixels right on the scaled
+/// rung, 420 on this one.
+fn deep_rung_always(tier: assembler::PerturbTier) -> bool {
+    matches!(tier, assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { width: 2.., .. } | assembler::PerturbTier::Custom { deep: true, .. })
+}
+
+fn orbit_depth(max_iter: u32, tier: assembler::PerturbTier) -> u32 {
+    match tier {
+        assembler::PerturbTier::Custom { stride, width, .. } if stride > 1 || width > 1 => {
+            let stride = u32::from(stride) * u32::from(width);
+            ((u64::from(max_iter) + 1) * u64::from(stride) - 1).min(u64::from(u32::MAX)) as u32
+        }
+        _ => max_iter,
+    }
+}
+
 fn r2_channel(hi: &[[f32; 2]], lo: &[[f32; 2]], e: &[i32]) -> Vec<[f32; 2]> {
     hi.iter()
         .zip(lo)
@@ -782,7 +868,11 @@ pub struct EscapeRenderer {
     solid_sky: Option<[f32; 3]>,
     /// The solid's material, the lit tier's as the path tracer's: the
     /// coat's reflectance and roughness, and the glow.
-    solid_material: [f32; 3],
+    solid_material: [f32; 5],
+    /// The studio's brightness (`path_core::studio_level`; 0, none).
+    solid_studio: f32,
+    /// An HDRI sky (`path_core::environment_settings`).
+    pub(crate) env: super::environment::EnvSlot,
     ifs_chain: Option<Vec<super::ifs::IfsLinkGpu>>,
     ifs_chain_key: String,
     ifs_chain_buffer: Buffer,
@@ -848,14 +938,39 @@ pub struct EscapeRenderer {
     pipelines: HashMap<String, ComputePipeline>,
     /// Mode D's path tracer (heightfield plan T3c), made on first use.
     solid_path: Option<solid_path::SolidPath>,
+    /// Fly mode's clearance probe (P6), made on its first use.
+    clearance: Option<clearance::ClearanceProbe>,
     /// Test-only: force the perturbed path regardless of zoom so the
     /// direct/perturbed agreement test can render the SAME shallow
     /// view both ways.
     #[cfg(test)]
     pub(crate) force_perturbed: bool,
+    /// Test-only: the direct path, however deep (a comparison against
+    /// the perturbed one past the switch).
+    #[cfg(test)]
+    pub(crate) force_direct: bool,
     /// Test-only: with `force_perturbed`, use the floatexp rung.
     #[cfg(test)]
     pub(crate) force_floatexp: bool,
+    /// Test-only: added to the solid path tracer's seed, so a reference
+    /// is a stream of its own, not the samples it is measured against.
+    #[cfg(test)]
+    pub(crate) path_seed_offset: u32,
+    /// Test-only: the solid path tracer without multiple importance
+    /// sampling, to measure it against.
+    #[cfg(test)]
+    pub(crate) path_no_mis: bool,
+    /// Test-only: no firefly clamp, to measure an estimator's bias.
+    #[cfg(test)]
+    pub(crate) path_no_clamp: bool,
+    /// Test-only: adaptive sampling's first check and its noise from the
+    /// odd half (`PathSum::tune_adaptive`), to measure them.
+    #[cfg(test)]
+    pub(crate) path_adapt: Option<(u32, bool)>,
+    /// Test-only: a rewrite of the solid path tracer's shader before it is
+    /// compiled, to measure it (path-tracing-research S1's step counts).
+    #[cfg(test)]
+    pub(crate) path_source_patch: Option<fn(String) -> String>,
     /// Completion-time GPU cost, for a device with no timestamp
     /// queries (WebGPU exposes none by default). Written by a
     /// `Queue::on_submitted_work_done` callback, drained by
@@ -1561,7 +1676,9 @@ impl EscapeRenderer {
         });
 
         // Recolor pass: coloring + palette from the cached records.
-        // Same front half as the direct layout, records read-only.
+        // Same front half as the direct layout, records read-only. The
+        // relight shares it, and reads the HDRI sky at 14 and 15
+        // (`environment::ENV_WGSL`); mode A's recolor binds the stand-in.
         let recolor_bind_group_layout =
             device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Escape Recolor Bind Group Layout"),
@@ -1635,6 +1752,22 @@ impl EscapeRenderer {
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -1753,10 +1886,12 @@ impl EscapeRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // COPY_SRC: a test reads each pixel's depth back
+        // (`the_fog_begins_without_a_line`).
         let ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Escape IFS Geometry"),
             size: 16,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let ifs_ref_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1799,7 +1934,9 @@ impl EscapeRenderer {
             ifs_seed_key: String::new(),
             solid_lighting: (crate::config::SolidShadingSettings::default(), 0.0, 0.0, [0.0; 3]),
             solid_sky: None,
-            solid_material: [0.0, 0.5, 0.0],
+            solid_material: [0.0, 0.5, 0.0, 0.0, 1.0],
+            solid_studio: 0.0,
+            env: Default::default(),
             ifs_chain: None,
             ifs_chain_key: String::new(),
             ifs_chain_buffer,
@@ -1820,7 +1957,19 @@ impl EscapeRenderer {
             #[cfg(test)]
             force_perturbed: false,
             #[cfg(test)]
+            force_direct: false,
+            #[cfg(test)]
             force_floatexp: false,
+            #[cfg(test)]
+            path_seed_offset: 0,
+            #[cfg(test)]
+            path_no_mis: false,
+            #[cfg(test)]
+            path_no_clamp: false,
+            #[cfg(test)]
+            path_adapt: None,
+            #[cfg(test)]
+            path_source_patch: None,
             #[cfg(test)]
             force_budgeted: false,
             #[cfg(test)]
@@ -1888,6 +2037,7 @@ impl EscapeRenderer {
             chunk_key: None,
             timestamps: None,
             solid_path: None,
+            clearance: None,
             gpu_ms_per_iter: None,
             gpu_ms_per_iter_cold: None,
             gpu_regime: None,
@@ -1961,11 +2111,11 @@ impl EscapeRenderer {
         }
         let power = match tier {
             assembler::PerturbTier::Power(p) => p.clamp(2, 12),
-            assembler::PerturbTier::Ship(_) => return false,
-            // Anti-holomorphic: `conj` is not complex-linear, so the
-            // A*delta + B*delta_c model BLA is built on does not hold.
-            // Per-step iteration carries the Tricorn family.
-            assembler::PerturbTier::Tricorn(_) => return false,
+            // Folds and the conjugate are real-linear: their tables carry
+            // P·δ + Q·conj(δ), from the twins' equations (phase 4, step
+            // 9b). `power` is then only the table's cache key.
+            assembler::PerturbTier::Ship(v) => 100 + u32::from(v),
+            assembler::PerturbTier::Tricorn(p) => 200 + u32::from(p),
             // A skip advances the reference index without running the
             // steps in between, but Phoenix's step also ADVANCES ITS
             // HISTORY -- w_prev would be left measured against the
@@ -1997,6 +2147,13 @@ impl EscapeRenderer {
             }
             // Abs-folds (and a log): not holomorphic, no linear model.
             assembler::PerturbTier::Kaliset | assembler::PerturbTier::Ducks(_) => return false,
+            // A custom formula's step is its own: its table is built from
+            // its own derivative where skipping is sound (phase 4, step
+            // 9: `custom::bla_steps`), with one reference and nothing
+            // carried, so the orbit's entry is the step. `power` is
+            // then only the table's cache key.
+            assembler::PerturbTier::Custom { stride: 1, width: 1, .. } => 0,
+            assembler::PerturbTier::Custom { .. } => return false,
         };
         // Skipped iterations never run the accumulator/period updates,
         // so those colorings -- base or texture layer -- keep the
@@ -2170,15 +2327,43 @@ impl EscapeRenderer {
             let e = dc_built.floor();
             super::bla::MagFe { m: 2f64.powf(dc_built - e), e: e as i64 }
         };
-        let table =
-            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built);
+        let table = if assembler::real_linear_bla(tier) {
+            // Each step from Z_n, n below the last entry, read from the
+            // formula's equations (the built-ins' from their twins'). The
+            // reference's pixel is the view's centre: the nucleus offset
+            // is pixels at depth, far below the f64 the coefficients are
+            // taken in.
+            let (cx, cy) = escape.center_f64();
+            let reference = super::lang::builtins::C64::new(cx, cy);
+            let dc_max = if dc.m == 0.0 { 0.0 } else { dc.m * (dc.e as f64).exp2() };
+            let orbit = &orbit_data[..prefix - 1];
+            let steps = match tier {
+                assembler::PerturbTier::Custom { .. } => super::custom::bla_steps(escape, orbit, reference, dc_max),
+                assembler::PerturbTier::Ship(v) => super::custom::twin_bla_steps(escape, "burning_ship", &[("variant", v as f32)], orbit, reference, dc_max),
+                assembler::PerturbTier::Tricorn(p) => super::custom::twin_bla_steps(escape, "tricorn", &[("power", p as f32)], orbit, reference, dc_max),
+                _ => None,
+            };
+            match steps {
+                Some(steps) => super::bla::BlaTable::build_from_steps(steps, dc, dc_built),
+                None => {
+                    self.bla_built = None;
+                    return false;
+                }
+            }
+        } else {
+            super::bla::BlaTable::build_with_dc(&orbit_data[..prefix], power, dc, dc_built)
+        };
+        // A real-linear table's entries carry Q's for A and B too.
+        let entry_bytes = if assembler::real_linear_bla(tier) { 56 } else { 32 };
         let n_levels = table.levels.len().min(30);
         let total: usize = table.levels[..n_levels].iter().map(|l| l.len()).sum();
         if total == 0 {
             self.bla_built = None;
             return false;
         }
-        let mut bytes = vec![0u8; 144 + total * 32];
+        // At least one entry of the larger layout, in 16-byte steps: what
+        // the shader's binding minimum is for either.
+        let mut bytes = vec![0u8; (144 + total * entry_bytes).max(256).next_multiple_of(16)];
         let mut offsets = [0u32; 32];
         let mut acc = 0u32;
         for (l, lev) in table.levels[..n_levels].iter().enumerate() {
@@ -2206,26 +2391,35 @@ impl EscapeRenderer {
             };
             dst[24..28].copy_from_slice(&rm.to_le_bytes());
             dst[28..32].copy_from_slice(&re.to_le_bytes());
+            if dst.len() >= 56 {
+                dst[32..36].copy_from_slice(&(ent.aq.re as f32).to_le_bytes());
+                dst[36..40].copy_from_slice(&(ent.aq.im as f32).to_le_bytes());
+                dst[40..44].copy_from_slice(&(ent.bq.re as f32).to_le_bytes());
+                dst[44..48].copy_from_slice(&(ent.bq.im as f32).to_le_bytes());
+                dst[48..52].copy_from_slice(&clamp_e(ent.aq.e).to_le_bytes());
+                dst[52..56].copy_from_slice(&clamp_e(ent.bq.e).to_le_bytes());
+            }
         };
-        // Entries pack into fixed 32-byte slots — independent, so the
-        // ~320 MB table for a 10M orbit packs across threads instead
-        // of stalling the render thread (identical bytes either way).
+        // Entries pack into fixed slots (32 bytes; 56 real-linear) —
+        // independent, so the ~320 MB table for a 10M orbit packs across
+        // threads instead of stalling the render thread (identical bytes
+        // either way).
         let mut base = 144usize;
         for lev in &table.levels[..n_levels] {
-            let region = &mut bytes[base..base + lev.len() * 32];
+            let region = &mut bytes[base..base + lev.len() * entry_bytes];
             #[cfg(not(target_arch = "wasm32"))]
             {
                 use rayon::prelude::*;
                 region
-                    .par_chunks_exact_mut(32)
+                    .par_chunks_exact_mut(entry_bytes)
                     .zip(lev.par_iter())
                     .for_each(|(dst, ent)| pack_one(ent, dst));
             }
             #[cfg(target_arch = "wasm32")]
-            for (dst, ent) in region.chunks_exact_mut(32).zip(lev.iter()) {
+            for (dst, ent) in region.chunks_exact_mut(entry_bytes).zip(lev.iter()) {
                 pack_one(ent, dst);
             }
-            base += lev.len() * 32;
+            base += lev.len() * entry_bytes;
         }
         let size = bytes.len() as u64;
         let recreate = match &self.bla_buffer {
@@ -2814,9 +3008,10 @@ impl EscapeRenderer {
             if self.results_dummy.is_none() {
                 self.results_dummy = Some(device.create_buffer(&BufferDescriptor {
                     label: Some("Escape Results Dummy"),
-                    // One record of the widest layout: a binding must
-                    // hold at least one element of the shader's array.
-                    size: assembler::RESULT_BYTES_WIDE,
+                    // One record of the layout in use, or the widest
+                    // built-in one: a binding must hold at least one
+                    // element of the shader's array.
+                    size: self.results_stride.max(assembler::RESULT_BYTES_WIDE),
                     usage: BufferUsages::STORAGE,
                     mapped_at_creation: false,
                 }));
@@ -2891,9 +3086,12 @@ impl EscapeRenderer {
         let data = slice.get_mapped_range();
         let f = |rec: &[u8], at: usize| f32::from_le_bytes(rec[at..at + 4].try_into().unwrap());
         // A wide record puts `accum2` after `accum`, which moves n and
-        // the tags along by eight bytes.
-        let wide = stride == assembler::RESULT_BYTES_WIDE as usize;
-        let tail = if wide { 32 } else { 24 };
+        // the tags along by eight bytes; an extended one its `accum_ext`
+        // after that, 16 bytes a vec4 (`result_bytes`).
+        let wide = stride >= assembler::RESULT_BYTES_WIDE as usize;
+        // 48 + 16k bytes: 40 and k vec4s, padded to the vec4s' alignment.
+        let ext = if stride > assembler::RESULT_BYTES_WIDE as usize { (stride - 48) / 16 } else { 0 };
+        let tail = if wide { 32 + 16 * ext } else { 24 };
         let out = data
             .chunks_exact(stride)
             .map(|rec| IterRecord {
@@ -2967,7 +3165,7 @@ impl EscapeRenderer {
             * assembler::iter_state_bytes(
                 tier,
                 floatexp,
-                super::config_accum_is_wide(escape),
+                super::config_accum_width(escape),
                 Self::perturbed_derivative(escape, floatexp).is_some(),
             );
         let lim = device.limits();
@@ -2994,7 +3192,7 @@ impl EscapeRenderer {
         }
         // The perturbed path's per-pixel state is one storage buffer,
         // and it is by far the largest thing here.
-        if Self::wants_perturbation(escape) {
+        if Self::wants_perturbation(escape, rh.min(u32::MAX as u64) as u32) {
             // The ACTUAL stride for this formula's tier and rung, not
             // the widest one: only the two-term recurrences on the
             // deep rung carry the larger state, and assuming it would
@@ -3007,7 +3205,7 @@ impl EscapeRenderer {
                 * assembler::iter_state_bytes(
                     tier,
                     floatexp,
-                    super::config_accum_is_wide(escape),
+                    super::config_accum_width(escape),
                     Self::perturbed_derivative(escape, floatexp).is_some(),
                 );
             let cap = lim.max_storage_buffer_binding_size as u64;
@@ -3295,11 +3493,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn perturbed_path(&self, escape: &EscapeConfig) -> bool {
         #[cfg(test)]
         {
-            Self::wants_perturbation(escape) || self.force_perturbed
+            (Self::wants_perturbation(escape, self.height) || self.force_perturbed) && !self.force_direct
         }
         #[cfg(not(test))]
         {
-            Self::wants_perturbation(escape)
+            Self::wants_perturbation(escape, self.height)
         }
     }
 
@@ -3312,7 +3510,13 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             || escape.wants_derivative();
         let formula = super::get_formula(&escape.formula);
         let tier = Self::perturb_tier(escape)?;
-        let single = !matches!(tier, assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar);
+        // A custom formula carries its own derivative program where it
+        // follows one reference and carries nothing besides z (plan, phase
+        // 4, step 9d).
+        let single = !matches!(
+            tier,
+            assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar | assembler::PerturbTier::Custom { .. }
+        ) || matches!(tier, assembler::PerturbTier::Custom { stride: 1, width: 1, .. });
         // Both rungs carry it; the argument stays for the callers that
         // size the state per rung.
         let _ = floatexp;
@@ -3320,13 +3524,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     /// Which rung a perturbed render of `escape` takes: floatexp past
-    /// [`PERTURB_FLOATEXP_ZOOM`], and always for Manowar.
+    /// [`PERTURB_FLOATEXP_ZOOM`], and always for Manowar and a custom
+    /// formula carrying a value besides z ([`deep_rung_always`]).
     fn floatexp_for(&self, escape: &EscapeConfig) -> bool {
         #[cfg(test)]
         let deep = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM || self.force_floatexp;
         #[cfg(not(test))]
         let deep = escape.zoom_log2 > PERTURB_FLOATEXP_ZOOM;
-        deep || matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Manowar))
+        deep || Self::perturb_tier(escape).is_some_and(deep_rung_always)
     }
 
     /// Whether the iterate pass compiles a real derivative orbit. On the
@@ -3388,9 +3593,12 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // `ifs_token` is in here for the same reason it is in the band
         // key: the flame is an input to the walk that does not live in
         // the escape config.
+        // The lens and the transformations move the points iterated, in
+        // every mode.
+        let maps = super::lens::maps_identity(escape, &crate::variations::global_registry());
         if super::ifs::get_ifs(&escape.formula).is_some() {
             return format!(
-                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}",
+                "ifs|{}|{}|{}|{}|{}|{}|{}x{}|s{}|{}|{}|{}|{maps}",
                 escape.formula,
                 Self::walk_params_key(escape),
                 escape.center_re,
@@ -3451,7 +3659,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             String::new()
         };
         format!(
-            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}|{:?}",
+            "{path}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}x{}|{}|{}|{}|{}|{:?}|{maps}",
             escape.formula,
             escape.formula_params,
             escape.center_re,
@@ -3562,6 +3770,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             });
             self.pipelines.insert(key.clone(), pipeline);
         }
+        let (env_view, env_sampler) = {
+            self.env.bindings(device)
+        };
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Recolor Bind Group"),
             layout: &self.recolor_bind_group_layout,
@@ -3597,6 +3808,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 BindGroupEntry {
                     binding: 6,
                     resource: self.contrast_params.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(&env_view),
+                },
+                BindGroupEntry {
+                    binding: 15,
+                    resource: BindingResource::Sampler(&env_sampler),
                 },
             ],
         });
@@ -3689,7 +3908,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.height,
             orbit_tag,
             orbit_done,
-        ) + format!("|{:?}|{:?}{}", escape.palette_map, escape.layer, self.palette_in_loop_key(escape)).as_str()
+        ) + format!(
+            "|{:?}|{:?}{}|{}",
+            escape.palette_map,
+            escape.layer,
+            self.palette_in_loop_key(escape),
+            super::lens::maps_identity(escape, &crate::variations::global_registry()),
+        )
+        .as_str()
     }
 
     /// The palette, for a colouring that samples it inside the loop
@@ -3770,6 +3996,8 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// which case the user is in rather than letting them zoom into a
     /// wash and wonder what broke.
     pub fn usable_depth(escape: &EscapeConfig) -> UsableDepth {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         if Self::perturb_tier(escape).is_some()
             && !escape.is_damped()
             && escape.biomorph == crate::config::escape::BiomorphMode::Off
@@ -3789,8 +4017,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// confident wrong one. Flat is honest but silent, and the panel
     /// is where the silence gets explained. Pinned against the
     /// assembler's own `HAS_DERIVATIVE` decision by test, so the two
-    /// cannot drift.
-    pub fn derivative_gap(escape: &EscapeConfig) -> Option<DerivativeGap> {
+    /// cannot drift. `render_lines` as [`Self::wants_perturbation`]
+    /// takes it: whether the view perturbs depends on its size.
+    pub fn derivative_gap(escape: &EscapeConfig, render_lines: u32) -> Option<DerivativeGap> {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         if super::fields::get_field(&escape.formula).is_some()
             || super::ifs::get_ifs(&escape.formula).is_some()
         {
@@ -3803,11 +4034,15 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // formula (docs/archive/escape-time/derivative-under-perturbation.md). The
         // two-term ones (Phoenix, Manowar) define none, so the formula
         // test above has already answered for them.
-        if Self::wants_perturbation(escape) {
+        if Self::wants_perturbation(escape, render_lines) {
             let single = !matches!(
                 Self::perturb_tier(escape),
-                Some(assembler::PerturbTier::Phoenix | assembler::PerturbTier::Manowar) | None
-            );
+                Some(
+                    assembler::PerturbTier::Phoenix
+                        | assembler::PerturbTier::Manowar
+                        | assembler::PerturbTier::Custom { .. }
+                ) | None
+            ) || matches!(Self::perturb_tier(escape), Some(assembler::PerturbTier::Custom { stride: 1, width: 1, .. }));
             if !single {
                 return Some(DerivativeGap::Perturbed);
             }
@@ -3815,40 +4050,59 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         None
     }
 
-    /// Whether this view renders through the perturbation path:
-    /// Mandelbrot parameter plane, plain iteration, past the direct
-    /// path's f32 ceiling. Everything else stays direct (and deep
-    /// zooms of unsupported combinations render the direct path's
-    /// f32 mush honestly rather than wrong perturbation math).
-    pub(crate) fn wants_perturbation(escape: &EscapeConfig) -> bool {
-        match Self::perturb_tier(escape) {
-            Some(tier) => {
-                escape.zoom_log2 > Self::tier_min_zoom(tier)
-                    && !escape.is_damped()
-                    && escape.biomorph == crate::config::escape::BiomorphMode::Off
-            }
-            None => false,
-        }
+    /// A custom colouring that reads the pixel's position cannot be
+    /// recoloured under a lens: the recolour pass rebuilds the position
+    /// from the pixel without the lens's warp, which the iterate pass
+    /// applied, so the picture would change on a palette edit.
+    fn recolor_misses_the_lens(escape: &EscapeConfig) -> bool {
+        super::custom::coloring(&escape.coloring).is_some_and(|c| c.wgsl.contains("esc_env_pixel"))
+            && super::lens::is_active(escape, &crate::variations::global_registry())
     }
 
-    /// The depth a tier's delta form is ACCURATE from, which is not
-    /// the same question as the depth the direct path runs out at.
+    /// Whether this view renders through the perturbation path, at
+    /// `render_lines` render pixels tall (display height times the
+    /// supersample in use): a formula with a perturbation tier, plain
+    /// iteration, past the direct path's f32 limit for that size.
+    /// Everything else stays direct (and deep zooms of unsupported
+    /// combinations render the direct path's f32 mush honestly rather
+    /// than wrong perturbation math).
+    pub(crate) fn wants_perturbation(escape: &EscapeConfig, render_lines: u32) -> bool {
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
+        Self::perturb_tier(escape).is_some()
+            && escape.zoom_log2 > Self::direct_limit_zoom(escape, render_lines)
+            && !escape.is_damped()
+            && escape.biomorph == crate::config::escape::BiomorphMode::Off
+    }
+
+    /// The zoom past which the direct path stops resolving this view
+    /// at `render_lines` render pixels tall: where a render pixel
+    /// spans [`DIRECT_ULPS_PLANE`] (Julia: [`DIRECT_ULPS_JULIA`]) f32
+    /// ulps of the centre, held between [`PERTURB_FLOOR_ZOOM`] and
+    /// [`PERTURB_MIN_ZOOM`].
     ///
-    /// Only Kaliset needs a floor of its own. Its map is an inversion,
-    /// so the delta picks up a 1/|Z|^2 amplification that the other
-    /// tiers have no analogue for, and it needs a genuinely small
-    /// delta before that settles. Measured against exact orbits on an
-    /// inverting view: 37% out at zoom 10 and 20% at 14 (the direct
-    /// path is 0.2% there), 2.4e-2 at 18, then 3.6e-4 at 24 and
-    /// 5.7e-6 at 30. Below the floor it renders direct -- which is
-    /// what it did before this tier existed, so the floor costs
-    /// nothing and shipping without one would have made the picture
-    /// WORSE exactly at the threshold.
-    fn tier_min_zoom(tier: assembler::PerturbTier) -> f64 {
-        match tier {
-            assembler::PerturbTier::Kaliset => 24.0,
-            _ => PERTURB_MIN_ZOOM,
+    /// A render's pixel is 4 / (2^zoom lines) tall, so doubling the
+    /// height -- or the supersample -- moves the limit an octave
+    /// shallower: a 4K export at 2x supersampling switches two octaves
+    /// before a 1080-line viewport. At the old fixed threshold every
+    /// size switched at 14, and the taller ones showed the direct
+    /// path's grain first.
+    ///
+    /// The centre's magnitude sets the ulp (to the binade, floored at
+    /// 0.5: an orbit's iterates reach O(1) wherever the view sits).
+    /// Every tier is accurate from the floor down -- Kaliset's own
+    /// floor of 24 answered a bug in its scaled rung's seed, since
+    /// fixed.
+    pub(crate) fn direct_limit_zoom(escape: &EscapeConfig, render_lines: u32) -> f64 {
+        if escape.zoom_log2 > PERTURB_MIN_ZOOM {
+            return PERTURB_MIN_ZOOM;
         }
+        let part = |s: &str| s.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map_or(0.0, f64::abs);
+        let m = part(&escape.center_re).max(part(&escape.center_im)).max(0.5);
+        let ulp = (m.log2().floor() - 23.0).exp2();
+        let need = if escape.julia { DIRECT_ULPS_JULIA } else { DIRECT_ULPS_PLANE };
+        let limit = (4.0 / (render_lines.max(1) as f64 * ulp * need)).log2();
+        limit.clamp(PERTURB_FLOOR_ZOOM, PERTURB_MIN_ZOOM)
     }
 
     /// Rows the direct path may cover in one dispatch.
@@ -4099,11 +4353,37 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// and roughness and the glow, which the lit tier reads as the path
     /// tracer does. Applied by the relight, so a change needs no walk.
     /// True when it changed.
-    pub fn set_solid_material(&mut self, material: [f32; 3]) -> bool {
+    pub fn set_solid_material(&mut self, material: [f32; 5]) -> bool {
         if self.solid_material == material {
             return false;
         }
         self.solid_material = material;
+        true
+    }
+
+    /// An HDRI sky (docs/archive/projects/hdri-environment.md), or none: its map
+    /// loaded and uploaded when it changes (`environment::EnvSlot`), its
+    /// sun the rig's next free light. True when anything about it changed
+    /// -- its sun's shadow is a walk input (`lighting_key`).
+    pub fn set_environment(&mut self, device: &Device, queue: &Queue, settings: Option<super::path_core::EnvSettings>) -> bool {
+        self.env.set(device, queue, settings)
+    }
+
+    /// Test-only: `map` as the sky's map, read with `settings`, in place of
+    /// the bundled file its id names.
+    #[cfg(test)]
+    pub(crate) fn set_environment_map_for_test(&mut self, device: &Device, queue: &Queue, map: &super::environment::EnvMap, settings: super::path_core::EnvSettings) {
+        self.env.set_map(device, queue, map, settings);
+    }
+
+    /// The studio's brightness (3d-look-and-tools P4; 0, none), which the
+    /// lit tier lights by as the path tracer's bounces see it. Applied by
+    /// the relight, so a change needs no walk. True when it changed.
+    pub fn set_solid_studio(&mut self, studio: f32) -> bool {
+        if self.solid_studio == studio {
+            return false;
+        }
+        self.solid_studio = studio;
         true
     }
 
@@ -4119,10 +4399,17 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     fn lighting_key(&self) -> String {
         let (s, _, _, _) = &self.solid_lighting;
         // The fallback rig has a light of its own; whether it is in
-        // force is a geometry fact.
+        // force is a geometry fact. So is an HDRI sky's sun, which takes a
+        // light, and where it stands.
         let mut k = format!("{}", s.rig_untouched());
+        k.push_str(&self.env.key());
         for l in &s.lights {
             k.push_str(&format!("|{}:{}:{}", l.enabled, l.azimuth, l.elevation));
+            // Where a point or a headlamp is decides its shadow rays; its
+            // reach and its cone only scale what reaches (a relight).
+            if l.kind != crate::config::LightKind::Directional {
+                k.push_str(&format!(":{:?}:{:?}:{}", l.kind, l.position, l.lift));
+            }
         }
         k
     }
@@ -4411,7 +4698,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             self.ifs_geom_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Escape IFS Geometry"),
                 size: (px as u64) * 16,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             self.ifs_geom_px = px;
@@ -4437,9 +4724,10 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     ) {
         let Some(def) = super::ifs::get_ifs(&escape.formula) else { return };
         let coloring = super::ifs::get_ifs_coloring(&escape.coloring, def);
-        let key = format!("ifs_relight|{}", coloring.name);
+        let placed = self.solid_lighting.0.placed_lights();
+        let key = format!("ifs_relight|{}{}", coloring.name, if placed { "|placed" } else { "" });
         if !self.pipelines.contains_key(&key) {
-            let source = assembler::assemble_ifs_relight(coloring);
+            let source = assembler::assemble_ifs_relight_rig(coloring, None, placed);
             let module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some(&format!("Escape Shader {key}")),
                 source: ShaderSource::Wgsl(source.into()),
@@ -4466,6 +4754,9 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // contrast fit; the relight does not, but the binding must be
         // there. Identity.
         queue_contrast(queue, &self.contrast_params, &escape.contrast, None);
+        let (env_view, env_sampler) = {
+            self.env.bindings(device)
+        };
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Escape Relight Bind Group"),
             layout: &self.recolor_bind_group_layout,
@@ -4497,6 +4788,14 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 BindGroupEntry {
                     binding: 6,
                     resource: self.contrast_params.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::TextureView(&env_view),
+                },
+                BindGroupEntry {
+                    binding: 15,
+                    resource: BindingResource::Sampler(&env_sampler),
                 },
             ],
         });
@@ -4803,6 +5102,11 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// cache keyed without it would silently reuse a stale one).
     /// Zero for every family that has no such parameter.
     fn map_params_for(escape: &EscapeConfig) -> [f32; 2] {
+        // A custom formula's reference is a function of its program and
+        // parameters: their identity rides here (MAP_CUSTOM).
+        if escape.formula.starts_with(super::custom::PREFIX) {
+            return super::custom::reference_identity(escape).unwrap_or([0.0, 0.0]);
+        }
         // Manowar is the same two-term map with p = 1, fixed by the
         // formula rather than by a parameter.
         if escape.formula == "manowar" {
@@ -4902,6 +5206,19 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     /// path's f32 mush at the threshold, which is how Phoenix came to
     /// render one flat colour past zoom 48.
     pub(crate) fn perturb_tier(escape: &EscapeConfig) -> Option<assembler::PerturbTier> {
+        // A Plane or Iteration transformation (the KIFS plan, C4) moves an
+        // absolute coordinate, which no perturbation of the reference's
+        // orbit follows: such a view stays on the direct path.
+        if escape.transforms_absolute() {
+            return None;
+        }
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
+        // A custom formula with UF's perturbation equations, on both
+        // rungs (escape::lang, plan phase 3).
+        if escape.formula.starts_with(super::custom::PREFIX) {
+            return super::custom::perturb_tier(escape);
+        }
         match escape.formula.as_str() {
             "mandelbrot" => Some(assembler::PerturbTier::Power(2)),
             "multibrot" => {
@@ -5293,6 +5610,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
             assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
             assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
+            assembler::PerturbTier::Custom { .. } => (2, false, super::reference::MAP_CUSTOM),
         };
         let height_px = self.height.max(1) as f64;
         let req = OrbitRequest {
@@ -5303,7 +5621,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &escape.center_im,
                 escape.zoom_log2,
             ),
-            max_iter: escape.max_iter,
+            max_iter: orbit_depth(escape.max_iter, tier),
             julia_c,
             power,
             ship,
@@ -5650,6 +5968,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             assembler::PerturbTier::Nova(p) => (p, false, super::reference::MAP_NOVA),
             assembler::PerturbTier::Kaliset => (2, false, super::reference::MAP_KALISET),
             assembler::PerturbTier::Ducks(_) => (2, false, super::reference::MAP_DUCKS),
+            assembler::PerturbTier::Custom { .. } => (2, false, super::reference::MAP_CUSTOM),
         };
         let period_hint = if julia_c.is_none() && !ship {
             escape.reference_period.filter(|&p| p > 0)
@@ -5677,7 +5996,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     &escape.center_re,
                     &escape.center_im,
                     escape.zoom_log2,
-                    escape.max_iter,
+                    orbit_depth(escape.max_iter, tier),
                     julia_c,
                     power,
                     ship,
@@ -5691,7 +6010,7 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     &escape.center_re,
                     &escape.center_im,
                     escape.zoom_log2,
-                    escape.max_iter,
+                    orbit_depth(escape.max_iter, tier),
                     julia_c,
                     power,
                     ship,
@@ -6295,11 +6614,19 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            // A copy source too: a terrain's surface texture is copied from
+            // it (`TerrainRenderer::set_surface_image`).
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
         (texture, view)
+    }
+
+    /// The simulation texture and its key, for the terrain renderer's
+    /// surface texture to copy (`TerrainRenderer::set_surface_image`).
+    pub(crate) fn texture_for_copy(&self) -> Option<(&str, &Texture)> {
+        self.texture_image.as_ref().map(|(k, t, _)| (k.as_str(), t))
     }
 
     /// The cache key of the texture on the GPU, if any.
@@ -6947,7 +7274,10 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 crate::config::escape::OVERLAY_TILE_RANGE.1,
             ),
             overlay_blue: u32::from(self.overlay_owns_blue(escape)),
-            _pad: [0; 2],
+            texture_where: shading.texture_where.to_gpu(),
+            texture_angle: shading.texture_angle.to_radians(),
+            texture_soft: shading.texture_angle_soft.to_radians(),
+            _pad: [0; 3],
         };
         queue.write_buffer(&self.shade_params_buffer, 0, bytemuck::bytes_of(&params));
 
@@ -6967,6 +7297,8 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             None => true,
         };
         if rebuild {
+            // The surface texture's noise: Rock's (surface-textures.md).
+            let surface_noise = crate::escape::surface::SURFACE_NOISE_WGSL;
             let src = format!(
                 r#"
 struct ShadeParams {{
@@ -6999,6 +7331,9 @@ struct ShadeParams {{
     overlay_ratio: f32,
     overlay_tile: f32,
     overlay_blue: u32,
+    texture_where: u32,
+    texture_angle: f32,
+    texture_soft: f32,
 }}
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -7176,6 +7511,8 @@ fn shade_blend(base: vec3<f32>, layer: vec3<f32>, mode: u32, amt: f32) -> vec3<f
 // no trig or self-compare is involved (see the fast-math notes in
 // CLAUDE.md); the mix is smoothstep-interpolated value noise, which
 // is cheap and has no directional artefacts of its own.
+{surface_noise}
+
 fn shade_hash(p: vec2<i32>) -> f32 {{
     var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
     h = (h ^ (h >> 13u)) * 1274126177u;
@@ -7203,6 +7540,19 @@ fn shade_texture(q: vec2<f32>) -> f32 {{
     // 1 = GRAIN: one octave, isotropic -- film grain / fine tooth.
     if (shade.texture_kind == 1u) {{
         return shade_value_noise(q) - 0.5;
+    }}
+    // 4 = ROCK: ridged gradient-noise octaves with a fractal falloff, the
+    // terrain's own (surface-textures.md), here on the screen's pixels.
+    if (shade.texture_kind == 4u) {{
+        var r = 0.0;
+        var amp = 1.0;
+        var f = 1.0;
+        for (var o = 0; o < 4; o = o + 1) {{
+            r = r + amp * surf_ridged(q * f + vec2<f32>(f32(o) * 17.0, f32(o) * 31.0)).x;
+            amp = amp * 0.5;
+            f = f * 2.0;
+        }}
+        return r * 0.5;
     }}
     // 2 = PAPER: octaves at falling amplitude, each STRETCHED along a
     // different axis. The stretch is what makes it read as fibre
@@ -7281,13 +7631,24 @@ fn shade_pixel(rgb: vec3<f32>, p: vec2<i32>) -> vec3<f32> {{
     // independent of both the coloring's value scale and the relief
     // depth, and it is lit by the same light, so it reads as the
     // surface being grainy rather than as an overlay.
-    if (shade.texture_strength > 0.0 && shade.texture_kind > 0u) {{
+    // Where it applies, by the relief's tilt: everywhere, the steep
+    // faces or the flats (`TextureWhere`), as the 3D terrain's mask.
+    var texture_mask = 1.0;
+    if (shade.texture_where != 0u) {{
+        let steep = smoothstep(
+            shade.texture_angle - max(shade.texture_soft, 1.0e-4),
+            shade.texture_angle + max(shade.texture_soft, 1.0e-4),
+            atan(length(g)),
+        );
+        texture_mask = select(1.0 - steep, steep, shade.texture_where == 1u);
+    }}
+    if (shade.texture_strength * texture_mask > 0.0 && shade.texture_kind > 0u) {{
         let sc = max(shade.texture_scale, 0.25);
         let q = vec2<f32>(f32(p.x), f32(p.y)) / sc;
         let e = 1.0 / sc;
         let nx = shade_texture(q + vec2<f32>(e, 0.0)) - shade_texture(q - vec2<f32>(e, 0.0));
         let ny = shade_texture(q + vec2<f32>(0.0, e)) - shade_texture(q - vec2<f32>(0.0, e));
-        g = g + vec2<f32>(-nx, ny) * (shade.texture_strength * 8.0);
+        g = g + vec2<f32>(-nx, ny) * (shade.texture_strength * texture_mask * 8.0);
     }}
 
     // THE SIGNED TILT TOWARD THE LIGHT, and not a Lambert dot product.
@@ -7644,16 +8005,20 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 .as_ref()
                 .is_some_and(|p| p.rows.iter().any(|r| r.kind == 7.0));
             let stag = if sums { "|sum" } else { "" };
+            // Points and headlamps compiled in, or not (`assembler::ifs_rig`).
+            let placed = self.solid_lighting.0.placed_lights();
+            let ptag = if placed { "|placed" } else { "" };
             let key =
-                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}", def.name, coloring.name);
+                format!("ifs|{}|{}|b{beam}|{lens_id}{dtag}{stag}{ptag}", def.name, coloring.name);
             if !self.pipelines.contains_key(&key) {
-                let source = assembler::assemble_ifs_with_lens(
+                let source = assembler::assemble_ifs_rig(
                     def,
                     coloring,
                     beam,
                     lens_src.as_deref(),
                     delta,
                     sums,
+                    placed,
                 );
                 let module = device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&format!("Escape Shader {key}")),
@@ -7824,8 +8189,24 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
         let mut fparams = [[0.0f32; 4]; PARAM_VEC4S];
         let mut cparams = [[0.0f32; 4]; PARAM_VEC4S];
-        let mut lparams = [[0.0f32; 4]; PARAM_VEC4S];
+        let mut lparams = [[0.0f32; 4]; LAYER_PARAM_VEC4S];
         let mut fdata = [[0.0f32; 4]; FDATA_VEC4S];
+        // What a custom entry's `global:` (`prepare`) reads of the image.
+        let image = super::lang::interp::Env {
+            pixel: super::lang::builtins::C64::ZERO,
+            maxiter: escape.max_iter.max(1),
+            center: super::lang::builtins::C64::new(cx, cy),
+            // As the shader's `esc_env_magn`.
+            magn: 4.0 / span_y,
+            x: 0,
+            y: 0,
+            width: self.width as i32,
+            height: self.height as i32,
+            random: super::lang::builtins::C64::ZERO,
+            julia: escape.julia,
+            julia_c: super::lang::builtins::C64::new(f64::from(escape.julia_re), f64::from(escape.julia_im)),
+            rotation: f64::from(escape.rotation),
+        };
         // The smooth count's log base: the formula's degree in mode A, 2
         // elsewhere.
         let mut degree = 2.0f32;
@@ -7845,6 +8226,12 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             // other value is the user's and is left alone.
             if coloring.name == "ifs_measure" && cparams[0][1] <= 0.0 {
                 cparams[0][1] = self.measure_auto_scale(escape).unwrap_or(1.0);
+            }
+            // A Rhai solid's `prepare`: its values after its parameters.
+            if let Some((at, values)) = super::custom::globals(def.name, fparams.as_flattened(), &image) {
+                for (slot, v) in fparams.as_flattened_mut().iter_mut().skip(at).zip(values) {
+                    *slot = v;
+                }
             }
             if def.solid {
                 if let Some((ifs3, _)) = self.ifs.as_ref().and_then(|p| p.solid.as_ref()) {
@@ -7874,10 +8261,30 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                         fdata[20] = [z[0], z[1], z[2], 1.0];
                     }
                     // The material, in the w of the camera's rows
-                    // (`ifs_gloss`, `ifs_rough`, `ifs_glow`).
+                    // (`ifs_gloss`, `ifs_rough`, `ifs_glow`), and the
+                    // metallic in the fog row's (`ifs_metallic`).
                     for k in 0..3 {
                         fdata[3 + k][3] = self.solid_material[k];
                     }
+                    fdata[10][3] = self.solid_material[3];
+                    // The studio, in the camera's frame when the lights
+                    // follow it and fixed in the fractal's when not
+                    // (`ifs_studio_frame`, `ifs::studio_basis`), the
+                    // reflectance's complement (`ifs_reflectance`), and
+                    // the ray tolerance past the finest
+                    // (`ifs_ray_tolerance`).
+                    let follow = self.solid_lighting.0.lights_follow_camera;
+                    let tolerance = self.solid_lighting.0.ray_tolerance;
+                    let tolerance = if tolerance.is_finite() { tolerance.clamp(1.0, 100.0) } else { 1.0 };
+                    fdata[32] = [self.solid_studio, if follow { 0.0 } else { 2.0 }, 1.0 - self.solid_material[4], tolerance - 1.0];
+                    if !follow {
+                        fdata[33..36].copy_from_slice(&super::ifs::studio_basis());
+                    }
+                    // An HDRI sky: its sun the rig's next free light, so
+                    // both tiers shade and shadow it, and the rest of its
+                    // map the lit tier's irradiance and reflections, the
+                    // path tracer's light and the backdrop.
+                    self.env.pack(&mut fdata, self.solid_lighting.0.rig_untouched());
                 }
                 // A flame that is planar but not solid leaves the map
                 // count at zero, and the marcher draws nothing.
@@ -7904,6 +8311,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             let coloring = super::get_coloring(&escape.coloring);
             super::pack_params(formula.parameters, &escape.formula_params, fparams.as_flattened_mut());
             super::pack_params(coloring.parameters, &escape.coloring_params, cparams.as_flattened_mut());
+            // A program's `bailout` parameter IS the escape radius, UF's
+            // own convention, in the same squared units as its `|z|`: the
+            // panel's bailout drives it, and the smooth colourings read
+            // the radius the formula escapes at.
+            // Undeclared, `@bailout` is complex (UF's default type), and
+            // its real part is the radius.
+            if formula.has_feature(super::FormulaFeature::Program) {
+                if let Some(i) = formula.parameters.iter().position(|p| p.name == "bailout" || p.name == "bailout.re") {
+                    if let Some(slot) = fparams.as_flattened_mut().get_mut(i) {
+                        *slot = escape.bailout;
+                    }
+                }
+            }
             if let Some(layer) = super::layer_of(escape) {
                 super::pack_params(layer.parameters, &escape.layer.params, lparams.as_flattened_mut());
             }
@@ -7912,6 +8332,19 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if let Some(derive) = formula.derived_data {
                 let flat = fdata.as_flattened_mut();
                 for (slot, v) in flat.iter_mut().zip(derive(fparams.as_flattened())) {
+                    *slot = v;
+                }
+            }
+            // A custom entry's `global:` values (escape::lang), computed
+            // on the CPU from the image and the parameters as packed: a
+            // formula's into `fdata`, a colouring's after its parameters.
+            if let Some((at, values)) = super::custom::globals(&formula.name, fparams.as_flattened(), &image) {
+                for (slot, v) in fdata.as_flattened_mut().iter_mut().skip(at).zip(values) {
+                    *slot = v;
+                }
+            }
+            if let Some((at, values)) = super::custom::globals(&coloring.name, cparams.as_flattened(), &image) {
+                for (slot, v) in cparams.as_flattened_mut().iter_mut().skip(at).zip(values) {
                     *slot = v;
                 }
             }
@@ -7983,6 +8416,10 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             cparams,
             lparams,
             fdata,
+            // A terrain made of creases bounds their reach.
+            crease: escape.shading.creases.to_gpu(
+                escape.terrain_active() && escape.terrain.source == crate::config::escape::TerrainSource::Creases,
+            ),
         }
     }
 
@@ -8003,6 +8440,13 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         palette_view: &TextureView,
         palette_generation: u64,
     ) -> bool {
+        // A config carrying a formula or colouring as source: compile
+        // and register it under its name before anything resolves it.
+        super::custom::ensure(escape);
+        // A custom formula takes the panel's damping and biomorph into its
+        // program (plan, phase 4, step 9e).
+        let resolved = super::custom::resolve(escape);
+        let escape = resolved.as_ref();
         self.palette_generation = palette_generation;
         // Whatever made this frame render changed the solid's picture:
         // its path-traced samples are of something else now.
@@ -8023,7 +8467,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let _diag_cpu = super::diag::CpuTimer::start();
         let results_active = self.ensure_results(
             device,
-            assembler::result_bytes(super::config_accum_is_wide(escape)),
+            assembler::result_bytes(super::config_accum_width(escape)),
         );
         // Once, at the top: every path below -- direct, field,
         // perturbed, mode D -- binds the same lens group, and a
@@ -8060,11 +8504,14 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let solid = super::ifs::get_ifs(&escape.formula).is_some_and(|d| d.solid);
         let geom_active = if solid { self.ensure_ifs_geom(device, results_active) } else { false };
         if let Some(ik) = iterate_key.as_deref() {
-            // Offset relief runs orbits beside each pixel's own, which a
+            // Offset relief runs orbits beside each pixel's own, and the
+            // crease field folds the pixel's starting point, which a
             // recolour of the stored records cannot: it iterates.
             if results_active
                 && self.results_key.as_deref() == Some(ik)
                 && !escape.shading.wants_offset_orbits()
+                && !escape.wants_creases()
+                && !Self::recolor_misses_the_lens(escape)
             {
                 let t0 = web_time::Instant::now();
                 let ckey = Self::contrast_key(escape, ik);
@@ -8126,9 +8573,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // Deep zoom: the perturbation path. Falls back to direct on a
         // center-parse failure (matching center_f64's fallback view).
         #[cfg(test)]
-        let use_perturbed = Self::wants_perturbation(escape) || self.force_perturbed;
+        let use_perturbed = (Self::wants_perturbation(escape, self.height) || self.force_perturbed) && !self.force_direct;
         #[cfg(not(test))]
-        let use_perturbed = Self::wants_perturbation(escape);
+        let use_perturbed = Self::wants_perturbation(escape, self.height);
         // ...unless this frame's per-pixel state will not fit the
         // device. Decided HERE rather than deeper in, so the direct
         // path below simply runs: it bands by rows and fits any size.
@@ -8230,10 +8677,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 // iterations. Measured against an exact orbit: 18.4%
                 // of pixels wrong at zoom 20 and 27.0% at zoom 26 on
                 // the scaled rung, against 1.6% and 2.1% on this one.
-                if matches!(
-                    Self::perturb_tier(escape),
-                    Some(assembler::PerturbTier::Manowar)
-                ) {
+                if Self::perturb_tier(escape).is_some_and(deep_rung_always) {
                     floatexp = true;
                 }
                 // Pixel spacing S = 2^(2 - zoom) / height. The scaled
@@ -8289,7 +8733,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                     assembler::iter_state_bytes(
                         tier,
                         floatexp,
-                        super::config_accum_is_wide(escape),
+                        super::config_accum_width(escape),
                         Self::perturbed_derivative(escape, floatexp).is_some(),
                     ),
                 ) {
@@ -8306,7 +8750,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
                 if self.bla_dummy.is_none() {
                     self.bla_dummy = Some(device.create_buffer(&BufferDescriptor {
                         label: Some("Escape BLA Dummy"),
-                        size: 176,
+                        size: 256,
                         usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     }));
@@ -8715,6 +9159,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     /// Free GPU memory explicitly — on WebGPU `Drop` frees nothing.
     /// Idempotent; safe once no submitted work references the texture.
     pub fn destroy(&self) {
+        if let Some(p) = &self.clearance {
+            p.destroy();
+        }
         self.output_texture.destroy();
         self.params_buffer.destroy();
         self.perturb_params_buffer.destroy();
@@ -8815,7 +9262,7 @@ mod tests {
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.zoom_log2 = 10.0;
         esc.max_iter = 10_100_100;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+        assert!(!EscapeRenderer::wants_perturbation(&esc, 768), "shallow stays direct");
 
         // A band's work must respect the budget, and a render must
         // still be reachable in a finite number of them.
@@ -9098,47 +9545,102 @@ mod tests {
     fn perturbation_gate_is_tight() {
         let mut esc = crate::config::escape::EscapeConfig::default();
         esc.zoom_log2 = 30.0;
-        assert!(EscapeRenderer::wants_perturbation(&esc));
+        assert!(EscapeRenderer::wants_perturbation(&esc, 720));
         esc.zoom_log2 = 10.0;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "shallow stays direct");
+        assert!(!EscapeRenderer::wants_perturbation(&esc, 720), "shallow stays direct");
         esc.zoom_log2 = 30.0;
         esc.julia = true;
-        assert!(EscapeRenderer::wants_perturbation(&esc), "julia is in the trivial tier");
+        assert!(EscapeRenderer::wants_perturbation(&esc, 720), "julia is in the trivial tier");
         esc.julia = false;
         esc.formula = "burning_ship".to_string();
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "the Ship family is in the diffabs tier"
         );
         esc.zoom_log2 = 60.0;
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "deep Ship rides the floatexp diffabs rung"
         );
         esc.zoom_log2 = 30.0;
         esc.formula_params.insert("variant".to_string(), 3.0);
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "every fold variant has its own delta algebra now"
         );
         esc.formula_params.clear();
         esc.formula = "weierstrass".to_string();
         assert!(
-            !EscapeRenderer::wants_perturbation(&esc),
+            !EscapeRenderer::wants_perturbation(&esc, 720),
             "mode B fields never perturb"
         );
         esc.formula = "burning_ship".to_string();
         esc.formula = "multibrot".to_string();
-        assert!(EscapeRenderer::wants_perturbation(&esc), "integer multibrot is in the tier");
+        assert!(EscapeRenderer::wants_perturbation(&esc, 720), "integer multibrot is in the tier");
         esc.formula_params.insert("power".to_string(), 3.5);
         assert!(
-            !EscapeRenderer::wants_perturbation(&esc),
+            !EscapeRenderer::wants_perturbation(&esc, 720),
             "non-integer power stays direct (binomial needs an integer exponent)"
         );
         esc.formula_params.clear();
         esc.formula = "mandelbrot".to_string();
         esc.damping_re = 0.5;
-        assert!(!EscapeRenderer::wants_perturbation(&esc), "damped not in v1");
+        assert!(!EscapeRenderer::wants_perturbation(&esc, 720), "damped not in v1");
+    }
+
+    /// The direct path's limit follows the render's pixel spacing: an
+    /// octave shallower per doubling of the height or the supersample,
+    /// three octaves shallower for a Julia plane, never past 14 nor
+    /// before 6 -- and the views reported going soft at the switch now
+    /// perturb at the size they were seen at.
+    #[test]
+    fn the_switch_follows_the_render_pixel() {
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.7436".to_string();
+        esc.center_im = "0.1318".to_string();
+        let at = |esc: &crate::config::escape::EscapeConfig, lines: u32| EscapeRenderer::direct_limit_zoom(esc, lines);
+        // 4 / (2^z 1080 2^-24) = 32 ulps.
+        let z1080 = at(&esc, 1080);
+        assert!((z1080 - (26.0 - 1080f64.log2() - 5.0)).abs() < 1e-9, "{z1080}");
+        assert!((at(&esc, 2160) - (z1080 - 1.0)).abs() < 1e-9, "a doubled height is an octave");
+        // A 4K render at 2x supersampling: four times the lines.
+        assert!((at(&esc, 4320) - (z1080 - 2.0)).abs() < 1e-9);
+        // The ulp is the binade's: past |c| = 1 it doubles.
+        let mut wide = esc.clone();
+        wide.center_re = "-1.75".to_string();
+        assert!((at(&wide, 1080) - (z1080 - 1.0)).abs() < 1e-9, "|c| in [1, 2) halves the resolution");
+        let mut julia = esc.clone();
+        julia.julia = true;
+        assert!((at(&julia, 1080) - (z1080 - 3.0)).abs() < 1e-9, "a Julia plane wants 8x the ulps");
+        // The clamps: a thumbnail switches where everything used to, a
+        // poster never before the floor.
+        assert_eq!(at(&esc, 64), PERTURB_MIN_ZOOM);
+        assert_eq!(at(&julia, 200_000), PERTURB_FLOOR_ZOOM);
+
+        // The reports: Phoenix soft at 13.56, Kaliset blocky at 20.3,
+        // both Julia views. Each now perturbs at viewport sizes, and
+        // Phoenix already at zoom 9.
+        let mut phoenix = crate::config::escape::EscapeConfig::default();
+        phoenix.formula = "phoenix".to_string();
+        phoenix.julia = true;
+        phoenix.julia_re = 0.5667;
+        phoenix.center_re = "0.2326184593499811".to_string();
+        phoenix.center_im = "0.7029418800117250".to_string();
+        for (zoom, lines) in [(13.56, 720), (13.56, 1080), (9.0, 720), (9.0, 1080)] {
+            phoenix.zoom_log2 = zoom;
+            assert!(EscapeRenderer::wants_perturbation(&phoenix, lines), "phoenix at {zoom}, {lines} lines");
+        }
+        phoenix.zoom_log2 = 4.0;
+        assert!(!EscapeRenderer::wants_perturbation(&phoenix, 100_000), "whole-set views stay direct");
+        let mut kaliset = crate::config::escape::EscapeConfig::default();
+        kaliset.formula = "kaliset".to_string();
+        kaliset.julia = true;
+        kaliset.julia_re = 0.6;
+        kaliset.julia_im = 0.4;
+        kaliset.center_re = "-0.0595709396088629".to_string();
+        kaliset.center_im = "0.5576624027876171".to_string();
+        kaliset.zoom_log2 = 20.3;
+        assert!(EscapeRenderer::wants_perturbation(&kaliset, 720), "kaliset has no floor of its own");
     }
 
     #[test]
@@ -9146,16 +9648,17 @@ mod tests {
         // 4 vec2 (32) + 4 u32 (16) + bailout, tile row, damping (16) +
         // shading flags, stride, degree, palette-map flags (16) + the
         // palette map's vec4 (16) + 3 param arrays (192) + the
-        // derived-data table (1024) = 1312, and every vec4 must start
-        // 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1312);
+        // derived-data table (1024) + the crease row (16) = 1328, and
+        // every vec4 must start 16-byte aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1712);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fparams), 96);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 160);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 224);
-        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 288);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, cparams), 352);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, lparams), 608);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, fdata), 672);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, crease), 1696);
     }
 }
 

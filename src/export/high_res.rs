@@ -2846,12 +2846,7 @@ impl HighResExporter {
             levels_low: config.levels_low,
             levels_high: config.levels_high,
             levels_gamma: config.levels_gamma,
-            highlight_mode: match config.highlight_mode {
-                crate::scene::tonemap::HighlightMode::Clip => 0,
-                crate::scene::tonemap::HighlightMode::MaxNorm => 1,
-                crate::scene::tonemap::HighlightMode::Reinhard => 2,
-                crate::scene::tonemap::HighlightMode::Filmic => 3,
-            },
+            highlight_mode: config.highlight_mode.shader_code(),
             levels_enabled: if config.levels_enabled { 1 } else { 0 },
             // Levels measures against the frame's REAL mean: this same
             // number without the targeting inflation, undone as
@@ -3480,12 +3475,7 @@ impl HighResExporter {
             levels_low: config.levels_low,
             levels_high: config.levels_high,
             levels_gamma: config.levels_gamma,
-            highlight_mode: match config.highlight_mode {
-                crate::scene::tonemap::HighlightMode::Clip => 0,
-                crate::scene::tonemap::HighlightMode::MaxNorm => 1,
-                crate::scene::tonemap::HighlightMode::Reinhard => 2,
-                crate::scene::tonemap::HighlightMode::Filmic => 3,
-            },
+            highlight_mode: config.highlight_mode.shader_code(),
             // Levels apply identically in transparent and opaque export: they
             // gate the fractal ALPHA (opacity), and the transparent PNG carries
             // that same alpha so compositing it over the background reconstructs

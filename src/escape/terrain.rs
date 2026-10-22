@@ -53,7 +53,7 @@ use wgpu::*;
 /// Steps a ray may take before it is called a miss. A ray over a
 /// 4096-cell tile skipping at the top levels takes a few dozen; this is
 /// a guard, not a budget.
-const HF_MAX_STEPS: u32 = 4096;
+pub(crate) const HF_MAX_STEPS: u32 = 4096;
 
 /// The walk's uniform. Mirrored by `TerrainParams` in [`WALK_COMMON`];
 /// `fdata` uses mode D's slots so the rig's accessors read the same
@@ -82,8 +82,9 @@ struct TerrainParamsGpu {
     /// Mode D's rig slots: [2].w the FOV, [3] forward, [4] right, [5]
     /// up, [7].z the light count, [8]-[10] the material and fog, [11..]
     /// two per light (direction and power, colour), [20] the sky, [21]
-    /// the colour by the height.
-    fdata: [[f32; 4]; 22],
+    /// the colour by the height, [32] the studio (`ifs_studio`), [36..45]
+    /// an HDRI sky (`environment::env_fdata`).
+    fdata: [[f32; 4]; 48],
 }
 
 /// One level of the mipmap build. Mirrored by `BuildParams`.
@@ -96,8 +97,10 @@ struct BuildParamsGpu {
     src_h: u32,
     /// 1 for level 0 (a cell's four corners), 2 above (a 2x2 block).
     step: u32,
-    /// 0 keeps the maximum of the raw values, 1 the minimum: whichever
-    /// the tile's map takes to the highest point.
+    /// 0 keeps the maximum of the raw values, 1 the minimum (a tile set
+    /// from heights, a simulation's). An escape terrain's sections keep
+    /// whichever raw value its map takes highest (`escape_build_order`):
+    /// bit 1, with bit 2 for a distance and bit 3 for an inverted map.
     mode: u32,
     /// Level 0 of a smooth ground: each cell's 4x4 control points' Bezier
     /// bound (1, a simulation's), or their extreme (2, an escape
@@ -137,6 +140,39 @@ fn at(x: i32, y: i32) -> f32 {
     return textureLoad(src, q, 0).r;
 }
 
+// Where an escape terrain's map takes a raw value (bp.mode bit 1;
+// `hf_f`), as an order: a plateau's sentinel at the top, the land in the
+// map's own direction -- a distance falls as the raw value rises, a count
+// or a relief rises, and inverted each the other way -- then a hole's
+// sentinel at the floor, and last a lake's, so the land round a lake
+// still bounds its block. Inverted, the land's direction turns over and
+// the sentinels' places do not: keeping the plain map's extreme bounded
+// nothing, and the walk stood every node at the relief's top instead --
+// a march cell by cell, slow enough to lose the device.
+fn rank(raw: f32) -> f32 {
+    if (abs(raw) >= 2.0e30) {
+        return -2.0e31;
+    }
+    let distance = (bp.mode & 4u) != 0u;
+    if (select(raw >= 1.0e29, raw <= -1.0e29, distance)) {
+        return 1.0e31;
+    }
+    if (select(raw <= -1.0e29, raw >= 1.0e29, distance)) {
+        return -1.0e31;
+    }
+    let rises = distance == ((bp.mode & 8u) != 0u);
+    return select(-raw, raw, rises);
+}
+
+// Of two raw values, the one the map takes higher: the maximum or the
+// minimum for a plain mode, the better ranked for an escape terrain's.
+fn pick(a: f32, b: f32) -> f32 {
+    if (bp.mode >= 2u) {
+        return select(b, a, rank(a) >= rank(b));
+    }
+    return select(max(a, b), min(a, b), bp.mode == 1u);
+}
+
 // A uniform cubic B-spline segment's Bezier control points, from its
 // four B-spline ones: the segment lies within their range, which hugs it
 // far closer than the B-spline points' own.
@@ -145,9 +181,9 @@ fn bz(p0: f32, p1: f32, p2: f32, p3: f32) -> vec4<f32> {
 }
 
 // Level 0: a cell's highest corner, so no bilinear patch rises above
-// it -- or, for a spline, its 16 Bezier points' highest. Above: the highest of the 2x2 block of nodes below. "Highest" is
-// the raw extreme the tile's map takes to the top: the maximum, or for
-// a distance the minimum.
+// it -- or, for a spline, its 16 Bezier points' highest. Above: the
+// highest of the 2x2 block of nodes below. "Highest" is the raw value
+// the tile's map takes to the top (`pick`).
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= bp.dst_w || gid.y >= bp.dst_h) {
@@ -167,7 +203,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var m = at(x - 1, y - 1);
         for (var j = -1; j < 3; j = j + 1) {
             for (var i = -1; i < 3; i = i + 1) {
-                m = select(max(m, at(x + i, y + j)), min(m, at(x + i, y + j)), bp.mode == 1u);
+                m = pick(m, at(x + i, y + j));
             }
         }
         textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(m, 0.0, 0.0, 0.0));
@@ -197,10 +233,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = at(x + 1, y);
     let c = at(x, y + 1);
     let d = at(x + 1, y + 1);
-    let m = select(max(max(a, b), max(c, d)), min(min(a, b), min(c, d)), bp.mode == 1u);
+    let m = pick(pick(a, b), pick(c, d));
     textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(m, 0.0, 0.0, 0.0));
 }
 "#;
+
+/// The mip build's order for an escape terrain's sections (`BuildParamsGpu::mode`):
+/// the raw value each node keeps is the one its map, `mode`
+/// (`TerrainIngest::mode`) and `inverted`, takes highest.
+fn escape_build_order(mode: u32, inverted: bool) -> u32 {
+    2 | if mode == 1 { 4 } else { 0 } | if inverted { 8 } else { 0 }
+}
 
 /// The albedo's mip chain: each level the 2x2 box average of the one
 /// below, the last row or column of an odd level repeated.
@@ -653,7 +696,7 @@ struct TerrainParams {
     eye: vec4<f32>,
     misc: vec4<f32>,
     tile: vec4<u32>,
-    fdata: array<vec4<f32>, 22>,
+    fdata: array<vec4<f32>, 48>,
 };
 @group(0) @binding(0) var<uniform> params: TerrainParams;
 
@@ -872,9 +915,9 @@ fn hf_rise(raw: f32, mode: u32) -> f32 {
 // from heights), the distance's H exp(-d / w) -- d the raw estimate in
 // the section's pixels times its texel -- or a count's or a relief's
 // rise (`hf_rise`), each with the interior's sentinels, and the land
-// inverted when asked. Increasing in the raw value unless inverted, so
-// a section's mipmap of raw extremes bounds its highest point -- and
-// for an inverted map `hf_bound` does instead.
+// inverted when asked. Monotone in the raw value, either way, so the
+// mipmap keeps each node's raw value this takes highest (`rank` in the
+// build) and `hf_bound` is its height.
 fn hf_f(raw: f32) -> f32 {
     // A lake: flat at the plain's level.
     if (abs(raw) >= 2.0e30) {
@@ -911,15 +954,10 @@ fn hf_f(raw: f32) -> f32 {
     return land;
 }
 
-// The highest a region of raw values stands, from its mipmap extreme:
-// the extreme's height -- or, inverted, the relief's top, since an
-// inverted map is not increasing. An inverted terrain stands at the top
-// almost everywhere (its plain), so the bound stays tight.
+// The highest a region of raw values stands: its mipmap node's height.
+// The node keeps the raw value the map takes highest, inverted or not
+// (the build's `rank`).
 fn hf_bound(raw: f32) -> f32 {
-    let mode = u32(params.fdata[1].w);
-    if (hf_inverted() && mode >= 1u && mode <= 3u) {
-        return params.fdata[6].x;
-    }
     return hf_f(raw);
 }
 
@@ -1537,11 +1575,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let bias = hf_sec.geo.z * 1.0e-3 + (length(p) + length(o)) * 1.0e-6;
             let start = p + n * bias;
             for (var li = 0u; li < ifs_light_count(); li = li + 1u) {
-                let ld = ifs_light_dir(li);
+                // Toward the light from here, no further than it.
+                let la = ifs_light_at(li, p);
+                let ld = la.dir;
                 if (dot(n, ld) <= 0.0) {
                     continue;
                 }
-                let s = hf_trace(start, ld, 1.0e30, params.misc.y);
+                let s = hf_trace(start, ld, min(la.dist, 1.0e30), params.misc.y);
                 steps = steps + s.steps;
                 sun[li] = select(s.soft, 0.0, s.hit);
             }
@@ -1553,6 +1593,41 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         atomicMax(&hf_stats[1], h.steps);
         atomicAdd(&hf_stats[2], 1u);
         atomicAdd(&hf_stats[3], steps);
+    }
+}
+
+// The nearest ground the view shows (`TerrainRenderer::probe_nearest`),
+// for the sections' detail to be chosen by: one primary ray an 8x8 block
+// of the frame -- each block's last row and column, so the frame's bottom
+// row, where the nearest ground usually is, is traced -- its hit distance
+// into word 0 of the buffer bound in the stats' place, by atomicMin (a
+// positive float's bits order as its value). And the ground's height under
+// the eye into word 1, for fly mode's floor (3d-look-and-tools P6): one
+// ray straight down from above the slab, so an eye inside a hill finds
+// the hill's top; the word left at its no-ground mark where none lies
+// under the eye.
+@compute @workgroup_size(8, 8, 1)
+fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let px = min(gid.x * 8u + 7u, params.width - 1u);
+    let py = min(gid.y * 8u + 7u, params.height - 1u);
+    if (gid.x * 8u >= params.width || gid.y * 8u >= params.height) {
+        return;
+    }
+    hf_load_range();
+    let o = params.eye.xyz;
+    let d = ifs_ray(px, py);
+    let tmax = params.fdata[6].w / max(dot(d, ifs_forward()), 1.0e-4);
+    let h = hf_trace(o, d, tmax, 0.0);
+    if (h.hit && h.t > 0.0) {
+        atomicMin(&hf_stats[0], bitcast<u32>(h.t));
+    }
+    if (gid.x == 0u && gid.y == 0u) {
+        let lift = params.fdata[0].z * 1.0e-3;
+        let start = vec3<f32>(o.xy, max(o.z, hf_slab_top) + lift);
+        let down = hf_trace(start, vec3<f32>(0.0, 0.0, -1.0), start.z - hf_slab_floor + lift, 0.0);
+        if (down.hit) {
+            atomicStore(&hf_stats[1], bitcast<u32>(start.z - down.t));
+        }
     }
 }
 "#;
@@ -1751,10 +1826,14 @@ const RELIGHT_WGSL: &str = r#"
 @group(0) @binding(4) var hf_sampler: sampler;
 @group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
 @group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
+@group(0) @binding(8) var surf_image: texture_2d<f32>;
+@group(0) @binding(9) var surf_sampler: sampler;
 
 //__HF_GROUND__
 
 //__HF_ALBEDO__
+
+//__SURFACE__
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1782,8 +1861,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // A wall's normal is level, a surface's never is (the spline's
     // (-du, -dv, 1)): a wall keeps the colour at its top.
     let albedo = hf_albedo_at(p.xy, select(HF_NO_HEIGHT, p.z, abs(n.z) > 1.0e-4), foot);
-    let sun = unpack4x8unorm(g.z);
-    let rgb = ifs_rig(albedo.rgb, n, nz_ao.y, sun, dir, t);
+    var sun = unpack4x8unorm(g.z);
+    // The surface texture tilts the shading normal (surface-textures.md).
+    // The walk tested each light's shadow from the true surface, and left
+    // one the true surface faces away from unshadowed: it stays dark.
+    let nb = surf_bump(n, p, foot);
+    for (var li = 0u; li < min(ifs_light_count(), 4u); li = li + 1u) {
+        if (dot(n, ifs_light_at(li, p).dir) <= 0.0) {
+            sun[li] = 0.0;
+        }
+    }
+    // A face in shade sees the texture too: the ambient takes the sky the
+    // tilted normal faces over what the true one does, a micro-occlusion.
+    // Exactly 1 without a texture.
+    let sky = (0.5 + 0.5 * nb.z) / max(0.5 + 0.5 * n.z, 1.0e-3);
+    let rgb = ifs_rig(albedo.rgb, nb, nz_ao.y * clamp(sky, 0.0, 2.0), sun, dir, t, p);
     // The fog: the ground's coverage fading with view depth past its
     // start (fdata[7].x its density, .y its start), so it melts into
     // the background exactly.
@@ -1819,10 +1911,14 @@ const PATH_WGSL: &str = r#"
 @group(0) @binding(6) var<storage, read> hf_sections: array<HfSection>;
 @group(0) @binding(7) var<storage, read> hf_nodes: array<HfNode>;
 @group(0) @binding(11) var hf_palette: texture_2d<f32>;
+@group(0) @binding(12) var surf_image: texture_2d<f32>;
+@group(0) @binding(13) var surf_sampler: sampler;
 
 //__HF_HELPERS__
 
 //__HF_ALBEDO__
+
+//__SURFACE__
 
 // The height field's side of the path tracer (`path_core`). Rays start
 // at the eye, in the world's units.
@@ -1863,17 +1959,30 @@ fn pt_surface(o: vec3<f32>, d: vec3<f32>, h: HfHit, travelled: f32) -> PtHit {
     // lake's roughness, over the tint.
     out.f0 = pt.mat.x;
     out.rough = pt.mat.y;
+    out.metal = ifs_metallic();
+    var lake = false;
     if (hf_lake_cell(ps.x, ps.y)) {
         n = vec3<f32>(0.0, 0.0, 1.0);
         out.f0 = 0.02;
         out.rough = pt.mat.w;
+        out.metal = 0.0;
+        lake = true;
+    }
+    let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
+    // The surface texture tilts the shading normal (surface-textures.md):
+    // of the true surface, so a bump seen from below is a dent. Not on a
+    // lake, nor on the ground's edge.
+    var nb = n;
+    if (!lake && !wall) {
+        nb = surf_bump(n, p, foot);
     }
     // The side the ray sees: a height field is two-sided.
     if (dot(n, d) > 0.0) {
         n = -n;
+        nb = -nb;
     }
-    out.n = n;
-    let foot = (travelled + h.t) * pt.misc.x / sqrt(max(abs(dot(n, d)), 0.05));
+    out.n = nb;
+    out.ng = n;
     out.albedo = hf_albedo_at(p.xy, select(p.z, HF_NO_HEIGHT, wall), foot);
     // Off the surface by a thousandth of its cell, and by what f32 can
     // tell apart at its distance from the origin and the eye's.
@@ -1895,8 +2004,8 @@ fn pt_scene_next(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> PtHit {
     return pt_surface(o, d, hf_trace(o, d, 1.0e30, 0.0), travelled);
 }
 
-fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, travelled: f32) -> bool {
-    return !hf_trace(o, d, 1.0e30, 0.0).hit;
+fn pt_scene_visible(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> bool {
+    return !hf_trace(o, d, min(t_end, 1.0e30), 0.0).hit;
 }
 
 // One sample of the pixel: (radiance times coverage, coverage). The
@@ -1917,7 +2026,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         let depth = h.t * dot(ray.d, ifs_forward());
         coverage = coverage * exp(-params.fdata[7].x * max(depth - params.fdata[7].y, 0.0));
     }
-    let l = min(pt_path(ray.o, ray.d, h), vec3<f32>(pt.misc.y));
+    let l = pt_clamp(pt_path(ray.o, ray.d, h));
     return vec4<f32>(l * coverage, coverage);
 }
 "#;
@@ -2039,11 +2148,12 @@ fn hf_lookup(q: vec2<f32>) -> HfLook {
 }
 "#;
 
-/// The walk's WGSL, assembled.
-pub fn assemble_walk() -> String {
+/// The walk's WGSL, assembled; `placed` compiles points and headlamps
+/// into the rig (`assembler::ifs_rig`).
+pub fn assemble_walk(placed: bool) -> String {
     format!(
         "{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered(placed)),
         WALK_WGSL.replace(
             "//__HF_HELPERS__",
             &HF_HELPERS_WGSL
@@ -2054,21 +2164,30 @@ pub fn assemble_walk() -> String {
 }
 
 /// The relight's WGSL, assembled.
-pub fn assemble_relight() -> String {
+pub fn assemble_relight(placed: bool) -> String {
     format!(
         "{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
-        RELIGHT_WGSL.replace("//__HF_GROUND__", GROUND_WGSL).replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered(placed)),
+        RELIGHT_WGSL
+            .replace("//__HF_GROUND__", GROUND_WGSL)
+            .replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+            .replace("//__SURFACE__", &surface_wgsl())
     )
+}
+
+/// The surface texture's WGSL (`super::surface`): its noise, then its
+/// kinds and bump.
+fn surface_wgsl() -> String {
+    format!("{}\n{}", super::surface::SURFACE_NOISE_WGSL, super::surface::SURFACE_WGSL)
 }
 
 /// The path tracer's WGSL, assembled: the rig's accessors and camera, the
 /// shared core (`path_core`), the ground's functions, the albedo's
 /// lookup, and the height field's side of the integrator.
-pub fn assemble_path() -> String {
+pub fn assemble_path(placed: bool) -> String {
     format!(
         "{}\n{}\n{}",
-        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered()),
+        WALK_COMMON.replace("//__IFS_RIG__", &super::assembler::ifs_rig_jittered(placed)),
         super::path_core::PT_CORE_WGSL.replace("//__LENS_APPLY_RAY__", ""),
         PATH_WGSL
             .replace(
@@ -2078,6 +2197,7 @@ pub fn assemble_path() -> String {
                     .replace("//__HF_GROUND__", GROUND_WGSL)
             )
             .replace("//__HF_ALBEDO__", HF_ALBEDO_WGSL)
+            .replace("//__SURFACE__", &surface_wgsl())
     )
 }
 
@@ -2120,6 +2240,12 @@ pub struct TerrainView {
     /// A gradient sky's zenith, as a ray that meets nothing sees it
     /// (`path_core::sky_seen`); None for the background alone.
     pub sky: Option<[f32; 3]>,
+    /// The studio's brightness (`path_core::studio_level`; 0, none).
+    pub studio: f32,
+    /// An HDRI sky (`path_core::environment_settings`; docs/projects/
+    /// hdri-environment.md), in the world's frame, z up: it lights the
+    /// ground, is what its gloss and water reflect, and is the backdrop.
+    pub environment: Option<super::path_core::EnvSettings>,
     /// The height map's curve (`TerrainCurve::code`) and whether the land
     /// is inverted (docs/archive/terrain/terrain-height.md, H2).
     pub curve: u32,
@@ -2129,8 +2255,11 @@ pub struct TerrainView {
     pub range: Option<[f32; 2]>,
     /// The material the lit tier reads as the path tracer does
     /// (camera-unification C7): the coat's reflectance and roughness,
-    /// and the glow (`path_core::lit_material`).
-    pub material: [f32; 3],
+    /// the glow and the metallic (`path_core::lit_material`).
+    pub material: [f32; 5],
+    /// The surface texture's bump (docs/projects/surface-textures.md);
+    /// off for a simulation's terrain.
+    pub surface: super::surface::SurfaceTexture,
 }
 
 pub use super::path_core::PathSettings;
@@ -2146,6 +2275,20 @@ struct RangeRead {
     /// A reduction came while a read was in flight.
     again: bool,
     last: Option<[f32; 2]>,
+}
+
+/// A probe of the nearest ground in flight, and the last that landed
+/// (`TerrainRenderer::probe_nearest`): the walk's key it measured.
+#[derive(Default)]
+struct NearRead {
+    stage: Option<Buffer>,
+    /// Set by the map's callback: 1 mapped, 2 failed.
+    landed: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
+    key: Option<String>,
+    last: Option<f32>,
+    /// The ground's height under the eye at the last probe; None where no
+    /// ground lay under it.
+    ground: Option<f32>,
 }
 
 /// The range's ordered encoding undone: `hf_unordered`.
@@ -2167,7 +2310,7 @@ pub fn light_direction(azimuth_deg: f32, elevation_deg: f32) -> [f32; 3] {
 /// The rig's slots of `fdata` for a terrain: mode D's material, fog and
 /// lights, the lights world-fixed. An untouched panel means a default
 /// sun, as mode D's untouched panel means a default key light.
-fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 22]) {
+fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [f32; 3]), out: &mut [[f32; 4]; 48]) {
     out[2][3] = cam.fov;
     out[3] = [cam.forward[0] as f32, cam.forward[1] as f32, cam.forward[2] as f32, 0.0];
     out[4] = [cam.right[0] as f32, cam.right[1] as f32, cam.right[2] as f32, 0.0];
@@ -2191,6 +2334,25 @@ fn pack_rig(cam: &SolidCamera, shading: &SolidShadingSettings, fog: (f32, f32, [
     let mut n = 0usize;
     for l in shading.lights.iter() {
         if any && (!l.enabled || l.intensity <= 0.0) {
+            continue;
+        }
+        // A headlamp rides with the camera (lights-in-the-fractal, L5); a
+        // point has no place here yet -- the terrain's world is the view's,
+        // its origin and its scale moving with it -- and is off.
+        if any && l.kind == crate::config::LightKind::Point {
+            continue;
+        }
+        if any && l.kind == crate::config::LightKind::Headlamp {
+            let lift = l.lift as f64 * cam.distance;
+            let pos = [cam.eye[0] + cam.up[0] * lift, cam.eye[1] + cam.up[1] * lift, cam.eye[2] + cam.up[2] * lift];
+            let (kind, extra) = super::ifs::light_extra(l, l.reach as f64 * cam.distance);
+            out[11 + n * 2] = [pos[0] as f32, pos[1] as f32, pos[2] as f32, l.intensity.max(0.0)];
+            out[12 + n * 2] = [l.color[0], l.color[1], l.color[2], kind];
+            out[28 + n] = extra;
+            n += 1;
+            if n == 4 {
+                break;
+            }
             continue;
         }
         let (az, el) = if any { (l.azimuth, l.elevation) } else { DEFAULT_SUN };
@@ -2226,11 +2388,18 @@ fn walk_key(view: &TerrainView, w: u32, h: u32, tile: u64) -> String {
         view.height,
         view.width
     );
-    k.push_str(&format!("|{}", view.far));
+    // The height map: a curve, an inversion or a pinned range moves the
+    // land itself.
+    k.push_str(&format!("|{}|{}|{}|{:?}", view.far, view.curve, view.invert, view.range));
     let any = !view.shading.rig_untouched();
     k.push_str(&format!("|{any}"));
     for l in &view.shading.lights {
         k.push_str(&format!("|{}:{}:{}", l.enabled && l.intensity > 0.0, l.azimuth, l.elevation));
+    }
+    // An HDRI sky's sun takes a light, and where it stands decides its
+    // shadow rays.
+    if let Some(e) = view.environment {
+        k.push_str(&format!("|env:{}:{}:{}", e.def.id, e.rotation, e.horizon));
     }
     k
 }
@@ -2333,6 +2502,10 @@ pub struct TerrainRenderer {
     albedo_mip_pipeline: ComputePipeline,
     path_layout: BindGroupLayout,
     path_pipeline: ComputePipeline,
+    /// The walk, the relight and the path tracer with points and
+    /// headlamps compiled into their rig, built when a view first has one
+    /// (`assembler::ifs_rig`: their code costs registers unused).
+    placed: Option<[ComputePipeline; 3]>,
     /// The path tracer's per-pixel sum, and the samples in it.
     path: PathSum,
     sampler: Sampler,
@@ -2349,6 +2522,23 @@ pub struct TerrainRenderer {
     range_reduce_pipeline: ComputePipeline,
     /// The ground's range, read back for a lock to pin (H3).
     range_read: RangeRead,
+    /// The surface texture's image (surface-textures.md): the simulation
+    /// texture with its mip chain, keyed as the section renderer's is; a
+    /// 1x1 stand-in without one.
+    surface_image: Option<(String, Texture, TextureView)>,
+    surface_dummy: (Texture, TextureView),
+    surface_sampler: Sampler,
+    /// The path tracer's HDRI sky binding's stand-in (terrains take none
+    /// yet).
+    /// The HDRI sky (`TerrainView::environment`).
+    env: super::environment::EnvSlot,
+    surface_mip_layout: BindGroupLayout,
+    surface_mip_pipeline: ComputePipeline,
+    /// The nearest ground the view shows (`probe_main`, on the walk's
+    /// layout), and its read.
+    probe_pipeline: ComputePipeline,
+    near: Buffer,
+    near_read: NearRead,
     /// The accumulation's pair, allocated on the first `accumulate`;
     /// `accum_front` is the one holding the mean.
     accum: Option<[(Texture, TextureView); 2]>,
@@ -2386,6 +2576,18 @@ impl TerrainRenderer {
             visibility: ShaderStages::COMPUTE,
             ty: BindingType::Texture {
                 sample_type: TextureSampleType::Float { filterable: false },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        // The surface texture's image, sampled with filtering between its
+        // mips.
+        let tex_filtered = |binding: u32| BindGroupLayoutEntry {
+            binding,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
                 view_dimension: TextureViewDimension::D2,
                 multisampled: false,
             },
@@ -2460,6 +2662,21 @@ impl TerrainRenderer {
                 },
                 storage(6, true),
                 storage(7, true),
+                tex_filtered(8),
+                BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // The HDRI sky (`environment::ENV_WGSL`).
+                tex_filtered(14),
+                BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let albedo_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -2486,7 +2703,26 @@ impl TerrainRenderer {
                 uniform(9),
                 storage(10, false),
                 tex(11),
+                tex_filtered(12),
+                BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // The HDRI sky (`environment::ENV_WGSL`).
+                tex_filtered(14),
+                BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
+        });
+        let surface_mip_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Terrain Surface Mips"),
+            entries: &[tex(0), storage_tex(1, TextureFormat::Rgba8Unorm)],
         });
         let ingest_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Terrain Ingest"),
@@ -2541,8 +2777,10 @@ impl TerrainRenderer {
         };
         let pipeline = |label: &str, layout: &BindGroupLayout, src: String| entry(label, layout, &src, "main");
         let build_pipeline = pipeline("Terrain Build", &build_layout, assemble_build());
-        let walk_pipeline = pipeline("Terrain Walk", &walk_layout, assemble_walk());
-        let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight());
+        let walk_src = assemble_walk(false);
+        let walk_pipeline = entry("Terrain Walk", &walk_layout, &walk_src, "main");
+        let probe_pipeline = entry("Terrain Probe", &walk_layout, &walk_src, "probe_main");
+        let relight_pipeline = pipeline("Terrain Relight", &relight_layout, assemble_relight(false));
         let filter_pipeline = entry("Terrain Section Raw", &filter_layout, INGEST_WGSL, "filter_main");
         let soften_pipeline = entry("Terrain Section Soften", &filter_layout, INGEST_WGSL, "soften_main");
         let store_pipeline = entry("Terrain Section Store", &filter_layout, INGEST_WGSL, "store_main");
@@ -2550,7 +2788,21 @@ impl TerrainRenderer {
         let grid_pipeline = entry("Terrain Grid", &ingest_layout, GRID_WGSL, "grid_main");
         let accum_pipeline = entry("Terrain Accumulate", &accum_layout, ACCUM_WGSL, "main");
         let albedo_mip_pipeline = entry("Terrain Albedo Mips", &albedo_mip_layout, ALBEDO_MIP_WGSL, "main");
-        let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path());
+        let surface_mip_src = ALBEDO_MIP_WGSL.replace("rgba16float", "rgba8unorm");
+        let surface_mip_pipeline = entry("Terrain Surface Mips", &surface_mip_layout, &surface_mip_src, "main");
+        // The surface texture tiles: it repeats, and filters between mips.
+        let surface_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Terrain Surface"),
+            address_mode_u: AddressMode::Repeat,
+            address_mode_v: AddressMode::Repeat,
+            address_mode_w: AddressMode::Repeat,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let surface_dummy = Self::create_surface_image(device, 1, 1);
+        let path_pipeline = pipeline("Terrain Path", &path_layout, assemble_path(false));
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Terrain Albedo"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -2582,6 +2834,12 @@ impl TerrainRenderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let near = device.create_buffer(&BufferDescriptor {
+            label: Some("Terrain Nearest"),
+            size: 16,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         TerrainRenderer {
             build_layout,
             walk_layout,
@@ -2604,6 +2862,7 @@ impl TerrainRenderer {
             albedo_mip_pipeline,
             path_layout,
             path_pipeline,
+            placed: None,
             path,
             sampler,
             atlas: None,
@@ -2611,6 +2870,15 @@ impl TerrainRenderer {
             building: None,
             range,
             range_read: RangeRead::default(),
+            surface_image: None,
+            surface_dummy,
+            surface_sampler,
+            env: Default::default(),
+            surface_mip_layout,
+            surface_mip_pipeline,
+            probe_pipeline,
+            near,
+            near_read: NearRead::default(),
             accum: None,
             accum_front: 0,
             accum_count: 0,
@@ -2771,6 +3039,14 @@ impl TerrainRenderer {
         if let Some(b) = &self.range_read.stage {
             b.destroy();
         }
+        self.near.destroy();
+        if let Some(b) = &self.near_read.stage {
+            b.destroy();
+        }
+        if let Some((_, t, _)) = &self.surface_image {
+            t.destroy();
+        }
+        self.surface_dummy.0.destroy();
         if let Some((_, _, pair)) = &self.scratch {
             pair[0].0.destroy();
             pair[1].0.destroy();
@@ -3013,7 +3289,7 @@ impl TerrainRenderer {
         self.reset_range(queue);
         self.begin_section(queue, 0, n, m, ingest, SectionFilter::default());
         self.ingest_region(device, queue, colour, height_field, 0, 0, n, m);
-        self.finish_section(device, queue, false);
+        self.finish_section(device, queue, false, false);
         let floor = -0.01 * n.max(m) as f64;
         self.set_ground(device, queue, Self::one_section_ground(n, m, ingest.mode(), top, floor, false, false));
     }
@@ -3183,6 +3459,182 @@ impl TerrainRenderer {
         self.range_read.last
     }
 
+    /// Measure the nearest ground `view` shows (`probe_main`: a primary
+    /// ray an 8x8 block), without waiting: read back and collected by
+    /// [`Self::poll_nearest`]. Only when something the walk reads has
+    /// changed since the last probe, and none is in flight. Submits its
+    /// own work.
+    pub fn probe_nearest(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
+        let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
+        if self.near_read.landed.is_some() {
+            return;
+        }
+        let key = walk_key(view, self.out_w, self.out_h, ground.version);
+        if self.near_read.key.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.write_params(queue, view);
+        queue.write_buffer(&self.near, 0, bytemuck::cast_slice(&[u32::MAX; 2]));
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Terrain Probe"),
+            layout: &self.walk_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&atlas.raw_all) },
+                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&atlas.mips_all) },
+                BindGroupEntry { binding: 3, resource: self.geom.as_entire_binding() },
+                BindGroupEntry { binding: 4, resource: self.near.as_entire_binding() },
+                BindGroupEntry { binding: 5, resource: self.range.as_entire_binding() },
+                BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
+                BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
+            ],
+        });
+        let stage = self.near_read.stage.get_or_insert_with(|| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some("Terrain Nearest Readback"),
+                size: 8,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Probe") });
+        {
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Probe"), timestamp_writes: None });
+            pass.set_pipeline(&self.probe_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(self.frame.0.div_ceil(64), self.frame.1.div_ceil(64), 1);
+        }
+        enc.copy_buffer_to_buffer(&self.near, 0, stage, 0, 8);
+        queue.submit(std::iter::once(enc.finish()));
+        let landed = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let flag = landed.clone();
+        stage.slice(..).map_async(MapMode::Read, move |r| {
+            flag.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release);
+        });
+        self.near_read.landed = Some(landed);
+        self.near_read.key = Some(key);
+    }
+
+    /// Collect a probe that has landed (`probe_nearest`), polling without
+    /// waiting.
+    pub fn poll_nearest(&mut self, device: &Device) {
+        let Some(landed) = self.near_read.landed.as_ref() else {
+            return;
+        };
+        let _ = device.poll(PollType::Poll);
+        let state = landed.load(std::sync::atomic::Ordering::Acquire);
+        if state == 0 {
+            return;
+        }
+        if let (1, Some(stage)) = (state, self.near_read.stage.as_ref()) {
+            let (bits, ground) = {
+                let data = stage.slice(..).get_mapped_range();
+                (u32::from_le_bytes(data[0..4].try_into().unwrap()), u32::from_le_bytes(data[4..8].try_into().unwrap()))
+            };
+            stage.unmap();
+            let t = f32::from_bits(bits);
+            // Nothing struck (the sky) leaves the last measure standing.
+            if bits != u32::MAX && t.is_finite() && t > 0.0 {
+                self.near_read.last = Some(t);
+            }
+            // No ground under the eye is none: the floor is then the
+            // flight's own (`camera::fly`).
+            let g = f32::from_bits(ground);
+            self.near_read.ground = (ground != u32::MAX && g.is_finite()).then_some(g);
+        }
+        self.near_read.landed = None;
+    }
+
+    /// The nearest ground the view showed, in the world's units, at the
+    /// last probe that struck any.
+    pub fn nearest_hit(&self) -> Option<f32> {
+        self.near_read.last
+    }
+
+    /// The ground's height under the eye at the last probe, in the
+    /// world's units (fly mode's floor, 3d-look-and-tools P6): None before
+    /// one lands, or where no ground lies under the eye.
+    pub fn ground_under_eye(&self) -> Option<f32> {
+        self.near_read.ground
+    }
+
+    /// Whether a probe is in flight.
+    pub fn probe_in_flight(&self) -> bool {
+        self.near_read.landed.is_some()
+    }
+
+    fn create_surface_image(device: &Device, w: u32, h: u32) -> (Texture, TextureView) {
+        let levels = 32 - w.max(h).max(1).leading_zeros();
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("Terrain Surface Texture"),
+            size: Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    fn surface_view(&self) -> &TextureView {
+        self.surface_image.as_ref().map_or(&self.surface_dummy.1, |(_, _, v)| v)
+    }
+
+    /// The surface texture's key, if it holds one.
+    pub fn surface_key(&self) -> Option<&str> {
+        self.surface_image.as_ref().map(|(k, _, _)| k.as_str())
+    }
+
+    /// Take the surface texture from `src` (the section renderer's
+    /// simulation texture, `key` its cache key): copied on the GPU into
+    /// a texture of its own, and its mip chain built, so distant ground
+    /// reads the texture's average rather than whichever texel a ray
+    /// struck.
+    pub fn set_surface_image(&mut self, device: &Device, queue: &Queue, key: &str, src: &Texture) {
+        let (w, h) = (src.width(), src.height());
+        let (texture, view) = Self::create_surface_image(device, w, h);
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Surface Texture") });
+        enc.copy_texture_to_texture(
+            TexelCopyTextureInfo { texture: src, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        {
+            let level_view = |l: u32| {
+                texture.create_view(&TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() })
+            };
+            let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Surface Mips"), timestamp_writes: None });
+            pass.set_pipeline(&self.surface_mip_pipeline);
+            for l in 1..texture.mip_level_count() {
+                let (s, d) = (level_view(l - 1), level_view(l));
+                let bg = device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Terrain Surface Mips"),
+                    layout: &self.surface_mip_layout,
+                    entries: &[
+                        BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&s) },
+                        BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&d) },
+                    ],
+                });
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups((w >> l).max(1).div_ceil(8), (h >> l).max(1).div_ceil(8), 1);
+            }
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        if let Some((_, old, _)) = self.surface_image.replace((key.to_string(), texture, view)) {
+            old.destroy();
+        }
+    }
+
+    /// Drop the surface texture's image.
+    pub fn clear_surface_image(&mut self) {
+        if let Some((_, old, _)) = self.surface_image.take() {
+            old.destroy();
+        }
+    }
+
     /// Start making atlas layer `layer` -- `n x m` samples -- from
     /// footprint regions, each rendered as `filter` says.
     pub fn begin_section(&mut self, queue: &Queue, layer: u32, n: u32, m: u32, ingest: &TerrainIngest, filter: SectionFilter) {
@@ -3315,17 +3767,27 @@ impl TerrainRenderer {
     /// Finish the section being made: its maximum mipmap and its albedo's
     /// mip chain. It is drawn once a ground names its layer.
     /// `smooth`: bounded for a smooth ground's spline (`reshape_section`).
-    pub fn finish_section(&mut self, device: &Device, queue: &Queue, smooth: bool) {
+    /// `inverted`: bounded for the land turned upside down.
+    pub fn finish_section(&mut self, device: &Device, queue: &Queue, smooth: bool, inverted: bool) {
         let (layer, base) = self.building.take().expect("begin_section first");
         let mode = TerrainIngest { source: base.source, interior: base.interior, background: [0.0; 3], tint: [0.0; 3] }.mode();
-        self.build_layer_shaped(device, queue, layer, u32::from(mode == 1), (if smooth { 2 } else { 0 }, false));
+        self.build_layer_shaped(device, queue, layer, escape_build_order(mode, inverted), (if smooth { 2 } else { 0 }, false));
     }
 
     /// Bound a made section's surface again: for the spline of a smooth
-    /// ground (`smooth`) or a bilinear patch a cell -- its max mipmap made
-    /// anew, its heights and colours as they are. Turning the smooth
-    /// surface on or off re-renders nothing.
-    pub fn reshape_section(&mut self, device: &Device, queue: &Queue, layer: u32, ingest: &TerrainIngest, smooth: bool) {
+    /// ground (`smooth`) or a bilinear patch a cell, for the land the
+    /// right way up or `inverted` -- its max mipmap made anew, its
+    /// heights and colours as they are. Turning the smooth surface or the
+    /// inversion on or off re-renders nothing.
+    pub fn reshape_section(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layer: u32,
+        ingest: &TerrainIngest,
+        smooth: bool,
+        inverted: bool,
+    ) {
         let atlas = self.atlas.as_ref().expect("ensure_atlas first");
         let raw = atlas.raw.create_view(&TextureViewDescriptor {
             dimension: Some(TextureViewDimension::D2),
@@ -3334,7 +3796,8 @@ impl TerrainRenderer {
             ..Default::default()
         });
         let shape = (if smooth { 2 } else { 0 }, false);
-        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, u32::from(ingest.mode() == 1), shape);
+        let order = escape_build_order(ingest.mode(), inverted);
+        self.build_mips(device, queue, &raw, &atlas.mips, layer, atlas.w, atlas.h, atlas.levels, order, shape);
         self.walked = None;
     }
 
@@ -3553,17 +4016,26 @@ impl TerrainRenderer {
 
     fn write_params(&self, queue: &Queue, view: &TerrainView) {
         let g = &self.ground.as_ref().expect("a ground").ground;
-        let mut fdata = [[0.0f32; 4]; 22];
+        let mut fdata = [[0.0f32; 4]; 48];
         // The terrain's fog fades its COVERAGE (the relight), so the
         // tonemap composites the background itself: a colour fog mixed
         // in linear light could never match a background composited
         // after the tonemap's gamma. The rig gets none.
         pack_rig(&view.camera, &view.shading, (0.0, 0.0, view.fog.2), &mut fdata);
+        // The surface texture (surface-textures.md), 22..28.
+        fdata[22..28].copy_from_slice(&view.surface.to_fdata());
         // The material, in the w of the camera's rows (`ifs_gloss`,
-        // `ifs_rough`, `ifs_glow`).
+        // `ifs_rough`, `ifs_glow`), and the metallic in the fog row's.
         for k in 0..3 {
             fdata[3 + k][3] = view.material[k];
         }
+        fdata[10][3] = view.material[3];
+        // The studio, the world's with z up (`ifs_studio`).
+        fdata[32] = [view.studio, 1.0, 1.0 - view.material[4], 0.0];
+        // An HDRI sky: its sun the rig's next light, in place of an
+        // untouched panel's default sun; the rest of its map at 36..45
+        // (`environment::EnvSlot::pack`).
+        self.env.pack(&mut fdata, view.shading.rig_untouched());
         fdata[7][0] = view.fog.0;
         fdata[7][1] = view.fog.1;
         // The ground's index, its top, and its map.
@@ -3613,7 +4085,51 @@ impl TerrainRenderer {
 
     /// Render the view: walk if anything the walk reads changed, then
     /// relight. Submits its own work.
+    /// Build the walk, the relight and the path tracer with points and
+    /// headlamps compiled into their rig, the first time a view has one.
+    fn ensure_placed(&mut self, device: &Device, placed: bool) {
+        if !placed || self.placed.is_some() {
+            return;
+        }
+        let make = |label: &str, layout: &BindGroupLayout, src: &str| {
+            let module = device.create_shader_module(ShaderModuleDescriptor { label: Some(label), source: ShaderSource::Wgsl(src.into()) });
+            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[Some(layout)], immediate_size: 0 });
+            device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        self.placed = Some([
+            make("Terrain Walk (placed lights)", &self.walk_layout, &assemble_walk(true)),
+            make("Terrain Relight (placed lights)", &self.relight_layout, &assemble_relight(true)),
+            make("Terrain Path (placed lights)", &self.path_layout, &assemble_path(true)),
+        ]);
+    }
+
+    /// The walk (0), the relight (1) or the path tracer (2) for a view:
+    /// with points and headlamps compiled in when it has one.
+    fn rig_pipeline(&self, placed: bool, k: usize) -> &ComputePipeline {
+        match (&self.placed, placed) {
+            (Some(p), true) => &p[k],
+            _ => [&self.walk_pipeline, &self.relight_pipeline, &self.path_pipeline][k],
+        }
+    }
+
+    /// Test-only: `map` as the sky's map, read with `settings`, in place of
+    /// the bundled file its id names (a view naming the same id keeps it).
+    #[cfg(test)]
+    pub(crate) fn set_environment_map_for_test(&mut self, device: &Device, queue: &Queue, map: &super::environment::EnvMap, settings: super::path_core::EnvSettings) {
+        self.env.set_map(device, queue, map, settings);
+    }
+
     pub fn render(&mut self, device: &Device, queue: &Queue, view: &TerrainView) {
+        let placed = view.shading.placed_lights();
+        self.ensure_placed(device, placed);
+        self.env.set(device, queue, view.environment);
         let (Some(ground), Some(atlas)) = (self.ground.as_ref(), self.atlas.as_ref()) else { return };
         let key = format!("{}|{:?}{:?}", walk_key(view, self.out_w, self.out_h, ground.version), self.frame, self.origin);
         let walk = self.walked.as_deref() != Some(key.as_str()) || self.count_steps;
@@ -3639,10 +4155,11 @@ impl TerrainRenderer {
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Walk"), timestamp_writes: None });
-            pass.set_pipeline(&self.walk_pipeline);
+            pass.set_pipeline(self.rig_pipeline(placed, 0));
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
+        let (env_view, env_sampler) = self.env.bindings(device);
         {
             let bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Terrain Relight"),
@@ -3656,10 +4173,14 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 5, resource: BindingResource::TextureView(&self.palette) },
                     BindGroupEntry { binding: 6, resource: ground.sections.as_entire_binding() },
                     BindGroupEntry { binding: 7, resource: ground.nodes.as_entire_binding() },
+                    BindGroupEntry { binding: 8, resource: BindingResource::TextureView(self.surface_view()) },
+                    BindGroupEntry { binding: 9, resource: BindingResource::Sampler(&self.surface_sampler) },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&env_view) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&env_sampler) },
                 ],
             });
             let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Relight"), timestamp_writes: None });
-            pass.set_pipeline(&self.relight_pipeline);
+            pass.set_pipeline(self.rig_pipeline(placed, 1));
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(gx, gy, 1);
         }
@@ -3681,6 +4202,16 @@ impl TerrainRenderer {
         self.path.count()
     }
 
+    /// Whether the path tracer's sum is done: `target` samples, or --
+    /// sampling adaptively (V2) -- every pixel converged at a check whose
+    /// count has come back (polled here, without waiting) under
+    /// `noise_threshold` (a new one reopens it: `PathSum::retune`).
+    pub fn path_done(&mut self, device: &Device, target: u32, noise_threshold: f32) -> bool {
+        self.path.retune(noise_threshold);
+        self.path.poll(device);
+        self.path.done(target)
+    }
+
     /// The path tracer's mean into the output now -- denoised, if it is,
     /// whatever the denoiser's schedule says (`PathSum::resolve`).
     /// Submits its own work.
@@ -3693,7 +4224,11 @@ impl TerrainRenderer {
     /// the output (a denoised one on the denoiser's schedule:
     /// `resolve_path` for the current one). Submits its own work. The
     /// samples are the next ones in order, so the sum is the same bits
-    /// however they are split.
+    /// however they are split. Sampling adaptively (V2), a dispatch stops
+    /// at the next check, the check follows it, and once one has run the
+    /// passes trace its list of the pixels still sampling -- the whole
+    /// list a dispatch, a terrain's sample being cheap; fewer than
+    /// `samples` once every pixel has converged.
     pub fn render_path(
         &mut self,
         device: &Device,
@@ -3706,12 +4241,37 @@ impl TerrainRenderer {
         if self.ground.is_none() || self.atlas.is_none() {
             return;
         }
+        let placed = view.shading.placed_lights();
+        self.ensure_placed(device, placed);
+        self.env.set(device, queue, view.environment);
         // The denoiser's guides start with the sum; the pass gathers them
         // only where they fit (`set_guided`).
         if self.path.set_guided(device, settings.denoise) {
             self.path.reset();
         }
-        let settings = &PathSettings { denoise: self.path.guided(), ..*settings };
+        if self.path.set_adaptive(device, settings.noise_threshold > 0.0) {
+            self.path.reset();
+        }
+        self.path.poll(device);
+        self.path.set_material(settings);
+        let noise_threshold = if self.path.adaptive() { settings.noise_threshold } else { 0.0 };
+        let mut settings = PathSettings { denoise: self.path.guided(), noise_threshold, ..*settings };
+        // No sky's map loaded (this build cannot, or it failed): the
+        // background lights, as it did.
+        if self.env.in_use().is_none() {
+            settings.env = [0.0; 4];
+        }
+        // A sky's sun is a light the clamps follow, with the rig's lights
+        // it draws (as mode D's: `solid_path`).
+        if let Some((sun, set)) = self.env.sun() {
+            let rig = &view.shading;
+            let lights: f32 = if rig.rig_untouched() { 0.0 } else { rig.lights.iter().filter(|l| l.enabled).map(|l| l.intensity.max(0.0)).sum() };
+            let brightest = lights + sun.power(set.scale).iter().cloned().fold(0.0f32, f32::max);
+            settings.clamp = settings.clamp.max(10.0 * brightest);
+            settings.clamp_indirect = settings.clamp_indirect.max(brightest);
+        }
+        let settings = &settings;
+        let (env_view, env_sampler) = self.env.bindings(device);
         let atlas = self.atlas.as_ref().expect("checked");
         self.write_params(queue, view);
         let ground = self.ground.as_ref().expect("checked");
@@ -3720,11 +4280,18 @@ impl TerrainRenderer {
         // A ray's share of a pixel per unit of distance: half a pixel,
         // since the jitter already spreads the samples over the whole.
         let per_ray = (view.camera.fov * 0.5).tan() / self.frame.1.max(1) as f32;
+        let px = self.out_w * self.out_h;
         let mut done = 0;
-        while done < samples {
-            let n = per_dispatch.max(1).min(samples - done);
-            let buf = PathParamsGpu::new(settings, self.path.count(), n, per_ray, view.shadow, radius, (0, self.out_h))
-                .buffer(device, queue);
+        while done < samples && !self.path.done(u32::MAX) {
+            self.path.poll(device);
+            let count = self.path.count();
+            let n = per_dispatch.max(1).min(samples - done).min(self.path.next_check().map_or(u32::MAX, |c| c - count));
+            let listed = self.path.listed();
+            let mut buf = PathParamsGpu::new(settings, count, n, per_ray, view.shadow, radius, (0, self.out_h));
+            if listed {
+                buf = buf.from_list(0, px);
+            }
+            let buf = buf.buffer(device, queue);
             let bg = device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Terrain Path"),
                 layout: &self.path_layout,
@@ -3741,17 +4308,27 @@ impl TerrainRenderer {
                     BindGroupEntry { binding: 9, resource: buf.as_entire_binding() },
                     BindGroupEntry { binding: 10, resource: self.path.guide_buffer().as_entire_binding() },
                     BindGroupEntry { binding: 11, resource: BindingResource::TextureView(&self.palette) },
+                    BindGroupEntry { binding: 12, resource: BindingResource::TextureView(self.surface_view()) },
+                    BindGroupEntry { binding: 13, resource: BindingResource::Sampler(&self.surface_sampler) },
+                    BindGroupEntry { binding: 14, resource: BindingResource::TextureView(&env_view) },
+                    BindGroupEntry { binding: 15, resource: BindingResource::Sampler(&env_sampler) },
                 ],
             });
             let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Path") });
             {
                 let mut pass = enc.begin_compute_pass(&ComputePassDescriptor { label: Some("Terrain Path"), timestamp_writes: None });
-                pass.set_pipeline(&self.path_pipeline);
+                pass.set_pipeline(self.rig_pipeline(placed, 2));
                 pass.set_bind_group(0, &bg, &[]);
-                pass.dispatch_workgroups(gx, gy, 1);
+                if listed {
+                    let (lx, ly) = super::path_core::list_groups(px);
+                    pass.dispatch_workgroups(lx, ly, 1);
+                } else {
+                    pass.dispatch_workgroups(gx, gy, 1);
+                }
             }
             queue.submit(std::iter::once(enc.finish()));
             self.path.add(n);
+            let _ = self.path.check_if_due(device, queue, self.out_w, self.out_h, settings);
             done += n;
         }
         // The mean, into the output.
@@ -3976,17 +4553,22 @@ mod tests {
     fn the_terrain_shaders_validate() {
         validate(INGEST_WGSL, "ingest");
         validate(&assemble_build(), "build");
-        validate(&assemble_walk(), "walk");
-        validate(&assemble_relight(), "relight");
-        validate(&assemble_path(), "path");
+        for placed in [false, true] {
+            validate(&assemble_walk(placed), "walk");
+            validate(&assemble_relight(placed), "relight");
+            validate(&assemble_path(placed), "path");
+        }
         validate(super::super::path_core::PATH_RESOLVE_WGSL, "path resolve");
         validate(super::super::path_core::PATH_DENOISE_WGSL, "path denoise");
     }
 
     #[test]
     fn the_uniform_matches_its_wgsl_mirror() {
-        // 8 words, three vec4s (the tile's), twenty-two vec4s.
-        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 352);
+        // 8 words, three vec4s (eye, misc, tile), and the 48 vec4s of
+        // `fdata` (the lights' third slots at 28..32, the studio at 32, an
+        // HDRI sky at 36..45).
+        assert_eq!(std::mem::size_of::<TerrainParamsGpu>(), 32 + 48 + 768);
+        assert!(WALK_COMMON.contains("fdata: array<vec4<f32>, 48>"));
     }
 
     #[test]
@@ -4240,10 +4822,13 @@ pub(crate) mod gpu_tests {
             samples_per_axis: 1,
             far: 1.0e30,
             sky: None,
+            studio: 0.0,
+            environment: None,
             curve: 0,
             invert: false,
             range: None,
-            material: [0.0, 0.5, 0.0],
+            material: [0.0, 0.5, 0.0, 0.0, 1.0],
+            surface: crate::escape::surface::SurfaceTexture::off(),
         }
     }
 
@@ -4358,6 +4943,52 @@ pub(crate) mod gpu_tests {
         }
     }
 
+    /// The probe's ground under the eye (fly mode's floor,
+    /// 3d-look-and-tools P6) is the surface's height there -- the bilinear
+    /// surface the trace walks -- from an eye above the ground, from one
+    /// inside a hill (the probe looks down from above the slab), and none
+    /// from an eye past a ground that does not repeat.
+    #[test]
+    fn the_probe_finds_the_ground_under_the_eye() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (n, m) = (257usize, 193usize);
+        let h = terrain("cone", n, m);
+        let mut r = TerrainRenderer::new(&device, 64, 48);
+        r.set_tile(&device, &queue, n as u32, m as u32, &h, &vec![[1.0; 4]; n * m]);
+        let surface = |x: f64, y: f64| {
+            let a = (x.floor() as usize).min(n - 2);
+            let b = (y.floor() as usize).min(m - 2);
+            let (u, v) = (x - a as f64, y - b as f64);
+            let hh = |i: usize, j: usize| h[j * n + i] as f64;
+            (hh(a, b) * (1.0 - u) + hh(a + 1, b) * u) * (1.0 - v) + (hh(a, b + 1) * (1.0 - u) + hh(a + 1, b + 1) * u) * v
+        };
+        let rel = camera([0.0; 3], 0.5, 0.6, 50.0, 0.9).eye_rel;
+        for (name, eye) in [("above", [110.3, 90.6, 60.0]), ("inside", [127.2, 95.4, 20.0]), ("past the edge", [-40.0, -30.0, 60.0])] {
+            let cam = camera([eye[0] - rel[0], eye[1] - rel[1], eye[2] - rel[2]], 0.5, 0.6, 50.0, 0.9);
+            r.probe_nearest(&device, &queue, &view(cam));
+            for _ in 0..1000 {
+                if !r.probe_in_flight() {
+                    break;
+                }
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                r.poll_nearest(&device);
+            }
+            assert!(!r.probe_in_flight(), "{name}: the probe landed");
+            let got = r.ground_under_eye();
+            let inside = eye[0] >= 0.0 && eye[0] <= (n - 1) as f64 && eye[1] >= 0.0 && eye[1] <= (m - 1) as f64;
+            let want = inside.then(|| surface(cam.eye[0], cam.eye[1]));
+            println!("  {name}: the eye at {:?}, the ground {got:?}, the surface {want:?}", cam.eye);
+            match (got, want) {
+                (Some(g), Some(s)) => assert!((g as f64 - s).abs() < 1.0e-3, "{name}: {g} against {s}"),
+                (None, None) => {}
+                _ => panic!("{name}: {got:?} against {want:?}"),
+            }
+        }
+    }
+
     /// A flat plane under one sun, nothing else: the rig's Lambert term,
     /// exactly -- albedo times the light's colour and power times the
     /// cosine of its elevation.
@@ -4397,6 +5028,13 @@ pub(crate) mod gpu_tests {
         }
         println!("flat plane: want {want:?}, worst error {worst:.2e}");
         assert!(worst < 1e-5, "{worst}");
+        // The material's reflectance scales the albedo the light meets.
+        v.material[4] = 0.5;
+        r.render(&device, &queue, &v);
+        let half: Vec<[f32; 4]> = bytemuck::cast_slice(&read_texture(&device, &queue, r.output_texture(), 0, 32, 32, 16)).to_vec();
+        let worst = half.iter().flat_map(|p| (0..3).map(move |c| (p[c] - 0.5 * want[c]).abs())).fold(0.0f32, f32::max);
+        println!("  at reflectance 0.5: worst error {worst:.2e}");
+        assert!(worst < 1e-5, "the reflectance: {worst}");
     }
 
     /// Distant ground is the average of its texels: a one-cell
@@ -4651,6 +5289,119 @@ pub(crate) mod gpu_tests {
         assert!(worst < 1e-4, "{worst}");
     }
 
+    /// A flat plane under a headlamp, nothing else (lights-in-the-fractal,
+    /// L5): each pixel is its closed form -- albedo times the lamp's
+    /// colour and power, its falloff `1 / (1 + (d / reach)^2)` over the
+    /// distance from the lamp (lifted above the eye), the cone's soft edge
+    /// about the view, and the cosine at the plane.
+    #[test]
+    fn a_headlamp_on_a_plane_is_its_closed_form() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.0;
+        shading.ssao_strength = 0.0;
+        let l = &mut shading.lights[0];
+        l.enabled = true;
+        l.kind = crate::config::LightKind::Headlamp;
+        l.intensity = 2.0;
+        l.color = [1.0, 0.5, 0.25];
+        l.reach = 0.6;
+        l.cone = 18.0;
+        l.lift = 0.1;
+        let light = *l;
+        let cam = camera([32.0, 32.0, 0.0], 0.7, 0.3, 20.0, 0.6);
+        let mut v = view(cam.clone());
+        v.shading = shading;
+        r.render(&device, &queue, &v);
+        let out = read_output(&device, &queue, &r, w, h);
+
+        let lamp: Vec<f64> = (0..3).map(|k| cam.eye[k] + cam.up[k] * light.lift as f64 * cam.distance).collect();
+        let reach = light.reach as f64 * cam.distance;
+        let (outer, inner) = ((light.cone as f64).to_radians().cos(), (light.cone as f64 * 0.9).to_radians().cos());
+        let (mut lit, mut worst) = (0, 0.0f64);
+        for py in 0..h {
+            for px in 0..w {
+                let d = ray(&cam, px, py, w, h);
+                let t = -cam.eye[2] / d[2];
+                let p: Vec<f64> = (0..3).map(|k| cam.eye[k] + d[k] * t).collect();
+                let to: Vec<f64> = (0..3).map(|k| lamp[k] - p[k]).collect();
+                let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                let ld: Vec<f64> = to.iter().map(|x| x / dist).collect();
+                let c = -(ld[0] * cam.forward[0] + ld[1] * cam.forward[1] + ld[2] * cam.forward[2]);
+                let s = ((c - outer) / (inner - outer)).clamp(0.0, 1.0);
+                let cone = s * s * (3.0 - 2.0 * s);
+                let q = dist / reach;
+                let e = light.intensity as f64 / (1.0 + q * q) * cone * ld[2].max(0.0);
+                let got = out[(py * w + px) as usize];
+                for k in 0..3 {
+                    let want = albedo[k] as f64 * light.color[k] as f64 * e;
+                    worst = worst.max((got[k] as f64 - want).abs());
+                }
+                if e > 1.0e-3 {
+                    lit += 1;
+                }
+            }
+        }
+        println!("headlamp on a plane: {lit} lit pixels of {}, worst error {worst:.2e}", w * h);
+        assert!(lit > (w * h / 8) as usize && lit < (w * h) as usize, "the cone should light part of the frame: {lit}");
+        assert!(worst < 2.0e-4, "{worst}");
+    }
+
+    /// The headlamp in the path tracer is the lit tier's: a flat plane
+    /// under it alone, no environment, a light of no size -- the two
+    /// alike to the path tracer's jitter across a pixel.
+    #[test]
+    fn a_headlamp_lit_plane_is_the_lit_tiers() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (48u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let albedo = [0.5f32, 0.25, 1.0, 1.0];
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![albedo; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.specular = 0.0;
+        shading.ssao_strength = 0.0;
+        let l = &mut shading.lights[0];
+        l.enabled = true;
+        l.kind = crate::config::LightKind::Headlamp;
+        l.intensity = 2.0;
+        l.reach = 0.6;
+        l.cone = 180.0;
+        l.lift = 0.1;
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.7, 0.3, 20.0, 0.6));
+        v.shading = shading;
+        v.softness = 1.0e6;
+        r.render(&device, &queue, &v);
+        let lit = read_output(&device, &queue, &r, w, h);
+        r.reset_path();
+        r.render_path(&device, &queue, &v, &PathSettings { bounces: 0, environment: [0.0; 3], clamp: 1.0e30, seed: 1, ..PathSettings::default() }, 16, 16);
+        let path = read_output(&device, &queue, &r, w, h);
+        let (mut sum, mut worst) = (0.0f64, 0.0f32);
+        for (a, b) in lit.iter().zip(&path) {
+            for k in 0..3 {
+                let d = (a[k] - b[k]).abs() / a[k].max(1.0e-3);
+                worst = worst.max(d);
+                sum += d as f64;
+            }
+        }
+        let mean = sum / (3 * lit.len()) as f64;
+        println!("headlamp-lit plane: path against lit, mean {mean:.2e}, worst {worst:.2e}");
+        assert!(mean < 2.0e-3 && worst < 2.0e-2, "mean {mean}, worst {worst}");
+    }
+
     /// One material, every tier's (docs/archive/projects/materials.md): under a
     /// sun alone, the lit tier's coat, glow and highlight are the path
     /// tracer's direct light -- the same terms, so the same picture.
@@ -4683,7 +5434,7 @@ pub(crate) mod gpu_tests {
             r.render(&device, &queue, &v);
             read_output(&device, &queue, &r, w, h)
         };
-        v.material = [gloss, roughness, glow];
+        v.material = [gloss, roughness, glow, 0.0, 1.0];
         r.render(&device, &queue, &v);
         let lit = read_output(&device, &queue, &r, w, h);
         let moved = lit.iter().zip(&plain).flat_map(|(a, b)| (0..3).map(move |k| (a[k] - b[k]).abs())).fold(0.0f32, f32::max);
@@ -4695,6 +5446,121 @@ pub(crate) mod gpu_tests {
         let worst = lit.iter().zip(&path).flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs() / a[k].abs().max(1.0))).fold(0.0f32, f32::max);
         println!("coated sunlit plane: path against lit, worst {worst:.2e} (the material moved the lit tier by {moved:.3})");
         assert!(worst < 1e-3, "{worst}");
+    }
+
+    /// The studio (3d-look-and-tools P4) on a terrain, the world's with z
+    /// up, under it alone (no lights, no ambient): a flat plane's diffuse
+    /// is the path tracer's to the integral (it sees the whole upper
+    /// studio: 2%); a metal's reflection, on rolling ground whose normals
+    /// sweep the studio, the lit tier's approximation of it (15%) -- a
+    /// flat plane reflects one direction, here at the softbox's edge,
+    /// where the approximation is half off. Off, the studio adds nothing.
+    #[test]
+    fn a_plane_under_the_studio_is_lit_alike() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.specular = 0.0;
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.8, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        let mean = |px: &[[f32; 4]]| px.iter().filter(|p| p[3] > 0.0).map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / px.len() as f64;
+        r.render(&device, &queue, &v);
+        assert!(mean(&read_output(&device, &queue, &r, w, h)) < 1.0e-6, "no light, no studio: dark");
+        v.studio = 1.0;
+        for (material, mat, tolerance) in [("diffuse", [0.0f32, 0.5, 0.0, 0.0, 1.0], 0.02), ("metal", [0.0, 0.4, 0.0, 1.0, 1.0], 0.15)] {
+            if material == "metal" {
+                let hills: Vec<f32> = (0..n * m).map(|k| 2.0 * ((k % n) as f32 * 0.25).sin() * ((k / n) as f32 * 0.25).cos()).collect();
+                r.set_tile(&device, &queue, n, m, &hills, &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+            }
+            v.material = mat;
+            r.render(&device, &queue, &v);
+            let lit = mean(&read_output(&device, &queue, &r, w, h));
+            r.reset_path();
+            let s = PathSettings { bounces: 1, environment: [0.0; 3], studio: 1.0, gloss: mat[0], roughness: mat[1], ..PathSettings::default() };
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            let path = mean(&read_output(&device, &queue, &r, w, h));
+            let ratio = lit / path.max(1.0e-12);
+            println!("plane under the studio, {material}: path {path:.4}, lit over path {ratio:.4}");
+            assert!(path > 0.0 && (ratio - 1.0).abs() < tolerance, "{material}: {ratio}");
+        }
+    }
+
+    /// An HDRI sky on a terrain (docs/archive/projects/hdri-environment.md, step 6),
+    /// the world's with z up, under it alone (the Sunflowers sky without its
+    /// sun; no lights, no ambient): a flat plane's diffuse is the path
+    /// tracer's to the harmonics' error (it sees the whole upper sky); a
+    /// metal's reflection on rolling ground whose normals sweep the sky,
+    /// the lit tier's reflection levels against the bounces. And an
+    /// untouched panel keeps its default sun under a sunless sky, and gives
+    /// it up to a sky's own. `PT_ENV_GATE=print` prints only.
+    #[test]
+    fn a_plane_under_an_hdri_sky_is_lit_alike() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (32u32, 32u32);
+        let (n, m) = (64u32, 64u32);
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        let mut shading = dark();
+        shading.ambient = 0.0;
+        shading.ssao_strength = 0.0;
+        shading.specular = 0.0;
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.path.environment_map = "sunflowers".to_string();
+        let set = super::super::path_core::environment_settings(&config.escape.path, &config).expect("bundled");
+        let full = super::super::environment::load(set.def).expect("the bundled file");
+        let map = super::super::environment::EnvMap { sun: None, ..full.clone() };
+        r.set_environment_map_for_test(&device, &queue, &map, set);
+        let mut v = view(camera([32.0, 32.0, 0.0], 0.8, 0.3, 40.0, 0.5));
+        v.shading = shading;
+        v.environment = Some(set);
+        let print_only = std::env::var("PT_ENV_GATE").is_ok_and(|v| v == "print");
+        let mean = |px: &[[f32; 4]]| px.iter().filter(|p| p[3] > 0.0).map(|p| (p[0] + p[1] + p[2]) as f64).sum::<f64>() / px.len() as f64;
+        for (material, mat, tolerance) in [("diffuse", [0.0f32, 0.5, 0.0, 0.0, 1.0], 0.03), ("metal", [0.0, 0.4, 0.0, 1.0, 1.0], 0.15)] {
+            if material == "metal" {
+                let hills: Vec<f32> = (0..n * m).map(|k| 2.0 * ((k % n) as f32 * 0.25).sin() * ((k / n) as f32 * 0.25).cos()).collect();
+                r.set_tile(&device, &queue, n, m, &hills, &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+            }
+            v.material = mat;
+            r.render(&device, &queue, &v);
+            let lit = mean(&read_output(&device, &queue, &r, w, h));
+            r.reset_path();
+            let s = PathSettings { bounces: 1, environment: [0.0; 3], gloss: mat[0], roughness: mat[1], ..PathSettings::default() };
+            r.render_path(&device, &queue, &v, &s, 256, 64);
+            let path = mean(&read_output(&device, &queue, &r, w, h));
+            let ratio = lit / path.max(1.0e-12);
+            println!("plane under the sky, {material}: path {path:.4}, lit over path {ratio:.4}");
+            if !print_only {
+                assert!(path > 0.0 && (ratio - 1.0).abs() < tolerance, "{material}: {ratio}");
+            }
+        }
+        // An untouched panel: under a sky without a sun (a night's) its
+        // default sun stays -- the plane brighter than the sky alone lights
+        // it; under a sky with one, the sky's sun takes its place -- the
+        // plane lit otherwise than by the default sun.
+        r.set_tile(&device, &queue, n, m, &vec![0.0; (n * m) as usize], &vec![[0.5, 0.25, 1.0, 1.0]; (n * m) as usize]);
+        v.material = [0.0, 0.5, 0.0, 0.0, 1.0];
+        r.render(&device, &queue, &v);
+        let sky_alone = mean(&read_output(&device, &queue, &r, w, h));
+        v.shading = SolidShadingSettings::default();
+        r.render(&device, &queue, &v);
+        let default_sun = mean(&read_output(&device, &queue, &r, w, h));
+        r.set_environment_map_for_test(&device, &queue, &full, set);
+        r.render(&device, &queue, &v);
+        let skys_sun = mean(&read_output(&device, &queue, &r, w, h));
+        println!("untouched panel: the sky alone {sky_alone:.4}, with the default sun {default_sun:.4}, with the sky's sun {skys_sun:.4}");
+        assert!(default_sun > sky_alone * 1.2, "the default sun stays under a sunless sky: {default_sun} against {sky_alone}");
+        assert!((skys_sun / default_sun - 1.0).abs() > 0.05, "the sky's sun took the default's place: {skys_sun} against {default_sun}");
     }
 
     /// The path tracer weights the highlight by the shading strength, as
@@ -4779,6 +5645,22 @@ pub(crate) mod gpu_tests {
                 println!("coat {gloss}/{roughness}, channel {k}: mean {mean:.4} against {}", l[k]);
                 assert!(mean <= l[k] as f64 * 1.005, "no energy from nowhere: {mean}");
                 assert!(mean >= l[k] as f64 * (1.0 - tolerance), "{gloss}/{roughness} channel {k}: {mean}");
+            }
+        }
+        // A white metal (3d-look-and-tools P4) under the same sky reflects
+        // it at any roughness: what single scattering loses is given back
+        // (`coat_energy`).
+        for roughness in [0.3f32, 0.7, 1.0] {
+            let s = PathSettings { bounces: 2, environment: l, gloss: 0.0, roughness, ..PathSettings::default() };
+            v.material = [0.0, roughness, 0.0, 1.0, 1.0];
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &s, 512, 64);
+            let out = read_output(&device, &queue, &r, w, h);
+            let hit: Vec<&[f32; 4]> = out.iter().filter(|p| p[3] > 0.0).collect();
+            for k in 0..3 {
+                let mean = hit.iter().map(|p| p[k] as f64).sum::<f64>() / hit.len() as f64;
+                println!("metal at roughness {roughness}, channel {k}: mean {mean:.4} against {}", l[k]);
+                assert!((mean / l[k] as f64 - 1.0).abs() < 0.03, "metal {roughness} channel {k}: {mean}");
             }
         }
     }
@@ -5070,7 +5952,7 @@ pub(crate) mod gpu_tests {
         let relief = TerrainIngest { source: 0, interior: 0, background: [0.0; 3], tint: [0.0; 3] };
         let albedo = r.atlas.as_ref().unwrap().albedo.clone();
         for s in 0..2 {
-            r.reshape_section(&device, &queue, s, &relief, true);
+            r.reshape_section(&device, &queue, s, &relief, true, false);
             r.build_albedo_mips(&device, &queue, &albedo, s);
         }
         // A relief's linear map over a pinned range: the CPU's heights.
@@ -5812,6 +6694,55 @@ pub(crate) mod gpu_tests {
         assert!(sums.windows(2).all(|p| p[0] == p[1]), "the sums differ across batchings");
         let f: &[f32] = bytemuck::cast_slice(&sums[0]);
         assert!(f.iter().any(|v| *v > 0.0), "something was traced");
+    }
+
+    /// Adaptive sampling on a terrain (V2): each pixel's sum is, to the
+    /// bit, the plain tracer's at that pixel's own count -- some stopped
+    /// early, some went to the end, traced from the check's list --
+    /// however the samples were batched; and at a threshold nothing
+    /// exceeds, every pixel stops at the first check.
+    #[test]
+    fn a_terrain_samples_adaptively_in_its_own_streams() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (40u32, 30u32);
+        let px = (w * h) as usize;
+        let (n, m) = (129u32, 97u32);
+        let hs = terrain("sinusoid", n as usize, m as usize);
+        let albedo: Vec<[f32; 4]> = (0..n * m).map(|k| [0.3 + 0.5 * ((k % 7) as f32 / 7.0), 0.6, 0.4, 1.0]).collect();
+        let mut r = TerrainRenderer::new(&device, w, h);
+        r.set_tile(&device, &queue, n, m, &hs, &albedo);
+        let v = view(camera([64.0, 48.0, 8.0], 0.6, 0.4, 150.0, 0.9));
+        let plain = PathSettings { bounces: 3, environment: [0.3, 0.4, 0.6], clamp: 10.0, seed: 3, ..PathSettings::default() };
+        const TARGET: u32 = 24;
+        let adaptive = |r: &mut TerrainRenderer, threshold: f32, per: u32| {
+            r.path.tune_adaptive(4, false);
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &PathSettings { noise_threshold: threshold, ..plain }, TARGET, per);
+            let a: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, r.path_sum_for_test(), (px * 32) as u64)).to_vec();
+            a
+        };
+        let a = adaptive(&mut r, 3.0, 1);
+        assert!(a == adaptive(&mut r, 3.0, 5) && a == adaptive(&mut r, 3.0, 24), "the batching moved the adaptive sum");
+        let counts: Vec<u32> = (0..px).map(|k| a[px + k][2].abs() as u32).collect();
+        let early = counts.iter().filter(|&&k| k < TARGET).count();
+        println!("{early} of {px} pixels stopped early");
+        assert!(early > 0 && early < px, "{early} of {px}: the test needs both");
+        let mut distinct = counts.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        for &k in &distinct {
+            r.reset_path();
+            r.render_path(&device, &queue, &v, &plain, k, k);
+            let u: Vec<[f32; 4]> = bytemuck::cast_slice(&read_buffer(&device, &queue, r.path_sum_for_test(), (px * 16) as u64)).to_vec();
+            for i in (0..px).filter(|&i| counts[i] == k) {
+                assert_eq!(a[i], u[i], "pixel {i} at {k} samples");
+            }
+        }
+        let all = adaptive(&mut r, 1.0e6, 8);
+        assert!((0..px).all(|k| all[px + k][2] == -4.0), "every pixel converged at the first check");
     }
 
     /// A still drawn in tiles (T5's output tiling) is the still drawn

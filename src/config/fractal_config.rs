@@ -44,6 +44,21 @@ fn lift_path_material(value: &mut serde_json::Value) {
     }
 }
 
+/// Whether a saved escape block draws a solid, for the migrations: a
+/// built-in solid by its formula's name, a Rhai one by its carried
+/// source's `distance`.
+fn json_is_solid(esc: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let formula = esc.get("formula").and_then(|f| f.as_str()).unwrap_or_default();
+    let builtin = matches!(formula, "ifs_flame_3d" | "quaternion_julia_solid" | "kifs_solid" | "mandelbox_solid" | "mandelbulb_solid");
+    let rhai = formula.starts_with("custom-")
+        && esc
+            .get("custom_formula")
+            .and_then(|c| c.get("source"))
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| s.contains("fn distance"));
+    builtin || rhai
+}
+
 /// Current config format version.
 ///
 /// v2 introduces the cloud "opaque blob" wire format (see
@@ -66,7 +81,15 @@ fn lift_path_material(value: &mut serde_json::Value) {
 /// default change, so an absent field there always meant 1.0. Older
 /// files keep loading at 0.5: before the change an absent field was the
 /// old default, which that change deliberately moved to the new one.
-pub const CURRENT_CONFIG_VERSION: u32 = 4;
+///
+/// v5 raises a solid's and a terrain's Shadows default from 0.7 to 0.98;
+/// the v4→v5 arm restores 0.7 where an older file omitted it.
+///
+/// v6 fixes a solid's directional lights in the fractal's space by
+/// default (`SolidShadingSettings::lights_follow_camera` off); before,
+/// they turned with the camera. The v5→v6 arm keeps an older solid's
+/// lights the camera's, so it renders as it did.
+pub const CURRENT_CONFIG_VERSION: u32 = 6;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -669,6 +692,10 @@ fn is_default_trim_levels(v: &u32) -> bool {
     *v == default_trim_levels()
 }
 
+fn is_one_f32(v: &f32) -> bool {
+    *v == 1.0
+}
+
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
 }
@@ -859,10 +886,81 @@ fn default_surface_thickness() -> f32 {
     super::defaults::DEFAULT_SURFACE_THICKNESS
 }
 
-/// One directional light for the solid-rendering shade pass. Direction is
-/// camera-space: azimuth/elevation in DEGREES, where (0°, 0°) is a
+/// What a light is (docs/archive/projects/lights-in-the-fractal.md, L2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightKind {
+    /// From a direction, at infinity: the azimuth and the elevation.
+    #[default]
+    Directional,
+    /// From a position in the world, its power falling off with the
+    /// distance: mode D's solids.
+    Point,
+    /// Attached to the camera, aimed down the view: a spot at the eye
+    /// (lifted by `lift`), its reach in camera distances so it scales
+    /// with the zoom.
+    Headlamp,
+}
+
+impl LightKind {
+    pub const ALL: [LightKind; 3] = [LightKind::Directional, LightKind::Point, LightKind::Headlamp];
+
+    fn is_directional(k: &LightKind) -> bool {
+        *k == LightKind::Directional
+    }
+
+    /// The kind as a track or a parameter carries it: 0, 1, 2.
+    pub fn index(self) -> u32 {
+        match self {
+            LightKind::Directional => 0,
+            LightKind::Point => 1,
+            LightKind::Headlamp => 2,
+        }
+    }
+
+    pub fn from_index(i: u32) -> LightKind {
+        match i {
+            1 => LightKind::Point,
+            2 => LightKind::Headlamp,
+            _ => LightKind::Directional,
+        }
+    }
+}
+
+/// A light's reach, as it ships: one world unit for a point, one camera
+/// distance for a headlamp.
+pub const DEFAULT_LIGHT_REACH: f32 = 1.0;
+/// A headlamp's cone half-angle as it ships, in degrees; 180 is no cone.
+pub const DEFAULT_LIGHT_CONE: f32 = 40.0;
+
+fn default_light_reach() -> f32 {
+    DEFAULT_LIGHT_REACH
+}
+
+fn is_default_light_reach(v: &f32) -> bool {
+    *v == DEFAULT_LIGHT_REACH
+}
+
+fn default_light_cone() -> f32 {
+    DEFAULT_LIGHT_CONE
+}
+
+fn is_default_light_cone(v: &f32) -> bool {
+    *v == DEFAULT_LIGHT_CONE
+}
+
+fn is_origin(v: &[f64; 3]) -> bool {
+    *v == [0.0; 3]
+}
+
+/// One light for the solid-rendering shade pass and the escape engine's
+/// 3D views. A **directional** light's direction is camera-space for a
+/// flame and mode D -- azimuth/elevation in DEGREES, where (0°, 0°) is a
 /// headlight from the viewer, azimuth swings around the vertical axis and
-/// elevation tilts up.
+/// elevation tilts up -- and world-fixed for a terrain. A **point** sits
+/// at `position` in the world; a **headlamp** rides with the camera
+/// (lights-in-the-fractal, L2). The kinds past directional are
+/// skip-if-default, so a file from before them reads as it did.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SolidLight {
     pub enabled: bool,
@@ -870,6 +968,27 @@ pub struct SolidLight {
     pub elevation: f32,
     pub intensity: f32,
     pub color: [f32; 3],
+    #[serde(default, skip_serializing_if = "LightKind::is_directional")]
+    pub kind: LightKind,
+    /// A point's position in the world (mode D's coordinates).
+    #[serde(default, skip_serializing_if = "is_origin")]
+    pub position: [f64; 3],
+    /// The falloff's length: at distance `d` the light's power is
+    /// `1 / (1 + (d / reach)^2)` of its intensity -- the inverse square
+    /// far off, finite at the light, half at `reach`. World units for a
+    /// point, camera distances (the eye's distance to its target) for a
+    /// headlamp.
+    #[serde(default = "default_light_reach", skip_serializing_if = "is_default_light_reach")]
+    pub reach: f32,
+    /// A headlamp's cone half-angle in degrees (180: none), its edge
+    /// softened over the outer tenth.
+    #[serde(default = "default_light_cone", skip_serializing_if = "is_default_light_cone")]
+    pub cone: f32,
+    /// How far above the eye a headlamp sits, in camera distances. At the
+    /// eye every shadow falls behind what casts it, out of sight; a little
+    /// lift shows them.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub lift: f32,
 }
 
 impl Default for SolidLight {
@@ -880,7 +999,46 @@ impl Default for SolidLight {
             elevation: 40.0,
             intensity: 1.0,
             color: [1.0, 1.0, 1.0],
+            kind: LightKind::Directional,
+            position: [0.0; 3],
+            reach: DEFAULT_LIGHT_REACH,
+            cone: DEFAULT_LIGHT_CONE,
+            lift: 0.0,
         }
+    }
+}
+
+/// Set one of a light's f32 parameters by its path name, clamped as the
+/// panel clamps it; None for a name that is not one. Shared by the
+/// manager and the exporter, so a track renders in the video as it plays
+/// in the app. The position (`x`, `y`, `z`) is f64 and set apart.
+pub(crate) fn set_light_param(l: &mut SolidLight, param: &str, v: f32) -> Option<()> {
+    match param {
+        "azimuth" => l.azimuth = v,
+        "elevation" => l.elevation = v,
+        "intensity" => l.intensity = v,
+        "color_r" => l.color[0] = v,
+        "color_g" => l.color[1] = v,
+        "color_b" => l.color[2] = v,
+        "kind" => l.kind = LightKind::from_index(v.round().max(0.0) as u32),
+        "reach" => l.reach = if v.is_finite() { v.max(0.0) } else { DEFAULT_LIGHT_REACH },
+        "cone" => l.cone = if v.is_finite() { v.clamp(1.0, 180.0) } else { DEFAULT_LIGHT_CONE },
+        "lift" => l.lift = if v.is_finite() { v } else { 0.0 },
+        _ => return None,
+    }
+    Some(())
+}
+
+impl SolidLight {
+    /// On, and lighting anything.
+    pub fn lights(&self) -> bool {
+        self.enabled && self.intensity > 0.0
+    }
+
+    /// On as a directional light: what the 3D flame's shade pass draws,
+    /// whose lights are screen-space and have no world to sit in.
+    pub fn directional_on(&self) -> bool {
+        self.enabled && self.kind == LightKind::Directional
     }
 }
 
@@ -922,6 +1080,21 @@ pub struct SolidShadingSettings {
     /// shading is turned on via the UI (the config default is all-off,
     /// so `is_default` stays cheap for untouched flames).
     pub lights: [SolidLight; 4],
+    /// Whether a solid's directional lights and its studio turn with the
+    /// camera (2026-10-19). Off, the default: they are fixed in the
+    /// fractal's space -- a light's azimuth around its z axis from +x, its
+    /// elevation above its xy plane, a terrain's convention -- and stay
+    /// put as the camera orbits or looks around. On: the camera's space,
+    /// azimuth 0 and elevation 0 a headlight, the lights turning with
+    /// every orbit, as every solid was lit before; a solid saved then
+    /// loads with it on (the v5 -> v6 migration), and the View panel's Fly
+    /// Mode section fixes its lights where they are
+    /// (`ui::render_mode::lights_to_world`). A solid's alone: a terrain's
+    /// lights are always the world's, a 3D flame's always the camera's
+    /// (its shade pass lights the projected picture). Not a touch of the
+    /// rig (`rig_untouched`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub lights_follow_camera: bool,
     /// The material's coat (docs/archive/projects/materials.md): its reflectance
     /// at normal incidence (0, the default, is none; 0.04 a dielectric's)
     /// and its roughness (GGX's alpha is its square) -- and the albedo's
@@ -936,6 +1109,33 @@ pub struct SolidShadingSettings {
     pub gloss: f32,
     pub roughness: f32,
     pub glow: f32,
+    /// How much of the surface is metal (3d-look-and-tools P4, the
+    /// metallic workflow): its coat's reflectance head on is the albedo's
+    /// colour, `mix(gloss, albedo, metallic)`, and nothing scatters under
+    /// it (the diffuse times `1 - metallic`). 0, the default, is the
+    /// dielectric coat alone. A material, like the coat: not the rig.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub metallic: f32,
+    /// How much of its colour the surface reflects (2026-10-19): the
+    /// albedo every tier lights is the colour times this -- 1, the
+    /// default, the colour itself. The path tracer's bounces lose the
+    /// rest at every surface, so below 1 its shadows, lit by bounces
+    /// alone, darken faster than its lit faces; the Lit tier has no
+    /// bounces and only darkens. The glow and the unshaded colour keep the
+    /// colour's own strength. A material, like the coat: not the rig.
+    #[serde(skip_serializing_if = "is_one_f32")]
+    pub reflectance: f32,
+    /// How close a solid's rays leaving a surface -- its shadow rays in
+    /// every tier, the path tracer's bounces -- may pass the solid and
+    /// still count as hitting it, in multiples of the finest (a
+    /// ten-thousandth of the solid's ball). Coarser marches fewer steps
+    /// and is faster (path-tracing-research, *Found on the way*: at 3, 1.24
+    /// to 1.4 times; at 10, 1.5 to 2), at the price of fine shadows
+    /// darkened where a near miss now counts -- nothing on the Menger, the
+    /// most on the Mandelbulb, whose distance estimate is not a strict
+    /// bound. The UI offers 1, 3 and 10.
+    #[serde(skip_serializing_if = "is_one_f32")]
+    pub ray_tolerance: f32,
 }
 
 impl Default for SolidShadingSettings {
@@ -957,9 +1157,13 @@ impl Default for SolidShadingSettings {
                 SolidLight::default(),
                 SolidLight::default(),
             ],
+            lights_follow_camera: false,
             gloss: 0.0,
             roughness: 0.5,
             glow: 0.0,
+            metallic: 0.0,
+            reflectance: 1.0,
+            ray_tolerance: 1.0,
         }
     }
 }
@@ -975,12 +1179,29 @@ impl SolidShadingSettings {
     /// switch that sun off.
     pub fn rig_untouched(&self) -> bool {
         let d = SolidShadingSettings::default();
-        SolidShadingSettings { gloss: d.gloss, roughness: d.roughness, glow: d.glow, ..self.clone() } == d
+        SolidShadingSettings {
+            gloss: d.gloss,
+            roughness: d.roughness,
+            glow: d.glow,
+            metallic: d.metallic,
+            reflectance: d.reflectance,
+            ray_tolerance: d.ray_tolerance,
+            lights_follow_camera: d.lights_follow_camera,
+            ..self.clone()
+        } == d
     }
 
     /// Whether the shade pass should run at all.
     pub fn active(&self) -> bool {
         self.shading_strength > 0.0
+    }
+
+    /// Whether any light that lights is a point or a headlamp: the 3D
+    /// views compile their rig's `ifs_light_at` for those only when so,
+    /// since its code costs the path tracer a fifth even when unused
+    /// (`assembler::ifs_rig`).
+    pub fn placed_lights(&self) -> bool {
+        !self.rig_untouched() && self.lights.iter().any(|l| l.lights() && l.kind != LightKind::Directional)
     }
 }
 
@@ -1280,8 +1501,8 @@ impl FractalConfig {
     }
 
     /// Walk every list-item (transforms in all three pools on Main and
-    /// every subflame, every subflame itself, and every color/density
-    /// effect) and assign a fresh session-local ID to anything whose
+    /// every subflame, every subflame itself, every color/density
+    /// effect and every escape transformation) and assign a fresh session-local ID to anything whose
     /// `id` is the zero sentinel. Idempotent — items that already have
     /// a non-zero ID are left alone.
     ///
@@ -1298,6 +1519,11 @@ impl FractalConfig {
         for effect in &mut self.color_effects {
             if effect.id == 0 {
                 effect.id = crate::scene::transforms::next_id();
+            }
+        }
+        for t in &mut self.escape.transforms {
+            if t.id == 0 {
+                t.id = crate::scene::transforms::next_id();
             }
         }
     }
@@ -1390,6 +1616,41 @@ impl FractalConfig {
                 3 => {
                     if from_version == 3 {
                         obj.entry("levels_gamma").or_insert(serde_json::json!(1.0));
+                    }
+                }
+                // v4 -> v5: the Shadows of a solid (its `shadow` formula
+                // parameter) and of the escape and simulation terrains
+                // rose from 0.7 to 0.98 (docs/archive/projects/3d-look-and-tools.md,
+                // P2). A file saved before omitted 0.7 as the default, so
+                // absent means 0.7 there. A solid is told by its formula's
+                // name, or a Rhai one by its carried source's `distance`.
+                4 => {
+                    if let Some(esc) = obj.get_mut("escape").and_then(|e| e.as_object_mut()) {
+                        if json_is_solid(esc) {
+                            let params = esc.entry("formula_params").or_insert_with(|| serde_json::json!({}));
+                            if let Some(m) = params.as_object_mut() {
+                                m.entry("shadow").or_insert(serde_json::json!(0.7));
+                            }
+                        }
+                        if let Some(t) = esc.get_mut("terrain").and_then(|t| t.as_object_mut()) {
+                            t.entry("shadow").or_insert(serde_json::json!(0.7));
+                        }
+                    }
+                    if let Some(t) = obj.get_mut("sim").and_then(|s| s.get_mut("terrain")).and_then(|t| t.as_object_mut()) {
+                        t.entry("shadow").or_insert(serde_json::json!(0.7));
+                    }
+                }
+                // v5 -> v6: a solid's directional lights and studio turned
+                // with the camera; now they are fixed in the fractal's
+                // space (`SolidShadingSettings::lights_follow_camera`). A
+                // solid saved before keeps the camera's, so it renders as
+                // it did.
+                5 => {
+                    if obj.get("escape").and_then(|e| e.as_object()).is_some_and(json_is_solid) {
+                        let shading = obj.entry("solid_shading").or_insert_with(|| serde_json::json!({}));
+                        if let Some(s) = shading.as_object_mut() {
+                            s.insert("lights_follow_camera".to_string(), serde_json::json!(true));
+                        }
                     }
                 }
                 other => {
@@ -1837,6 +2098,65 @@ mod tests {
         let json = r#"{"render_mode": "3d", "flame": {"name": "test", "transforms": [], "render_mode": "2d"}}"#;
         let c = FractalConfig::from_json(json).expect("loads");
         assert_eq!(c.render_mode, RenderMode::TwoD, "a flame mode in an unversioned file still migrates");
+    }
+
+    /// Shadows rose to 0.98 in v5 (3d-look-and-tools P2): a v4 file that
+    /// omitted them as the default 0.7 keeps 0.7 -- a solid's formula
+    /// parameter, the escape terrain's, the simulation terrain's -- and a
+    /// v5 file without them has 0.98.
+    #[test]
+    fn shadows_saved_before_v5_keep_their_default() {
+        let v4 = r#"{"version": 4, "render_mode": "escape", "flame": {"name": "t", "transforms": []},
+            "escape": {"formula": "mandelbulb_solid", "terrain": {"enabled": false}},
+            "sim": {"terrain": {"enabled": false}}}"#;
+        let c = FractalConfig::from_json(v4).expect("loads");
+        assert_eq!(c.escape.formula_params.get("shadow"), Some(&0.7), "a solid's");
+        assert_eq!(c.escape.terrain.shadow, 0.7, "the escape terrain's");
+        assert_eq!(c.sim.terrain.shadow, 0.7, "the simulation terrain's");
+        // A plane's formula gains no shadow.
+        let plane = r#"{"version": 4, "render_mode": "escape", "flame": {"name": "t", "transforms": []}, "escape": {"formula": "mandelbrot"}}"#;
+        assert!(FractalConfig::from_json(plane).unwrap().escape.formula_params.get("shadow").is_none());
+        let v5 = r#"{"version": 5, "render_mode": "escape", "flame": {"name": "t", "transforms": []},
+            "escape": {"formula": "mandelbulb_solid", "terrain": {"enabled": false}}}"#;
+        let c = FractalConfig::from_json(v5).expect("loads");
+        assert!(c.escape.formula_params.get("shadow").is_none(), "the def's default, 0.98");
+        assert_eq!(c.escape.terrain.shadow, 0.98);
+        assert_eq!(c.sim.terrain.shadow, 0.98);
+    }
+
+    /// A solid's lights became the fractal's in v6: a solid saved before --
+    /// built-in, or Rhai by its `distance` -- keeps them the camera's, rig
+    /// touched or not, and still reads as untouched when it was; a plane's
+    /// formula and a v6 solid stay with the fractal's; and every solid
+    /// preset that ships lights in the fractal's space (converted at its own
+    /// camera, `scripts/presets_lights_to_world.py`).
+    #[test]
+    fn a_solid_saved_before_v6_keeps_its_lights_on_the_camera() {
+        let file = |version: u32, escape: &str, shading: &str| {
+            format!(r#"{{"version": {version}, "render_mode": "escape", "flame": {{"name": "t", "transforms": []}}, "escape": {escape}{shading}}}"#)
+        };
+        let follows = |json: String| FractalConfig::from_json(&json).expect("loads").solid_shading.lights_follow_camera;
+        let bulb = r#"{"formula": "mandelbulb_solid"}"#;
+        let rhai = r#"{"formula": "custom-0123", "custom_formula": {"dialect": "rhai", "entry": "s", "source": "fn distance(s, p) { 0.0 }"}}"#;
+        assert!(follows(file(5, bulb, "")), "an untouched built-in solid");
+        assert!(follows(file(5, bulb, r#", "solid_shading": {"shading_strength": 1.0}"#)), "a touched one");
+        assert!(follows(file(4, rhai, "")), "a Rhai solid, through two migrations");
+        assert!(!follows(file(5, r#"{"formula": "mandelbrot"}"#, "")), "a plane's formula");
+        assert!(!follows(file(6, bulb, "")), "a v6 solid");
+        let old = FractalConfig::from_json(&file(5, bulb, "")).unwrap();
+        assert!(old.solid_shading.rig_untouched(), "the flag is not a touch of the rig");
+        // The shipped presets.
+        let presets: Vec<serde_json::Value> = serde_json::from_str(crate::resources::presets::PRESETS_JSON).unwrap();
+        let mut solids = 0;
+        for v in presets {
+            let solid = v.get("escape").and_then(|e| e.as_object()).is_some_and(json_is_solid);
+            let c = FractalConfig::from_json_value(v).unwrap();
+            if solid {
+                solids += 1;
+                assert!(!c.solid_shading.lights_follow_camera, "{}: a shipped solid's lights follow the camera", c.flame.name);
+            }
+        }
+        assert!(solids >= 20, "{solids} solid presets");
     }
 
     #[test]

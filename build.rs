@@ -182,11 +182,17 @@ fn generate_texture_presets() {
     files.sort();
     let mut code = String::from("pub static TEXTURE_PRESETS: &[(&str, &str)] = &[
 ");
+    // Each path is relative to CARGO_MANIFEST_DIR, which the CRATE
+    // resolves when it compiles -- never an absolute path from here.
+    // Cargo can reuse this output for another checkout of the same
+    // package (a worktree built into a shared target directory), and
+    // absolute paths then point into that checkout: deleting it broke
+    // every later build until this script reran.
     for file in &files {
-        let abs = fs::canonicalize(dir.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
         let stem = file.trim_end_matches(".fflame");
-        code.push_str(&format!("    ({stem:?}, include_str!({:?})),
-", abs.display().to_string()));
+        let rel = format!("/assets/textures/{file}");
+        code.push_str(&format!("    ({stem:?}, include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {rel:?}))),
+"));
     }
     code.push_str("];
 ");

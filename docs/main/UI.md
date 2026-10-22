@@ -26,7 +26,7 @@ bar with a single menu button (see [Compact (mobile) UI](#compact-mobile-ui)).
 ## Panels
 
 `PanelType` in [src/ui/workspace.rs](../../src/ui/workspace.rs) defines
-**30 panels**. Each renders from its own `src/ui/*.rs` file;
+**32 panels**. Each renders from its own `src/ui/*.rs` file;
 `src/ui/mod.rs` coordinates docking and returns cross-panel results to
 the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uiresponse)).
 
@@ -35,10 +35,10 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 | The picture | Fractal Viewport (effectively always present) |
 | The camera, every mode's | View (see [The View panel](#the-view-panel)) |
 | The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
-| The other engines | Escape Fractal, Simulation, Textures |
+| The other engines | Escape Fractal, Formula Editor, Hybrid Designer, Simulation, Textures |
 | Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
+| Light, every 3D view's | Lighting & Material (see [The Lighting & Material panel](#the-lighting--material-panel)) |
 | Workflow | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
-| Kept for saved layouts | Solid & Lighting (draws the View panel's Lighting & Material section; no Window menu row) |
 
 **Which of these is available depends on the render mode** — see
 [Render modes and the UI](#render-modes-and-the-ui). Do not add a
@@ -192,6 +192,13 @@ through `switch_render_mode`. A script sets the mode in the config it
 returns, applying the same tone-map rule (`entry_tone_mapping`), and
 that config loads as a whole.
 
+Entering a lit 3D view (a solid formula, a terrain) from one that is not
+sets **the 3D look** (`look_3d`: Linear, exposure 2, gamma 1, saturation
+1, no hue shift, an untouched rig at strength 1 and ambient 0) in the
+same undo entry. Besides the mode switch, the Escape panel's formula
+picker and terrain switch, the Simulation panel's terrain switch and the
+Formula Editor's Use go through `apply_with_look`.
+
 Also in that module:
 
 - `layout_for(mode)` — the workspace and editor panel a mode wants.
@@ -242,7 +249,9 @@ Panels:
 | Escape Fractal | Show | Show | Show | Grey (other engine) |
 | Simulation | Show | Show | Grey (other engine) | Show |
 | Textures | Grey | Grey | Show | Show |
-| Solid & Lighting (follows `Solid::of`, not the mode) | Grey | Show | Show for a solid formula or a terrain, else Grey | Show for a terrain, else Grey |
+| Formula Editor (escape-time formulas and colourings, Rhai and Ultra Fractal's and Fractint's languages; in the flame modes, Rhai variations; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Show | Show | Show | Grey (other engine) |
+| Hybrid Designer (Kalles Fraktaler-style hybrid formulas; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Grey | Grey | Show | Grey (other engine) |
+| Lighting & Material (follows `Solid::of`, not the mode) | Grey | Show | Show for a solid formula or a terrain, else Grey | Show for a terrain, else Grey |
 | Every other panel | Show | Show | Show | Show |
 
 - **The transform editors are available in every mode.** Escape mode D
@@ -364,7 +373,7 @@ contract.
 | Subflames | [subflames.rs](../../src/ui/subflames.rs) | which flame the editors operate on |
 | Paths | [paths_panel.rs](../../src/ui/paths_panel.rs) | Focused Rendering's plan as a tree of paths; see [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) |
 | View | [view.rs](../../src/ui/view.rs), [view_controls.rs](../../src/ui/view_controls.rs) | below |
-| Solid & Lighting | [solid_panel.rs](../../src/ui/solid_panel.rs) | kept for saved layouts |
+| Lighting & Material | [lighting_panel.rs](../../src/ui/lighting_panel.rs) | below |
 | Escape Fractal | [escape_panel.rs](../../src/ui/escape_panel.rs) | below |
 | Simulation | [sim_panel.rs](../../src/ui/sim_panel.rs) | below |
 | Textures | [textures_panel.rs](../../src/ui/textures_panel.rs) | below |
@@ -401,6 +410,10 @@ have no effect in 2D.
 ### View
 
 See [The View panel](#the-view-panel).
+
+### Lighting & Material
+
+See [The Lighting & Material panel](#the-lighting--material-panel).
 
 ### Escape Fractal
 
@@ -494,7 +507,7 @@ in [CAMERA.md](CAMERA.md).
 | 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A camera that stores a target shows its eye as a readout; a terrain's target has a lift |
 | Camera Lens | an escape plane or solid | a variation used as a lens on the pixels or rays |
 | Image | every escape view; a 2D simulation | escape: antialiasing (supersampling) and how the samples combine; simulation: the resolve filters (upscale, fit, downscale) and tiling a periodic field |
-| Atmosphere, Depth of Field, Lighting & Material | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; the render tier and the path tracer, a terrain's shadows, the lights, and the picture's material ([materials.md](../archive/projects/materials.md); terrains in [TERRAIN.md](TERRAIN.md)) |
+| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting & Material panel |
 | Deep Zoom | flames (`Control::DeepZoom`) | auto exposure and the Focused Rendering switch |
 | Render Mode, Preserve Z, post symmetry | flames | the 2D/3D switch (through `switch_render_mode`), JWildfire's `preserve_z` (3D), post symmetry |
 
@@ -502,6 +515,42 @@ Angles show in degrees on a −180..180 slider that takes typed values
 beyond (`view_controls::angle_slider`); the config stores radians.
 
 ---
+
+## The Lighting & Material panel
+
+Every lit 3D view's light in one place (`PanelType::SolidLighting`, the
+name saved layouts know; [lighting_panel.rs](../../src/ui/lighting_panel.rs);
+[3d-look-and-tools.md](../archive/projects/3d-look-and-tools.md), P3). It was
+the View panel's Lighting & Material section from camera-unification C5
+until 2026-10-19, with a solid's shadows among the Escape panel's
+formula parameters and a terrain's texture and lake in the Escape
+panel. Available where `Solid::of` says the view draws a surface;
+sections by the view:
+
+| Section | Solid | Escape terrain | Simulation terrain | 3D flame |
+|---|---|---|---|---|
+| Rendering | render tier; samples, noise threshold, bounces, denoise (not Lit) | the same | the same | -- |
+| Sky | HDRI sky (None, the bundled skies, Starfield) with Rotation, Horizon, Stars, Show as backdrop and its credit; else sky colour (the background, as in Colors), gradient and zenith, Studio light; Sky light (not Lit, unless the studio or a sky is on) | the same | the same | -- |
+| Lights | Light 1 to 4: kind, colour, its settings, intensity | the same | the same | directional only, once Shading strength is above 0 |
+| Shading | strength, ambient, occlusion strength and reach (not Path traced) | the same, the terrain's reach | the same, the terrain's reach | strength, ambient, SSAO strength and radius, normal smoothing, gap fill |
+| Shadows | Shadows, Shadow sharpness (formula parameters), Ray tolerance | the terrain's | the terrain's | shadow maps' strength |
+| Material | diffuse, highlight and its size, gloss, roughness, glow | the same | the same | the same, once lit |
+| Surface | -- | the surface texture; the lake's tint and roughness | -- | solid strength, surface thickness |
+
+A solid's **Shadows, Shadow sharpness and Occlusion reach** stay formula
+parameters in the file (`escape::ifs::LIGHTING_PARAMS`); the Escape panel
+leaves them out of its list and says where they are. A plane's relief
+keeps its texture in the Escape panel.
+
+**An untouched rig** (`SolidShadingSettings::rig_untouched`) lights a
+solid or a terrain with a default key light, not with its stored
+values. The panel shows its rows from the start, with the values the
+first change makes current, and says so: that change takes the rig over
+(`render_mode::rig_taken_over`, the 3D look's own -- strength 1, ambient
+0, a terrain's light 0 at the default sun) with it, in one undo step.
+The coat and the glow are not the rig and leave it untouched. Until
+2026-10-19 a change made the stored rig current at its strength of 0,
+and the lit tier fell to the bare colours.
 
 ## Input Handling
 

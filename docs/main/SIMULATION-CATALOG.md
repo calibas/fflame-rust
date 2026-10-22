@@ -719,6 +719,51 @@ shipped the same day.
   while the interior was bit-exact. Lenia hid the same bug even at
   radius 6. See `simulation-fractals.md`.
 
+**Revised 2026-10-13: the glider set never glided here.** It was
+measured as a labyrinth and shipped as one, at dt 0.15. Rafler's
+gliders are the DISCRETE form's ("the same generic gliders can not be
+found at the same birth/death values" in the continuous one, §§ on
+time stepping), and a labyrinth is what the relaxing form makes of
+them. Compared against Reusser's notebook
+(rreusser.github.io/notebooks/smooth-life, its source's presets and
+seed):
+- **Appended parameters**, each defaulting to the model as it was:
+  - `ratio` (r_a / r_i);
+  - `stepping`: relax `f + dt(s − f)`, which is discrete at dt 1, or
+    increment `f + dt(2s − 1)`, the paper's continuous scheme;
+  - `blend`: the 2011 thresholds, or SmoothLifeL's windows mixed by m;
+  - `fill`;
+  - `seed_shape`: the old disc-sized patches, or Reusser's blobs.
+- **The blob seed:** value noise at 1.2 r_a, thresholded at 1 − fill
+  over a 0.16 ramp.
+- **`SimPreset::dt`:** a preset now carries the time step it was
+  measured at.
+- **Presets**, each run at 256² before shipping:
+  - Rafler's set: discrete (dt 1), blobs at 0.3, 200 steps. A
+    bean-shaped glider crosses the grid; 0.4 is chaos, 0.5 dies.
+  - SmoothLifeL: r_a 20, b 0.257/0.336, d 0.365/0.549, increment at
+    dt 0.05, windows, blobs at 0.4, 640 steps. Gliders at 0.3 and 0.4;
+    0.5 fills in, 0.2 dies.
+  - Soft gliders: r_a 12, b 0.269/0.340, d 0.523/0.746, relax at
+    dt 0.115, thresholds, blobs at 0.5, 600 steps. Round striped
+    gliders drift.
+- **The patch seed was the other half.** Squares of r_i at 0.4–0.5
+  fill the field into a still foam in every rule set. The rules'
+  gliders grow from structures wider than the outer ring.
+- **By FFT (`ModelFeature::ExactDiscs`):** on a periodic grid with an
+  FFT plan, both averages come from the spectral stage, one forward and
+  one inverse 2D FFT per step (`smoothlife_discs`):
+  - the inner disc against a disc of radius 0 (slice 0 is the average
+    less the cell);
+  - the annulus, averaged (`SpectralScale::annulus`: the discs'
+    difference over their sums' difference, the gather's own weights).
+
+  Measured at 1024², r_a 20: 1.5 ms a step against 40 ms for the
+  gather, about 27×. One step agrees with the gather to 8-bit rounding.
+  640 increment steps diverge chaotically, so SmoothLifeL's baseline was
+  re-recorded; the other two hold. Fallback: a grid with a prime factor
+  past 64 (a 1366-wide window), or another boundary, gathers as before.
+
 ---
 
 ## 10. McCabe multi-scale Turing patterns

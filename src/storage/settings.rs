@@ -151,6 +151,19 @@ pub struct SystemSettings {
     #[serde(default)]
     pub fly_camera_mode: FlyCameraMode,
 
+    /// Fly mode stops short of a solid's surface (3d-look-and-tools P6):
+    /// each step stays inside half the solid's distance at the eye, as a
+    /// GPU probe last measured it. On by default.
+    #[serde(default = "default_true_fly")]
+    pub fly_collisions: bool,
+
+    /// Fly mode's speed and zoom follow the solid's distance (P6): a step
+    /// is a share of the distance to the surface rather than to the
+    /// target, and the zoom eases toward it, so flying into the surface
+    /// zooms in. Off by default.
+    #[serde(default)]
+    pub fly_proximity: bool,
+
     // Export Defaults
     /// Default export width in pixels
     #[serde(default = "default_export_width")]
@@ -259,6 +272,10 @@ fn default_fly_sprint_multiplier() -> f32 {
     3.0
 }
 
+fn default_true_fly() -> bool {
+    true
+}
+
 impl Default for SystemSettings {
     fn default() -> Self {
         Self {
@@ -283,6 +300,8 @@ impl Default for SystemSettings {
             fly_sprint_multiplier: default_fly_sprint_multiplier(),
             fly_invert_y: false,
             fly_camera_mode: FlyCameraMode::default(),
+            fly_collisions: true,
+            fly_proximity: false,
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             png_export_strip_metadata: false,

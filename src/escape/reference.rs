@@ -40,13 +40,42 @@ fn nucleus_for_view(
         power,
         20_000,
     )?;
+    let off = nucleus_offset(center_re, center_im, &hit.re, &hit.im, zoom_log2, height_px)?;
+    Some((hit.re, hit.im, hit.period, off))
+}
+
+/// A custom formula's nucleus for the view at a period its reference's
+/// build found (plan, phase 4, step 9c; `lang::periodic::SlopeWatch`):
+/// [`nucleus_for_view`]'s Newton through the formula's own derivative,
+/// and the offset.
+fn custom_nucleus_at(
+    search: &crate::escape::lang::periodic::NucleusSearch,
+    center_re: &str,
+    center_im: &str,
+    zoom_log2: f64,
+    height_px: f64,
+    period: u32,
+) -> Option<(String, String, u32, [f32; 2])> {
+    let hit = search.nucleus_at(center_re, center_im, zoom_log2, period)?;
+    let off = nucleus_offset(center_re, center_im, &hit.re, &hit.im, zoom_log2, height_px)?;
+    Some((hit.re, hit.im, hit.period, off))
+}
+
+/// The periods Newton runs for a custom formula's nucleus: the built-ins'
+/// budget (`nucleus_for_view`), each pass a big-float pass of the
+/// formula and its derivative (~5 us).
+const CUSTOM_NEWTON_PERIODS: u32 = 20_000;
+
+/// `(C_view − C_nucleus) / S` in pixel units, or `None` past the 2^15 px
+/// the shader's f32 offset can carry.
+fn nucleus_offset(center_re: &str, center_im: &str, nucleus_re: &str, nucleus_im: &str, zoom_log2: f64, height_px: f64) -> Option<[f32; 2]> {
     // ref_offset = (C_view − C_nucleus) / S, computed exactly in
     // fixed-point, exported via floatexp.
     let n = limbs_for_zoom(zoom_log2) + 1;
     let vx = FixedPoint::from_decimal(center_re, n)?;
     let vy = FixedPoint::from_decimal(center_im, n)?;
-    let nx = FixedPoint::from_decimal(&hit.re, n)?;
-    let ny = FixedPoint::from_decimal(&hit.im, n)?;
+    let nx = FixedPoint::from_decimal(nucleus_re, n)?;
+    let ny = FixedPoint::from_decimal(nucleus_im, n)?;
     // S = 2^(2 − zoom) / height ⇒ 1/S = height · 2^(zoom − 2).
     let to_px = |d: FixedPoint| -> f64 {
         let fe = d.to_floatexp();
@@ -67,7 +96,7 @@ fn nucleus_for_view(
     {
         return None;
     }
-    Some((hit.re, hit.im, hit.period, off))
+    Some(off)
 }
 
 /// Pan-reuse ceiling on a relocation offset, in pixel-spacing units.
@@ -296,11 +325,22 @@ pub const MAP_KALISET: u32 = 18;
 /// variant (0 and 4 perturb). The step is transcendental, so the
 /// reference runs on the big-float `ln`/`atan2` core.
 pub const MAP_DUCKS: u32 = 19;
+/// A custom formula (escape::lang) with UF's perturbation equations:
+/// its program, run in big floats (`lang::bigeval`), is the orbit, and
+/// its own test ends it. `map_params` carry the program's identity
+/// (`custom::reference_identity`), which names the program, its
+/// parameters and the plane; never stored, as no big family is.
+pub const MAP_CUSTOM: u32 = 20;
+
+/// The exponent marking an interleaved reference's slot after that
+/// reference has ended (the custom family's phases): the shader reads
+/// it as zero and as the end. Far below any real entry's exponent.
+pub const ORBIT_PAD_E: i32 = -2_147_483_647;
 
 /// Whether a (ship, variant) pair names one of the families whose
 /// reference state lives in a [`BigComplex`] rather than fixed point.
 pub fn map_is_big(ship: bool, variant: u32) -> bool {
-    !ship && (MAP_NEWTON_BASE..=MAP_DUCKS).contains(&variant)
+    !ship && (MAP_NEWTON_BASE..=MAP_CUSTOM).contains(&variant)
 }
 
 /// The Newton family's variant for a (scheme, func) pair.
@@ -621,6 +661,25 @@ pub struct ReferenceOrbit {
     zb: BigComplex,
     cb: BigComplex,
     pb: BigComplex,
+    /// The custom family's state: the program at the reference point;
+    /// for a loop with a cycle (a hybrid), also one machine per phase,
+    /// their entries interleaved (`m * R + r`, R machines) and padded
+    /// with [`ORBIT_PAD_E`] once each has ended.
+    custom: Vec<crate::escape::lang::bigeval::BigMachine>,
+    custom_live: Vec<bool>,
+    /// The custom family's start, `Z_0` in big floats, where its
+    /// reference wraps exactly (`custom::reference_wraps`; parameter
+    /// plane, one machine): what a closing iterate is measured against
+    /// (plan, phase 4, step 9c). `None` otherwise, and on a store load.
+    custom_start: Option<BigComplex>,
+    /// The nucleus search's test riding on the custom family's build
+    /// (`lang::periodic::SlopeWatch`), no further than its cap; and the
+    /// period it found, which stops the build there.
+    custom_watch: Option<(crate::escape::lang::periodic::SlopeWatch, u32)>,
+    custom_found: Option<u32>,
+    /// A stored custom orbit's machine state, read with it and restored
+    /// once the formula is known ([`Self::restore_custom`]).
+    custom_saved: Option<Vec<u8>>,
     /// Running |Z| minimum past index 0 as an OCTAVE (extended-range;
     /// f64 magnitudes underflow at 2^-537 and would falsely read as
     /// closures) and its index — the ball-method candidate tracker.
@@ -857,6 +916,9 @@ impl ReferenceOrbit {
             re: FixedPoint::from_decimal(center_re, n)?,
             im: FixedPoint::from_decimal(center_im, n)?,
         };
+        // The custom family starts at its program's own start, at the
+        // reference point (below).
+        let custom_at = (!ship && ship_variant == MAP_CUSTOM).then(|| BigComplex::from_fixed(&center));
         // Parameter plane: z0 = 0, c = center. Julia (dynamical)
         // plane: z0 = center, c = the fixed Julia constant (f32
         // config values — exact in fixed-point).
@@ -953,6 +1015,12 @@ impl ReferenceOrbit {
             zb,
             cb,
             pb,
+            custom: Vec::new(),
+            custom_live: Vec::new(),
+            custom_start: None,
+            custom_watch: None,
+            custom_found: None,
+            custom_saved: None,
             store_grown: true,
             orbit: vec![first],
             orbit_lo: vec![[0.0, 0.0]],
@@ -970,6 +1038,31 @@ impl ReferenceOrbit {
             shadow: [f64::NAN; 4],
             c_dd: [0.0; 4],
         };
+        // The custom family's start is its program's: `global:` and
+        // `init:` at the reference point (the formula decides its own
+        // plane), in big floats.
+        if let Some(at) = custom_at {
+            let machines = crate::escape::custom::reference_machines(map_params, &at, n)?;
+            orbit.orbit.clear();
+            orbit.orbit_lo.clear();
+            orbit.orbit_e.clear();
+            // Each reference's start: z, then what its equations carry
+            // besides it (`Program::carried`), interleaved.
+            for m in &machines {
+                for v in std::iter::once(m.z().clone()).chain(m.carried()) {
+                    let (hi, lo, ee, _) = split_entry_big(&v);
+                    orbit.orbit.push(hi);
+                    orbit.orbit_lo.push(lo);
+                    orbit.orbit_e.push(ee);
+                }
+            }
+            orbit.zb = machines[0].z().clone();
+            if machines.len() == 1 && julia_c.is_none() && crate::escape::custom::reference_wraps(map_params) {
+                orbit.custom_start = Some(orbit.zb.clone());
+            }
+            orbit.custom_live = vec![true; machines.len()];
+            orbit.custom = machines;
+        }
         orbit.init_shadow();
         orbit.extend(max_iter);
         Some(orbit)
@@ -1064,6 +1157,95 @@ impl ReferenceOrbit {
         }
     }
 
+    /// One loop pass of the custom family's program: `Some(true)` when
+    /// its test holds (the iterate pushed), `Some(false)` when it fails
+    /// (the escaping iterate pushed: the orbit ends there, as the
+    /// fixed-point families end on theirs), `None` when the big floats
+    /// cannot take the step (nothing pushed). With a reference per phase,
+    /// `Some(false)` once every one has ended.
+    fn step_custom(&mut self) -> Option<bool> {
+        if self.custom.len() == 1 {
+            let machine = self.custom.first_mut()?;
+            let go = machine.step().ok()?;
+            self.zb = machine.z().clone();
+            let carried = machine.carried();
+            self.push_entry_big();
+            for v in &carried {
+                self.push_value_big(v);
+            }
+            return Some(go);
+        }
+        // A reference per phase: an entry each a pass (z and what it
+        // carries), pads for one that has ended (its escaping iterate is
+        // its last entry). The orbit ends when they all have.
+        for r in 0..self.custom.len() {
+            let width = 1 + self.custom[r].carried().len();
+            if !self.custom_live[r] {
+                for _ in 0..width {
+                    self.push_entry_pad();
+                }
+                continue;
+            }
+            match self.custom[r].step() {
+                Ok(go) => {
+                    self.zb = self.custom[r].z().clone();
+                    let carried = self.custom[r].carried();
+                    self.push_entry_big();
+                    for v in &carried {
+                        self.push_value_big(v);
+                    }
+                    self.custom_live[r] = go;
+                }
+                Err(_) => {
+                    self.custom_live[r] = false;
+                    for _ in 0..width {
+                        self.push_entry_pad();
+                    }
+                }
+            }
+        }
+        Some(self.custom_live.iter().any(|&l| l))
+    }
+
+    /// The custom family's progressive period detection (plan, phase 4,
+    /// step 9c), the plain map's: where the reference wraps exactly, a
+    /// new minimum of `|Z_n - Z_0|` below the view's limit makes the
+    /// orbit periodic on the spot.
+    fn custom_closes(&mut self) -> bool {
+        let Some(oct) = self.custom_closure_octave() else {
+            return false;
+        };
+        let idx = self.orbit.len() as u32 - 1;
+        if oct < self.min_octave {
+            self.min_octave = oct;
+            self.min_at = idx;
+            if oct <= self.closure_limit_octave && idx > 0 {
+                self.periodic = Some(idx);
+                self.closure_octave = oct;
+                log::info!("auto-detected periodic custom reference: period {idx} (|Z - Z_0| ~ 2^{oct})");
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The nucleus search's test after a pass (`custom_watch`): true when
+    /// it found the period, which stops the build for the caller's Newton.
+    fn custom_watched(&mut self, z_prev: Option<crate::escape::lang::builtins::C64>) -> bool {
+        let (Some(z_prev), Some((watch, cap))) = (z_prev, self.custom_watch.as_mut()) else {
+            return false;
+        };
+        if watch.observe(z_prev, &self.zb) {
+            self.custom_found = Some(watch.passes());
+            self.custom_watch = None;
+            return true;
+        }
+        if watch.passes() >= *cap {
+            self.custom_watch = None;
+        }
+        false
+    }
+
     /// Newton / Halley / Chebyshev over the polynomial functions, with
     /// complex relaxation; Nova adds c. The big-float twin of the
     /// formula's `newton_delta`.
@@ -1145,16 +1327,34 @@ impl ReferenceOrbit {
         true
     }
 
+    /// An interleaved reference's slot after it has ended.
+    fn push_entry_pad(&mut self) {
+        let idx = self.orbit.len() as u32;
+        self.shadow = [f64::NAN; 4];
+        self.corrections.push(Correction { idx, hi: [0.0; 2], lo: [0.0; 2], e: ORBIT_PAD_E, dd: [0.0; 4] });
+        self.orbit.push([0.0; 2]);
+        self.orbit_lo.push([0.0; 2]);
+        self.orbit_e.push(ORBIT_PAD_E);
+    }
+
     /// Push the big-float iterate's storage triple. These families do
     /// not ride the DD shadow (its step is the power map's), so every
     /// entry is recorded as a correction -- always correct, merely
     /// uncompressed; their orbits are short and never stored anyway
     /// (`orbit_store` refuses them).
     fn push_entry_big(&mut self) {
-        let (hi, lo, ee, dd) = split_entry_big(&self.zb);
-        let idx = self.orbit.len() as u32;
+        let z = self.zb.clone();
+        self.push_value_big(&z);
+    }
+
+    /// Push a big-float value's storage triple: the iterate, or what a
+    /// custom formula carries beside it.
+    fn push_value_big(&mut self, v: &BigComplex) {
+        let (hi, lo, ee, _) = split_entry_big(v);
+        // No compression correction: an orbit of big-float values is
+        // stored raw (the shadow replays the plain map), and a correction
+        // an entry held 52 B of nothing for each.
         self.shadow = [f64::NAN; 4];
-        self.corrections.push(Correction { idx, hi, lo, e: ee, dd });
         self.orbit.push(hi);
         self.orbit_lo.push(lo);
         self.orbit_e.push(ee);
@@ -1180,6 +1380,21 @@ impl ReferenceOrbit {
             return;
         }
         while (self.orbit.len() as u32) <= max_iter {
+            if !self.custom.is_empty() {
+                let z_prev = self.custom_watch.as_ref().map(|_| crate::escape::lang::builtins::C64::new(self.zb.re.to_f64(), self.zb.im.to_f64()));
+                match self.step_custom() {
+                    Some(true) => {
+                        if self.custom_closes() || self.custom_watched(z_prev) {
+                            return;
+                        }
+                        continue;
+                    }
+                    _ => {
+                        self.escaped_at = Some(self.orbit.len() as u32 - 1);
+                        break;
+                    }
+                }
+            }
             if map_is_big(self.ship, self.ship_variant) {
                 // The big-float families: their own step, their own
                 // end (a divisor exactly zero ends the orbit the way an
@@ -1693,7 +1908,9 @@ impl ReferenceOrbit {
         }
         let compressed_bytes = 4 + self.corrections.len() * 52 + 4 + runs.len() * 8;
         let raw_bytes = self.orbit.len() * 20;
-        if compressed_bytes < raw_bytes {
+        // The shadow replays the plain map: a big-float family's orbit
+        // (a custom formula's) is stored raw.
+        if compressed_bytes < raw_bytes && !map_is_big(self.ship, self.ship_variant) {
             out.push(1);
             out.extend_from_slice(&(self.corrections.len() as u32).to_le_bytes());
             for c in &self.corrections {
@@ -1738,7 +1955,60 @@ impl ReferenceOrbit {
         ] {
             put_fixed(&mut out, f);
         }
+        // A custom formula's machines (plan, phase 4, the speed work):
+        // each one's pass, iterate and variables, so the stored orbit
+        // deepens as the saved one would.
+        if !self.ship && self.ship_variant == MAP_CUSTOM {
+            out.extend_from_slice(&(self.custom.len() as u32).to_le_bytes());
+            for (m, live) in self.custom.iter().zip(&self.custom_live) {
+                out.push(u8::from(*live));
+                m.save_state(&mut out);
+            }
+        }
         out
+    }
+
+    /// Rebuild a stored custom orbit's machines from its reference
+    /// identity, which this session's compile of the formula names, and
+    /// restore their saved state: true where there is nothing to restore,
+    /// false where it cannot be (a miss for the store).
+    pub fn restore_custom(&mut self) -> bool {
+        let Some(saved) = self.custom_saved.take() else {
+            return true;
+        };
+        let at = BigComplex::from_fixed(&self.c);
+        let Some(mut machines) = crate::escape::custom::reference_machines(self.map_params, &at, self.n_limbs) else {
+            return false;
+        };
+        let start = machines.first().map(|m| m.z().clone());
+        let mut bytes: &[u8] = &saved;
+        let Some(count) = crate::escape::lang::bigeval::take_u32(&mut bytes) else {
+            return false;
+        };
+        if count as usize != machines.len() {
+            return false;
+        }
+        let mut live = Vec::with_capacity(machines.len());
+        for m in &mut machines {
+            let Some((&flag, rest)) = bytes.split_first() else {
+                return false;
+            };
+            bytes = rest;
+            live.push(flag != 0);
+            if m.load_state(&mut bytes).is_none() {
+                return false;
+            }
+        }
+        self.zb = machines[0].z().clone();
+        if machines.len() == 1 && self.julia_c.is_none() && crate::escape::custom::reference_wraps(self.map_params) {
+            self.custom_start = start;
+        }
+        self.custom_live = live;
+        self.custom = machines;
+        // The closure test's minimum is of |Z - Z_0| here, not the |Z| a
+        // load rescans: it starts again (a closure past it still wraps).
+        self.min_octave = i64::MAX;
+        true
     }
 
     /// Inverse of [`to_bytes`](Self::to_bytes); None on any
@@ -1766,8 +2036,9 @@ impl ReferenceOrbit {
             escaped_at,
         } = read_header(&mut r)?;
         // The big-float families are never written (see orbit_store)
-        // and could not deepen from a fixed-point live state anyway.
-        if map_is_big(ship, ship_variant) {
+        // and could not deepen from a fixed-point live state anyway --
+        // but for a custom formula, whose machines have their own section.
+        if map_is_big(ship, ship_variant) && (ship || ship_variant != MAP_CUSTOM) {
             return None;
         }
         let mode = r.u8()?;
@@ -1787,6 +2058,14 @@ impl ReferenceOrbit {
             }
             let z = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
             let c = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+            // A custom formula's machines follow the history, kept for
+            // `restore_custom`, which needs the formula compiled.
+            let custom_saved = if !ship && ship_variant == MAP_CUSTOM {
+                let _z_prev = FixedComplex { re: r.fixed(n_limbs)?, im: r.fixed(n_limbs)? };
+                Some(r.0.to_vec())
+            } else {
+                None
+            };
             let c_dd = {
                 let (cx, cxl) = Self::fixed_dd(&c.re, n_limbs);
                 let (cy, cyl) = Self::fixed_dd(&c.im, n_limbs);
@@ -1837,6 +2116,12 @@ impl ReferenceOrbit {
                     zb: BigComplex::zero(0),
                     cb: BigComplex::zero(0),
                     pb: BigComplex::zero(0),
+                    custom: Vec::new(),
+                    custom_live: Vec::new(),
+                    custom_start: None,
+                    custom_watch: None,
+                    custom_found: None,
+                    custom_saved,
                     corrections: vec![seed],
                     shadow: [f64::NAN; 4],
                     c_dd,
@@ -2002,6 +2287,12 @@ impl ReferenceOrbit {
             zb: BigComplex::zero(0),
             cb: BigComplex::zero(0),
             pb: BigComplex::zero(0),
+            custom: Vec::new(),
+            custom_live: Vec::new(),
+            custom_start: None,
+            custom_watch: None,
+            custom_found: None,
+            custom_saved: None,
             corrections,
             shadow,
             c_dd,
@@ -2740,6 +3031,17 @@ fn worker_compute_orbit(
             req.power,
             req.reference_period,
         )
+    } else if req.julia_c.is_none() && !req.ship && req.ship_variant == MAP_CUSTOM {
+        ReferenceOrbit::compute_custom_nucleus_aware(
+            &req.center_re,
+            &req.center_im,
+            req.zoom_log2,
+            0,
+            req.height_px.max(1.0),
+            req.map_params,
+            req.reference_period,
+            req.max_iter,
+        )
     } else {
         ReferenceOrbit::compute(
             &req.center_re,
@@ -2897,6 +3199,110 @@ impl ReferenceOrbit {
         }
         log::info!("periodic reference from hint: period {period} at {n} limbs");
         Some(orbit)
+    }
+
+    /// A custom formula's reference, nucleus-aware (plan, phase 4, step
+    /// 9c), as [`Self::compute_nucleus_aware`] is the plain map's: the
+    /// hinted period, verified; else the nucleus governing the view,
+    /// found through the formula's derivative, its orbit one period
+    /// long and verified to close below the view's limit; else the view
+    /// centre's, closing on its own where it does. `horizon` is the
+    /// depth a plain reference would need: no period past it is looked
+    /// for. Formulas whose reference does not wrap exactly
+    /// (`custom::reference_wraps`) take the plain reference.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_custom_nucleus_aware(
+        center_re: &str,
+        center_im: &str,
+        zoom_log2: f64,
+        max_iter: u32,
+        height_px: f64,
+        map_params: [f32; 2],
+        period_hint: Option<u32>,
+        horizon: u32,
+    ) -> Option<Self> {
+        let n = super::fixedpoint::limbs_for_view(center_re, center_im, zoom_log2);
+        let plain = || Self::compute(center_re, center_im, zoom_log2, Some(n), max_iter, None, 2, false, MAP_CUSTOM, map_params);
+        if std::env::var("ESCAPE_DISABLE_NUCLEUS").is_ok() || !crate::escape::custom::reference_wraps(map_params) {
+            return plain();
+        }
+        if let Some(p) = period_hint.filter(|&p| p > 0) {
+            // The centre is taken as the nucleus: its orbit to the
+            // period, closure detection off, then measured.
+            let mut orbit = Self::compute(center_re, center_im, zoom_log2, Some(n), 0, None, 2, false, MAP_CUSTOM, map_params)?;
+            orbit.closure_limit_octave = i64::MIN / 4;
+            orbit.extend(p);
+            let octave = orbit.custom_closure_octave();
+            match octave {
+                Some(oct) if orbit.escaped_at.is_none() && orbit.len() > p && oct <= -24 => {
+                    if oct <= closure_limit_for_zoom(zoom_log2) {
+                        orbit.periodic = Some(p);
+                        orbit.closure_octave = oct;
+                        log::info!("periodic custom reference from hint: period {p} at {n} limbs");
+                        return Some(orbit);
+                    }
+                    // Closes, not below this view's pixels: the plain
+                    // reference, which knows it tried the hint.
+                    log::warn!("custom reference period {p} does not serve zoom {zoom_log2:.0}: |Z_p - Z_0| ~ 2^{oct}");
+                    orbit.hint_period = Some(p);
+                    orbit.hint_octave = oct;
+                    orbit.set_closure_limit(zoom_log2);
+                    orbit.extend(max_iter);
+                    return Some(orbit);
+                }
+                _ => log::warn!("custom reference period {p} rejected: the centre's orbit does not close at it"),
+            }
+        }
+        // The plain reference first, the nucleus search's test riding on its
+        // build (no further than Newton would run, or the orbit is needed):
+        // a search that finds nothing costs a pass of the derivative in f64
+        // beside each big-float one. A period found stops the build there,
+        // for Newton.
+        let mut plain = Self::compute(center_re, center_im, zoom_log2, Some(n), 0, None, 2, false, MAP_CUSTOM, map_params)?;
+        let search = crate::escape::custom::nucleus_search(map_params);
+        let depth = CUSTOM_NEWTON_PERIODS.min(horizon.max(1));
+        if let (Some(search), Some(z0)) = (&search, plain.custom_start.clone()) {
+            let c = crate::escape::lang::builtins::C64::new(plain.c.re.to_f64(), plain.c.im.to_f64());
+            plain.custom_watch = search.watch(c, z0, 1.0 - zoom_log2).map(|w| (w, depth));
+        }
+        plain.extend(depth);
+        plain.custom_watch = None;
+        let found = plain.custom_found.take();
+        if let Some((nre, nim, period, off)) = found.zip(search.as_ref()).and_then(|(p, s)| custom_nucleus_at(s, center_re, center_im, zoom_log2, height_px, p)) {
+            let nn = super::fixedpoint::limbs_for_view(&nre, &nim, zoom_log2);
+            if let Some(mut orbit) = Self::compute(&nre, &nim, zoom_log2, Some(nn), period, None, 2, false, MAP_CUSTOM, map_params) {
+                // Its own closure detection is the check: the orbit
+                // closes at the period (or one dividing it) below the
+                // view's limit, or the nucleus does not serve.
+                if orbit.periodic.is_some() {
+                    log::info!(
+                        "custom nucleus relocation: period {:?}, offset ({:.3}, {:.3}) px, zoom {zoom_log2:.2}",
+                        orbit.periodic,
+                        off[0],
+                        off[1]
+                    );
+                    orbit.center_re = center_re.to_string();
+                    orbit.center_im = center_im.to_string();
+                    orbit.ref_offset = off;
+                    orbit.off_zoom_log2 = zoom_log2;
+                    orbit.off_height_px = height_px.max(1.0);
+                    return Some(orbit);
+                }
+                log::warn!("custom nucleus of period {period} does not close below the limit of zoom {zoom_log2:.0}");
+            }
+        }
+        plain.extend(max_iter);
+        Some(plain)
+    }
+
+    /// `|Z - Z_0|`'s octave for the custom family's live iterate, where
+    /// its reference wraps exactly.
+    fn custom_closure_octave(&self) -> Option<i64> {
+        let z0 = self.custom_start.as_ref()?;
+        Some(match crate::escape::lang::periodic::log2_abs(&self.zb.sub(z0)) {
+            None => i64::MIN / 2,
+            Some(l) => l.floor() as i64,
+        })
     }
 
     /// Parameter-plane Mandelbrot: try a nucleus-relocated periodic
@@ -3089,7 +3495,10 @@ impl OrbitCache {
                 julia_c,
                 power,
                 ship,
-                ship_variant.min(5),
+                // Only a Ship FOLD variant clamps: a family number past 5
+                // clamped to Feather's, and a Magnet I, Kaliset (-c) or
+                // Ducks v0 request could load a stored Feather(2) orbit.
+                if ship { ship_variant.min(5) } else { ship_variant },
                 map_params,
                 zoom_log2,
                 self.height_px.max(1.0),
@@ -3113,6 +3522,17 @@ impl OrbitCache {
                     self.height_px.max(1.0),
                     power,
                     self.reference_period,
+                )?
+            } else if julia_c.is_none() && !ship && ship_variant == MAP_CUSTOM {
+                ReferenceOrbit::compute_custom_nucleus_aware(
+                    center_re,
+                    center_im,
+                    zoom_log2,
+                    max_iter,
+                    self.height_px.max(1.0),
+                    map_params,
+                    self.reference_period,
+                    max_iter,
                 )?
             } else {
                 ReferenceOrbit::compute(
@@ -3355,7 +3775,7 @@ mod big_family_tests {
                 assert!(map_is_big(false, v));
             }
         }
-        for v in [MAP_NOVA, MAP_KALISET, MAP_DUCKS] {
+        for v in [MAP_NOVA, MAP_KALISET, MAP_DUCKS, MAP_CUSTOM] {
             assert!(map_is_big(false, v));
         }
         for v in [MAP_PLAIN, MAP_CONJ, MAP_PHOENIX, MAP_MANOWAR, MAP_LAMBDA, MAP_FEATHER, MAP_MCMULLEN, MAP_MAGNET] {
@@ -5166,7 +5586,182 @@ mod tests {
         assert_eq!(plain.ref_offset, [0.0, 0.0]);
     }
 
+    /// A custom formula's reference goes through the orbit store (the
+    /// speed work after phase 4, step 9e): saved with its machines' state,
+    /// loaded and restored from its identity, it deepens to the very
+    /// orbit a build straight to that depth gives, entry for entry.
+    #[test]
+    fn a_custom_formulas_reference_goes_through_the_store() {
+        use crate::config::escape::EscapeConfig;
+        let dir = std::env::temp_dir().join(format!("fflame-custom-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (re, im, zoom) = ("-0.5", "0.1", 30.0);
+        for name in ["mandelbrot", "burning_ship", "phoenix"] {
+            let src = crate::escape::twins::custom_source(name).unwrap();
+            let mut esc = EscapeConfig { bailout: 4.0, max_iter: 4000, zoom_log2: zoom, ..EscapeConfig::default() };
+            esc.center_re = re.into();
+            esc.center_im = im.into();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            crate::escape::custom::ensure(&esc);
+            let id = crate::escape::custom::reference_identity(&esc).unwrap();
+            let n = crate::escape::fixedpoint::limbs_for_view(re, im, zoom);
+            let short = ReferenceOrbit::compute(re, im, zoom, Some(n), 2000, None, 2, false, MAP_CUSTOM, id).unwrap();
+            assert!(super::super::orbit_store::save_to(&dir, &short), "{name}: not stored");
+            let mut loaded = super::super::orbit_store::load_from(&dir, re, im, n, None, 2, false, MAP_CUSTOM, id, zoom, 1080.0).unwrap_or_else(|| panic!("{name}: not loaded"));
+            assert_eq!(loaded.len(), short.len(), "{name}");
+            loaded.extend(4000);
+            let full = ReferenceOrbit::compute(re, im, zoom, Some(n), 4000, None, 2, false, MAP_CUSTOM, id).unwrap();
+            assert_eq!(loaded.len(), full.len(), "{name}");
+            assert!(loaded.orbit == full.orbit && loaded.orbit_lo == full.orbit_lo && loaded.orbit_e == full.orbit_e, "{name}: the deepened orbit differs");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
+    /// A custom formula's nucleus (plan, phase 4, step 9c): the
+    /// Mandelbrot's twin and UF's Mandelbrot that starts at its pixel
+    /// relocate as the built-in does -- the same period, the same
+    /// offset -- and arrive complete at period length, their iterate
+    /// back at its start; a hinted period at the nucleus serves; a view
+    /// whose centre escapes takes the plain reference; and a fold
+    /// relocates through its Jacobian (step 9d).
+    #[test]
+    fn a_custom_formula_relocates_to_its_nucleus() {
+        use crate::config::escape::{CustomDialect, CustomSource, EscapeConfig};
+        // Far enough from the nucleus that the centre does not close below
+        // the view's limit on its own.
+        let (cre, cim, zoom) = ("-1.75488", "0.00001", 14.0);
+        let built_in = ReferenceOrbit::compute_nucleus_aware(cre, cim, zoom, 5000, 320.0, 2, None).unwrap();
+        assert_eq!(built_in.periodic, Some(3));
+        let uf = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
+        let identity = |src: CustomSource| {
+            let mut esc = EscapeConfig { bailout: 4.0, max_iter: 5000, zoom_log2: zoom, ..EscapeConfig::default() };
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            crate::escape::custom::ensure(&esc);
+            crate::escape::custom::reference_identity(&esc).expect("an identity")
+        };
+        for src in [
+            crate::escape::twins::custom_source("mandelbrot").unwrap(),
+            uf("P {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}", "P"),
+        ] {
+            let what = src.entry.clone();
+            let id = identity(src);
+            let orbit = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, 5000, 320.0, id, None, 5000).unwrap();
+            assert_eq!(orbit.periodic, Some(3), "{what}");
+            assert_eq!(orbit.len(), 4, "{what}");
+            let (a, b) = (orbit.ref_offset, built_in.ref_offset);
+            assert!((a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3, "{what}: offset {a:?} against {b:?}");
+            assert!(orbit.closure_octave <= closure_limit_for_zoom(zoom), "{what}: closes at 2^{}", orbit.closure_octave);
+            let (z0, z3) = (orbit.z_f32(0), orbit.z_f32(3));
+            assert!((z0[0] - z3[0]).abs() < 1e-6 && (z0[1] - z3[1]).abs() < 1e-6, "{what}: {z0:?} against {z3:?}");
+            // A centre whose orbit escapes: no nucleus.
+            let plain = ReferenceOrbit::compute_custom_nucleus_aware("0.3", "0.5", zoom, 100, 320.0, id, None, 100).unwrap();
+            assert_eq!((plain.periodic, plain.ref_offset), (None, [0.0, 0.0]), "{what}");
+        }
+        // The period as a hint, at the nucleus to the view's digits.
+        let id = identity(crate::escape::twins::custom_source("mandelbrot").unwrap());
+        let n = crate::escape::nucleus::find_nucleus(cre, cim, 3, 60.0, 2).unwrap();
+        let hinted = ReferenceOrbit::compute_custom_nucleus_aware(&n.re, &n.im, zoom, 5000, 320.0, id, Some(3), 5000).unwrap();
+        assert_eq!((hinted.periodic, hinted.ref_offset), (Some(3), [0.0, 0.0]));
+        // A fold relocates through its Jacobian (step 9d): on the real axis
+        // the Burning Ship is the Mandelbrot, its nucleus the same.
+        let ship = identity(crate::escape::twins::custom_source("burning_ship").unwrap());
+        let orbit = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, 500, 320.0, ship, None, 500).unwrap();
+        assert_eq!(orbit.periodic, Some(3));
+        let b = built_in.ref_offset;
+        assert!((orbit.ref_offset[0] - b[0]).abs() < 1e-3 && (orbit.ref_offset[1] - b[1]).abs() < 1e-3, "{:?} against {b:?}", orbit.ref_offset);
+    }
+
+    /// What a custom formula's nucleus reference costs and saves (plan,
+    /// phase 4, step 9c): the Mandelbrot's twin, its reference for
+    /// 100,000 iterations nucleus-aware and plain, against the
+    /// built-in's; at a minibrot's view, deeper ones, a Misiurewicz point
+    /// (no period ever: the search's whole cost, for nothing) and a
+    /// centre that escapes.
+    #[test]
+    #[ignore = "measurement"]
+    fn measure_custom_nucleus_references() {
+        use crate::config::escape::EscapeConfig;
+        let src = crate::escape::twins::custom_source("mandelbrot").unwrap();
+        let max_iter = 100_000;
+        for (what, cre, cim, zoom) in [
+            ("seahorse", "-0.7436438870371587", "0.1318259042053120", 30.0),
+            ("seahorse deep", "-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549", 42.0),
+            ("seahorse deeper", "-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549", 100.0),
+            ("Misiurewicz i", "0.0", "1.0", 30.0),
+            ("escaping", "0.3", "0.5", 30.0),
+        ] {
+            let mut esc = EscapeConfig { bailout: 4.0, max_iter, zoom_log2: zoom, ..EscapeConfig::default() };
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            crate::escape::custom::ensure(&esc);
+            let id = crate::escape::custom::reference_identity(&esc).unwrap();
+            let t = std::time::Instant::now();
+            let built_in = ReferenceOrbit::compute_nucleus_aware(cre, cim, zoom, max_iter, 1080.0, 2, None).unwrap();
+            let tb = t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let ours = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, max_iter, 1080.0, id, None, max_iter).unwrap();
+            let tn = t.elapsed().as_secs_f64();
+            let n = crate::escape::fixedpoint::limbs_for_view(cre, cim, zoom);
+            let t = std::time::Instant::now();
+            let plain = ReferenceOrbit::compute(cre, cim, zoom, Some(n), max_iter, None, 2, false, MAP_CUSTOM, id).unwrap();
+            let tp = t.elapsed().as_secs_f64();
+            println!(
+                "{what} (zoom {zoom}): built-in {tb:.3} s, {} entries, period {:?}; the twin nucleus-aware {tn:.3} s, {} entries, period {:?}, offset {:?}; plain {tp:.3} s, {} entries",
+                built_in.len(),
+                built_in.periodic,
+                ours.len(),
+                ours.periodic,
+                ours.ref_offset,
+                plain.len()
+            );
+        }
+        // The folds' twins at the measurement's interior views
+        // (`measure_twins_against_their_builtins`): the built-in's plain
+        // reference, the twin's nucleus-aware (the period watch riding
+        // on it) and plain.
+        for (family, params, ship, cre, cim) in [
+            ("burning_ship", &[("variant", 0.0)][..], true, "-0.5", "-0.5"),
+            ("tricorn", &[("power", 2.0)][..], false, "-0.2", "0.0"),
+        ] {
+            let (zoom, max_iter) = (30.0, 20_000);
+            let src = crate::escape::twins::custom_source(family).unwrap();
+            let mut esc = EscapeConfig { bailout: 4.0, max_iter, zoom_log2: zoom, ..EscapeConfig::default() };
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            crate::escape::custom::ensure(&esc);
+            let id = crate::escape::custom::reference_identity(&esc).unwrap();
+            let n = crate::escape::fixedpoint::limbs_for_view(cre, cim, zoom);
+            let variant = if ship { 0 } else { MAP_CONJ };
+            let t = std::time::Instant::now();
+            let built_in = ReferenceOrbit::compute(cre, cim, zoom, Some(n), max_iter, None, 2, ship, variant, [0.0; 2]).unwrap();
+            let tb = t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let ours = ReferenceOrbit::compute_custom_nucleus_aware(cre, cim, zoom, max_iter, 1080.0, id, None, max_iter).unwrap();
+            let tn = t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let plain = ReferenceOrbit::compute(cre, cim, zoom, Some(n), max_iter, None, 2, false, MAP_CUSTOM, id).unwrap();
+            let tp = t.elapsed().as_secs_f64();
+            println!(
+                "{family} (zoom {zoom}, {n} limbs): built-in plain {tb:.3} s, {} entries; the twin nucleus-aware {tn:.3} s, {} entries, period {:?}; plain {tp:.3} s, {} entries",
+                built_in.len(),
+                ours.len(),
+                ours.periodic,
+                plain.len()
+            );
+        }
+    }
 
 
 

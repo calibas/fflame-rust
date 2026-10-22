@@ -902,10 +902,7 @@ impl ConfigManager {
         // config before and after, labelled as the edit. A delta of the
         // one field restored the model name and kept the new model's
         // defaults, and the run reseeded with them.
-        if matches!(
-            path,
-            ConfigPath::SimModel | ConfigPath::SimLayerModel { .. } | ConfigPath::SimGridMode | ConfigPath::SimInitKind
-        ) {
+        if Self::changes_more_than_itself(&path) {
             let before = self.current.clone();
             self.set_value(&path, new_value)?;
             let change = ConfigChange::full_config_snapshot(before, self.current.clone(), delta.description());
@@ -989,12 +986,44 @@ impl ConfigManager {
             return Ok(update_type);
         }
 
-        // Normal mode: create deltas and capture
-        let mut deltas = Vec::new();
+        // Normal mode: each change in order, its old value read as the
+        // earlier ones left the config. A later path's value can depend on
+        // an earlier one: a colouring's parameters read that colouring's
+        // defaults, so with every old value read up front a preset's
+        // `mask_channel` 0 against the LAST colouring's default 0 was
+        // dropped as a no-op, and the new colouring's default 1 showed
+        // until the preset was applied again.
+        //
+        // A setter that changes more than its own field makes the batch a
+        // before-and-after snapshot, as it does a single edit: inverted
+        // deltas put back the model's name and kept the new model's
+        // parameters.
+        let before = changes.iter().any(|(p, _)| Self::changes_more_than_itself(p)).then(|| self.current.clone());
+        let mut deltas: Vec<ConfigDelta> = Vec::new();
         for (path, new_value) in changes {
-            let old_value = self.get_value(&path)?;
-            if !old_value.approx_eq(&new_value) {
-                deltas.push(ConfigDelta::new(path, old_value, new_value));
+            let applied = self.get_value(&path).and_then(|old_value| {
+                if old_value.approx_eq(&new_value) {
+                    return Ok(None);
+                }
+                self.set_value(&path, new_value.clone())?;
+                Ok(Some(ConfigDelta::new(path, old_value, new_value)))
+            });
+            match applied {
+                Ok(Some(delta)) => deltas.push(delta),
+                Ok(None) => {}
+                Err(e) => {
+                    // Leave the config as it was: the snapshot, or the
+                    // applied deltas undone in reverse.
+                    match before {
+                        Some(before) => self.current = before,
+                        None => {
+                            for d in deltas.iter().rev() {
+                                let _ = self.set_value(&d.path, d.old_value.clone());
+                            }
+                        }
+                    }
+                    return Err(e);
+                }
             }
         }
 
@@ -1002,19 +1031,32 @@ impl ConfigManager {
             return Ok(UpdateType::None);
         }
 
-        let change = ConfigChange::batch(deltas, description);
-        let update_type = change.update_type();
-
-        self.push_undo(change.clone());  // Batch changes skip coalescing
-
-        for delta in &change.deltas {
-            self.set_value(&delta.path, delta.new_value.clone())?;
+        let mut update_type = UpdateType::None;
+        for delta in &deltas {
+            update_type = update_type.merge(delta.path.update_type());
             // Record each delta's update type separately so all necessary actions are merged
             // (e.g., batch with ColorMode + TonemapCurve needs both update_palette AND update_tone_curve)
             self.record_action(delta.path.update_type());
         }
+        let change = match before {
+            Some(before) => ConfigChange::full_config_snapshot(before, self.current.clone(), description),
+            None => ConfigChange::batch(deltas, description),
+        };
+        self.push_undo(change); // Batch changes skip coalescing
 
         Ok(update_type)
+    }
+
+    /// A setter that changes more than its own field -- a model pick
+    /// resets that model's parameters, time step and steps; the grid mode
+    /// its sizes; the init kind its shape. Recorded as the config before
+    /// and after: a delta of the one field would restore the model's name
+    /// and keep the new model's defaults.
+    fn changes_more_than_itself(path: &ConfigPath) -> bool {
+        matches!(
+            path,
+            ConfigPath::SimModel | ConfigPath::SimLayerModel { .. } | ConfigPath::SimGridMode | ConfigPath::SimInitKind
+        )
     }
 
     /// Update a system setting (device-specific preference)
@@ -1079,6 +1121,12 @@ impl ConfigManager {
             }
             ConfigPath::SystemFlyInvertY => {
                 self.system_settings.fly_invert_y = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyCollisions => {
+                self.system_settings.fly_collisions = new_value.try_into()?;
+            }
+            ConfigPath::SystemFlyProximity => {
+                self.system_settings.fly_proximity = new_value.try_into()?;
             }
             ConfigPath::SystemFlyCameraMode => {
                 // String transport ("free_look" / "fps") so future
@@ -1903,6 +1951,9 @@ impl ConfigManager {
 
             // Escape-time
             ConfigPath::EscapeFormula => Ok(ConfigValue::String(config.escape.formula.clone())),
+            ConfigPath::EscapeCustomFormula => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_formula))),
+            ConfigPath::EscapeCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.escape.custom_coloring))),
+            ConfigPath::FlameCustomVariations => Ok(ConfigValue::String(serde_json::to_string(&config.flame.custom_variations).unwrap_or_default())),
             ConfigPath::EscapeJulia => Ok(config.escape.julia.into()),
             ConfigPath::EscapeJuliaRe => Ok(config.escape.julia_re.into()),
             ConfigPath::EscapeJuliaIm => Ok(config.escape.julia_im.into()),
@@ -1997,6 +2048,12 @@ impl ConfigManager {
             ConfigPath::SimTerrainTargetY => Ok(ConfigValue::Float(config.sim.terrain.target_y)),
             ConfigPath::SimTerrainTargetLift => Ok(ConfigValue::Float(config.sim.terrain.target_lift)),
             ConfigPath::SimPathSamples => Ok(ConfigValue::UInt(config.sim.terrain.path.samples)),
+            ConfigPath::SimPathNoiseThreshold => Ok(ConfigValue::Float(config.sim.terrain.path.noise_threshold)),
+            ConfigPath::SimPathEnvironmentMap => Ok(ConfigValue::String(config.sim.terrain.path.environment_map.clone())),
+            ConfigPath::SimPathEnvironmentRotation => Ok(config.sim.terrain.path.environment_rotation.into()),
+            ConfigPath::SimPathEnvironmentHorizon => Ok(config.sim.terrain.path.environment_horizon.into()),
+            ConfigPath::SimPathEnvironmentStars => Ok(config.sim.terrain.path.environment_stars.into()),
+            ConfigPath::SimPathEnvironmentBackdrop => Ok(config.sim.terrain.path.environment_backdrop.into()),
             ConfigPath::SimPathBounces => Ok(ConfigValue::UInt(config.sim.terrain.path.bounces)),
             ConfigPath::SimPathEnvironment => Ok(ConfigValue::Float(config.sim.terrain.path.environment)),
             // The material is the picture's, beside the lights
@@ -2008,6 +2065,7 @@ impl ConfigManager {
             ConfigPath::SimPathFocus => Ok(ConfigValue::Float(config.sim.terrain.path.focus)),
             ConfigPath::SimPathDenoise => Ok(config.sim.terrain.path.denoise.into()),
             ConfigPath::SimPathSky => Ok(config.sim.terrain.path.sky_gradient.into()),
+            ConfigPath::SimPathStudio => Ok(config.sim.terrain.path.studio.into()),
             ConfigPath::SimPathZenith => Ok(ConfigValue::ColorRgb(config.sim.terrain.path.zenith)),
             ConfigPath::SimWarpZoom => Ok(ConfigValue::Float(config.sim.warp.zoom)),
             ConfigPath::SimViewCenterX => Ok(ConfigValue::Float(config.sim.view.center_x)),
@@ -2151,6 +2209,7 @@ impl ConfigManager {
             ConfigPath::EscapeTerrainTier => Ok(ConfigValue::String(config.escape.terrain.tier.as_str().to_string())),
             ConfigPath::EscapeSolidTier => Ok(ConfigValue::String(config.escape.solid_tier.as_str().to_string())),
             ConfigPath::EscapePathSamples => Ok(ConfigValue::UInt(config.escape.path.samples)),
+            ConfigPath::EscapePathNoiseThreshold => Ok(ConfigValue::Float(config.escape.path.noise_threshold)),
             ConfigPath::EscapePathBounces => Ok(ConfigValue::UInt(config.escape.path.bounces)),
             ConfigPath::EscapePathEnvironment => Ok(config.escape.path.environment.into()),
             ConfigPath::EscapePathGloss => Ok(config.solid_shading.gloss.into()),
@@ -2160,6 +2219,12 @@ impl ConfigManager {
             ConfigPath::EscapePathFocus => Ok(config.escape.path.focus.into()),
             ConfigPath::EscapePathDenoise => Ok(config.escape.path.denoise.into()),
             ConfigPath::EscapePathSky => Ok(config.escape.path.sky_gradient.into()),
+            ConfigPath::EscapePathStudio => Ok(config.escape.path.studio.into()),
+            ConfigPath::EscapePathEnvironmentMap => Ok(ConfigValue::String(config.escape.path.environment_map.clone())),
+            ConfigPath::EscapePathEnvironmentRotation => Ok(config.escape.path.environment_rotation.into()),
+            ConfigPath::EscapePathEnvironmentHorizon => Ok(config.escape.path.environment_horizon.into()),
+            ConfigPath::EscapePathEnvironmentStars => Ok(config.escape.path.environment_stars.into()),
+            ConfigPath::EscapePathEnvironmentBackdrop => Ok(config.escape.path.environment_backdrop.into()),
             ConfigPath::EscapePathZenith => Ok(ConfigValue::ColorRgb(config.escape.path.zenith)),
             ConfigPath::EscapeTerrainInterior => Ok(ConfigValue::String(config.escape.terrain.interior.as_str().to_string())),
             ConfigPath::EscapeTerrainCurve => Ok(ConfigValue::String(config.escape.terrain.curve.as_str().to_string())),
@@ -2202,6 +2267,11 @@ impl ConfigManager {
             ConfigPath::EscapeShadingEmbossSections => {
                 Ok(ConfigValue::UInt(config.escape.shading.emboss_sections))
             }
+            ConfigPath::EscapeShadingCreasePattern => Ok(ConfigValue::String(
+                config.escape.shading.creases.pattern.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingCreaseDecay => Ok(config.escape.shading.creases.decay.into()),
+            ConfigPath::EscapeShadingCreaseFlip => Ok(ConfigValue::Bool(config.escape.shading.creases.flip)),
             ConfigPath::EscapeTextureOverlay => Ok(ConfigValue::Bool(config.escape.texture_overlay.enabled)),
             ConfigPath::EscapeTextureOverlayMerge => Ok(config.escape.texture_overlay.merge.into()),
             ConfigPath::EscapeTextureOverlayPower => Ok(config.escape.texture_overlay.power.into()),
@@ -2213,6 +2283,11 @@ impl ConfigManager {
             ConfigPath::EscapeShadingTextureScale => {
                 Ok(config.escape.shading.texture_scale.into())
             }
+            ConfigPath::EscapeShadingTextureWhere => Ok(ConfigValue::String(
+                config.escape.shading.texture_where.as_str().to_string(),
+            )),
+            ConfigPath::EscapeShadingTextureAngle => Ok(config.escape.shading.texture_angle.into()),
+            ConfigPath::EscapeShadingTextureAngleSoft => Ok(config.escape.shading.texture_angle_soft.into()),
             ConfigPath::EscapeShadingHighlightBlend => Ok(ConfigValue::String(
                 crate::config::escape::shading_blend_to_str(config.escape.shading.highlight_blend)
                     .to_string(),
@@ -2232,10 +2307,7 @@ impl ConfigManager {
             // mirroring how effect params behave here.
             ConfigPath::EscapeFormulaParam { param } => Ok(config
                 .escape
-                .formula_params
-                .get(param)
-                .copied()
-                .or_else(|| Self::escape_param_default(config, EscapeParamOf::Formula, param))
+                .formula_param(param, |p| Self::escape_param_default(config, EscapeParamOf::Formula, p))
                 .unwrap_or(0.0)
                 .into()),
             ConfigPath::EscapeColoringParam { param } => Ok(config
@@ -2270,6 +2342,20 @@ impl ConfigManager {
                 .or_else(|| Self::escape_param_default(config, EscapeParamOf::Lens, param))
                 .unwrap_or(0.0)
                 .into()),
+            ConfigPath::EscapeTransforms => Ok(ConfigValue::String(crate::config::escape::transforms_to_wire(&config.escape.transforms))),
+            ConfigPath::EscapeTransformAmount { index } => {
+                Ok(config.escape.transforms.get(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.amount.into())
+            }
+            ConfigPath::EscapeTransformParam { index, param } => {
+                let t = config.escape.transforms.get(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?;
+                // An absent parameter reads as its variation's default.
+                let default = || {
+                    crate::variations::global_registry()
+                        .get(&t.variation)
+                        .and_then(|v| v.parameters.iter().find(|p| p.name == *param).map(|p| p.default_value))
+                };
+                Ok(t.params.get(param).copied().or_else(default).unwrap_or(0.0).into())
+            }
 
             // Transforms
             ConfigPath::TransformCount => {
@@ -2672,6 +2758,9 @@ impl ConfigManager {
             ConfigPath::SolidGloss => Ok(config.solid_shading.gloss.into()),
             ConfigPath::SolidRoughness => Ok(config.solid_shading.roughness.into()),
             ConfigPath::SolidGlow => Ok(config.solid_shading.glow.into()),
+            ConfigPath::SolidMetallic => Ok(config.solid_shading.metallic.into()),
+            ConfigPath::SolidReflectance => Ok(config.solid_shading.reflectance.into()),
+            ConfigPath::SolidRayTolerance => Ok(config.solid_shading.ray_tolerance.into()),
             ConfigPath::SolidDiffuse => Ok(config.solid_shading.diffuse.into()),
             ConfigPath::SolidSpecular => Ok(config.solid_shading.specular.into()),
             ConfigPath::SolidShininess => Ok(config.solid_shading.shininess.into()),
@@ -2683,8 +2772,16 @@ impl ConfigManager {
                 let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
                 Ok(l.enabled.into())
             }
+            ConfigPath::SolidLightsFollowCamera => Ok(config.solid_shading.lights_follow_camera.into()),
             ConfigPath::SolidLightParam { index, param } => {
                 let l = config.solid_shading.lights.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                // A point's position is f64, as the world it sits in.
+                match param.as_str() {
+                    "x" => return Ok(ConfigValue::Double(l.position[0])),
+                    "y" => return Ok(ConfigValue::Double(l.position[1])),
+                    "z" => return Ok(ConfigValue::Double(l.position[2])),
+                    _ => {}
+                }
                 let v = match param.as_str() {
                     "azimuth" => l.azimuth,
                     "elevation" => l.elevation,
@@ -2692,6 +2789,10 @@ impl ConfigManager {
                     "color_r" => l.color[0],
                     "color_g" => l.color[1],
                     "color_b" => l.color[2],
+                    "kind" => l.kind.index() as f32,
+                    "reach" => l.reach,
+                    "cone" => l.cone,
+                    "lift" => l.lift,
                     _ => return Err(ConfigError::InvalidIndex),
                 };
                 Ok(v.into())
@@ -2771,6 +2872,8 @@ impl ConfigManager {
             | ConfigPath::SystemFlySprintMultiplier
             | ConfigPath::SystemFlyInvertY
             | ConfigPath::SystemFlyCameraMode
+            | ConfigPath::SystemFlyCollisions
+            | ConfigPath::SystemFlyProximity
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemPngStripMetadata
@@ -3095,6 +3198,19 @@ impl ConfigManager {
             ConfigPath::EscapeFormula => {
                 self.current.escape.formula = value.try_into()?;
             }
+            ConfigPath::EscapeCustomFormula => {
+                let s: String = value.try_into()?;
+                self.current.escape.custom_formula = custom_source_from_json(&s)?;
+            }
+            ConfigPath::EscapeCustomColoring => {
+                let s: String = value.try_into()?;
+                self.current.escape.custom_coloring = custom_source_from_json(&s)?;
+            }
+            ConfigPath::FlameCustomVariations => {
+                let s: String = value.try_into()?;
+                self.current.flame.custom_variations =
+                    if s.is_empty() { Vec::new() } else { serde_json::from_str(&s).map_err(|_| ConfigError::TypeMismatch)? };
+            }
             ConfigPath::EscapeJulia => {
                 self.current.escape.julia = value.try_into()?;
             }
@@ -3346,6 +3462,30 @@ impl ConfigManager {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.samples = v.clamp(1, 65_536);
             }
+            ConfigPath::SimPathNoiseThreshold => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.noise_threshold = if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentMap => {
+                let v: String = value.try_into()?;
+                self.current.sim.terrain.path.environment_map = v;
+            }
+            ConfigPath::SimPathEnvironmentRotation => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment_rotation = if v.is_finite() { v.rem_euclid(360.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentHorizon => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment_horizon = if v.is_finite() { v.clamp(-80.0, 80.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentStars => {
+                let v: f32 = value.try_into()?;
+                self.current.sim.terrain.path.environment_stars = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
+            }
+            ConfigPath::SimPathEnvironmentBackdrop => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.environment_backdrop = v;
+            }
             ConfigPath::SimPathBounces => {
                 let v: u32 = value.try_into()?;
                 self.current.sim.terrain.path.bounces = v.min(16);
@@ -3381,6 +3521,10 @@ impl ConfigManager {
             ConfigPath::SimPathSky => {
                 let v: bool = value.try_into()?;
                 self.current.sim.terrain.path.sky_gradient = v;
+            }
+            ConfigPath::SimPathStudio => {
+                let v: bool = value.try_into()?;
+                self.current.sim.terrain.path.studio = v;
             }
             ConfigPath::SimPathZenith => {
                 let v: [f32; 3] = value.try_into()?;
@@ -3758,6 +3902,10 @@ impl ConfigManager {
                 let v: u32 = value.try_into()?;
                 self.current.escape.path.samples = v.clamp(1, 65_536);
             }
+            ConfigPath::EscapePathNoiseThreshold => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.noise_threshold = if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 };
+            }
             ConfigPath::EscapePathBounces => {
                 let v: u32 = value.try_into()?;
                 self.current.escape.path.bounces = v.min(16);
@@ -3793,6 +3941,30 @@ impl ConfigManager {
             ConfigPath::EscapePathSky => {
                 let v: bool = value.try_into()?;
                 self.current.escape.path.sky_gradient = v;
+            }
+            ConfigPath::EscapePathStudio => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.studio = v;
+            }
+            ConfigPath::EscapePathEnvironmentMap => {
+                let v: String = value.try_into()?;
+                self.current.escape.path.environment_map = v;
+            }
+            ConfigPath::EscapePathEnvironmentRotation => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment_rotation = if v.is_finite() { v.rem_euclid(360.0) } else { 0.0 };
+            }
+            ConfigPath::EscapePathEnvironmentHorizon => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment_horizon = if v.is_finite() { v.clamp(-80.0, 80.0) } else { 0.0 };
+            }
+            ConfigPath::EscapePathEnvironmentStars => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.path.environment_stars = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
+            }
+            ConfigPath::EscapePathEnvironmentBackdrop => {
+                let v: bool = value.try_into()?;
+                self.current.escape.path.environment_backdrop = v;
             }
             ConfigPath::EscapePathZenith => {
                 let v: [f32; 3] = value.try_into()?;
@@ -3868,6 +4040,20 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.escape.shading.texture_scale = v.clamp(0.25, 64.0);
             }
+            ConfigPath::EscapeShadingTextureWhere => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.texture_where = crate::config::escape::TextureWhere::from_name(&v);
+            }
+            ConfigPath::EscapeShadingTextureAngle => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::TEXTURE_ANGLE_RANGE;
+                self.current.escape.shading.texture_angle = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingTextureAngleSoft => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::TEXTURE_ANGLE_SOFT_RANGE;
+                self.current.escape.shading.texture_angle_soft = v.clamp(lo, hi);
+            }
             ConfigPath::EscapeShadingModel => {
                 let v: String = value.try_into()?;
                 self.current.escape.shading.model = crate::config::escape::ReliefModel::from_name(&v);
@@ -3910,6 +4096,18 @@ impl ConfigManager {
                 let v: u32 = value.try_into()?;
                 let (lo, hi) = crate::config::escape::EMBOSS_SECTIONS_RANGE;
                 self.current.escape.shading.emboss_sections = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingCreasePattern => {
+                let v: String = value.try_into()?;
+                self.current.escape.shading.creases.pattern = crate::config::escape::CreasePattern::from_name(&v);
+            }
+            ConfigPath::EscapeShadingCreaseDecay => {
+                let v: f32 = value.try_into()?;
+                let (lo, hi) = crate::config::escape::CREASE_DECAY_RANGE;
+                self.current.escape.shading.creases.decay = v.clamp(lo, hi);
+            }
+            ConfigPath::EscapeShadingCreaseFlip => {
+                self.current.escape.shading.creases.flip = value.try_into()?;
             }
             ConfigPath::EscapeTextureOverlay => {
                 self.current.escape.texture_overlay.enabled = value.try_into()?;
@@ -3965,7 +4163,11 @@ impl ConfigManager {
             }
             ConfigPath::EscapeFormulaParam { param } => {
                 let v: f32 = value.try_into()?;
-                self.current.escape.formula_params.insert(param.clone(), v);
+                // `name.r` / `name.angle` write a complex parameter's parts.
+                let writes = self.current.escape.formula_param_writes(param, v, |p| Self::escape_param_default(&self.current, EscapeParamOf::Formula, p));
+                for (k, x) in writes {
+                    self.current.escape.formula_params.insert(k, x);
+                }
             }
             ConfigPath::EscapeColoringParam { param } => {
                 let v: f32 = value.try_into()?;
@@ -3997,6 +4199,23 @@ impl ConfigManager {
             ConfigPath::EscapeLensParam { param } => {
                 let v: f32 = value.try_into()?;
                 self.current.escape.lens_params.insert(param.clone(), v);
+            }
+            ConfigPath::EscapeTransforms => {
+                let s: String = value.try_into()?;
+                self.current.escape.transforms = crate::config::escape::transforms_from_wire(&s).map_err(|_| ConfigError::TypeMismatch)?;
+                // The list changed shape: tracks on a transformation
+                // follow it by id (`Animation::rebind_targets`), on an
+                // edit, an undo and a redo alike.
+                self.pending_actions.structural_changed = true;
+            }
+            ConfigPath::EscapeTransformAmount { index } => {
+                let v: f32 = value.try_into()?;
+                let lim = crate::config::escape::LENS_AMOUNT_LIMIT;
+                self.current.escape.transforms.get_mut(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.amount = v.clamp(-lim, lim);
+            }
+            ConfigPath::EscapeTransformParam { index, param } => {
+                let v: f32 = value.try_into()?;
+                self.current.escape.transforms.get_mut(*index).ok_or_else(|| ConfigError::InvalidPath(format!("no transformation {index}")))?.params.insert(param.clone(), v);
             }
 
             // Transforms
@@ -4414,6 +4633,18 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.solid_shading.roughness = if v.is_finite() { v.clamp(0.02, 1.0) } else { 0.5 };
             }
+            ConfigPath::SolidMetallic => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.metallic = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+            }
+            ConfigPath::SolidRayTolerance => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.ray_tolerance = if v.is_finite() { v.clamp(1.0, 100.0) } else { 1.0 };
+            }
+            ConfigPath::SolidReflectance => {
+                let v: f32 = value.try_into()?;
+                self.current.solid_shading.reflectance = if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 };
+            }
             ConfigPath::SolidGlow => {
                 let v: f32 = value.try_into()?;
                 self.current.solid_shading.glow = if v.is_finite() { v.clamp(0.0, 16.0) } else { 0.0 };
@@ -4436,18 +4667,25 @@ impl ConfigManager {
                 let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
                 l.enabled = value.try_into()?;
             }
+            ConfigPath::SolidLightsFollowCamera => {
+                self.current.solid_shading.lights_follow_camera = value.try_into()?;
+            }
             ConfigPath::SolidLightParam { index, param } => {
                 let l = self.current.solid_shading.lights.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
-                let v: f32 = value.try_into()?;
-                match param.as_str() {
-                    "azimuth" => l.azimuth = v,
-                    "elevation" => l.elevation = v,
-                    "intensity" => l.intensity = v,
-                    "color_r" => l.color[0] = v,
-                    "color_g" => l.color[1] = v,
-                    "color_b" => l.color[2] = v,
-                    _ => return Err(ConfigError::InvalidIndex),
+                if let Some(axis) = ["x", "y", "z"].iter().position(|a| a == param) {
+                    // f64 from a Double (the panel, Place at camera), f32
+                    // from a Float (a track's keyframe).
+                    l.position[axis] = match value {
+                        ConfigValue::Double(d) => d,
+                        other => {
+                            let v: f32 = other.try_into()?;
+                            v as f64
+                        }
+                    };
+                    return Ok(());
                 }
+                let v: f32 = value.try_into()?;
+                crate::config::fractal_config::set_light_param(l, param, v).ok_or(ConfigError::InvalidIndex)?;
             }
             ConfigPath::FarDensityFadeStart => {
                 self.current.far_density_fade_start = value.try_into()?;
@@ -4573,6 +4811,8 @@ impl ConfigManager {
             | ConfigPath::SystemFlySprintMultiplier
             | ConfigPath::SystemFlyInvertY
             | ConfigPath::SystemFlyCameraMode
+            | ConfigPath::SystemFlyCollisions
+            | ConfigPath::SystemFlyProximity
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemPngStripMetadata
@@ -5339,6 +5579,20 @@ impl TryFrom<ConfigValue> for ToneCurve {
     }
 }
 
+/// A custom source as a config path's value: its JSON, or empty for
+/// none (`ConfigPath::EscapeCustomFormula` / `EscapeCustomColoring`).
+pub fn custom_source_json(src: &Option<crate::config::escape::CustomSource>) -> String {
+    src.as_ref().and_then(|s| serde_json::to_string(s).ok()).unwrap_or_default()
+}
+
+/// The inverse of [`custom_source_json`].
+pub fn custom_source_from_json(s: &str) -> Result<Option<crate::config::escape::CustomSource>, ConfigError> {
+    if s.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(s).map(Some).map_err(|_| ConfigError::TypeMismatch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5402,6 +5656,79 @@ mod tests {
         assert_eq!(m.config().sim, before);
         m.redo().unwrap();
         assert_eq!(m.config().sim.model, "hodgepodge");
+    }
+
+    /// A batch reads each old value as the changes before it left the
+    /// config: a colouring's parameter against the NEW colouring's
+    /// default, so a preset's `mask_channel` 0 is not dropped as a no-op
+    /// against the old colouring's 0 (field-reported: Percolation's
+    /// presets showed 1 until applied twice).
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_batch_reads_each_old_value_after_the_changes_before_it() {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.sim.coloring = "channel".into();
+        c.sim.coloring_params.clear();
+        let mut m = ConfigManager::new(c);
+        m.update_batch(
+            vec![
+                (ConfigPath::SimColoring, ConfigValue::String("label".into())),
+                (ConfigPath::SimColoringParam { param: "mask_channel".into() }, ConfigValue::Float(0.0)),
+            ],
+            "preset".into(),
+        )
+        .unwrap();
+        assert_eq!(m.config().sim.coloring, "label");
+        let v = m.get_value(&ConfigPath::SimColoringParam { param: "mask_channel".into() }).unwrap();
+        assert!(v.approx_eq(&ConfigValue::Float(0.0)), "{v:?}");
+    }
+
+    /// A batch that picks a model is undone whole, as a single pick is:
+    /// the old model's tuned parameters come back with its name.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn undoing_a_batched_model_pick_restores_its_tuning() {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.sim.model = "gray_scott".into();
+        c.sim.model_params.insert("feed".into(), 0.031);
+        c.sim.dt = 0.7;
+        let before = c.sim.clone();
+        let mut m = ConfigManager::new(c);
+        m.update_batch(
+            vec![
+                (ConfigPath::SimModel, ConfigValue::String("ising".into())),
+                (ConfigPath::SimInitKind, ConfigValue::String("noise".into())),
+                (ConfigPath::SimInitAmplitude, ConfigValue::Float(1.0)),
+            ],
+            "model".into(),
+        )
+        .unwrap();
+        assert_eq!(m.config().sim.init, crate::config::sim::SimInit::Noise { amplitude: 1.0 });
+        m.undo().unwrap();
+        assert_eq!(m.config().sim, before);
+        m.redo().unwrap();
+        assert_eq!(m.config().sim.model, "ising");
+        assert_eq!(m.config().sim.init, crate::config::sim::SimInit::Noise { amplitude: 1.0 });
+    }
+
+    /// A batch whose change fails leaves the config as it was, and no undo
+    /// point.
+    #[test]
+    fn a_failed_batch_changes_nothing() {
+        let mut m = ConfigManager::new(FractalConfig::default());
+        let before = m.config().clone();
+        let r = m.update_batch(
+            vec![
+                (ConfigPath::Exposure, ConfigValue::Float(3.5)),
+                (ConfigPath::SimSteps, ConfigValue::String("not a number".into())),
+            ],
+            "bad".into(),
+        );
+        assert!(r.is_err());
+        assert_eq!(m.config().exposure, before.exposure);
+        assert!(m.undo().is_err(), "no undo point");
     }
 
     #[test]

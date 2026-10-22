@@ -1,0 +1,115 @@
+; Formula examples, in Ultra Fractal's language.
+; Pick an entry in the Formula Editor and press "Use as formula".
+; A float parameter named `bailout` is the panel's Bailout control.
+
+Mandelbrot {
+; z <- z^2 + c, with c the pixel. Its switch: section names the Julia
+; below, so the Julia toggle runs that, its seed the Julia constant.
+init:
+  z = @start
+loop:
+  z = sqr(z) + #pixel
+bailout:
+  |z| < @bailout
+default:
+  title = "Mandelbrot"
+  center = (-0.5, 0)
+  complex param start
+    caption = "Starting z"
+    default = (0, 0)
+    hint = "Where each orbit begins; zero is the classic set."
+  endparam
+  float param bailout
+    caption = "Bailout"
+    default = 10000
+  endparam
+switch:
+  type = "Julia"
+  seed = #pixel
+  bailout = bailout
+}
+
+Julia {
+; The same map with c fixed and the orbit starting at the pixel.
+init:
+  z = #pixel
+loop:
+  z = sqr(z) + @seed
+bailout:
+  |z| < @bailout
+default:
+  title = "Julia"
+  center = (0, 0)
+  complex param seed
+    caption = "Seed"
+    default = (-0.8, 0.156)
+  endparam
+  float param bailout
+    default = 10000
+  endparam
+}
+
+Magnet2 {
+; Magnet type II, the second recurrence of the magnetic model: escapes
+; to infinity or settles at 1.
+init:
+  z = 0
+  c = #pixel
+loop:
+  zold = z
+  z = sqr((z^3 + 3*(c - 1)*z + (c - 1)*(c - 2)) / (3*z^2 + 3*(c - 2)*z + (c - 1)*(c - 2) + 1))
+bailout:
+  |z| < @bailout && |z - zold| > 1e-12
+default:
+  title = "Magnet II"
+  center = (1.2, 0)
+  float param bailout
+    default = 100
+  endparam
+}
+
+FnMandel {
+; A user function where the square was: choose it in the panel.
+init:
+  z = 0
+loop:
+  z = @fn(z) + #pixel
+bailout:
+  |z| < @bailout
+default:
+  title = "Function Mandelbrot"
+  func fn
+    caption = "Function"
+    default = sqr()
+  endfunc
+  float param bailout
+    default = 64
+  endparam
+}
+
+SineMandel {
+; A Mandelbrot whose orbit a sine bends every step.
+init:
+  z = 0
+loop:
+  z = sqr(z) + #pixel
+  z = z + @mix * sin(z)
+bailout:
+  |z| < @bailout
+default:
+  title = "Sine Mandelbrot"
+  center = (-0.55, 0)
+  float param mix
+    caption = "Sine mix"
+    default = 0.25
+    min = 0
+    max = 1
+  endparam
+  float param bailout
+    default = 64
+  endparam
+}
+
+; Fractint's shape works in a .ufm file too: an empty label starts the
+; loop, and the loop's last statement is the bailout test.
+CubicFractint { z = pixel : z = z*z*z + pixel, |z| <= 4 }
