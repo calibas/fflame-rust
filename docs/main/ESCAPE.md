@@ -585,7 +585,10 @@ fn escaped(s, p) {
   The distance a solid gives is its own to keep honest: a variation
   stretches space. Example: `assets/formulas/solid-inverted-menger.rhai`
   (the sponge inverted in the unit sphere by `spherical3D`, its distance
-  multiplied back by the inversion's stretch). Gates:
+  `d` taken back through the inversion as `d |pos|^2 / (1 + d |pos|)`,
+  the least a step is shrunk; the stretch at the point alone, `d |pos|^2`,
+  overstepped by up to twice and cut parts of the solid away at some
+  angles: `the_inverted_menger_example_never_oversteps`). Gates:
   `a_solid_calls_a_built_in_variation` (the language),
   `a_solid_calls_built_in_variations` (the GPU: `linear3D` the identity
   to the pixel, `spherical3D` its Rhai twin to the pixel, a parameter

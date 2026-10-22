@@ -2227,6 +2227,89 @@ mod tests {
         assert_eq!(apart(&bound, &number), 0, "the solid's parameter reaches the variation");
     }
 
+    /// The inverted Menger example's distance never oversteps: marched at
+    /// half its steps, it finds no surface nearer than the example's but
+    /// at the edges a smaller step grazes. Its distance once took the
+    /// inversion's stretch at the point alone (`d |pos|^2`), up to twice
+    /// the bound, and the march stepped through the lobes: at this view,
+    /// the one reported, the middle lobe's face was gone.
+    #[test]
+    fn the_inverted_menger_example_never_oversteps() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        use crate::config::escape::{CustomDialect, CustomSource};
+        const W: u32 = 192;
+        const H: u32 = 108;
+        let (_pt, palette) = white_palette(&device, &queue);
+        let base = include_str!("../../../assets/formulas/solid-inverted-menger.rhai").replace("\r\n", "\n");
+        // Its distance, the file's last function, at half: `let full =
+        // <its body>; 0.5 * full`.
+        let (head, body) = base.split_once("fn distance(s, p) {\n").expect("the example's distance");
+        let body = body.trim_end().strip_suffix('}').expect("the distance ends the file").trim();
+        let halved = format!("{head}fn distance(s, p) {{\n    let full = {body};\n    0.5 * full\n}}\n");
+        // The hit distance along each pixel's ray, 0 for a miss.
+        let depths = |src: &str| -> Vec<f32> {
+            let source = CustomSource {
+                dialect: CustomDialect::Rhai,
+                entry: "Inverted Menger (Rhai)".to_string(),
+                source: src.to_string(),
+                variations: Vec::new(),
+            };
+            let mut c = FractalConfig::default();
+            c.render_mode = RenderMode::Escape;
+            c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Solid, &source);
+            if let Err(e) = crate::escape::custom::compile_solid(&source, &c.escape.formula) {
+                panic!("the example compiles: {}", e.iter().map(|d| d.render(&source.source)).collect::<Vec<_>>().join("; "));
+            }
+            c.escape.custom_formula = Some(source);
+            c.escape.solid_tier = RenderTier::Lit;
+            c.escape.formula_params.insert("levels".to_string(), 18.0);
+            c.escape.cam_target_x = "0.44006078".to_string();
+            c.escape.cam_target_y = "1.02677173".to_string();
+            c.escape.cam_target_z = "-0.10488772".to_string();
+            c.escape.cam_yaw = 0.3541975;
+            c.escape.cam_pitch = 0.26159883;
+            c.escape.cam_fov = 1.0821041;
+            c.escape.zoom_log2 = 2.196841;
+            let mut r = renderer_for(&device, &c, W, H);
+            loop {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                let settled = r.render(&device, &queue, &mut enc, &c.escape, &palette, 1);
+                queue.submit(std::iter::once(enc.finish()));
+                if settled {
+                    break;
+                }
+            }
+            let geom = read_buffer(&device, &queue, &r.ifs_geom_buffer, (W * H * 16) as u64);
+            r.destroy();
+            geom.chunks_exact(16).map(|g| f32::from_le_bytes([g[12], g[13], g[14], g[15]])).collect()
+        };
+        let shown = depths(&base);
+        let careful = depths(&halved);
+        // A surface the careful march finds that the example shows at no
+        // pixel within two of it, at that depth or nearer: a part of the
+        // solid the example stepped through.
+        let near = |x: i64, y: i64, t: f32| {
+            x >= 0 && y >= 0 && x < W as i64 && y < H as i64 && {
+                let s = shown[(y * W as i64 + x) as usize];
+                s > 0.0 && s < t * 1.05
+            }
+        };
+        let lost = (0..(W * H) as i64)
+            .filter(|&i| {
+                let t = careful[i as usize];
+                let (x, y) = (i % W as i64, i / W as i64);
+                t > 0.0 && !(-2..=2).any(|dy| (-2..=2).any(|dx| near(x + dx, y + dy, t)))
+            })
+            .count();
+        let covered = shown.iter().filter(|t| **t > 0.0).count();
+        println!("  the example covers {covered} of {}; at half its steps, {lost} pixels nearer past its edges", W * H);
+        assert!(covered > (W * H / 4) as usize, "the view shows the solid: {covered}");
+        assert!(lost <= (W * H / 1000) as usize, "the example's march stepped through the solid at {lost} pixels");
+    }
+
     /// A solid's Orbit transformations (3d-look-and-tools P5) move what
     /// its colouring measures and nothing else, in every solid's walk:
     /// under the orbit trap, an Orbit `linear3D` is the picture to the
