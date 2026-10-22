@@ -95,7 +95,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             display_name: "Mitosis",
             params: &[("feed", 0.0367), ("kill", 0.0649)],
             steps: 10000,
-            init: None,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
+            init: Some(crate::config::sim::SimInit::Blobs { count: 6, radius: 24 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
@@ -106,7 +108,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             display_name: "Coral",
             params: &[("feed", 0.0545), ("kill", 0.062)],
             steps: 10000,
-            init: None,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
+            init: Some(crate::config::sim::SimInit::Blobs { count: 6, radius: 24 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
@@ -117,7 +121,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             display_name: "Maze",
             params: &[("feed", 0.030), ("kill", 0.057)],
             steps: 10000,
-            init: None,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
+            init: Some(crate::config::sim::SimInit::Blobs { count: 6, radius: 24 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
@@ -128,7 +134,9 @@ pub static GRAY_SCOTT: ModelDef = ModelDef {
             display_name: "Worms",
             params: &[("feed", 0.046), ("kill", 0.065)],
             steps: 10000,
-            init: None,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
+            init: Some(crate::config::sim::SimInit::Blobs { count: 6, radius: 24 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 1.0), ("scale", 3.0), ("offset", 0.0), ("wrap", 0.0)],
             matte: None,
@@ -304,6 +312,8 @@ pub static FITZHUGH_NAGUMO: ModelDef = ModelDef {
         // Tips curling by 1,000 steps, fully formed by 4,000 (measured;
         // an earlier note said 1,000 without looking at that frame).
         steps: 4000,
+        dt: None,
+        boundary: crate::config::sim::SimBoundary::Periodic,
         init: Some(crate::config::sim::SimInit::BrokenWave),
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 0.4), ("offset", 0.5), ("wrap", 0.0)],
@@ -463,6 +473,8 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             // Measured settle point, 256^2 (a first run reported 4,960
             // through a settle-window bug).
             steps: 1180,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.05 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3), ("offset", 0.0), ("wrap", 0.0)],
@@ -481,6 +493,8 @@ pub static BRUSSELATOR: ModelDef = ModelDef {
             // Never stills, so this is a state rather than a settle
             // point: the field is developed and keeps moving.
             steps: 2000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.05 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3), ("offset", 0.0), ("wrap", 0.0)],
@@ -620,6 +634,8 @@ pub static SCHNAKENBERG: ModelDef = ModelDef {
         // Measured settle point; an independent run in the wavelength
         // sweep gave 5,100 from a different seed.
         steps: 4900,
+        dt: None,
+        boundary: crate::config::sim::SimBoundary::Periodic,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.02 }),
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.0), ("wrap", 0.0)],
@@ -814,6 +830,8 @@ pub static HODGEPODGE: ModelDef = ModelDef {
             // busy texture. At 25 they open out into scrolls with
             // visible spiral cores; at 10 the field is mush.
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.005), ("offset", 0.0), ("wrap", 0.0)],
@@ -831,6 +849,8 @@ pub static HODGEPODGE: ModelDef = ModelDef {
                 ("variant", 1.0),
             ],
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.005), ("offset", 0.0), ("wrap", 0.0)],
@@ -1008,6 +1028,8 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
                 ("neighbourhood", 0.0),
             ],
             steps: 300,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.0714286), ("offset", 0.0), ("wrap", 0.0)],
@@ -1024,6 +1046,8 @@ pub static CYCLIC_CA: ModelDef = ModelDef {
                 ("neighbourhood", 1.0),
             ],
             steps: 60,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3333333), ("offset", 0.0), ("wrap", 0.0)],
@@ -1157,6 +1181,8 @@ pub static SPATIAL_RPS: ModelDef = ModelDef {
         display_name: "Three species",
         params: &[("species", 3.0), ("p_select", 1.0), ("p_reproduce", 1.0)],
         steps: 400,
+        dt: None,
+        boundary: crate::config::sim::SimBoundary::Periodic,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 0.25), ("offset", 0.0), ("wrap", 0.0)],
@@ -1288,6 +1314,8 @@ pub static ISING: ModelDef = ModelDef {
             params: &[("temperature", 2.269), ("field", 0.0), ("coupling", 1.0)],
             // 600 sweeps; a step is a half-sweep.
             steps: 1200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -1300,6 +1328,8 @@ pub static ISING: ModelDef = ModelDef {
             params: &[("temperature", 1.5), ("field", 0.0), ("coupling", 1.0)],
             // Measured to need ~436 sweeps before it looks like anything.
             steps: 1000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -1405,6 +1435,8 @@ pub static EDEN: ModelDef = ModelDef {
             params: &[("p_grow", 0.3)],
             // Measured: 256 steps to reach the edge of a 256 grid.
             steps: 250,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 250.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1426,6 +1458,8 @@ pub static EDEN: ModelDef = ModelDef {
             // the top and the run ends on step one. The front cases
             // want Zero.
             steps: 500,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Line),
             coloring: Some("age"),
             coloring_params: &[("window", 500.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1537,6 +1571,8 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
             display_name: "Ballistic",
             params: &[("p_drop", 0.5), ("sideways", 1.0)],
             steps: 360,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 360.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1554,6 +1590,8 @@ pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
             display_name: "Random deposition",
             params: &[("p_drop", 0.5), ("sideways", 0.0)],
             steps: 450,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 450.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1663,6 +1701,8 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             display_name: "Rule 90 (Sierpinski)",
             params: &[("rule", 90.0)],
             steps: 256,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -1674,6 +1714,8 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             display_name: "Rule 30 (chaotic)",
             params: &[("rule", 30.0)],
             steps: 256,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -1685,6 +1727,8 @@ pub static WOLFRAM_ECA: ModelDef = ModelDef {
             display_name: "Rule 110 (universal)",
             params: &[("rule", 110.0)],
             steps: 256,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -1797,6 +1841,8 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
             display_name: "Rule 1 (plate)",
             params: &[("rule_mask", 2.0)],
             steps: 125,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 125.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1814,6 +1860,8 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
             display_name: "Rule 13",
             params: &[("rule_mask", 10.0)],
             steps: 125,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 125.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1831,6 +1879,8 @@ pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
             display_name: "Rule 134",
             params: &[("rule_mask", 26.0)],
             steps: 125,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 125.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -1954,9 +2004,11 @@ pub static PERCOLATION: ModelDef = ModelDef {
             display_name: "Critical (p_c)",
             params: &[("p_open", 0.592746)],
             steps: 400,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("label"),
-            coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
+            coloring_params: &[("channel", 0.0), ("mask_channel", 0.0)],
             matte: None,
             warp: None,
         },
@@ -1965,9 +2017,11 @@ pub static PERCOLATION: ModelDef = ModelDef {
             display_name: "Below threshold",
             params: &[("p_open", 0.45)],
             steps: 400,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("label"),
-            coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
+            coloring_params: &[("channel", 0.0), ("mask_channel", 0.0)],
             matte: None,
             warp: None,
         },
@@ -1976,9 +2030,11 @@ pub static PERCOLATION: ModelDef = ModelDef {
             display_name: "Above threshold",
             params: &[("p_open", 0.75)],
             steps: 400,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("label"),
-            coloring_params: &[("channel", 0.0), ("mask_channel", 1.0)],
+            coloring_params: &[("channel", 0.0), ("mask_channel", 0.0)],
             matte: None,
             warp: None,
         },
@@ -2150,6 +2206,8 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
             params: &[("wavelength", 16.0), ("drive", 2.0), ("asymmetry", 0.0)],
             // Measured: settles at 4,600 steps at 256^2.
             steps: 5000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.5), ("wrap", 0.0)],
@@ -2163,6 +2221,8 @@ pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
             // Measured: settles at 5,900; skew -1.02 against the
             // labyrinth's +0.00, which is the asymmetry showing up.
             steps: 6000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.5), ("wrap", 0.0)],
@@ -2328,6 +2388,8 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
             // choice of how coarse. Measured at 256^2: domain size 8.5
             // cells at 1,000 steps, 13.2 at 5,000, 18.6 at 20,000.
             steps: 20000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -2339,6 +2401,8 @@ pub static CAHN_HILLIARD: ModelDef = ModelDef {
             display_name: "Droplets",
             params: &[("mobility", 1.0), ("gamma", 0.5), ("mean", 0.4)],
             steps: 20000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -2532,6 +2596,8 @@ pub static OREGONATOR: ModelDef = ModelDef {
         // Measured: each seed's front is well formed and the seeds
         // have begun to collide by 15,000 steps at dt = 1e-4.
         steps: 15000,
+        dt: None,
+        boundary: crate::config::sim::SimBoundary::Periodic,
         init: Some(crate::config::sim::SimInit::Blobs { count: 5, radius: 5 }),
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 1.2), ("offset", 0.0), ("wrap", 0.0)],
@@ -2719,6 +2785,8 @@ pub static KOBAYASHI: ModelDef = ModelDef {
             // Measured: reaches the edge of a 300 grid by ~6,000 steps
             // at dt = 1e-4, so 4,000 leaves the arms clear of the wall.
             steps: 4000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Blob { radius: 4 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -2736,6 +2804,8 @@ pub static KOBAYASHI: ModelDef = ModelDef {
                 ("theta0", 0.0),
             ],
             steps: 4000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Blob { radius: 4 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -2965,6 +3035,8 @@ pub static LENIA: ModelDef = ModelDef {
         params: &[("radius", 13.0), ("mu", 0.15), ("sigma", 0.015)],
         // Measured: filaments by 200, still moving at 600.
         steps: 600,
+        dt: None,
+        boundary: crate::config::sim::SimBoundary::Periodic,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -3090,7 +3162,7 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
     display_name: "SmoothLife",
     description: "Conway's Life on a continuous domain: the same birth and survival rules \
                   read as smooth thresholds, giving gliders and rolling labyrinths.",
-    features: &[ModelFeature::NeverStills],
+    features: &[ModelFeature::NeverStills, ModelFeature::ExactDiscs],
     parameters: &[
         SimParamDef {
             name: "inner_radius",
@@ -3160,7 +3232,67 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
                       windows.",
             choices: &[],
         },
+        // Appended after the paper's seven, so a saved run's parameters
+        // keep their slots; each default is the model as it was.
+        SimParamDef {
+            name: "ratio",
+            display_name: "Outer / inner radius",
+            default: 3.0,
+            min: 1.5,
+            max: 5.0,
+            tooltip: "How much wider the neighbourhood ring reaches than the inner disc. \
+                      The paper's is 3; other rule sets use 2.3 to 4. The outer radius \
+                      stops at 30 cells.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "stepping",
+            display_name: "Time stepping",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How a step moves a cell toward the rule. Relax: f + dt·(s − f), which \
+                      at dt 1 is Rafler's discrete SmoothLife, f = s. Increment: \
+                      f + dt·(2s − 1), the paper's continuous scheme and SmoothLifeL's. \
+                      A rule set's gliders exist in one scheme and not the other.",
+            choices: &["Relax", "Increment"],
+        },
+        SimParamDef {
+            name: "blend",
+            display_name: "Window blend",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "How a cell's own filling chooses between birth and survival. \
+                      Thresholds: the window's edges slide from birth's to survival's \
+                      (the 2011 paper). Windows: the birth and survival windows are each \
+                      computed and mixed (SmoothLifeL).",
+            choices: &["Thresholds (2011)", "Windows (SmoothLifeL)"],
+        },
+        SimParamDef {
+            name: "fill",
+            display_name: "Initial density",
+            default: 0.5,
+            min: 0.05,
+            max: 0.95,
+            tooltip: "How much of the field the seed fills.",
+            choices: &[],
+        },
+        SimParamDef {
+            name: "seed_shape",
+            display_name: "Seed",
+            default: 0.0,
+            min: 0.0,
+            max: 1.0,
+            tooltip: "What the run starts from. Patches: squares the size of the inner disc, \
+                      each filled at the density. Blobs: smooth noise a little wider than the \
+                      outer ring, thresholded at the density with a soft edge, as Reusser's \
+                      notebook seeds -- the structures the rules' gliders grow out of.",
+            choices: &["Patches", "Blobs"],
+        },
     ],
+    // Rafler's own set, and two from Ricky Reusser's SmoothLife notebook
+    // (rreusser.github.io/notebooks/smooth-life), run here before shipping.
     presets: &[SimPreset {
         name: "glider",
         display_name: "Rafler's glider set",
@@ -3172,10 +3304,81 @@ pub static SMOOTHLIFE: ModelDef = ModelDef {
             ("d2", 0.445),
             ("alpha_n", 0.028),
             ("alpha_m", 0.147),
+            ("ratio", 3.0),
+            ("stepping", 0.0),
+            ("blend", 0.0),
+            ("fill", 0.3),
+            ("seed_shape", 1.0),
         ],
-        // Measured: the soup organises by ~100 steps and is a settled
-        // labyrinth by 400.
-        steps: 400,
+        // The paper's Figure 1 glider (r_a = 21, so r_i = 7): the DISCRETE
+        // form, f = s, which is relaxing at dt 1 -- in the continuous one
+        // "the same generic gliders can not be found at the same
+        // birth/death values" (Rafler), and at the old default 0.15 these
+        // settled into a still labyrinth. Measured from blobs at 0.3: a
+        // bean-shaped glider crossing a 256 grid; 0.4 is chaos, 0.5 dies.
+        steps: 200,
+        dt: Some(1.0),
+        boundary: crate::config::sim::SimBoundary::Periodic,
+        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
+        warp: None,
+    },
+    SimPreset {
+        name: "smoothlife_l",
+        display_name: "SmoothLifeL gliders",
+        // Rafler's SmoothLifeL (as Hutton and Reusser run it): the
+        // continuous scheme, f + dt(2s - 1), the windows mixed by the
+        // filling, r_a = 20.
+        params: &[
+            ("inner_radius", 6.6667),
+            ("b1", 0.257),
+            ("b2", 0.336),
+            ("d1", 0.365),
+            ("d2", 0.549),
+            ("alpha_n", 0.028),
+            ("alpha_m", 0.147),
+            ("ratio", 3.0),
+            ("stepping", 1.0),
+            ("blend", 1.0),
+            ("fill", 0.4),
+            ("seed_shape", 1.0),
+        ],
+        // Measured from blobs: gliders by 600 steps at 0.3 and 0.4; 0.5
+        // fills the field, 0.2 dies.
+        steps: 640,
+        dt: Some(0.05),
+        boundary: crate::config::sim::SimBoundary::Periodic,
+        init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
+        coloring: Some("channel"),
+        coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
+        matte: None,
+        warp: None,
+    },
+    SimPreset {
+        name: "soft_gliders",
+        display_name: "Soft gliders",
+        // Reusser's: relaxing at dt 0.115, the 2011 blend, r_a = 12.
+        params: &[
+            ("inner_radius", 4.0),
+            ("b1", 0.269),
+            ("b2", 0.340),
+            ("d1", 0.523),
+            ("d2", 0.746),
+            ("alpha_n", 0.028),
+            ("alpha_m", 0.147),
+            ("ratio", 3.0),
+            ("stepping", 0.0),
+            ("blend", 0.0),
+            ("fill", 0.5),
+            ("seed_shape", 1.0),
+        ],
+        // Measured from blobs at 0.5: round striped gliders drifting by
+        // 400 steps; 0.4 adds blobs that stay.
+        steps: 600,
+        dt: Some(0.115),
+        boundary: crate::config::sim::SimBoundary::Periodic,
         init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
         coloring: Some("channel"),
         coloring_params: &[("channel", 0.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -3192,33 +3395,54 @@ fn sim_step(s: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
     let w = 2 * r + 1;
     let taps = sim_kernel_taps();
 
-    // ONE gather, two accumulators: the disc and the annulus differ
-    // only in their weights, so reading the field twice would double
-    // the only expensive part.
     var m = 0.0;
     var n = 0.0;
-    for (var dy = -r; dy <= r; dy = dy + 1) {
-        for (var dx = -r; dx <= r; dx = dx + 1) {
-            let i = u32((dy + r) * w + (dx + r));
-            let ki = klut(i);
-            let ko = klut(taps + i);
-            if (ki > 0.0 || ko > 0.0) {
-                let v = sim_read(p + vec2<i32>(dx, dy)).x;
-                m = m + ki * v;
-                n = n + ko * v;
+    if (pyr_exact()) {
+        // By FFT (`smoothlife_discs`): the inner disc's average less the
+        // cell, then the annulus's average -- the gather's own weights.
+        m = pyr_diff_cell(0, p) + s.x;
+        n = pyr_diff_cell(1, p);
+    } else {
+        // ONE gather, two accumulators: the disc and the annulus differ
+        // only in their weights, so reading the field twice would double
+        // the only expensive part.
+        for (var dy = -r; dy <= r; dy = dy + 1) {
+            for (var dx = -r; dx <= r; dx = dx + 1) {
+                let i = u32((dy + r) * w + (dx + r));
+                let ki = klut(i);
+                let ko = klut(taps + i);
+                if (ki > 0.0 || ko > 0.0) {
+                    let v = sim_read(p + vec2<i32>(dx, dy)).x;
+                    m = m + ki * v;
+                    n = n + ko * v;
+                }
             }
         }
     }
 
     let al_m = mparam(6u);
     let al_n = mparam(5u);
-    // A cell's own filling chooses which window applies.
+    // A cell's own filling chooses between birth and survival.
     let pick = sl_sigma(m, 0.5, al_m);
-    let lo = mparam(1u) + (mparam(3u) - mparam(1u)) * pick;
-    let hi = mparam(2u) + (mparam(4u) - mparam(2u)) * pick;
-    let alive = sl_sigma(n, lo, al_n) * (1.0 - sl_sigma(n, hi, al_n));
+    var alive = 0.0;
+    if (mparam(9u) >= 0.5) {
+        // SmoothLifeL: each window, mixed by the filling.
+        let born = sl_sigma(n, mparam(1u), al_n) * (1.0 - sl_sigma(n, mparam(2u), al_n));
+        let lives = sl_sigma(n, mparam(3u), al_n) * (1.0 - sl_sigma(n, mparam(4u), al_n));
+        alive = born + (lives - born) * pick;
+    } else {
+        // The 2011 paper: the window's edges slide with the filling.
+        let lo = mparam(1u) + (mparam(3u) - mparam(1u)) * pick;
+        let hi = mparam(2u) + (mparam(4u) - mparam(2u)) * pick;
+        alive = sl_sigma(n, lo, al_n) * (1.0 - sl_sigma(n, hi, al_n));
+    }
 
-    let nf = clamp(s.x + sim_dt() * (alive - s.x), 0.0, 1.0);
+    // Relax toward the rule (dt 1: the discrete f = s), or the paper's
+    // continuous increment, f + dt(2s - 1).
+    var nf = clamp(s.x + sim_dt() * (alive - s.x), 0.0, 1.0);
+    if (mparam(8u) >= 0.5) {
+        nf = clamp(s.x + sim_dt() * (2.0 * alive - 1.0), 0.0, 1.0);
+    }
     let age = select(s.z, f32(sim_step_index()), abs(nf - s.x) > 1.0e-4);
     return vec4<f32>(nf, n, age, 0.0);
 }
@@ -3228,9 +3452,26 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
     // Patches the size of the inner disc, for the same reason Lenia
     // seeds in patches: a radius-21 gather averages per-cell noise
     // flat before the rule can act on it.
+    let fill = mparam(10u);
+    if (mparam(11u) >= 0.5) {
+        // Blobs: value noise at 1.2 outer radii, thresholded at 1 - fill
+        // over a ramp of 0.16 (Reusser's seed).
+        let ra = mparam(0u) * mparam(7u);
+        let q = vec2<f32>(p) / max(3.0, ra * 1.2);
+        let i = vec2<i32>(floor(q));
+        let f = fract(q);
+        let u = f * f * (3.0 - 2.0 * f);
+        let a = sim_rand(i, 0x61u);
+        let b = sim_rand(i + vec2<i32>(1, 0), 0x61u);
+        let c = sim_rand(i + vec2<i32>(0, 1), 0x61u);
+        let d = sim_rand(i + vec2<i32>(1, 1), 0x61u);
+        let v = mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        let t = 1.0 - fill;
+        return vec4<f32>(smoothstep(t - 0.08, t + 0.08, v), 0.0, 0.0, 0.0);
+    }
     let blk = max(i32(round(mparam(0u))), 1);
     let cell = vec2<i32>(p.x / blk, p.y / blk);
-    return vec4<f32>(select(0.0, 1.0, sim_rand(cell, 0x5fu) < 0.5), 0.0, 0.0, 0.0);
+    return vec4<f32>(select(0.0, 1.0, sim_rand(cell, 0x5fu) < fill), 0.0, 0.0, 0.0);
 }
 "#,
     default_steps: 400,
@@ -3242,8 +3483,10 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
         // Two blocks: the inner disc, then the annulus out to 3 r_i.
         // Both anti-aliased over a one-cell band, which is what keeps
         // a smooth rule from inheriting the lattice's square symmetry.
+        // The outer radius stays inside the kernel's reach, its
+        // anti-aliased rim included.
         let ri = p.get("inner_radius").clamp(1.0, 10.0);
-        let ra = ri * 3.0;
+        let ra = (ri * p.get("ratio").clamp(1.5, 5.0)).min(MAX_KERNEL_RADIUS as f32 - 1.5);
         let r = ((ra.ceil() as u32) + 1).clamp(1, MAX_KERNEL_RADIUS);
         let w = 2 * r as usize + 1;
         let taps = w * w;
@@ -3394,6 +3637,19 @@ pub fn mccabe_table_from_ladder(params: &std::collections::BTreeMap<String, f32>
 /// the ladder's power of two times the base, the table's radius floored
 /// at a half cell. The table's discs also lean (section 9); the
 /// ladder's are round.
+/// SmoothLife's discs for the spectral stage (`ModelFeature::ExactDiscs`):
+/// the inner disc against a disc of radius 0 -- the cell itself, so
+/// slice 0 is the disc's average less the cell -- then the annulus out
+/// to the outer radius, averaged. The radii are the kernel's, its
+/// clamps included, so the two paths read the same weights.
+pub fn smoothlife_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
+    use crate::sim::spectral::SpectralScale;
+    let get = |k: &str, d: f32| params.get(k).copied().filter(|v| v.is_finite()).unwrap_or(d);
+    let ri = get("inner_radius", 7.0).clamp(1.0, 10.0);
+    let ra = (ri * get("ratio", 3.0).clamp(1.5, 5.0)).min(MAX_KERNEL_RADIUS as f32 - 1.5);
+    vec![SpectralScale::round(ri, 0.0), SpectralScale::annulus(ra, ri)]
+}
+
 pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> Vec<crate::sim::spectral::SpectralScale> {
     use crate::sim::spectral::SpectralScale;
     let get = |name: &str| -> f32 {
@@ -3413,6 +3669,7 @@ pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> V
                     // Counter-clockwise on screen, as the app's other
                     // angles are; the grid's y runs down, so negated.
                     angle: -get(&format!("s{i}_angle")).to_radians(),
+                    annulus: false,
                 }
             } else {
                 let ra = get("base_radius") * (1u32 << i) as f32;
@@ -4229,6 +4486,8 @@ pub static MCCABE: ModelDef = ModelDef {
             // by step 20 and fully developed by 100; the field never
             // stills.
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("scale_mix"),
             coloring_params: &[("scales", 5.0), ("value_scale", 0.5)],
@@ -4253,6 +4512,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("memory", 0.0),
             ],
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -4279,6 +4540,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("layout", 0.0),
             ],
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("scale_memory"),
             coloring_params: &[("scales", 5.0), ("value_scale", 0.5), ("brightness", 0.0)],
@@ -4299,6 +4562,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("memory", 0.0),
             ],
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -4325,6 +4590,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("s4_radius", 48.0), ("s4_ratio", 2.0), ("s4_amount", 0.01), ("s4_weight", 1.0), ("s4_symmetry", 9.0),
             ],
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],
@@ -4354,6 +4621,8 @@ pub static MCCABE: ModelDef = ModelDef {
                 ("s4_radius", 45.0), ("s4_ratio", 2.0), ("s4_amount", 0.01), ("s4_weight", 1.0), ("s4_symmetry", 0.0),
             ],
             steps: 200,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("scale_memory"),
             coloring_params: &[("scales", 5.0), ("value_scale", 0.5), ("brightness", 0.0)],
@@ -4827,6 +5096,8 @@ pub static PHYSARUM: ModelDef = ModelDef {
             // Measured on the prototype: filaments by 100 steps, the
             // polygonal network by 600, and it keeps rearranging.
             steps: 600,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.15), ("offset", 0.0), ("wrap", 0.0)],
@@ -4848,6 +5119,8 @@ pub static PHYSARUM: ModelDef = ModelDef {
                 ("decay", 0.1),
             ],
             steps: 600,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 0.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.15), ("offset", 0.0), ("wrap", 0.0)],
@@ -5112,6 +5385,8 @@ pub static DLA: ModelDef = ModelDef {
         // radius of 230, which is a full aggregate still clear of the
         // walls.
         steps: 1200,
+        dt: None,
+        boundary: crate::config::sim::SimBoundary::Clamp,
         init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("age"),
             coloring_params: &[("window", 1200.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -5336,6 +5611,8 @@ pub static SANDPILE: ModelDef = ModelDef {
             // shader: 2^16 grains stabilise in exactly 12,837 rounds
             // and span 188 cells, which fits a 256 grid with margin.
             steps: 12_837,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.3333333), ("offset", 0.0), ("wrap", 0.0)],
@@ -5351,6 +5628,8 @@ pub static SANDPILE: ModelDef = ModelDef {
             // The 8-neighbour graph holds up to 7 grains per site, so
             // the same mass settles denser, smaller and sooner.
             steps: 4_652,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.1428571), ("offset", 0.0), ("wrap", 0.0)],
@@ -5526,6 +5805,8 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
             // a few hundred more; measured, it finishes well inside
             // this and extra steps then change nothing.
             steps: 2_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Line),
             coloring: Some("age"),
             coloring_params: &[("window", 2000.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -5546,6 +5827,8 @@ pub static INVASION_PERCOLATION: ModelDef = ModelDef {
             // fill in.
             params: &[("dp", 0.0005), ("p_max", 0.635)],
             steps: 2_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Zero,
             init: Some(crate::config::sim::SimInit::Line),
             coloring: Some("age"),
             coloring_params: &[("window", 2000.0), ("invert", 1.0), ("wrap", 0.0)],
@@ -5825,6 +6108,8 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // case tends to -- "should resemble a fern once it grows
             // large enough".
             steps: 24_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -5851,6 +6136,8 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // Measured at 512^2: 22% of the grid, six faceted arms with
             // the internal markings the figure is described by.
             steps: 12_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -5877,6 +6164,8 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             // "more than 100,000 updates" at its own scale -- and
             // 40,000 is where the plate ends are unmistakable here.
             steps: 40_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -5901,6 +6190,8 @@ pub static SNOWFAKE: ModelDef = ModelDef {
             ],
             // Measured at 512^2: 31% of the grid, with side branching.
             steps: 20_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -6231,6 +6522,8 @@ pub static DBM: ModelDef = ModelDef {
             // One site per step, so this is the particle count. The
             // paper's figure 3 is "about 5000 steps".
             steps: 5_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -6251,6 +6544,8 @@ pub static DBM: ModelDef = ModelDef {
             params: &[("eta", 0.0), ("relax", 10.0), ("surface_tension", 0.0),
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             steps: 5_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -6270,6 +6565,8 @@ pub static DBM: ModelDef = ModelDef {
             params: &[("eta", 2.0), ("relax", 10.0), ("surface_tension", 0.0),
                      ("selection", 0.0), ("rate", 0.05), ("electrode", 0.0)],
             steps: 5_000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Center),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -6598,6 +6895,8 @@ pub static FINGERING: ModelDef = ModelDef {
             // Measured at 256^2: 800 steps carries the front about 40% of
             // the way with the fingers' shielding well developed.
             steps: 800,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Line),
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -6614,6 +6913,8 @@ pub static FINGERING: ModelDef = ModelDef {
                 ("disturbance", 0.05), ("relax", 20.0),
             ],
             steps: 600,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Clamp,
             init: Some(crate::config::sim::SimInit::Line),
             coloring: Some("channel"),
             coloring_params: &[("channel", 2.0), ("scale", 1.0), ("offset", 0.0), ("wrap", 0.0)],
@@ -7097,6 +7398,8 @@ pub static LATTICE4: ModelDef = ModelDef {
             display_name: "Chasing ring",
             params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0), ("memory", 0.0), ("leak", 0.05)],
             steps: 2000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
             coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)],
@@ -7108,6 +7411,8 @@ pub static LATTICE4: ModelDef = ModelDef {
             display_name: "Four independent patterns",
             params: &[("kaa", 1.0), ("kab", 0.0), ("kac", 0.0), ("kad", 0.0), ("kba", 0.0), ("kbb", 1.0), ("kbc", 0.0), ("kbd", 0.0), ("kca", 0.0), ("kcb", 0.0), ("kcc", 1.0), ("kcd", 0.0), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0), ("memory", 0.0), ("leak", 0.05)],
             steps: 2000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
             coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)],
@@ -7119,6 +7424,8 @@ pub static LATTICE4: ModelDef = ModelDef {
             display_name: "Cells",
             params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 1.5), ("kad", 0.2), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", -1.5), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -0.2), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 6.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 1.5), ("memory", 1.0), ("leak", 0.05)],
             steps: 3000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
             coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 1.0)],
@@ -7130,6 +7437,8 @@ pub static LATTICE4: ModelDef = ModelDef {
             display_name: "Cells, inflating",
             params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 1.5), ("kad", 0.2), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", -1.5), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -0.2), ("kda", 0.0), ("kdb", 0.0), ("kdc", 0.0), ("kdd", 1.0), ("radius", 6.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 1.5), ("memory", 1.0), ("leak", 0.05)],
             steps: 8000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
             coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 1.0)],
@@ -7151,6 +7460,8 @@ pub static LATTICE4: ModelDef = ModelDef {
             display_name: "Inflating space",
             params: &[("kaa", 1.0), ("kab", -1.5), ("kac", 0.0), ("kad", 1.5), ("kba", 1.5), ("kbb", 1.0), ("kbc", -1.5), ("kbd", 0.0), ("kca", 0.0), ("kcb", 1.5), ("kcc", 1.0), ("kcd", -1.5), ("kda", -1.5), ("kdb", 0.0), ("kdc", 1.5), ("kdd", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0), ("memory", 0.0), ("leak", 0.05)],
             steps: 6000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("species"),
             coloring_params: &[("scale", 1.0), ("rotate", 0.0), ("fields", 0.0)],
@@ -7418,6 +7729,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // settled.
             params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.15)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
@@ -7430,6 +7743,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Paper Fig. 3(e).
             params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.09)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
@@ -7442,6 +7757,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Paper Fig. 3(c)-(d).
             params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.03)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
@@ -7454,6 +7771,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Paper Fig. 3(h).
             params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 1.0), ("q", 0.27)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
@@ -7466,6 +7785,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Paper Fig. 2(a).
             params: &[("a", 4.5), ("b", 11.0), ("du1", 1.85), ("dv1", 16.66), ("du2", 25.741), ("dv2", 196.0), ("coupling", 1.0), ("q", 0.1)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.75), ("wrap", 0.0)],
@@ -7478,6 +7799,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Paper Fig. 2(c).
             params: &[("a", 4.5), ("b", 11.0), ("du1", 7.5), ("dv1", 32.5), ("du2", 27.5), ("dv2", 121.5), ("coupling", 1.0), ("q", 0.01)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.75), ("wrap", 0.0)],
@@ -7490,6 +7813,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Yang et al. 2002 Fig. 3(a) parameters as this paper gives them.
             params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 0.0), ("q", 0.1)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
@@ -7502,6 +7827,8 @@ pub static BRUSSELATOR2: ModelDef = ModelDef {
             // Yang et al. 2002 Fig. 3(b).
             params: &[("a", 3.0), ("b", 9.0), ("du1", 1.85), ("dv1", 5.66), ("du2", 50.6), ("dv2", 186.0), ("coupling", 0.0), ("q", 1.0)],
             steps: 200000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", -1.0), ("wrap", 0.0)],
@@ -7703,6 +8030,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.017), ("dw", 1.25), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.2961), ("offset", -3.1622), ("wrap", 0.0)],
@@ -7716,6 +8045,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.015), ("dw", 0.65), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.2616), ("offset", -2.3020), ("wrap", 0.0)],
@@ -7729,6 +8060,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.023), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.1271), ("offset", -1.0928), ("wrap", 0.0)],
@@ -7742,6 +8075,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.003), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.0315), ("offset", -0.3621), ("wrap", 0.0)],
@@ -7755,6 +8090,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.01), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.0655), ("offset", -0.5557), ("wrap", 0.0)],
@@ -7768,6 +8105,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.032), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.1471), ("offset", -1.2853), ("wrap", 0.0)],
@@ -7781,6 +8120,8 @@ pub static ROSSLER: ModelDef = ModelDef {
             // colouring spans that.
             params: &[("a", 0.2), ("b", 0.2), ("c", 4.5), ("duv", 0.03), ("dw", 2.5), ("spacing", 0.25), ("forget", 0.0)],
             steps: 2000000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 3.0), ("scale", 0.1385), ("offset", -1.2031), ("wrap", 0.0)],
@@ -8017,6 +8358,8 @@ pub static TURING: ModelDef = ModelDef {
             display_name: "One pattern",
             params: &[("self", 1.0), ("radius", 4.0), ("ratio", 2.0), ("amount", 0.05), ("noise", 0.01), ("gain", 4.0), ("decay", 1.0), ("quadratic", 0.0)],
             steps: 2000,
+            dt: None,
+            boundary: crate::config::sim::SimBoundary::Periodic,
             init: Some(crate::config::sim::SimInit::Noise { amplitude: 1.0 }),
             coloring: Some("channel"),
             coloring_params: &[("channel", 0.0), ("scale", 0.5), ("offset", 0.5), ("wrap", 0.0)],

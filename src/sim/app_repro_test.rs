@@ -3334,8 +3334,8 @@ fn spectral_differences_match_a_direct_convolution() {
         SpectralScale::round(2.0, 4.0),
         SpectralScale::round(3.5, 7.0),
         SpectralScale::round(6.0, 12.0),
-        SpectralScale { ra: 2.5, rb: 5.0, stretch: 2.5, angle: 30f32.to_radians() },
-        SpectralScale { ra: 4.0, rb: 8.0, stretch: 4.0, angle: 100f32.to_radians() },
+        SpectralScale { ra: 2.5, rb: 5.0, stretch: 2.5, angle: 30f32.to_radians(), annulus: false },
+        SpectralScale { ra: 4.0, rb: 8.0, stretch: 4.0, angle: 100f32.to_radians(), annulus: false },
     ];
     // Slices from 2, to check the stage writes where it is told.
     let (diffs, diffs_view) = crate::sim::spectral::SpectralAverages::create_diffs(&device, w, h, 8);

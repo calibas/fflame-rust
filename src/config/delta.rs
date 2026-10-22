@@ -260,12 +260,21 @@ pub enum ConfigPath {
     SolidGloss,
     SolidRoughness,
     SolidGlow,
+    /// The material's metallic share (3d-look-and-tools P4).
+    SolidMetallic,
+    /// How much of its colour the material reflects.
+    SolidReflectance,
+    /// A solid's rays leaving a surface: their hit tolerance, in
+    /// multiples of the finest.
+    SolidRayTolerance,
     SsaoStrength,
     SsaoRadius,
     NormalSmoothing,
     GapFill,
     /// Enable/disable one of the 4 shade-pass lights.
     SolidLightEnabled { index: usize },
+    /// Whether a solid's directional lights turn with the camera.
+    SolidLightsFollowCamera,
     /// Parameter of one shade-pass light: "azimuth", "elevation",
     /// "intensity", "color_r", "color_g", "color_b".
     SolidLightParam { index: usize, param: String },
@@ -273,6 +282,9 @@ pub enum ConfigPath {
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
     Xaos { src: usize, dst: usize },
+    /// The variations the user wrote that the flame uses
+    /// (`config.flame.custom_variations`), as JSON: their sources.
+    FlameCustomVariations,
     /// Solo transform index (0-indexed). When Some(n), only transform n is active,
     /// all others effectively have weight 0. Used for debugging.
     /// Matches Apophysis XML: soloxform="N"
@@ -320,6 +332,11 @@ pub enum ConfigPath {
     // reset/accumulate distinction to encode per path.
     /// Formula registry name (`config.escape.formula`).
     EscapeFormula,
+    /// The formula's source, when it is compiled from one
+    /// (`config.escape.custom_formula`), as JSON; empty for none.
+    EscapeCustomFormula,
+    /// The colouring's source, the same way.
+    EscapeCustomColoring,
     /// Julia toggle (parameter plane vs dynamical plane).
     EscapeJulia,
     /// Julia seed, real part.
@@ -483,6 +500,15 @@ pub enum ConfigPath {
     /// grid widths.
     SimTerrainTargetLift,
     SimPathSamples,
+    /// Adaptive sampling's noise threshold (path-tracing-research V2).
+    SimPathNoiseThreshold,
+    /// The simulation terrain's HDRI sky (as `EscapePathEnvironmentMap`
+    /// and the rest).
+    SimPathEnvironmentMap,
+    SimPathEnvironmentRotation,
+    SimPathEnvironmentHorizon,
+    SimPathEnvironmentStars,
+    SimPathEnvironmentBackdrop,
     SimPathBounces,
     SimPathEnvironment,
     SimPathGloss,
@@ -493,6 +519,8 @@ pub enum ConfigPath {
     SimPathDenoise,
     SimPathSky,
     SimPathZenith,
+    /// The studio environment (3d-look-and-tools P4).
+    SimPathStudio,
     /// Colouring layer `index`: one of its colouring's parameters, its
     /// opacity, its matte's cutoff and softness. All animatable; the
     /// layer's other fields are snapshot edits.
@@ -550,6 +578,8 @@ pub enum ConfigPath {
     EscapeTerrainTier,
     EscapeSolidTier,
     EscapePathSamples,
+    /// Adaptive sampling's noise threshold (path-tracing-research V2).
+    EscapePathNoiseThreshold,
     EscapePathBounces,
     EscapePathEnvironment,
     EscapePathGloss,
@@ -560,6 +590,16 @@ pub enum ConfigPath {
     EscapePathDenoise,
     EscapePathSky,
     EscapePathZenith,
+    /// The studio environment (3d-look-and-tools P4).
+    EscapePathStudio,
+    /// An HDRI sky (docs/archive/projects/hdri-environment.md): its id, its turn
+    /// about the up axis, whether the camera sees it.
+    EscapePathEnvironmentMap,
+    EscapePathEnvironmentRotation,
+    EscapePathEnvironmentHorizon,
+    /// Procedural stars over the sky, their brightness (0, none).
+    EscapePathEnvironmentStars,
+    EscapePathEnvironmentBackdrop,
     EscapeTerrainInterior,
     /// How a count or a relief rises to its height, and the land
     /// inverted (docs/archive/terrain/terrain-height.md, H2).
@@ -583,6 +623,11 @@ pub enum ConfigPath {
     EscapeShadingTextureKind,
     EscapeShadingTextureStrength,
     EscapeShadingTextureScale,
+    /// Where the surface texture applies by slope, and the slope it turns
+    /// at, ± its softness (docs/projects/surface-textures.md).
+    EscapeShadingTextureWhere,
+    EscapeShadingTextureAngle,
+    EscapeShadingTextureAngleSoft,
     // Relief lighting (survey item 7): model, elevation, ambient, the
     // slope stencil, and a curve on the height.
     EscapeShadingModel,
@@ -595,6 +640,10 @@ pub enum ConfigPath {
     EscapeShadingOffset,
     EscapeShadingEmboss,
     EscapeShadingEmbossSections,
+    /// A folding formula's paper (`CreaseSettings`).
+    EscapeShadingCreasePattern,
+    EscapeShadingCreaseDecay,
+    EscapeShadingCreaseFlip,
     /// The texture overlay (`TextureOverlay`, Kalles Fraktaler's).
     EscapeTextureOverlay,
     EscapeTextureOverlayMerge,
@@ -623,6 +672,12 @@ pub enum ConfigPath {
     /// One parameter of the lens variation, keyed by name like
     /// `EscapeFormulaParam`.
     EscapeLensParam { param: String },
+    /// The transformations (the KIFS plan, C4), as JSON: a structural
+    /// edit -- add, remove, move, a stage or a variation -- is one step.
+    EscapeTransforms,
+    /// A transformation's amount, and one of its variation's parameters.
+    EscapeTransformAmount { index: usize },
+    EscapeTransformParam { index: usize, param: String },
 
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
@@ -637,6 +692,9 @@ pub enum ConfigPath {
     SystemFlySprintMultiplier,
     SystemFlyInvertY,
     SystemFlyCameraMode,
+    /// Fly mode's collisions and proximity speed (3d-look-and-tools P6).
+    SystemFlyCollisions,
+    SystemFlyProximity,
     SystemExportWidth,
     SystemExportHeight,
     SystemPngStripMetadata,
@@ -1111,6 +1169,8 @@ impl Display for ConfigPath {
 
             // Escape-time
             ConfigPath::EscapeFormula => write!(f, "Escape Formula"),
+            ConfigPath::EscapeCustomFormula => write!(f, "Escape Formula Source"),
+            ConfigPath::EscapeCustomColoring => write!(f, "Escape Coloring Source"),
             ConfigPath::EscapeJulia => write!(f, "Julia Mode"),
             ConfigPath::EscapeJuliaRe => write!(f, "Julia Seed Re"),
             ConfigPath::EscapeJuliaIm => write!(f, "Julia Seed Im"),
@@ -1194,6 +1254,12 @@ impl Display for ConfigPath {
             ConfigPath::SimTerrainTargetY => write!(f, "Simulation Terrain Target Y"),
             ConfigPath::SimTerrainTargetLift => write!(f, "Simulation Terrain Target Lift"),
             ConfigPath::SimPathSamples => write!(f, "Simulation Path Samples"),
+            ConfigPath::SimPathNoiseThreshold => write!(f, "Simulation Noise Threshold"),
+            ConfigPath::SimPathEnvironmentMap => write!(f, "Simulation HDRI Sky"),
+            ConfigPath::SimPathEnvironmentRotation => write!(f, "Simulation Sky Rotation"),
+            ConfigPath::SimPathEnvironmentHorizon => write!(f, "Simulation Sky Horizon"),
+            ConfigPath::SimPathEnvironmentStars => write!(f, "Simulation Stars"),
+            ConfigPath::SimPathEnvironmentBackdrop => write!(f, "Simulation Sky as Backdrop"),
             ConfigPath::SimPathBounces => write!(f, "Simulation Path Bounces"),
             ConfigPath::SimPathEnvironment => write!(f, "Simulation Sky Light"),
             ConfigPath::SimPathGloss => write!(f, "Simulation Gloss"),
@@ -1203,6 +1269,7 @@ impl Display for ConfigPath {
             ConfigPath::SimPathFocus => write!(f, "Simulation Focus"),
             ConfigPath::SimPathDenoise => write!(f, "Simulation Denoise"),
             ConfigPath::SimPathSky => write!(f, "Simulation Gradient Sky"),
+            ConfigPath::SimPathStudio => write!(f, "Simulation Studio"),
             ConfigPath::SimPathZenith => write!(f, "Simulation Zenith"),
             ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {index} {param}"),
             ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {index} Opacity"),
@@ -1246,6 +1313,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeTerrainTier => write!(f, "Terrain Rendering"),
             ConfigPath::EscapeSolidTier => write!(f, "Solid Rendering Tier"),
             ConfigPath::EscapePathSamples => write!(f, "Path Samples"),
+            ConfigPath::EscapePathNoiseThreshold => write!(f, "Noise Threshold"),
             ConfigPath::EscapePathBounces => write!(f, "Path Bounces"),
             ConfigPath::EscapePathEnvironment => write!(f, "Sky Light"),
             ConfigPath::EscapePathGloss => write!(f, "Gloss"),
@@ -1255,6 +1323,12 @@ impl Display for ConfigPath {
             ConfigPath::EscapePathFocus => write!(f, "Focus"),
             ConfigPath::EscapePathDenoise => write!(f, "Denoise"),
             ConfigPath::EscapePathSky => write!(f, "Gradient Sky"),
+            ConfigPath::EscapePathStudio => write!(f, "Studio"),
+            ConfigPath::EscapePathEnvironmentMap => write!(f, "HDRI Sky"),
+            ConfigPath::EscapePathEnvironmentRotation => write!(f, "Sky Rotation"),
+            ConfigPath::EscapePathEnvironmentHorizon => write!(f, "Sky Horizon"),
+            ConfigPath::EscapePathEnvironmentStars => write!(f, "Stars"),
+            ConfigPath::EscapePathEnvironmentBackdrop => write!(f, "Sky as Backdrop"),
             ConfigPath::EscapePathZenith => write!(f, "Zenith"),
             ConfigPath::EscapeTerrainInterior => write!(f, "Terrain Interior"),
             ConfigPath::EscapeTerrainCurve => write!(f, "Terrain Curve"),
@@ -1274,6 +1348,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingTextureKind => write!(f, "Relief Texture"),
             ConfigPath::EscapeShadingTextureStrength => write!(f, "Relief Texture Strength"),
             ConfigPath::EscapeShadingTextureScale => write!(f, "Relief Texture Scale"),
+            ConfigPath::EscapeShadingTextureWhere => write!(f, "Texture Where"),
+            ConfigPath::EscapeShadingTextureAngle => write!(f, "Texture Slope Angle"),
+            ConfigPath::EscapeShadingTextureAngleSoft => write!(f, "Texture Slope Softness"),
             ConfigPath::EscapeShadingModel => write!(f, "Relief Lighting Model"),
             ConfigPath::EscapeShadingElevation => write!(f, "Relief Light Elevation"),
             ConfigPath::EscapeShadingAmbient => write!(f, "Relief Ambient"),
@@ -1284,6 +1361,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeShadingOffset => write!(f, "Relief Offset"),
             ConfigPath::EscapeShadingEmboss => write!(f, "Relief Emboss Type"),
             ConfigPath::EscapeShadingEmbossSections => write!(f, "Relief Emboss Sections"),
+            ConfigPath::EscapeShadingCreasePattern => write!(f, "Crease Pattern"),
+            ConfigPath::EscapeShadingCreaseDecay => write!(f, "Crease Decay"),
+            ConfigPath::EscapeShadingCreaseFlip => write!(f, "Crease Flip"),
             ConfigPath::EscapeTextureOverlay => write!(f, "Texture Overlay"),
             ConfigPath::EscapeTextureOverlayMerge => write!(f, "Texture Overlay Merge"),
             ConfigPath::EscapeTextureOverlayPower => write!(f, "Texture Overlay Power"),
@@ -1300,6 +1380,9 @@ impl Display for ConfigPath {
             ConfigPath::EscapeLens => write!(f, "Lens"),
             ConfigPath::EscapeLensAmount => write!(f, "Lens Amount"),
             ConfigPath::EscapeLensParam { param } => write!(f, "Lens → {param}"),
+            ConfigPath::EscapeTransforms => write!(f, "Transformations"),
+            ConfigPath::EscapeTransformAmount { index } => write!(f, "Transformation {} Amount", index + 1),
+            ConfigPath::EscapeTransformParam { index, param } => write!(f, "Transformation {} → {param}", index + 1),
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -1317,17 +1400,22 @@ impl Display for ConfigPath {
             ConfigPath::SolidGloss => write!(f, "Gloss"),
             ConfigPath::SolidRoughness => write!(f, "Roughness"),
             ConfigPath::SolidGlow => write!(f, "Glow"),
+            ConfigPath::SolidMetallic => write!(f, "Metallic"),
+            ConfigPath::SolidReflectance => write!(f, "Reflectance"),
+            ConfigPath::SolidRayTolerance => write!(f, "Ray Tolerance"),
             ConfigPath::SsaoStrength => write!(f, "SSAO Strength"),
             ConfigPath::SsaoRadius => write!(f, "SSAO Radius"),
             ConfigPath::NormalSmoothing => write!(f, "Normal Smoothing"),
             ConfigPath::GapFill => write!(f, "Gap Fill"),
             ConfigPath::SolidLightEnabled { index } => write!(f, "Light {} Enabled", index + 1),
+            ConfigPath::SolidLightsFollowCamera => write!(f, "Lights Follow Camera"),
             ConfigPath::SolidLightParam { index, param } => write!(f, "Light {} {}", index + 1, param),
             ConfigPath::FarDensityFadeStart => write!(f, "Far Density Fade Start"),
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
             }
             ConfigPath::SoloTransform => write!(f, "Solo Transform"),
+            ConfigPath::FlameCustomVariations => write!(f, "Custom Variations"),
 
             // Post-symmetry
             ConfigPath::PostSymmetryType => write!(f, "Symmetry Type"),
@@ -1376,6 +1464,8 @@ impl Display for ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => write!(f, "System: Fly Move Speed"),
             ConfigPath::SystemFlySprintMultiplier => write!(f, "System: Fly Sprint Multiplier"),
             ConfigPath::SystemFlyInvertY => write!(f, "System: Fly Invert Y"),
+            ConfigPath::SystemFlyCollisions => write!(f, "System: Fly Collisions"),
+            ConfigPath::SystemFlyProximity => write!(f, "System: Fly Proximity Speed"),
             ConfigPath::SystemFlyCameraMode => write!(f, "System: Fly Camera Mode"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
@@ -1516,6 +1606,8 @@ impl ConfigPath {
 
             // Escape-time
             ConfigPath::EscapeFormula => I18nKey::simple("history.param.escape_formula"),
+            ConfigPath::EscapeCustomFormula => I18nKey::simple("history.param.escape_custom_formula"),
+            ConfigPath::EscapeCustomColoring => I18nKey::simple("history.param.escape_custom_coloring"),
             ConfigPath::EscapeJulia => I18nKey::simple("history.param.escape_julia"),
             ConfigPath::EscapeJuliaRe => I18nKey::simple("history.param.escape_julia_re"),
             ConfigPath::EscapeJuliaIm => I18nKey::simple("history.param.escape_julia_im"),
@@ -1617,6 +1709,12 @@ impl ConfigPath {
             ConfigPath::SimTerrainTargetY => I18nKey::simple("history.param.sim_terrain_target_y"),
             ConfigPath::SimTerrainTargetLift => I18nKey::simple("history.param.sim_terrain_target_lift"),
             ConfigPath::SimPathSamples => I18nKey::simple("history.param.sim_path_samples"),
+            ConfigPath::SimPathNoiseThreshold => I18nKey::simple("history.param.sim_path_noise_threshold"),
+            ConfigPath::SimPathEnvironmentMap => I18nKey::simple("history.param.path_environment_map"),
+            ConfigPath::SimPathEnvironmentRotation => I18nKey::simple("history.param.path_environment_rotation"),
+            ConfigPath::SimPathEnvironmentHorizon => I18nKey::simple("history.param.path_environment_horizon"),
+            ConfigPath::SimPathEnvironmentStars => I18nKey::simple("history.param.path_environment_stars"),
+            ConfigPath::SimPathEnvironmentBackdrop => I18nKey::simple("history.param.path_environment_backdrop"),
             ConfigPath::SimPathBounces => I18nKey::simple("history.param.sim_path_bounces"),
             ConfigPath::SimPathEnvironment => I18nKey::simple("history.param.sim_path_environment"),
             ConfigPath::SimPathGloss => I18nKey::simple("history.param.sim_path_gloss"),
@@ -1626,6 +1724,7 @@ impl ConfigPath {
             ConfigPath::SimPathFocus => I18nKey::simple("history.param.sim_path_focus"),
             ConfigPath::SimPathDenoise => I18nKey::simple("history.param.sim_path_denoise"),
             ConfigPath::SimPathSky => I18nKey::simple("history.param.sim_path_sky"),
+            ConfigPath::SimPathStudio => I18nKey::simple("history.param.path_studio"),
             ConfigPath::SimPathZenith => I18nKey::simple("history.param.sim_path_zenith"),
             ConfigPath::SimColorLayerParam { index, param } => I18nKey::with_params(
                 "history.param.sim_color_layer_param",
@@ -1682,6 +1781,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainTier => I18nKey::simple("history.param.escape_terrain_tier"),
             ConfigPath::EscapeSolidTier => I18nKey::simple("history.param.escape_solid_tier"),
             ConfigPath::EscapePathSamples => I18nKey::simple("history.param.escape_path_samples"),
+            ConfigPath::EscapePathNoiseThreshold => I18nKey::simple("history.param.escape_path_noise_threshold"),
             ConfigPath::EscapePathBounces => I18nKey::simple("history.param.escape_path_bounces"),
             ConfigPath::EscapePathEnvironment => I18nKey::simple("history.param.escape_path_environment"),
             ConfigPath::EscapePathGloss => I18nKey::simple("history.param.escape_path_gloss"),
@@ -1691,6 +1791,12 @@ impl ConfigPath {
             ConfigPath::EscapePathFocus => I18nKey::simple("history.param.escape_path_focus"),
             ConfigPath::EscapePathDenoise => I18nKey::simple("history.param.escape_path_denoise"),
             ConfigPath::EscapePathSky => I18nKey::simple("history.param.escape_path_sky"),
+            ConfigPath::EscapePathStudio => I18nKey::simple("history.param.path_studio"),
+            ConfigPath::EscapePathEnvironmentMap => I18nKey::simple("history.param.path_environment_map"),
+            ConfigPath::EscapePathEnvironmentRotation => I18nKey::simple("history.param.path_environment_rotation"),
+            ConfigPath::EscapePathEnvironmentHorizon => I18nKey::simple("history.param.path_environment_horizon"),
+            ConfigPath::EscapePathEnvironmentStars => I18nKey::simple("history.param.path_environment_stars"),
+            ConfigPath::EscapePathEnvironmentBackdrop => I18nKey::simple("history.param.path_environment_backdrop"),
             ConfigPath::EscapePathZenith => I18nKey::simple("history.param.escape_path_zenith"),
             ConfigPath::EscapeTerrainInterior => I18nKey::simple("history.param.escape_terrain_interior"),
             ConfigPath::EscapeTerrainCurve => I18nKey::simple("history.param.escape_terrain_curve"),
@@ -1710,6 +1816,11 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => I18nKey::simple("history.param.escape_shading_texture_kind"),
             ConfigPath::EscapeShadingTextureStrength => I18nKey::simple("history.param.escape_shading_texture_strength"),
             ConfigPath::EscapeShadingTextureScale => I18nKey::simple("history.param.escape_shading_texture_scale"),
+            ConfigPath::EscapeShadingTextureWhere => I18nKey::simple("history.param.escape_shading_texture_where"),
+            ConfigPath::EscapeShadingTextureAngle => I18nKey::simple("history.param.escape_shading_texture_angle"),
+            ConfigPath::EscapeShadingTextureAngleSoft => {
+                I18nKey::simple("history.param.escape_shading_texture_angle_soft")
+            }
             ConfigPath::EscapeShadingModel => I18nKey::simple("history.param.escape_shading_model"),
             ConfigPath::EscapeShadingElevation => I18nKey::simple("history.param.escape_shading_elevation"),
             ConfigPath::EscapeShadingAmbient => I18nKey::simple("history.param.escape_shading_ambient"),
@@ -1722,6 +1833,11 @@ impl ConfigPath {
             ConfigPath::EscapeShadingEmbossSections => {
                 I18nKey::simple("history.param.escape_shading_emboss_sections")
             }
+            ConfigPath::EscapeShadingCreasePattern => {
+                I18nKey::simple("history.param.escape_shading_crease_pattern")
+            }
+            ConfigPath::EscapeShadingCreaseDecay => I18nKey::simple("history.param.escape_shading_crease_decay"),
+            ConfigPath::EscapeShadingCreaseFlip => I18nKey::simple("history.param.escape_shading_crease_flip"),
             ConfigPath::EscapeTextureOverlay => I18nKey::simple("history.param.escape_texture_overlay"),
             ConfigPath::EscapeTextureOverlayMerge => I18nKey::simple("history.param.escape_texture_overlay_merge"),
             ConfigPath::EscapeTextureOverlayPower => I18nKey::simple("history.param.escape_texture_overlay_power"),
@@ -1749,6 +1865,15 @@ impl ConfigPath {
             ConfigPath::EscapeLensParam { param } => I18nKey::with_params(
                 "history.param.escape_lens_param",
                 vec![("param", param.clone())],
+            ),
+            ConfigPath::EscapeTransforms => I18nKey::simple("history.param.escape_transforms"),
+            ConfigPath::EscapeTransformAmount { index } => I18nKey::with_params(
+                "history.param.escape_transform_amount",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::EscapeTransformParam { index, param } => I18nKey::with_params(
+                "history.param.escape_transform_param",
+                vec![("index", (index + 1).to_string()), ("param", param.clone())],
             ),
 
             // Transforms
@@ -2020,11 +2145,15 @@ impl ConfigPath {
             ConfigPath::SolidGloss => I18nKey::simple("history.param.solid_gloss"),
             ConfigPath::SolidRoughness => I18nKey::simple("history.param.solid_roughness"),
             ConfigPath::SolidGlow => I18nKey::simple("history.param.solid_glow"),
+            ConfigPath::SolidMetallic => I18nKey::simple("history.param.solid_metallic"),
+            ConfigPath::SolidReflectance => I18nKey::simple("history.param.solid_reflectance"),
+            ConfigPath::SolidRayTolerance => I18nKey::simple("history.param.solid_ray_tolerance"),
             ConfigPath::SsaoStrength => I18nKey::simple("history.param.ssao_strength"),
             ConfigPath::SsaoRadius => I18nKey::simple("history.param.ssao_radius"),
             ConfigPath::NormalSmoothing => I18nKey::simple("history.param.normal_smoothing"),
             ConfigPath::GapFill => I18nKey::simple("history.param.gap_fill"),
             ConfigPath::SolidLightEnabled { .. } => I18nKey::simple("history.param.solid_light_enabled"),
+            ConfigPath::SolidLightsFollowCamera => I18nKey::simple("history.param.solid_lights_follow_camera"),
             ConfigPath::SolidLightParam { .. } => I18nKey::simple("history.param.solid_light_param"),
             ConfigPath::FarDensityFadeStart => I18nKey::simple("history.param.far_density_fade_start"),
             ConfigPath::Xaos { src, dst } => I18nKey::with_params(
@@ -2035,6 +2164,7 @@ impl ConfigPath {
                 ],
             ),
             ConfigPath::SoloTransform => I18nKey::simple("history.param.solo_transform"),
+            ConfigPath::FlameCustomVariations => I18nKey::simple("history.param.flame_custom_variations"),
             ConfigPath::PostSymmetryType => I18nKey::simple("history.param.post_symmetry_type"),
             ConfigPath::PostSymmetryOrder => I18nKey::simple("history.param.post_symmetry_order"),
             ConfigPath::PostSymmetryCenterX => I18nKey::simple("history.param.post_symmetry_center_x"),
@@ -2097,6 +2227,8 @@ impl ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => I18nKey::simple("history.param.system_fly_move_speed"),
             ConfigPath::SystemFlySprintMultiplier => I18nKey::simple("history.param.system_fly_sprint_multiplier"),
             ConfigPath::SystemFlyInvertY => I18nKey::simple("history.param.system_fly_invert_y"),
+            ConfigPath::SystemFlyCollisions => I18nKey::simple("history.param.system_fly_collisions"),
+            ConfigPath::SystemFlyProximity => I18nKey::simple("history.param.system_fly_proximity"),
             ConfigPath::SystemFlyCameraMode => I18nKey::simple("history.param.system_fly_camera_mode"),
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
@@ -2926,12 +3058,16 @@ impl ConfigPath {
             | ConfigPath::SolidGloss
             | ConfigPath::SolidRoughness
             | ConfigPath::SolidGlow
+            | ConfigPath::SolidMetallic
+            | ConfigPath::SolidReflectance
+            | ConfigPath::SolidRayTolerance
             | ConfigPath::SsaoStrength
             | ConfigPath::SsaoRadius
             | ConfigPath::NormalSmoothing
             | ConfigPath::GapFill
             | ConfigPath::SolidShadowStrength
             | ConfigPath::SolidLightEnabled { .. }
+            | ConfigPath::SolidLightsFollowCamera
             | ConfigPath::SolidLightParam { .. } => UpdateType::ShadingOnly,
 
             // Tone mapping - re-run tonemap shader
@@ -3049,6 +3185,7 @@ impl ConfigPath {
             | ConfigPath::DepthDensityCompensation
             | ConfigPath::Xaos { .. }
             | ConfigPath::SoloTransform
+            | ConfigPath::FlameCustomVariations
             | ConfigPath::PostSymmetryType
             | ConfigPath::PostSymmetryOrder
             | ConfigPath::PostSymmetryCenterX
@@ -3071,6 +3208,8 @@ impl ConfigPath {
             // Escape-time: the fragment renderer re-renders the frame;
             // no flame-style reset/accumulate distinction exists there.
             ConfigPath::EscapeFormula
+            | ConfigPath::EscapeCustomFormula
+            | ConfigPath::EscapeCustomColoring
             | ConfigPath::EscapeJulia
             | ConfigPath::EscapeJuliaRe
             | ConfigPath::EscapeJuliaIm
@@ -3133,6 +3272,12 @@ impl ConfigPath {
             | ConfigPath::EscapePathDenoise
             | ConfigPath::EscapePathSky
             | ConfigPath::EscapePathZenith
+            | ConfigPath::EscapePathStudio
+            | ConfigPath::EscapePathEnvironmentMap
+            | ConfigPath::EscapePathEnvironmentRotation
+            | ConfigPath::EscapePathEnvironmentHorizon
+            | ConfigPath::EscapePathEnvironmentStars
+            | ConfigPath::EscapePathEnvironmentBackdrop
             | ConfigPath::EscapeTerrainInterior
             | ConfigPath::EscapeTerrainCurve
             | ConfigPath::EscapeTerrainInvert
@@ -3151,6 +3296,9 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingTextureKind
             | ConfigPath::EscapeShadingTextureStrength
             | ConfigPath::EscapeShadingTextureScale
+            | ConfigPath::EscapeShadingTextureWhere
+            | ConfigPath::EscapeShadingTextureAngle
+            | ConfigPath::EscapeShadingTextureAngleSoft
             | ConfigPath::EscapeShadingModel
             | ConfigPath::EscapeShadingElevation
             | ConfigPath::EscapeShadingAmbient
@@ -3161,6 +3309,9 @@ impl ConfigPath {
             | ConfigPath::EscapeShadingOffset
             | ConfigPath::EscapeShadingEmboss
             | ConfigPath::EscapeShadingEmbossSections
+            | ConfigPath::EscapeShadingCreasePattern
+            | ConfigPath::EscapeShadingCreaseDecay
+            | ConfigPath::EscapeShadingCreaseFlip
             | ConfigPath::EscapeTextureOverlay
             | ConfigPath::EscapeTextureOverlayMerge
             | ConfigPath::EscapeTextureOverlayPower
@@ -3176,7 +3327,10 @@ impl ConfigPath {
             | ConfigPath::EscapeLayerWeight
             | ConfigPath::EscapeLens
             | ConfigPath::EscapeLensAmount
-            | ConfigPath::EscapeLensParam { .. } => UpdateType::EscapeRerender,
+            | ConfigPath::EscapeLensParam { .. }
+            | ConfigPath::EscapeTransforms
+            | ConfigPath::EscapeTransformAmount { .. }
+            | ConfigPath::EscapeTransformParam { .. } => UpdateType::EscapeRerender,
 
             // Simulation: split by how much of the run survives. This
             // grouping is the whole reason there are three update types
@@ -3257,6 +3411,12 @@ impl ConfigPath {
             | ConfigPath::SimPathDenoise
             | ConfigPath::SimPathSky
             | ConfigPath::SimPathZenith
+            | ConfigPath::SimPathStudio
+            | ConfigPath::SimPathEnvironmentMap
+            | ConfigPath::SimPathEnvironmentRotation
+            | ConfigPath::SimPathEnvironmentHorizon
+            | ConfigPath::SimPathEnvironmentStars
+            | ConfigPath::SimPathEnvironmentBackdrop
             | ConfigPath::SimColoringParam { .. } => UpdateType::SimRerender,
 
             // A bound grid's scale change resamples the live field
@@ -3293,10 +3453,14 @@ impl ConfigPath {
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             // Disk housekeeping only: nothing on the GPU changes.
             ConfigPath::SystemOrbitCacheMb => UpdateType::None,
+            // Adaptive sampling's threshold: the path tracer reads it each
+            // frame, and a new one reflags the pixels at its next check
+            // without starting the picture over (`PathSum::retune`).
+            ConfigPath::EscapePathNoiseThreshold | ConfigPath::SimPathNoiseThreshold => UpdateType::None,
             // Read by the frame loop each frame; orbits persist, so how
             // the work is sliced changes nothing to reset.
             ConfigPath::SystemFrameGovernor | ConfigPath::SystemManualWorkgroups => UpdateType::None,
-            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode => UpdateType::ViewOnly,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode | ConfigPath::SystemFlyCollisions | ConfigPath::SystemFlyProximity => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
             // Nothing to re-render: it only changes what a future
             // export writes into the file.
@@ -3525,6 +3689,8 @@ impl ConfigPath {
 
             // Escape-time
             ConfigPath::EscapeFormula => "Escape.Formula".to_string(),
+            ConfigPath::EscapeCustomFormula => "Escape.CustomFormula".to_string(),
+            ConfigPath::EscapeCustomColoring => "Escape.CustomColoring".to_string(),
             ConfigPath::EscapeJulia => "Escape.Julia".to_string(),
             ConfigPath::EscapeJuliaRe => "Escape.JuliaRe".to_string(),
             ConfigPath::EscapeJuliaIm => "Escape.JuliaIm".to_string(),
@@ -3562,6 +3728,12 @@ impl ConfigPath {
             ConfigPath::SimTerrainTargetY => "Sim.Terrain.TargetY".to_string(),
             ConfigPath::SimTerrainTargetLift => "Sim.Terrain.TargetLift".to_string(),
             ConfigPath::SimPathSamples => "Sim.Path.Samples".to_string(),
+            ConfigPath::SimPathNoiseThreshold => "Sim.Path.NoiseThreshold".to_string(),
+            ConfigPath::SimPathEnvironmentMap => "Sim.Path.EnvironmentMap".to_string(),
+            ConfigPath::SimPathEnvironmentRotation => "Sim.Path.EnvironmentRotation".to_string(),
+            ConfigPath::SimPathEnvironmentHorizon => "Sim.Path.EnvironmentHorizon".to_string(),
+            ConfigPath::SimPathEnvironmentStars => "Sim.Path.EnvironmentStars".to_string(),
+            ConfigPath::SimPathEnvironmentBackdrop => "Sim.Path.EnvironmentBackdrop".to_string(),
             ConfigPath::SimPathBounces => "Sim.Path.Bounces".to_string(),
             ConfigPath::SimPathEnvironment => "Sim.Path.Environment".to_string(),
             ConfigPath::SimPathGloss => "Sim.Path.Gloss".to_string(),
@@ -3571,6 +3743,7 @@ impl ConfigPath {
             ConfigPath::SimPathFocus => "Sim.Path.Focus".to_string(),
             ConfigPath::SimPathDenoise => "Sim.Path.Denoise".to_string(),
             ConfigPath::SimPathSky => "Sim.Path.Sky".to_string(),
+            ConfigPath::SimPathStudio => "Sim.Path.Studio".to_string(),
             ConfigPath::SimPathZenith => "Sim.Path.Zenith".to_string(),
             ConfigPath::SimColoring => "Sim.Coloring".to_string(),
             ConfigPath::SimGridMode => "Sim.GridMode".to_string(),
@@ -3660,6 +3833,7 @@ impl ConfigPath {
             ConfigPath::EscapeTerrainTier => "Escape.Terrain.Tier".to_string(),
             ConfigPath::EscapeSolidTier => "Escape.SolidTier".to_string(),
             ConfigPath::EscapePathSamples => "Escape.Path.Samples".to_string(),
+            ConfigPath::EscapePathNoiseThreshold => "Escape.Path.NoiseThreshold".to_string(),
             ConfigPath::EscapePathBounces => "Escape.Path.Bounces".to_string(),
             ConfigPath::EscapePathEnvironment => "Escape.Path.Environment".to_string(),
             ConfigPath::EscapePathGloss => "Escape.Path.Gloss".to_string(),
@@ -3669,6 +3843,12 @@ impl ConfigPath {
             ConfigPath::EscapePathFocus => "Escape.Path.Focus".to_string(),
             ConfigPath::EscapePathDenoise => "Escape.Path.Denoise".to_string(),
             ConfigPath::EscapePathSky => "Escape.Path.Sky".to_string(),
+            ConfigPath::EscapePathStudio => "Escape.Path.Studio".to_string(),
+            ConfigPath::EscapePathEnvironmentMap => "Escape.Path.EnvironmentMap".to_string(),
+            ConfigPath::EscapePathEnvironmentRotation => "Escape.Path.EnvironmentRotation".to_string(),
+            ConfigPath::EscapePathEnvironmentHorizon => "Escape.Path.EnvironmentHorizon".to_string(),
+            ConfigPath::EscapePathEnvironmentStars => "Escape.Path.EnvironmentStars".to_string(),
+            ConfigPath::EscapePathEnvironmentBackdrop => "Escape.Path.EnvironmentBackdrop".to_string(),
             ConfigPath::EscapePathZenith => "Escape.Path.Zenith".to_string(),
             ConfigPath::EscapeTerrainInterior => "Escape.Terrain.Interior".to_string(),
             ConfigPath::EscapeTerrainCurve => "Escape.Terrain.Curve".to_string(),
@@ -3688,6 +3868,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingTextureKind => "Escape.Shading.TextureKind".to_string(),
             ConfigPath::EscapeShadingTextureStrength => "Escape.Shading.TextureStrength".to_string(),
             ConfigPath::EscapeShadingTextureScale => "Escape.Shading.TextureScale".to_string(),
+            ConfigPath::EscapeShadingTextureWhere => "Escape.Shading.TextureWhere".to_string(),
+            ConfigPath::EscapeShadingTextureAngle => "Escape.Shading.TextureAngle".to_string(),
+            ConfigPath::EscapeShadingTextureAngleSoft => "Escape.Shading.TextureAngleSoft".to_string(),
             ConfigPath::EscapeShadingModel => "Escape.Shading.Model".to_string(),
             ConfigPath::EscapeShadingElevation => "Escape.Shading.Elevation".to_string(),
             ConfigPath::EscapeShadingAmbient => "Escape.Shading.Ambient".to_string(),
@@ -3698,6 +3881,9 @@ impl ConfigPath {
             ConfigPath::EscapeShadingOffset => "Escape.Shading.Offset".to_string(),
             ConfigPath::EscapeShadingEmboss => "Escape.Shading.Emboss".to_string(),
             ConfigPath::EscapeShadingEmbossSections => "Escape.Shading.EmbossSections".to_string(),
+            ConfigPath::EscapeShadingCreasePattern => "Escape.Shading.CreasePattern".to_string(),
+            ConfigPath::EscapeShadingCreaseDecay => "Escape.Shading.CreaseDecay".to_string(),
+            ConfigPath::EscapeShadingCreaseFlip => "Escape.Shading.CreaseFlip".to_string(),
             ConfigPath::EscapeTextureOverlay => "Escape.TextureOverlay.Enabled".to_string(),
             ConfigPath::EscapeTextureOverlayMerge => "Escape.TextureOverlay.Merge".to_string(),
             ConfigPath::EscapeTextureOverlayPower => "Escape.TextureOverlay.Power".to_string(),
@@ -3714,6 +3900,9 @@ impl ConfigPath {
             ConfigPath::EscapeLens => "Escape.Lens".to_string(),
             ConfigPath::EscapeLensAmount => "Escape.LensAmount".to_string(),
             ConfigPath::EscapeLensParam { param } => format!("Escape.LensParam.{param}"),
+            ConfigPath::EscapeTransforms => "Escape.Transforms".to_string(),
+            ConfigPath::EscapeTransformAmount { index } => format!("Escape.Transform.{index}.Amount"),
+            ConfigPath::EscapeTransformParam { index, param } => format!("Escape.Transform.{index}.Param.{param}"),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::DepthDensityCompensation => "DepthDensityCompensation".to_string(),
             ConfigPath::FarDensityFade => "FarDensityFade".to_string(),
@@ -3728,15 +3917,20 @@ impl ConfigPath {
             ConfigPath::SolidGloss => "SolidGloss".to_string(),
             ConfigPath::SolidRoughness => "SolidRoughness".to_string(),
             ConfigPath::SolidGlow => "SolidGlow".to_string(),
+            ConfigPath::SolidMetallic => "SolidMetallic".to_string(),
+            ConfigPath::SolidReflectance => "SolidReflectance".to_string(),
+            ConfigPath::SolidRayTolerance => "SolidRayTolerance".to_string(),
             ConfigPath::SsaoStrength => "SsaoStrength".to_string(),
             ConfigPath::SsaoRadius => "SsaoRadius".to_string(),
             ConfigPath::NormalSmoothing => "NormalSmoothing".to_string(),
             ConfigPath::GapFill => "GapFill".to_string(),
             ConfigPath::SolidLightEnabled { index } => format!("SolidLight.{}.enabled", index),
+            ConfigPath::SolidLightsFollowCamera => "SolidLightsFollowCamera".to_string(),
             ConfigPath::SolidLightParam { index, param } => format!("SolidLight.{}.{}", index, param),
             ConfigPath::FarDensityFadeStart => "FarDensityFadeStart".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
+            ConfigPath::FlameCustomVariations => "CustomVariations".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
             ConfigPath::PostSymmetryOrder => "PostSymmetryOrder".to_string(),
             ConfigPath::PostSymmetryCenterX => "PostSymmetryCenterX".to_string(),
@@ -3767,6 +3961,8 @@ impl ConfigPath {
             ConfigPath::SystemFlyMoveSpeed => "System.FlyMoveSpeed".to_string(),
             ConfigPath::SystemFlySprintMultiplier => "System.FlySprintMultiplier".to_string(),
             ConfigPath::SystemFlyInvertY => "System.FlyInvertY".to_string(),
+            ConfigPath::SystemFlyCollisions => "System.FlyCollisions".to_string(),
+            ConfigPath::SystemFlyProximity => "System.FlyProximity".to_string(),
             ConfigPath::SystemFlyCameraMode => "System.FlyCameraMode".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
@@ -3870,12 +4066,17 @@ impl ConfigPath {
             "SolidGloss" => return Some(ConfigPath::SolidGloss),
             "SolidRoughness" => return Some(ConfigPath::SolidRoughness),
             "SolidGlow" => return Some(ConfigPath::SolidGlow),
+            "SolidMetallic" => return Some(ConfigPath::SolidMetallic),
+            "SolidLightsFollowCamera" => return Some(ConfigPath::SolidLightsFollowCamera),
+            "SolidReflectance" => return Some(ConfigPath::SolidReflectance),
+            "SolidRayTolerance" => return Some(ConfigPath::SolidRayTolerance),
             "SsaoStrength" => return Some(ConfigPath::SsaoStrength),
             "SsaoRadius" => return Some(ConfigPath::SsaoRadius),
             "NormalSmoothing" => return Some(ConfigPath::NormalSmoothing),
             "GapFill" => return Some(ConfigPath::GapFill),
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
+            "CustomVariations" => return Some(ConfigPath::FlameCustomVariations),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
             "PostSymmetryCenterX" => return Some(ConfigPath::PostSymmetryCenterX),
@@ -3891,9 +4092,38 @@ impl ConfigPath {
 
         // Escape-time paths: Escape.{field} and Escape.{kind}Param.{param}
         if let Some(rest) = s.strip_prefix("Escape.") {
+            // A parameter's name is all that follows its kind: a custom
+            // formula's complex parameter is two, `seed.re` and
+            // `seed.im`, so the name may hold dots of its own.
+            let named: [(&str, fn(String) -> ConfigPath); 4] = [
+                ("FormulaParam.", |param| ConfigPath::EscapeFormulaParam { param }),
+                ("ColoringParam.", |param| ConfigPath::EscapeColoringParam { param }),
+                ("Layer.Param.", |param| ConfigPath::EscapeLayerParam { param }),
+                ("LensParam.", |param| ConfigPath::EscapeLensParam { param }),
+            ];
+            for (kind, path) in named {
+                if let Some(param) = rest.strip_prefix(kind).filter(|p| !p.is_empty()) {
+                    return Some(path(param.to_string()));
+                }
+            }
+            // A transformation's amount or parameter (C4): its index,
+            // then what follows.
+            if let Some(t) = rest.strip_prefix("Transform.") {
+                let (index, what) = t.split_once('.')?;
+                let index: usize = index.parse().ok()?;
+                if what == "Amount" {
+                    return Some(ConfigPath::EscapeTransformAmount { index });
+                }
+                if let Some(param) = what.strip_prefix("Param.").filter(|p| !p.is_empty()) {
+                    return Some(ConfigPath::EscapeTransformParam { index, param: param.to_string() });
+                }
+                return None;
+            }
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Formula"] => return Some(ConfigPath::EscapeFormula),
+                ["CustomFormula"] => return Some(ConfigPath::EscapeCustomFormula),
+                ["CustomColoring"] => return Some(ConfigPath::EscapeCustomColoring),
                 ["Julia"] => return Some(ConfigPath::EscapeJulia),
                 ["JuliaRe"] => return Some(ConfigPath::EscapeJuliaRe),
                 ["JuliaIm"] => return Some(ConfigPath::EscapeJuliaIm),
@@ -3946,6 +4176,7 @@ impl ConfigPath {
                 ["Terrain", "Tier"] => return Some(ConfigPath::EscapeTerrainTier),
                 ["SolidTier"] => return Some(ConfigPath::EscapeSolidTier),
                 ["Path", "Samples"] => return Some(ConfigPath::EscapePathSamples),
+                ["Path", "NoiseThreshold"] => return Some(ConfigPath::EscapePathNoiseThreshold),
                 ["Path", "Bounces"] => return Some(ConfigPath::EscapePathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::EscapePathEnvironment),
                 ["Path", "Gloss"] => return Some(ConfigPath::EscapePathGloss),
@@ -3955,6 +4186,12 @@ impl ConfigPath {
                 ["Path", "Focus"] => return Some(ConfigPath::EscapePathFocus),
                 ["Path", "Denoise"] => return Some(ConfigPath::EscapePathDenoise),
                 ["Path", "Sky"] => return Some(ConfigPath::EscapePathSky),
+                ["Path", "Studio"] => return Some(ConfigPath::EscapePathStudio),
+                ["Path", "EnvironmentMap"] => return Some(ConfigPath::EscapePathEnvironmentMap),
+                ["Path", "EnvironmentRotation"] => return Some(ConfigPath::EscapePathEnvironmentRotation),
+                ["Path", "EnvironmentHorizon"] => return Some(ConfigPath::EscapePathEnvironmentHorizon),
+                ["Path", "EnvironmentStars"] => return Some(ConfigPath::EscapePathEnvironmentStars),
+                ["Path", "EnvironmentBackdrop"] => return Some(ConfigPath::EscapePathEnvironmentBackdrop),
                 ["Path", "Zenith"] => return Some(ConfigPath::EscapePathZenith),
                 ["Terrain", "Interior"] => return Some(ConfigPath::EscapeTerrainInterior),
                 ["Terrain", "Curve"] => return Some(ConfigPath::EscapeTerrainCurve),
@@ -3974,6 +4211,9 @@ impl ConfigPath {
                 ["Shading", "TextureKind"] => return Some(ConfigPath::EscapeShadingTextureKind),
                 ["Shading", "TextureStrength"] => return Some(ConfigPath::EscapeShadingTextureStrength),
                 ["Shading", "TextureScale"] => return Some(ConfigPath::EscapeShadingTextureScale),
+                ["Shading", "TextureWhere"] => return Some(ConfigPath::EscapeShadingTextureWhere),
+                ["Shading", "TextureAngle"] => return Some(ConfigPath::EscapeShadingTextureAngle),
+                ["Shading", "TextureAngleSoft"] => return Some(ConfigPath::EscapeShadingTextureAngleSoft),
                 ["Shading", "Model"] => return Some(ConfigPath::EscapeShadingModel),
                 ["Shading", "Elevation"] => return Some(ConfigPath::EscapeShadingElevation),
                 ["Shading", "Ambient"] => return Some(ConfigPath::EscapeShadingAmbient),
@@ -3984,6 +4224,9 @@ impl ConfigPath {
                 ["Shading", "Offset"] => return Some(ConfigPath::EscapeShadingOffset),
                 ["Shading", "Emboss"] => return Some(ConfigPath::EscapeShadingEmboss),
                 ["Shading", "EmbossSections"] => return Some(ConfigPath::EscapeShadingEmbossSections),
+                ["Shading", "CreasePattern"] => return Some(ConfigPath::EscapeShadingCreasePattern),
+                ["Shading", "CreaseDecay"] => return Some(ConfigPath::EscapeShadingCreaseDecay),
+                ["Shading", "CreaseFlip"] => return Some(ConfigPath::EscapeShadingCreaseFlip),
                 ["TextureOverlay", "Enabled"] => return Some(ConfigPath::EscapeTextureOverlay),
                 ["TextureOverlay", "Merge"] => return Some(ConfigPath::EscapeTextureOverlayMerge),
                 ["TextureOverlay", "Power"] => return Some(ConfigPath::EscapeTextureOverlayPower),
@@ -3991,29 +4234,28 @@ impl ConfigPath {
                 ["TextureOverlay", "Fit"] => return Some(ConfigPath::EscapeTextureOverlayFit),
                 ["TextureOverlay", "TileScale"] => return Some(ConfigPath::EscapeTextureOverlayTile),
                 ["Coloring"] => return Some(ConfigPath::EscapeColoring),
-                ["FormulaParam", param] => {
-                    return Some(ConfigPath::EscapeFormulaParam { param: param.to_string() })
-                }
-                ["ColoringParam", param] => {
-                    return Some(ConfigPath::EscapeColoringParam { param: param.to_string() })
-                }
                 ["Layer", "Coloring"] => return Some(ConfigPath::EscapeLayerColoring),
-                ["Layer", "Param", param] => {
-                    return Some(ConfigPath::EscapeLayerParam { param: param.to_string() })
-                }
                 ["Layer", "Blend"] => return Some(ConfigPath::EscapeLayerBlend),
                 ["Layer", "Weight"] => return Some(ConfigPath::EscapeLayerWeight),
                 ["Lens"] => return Some(ConfigPath::EscapeLens),
                 ["LensAmount"] => return Some(ConfigPath::EscapeLensAmount),
-                ["LensParam", param] => {
-                    return Some(ConfigPath::EscapeLensParam { param: param.to_string() })
-                }
+                ["Transforms"] => return Some(ConfigPath::EscapeTransforms),
                 _ => return None,
             }
         }
 
         // Simulation paths: Sim.{field} and Sim.{kind}Param.{param}
         if let Some(rest) = s.strip_prefix("Sim.") {
+            // As the escape parameters: the name is all that follows.
+            let named: [(&str, fn(String) -> ConfigPath); 2] = [
+                ("ModelParam.", |param| ConfigPath::SimModelParam { param }),
+                ("ColoringParam.", |param| ConfigPath::SimColoringParam { param }),
+            ];
+            for (kind, path) in named {
+                if let Some(param) = rest.strip_prefix(kind).filter(|p| !p.is_empty()) {
+                    return Some(path(param.to_string()));
+                }
+            }
             let parts: Vec<&str> = rest.split('.').collect();
             match parts.as_slice() {
                 ["Model"] => return Some(ConfigPath::SimModel),
@@ -4038,6 +4280,12 @@ impl ConfigPath {
                 ["Terrain", "TargetY"] => return Some(ConfigPath::SimTerrainTargetY),
                 ["Terrain", "TargetLift"] => return Some(ConfigPath::SimTerrainTargetLift),
                 ["Path", "Samples"] => return Some(ConfigPath::SimPathSamples),
+                ["Path", "NoiseThreshold"] => return Some(ConfigPath::SimPathNoiseThreshold),
+                ["Path", "EnvironmentMap"] => return Some(ConfigPath::SimPathEnvironmentMap),
+                ["Path", "EnvironmentRotation"] => return Some(ConfigPath::SimPathEnvironmentRotation),
+                ["Path", "EnvironmentHorizon"] => return Some(ConfigPath::SimPathEnvironmentHorizon),
+                ["Path", "EnvironmentStars"] => return Some(ConfigPath::SimPathEnvironmentStars),
+                ["Path", "EnvironmentBackdrop"] => return Some(ConfigPath::SimPathEnvironmentBackdrop),
                 ["Path", "Bounces"] => return Some(ConfigPath::SimPathBounces),
                 ["Path", "Environment"] => return Some(ConfigPath::SimPathEnvironment),
                 ["Path", "Gloss"] => return Some(ConfigPath::SimPathGloss),
@@ -4047,6 +4295,7 @@ impl ConfigPath {
                 ["Path", "Focus"] => return Some(ConfigPath::SimPathFocus),
                 ["Path", "Denoise"] => return Some(ConfigPath::SimPathDenoise),
                 ["Path", "Sky"] => return Some(ConfigPath::SimPathSky),
+                ["Path", "Studio"] => return Some(ConfigPath::SimPathStudio),
                 ["Path", "Zenith"] => return Some(ConfigPath::SimPathZenith),
                 ["Coloring"] => return Some(ConfigPath::SimColoring),
                 ["GridMode"] => return Some(ConfigPath::SimGridMode),
@@ -4084,9 +4333,6 @@ impl ConfigPath {
                 ["Upscale"] => return Some(ConfigPath::SimUpscale),
                 ["Downscale"] => return Some(ConfigPath::SimDownscale),
                 ["Fit"] => return Some(ConfigPath::SimFit),
-                ["ModelParam", param] => {
-                    return Some(ConfigPath::SimModelParam { param: param.to_string() })
-                }
                 ["Layer", layer, "Model"] => {
                     return Some(ConfigPath::SimLayerModel { layer: layer.parse().ok()? })
                 }
@@ -4125,9 +4371,6 @@ impl ConfigPath {
                         "Channels" => Some(ConfigPath::SimCouplingChannels { index }),
                         _ => None,
                     };
-                }
-                ["ColoringParam", param] => {
-                    return Some(ConfigPath::SimColoringParam { param: param.to_string() })
                 }
                 _ => return None,
             }
@@ -4326,6 +4569,8 @@ impl ConfigPath {
                 "FlyMoveSpeed" => return Some(ConfigPath::SystemFlyMoveSpeed),
                 "FlySprintMultiplier" => return Some(ConfigPath::SystemFlySprintMultiplier),
                 "FlyInvertY" => return Some(ConfigPath::SystemFlyInvertY),
+                "FlyCollisions" => return Some(ConfigPath::SystemFlyCollisions),
+                "FlyProximity" => return Some(ConfigPath::SystemFlyProximity),
                 "FlyCameraMode" => return Some(ConfigPath::SystemFlyCameraMode),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
@@ -4507,6 +4752,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SolidGloss
         | ConfigPath::SolidRoughness
         | ConfigPath::SolidGlow
+        | ConfigPath::SolidMetallic
+        | ConfigPath::SolidReflectance
         | ConfigPath::SsaoStrength
         | ConfigPath::SsaoRadius
         | ConfigPath::NormalSmoothing
@@ -4574,6 +4821,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemFlyMoveSpeed
         | ConfigPath::SystemFlySprintMultiplier
         | ConfigPath::SystemFlyInvertY
+        | ConfigPath::SystemFlyCollisions
+        | ConfigPath::SystemFlyProximity
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh
         | ConfigPath::LevelsGamma
@@ -4620,10 +4869,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainTiling
         | ConfigPath::SimTerrainTier
         | ConfigPath::SimPathSamples
+        | ConfigPath::SimPathNoiseThreshold
         | ConfigPath::SimPathBounces
         | ConfigPath::SimPathDenoise
         | ConfigPath::SimPathSky
-        | ConfigPath::SimPathZenith => None,
+        | ConfigPath::SimPathZenith
+        | ConfigPath::SimPathStudio
+        | ConfigPath::SimPathEnvironmentMap
+        | ConfigPath::SimPathEnvironmentBackdrop => None,
 
         // Vec2 (pan coordinates)
         ConfigPath::Pan => {
@@ -4761,9 +5014,12 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::ColorEffectEnabled { .. } => {
             json_as_bool(json).map(ConfigValue::Bool)
         }
-        ConfigPath::SolidLightEnabled { .. } => {
+        ConfigPath::SolidLightEnabled { .. } | ConfigPath::SolidLightsFollowCamera => {
             json.as_bool().map(ConfigValue::Bool)
         }
+        // A render's precision, three steps apart: nothing between two to
+        // tween.
+        ConfigPath::SolidRayTolerance => None,
 
         // Effect parameters (float)
         ConfigPath::DensityEffectParam { .. }
@@ -4784,7 +5040,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeLayerParam { .. }
         | ConfigPath::EscapeLayerWeight
         | ConfigPath::EscapeLensAmount
-        | ConfigPath::EscapeLensParam { .. } => {
+        | ConfigPath::EscapeLensParam { .. }
+        | ConfigPath::EscapeTransformAmount { .. }
+        | ConfigPath::EscapeTransformParam { .. } => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
         // Rounded: a keyframe is stored, and interpolated, as an f64, and
@@ -4820,6 +5078,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SimTerrainTargetY
         | ConfigPath::SimTerrainTargetLift
         | ConfigPath::SimPathEnvironment
+        | ConfigPath::SimPathEnvironmentRotation
+        | ConfigPath::SimPathEnvironmentHorizon
+        | ConfigPath::SimPathEnvironmentStars
         | ConfigPath::SimPathGloss
         | ConfigPath::SimPathRoughness
         | ConfigPath::SimPathEmission
@@ -4873,6 +5134,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainHaze
         | ConfigPath::EscapeTerrainTargetLift
         | ConfigPath::EscapePathEnvironment
+        | ConfigPath::EscapePathEnvironmentRotation
+        | ConfigPath::EscapePathEnvironmentHorizon
+        | ConfigPath::EscapePathEnvironmentStars
         | ConfigPath::EscapePathGloss
         | ConfigPath::EscapePathRoughness
         | ConfigPath::EscapePathEmission
@@ -4880,11 +5144,14 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePathFocus
         | ConfigPath::EscapeShadingTextureStrength
         | ConfigPath::EscapeShadingTextureScale
+        | ConfigPath::EscapeShadingTextureAngle
+        | ConfigPath::EscapeShadingTextureAngleSoft
         | ConfigPath::EscapeShadingElevation
         | ConfigPath::EscapeShadingAmbient
         | ConfigPath::EscapeShadingHeightPre
         | ConfigPath::EscapeShadingHeightPost
         | ConfigPath::EscapeShadingOffset
+        | ConfigPath::EscapeShadingCreaseDecay
         // The overlay's mix, warp ratio and tile size are quantities;
         // its power is a whole number whose parity flips the warp's
         // sign rule, so it does not tween.
@@ -4911,9 +5178,13 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeTerrainTier
         | ConfigPath::EscapeSolidTier
         | ConfigPath::EscapePathSamples
+        | ConfigPath::EscapePathNoiseThreshold
         | ConfigPath::EscapePathBounces
         | ConfigPath::EscapePathDenoise
         | ConfigPath::EscapePathSky
+        | ConfigPath::EscapePathStudio
+        | ConfigPath::EscapePathEnvironmentMap
+        | ConfigPath::EscapePathEnvironmentBackdrop
         | ConfigPath::EscapeTerrainEnabled
         | ConfigPath::EscapeTerrainSource
         | ConfigPath::EscapeTerrainInterior
@@ -4939,11 +5210,15 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapePaletteStepped
         | ConfigPath::EscapeShadingField
         | ConfigPath::EscapeShadingTextureKind
+        | ConfigPath::EscapeShadingTextureWhere
         // Embossed's type picks a different integer field, and its
         // sections count is a whole number of sectors: neither has a
         // value part-way between two keyframes.
         | ConfigPath::EscapeShadingEmboss
         | ConfigPath::EscapeShadingEmbossSections
+        // A crease pattern is a choice, and a flip a switch.
+        | ConfigPath::EscapeShadingCreasePattern
+        | ConfigPath::EscapeShadingCreaseFlip
         | ConfigPath::EscapeTextureOverlay
         | ConfigPath::EscapeTextureOverlayPower
         | ConfigPath::EscapeTextureOverlayFit
@@ -4953,12 +5228,16 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // The lens NAME is a choice, not a quantity: there is no
         // meaning to a value part-way between two variations, so it
         // cannot carry an animation track. Its amount and its
-        // parameters can, and do.
-        | ConfigPath::EscapeLens => None,
+        // parameters can, and do. So with the transformations (C4).
+        | ConfigPath::EscapeLens
+        | ConfigPath::EscapeTransforms => None,
         // Selectors and the deep-zoom center strings are structural /
         // exact — not animatable (centers deliberately: see the plan's
         // open questions on center-path animation).
         ConfigPath::EscapeFormula
+        | ConfigPath::EscapeCustomFormula
+        | ConfigPath::EscapeCustomColoring
+        | ConfigPath::FlameCustomVariations
         | ConfigPath::EscapeColoring
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend
@@ -5308,6 +5587,31 @@ mod tests {
         }
     }
 
+    /// A parameter's name may hold dots -- a custom formula's complex
+    /// parameter is `seed.re` and `seed.im` -- and its key must still
+    /// parse back, or an animation track on it never plays nor exports.
+    #[test]
+    fn a_dotted_parameter_name_roundtrips() {
+        let paths = [
+            ConfigPath::EscapeFormulaParam { param: "seed.re".into() },
+            ConfigPath::EscapeFormulaParam { param: "a1_1_1.im".into() },
+            ConfigPath::EscapeFormulaParam { param: "power".into() },
+            ConfigPath::EscapeColoringParam { param: "center.im".into() },
+            ConfigPath::EscapeLayerParam { param: "offset.re".into() },
+            ConfigPath::EscapeLensParam { param: "c1".into() },
+            ConfigPath::EscapeTransformAmount { index: 2 },
+            ConfigPath::EscapeTransformParam { index: 0, param: "a.re".into() },
+            ConfigPath::SimModelParam { param: "feed".into() },
+            ConfigPath::SimColoringParam { param: "tint.re".into() },
+        ];
+        for path in paths {
+            let key = path.to_string_key();
+            assert_eq!(ConfigPath::from_string_key(&key), Some(path.clone()), "{key}");
+        }
+        // The kind alone names nothing.
+        assert_eq!(ConfigPath::from_string_key("Escape.FormulaParam."), None);
+    }
+
     #[test]
     fn test_config_path_string_roundtrip_transform() {
         // Test transform paths
@@ -5550,11 +5854,15 @@ mod tests {
             ConfigPath::SolidGloss,
             ConfigPath::SolidRoughness,
             ConfigPath::SolidGlow,
+            ConfigPath::SolidMetallic,
+            ConfigPath::SolidReflectance,
+            ConfigPath::SolidRayTolerance,
             ConfigPath::SsaoStrength,
             ConfigPath::SsaoRadius,
             ConfigPath::NormalSmoothing,
             ConfigPath::GapFill,
             ConfigPath::SolidLightEnabled { index: 2 },
+            ConfigPath::SolidLightsFollowCamera,
             ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() },
             ConfigPath::SolidLightParam { index: 3, param: "color_b".to_string() },
             ConfigPath::FarDensityFadeStart,
@@ -5580,6 +5888,8 @@ mod tests {
             ConfigPath::SystemFlySprintMultiplier,
             ConfigPath::SystemFlyInvertY,
             ConfigPath::SystemFlyCameraMode,
+            ConfigPath::SystemFlyCollisions,
+            ConfigPath::SystemFlyProximity,
             ConfigPath::SystemExportWidth,
             ConfigPath::SystemExportHeight,
             ConfigPath::SystemPngStripMetadata,
@@ -5668,6 +5978,7 @@ mod tests {
             (ConfigPath::EscapeTerrainTier, ConfigValue::String("path_traced".into()), false),
             (ConfigPath::EscapeSolidTier, ConfigValue::String("auto".into()), false),
             (ConfigPath::EscapePathSamples, ConfigValue::UInt(64), false),
+            (ConfigPath::EscapePathNoiseThreshold, ConfigValue::Float(2.5), false),
             (ConfigPath::EscapePathBounces, ConfigValue::UInt(4), false),
             (ConfigPath::EscapePathEnvironment, ConfigValue::Float(0.5), true),
             (ConfigPath::EscapePathGloss, ConfigValue::Float(0.25), true),
@@ -5677,6 +5988,12 @@ mod tests {
             (ConfigPath::EscapePathFocus, ConfigValue::Float(0.25), true),
             (ConfigPath::EscapePathDenoise, ConfigValue::Bool(true), false),
             (ConfigPath::EscapePathSky, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathStudio, ConfigValue::Bool(true), false),
+            (ConfigPath::EscapePathEnvironmentMap, ConfigValue::String("sunflowers".into()), false),
+            (ConfigPath::EscapePathEnvironmentRotation, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEnvironmentHorizon, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEnvironmentStars, ConfigValue::Float(0.25), true),
+            (ConfigPath::EscapePathEnvironmentBackdrop, ConfigValue::Bool(false), false),
             (ConfigPath::EscapePathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
             (ConfigPath::EscapeTerrainInterior, ConfigValue::String("hole".into()), false),
             (ConfigPath::EscapeTerrainCurve, ConfigValue::String("mesa".into()), false),
@@ -5744,6 +6061,7 @@ mod tests {
             (ConfigPath::SimTerrainTargetY, ConfigValue::Float(0.25), true),
             (ConfigPath::SimTerrainTargetLift, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathSamples, ConfigValue::UInt(2), false),
+            (ConfigPath::SimPathNoiseThreshold, ConfigValue::Float(2.5), false),
             (ConfigPath::SimPathBounces, ConfigValue::UInt(2), false),
             (ConfigPath::SimPathEnvironment, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathGloss, ConfigValue::Float(0.25), true),
@@ -5753,6 +6071,12 @@ mod tests {
             (ConfigPath::SimPathFocus, ConfigValue::Float(0.25), true),
             (ConfigPath::SimPathDenoise, ConfigValue::Bool(true), false),
             (ConfigPath::SimPathSky, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathStudio, ConfigValue::Bool(true), false),
+            (ConfigPath::SimPathEnvironmentMap, ConfigValue::String("sunflowers".into()), false),
+            (ConfigPath::SimPathEnvironmentRotation, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEnvironmentHorizon, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEnvironmentStars, ConfigValue::Float(0.25), true),
+            (ConfigPath::SimPathEnvironmentBackdrop, ConfigValue::Bool(false), false),
             (ConfigPath::SimPathZenith, ConfigValue::ColorRgb([0.1, 0.2, 0.3]), false),
         ];
         let mut m = crate::config::ConfigManager::new(crate::config::FractalConfig::default());

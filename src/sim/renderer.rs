@@ -2192,9 +2192,14 @@ impl SimRenderer {
     fn wants_exact(cfg: &SimConfig, layer: usize) -> bool {
         let m = model_or_default(cfg.layer_model_name(layer));
         let params = cfg.layer_model_params(layer);
-        m.has(ModelFeature::NeedsPyramid)
-            && params.get("averaging").is_some_and(|v| v.round() == 2.0)
-            && cfg.boundary == crate::config::sim::SimBoundary::Periodic
+        // McCabe asks by its averaging; a model whose step reads exact
+        // discs always does.
+        let asks = if m.has(ModelFeature::NeedsPyramid) {
+            params.get("averaging").is_some_and(|v| v.round() == 2.0)
+        } else {
+            m.has(ModelFeature::ExactDiscs)
+        };
+        asks && cfg.boundary == crate::config::sim::SimBoundary::Periodic
             && crate::sim::spectral_scales(m.name, params).is_some()
     }
 

@@ -318,7 +318,11 @@ fn angle_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, label: &str,
 }
 
 /// A pinhole camera's vertical field of view in degrees, 3..170 (the
-/// renderers clamp what is typed beyond).
+/// renderers clamp what is typed beyond). Clamped on edits only: egui's
+/// default clamps -- and rounds to the one decimal shown -- the value it
+/// is handed on every draw, so the default 0.7 rad (40.107 degrees) was
+/// written back as 40.1 whenever the View panel showed, and every solid
+/// and terrain drew again (user-reported 2026-10-21).
 fn fov_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPath, radians: f32) {
     let mut deg = radians.to_degrees();
     if ui
@@ -326,7 +330,8 @@ fn fov_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPa
             egui::Slider::new(&mut deg, 3.0..=170.0)
                 .text(t!("escape_panel.camera_fov").as_ref())
                 .suffix("°")
-                .fixed_decimals(1),
+                .fixed_decimals(1)
+                .clamping(egui::SliderClamping::Edits),
         )
         .on_hover_text(t!("escape_panel.camera_fov_tip"))
         .changed()
@@ -543,6 +548,16 @@ fn fly_controls(
             *fly_mode_toggle_requested = true;
         }
     }
+    // A solid saved while its lights turned with the camera: flying swings
+    // them. One click fixes them in the fractal where they are, the picture
+    // as it stands.
+    #[cfg(feature = "engine-escape")]
+    if kind == crate::camera::gesture::ViewKind::Solid && config_manager.active_config().solid_shading.lights_follow_camera {
+        if ui.button(t!("view.lights_to_world").as_ref()).on_hover_text(t!("view.lights_to_world_tip")).clicked() {
+            let changes = super::render_mode::lights_to_world(config_manager.active_config());
+            let _ = config_manager.update_batch(changes, "history.action.lights_to_world".to_string());
+        }
+    }
     egui::CollapsingHeader::new(t!("view.fly_mode_settings").as_ref())
         .default_open(false)
         .show(ui, |ui| {
@@ -586,6 +601,15 @@ fn fly_controls(
             let mut invert_y = s.fly_invert_y;
             if ui.checkbox(&mut invert_y, t!("view.fly_invert_y").as_ref()).changed() {
                 let _ = config_manager.update_system_setting(ConfigPath::SystemFlyInvertY, invert_y.into());
+            }
+            // A solid's surface, measured at the eye (P6).
+            let mut collisions = s.fly_collisions;
+            if ui.checkbox(&mut collisions, t!("view.fly_collisions").as_ref()).on_hover_text(t!("view.tooltip_fly_collisions")).changed() {
+                let _ = config_manager.update_system_setting(ConfigPath::SystemFlyCollisions, collisions.into());
+            }
+            let mut proximity = s.fly_proximity;
+            if ui.checkbox(&mut proximity, t!("view.fly_proximity").as_ref()).on_hover_text(t!("view.tooltip_fly_proximity")).changed() {
+                let _ = config_manager.update_system_setting(ConfigPath::SystemFlyProximity, proximity.into());
             }
         });
 }
@@ -662,7 +686,7 @@ pub fn atmosphere_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
 /// The path tracer's settings, their paths, and the tier for a 3D view
 /// other than a flame.
 #[cfg(feature = "engine-escape")]
-type PathOf = (
+pub(super) type PathOf = (
     crate::config::escape::PathTraceConfig,
     super::escape_panel::PathPaths,
     ConfigPath,
@@ -671,7 +695,7 @@ type PathOf = (
 );
 
 #[cfg(feature = "engine-escape")]
-fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
+pub(super) fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
     use crate::camera::gesture::{self, ViewKind};
     match gesture::view_kind(config) {
         ViewKind::Solid => Some((
@@ -694,6 +718,7 @@ fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
             config.sim.terrain.path.clone(),
             super::escape_panel::PathPaths {
                 samples: ConfigPath::SimPathSamples,
+                noise_threshold: ConfigPath::SimPathNoiseThreshold,
                 bounces: ConfigPath::SimPathBounces,
                 environment: ConfigPath::SimPathEnvironment,
                 aperture: ConfigPath::SimPathAperture,
@@ -701,6 +726,12 @@ fn path_of(config: &crate::config::FractalConfig) -> Option<PathOf> {
                 denoise: ConfigPath::SimPathDenoise,
                 sky: ConfigPath::SimPathSky,
                 zenith: ConfigPath::SimPathZenith,
+                studio: ConfigPath::SimPathStudio,
+                environment_map: ConfigPath::SimPathEnvironmentMap,
+                environment_rotation: ConfigPath::SimPathEnvironmentRotation,
+                environment_horizon: ConfigPath::SimPathEnvironmentHorizon,
+                environment_stars: ConfigPath::SimPathEnvironmentStars,
+                environment_backdrop: ConfigPath::SimPathEnvironmentBackdrop,
             },
             ConfigPath::SimTerrainTier,
             config.sim.terrain.tier,
@@ -728,75 +759,5 @@ pub fn depth_of_field_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) 
         } else {
             super::escape_panel::show_path_dof(ui, config_manager, &pt, &paths);
         }
-    }
-}
-
-/// How a 3D view is lit and what its surfaces are made of: the render
-/// tier and the path tracer (samples, sky, material), a terrain's shadows
-/// and occlusion, and the lights and the lit tier's shading -- the Solid
-/// Lighting panel's (camera-unification C5: in the View panel for now,
-/// its own panel if it grows enough).
-pub fn lighting_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
-    use crate::camera::gesture::{self, ViewKind};
-    let config = config_manager.active_config().clone();
-    let kind = gesture::view_kind(&config);
-    #[cfg(feature = "engine-escape")]
-    if let Some((pt, paths, tier_path, tier, id)) = path_of(&config) {
-        super::escape_panel::show_path_tracing(ui, config_manager, &pt, &paths, tier_path, tier, id);
-        ui.separator();
-    }
-    match kind {
-        #[cfg(feature = "terrain")]
-        ViewKind::EscapeTerrain => {
-            let t = &config.escape.terrain;
-            terrain_shadows(
-                ui,
-                config_manager,
-                [t.shadow, t.shadow_sharpness, t.occlusion],
-                t.tier,
-                [ConfigPath::EscapeTerrainShadow, ConfigPath::EscapeTerrainShadowSharpness, ConfigPath::EscapeTerrainOcclusion],
-                0.05,
-                &t!("escape_panel.terrain_occlusion_tip"),
-            );
-            ui.separator();
-        }
-        #[cfg(all(feature = "terrain", feature = "engine-sim"))]
-        ViewKind::SimTerrain => {
-            let t = &config.sim.terrain;
-            terrain_shadows(
-                ui,
-                config_manager,
-                [t.shadow, t.shadow_sharpness, t.occlusion],
-                t.tier,
-                [ConfigPath::SimTerrainShadow, ConfigPath::SimTerrainShadowSharpness, ConfigPath::SimTerrainOcclusion],
-                0.2,
-                &t!("sim_panel.terrain_occlusion_tip"),
-            );
-            ui.separator();
-        }
-        _ => {}
-    }
-    super::solid_panel::lighting_rig(ui, config_manager, matches!(kind, ViewKind::Flame2d | ViewKind::Flame3d));
-}
-
-/// A terrain's traced shadows and its occlusion: `[shadow, sharpness,
-/// occlusion]` and their paths. Occlusion is the lit tier's stand-in for
-/// the sky the path tracer traces, so it hides when only that runs.
-#[cfg(feature = "terrain")]
-fn terrain_shadows(
-    ui: &mut egui::Ui,
-    config_manager: &mut ConfigManager,
-    values: [f32; 3],
-    tier: crate::config::escape::RenderTier,
-    paths: [ConfigPath; 3],
-    occlusion_max: f32,
-    occlusion_tip: &str,
-) {
-    let [shadow, sharpness, occlusion] = values;
-    let [p_shadow, p_sharpness, p_occlusion] = paths;
-    float_row(ui, config_manager, &t!("escape_panel.terrain_shadow"), &t!("escape_panel.terrain_shadow_tip"), p_shadow, shadow, 0.0..=1.0, false);
-    float_row(ui, config_manager, &t!("escape_panel.terrain_shadow_sharpness"), &t!("escape_panel.terrain_shadow_sharpness_tip"), p_sharpness, sharpness, 1.0..=128.0, true);
-    if tier != crate::config::escape::RenderTier::PathTraced {
-        float_row(ui, config_manager, &t!("escape_panel.terrain_occlusion"), occlusion_tip, p_occlusion, occlusion, 0.0..=occlusion_max, false);
     }
 }

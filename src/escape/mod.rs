@@ -36,10 +36,19 @@ pub mod orbit_store;
 pub mod reference;
 pub mod fields;
 pub mod ifs;
+pub mod custom;
+pub mod lang;
 pub mod lens;
 pub mod formulas;
+pub mod surface;
 pub mod presets;
+pub mod twins;
+/// Tests: Fractint's Frothy Basin, Volterra-Lotka and Unity, written in
+/// Rhai (`assets/formulas`), run as Fractint does.
+#[cfg(test)]
+mod legacy;
 pub mod diag;
+pub mod environment;
 pub mod path_core;
 pub mod renderer;
 #[cfg(feature = "terrain")]
@@ -49,7 +58,7 @@ pub mod terrain;
 #[cfg(feature = "terrain")]
 pub mod terrain_tiers;
 
-pub use renderer::{DerivativeGap, EscapeRenderer, UsableDepth};
+pub use renderer::{set_viewport_render_lines, viewport_render_lines, DerivativeGap, EscapeRenderer, UsableDepth};
 
 /// Capability flags a formula can opt into — same pattern as the
 /// variation system's `Feature` enum (a slice on the def, absence ⇒
@@ -98,6 +107,23 @@ pub enum FormulaFeature {
     /// toggle something inert. `formula_julia_is_meaningful` is the
     /// gate, and a test keeps the flag honest against the WGSL.
     DynamicalOnly,
+    /// The map FOLDS paper, and its WGSL also defines
+    /// `fn formula_creases(p0: vec2<f32>) -> vec3<f32>`: the folded
+    /// paper's height at a starting point and the height's gradient
+    /// there, in the plane's units, from the settings in
+    /// `params.crease` (`CreaseSettings`). The Creases relief field and
+    /// terrain source draw it (docs/archive/projects/origami-creases.md);
+    /// without the flag neither is offered, and the assembler never
+    /// calls the function.
+    Creases,
+    /// The formula is a PROGRAM compiled from source (`escape::lang`):
+    /// its WGSL defines `FormulaState`, `formula_init(pixel)`,
+    /// `formula_loop(s, pixel)` and `formula_bailout(s, pixel)` instead
+    /// of `formula_step`, and owns its seed and its escape test. The
+    /// direct template drives it; the perturbed path runs it by its own
+    /// perturbation equations when it has them
+    /// (`assembler::PerturbTier::Custom`).
+    Program,
 }
 
 /// Which quantity the escape test compares against `bailout`
@@ -195,6 +221,7 @@ pub enum ColoringFeature {
 /// parameters, minus the type zoo — everything is a float slot in v1
 /// (integers and small enums ride as floats the way variation
 /// `Integer`/`Enum` params ride their buffer).
+#[derive(Clone)]
 pub struct EscapeParamDef {
     /// Key inside `EscapeConfig::formula_params` / `coloring_params`.
     pub name: &'static str,
@@ -285,6 +312,15 @@ pub struct IterationControls {
 
 /// What a mode-A formula's shader actually reads.
 pub fn iteration_controls(formula: &FormulaDef) -> IterationControls {
+    // A compiled program owns its step and its escape test; the panel's
+    // damping and biomorph reach it compiled into a variant
+    // (`custom::resolve`; plan, phase 4, step 9e), the biomorph where its
+    // test reads |z|. The bailout does through its `bailout` parameter
+    // and the colourings that read the radius.
+    if formula.has_feature(FormulaFeature::Program) {
+        let bailout = formula.parameters.iter().any(|p| p.name == "bailout");
+        return IterationControls { bailout, biomorph: custom::biomorph_ok_named(formula.name), damping: true };
+    }
     let escapes = !formula.has_feature(FormulaFeature::NonEscaping);
     IterationControls { bailout: escapes, biomorph: escapes, damping: true }
 }
@@ -472,7 +508,12 @@ pub struct ColoringDef {
 /// grows faster than linearly at these params (see
 /// [`FormulaDef::escape_degree`]); `None` otherwise.
 pub fn polynomial_degree(formula: &FormulaDef, fparams: &[f32]) -> Option<f32> {
-    let p = formula.escape_degree?(fparams);
+    // A compiled formula declares its own (`fn degree(p)`).
+    let p = if formula.has_feature(FormulaFeature::Program) {
+        custom::escape_degree(formula.name, fparams)?
+    } else {
+        formula.escape_degree?(fparams)
+    };
     (p > 1.0001 && p <= 1.0e6).then_some(p)
 }
 
@@ -526,7 +567,50 @@ impl ColoringDef {
 /// the only ones with anything in it -- so the others keep the narrow
 /// records (32 B) and state, and the deep-zoom pixel budget with them.
 pub fn accum_is_wide(coloring: &ColoringDef) -> bool {
-    coloring.has_feature(ColoringFeature::NeedsOrbitAccum)
+    accum_width(coloring).is_wide()
+}
+
+/// How much of a colouring's accumulator the terminal records and the
+/// perturbed resume state keep.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AccumWidth {
+    /// `.xy`: a colouring with nothing in its accumulator.
+    #[default]
+    Narrow,
+    /// All four floats of the `vec4`.
+    Wide,
+    /// All four, and this many `vec4`s more: a custom colouring's state
+    /// past four floats (escape::lang, up to 32 floats in all), which it
+    /// keeps in its private `ufc_ext` and the templates save and
+    /// restore beside the `vec4`.
+    Extended(usize),
+}
+
+impl AccumWidth {
+    pub fn is_wide(self) -> bool {
+        self != AccumWidth::Narrow
+    }
+
+    /// The `vec4`s past the first.
+    pub fn ext(self) -> usize {
+        match self {
+            AccumWidth::Extended(k) => k,
+            _ => 0,
+        }
+    }
+}
+
+/// [`AccumWidth`] of a colouring: narrow without an accumulator, wide
+/// with one, extended for a custom colouring keeping more than four
+/// floats.
+pub fn accum_width(coloring: &ColoringDef) -> AccumWidth {
+    if !coloring.has_feature(ColoringFeature::NeedsOrbitAccum) {
+        return AccumWidth::Narrow;
+    }
+    match custom::accum_ext(coloring.name) {
+        0 => AccumWidth::Wide,
+        k => AccumWidth::Extended(k),
+    }
 }
 
 /// Whether `layer` can be drawn over `base` in one shader: they share
@@ -599,22 +683,38 @@ pub fn layer_of(escape: &crate::config::escape::EscapeConfig) -> Option<&'static
     if !escape.layer.is_on() {
         return None;
     }
-    let layer = COLORINGS.iter().copied().find(|c| c.name == escape.layer.coloring)?;
-    let base = COLORINGS.iter().copied().find(|c| c.name == escape.coloring)?;
+    let layer = find_coloring(&escape.layer.coloring)?;
+    let base = find_coloring(&escape.coloring)?;
     layer_fits(base, layer).then_some(layer)
 }
 
-/// Whether a config's records carry the wide accumulator: the base's,
-/// or a layer's that owns the accumulator.
-pub fn config_accum_is_wide(escape: &crate::config::escape::EscapeConfig) -> bool {
-    accum_is_wide_named(&escape.coloring) || layer_of(escape).is_some_and(accum_is_wide)
+/// The accumulator width a config's records and resume state carry: the
+/// base's, or that of a layer that owns the accumulator (at most one of
+/// the two has one, [`layer_fits`]).
+pub fn config_accum_width(escape: &crate::config::escape::EscapeConfig) -> AccumWidth {
+    let base = find_coloring(&escape.coloring).map_or(AccumWidth::Narrow, accum_width);
+    if base.is_wide() {
+        return base;
+    }
+    layer_of(escape).map_or(AccumWidth::Narrow, accum_width)
 }
 
 /// [`accum_is_wide`] for a config's colouring name. A name that is not
 /// a mode-A colouring (a field's, a mode-D walk's) is narrow, and is
 /// not warned about as `get_coloring` would.
 pub fn accum_is_wide_named(coloring: &str) -> bool {
-    COLORINGS.iter().any(|c| c.name == coloring && accum_is_wide(c))
+    find_coloring(coloring).is_some_and(accum_is_wide)
+}
+
+/// A mode-A colouring by name, built-in or compiled ([`custom`]), with
+/// no fallback.
+pub fn find_coloring(name: &str) -> Option<&'static ColoringDef> {
+    COLORINGS.iter().copied().find(|c| c.name == name).or_else(|| custom::coloring(name))
+}
+
+/// A mode-A formula by name, built-in or compiled, with no fallback.
+pub fn find_formula(name: &str) -> Option<&'static FormulaDef> {
+    FORMULAS.iter().copied().find(|f| f.name == name).or_else(|| custom::formula(name))
 }
 
 /// Ordered formula registry. **Append-only** — UI ordering and any
@@ -698,6 +798,15 @@ pub const SLOW_PARAMS: &[(&str, &str)] = &[
     ("quaternion_julia_solid", "levels"),
     ("quaternion_julia_solid", "beam"),
     ("quaternion_julia_solid", "steps"),
+    ("kifs_solid", "levels"),
+    ("kifs_solid", "beam"),
+    ("kifs_solid", "steps"),
+    ("mandelbox_solid", "levels"),
+    ("mandelbox_solid", "beam"),
+    ("mandelbox_solid", "steps"),
+    ("mandelbulb_solid", "levels"),
+    ("mandelbulb_solid", "beam"),
+    ("mandelbulb_solid", "steps"),
 ];
 
 /// Whether `param` of the formula or colouring `def` is slow
@@ -707,10 +816,7 @@ pub fn is_slow_param(def: &str, param: &str) -> bool {
 }
 
 pub fn get_formula(name: &str) -> &'static FormulaDef {
-    FORMULAS
-        .iter()
-        .find(|f| f.name == name)
-        .copied()
+    find_formula(name)
         .unwrap_or_else(|| {
             log::warn!("Unknown escape formula '{name}', rendering '{}'", FORMULAS[0].name);
             FORMULAS[0]
@@ -719,10 +825,7 @@ pub fn get_formula(name: &str) -> &'static FormulaDef {
 
 /// Look up a coloring by name, with the same unknown-name fallback.
 pub fn get_coloring(name: &str) -> &'static ColoringDef {
-    COLORINGS
-        .iter()
-        .find(|c| c.name == name)
-        .copied()
+    find_coloring(name)
         .unwrap_or_else(|| {
             log::warn!("Unknown escape coloring '{name}', using '{}'", COLORINGS[0].name);
             COLORINGS[0]

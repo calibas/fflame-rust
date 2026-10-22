@@ -85,6 +85,20 @@ pub struct SimPreset {
     /// Steps to a settled or developed picture, measured. Used as the
     /// config's `steps` when the preset is applied.
     pub steps: u32,
+    /// The time step it was measured at, where that is not the model's
+    /// `default_dt`. Not a tuning: SmoothLife's 2011 glider set glides
+    /// only in the discrete form, dt 1 ("the same generic gliders can
+    /// not be found at the same birth/death values" in the continuous
+    /// one, Rafler), and SmoothLifeL's only at 0.05. `None` applies the
+    /// default.
+    pub dt: Option<f32>,
+    /// The boundary it was measured with. Not a taste either: viscous
+    /// fingering's inlet and outlet are the grid's last and first rows,
+    /// and on a wrapping grid they meet and the front never moves; a
+    /// sandpile is defined with an open (Zero) edge; a growing front's
+    /// bottom row wraps to the top and ends the run on step one. Every
+    /// preset names one, so none inherits the last model's.
+    pub boundary: crate::config::sim::SimBoundary,
     /// The initial field this preset needs, when it needs a particular
     /// one.
     ///
@@ -165,6 +179,12 @@ pub enum ModelFeature {
     /// many levels it has, and McCabe's texture came out visibly
     /// axis-aligned on it. See `scripts/sim_prototypes/proto_mccabe_pyramid.py`.
     NeedsPyramid,
+    /// The model's step reads exact disc averages from the spectral stage
+    /// (`pyr_exact()`, `pyr_diff_cell`) when its layer has one -- the
+    /// discs `spectral_scales` names, by FFT -- and gathers its own
+    /// otherwise: a grid without an FFT plan, or a boundary that is not
+    /// periodic. SmoothLife's: its rings are 1849 taps a cell at r_a 21.
+    ExactDiscs,
     /// The model carries a population of AGENTS: a storage buffer of
     /// 16-byte records that move themselves and deposit into an
     /// integer accumulation buffer, which the step pass then folds
@@ -409,6 +429,7 @@ pub fn spectral_scales(
 ) -> Option<Vec<spectral::SpectralScale>> {
     match model {
         "mccabe" => Some(models::mccabe_scale_discs(params)),
+        "smoothlife" => Some(models::smoothlife_discs(params)),
         _ => None,
     }
 }

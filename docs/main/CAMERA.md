@@ -321,12 +321,24 @@ It is held above −90°. For an unlifted target this is exactly the old
 clamp; a lifted target orbits below the horizon, down to looking straight
 up. A pitch already under the floor, typed or flown there, is a floor of
 its own: an orbit never snaps it up. Fly mode keeps the eye above the
-same floor by raising the lift.
+same floor by raising the lift -- or, with collisions, above the ground
+under the eye (*A terrain's ground*, below).
 
 The View panel's 3D Camera section has a Target lift row for both
 terrains, and Reset sets it to 0.
 
 ---
+
+## The headlamp
+
+A light can ride with the camera (`LightKind::Headlamp`; TERRAIN.md,
+*Kinds of light*): it sits at the eye -- lifted by `lift` camera
+distances along the camera's up, so its shadows show -- and its beam is
+aimed down the view, `cone` degrees each side. Its reach is in camera
+distances, the eye's distance to its target, so it lights the same share
+of the view at any zoom; flying inside a solid, it lights what you look
+at. Offered in mode D and on both terrains. A point light can be dropped
+where the camera is with **Place at Camera** in the light's row.
 
 ## Fly mode
 
@@ -384,10 +396,87 @@ speed by `fly_sprint_multiplier`.
 - **The other cameras** fly in distances to their target a second, so a
   flight feels the same at every zoom. Mode D's steps are fixed-point
   adds to its decimal target, so it flies at any depth.
-- **A terrain's eye** is kept above the orbit's floor.
+- **A terrain's eye** is kept above the orbit's floor, or above the
+  ground (*A terrain's ground*).
 
 In fly mode the wheel sets the speed: `view_scroll` multiplies
 `fly_move_speed` by the wheel factor, clamped to 0.05..20.
+
+### A solid's surface (2026-10-19)
+
+A solid knows how far its surface is: its own distance estimate at the
+eye, `ifs_distance_at` -- every solid kind, Rhai ones included, at the
+render's precision. While fly mode is on, `App::update_fly_camera` has
+the escape renderer measure it every frame (`probe_clearance`: the walk's
+shader to its entry point, and one thread writing one float at binding
+7) and read it back without waiting (`poll_clearance`), as the terrain's
+nearest-ground probe is read. The last measure that landed is a
+`fly::Clearance`: the eye it stood at (the world's, f64) and the distance.
+`fly::fly` takes it in `FlyLimits`:
+- **Collisions** (`fly_collisions`, on): a step never takes the eye
+  further than half the clearance (`CLEARANCE_FRACTION`) from where it
+  was measured -- a sphere-traced step, safe in every direction. The eye
+  closes on a wall in ever smaller steps and stops short of it; moving
+  away, each new measure lets it go further.
+- **Proximity speed** (`fly_proximity`, off): a step is a share of the
+  clearance rather than of the distance to the target, and the zoom
+  eases a quarter of the way (`ZOOM_FOLLOW`, in log2) toward the
+  clearance each step, the eye held where the step put it: the target
+  slides along the view by what its distance changes. Flying into the
+  surface slows and zooms in -- a deep zoom, as deep as the solid's
+  precision goes (the IFS flame solids' seeded walk; f32 elsewhere).
+
+Without a measure yet, or in any other camera, a flight is as above.
+Gates: `the_clearance_probe_reads_the_solid_at_the_eye` (the Julia set at
+c = 0 is the unit ball, its estimate 0.5 r ln r exactly: within 1e-6),
+`the_clearance_probe_lands_for_every_shipped_solid`,
+`a_solid_flies_within_its_clearance`.
+
+### A terrain's ground (2026-10-19)
+
+The orbit's floor keeps an escape terrain's eye above the relief's top --
+never down into a valley -- and a simulation terrain's above half a field
+unit, through any taller ground. The terrain's probe of the nearest ground
+in view (`TerrainRenderer::probe_nearest`) now measures the ground under
+the eye too: one ray straight down from above the relief's slab, so an
+eye inside a hill finds the hill's top, its height into the probe's
+second word (`ground_under_eye`; None where no ground lies under the
+eye). The escape terrain's frame probes every changed view already; the
+simulation terrain's probes while fly mode uses it (`probe_ground`, before
+the frame's render: the probe writes the view's uniform). `fly::fly` takes
+the height as `FlyLimits::ground`, in the terrain's world units (current
+widths; cells), and its pivot (`Floor`):
+- **Collisions**: the floor is the ground under the eye rather than
+  where the target rests -- the eye stays `sin 0.02` distances above it
+  (`FLOOR_PITCH`, the orbit floor's own height). It flies down into a
+  valley; it climbs a hill flown into, a probe later (the ground is the
+  last measured, at the eye's place then). No ground measured, or
+  collisions off: the orbit's floor.
+- **Proximity speed**: the step in heights of the eye above the ground
+  rather than in distances to the target (the floor's height at least),
+  so it slows as it nears the ground. The zoom does not follow over a
+  terrain.
+
+Gates: `the_probe_finds_the_ground_under_the_eye` (the bilinear surface's
+height on the analytic cone, from above and from inside it, to 1e-6;
+none past a ground's edge), `a_terrain_flies_above_its_ground` (a dive
+stops over the valley measured, at the orbit's floor without a measure or
+without collisions; a simulation's hill raises the floor; proximity paces
+by the height).
+
+### A solid's lights while flying
+
+A solid's directional lights are fixed in the fractal by default (config
+v6, TERRAIN.md *The lights' space differs*), so flying past them changes
+nothing about where they are. A solid saved before follows the camera, and
+looking around swings its light: the Fly Mode section (under the Fly Mode
+button) then shows **Fix lights in the fractal**, which turns each
+directional light's angles into the fractal's space at the current camera
+and stops them following (`ui::render_mode::lights_to_world`) -- the
+picture as it stands, one undo step. Gate:
+`fixing_a_solids_lights_in_the_fractal_keeps_its_picture` (two lights,
+shadows and the studio on the Mandelbulb: 0 pixels apart, Lit and Path
+traced).
 
 ### Settings
 
@@ -401,6 +490,8 @@ Device preferences in `SystemSettings` (`src/storage/settings.rs`), not
 | `fly_move_speed` | 1.0 | Move speed (0.05..20); the wheel in fly mode | |
 | `fly_sprint_multiplier` | 3.0 | Sprint multiplier (1..20) | |
 | `fly_invert_y` | false | Invert Y axis | every orbit |
+| `fly_collisions` | true | Stop at surfaces | a solid's flight, a terrain's floor |
+| `fly_proximity` | false | Speed by distance | a solid's flight, a terrain's pace |
 
 ---
 

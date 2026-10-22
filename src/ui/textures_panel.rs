@@ -375,7 +375,7 @@ fn overlay_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager, has_t
         let mut v = ov.power;
         let (lo, hi) = crate::config::escape::OVERLAY_POWER_RANGE;
         if ui
-            .add(egui::Slider::new(&mut v, lo..=hi).step_by(1.0).fixed_decimals(0))
+            .add(egui::Slider::new(&mut v, lo..=hi).step_by(1.0).fixed_decimals(0).clamping(egui::SliderClamping::Edits))
             .on_hover_text(t!("textures_panel.power_tip"))
             .changed()
         {
@@ -431,6 +431,8 @@ fn overlay_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager, has_t
 /// same setting as the Escape panel's surface texture, offered here too.
 fn bump_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     let sh = config_manager.config().escape.shading.clone();
+    // A terrain bumps its surface whether the 2D relief is on or not.
+    let terrain = config_manager.config().escape.terrain_active();
     let mut on = sh.texture_kind == ShadingTexture::Simulation;
     if ui
         .checkbox(&mut on, t!("textures_panel.bump"))
@@ -446,7 +448,7 @@ fn bump_controls(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     if !on {
         return;
     }
-    if !sh.enabled {
+    if !sh.enabled && !terrain {
         ui.weak(t!("textures_panel.bump_needs_relief"));
     }
     egui::Grid::new("texture_bump").num_columns(2).show(ui, |ui| {

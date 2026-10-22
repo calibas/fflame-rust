@@ -123,14 +123,32 @@ matte and a transparent PNG work; the matte multiplies into that same
 channel.
 
 A **`SimPreset`** is a whole recipe, not a parameter list: parameters,
-the *measured* step count, the initial field the model needs (or `None`
-to keep the user's), the colouring its state layout wants with *every*
-parameter that colouring declares, and optionally a matte and a warp
-(`None` for the warp sets the identity, clearing one a previous preset
-left). It carries no `dt`: the model's `default_dt` is applied when the
-model is selected. Applying half of one produces a picture of nothing —
-FitzHugh–Nagumo's constants give spirals from a cut wavefront and a
-**flat field** from noise.
+the *measured* step count, the initial field it was measured from, the
+colouring its state layout wants with *every* parameter that colouring
+declares, and optionally a matte and a warp (`None` for the warp sets
+the identity, clearing one a previous preset left). It carries no `dt`:
+the model's `default_dt` is applied when the model is selected. Applying
+half of one produces a picture of nothing — FitzHugh–Nagumo's constants
+give spirals from a cut wavefront and a **flat field** from noise.
+
+**The initial field is applied whole:** its kind, plus its noise
+amplitude, its radius or its count (`init_changes` in the panel). The
+kind alone kept the last field's radius and count and reset noise to
+0.05, so the presets that want noise at 1 (Ising, percolation, Lenia
+and most others) started from a near-uniform field. Every preset names
+a field (`every_preset_names_its_initial_field`); Gray–Scott's are the
+default blobs. **The boundary too** (`SimPreset::boundary`, required): a
+preset applies the boundary it was measured with. Before, none did, and a
+model ran on whatever the last one left. Viscous fingering's inlet and
+outlet meet on a wrapping grid, so its front never moved; a sandpile is
+defined with an open edge; a growing front's bottom row wraps to the
+top. Clamp: fingering, Kobayashi, the snowfake, DLA, DBM. Zero: the
+sandpile, percolation, invasion percolation, Packard's snowflake, Eden's
+rough front. Everything else is periodic. **Choosing a model** in the panel applies its first
+preset's field and boundary too, so a model never starts from the last
+one's.
+A layer's model leaves it, since the field belongs to the whole
+simulation.
 
 A **`SimLayeredPreset`** (`LAYERED_PRESETS` in
 [src/sim/mod.rs](../../src/sim/mod.rs)) is the same idea for several

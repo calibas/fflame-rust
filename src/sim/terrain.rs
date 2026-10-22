@@ -88,10 +88,13 @@ pub fn sim_terrain_view(config: &FractalConfig, gw: u32, gh: u32, jitter: [f32; 
         samples_per_axis: SUPERSAMPLE,
         far,
         sky: crate::escape::path_core::sky_seen(&t.path, config),
+        studio: crate::escape::path_core::studio_level(&t.path, config),
+        environment: crate::escape::path_core::environment_settings(&t.path, config),
         material: crate::escape::path_core::lit_material(config),
         curve: 0,
         invert: false,
         range: None,
+        surface: crate::escape::surface::SurfaceTexture::off(),
     }
 }
 
@@ -235,6 +238,26 @@ impl SimTerrain {
 
     pub fn output_view(&self) -> &TextureView {
         self.tiers.output_view(&self.terrain)
+    }
+
+    /// Measure the ground under the eye for fly mode's floor
+    /// (3d-look-and-tools P6): collect the last probe and start the next,
+    /// without waiting -- a probe only when the view has changed
+    /// (`TerrainRenderer::probe_nearest`). Before the frame's render: the
+    /// probe writes the view's uniform.
+    pub fn probe_ground(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) {
+        let (gw, gh) = self.grid;
+        if gw == 0 || gh == 0 {
+            return;
+        }
+        self.terrain.poll_nearest(device);
+        self.terrain.probe_nearest(device, queue, &sim_terrain_view(config, gw, gh, [0.0, 0.0]));
+    }
+
+    /// The ground's height under the eye at the last probe, in cells:
+    /// None before one lands, or where no ground lies under the eye.
+    pub fn ground_under_eye(&self) -> Option<f32> {
+        self.terrain.ground_under_eye()
     }
 
     /// Path-traced samples so far, and whether the picture is theirs.

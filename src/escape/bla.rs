@@ -21,9 +21,17 @@
 //! being useful, so entries carry f64 mantissas with a shared i64
 //! exponent (the CPU mirror of the shader's CFe).
 //!
-//! Holomorphic formulas only (z^p + c): the Ship family's abs-folds
-//! are not linear in δ across a fold-sign change, so it keeps the
-//! per-step path.
+//! A fold or a conjugate makes a step real-linear rather than
+//! complex-linear (phase 4, step 9b): `P·δ + Q·conj(δ)`, any real 2x2
+//! map written with two complex coefficients, holomorphic where Q = 0.
+//! Such an entry carries Q's for A and B beside them, and merges by
+//!
+//!   A ← (Py·Px + Qy·conj(Qx), Py·Qx + Qy·conj(Px)), B likewise,
+//!
+//! the operator norm |P| + |Q| bounding |A| in the radius. Its radius
+//! is bounded by the step's own nonlinearity, probed (a fold's kink, a
+//! branch cut), not the z^p formula (`custom::bla_steps`). Entries
+//! without Q merge exactly as before.
 
 /// Extended-range complex: f64 mantissa pair sharing one exponent.
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +105,10 @@ impl Cfe64 {
 
     pub fn is_zero(self) -> bool {
         self.re == 0.0 && self.im == 0.0
+    }
+
+    pub fn conj(self) -> Self {
+        Self { re: self.re, im: -self.im, e: self.e }
     }
 
     /// |self| as (mantissa, exponent).
@@ -219,14 +231,52 @@ impl MagFe {
             o
         }
     }
+
+    pub fn add(self, o: Self) -> Self {
+        if self.m == 0.0 {
+            return o;
+        }
+        if o.m == 0.0 {
+            return self;
+        }
+        let d = self.e.saturating_sub(o.e);
+        if d > 64 {
+            return self;
+        }
+        if d < -64 {
+            return o;
+        }
+        let (v, base) = if d >= 0 { (self.m + o.m * pow2(-d), self.e) } else { (self.m * pow2(d) + o.m, o.e) };
+        Self { m: v, e: base }.norm()
+    }
 }
 
-/// One BLA entry: δ' = A·δ + B·δc, valid while |δ| < r.
+/// |c| as an extended-range magnitude.
+fn mag_of(c: Cfe64) -> MagFe {
+    let (m, e) = c.mag();
+    MagFe { m, e }.norm()
+}
+
+/// One BLA entry: δ' = A·δ + B·δc, valid while |δ| < r; a real-linear
+/// one also `+ aq·conj(δ) + bq·conj(δc)` (zero where holomorphic).
 #[derive(Clone, Copy, Debug)]
 pub struct BlaEntry {
     pub a: Cfe64,
     pub b: Cfe64,
     pub r: MagFe,
+    pub aq: Cfe64,
+    pub bq: Cfe64,
+}
+
+impl BlaEntry {
+    /// A holomorphic entry.
+    pub fn holomorphic(a: Cfe64, b: Cfe64, r: MagFe) -> Self {
+        BlaEntry { a, b, r, aq: Cfe64::zero(), bq: Cfe64::zero() }
+    }
+
+    fn real_linear(&self) -> bool {
+        !self.aq.is_zero() || !self.bq.is_zero()
+    }
 }
 
 /// The full table. `levels[l]` holds entries each skipping 2^(l+1)
@@ -314,8 +364,15 @@ impl BlaTable {
             let r = MagFe { m: zm, e: ze }
                 .norm()
                 .mul(MagFe::from_f64(BLA_EPS * 2.0 / (p as f64 - 1.0)));
-            BlaEntry { a, b: Cfe64::from_f64(1.0, 0.0), r }
+            BlaEntry::holomorphic(a, Cfe64::from_f64(1.0, 0.0), r)
         });
+        Self::build_from_steps(level0, dc, dc_max_hint)
+    }
+
+    /// A table from its single-step entries, computed elsewhere: a
+    /// custom formula's from its own derivative (phase 4, step 9,
+    /// `lang::interp::step_coefficients`).
+    pub fn build_from_steps(level0: Vec<BlaEntry>, dc: MagFe, dc_max_hint: f64) -> Self {
         let mut levels = Vec::new();
         if level0.len() >= 2 {
             levels.push(Self::merge_level(&level0, dc));
@@ -339,6 +396,9 @@ impl BlaTable {
 
     /// y ∘ x: apply x's span first, then y's.
     fn merge(x: &BlaEntry, y: &BlaEntry, dc: MagFe) -> BlaEntry {
+        if x.real_linear() || y.real_linear() {
+            return Self::merge_real_linear(x, y, dc);
+        }
         let a = y.a.mul(x.a);
         let b = y.a.mul(x.b).add(y.b);
         let (axm, axe) = x.a.mag();
@@ -346,7 +406,21 @@ impl BlaTable {
         let ax = MagFe { m: axm, e: axe }.norm();
         let bx = MagFe { m: bxm, e: bxe }.norm();
         let r = x.r.min(y.r.sub_clamped(bx.mul(dc)).div(ax));
-        BlaEntry { a, b, r }
+        BlaEntry::holomorphic(a, b, r)
+    }
+
+    /// y ∘ x for real-linear maps `P·δ + Q·conj(δ)`: A_y(A_x δ + B_x δc)
+    /// + B_y δc, |A_x| and |B_x| by their operator norms |P| + |Q|.
+    fn merge_real_linear(x: &BlaEntry, y: &BlaEntry, dc: MagFe) -> BlaEntry {
+        // L_y ∘ (P, Q) = (Py·P + Qy·conj(Q), Py·Q + Qy·conj(P)).
+        let after_y = |p: Cfe64, q: Cfe64| (y.a.mul(p).add(y.aq.mul(q.conj())), y.a.mul(q).add(y.aq.mul(p.conj())));
+        let (a, aq) = after_y(x.a, x.aq);
+        let (b, bq) = after_y(x.b, x.bq);
+        let (b, bq) = (b.add(y.b), bq.add(y.bq));
+        let ax = mag_of(x.a).add(mag_of(x.aq));
+        let bx = mag_of(x.b).add(mag_of(x.bq));
+        let r = x.r.min(y.r.sub_clamped(bx.mul(dc)).div(ax));
+        BlaEntry { a, b, r, aq, bq }
     }
 
     /// The largest skip applicable at orbit index m with |δ| = d_mag:
@@ -372,6 +446,31 @@ impl BlaTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real-linear entries (phase 4, step 9b) merge as their maps
+    /// compose: y's span applied to x's result, the pixel's offset added
+    /// by each.
+    #[test]
+    fn real_linear_entries_merge_as_their_maps_compose() {
+        use crate::escape::lang::builtins::C64;
+        let c = |v: (f64, f64)| Cfe64::from_f64(v.0, v.1);
+        let entry = |p, q, b, bq| BlaEntry { a: c(p), aq: c(q), b: c(b), bq: c(bq), r: MagFe::from_f64(1.0) };
+        let x = entry((1.2, -0.3), (0.4, 0.1), (0.5, 0.2), (-0.1, 0.3));
+        let y = entry((-0.7, 0.9), (0.2, -0.6), (1.1, 0.0), (0.05, 0.05));
+        let m = BlaTable::merge(&x, &y, MagFe::zero());
+        let v = |e: Cfe64| {
+            let (re, im) = e.to_f64();
+            C64::new(re, im)
+        };
+        let apply = |e: &BlaEntry, d: C64, dc: C64| v(e.a).mul(d).add(v(e.aq).mul(d.conj())).add(v(e.b).mul(dc)).add(v(e.bq).mul(dc.conj()));
+        for (d, dc) in [(C64::new(0.3, -0.2), C64::new(0.01, 0.02)), (C64::new(-1.0, 0.5), C64::ZERO), (C64::ZERO, C64::new(-0.4, 0.7))] {
+            let (got, want) = (apply(&m, d, dc), apply(&y, apply(&x, d, dc), dc));
+            assert!(got.sub(want).abs() < 1e-12, "{d:?} {dc:?}: {got:?} against {want:?}");
+        }
+        // Holomorphic halves merge as before, Q staying zero.
+        let h = BlaTable::merge(&BlaEntry::holomorphic(c((1.0, 1.0)), c((1.0, 0.0)), MagFe::from_f64(1.0)), &BlaEntry::holomorphic(c((0.5, 0.0)), c((1.0, 0.0)), MagFe::from_f64(1.0)), MagFe::zero());
+        assert!(h.aq.is_zero() && h.bq.is_zero());
+    }
 
     fn f64_orbit(cr: f64, ci: f64, p: u32, n: usize) -> Vec<[f64; 2]> {
         let mut out = vec![[0.0f64; 2]];
@@ -499,7 +598,7 @@ mod tests {
                     let r = MagFe { m: zm, e: ze }
                         .norm()
                         .mul(MagFe::from_f64(BLA_EPS * 2.0 / (p as f64 - 1.0)));
-                    BlaEntry { a, b: Cfe64::from_f64(1.0, 0.0), r }
+                    BlaEntry::holomorphic(a, Cfe64::from_f64(1.0, 0.0), r)
                 })
                 .collect();
             let mut levels = Vec::new();

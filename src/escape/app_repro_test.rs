@@ -1639,6 +1639,2794 @@ mod tests {
         );
     }
 
+    /// One render's output colour, linear RGBA, on the path chosen
+    /// whatever the zoom.
+    fn output_on(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &crate::renderer::compute_kernel::FlameRenderer,
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        perturbed: bool,
+    ) -> Vec<f32> {
+        output_with(device, queue, renderer, esc, w, h, perturbed, |_| {})
+    }
+
+    /// [`output_on`] with the renderer set up first.
+    #[allow(clippy::too_many_arguments)]
+    fn output_with(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &crate::renderer::compute_kernel::FlameRenderer,
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        perturbed: bool,
+        setup: impl FnOnce(&mut crate::escape::EscapeRenderer),
+    ) -> Vec<f32> {
+        let mut escape = crate::escape::EscapeRenderer::new(device, w, h);
+        escape.force_perturbed = perturbed;
+        escape.force_direct = !perturbed;
+        setup(&mut escape);
+        let mut guard = 0u32;
+        loop {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cal") });
+            let settled = escape.render(device, queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            if settled { break; }
+            guard += 1;
+            assert!(guard < 100_000);
+        }
+        let px: Vec<f32> = bytemuck::cast_slice(&crate::escape::terrain::gpu_tests::read_texture(device, queue, escape.output_texture_for_test(), 0, w, h, 16)).to_vec();
+        escape.destroy();
+        px
+    }
+
+    /// DIAGNOSTIC: each perturbation tier's f32 sensitivity `A`. Walks
+    /// every preset of every tiered formula to a boundary point (the
+    /// slowest-escaping pixel, zoom by zoom), then sweeps zoom and
+    /// fits the direct path's visible error -- the median of
+    /// |direct - perturbed| over the step to the next pixel, in output
+    /// colour -- to `A / r`, r the pixel spacing in f32 ulps of the
+    /// centre. The calibration of `DIRECT_ULPS_PLANE` / `_JULIA`.
+    /// DIAG_F filters formulas by name.
+    ///
+    /// A row whose ratio is already high at zoom 6 is not measuring
+    /// f32: the walk landed somewhere the colour changes faster than
+    /// the pixels (Burning Ship's dust, Newton's and Nova's basin
+    /// edges), and there both paths flip pixels at the faintest
+    /// difference. Look at those side by side rather than trust A.
+    #[test]
+    #[ignore = "diagnostic"]
+    fn diag_tier_sensitivity() {
+        let (device, queue) = repro_device();
+        let filter = std::env::var("DIAG_F").unwrap_or_default();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (480u32, 270u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let formulas = [
+            "mandelbrot", "multibrot", "phoenix", "lambda", "magnet", "mcmullen", "feather",
+            "manowar", "tricorn", "burning_ship", "newton", "nova", "kaliset", "ducks",
+        ];
+        for name in formulas {
+            if !filter.is_empty() && !filter.split(',').any(|f| f == name) {
+                continue;
+            }
+            let def = crate::escape::get_formula(name);
+            for (pi, pre) in def.presets.iter().enumerate() {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = name.to_string();
+                esc.coloring = pre.coloring.to_string();
+                esc.max_iter = pre.max_iter;
+                esc.julia = pre.julia.is_some();
+                if let Some((re, im)) = pre.julia {
+                    esc.julia_re = re;
+                    esc.julia_im = im;
+                }
+                esc.formula_params = pre.formula_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                esc.coloring_params = pre.coloring_params.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                let coloring = crate::escape::get_coloring(pre.coloring);
+                let fparams = crate::escape::packed_formula_params(def, &esc.formula_params);
+                esc.bailout = pre
+                    .bailout
+                    .or_else(|| crate::escape::suggested_bailout(def, &fparams, coloring, true))
+                    .unwrap_or(crate::config::escape::LEGACY_BAILOUT);
+                if crate::escape::EscapeRenderer::perturb_tier(&esc).is_none() {
+                    continue;
+                }
+                // Walk to a boundary: the slowest pixel that still
+                // escapes (or converges), three octaves at a time.
+                let (ww, wh) = (160u32, 90u32);
+                let (mut cx, mut cy): (f64, f64) = (pre.center_re.parse().unwrap(), pre.center_im.parse().unwrap());
+                let mut zoom = pre.zoom_log2;
+                let mut lost = false;
+                while zoom < 9.0 {
+                    esc.center_re = format!("{cx:.17}");
+                    esc.center_im = format!("{cy:.17}");
+                    esc.zoom_log2 = zoom.into();
+                    let recs = records_on(&esc, ww, wh, false, false, true);
+                    let mx = esc.max_iter as u32;
+                    // Interior pixels hold n = max_iter; the boundary
+                    // is where the finite counts peak.
+                    let best = recs.iter().enumerate().filter(|(_, r)| r.n < mx).max_by_key(|(_, r)| r.n);
+                    let Some((i, _)) = best else { lost = true; break };
+                    let (px, py) = (i as u32 % ww, i as u32 / ww);
+                    let span_y = 4.0 / zoom.exp2();
+                    let span_x = span_y * ww as f64 / wh as f64;
+                    cx += ((px as f64 + 0.5) / ww as f64 - 0.5) * span_x;
+                    cy -= ((py as f64 + 0.5) / wh as f64 - 0.5) * span_y;
+                    zoom += 3.0;
+                }
+                if lost {
+                    println!("{name}#{pi} {}: no boundary found", pre.name);
+                    continue;
+                }
+                esc.center_re = format!("{cx:.17}");
+                esc.center_im = format!("{cy:.17}");
+                let m = cx.abs().max(cy.abs()).max(0.5);
+                let ulp = (m.log2().floor() - 23.0).exp2();
+                let mut fits = Vec::new();
+                let mut row = String::new();
+                for z in [6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0] {
+                    esc.zoom_log2 = z;
+                    let d = output_on(&device, &queue, &renderer, &esc, w, h, false);
+                    let p = output_on(&device, &queue, &renderer, &esc, w, h, true);
+                    let col = |v: &[f32], i: usize| [v[i * 4], v[i * 4 + 1], v[i * 4 + 2]];
+                    let dist = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()) as f64;
+                    let mut ratios = Vec::new();
+                    for y in 0..h as usize - 1 {
+                        for x in 0..w as usize - 1 {
+                            let i = y * w as usize + x;
+                            let grad = dist(col(&p, i), col(&p, i + 1)).max(dist(col(&p, i), col(&p, i + w as usize)));
+                            if grad < 1e-4 {
+                                continue;
+                            }
+                            ratios.push(dist(col(&d, i), col(&p, i)) / grad);
+                        }
+                    }
+                    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    let med = ratios.get(ratios.len() / 2).copied().unwrap_or(f64::NAN);
+                    let r = (4.0 / z.exp2() / h as f64) / ulp;
+                    if med > 0.03 && med < 3.0 {
+                        fits.push(med * r);
+                    }
+                    row.push_str(&format!(" z{z}:{med:.3}"));
+                }
+                let a = if fits.is_empty() { f64::NAN } else { (fits.iter().map(|v| v.ln()).sum::<f64>() / fits.len() as f64).exp() };
+                println!("{name}#{pi} {} julia={} at ({cx:.6}, {cy:.6}): A = {a:.3} [{} fits]{row}", pre.name, esc.julia, fits.len());
+            }
+        }
+    }
+
+    /// A config whose formula or colouring is the given entry, compiled
+    /// from source (`escape::custom`).
+    fn with_custom(
+        mut esc: crate::config::escape::EscapeConfig,
+        formula: Option<(&str, &str)>,
+        coloring: Option<(&str, &str)>,
+    ) -> crate::config::escape::EscapeConfig {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        if let Some((text, entry)) = formula {
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
+            esc.formula = crate::escape::custom::name_of(EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+        }
+        if let Some((text, entry)) = coloring {
+            let src = CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
+            esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+            esc.custom_coloring = Some(src);
+        }
+        esc
+    }
+
+    /// `esc` with a hybrid as its formula.
+    fn with_hybrid(mut esc: crate::config::escape::EscapeConfig, h: &crate::escape::lang::hybrid::Hybrid) -> crate::config::escape::EscapeConfig {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let src = CustomSource { dialect: CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() };
+        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+        esc.custom_formula = Some(src);
+        esc
+    }
+
+    /// `esc` with a Rhai formula (`lang::rhai`) as its formula.
+    fn with_rhai(mut esc: crate::config::escape::EscapeConfig, source: &str) -> crate::config::escape::EscapeConfig {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let title = crate::escape::lang::rhai::title(source).unwrap_or_default();
+        let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source: source.into(), variations: Vec::new() };
+        esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+        esc.custom_formula = Some(src);
+        esc
+    }
+
+    /// **A formula's `rand()` draws the interpreter's stream** (the KIFS
+    /// plan, C2a): a formula that escapes on its first draw past 0.9
+    /// counts, on the GPU, what the interpreter counts at the same place
+    /// on the screen -- on every pixel -- so a still reproduces. And the
+    /// counts vary by pixel: the stream is the pixel's.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_formula_draws_the_interpreters_stream() {
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        const DRAWS: &str = "const PARAMS = #{ bailout: 4.0 };\nconst INFO = #{ title: \"Draws\" };\n\
+                             fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                             fn step(s, p) {\n    s.z = complex(rand(), rand());\n    s\n}\n\
+                             fn escaped(s, p) { s.z.re > 0.9 }\n";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "escape_count".into();
+        esc.max_iter = 500;
+        let esc = with_rhai(esc, DRAWS);
+        crate::escape::custom::ensure(&esc);
+        let (w, h) = (64u32, 48u32);
+        let gpu = records_on(&esc, w, h, false, false, false);
+        let prog = crate::escape::lang::rhai::program(DRAWS).expect("compiles");
+        let values = ParamValues::defaults(&prog);
+        let mut same = 0;
+        let mut counts = std::collections::BTreeSet::new();
+        for (i, r) in gpu.iter().enumerate() {
+            let mut env = Env::at(C64::ZERO, esc.max_iter);
+            (env.x, env.y) = ((i as u32 % w) as i32, (i as u32 / w) as i32);
+            let n = run(&prog, &values, None, &env).n;
+            same += usize::from(r.n == n);
+            counts.insert(r.n);
+        }
+        println!("the GPU counts as the interpreter on {same} of {} pixels; {} distinct counts", gpu.len(), counts.len());
+        assert!(counts.len() > 10, "the pixels draw alike: {counts:?}");
+        assert_eq!(same, gpu.len(), "the GPU's stream is the interpreter's");
+    }
+
+    /// **A formula that calls a variation renders as the formula with the
+    /// variation written out** (the KIFS plan, C1e's gate): a Mandelbrot
+    /// bent each step by a variation of the user's, carried in the config
+    /// and inlined, against the same arithmetic written in the step -- the
+    /// same picture on the direct path, and at zoom 2^24, where the
+    /// perturbed path runs on equations derived through the variation,
+    /// the same counts pixel for pixel. The deep view's centre is a point
+    /// of the bent set's edge, found by bisection in the interpreter.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_formula_calling_a_variation_renders_as_written_out() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::builtins::C64;
+        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::escape::lang::EntryKind;
+        const BEND: &str = "const PARAMS = #{\n    k: #{ value: 0.3 },\n    shift: #{ value: complex(0.1, 0.0) },\n};\n\
+                            const INFO = #{ title: \"Bend\", name: \"rhai_bend_gpu\" };\n\
+                            fn variation(z, p) {\n    let r2 = z.norm_sqr();\n    z = z * complex(cos(p.k * r2), sin(p.k * r2));\n    z + p.shift\n}\n";
+        const VARIED: &str = "const PARAMS = #{ bailout: 4.0, twist: 0.5 };\nconst INFO = #{ title: \"Varied\" };\n\
+                              fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                              fn step(s, p) {\n    s.z = vary(\"rhai_bend_gpu\", s.z * s.z + s.c, #{ k: p.twist });\n    s\n}\n\
+                              fn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n";
+        const WRITTEN_OUT: &str = "const PARAMS = #{ bailout: 4.0, twist: 0.5 };\nconst INFO = #{ title: \"Written Out\" };\n\
+                                   fn start(pixel, p) { #{ z: complex(0.0, 0.0), c: pixel } }\n\
+                                   fn step(s, p) {\n    let w = s.z * s.z + s.c;\n    let r2 = w.norm_sqr();\n    \
+                                   w = w * complex(cos(p.twist * r2), sin(p.twist * r2));\n    s.z = w + complex(0.1, 0.0);\n    s\n}\n\
+                                   fn escaped(s, p) { s.z.norm_sqr() > p.bailout }\n";
+        let bend = CustomSource { dialect: CustomDialect::Rhai, entry: "rhai_bend_gpu".into(), source: BEND.into(), variations: Vec::new() };
+        let varied_src = CustomSource { dialect: CustomDialect::Rhai, entry: "Varied".into(), source: VARIED.into(), variations: vec![bend] };
+        let set = |mut esc: crate::config::escape::EscapeConfig, src: CustomSource| {
+            esc.formula = crate::escape::custom::name_of(EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            esc
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 400;
+        esc.bailout = 4.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        let varied = set(esc.clone(), varied_src.clone());
+        let written = with_rhai(esc.clone(), WRITTEN_OUT);
+
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let a = output_on(&device, &queue, &renderer, &varied, w, h, false);
+        assert!(crate::escape::get_formula(&varied.formula).has_feature(crate::escape::FormulaFeature::Program), "the varied formula did not compile");
+        let b = output_on(&device, &queue, &renderer, &written, w, h, false);
+        let covered = a.chunks(4).filter(|p| p[3] > 0.5).count();
+        assert!(covered > 100, "the view shows too little ({covered})");
+        let d = differing(&a, &b);
+        println!("direct: the varied formula differs from the written-out one on {:.3}% of pixels", d * 100.0);
+        assert!(d <= 0.001, "{:.3}%", d * 100.0);
+
+        // A point of the bent set's edge, on the line Im c = 0.3.
+        let prog = crate::escape::lang::rhai::program(WRITTEN_OUT).expect("compiles");
+        let pv = ParamValues::defaults(&prog);
+        let inside = |re: f64| !run(&prog, &pv, None, &Env::at(C64::new(re, 0.3), 4000)).escaped;
+        let (mut lo, mut hi) = (f64::NAN, f64::NAN);
+        for i in 0..400 {
+            let (x0, x1) = (-2.0 + 3.0 * i as f64 / 400.0, -2.0 + 3.0 * (i + 1) as f64 / 400.0);
+            if inside(x0) != inside(x1) {
+                (lo, hi) = (x0, x1);
+                break;
+            }
+        }
+        assert!(lo.is_finite(), "no edge on the line");
+        let lo_inside = inside(lo);
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if inside(mid) == lo_inside {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let mut deep = esc.clone();
+        deep.center_re = format!("{lo:.17}");
+        deep.center_im = "0.3".into();
+        deep.zoom_log2 = 24.0;
+        deep.max_iter = 4000;
+        let (varied, written) = (set(deep.clone(), varied_src), with_rhai(deep, WRITTEN_OUT));
+        crate::escape::custom::ensure(&varied);
+        crate::escape::custom::ensure(&written);
+        let (tv, tw) = (crate::escape::EscapeRenderer::perturb_tier(&varied), crate::escape::EscapeRenderer::perturb_tier(&written));
+        println!("tiers: {tv:?} against {tw:?}");
+        assert!(tv.is_some(), "the varied formula has no perturbed tier");
+        let (a, b) = (records_on(&varied, 64, 48, false, true, false), records_on(&written, 64, 48, false, true, false));
+        let same = a.iter().zip(&b).filter(|(x, y)| x.n == y.n).count();
+        let distinct: std::collections::BTreeSet<u32> = a.iter().map(|r| r.n).collect();
+        println!("zoom 2^24 at {lo:.17} + 0.3i: the same count on {same} of {} pixels; {} distinct counts", a.len(), distinct.len());
+        assert!(distinct.len() > 5, "the deep view is flat: {distinct:?}");
+        assert_eq!(same, a.len(), "the same program");
+    }
+
+    /// Rhai formulas (phase 4) through the whole renderer: the Mandelbrot
+    /// and the Burning Ship (on both planes, by the panel's Julia toggle)
+    /// render as their built-ins; at the floatexp threshold the Rhai
+    /// Mandelbrot deep-zooms pixel for pixel as its UF twin.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn rhai_formulas_render_and_deep_zoom_as_their_twins() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const MANDELBROT: &str = include_str!("../../tests/formulas/rhai/mandelbrot.rhai");
+        const SHIP: &str = include_str!("../../tests/formulas/rhai/plane.rhai");
+        // (what, built-in, its params, centre, zoom, julia, source)
+        let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64, bool, &str)] = &[
+            ("mandelbrot", "mandelbrot", &[], ("-0.6", "0"), 0.4, false, MANDELBROT),
+            ("burning ship", "burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5, false, SHIP),
+            ("burning ship julia", "burning_ship", &[("variant", 0.0)], ("0", "0"), 0.0, true, SHIP),
+        ];
+        for &(what, formula, params, (cre, cim), zoom, julia, source) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 200;
+            esc.bailout = 4.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.julia = julia;
+            esc.julia_re = -1.6;
+            esc.julia_im = 0.02;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let rhai = with_rhai(esc.clone(), source);
+            let got = output_on(&device, &queue, &renderer, &rhai, w, h, false);
+            assert!(crate::escape::get_formula(&rhai.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            // A Julia view may escape everywhere; the colours still differ
+            // by pixel.
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && (julia || covered + 100 < (w * h) as usize), "{what}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{what}: the Rhai formula differs from {formula} on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.03, "{what}: {:.3}%", d * 100.0);
+        }
+
+        // At depth: the Rhai Mandelbrot against its UF twin, perturbed.
+        const UF_M: &str = "M {\ninit:\n z = 0\n c = #pixel\nloop:\n z = z * z + c\nbailout:\n |z| <= @bailout\n\
+                            default:\n float param bailout\n  default = 4\n endparam\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.74364388703715870475481082977993857803".into();
+        esc.center_im = "0.13182590420531251981651559677435626549".into();
+        esc.zoom_log2 = 48.5;
+        esc.max_iter = 4000;
+        esc.bailout = 4.0;
+        let rhai = with_rhai(esc.clone(), MANDELBROT);
+        let uf = with_custom(esc, Some((UF_M, "M")), None);
+        crate::escape::custom::ensure(&rhai);
+        crate::escape::custom::ensure(&uf);
+        let tier = crate::escape::EscapeRenderer::perturb_tier(&rhai);
+        assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, stride: 1, .. })), "{tier:?}");
+        let (a, b) = (records_on(&rhai, 64, 48, false, true, false), records_on(&uf, 64, 48, false, true, false));
+        let same = a.iter().zip(&b).filter(|(x, y)| x.n == y.n).count();
+        println!("zoom 48.5: the Rhai Mandelbrot counts as its UF twin on {same} of {} pixels", a.len());
+        assert_eq!(same, a.len(), "the same program");
+    }
+
+    /// The panel's damping and biomorph on custom formulas (plan, phase 4,
+    /// step 9e), compiled into a variant of the program: the twins render
+    /// as their built-ins with them, on the direct path; and at depth,
+    /// which the built-ins cannot reach with either on, a damped and a
+    /// biomorph Mandelbrot count against their own programs in big
+    /// floats.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_formulas_take_damping_and_the_biomorph() {
+        use crate::config::escape::BiomorphMode;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let twin_of = |esc: &crate::config::escape::EscapeConfig| {
+            let src = crate::escape::twins::custom_source(&esc.formula).expect("a twin");
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            crate::escape::custom::ensure(&t);
+            t
+        };
+        // (built-in, params, centre, zoom, damping, biomorph)
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f64, (f32, f32), BiomorphMode)] = &[
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, (0.8, 0.15), BiomorphMode::Off),
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, (1.0, 0.0), BiomorphMode::Re),
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, (1.2, -0.1), BiomorphMode::Im),
+            ("multibrot", &[("power", 3.0)], ("0", "0"), 0.2, (1.0, 0.0), BiomorphMode::Re),
+            ("multibrot", &[("power", 3.0)], ("0", "0"), 0.2, (0.9, 0.0), BiomorphMode::Off),
+            ("burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5, (0.85, 0.1), BiomorphMode::Im),
+            ("tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2, (0.9, -0.1), BiomorphMode::Off),
+        ];
+        for &(formula, params, (cre, cim), zoom, (dr, di), bio) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.damping_re = dr;
+            esc.damping_im = di;
+            esc.biomorph = bio;
+            let what = format!("{formula} {params:?} damping ({dr}, {di}) {bio:?}");
+            let twin = twin_of(&esc);
+            let resolved = crate::escape::custom::resolve(&twin);
+            assert_ne!(resolved.formula, twin.formula, "{what}: no variant");
+            assert!(!crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::NonEscaping));
+            assert!(crate::escape::iteration_controls(crate::escape::get_formula(&twin.formula)).damping, "{what}");
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.005, "{what}: {:.3}%", d * 100.0);
+        }
+
+        // Perturbed, the variant's own equations: forced at the views above,
+        // on both rungs, with BLA and without, against its program in big
+        // floats; and past the direct path the twins take the perturbed
+        // path, where the built-ins with either on stay direct.
+        for (damping, bio) in [((0.8f32, 0.15f32), BiomorphMode::Off), ((1.0, 0.0), BiomorphMode::Re), ((1.2, -0.1), BiomorphMode::Im), ((0.9, 0.05), BiomorphMode::Re)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "mandelbrot".into();
+            esc.center_re = "-0.6".into();
+            esc.center_im = "0".into();
+            esc.zoom_log2 = 0.4;
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.damping_re = damping.0;
+            esc.damping_im = damping.1;
+            esc.biomorph = bio;
+            let twin = twin_of(&esc);
+            let what = format!("damping {damping:?} {bio:?}");
+            let src = twin.custom_formula.as_ref().unwrap();
+            let mut prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            if bio != BiomorphMode::Off {
+                let axis = if bio == BiomorphMode::Re { crate::escape::lang::modifiers::Axis::Re } else { crate::escape::lang::modifiers::Axis::Im };
+                prog = crate::escape::lang::modifiers::biomorph(&prog, axis).unwrap();
+            }
+            if damping != (1.0, 0.0) {
+                prog = crate::escape::lang::modifiers::damped(&prog);
+            }
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 16.0;
+                }
+                if x.name == "alpha" {
+                    params.values[i] = (f64::from(damping.0), f64::from(damping.1));
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), ("-0.6", "0"), 0.4, 200, (64, 48), 7, 2);
+            let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+            assert!(distinct.len() > 10, "{what}: the view tests little");
+            for (deep, bla) in [(false, true), (false, false), (true, true), (true, false)] {
+                let got = records_with(&twin, 64, 48, deep, true, false, bla);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                println!("{what} perturbed, floatexp {deep}, BLA {bla}: {right} of {} right ({} distinct counts)", truth.len(), distinct.len());
+                assert!(right * 100 >= truth.len() * 97, "{what} fe={deep} bla={bla}: {right} of {}", truth.len());
+            }
+            let mut deep = esc.clone();
+            deep.center_re = "-0.7436438870371587047548108297799385780".into();
+            deep.center_im = "0.13182590420531251981651559677435626549".into();
+            deep.zoom_log2 = 30.0;
+            assert!(!crate::escape::EscapeRenderer::wants_perturbation(&deep, 1080), "{what}: the built-in stays direct");
+            assert!(crate::escape::EscapeRenderer::wants_perturbation(&twin_of(&deep), 1080), "{what}: the twin perturbs");
+        }
+    }
+
+    /// A custom formula carries its derivative under perturbation (plan,
+    /// phase 4, step 9d). At a shallow view, against the interpreter's
+    /// derivative in f64 at each pixel: the perturbed rungs (with BLA and
+    /// without) count as many right as the direct path, for the
+    /// Mandelbrot's twin and the Burning Ship's (a Jacobian). At depth,
+    /// the twin's is the built-in's. Compared where the counts agree, to a
+    /// part in a hundred, per render pixel as the records hold it.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_carries_its_derivative_at_depth() {
+        use crate::escape::lang::builtins::C64;
+        type Records = [crate::escape::renderer::IterRecord];
+        let (w, h) = (64u32, 48u32);
+        let twin = |name: &str, (cre, cim): (&str, &str), zoom: f64, iters: u32| {
+            let src = crate::escape::twins::custom_source(name).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "distance_estimate".into();
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 1e4;
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            crate::escape::custom::ensure(&t);
+            (esc, t)
+        };
+        let close = |a: [f32; 2], b: C64| {
+            let d = (a[0] as f64 - b.re).hypot(a[1] as f64 - b.im);
+            b.abs() > 0.0 && d <= 0.01 * b.abs()
+        };
+        // The interpreter's count and derivative at each pixel, per render
+        // pixel, where it escapes.
+        let truth = |esc: &crate::config::escape::EscapeConfig, (cx, cy): (f64, f64)| -> Vec<Option<(u32, C64)>> {
+            let src = esc.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let d = crate::escape::lang::derive::with_derivative(&prog).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            for (i, x) in d.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = f64::from(esc.bailout);
+                }
+            }
+            let params = as_on_the_gpu(params);
+            let span_y = 4.0 / esc.zoom_log2.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            (0..(w * h))
+                .map(|idx| {
+                    let (px, py) = (idx % w, idx / w);
+                    let c = C64::new(cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x, cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                    let r = crate::escape::lang::interp::run(&d, &params, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter));
+                    (r.escaped && r.n > 2).then(|| (r.n, r.dz.scale(span_y / h as f64)))
+                })
+                .collect()
+        };
+        let right = |r: &Records, t: &[Option<(u32, C64)>]| -> (usize, usize) {
+            let same: Vec<_> = r.iter().zip(t).filter_map(|(x, t)| t.filter(|(n, _)| *n == x.n).map(|(_, dz)| (x.dz, dz))).collect();
+            (same.iter().filter(|(a, b)| close(*a, *b)).count(), same.len())
+        };
+        for (name, view, at) in [("mandelbrot", ("-0.7436", "0.1318"), (-0.7436, 0.1318)), ("burning_ship", ("-1.762", "-0.028"), (-1.762, -0.028))] {
+            let (_, esc) = twin(name, view, 10.0, 500);
+            assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 4000).is_none(), "{name}: a gap");
+            let t = truth(&esc, at);
+            let (direct, n) = right(&records_with(&esc, w, h, false, false, true, true), &t);
+            println!("{name} zoom 10: the direct path's derivative is the truth's on {direct} of {n} pixels");
+            for (deep, bla) in [(false, true), (false, false), (true, true), (true, false)] {
+                let (got, m) = right(&records_with(&esc, w, h, deep, true, false, bla), &t);
+                println!("{name} zoom 10, floatexp {deep}, BLA {bla}: {got} of {m}");
+                assert!(m > 1000 && got * 100 >= m * 70 && got + n / 50 >= direct, "{name} fe={deep} bla={bla}: {got} of {m}, direct {direct}");
+            }
+        }
+        // At depth, on both rungs, against the derivative in big floats at
+        // every seventh pixel: the twin's counts as many right as the
+        // built-in's.
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        for (zoom, iters, deep, stride) in [(30.0, 4000u32, false, 7usize), (42.0, 8000, true, 7)] {
+            let (built_in, esc) = twin("mandelbrot", seahorse, zoom, iters);
+            let src = esc.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let d = std::sync::Arc::new(crate::escape::lang::derive::with_derivative(&prog).unwrap());
+            let dzv = d.dz_var.unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            for (i, x) in d.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 1e4;
+                }
+            }
+            let params = as_on_the_gpu(params);
+            let n_limbs = 6;
+            let c = crate::escape::bigfloat::BigComplex::from_fixed(&crate::escape::fixedpoint::FixedComplex {
+                re: crate::escape::fixedpoint::FixedPoint::from_decimal(seahorse.0, n_limbs).unwrap(),
+                im: crate::escape::fixedpoint::FixedPoint::from_decimal(seahorse.1, n_limbs).unwrap(),
+            });
+            let span_y = 4.0 / zoom.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let truth: Vec<(usize, u32, C64)> = (0..(w * h) as usize)
+                .step_by(stride)
+                .filter_map(|idx| {
+                    let (px, py) = (idx as u32 % w, idx as u32 / w);
+                    let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                    let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                    let env = crate::escape::lang::interp::Env::at(C64::ZERO, iters);
+                    let mut m = crate::escape::lang::bigeval::BigMachine::new(d.clone(), params.clone(), env, c.add(&crate::escape::bigfloat::BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
+                    for i in 0..iters {
+                        if !m.step().unwrap() {
+                            let dz = m.complex_var(dzv);
+                            return Some((idx, i + 1, C64::new(dz.re.to_f64(), dz.im.to_f64()).scale(span_y / h as f64)));
+                        }
+                    }
+                    None
+                })
+                .collect();
+            let score = |r: &Records| truth.iter().filter(|(i, n, dz)| r[*i].n == *n && close(r[*i].dz, *dz)).count();
+            let theirs = score(&records_with(&built_in, w, h, deep, true, false, true));
+            let ours = score(&records_with(&esc, w, h, deep, true, false, true));
+            println!("the twin at zoom {zoom}: of {} escaping pixels in big floats, its derivative right on {ours}, the built-in's on {theirs}", truth.len());
+            assert!(truth.len() > 50 && ours + truth.len() / 50 >= theirs, "zoom {zoom}: {ours} against {theirs}");
+        }
+    }
+
+    /// A custom formula's nucleus reference renders (plan, phase 4, step
+    /// 9c): the Mandelbrot's twin and UF's Mandelbrot that starts at its
+    /// pixel, their references relocated to the nucleus governing the
+    /// view -- period 3 a few pixels off a zoom-6 view, period 998 at
+    /// the deep seahorse view (zoom 42) -- count against the truth as
+    /// their plain references do (`ESCAPE_DISABLE_NUCLEUS`).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_renders_from_its_nucleus() {
+        const P: &str = "P {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < 4\n}";
+        let twin = crate::escape::twins::custom_source("mandelbrot").unwrap();
+        let near3 = ("-1.76", "0.005");
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        let (w, h) = (64u32, 48u32);
+        for (text, entry, (cre, cim), zoom, iters, period) in [
+            (twin.source.as_str(), "", near3, 6.0, 1000u32, 3u32),
+            (P, "P", near3, 6.0, 1000, 3),
+            (twin.source.as_str(), "", seahorse, 42.0, 8000, 998),
+            (P, "P", seahorse, 42.0, 8000, 998),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let esc = if entry.is_empty() {
+                let mut t = esc;
+                t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &twin);
+                t.custom_formula = Some(twin.clone());
+                t
+            } else {
+                with_custom(esc, Some((text, entry)), None)
+            };
+            crate::escape::custom::ensure(&esc);
+            let what = format!("{} at zoom {zoom}", if entry.is_empty() { "the twin" } else { entry });
+            crate::escape::reference::set_live_reference_period(None);
+            let relocated = records_on(&esc, w, h, false, true, false);
+            assert_eq!(crate::escape::reference::live_reference_period(), Some(period), "{what}: no nucleus reference");
+            std::env::set_var("ESCAPE_DISABLE_NUCLEUS", "1");
+            let plain = records_on(&esc, w, h, false, true, false);
+            std::env::remove_var("ESCAPE_DISABLE_NUCLEUS");
+            let src = esc.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, src).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 4.0;
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, iters, (w, h), 7, 4);
+            let right = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, n)| r[*i].n == *n).count();
+            let (a, b) = (right(&relocated), right(&plain));
+            let escaped = truth.iter().filter(|(_, n)| *n < iters).count();
+            println!("{what}: of {} pixels in big floats ({escaped} escape), the nucleus reference counts {a} right, the plain one {b}", truth.len());
+            assert!(escaped > truth.len() / 4, "{what}: the view escapes too little");
+            assert!(a + truth.len() / 50 >= b && a * 10 >= truth.len() * 9, "{what}: {a} against {b}");
+        }
+    }
+
+    /// The built-ins' twins (phase 4, step 4: `escape::twins`) render as
+    /// their built-ins: directly, with the smooth colouring (which reads
+    /// the twin's declared degree), on both planes and every Burning Ship
+    /// variant; and perturbed at the visual suite's deep views, by derived
+    /// equations against the built-ins' native tiers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn builtin_twins_render_and_deep_zoom_as_their_builtins() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let twin_of = |esc: &crate::config::escape::EscapeConfig| {
+            let src = crate::escape::twins::custom_source(&esc.formula).expect("a twin");
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            t
+        };
+        // (built-in, its params, centre, zoom, julia, allowed share)
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f64, bool, f64)] = &[
+            ("mandelbrot", &[], ("-0.6", "0"), 0.4, false, 0.0),
+            ("mandelbrot", &[], ("0", "0"), 0.0, true, 0.0),
+            ("multibrot", &[("power", 3.0)], ("0", "0"), 0.2, false, 0.03),
+            ("tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2, false, 0.03),
+            ("tricorn", &[("power", 3.0)], ("0", "0"), 0.2, false, 0.03),
+            ("burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5, false, 0.03),
+            ("burning_ship", &[("variant", 1.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 2.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 3.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 4.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 5.0)], ("-0.5", "0"), 0.4, false, 0.03),
+            ("burning_ship", &[("variant", 0.0)], ("0", "0"), 0.0, true, 0.03),
+            ("lambda", &[], ("1", "0"), -0.5, false, 0.0),
+            ("lambda", &[], ("0.5", "0"), 0.0, true, 0.0),
+            ("cactus", &[], ("0", "0"), 0.5, false, 0.0),
+            ("cactus", &[], ("0", "0"), 0.5, true, 0.0),
+            // Carrying a value besides z (step 5).
+            ("phoenix", &[("p_re", -0.5)], ("0", "0"), 0.0, false, 0.0),
+            ("phoenix", &[("p_re", -0.5)], ("0", "0"), -0.3, true, 0.0),
+            ("manowar", &[], ("-0.4", "0"), 1.0, false, 0.0),
+            ("spider", &[], ("-0.4", "0"), 0.0, false, 0.0),
+            // A branch on the iterate: the greedy digit, every set.
+            ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, false, 0.0),
+            ("littlewood", &[("digit_set", 1.0)], ("0", "0"), 0.5, false, 0.0),
+            ("littlewood", &[("digit_set", 2.0)], ("0", "0"), 0.5, false, 0.0),
+            ("littlewood", &[("digit_set", 0.0)], ("0", "0"), 0.5, true, 0.0),
+            // Branches on the iterate, a fold, never escaping (batch 3).
+            ("barnsley", &[("variant", 0.0)], ("0", "0"), 0.0, true, 0.0),
+            ("barnsley", &[("variant", 1.0)], ("0", "0"), 0.0, true, 0.0),
+            ("barnsley", &[("variant", 2.0)], ("0.3", "0"), 0.0, false, 0.0),
+            ("kaliset", &[("plus_c", 0.0)], ("0", "0"), 0.5, true, 0.0),
+            ("kaliset", &[("plus_c", 1.0)], ("0", "0"), 0.5, false, 0.0),
+            // The built-in's arithmetic step for step (its other variants
+            // match exactly); the map is chaotic over these 80 passes, and
+            // a rounding moves 1.6% of the pixels.
+            ("ducks", &[("variant", 0.0)], ("0", "0"), -0.5, false, 0.02),
+            ("ducks", &[("variant", 2.0)], ("0", "0"), -0.5, false, 0.0),
+            ("ducks", &[("variant", 3.0)], ("0", "0"), -0.5, true, 0.0),
+            ("lattes", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
+            ("lattes", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
+            ("lattes", &[("variant", 2.0)], ("0", "0"), -1.0, false, 0.0),
+            // Convergent: an orbit ends as it settles (batch 4); Newton by
+            // every function, and every scheme at two.
+            ("magnet", &[("variant", 0.0)], ("1", "0"), -0.8, false, 0.001),
+            ("magnet", &[("variant", 1.0)], ("1", "0"), -0.8, false, 0.001),
+            ("magnet", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.001),
+            ("nova", &[], ("-0.3", "0"), 0.5, false, 0.001),
+            ("nova", &[], ("0", "0"), 0.0, true, 0.001),
+            ("novaretti", &[], ("0", "0"), -2.0, false, 0.001),
+            ("novaretti", &[], ("0", "0"), 0.0, true, 0.001),
+            ("newton", &[("func", 0.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 0.0), ("scheme", 1.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 0.0), ("scheme", 2.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 0.0), ("relax_re", 1.5), ("relax_im", 0.3)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 1.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 1.0), ("scheme", 2.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 2.0)], ("0", "0"), 0.0, false, 0.001),
+            ("newton", &[("func", 3.0)], ("1.5", "0"), -1.5, false, 0.001),
+            ("newton", &[("func", 4.0)], ("0", "0"), -1.0, false, 0.001),
+            ("newton", &[("func", 5.0)], ("0", "0"), 0.0, false, 0.001),
+            // Folded paper (item 3): its lines a table `prepare` builds as
+            // the built-in's, in f32.
+            ("origami", &[("seed", 8.0), ("spread", 2.0)], ("0", "0"), -1.0, false, 0.0),
+            ("origami", &[("seed", 123.0), ("spread", 1.3)], ("0.3", "-0.2"), 1.5, false, 0.0),
+            // Powers by parameters, a pole (item 2, batch 2).
+            // Chaotic in f32 here: against f64 the built-in's counts differ
+            // on 328 of 6,144 pixels, the twin's on 313 (each one's f32
+            // rounding decides); the two differ on 10% of pixels by 1e-4.
+            ("feather", &[("power", 3.0)], ("-0.35", "0"), 0.5, false, 0.12),
+            ("feather", &[("power", 4.0)], ("0", "0"), 0.5, true, 0.03),
+            ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("0", "0"), 0.5, true, 0.03),
+            ("mcmullen", &[("n", 3.0), ("m", 2.0)], ("0", "0"), 0.0, false, 0.03),
+            // Escaping on Re z or |Im z| (item 2, batch 1).
+            ("exponential", &[], ("-1", "0"), -1.0, false, 0.0),
+            ("exponential", &[], ("0", "0"), -1.0, true, 0.0),
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, false, 0.0),
+            ("trig", &[("variant", 1.0)], ("0", "0"), -1.0, false, 0.0),
+            ("trig", &[("variant", 0.0)], ("0", "0"), -1.0, true, 0.0),
+            ("lambda_sine", &[], ("0", "0"), -1.0, false, 0.0),
+            ("lambda_sine", &[], ("0", "0"), -1.0, true, 0.0),
+            ("collatz", &[], ("1", "0"), 1.5, false, 0.0),
+            // Its log rounds otherwise than the built-in's (`log(length)`
+            // against `0.5 log(r^2)`), and the map is chaotic: 0.2%.
+            ("tetration", &[], ("0", "0"), -1.5, false, 0.005),
+            ("tetration", &[], ("0", "0"), -1.5, true, 0.005),
+        ];
+        for &(formula, params, (cre, cim), zoom, julia, allowed) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "smooth".into();
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            // One that never escapes draws by an interior colouring, over
+            // its presets' short orbits (chaotic maps: a long one's end is
+            // its rounding's).
+            let built = crate::escape::get_formula(formula);
+            if built.has_feature(crate::escape::FormulaFeature::NonEscaping) && !built.has_feature(crate::escape::FormulaFeature::Convergent) {
+                esc.coloring = "orbit_average".into();
+                esc.max_iter = match formula {
+                    "lattes" => 5,
+                    "kaliset" => 24,
+                    _ => 80,
+                };
+            }
+            // One that settles by its count: the smooth colouring's log of
+            // log |z| at a settled z, |z| near 1 at a root, amplifies a
+            // power's rounding (the twin's `exp(p log z)` against the
+            // built-in's polar form) into colour. A root finder by its
+            // basins, which read `converged`.
+            if built.has_feature(crate::escape::FormulaFeature::Convergent) {
+                esc.coloring = if formula == "newton" { "root_basin" } else { "escape_count" }.into();
+            }
+            // Folded paper by the position its preset maps.
+            if formula == "origami" {
+                esc.coloring = "position_map".into();
+                esc.max_iter = 32;
+                for (k, v) in [("address_mix", 1.5), ("freq_x", 5.0), ("freq_y", 1.5)] {
+                    esc.coloring_params.insert(k.into(), v);
+                }
+            }
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.julia = julia;
+            (esc.julia_re, esc.julia_im) = match formula {
+                "lambda" => (1.5, 0.4),
+                "phoenix" => (0.5667, 0.0),
+                // Past the unit circle, or every start stays bounded.
+                "littlewood" => (1.1, 0.4),
+                "exponential" => (-0.65, 0.0),
+                "mcmullen" => (0.04, 0.0),
+                "barnsley" => (0.6, 1.1),
+                "kaliset" => (0.6, 0.4),
+                "ducks" => (-0.3, 0.6),
+                "trig" => (1.0, 0.5),
+                "lambda_sine" => (1.0, 0.4),
+                "tetration" => (1.2, 0.6),
+                "magnet" => (1.4, 0.3),
+                "nova" => (-0.3, 0.2),
+                "novaretti" => (0.3, 0.2),
+                _ => (-0.8, 0.156),
+            };
+            let what = format!("{formula} {params:?}{}", if julia { " julia" } else { "" });
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let twin = twin_of(&esc);
+            let got = output_on(&device, &queue, &renderer, &twin, w, h, false);
+            assert!(crate::escape::get_formula(&twin.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            // The pass a settle test fires on is f32 rounding's (`|z -
+            // prev|^2` under 1e-12 at an O(1) z): where the twin's
+            // arithmetic is not the built-in's to the rounding (a power by
+            // `exp(p log z)`, the built-in's polar), counts part by one --
+            // against f64 each is right on about half of those -- and on a
+            // chaotic boundary by more. Measured: each one's counts off
+            // f64's by more than one, the twin's no more often than the
+            // built-in's, `allowed` the slack.
+            if built.has_feature(crate::escape::FormulaFeature::Convergent) {
+                use rayon::prelude::*;
+                let (ra, rb) = (records_on(&esc, w, h, false, false, true), records_on(&twin, w, h, false, false, true));
+                let src = twin.custom_formula.as_ref().unwrap();
+                let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+                let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+                for (i, x) in prog.params.iter().enumerate() {
+                    if x.name == "bailout" {
+                        values.values[i].0 = f64::from(esc.bailout);
+                    } else if let Some(v) = esc.formula_params.get(&x.name) {
+                        values.values[i].0 = f64::from(*v);
+                    }
+                }
+                let values = as_on_the_gpu(values);
+                let (cx, cy): (f64, f64) = (cre.parse().unwrap(), cim.parse().unwrap());
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                let exact: Vec<u32> = (0..w * h)
+                    .into_par_iter()
+                    .map(|i| {
+                        let (px, py) = (i % w, i / w);
+                        let c = crate::escape::lang::builtins::C64::new(
+                            cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x,
+                            cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y,
+                        );
+                        let mut env = crate::escape::lang::interp::Env::at(c, esc.max_iter);
+                        if julia {
+                            (env.julia, env.julia_c) = (true, crate::escape::lang::builtins::C64::new(f64::from(esc.julia_re), f64::from(esc.julia_im)));
+                        }
+                        crate::escape::lang::interp::run(&prog, &values, None, &env).n
+                    })
+                    .collect();
+                let share = |r: &[crate::escape::renderer::IterRecord], f: &dyn Fn(u32, u32) -> bool| r.iter().zip(&exact).filter(|(a, t)| f(a.n, **t)).count() as f64 / r.len() as f64;
+                let apart = ra.iter().zip(&rb).filter(|(a, b)| a.n != b.n).count() as f64 / ra.len() as f64;
+                let (off_built_in, off_twin) = (share(&ra, &|a, t| a.abs_diff(t) > 1), share(&rb, &|a, t| a.abs_diff(t) > 1));
+                println!(
+                    "{what}: the twin's counts differ on {:.3}% of pixels; off f64's by more than one, the built-in's {:.3}%, the twin's {:.3}%",
+                    apart * 100.0,
+                    off_built_in * 100.0,
+                    off_twin * 100.0
+                );
+                assert!(off_twin <= off_built_in + allowed, "{what}: the twin {:.3}%, the built-in {:.3}%", off_twin * 100.0, off_built_in * 100.0);
+                continue;
+            }
+            println!("{what}: the twin differs on {:.3}% of pixels", d * 100.0);
+            assert!(d <= allowed, "{what}: {:.3}%", d * 100.0);
+        }
+
+        // At depth, perturbed: the twin by derived equations, the built-in
+        // by its native tier. (built-in, params, centre, zoom, iterations,
+        // the Julia constant on that plane)
+        let deep: &[(&str, &[(&str, f32)], (&str, &str), f64, u32, Option<(f32, f32)>)] = &[
+            ("mandelbrot", &[], ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549"), 42.0, 8000, None),
+            ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000, None),
+            ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000, None),
+            ("burning_ship", &[("variant", 0.0)], ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000, None),
+            // Carrying the previous z (step 5).
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-1.1543534481639833789918460777111", "0.6293282132782021964135047790493"), 22.436075, 256, None),
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256, None),
+            ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000, None),
+            // A power given as a parameter, by its difference form (step 6).
+            ("multibrot", &[("power", 4.0)], ("-0.9641787397769701302601128871474335232", "0.20113415795567669775171048165243266489"), 30.0, 2660, None),
+            // Powers by parameters, a pole (item 2, batch 2): the visual
+            // suite's deep views; McMullen's native tier is the Julia
+            // plane's.
+            ("feather", &[("power", 3.0)], ("-0.77291940505873225", "-1.83786610577385723"), 30.0, 600, None),
+            ("mcmullen", &[("n", 2.0), ("m", 3.0)], ("-0.12291872044575830", "-0.36795489251636515"), 30.0, 400, Some((0.05, 0.03))),
+            // Convergent (batch 4): the visual suite's deep views.
+            ("magnet", &[("variant", 0.0)], ("-0.17175811456405135", "0.09206142643187049"), 30.0, 400, None),
+            ("nova", &[("power", 3.0)], ("-0.36039383324484020", "0.22577954314649112"), 30.0, 400, None),
+            ("newton", &[("power", 3.0), ("scheme", 0.0), ("func", 0.0)], ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, None),
+            ("newton", &[("power", 3.0), ("scheme", 1.0), ("func", 0.0)], ("-0.50000000000000000", "0.00365726284994825"), 30.0, 400, None),
+        ];
+        for &(formula, params, (cre, cim), zoom, max_iter, julia) in deep {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = max_iter;
+            esc.bailout = 4.0;
+            if let Some((jr, ji)) = julia {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, jr, ji);
+            }
+            let twin = twin_of(&esc);
+            crate::escape::custom::ensure(&twin);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&twin);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            // A carrying twin runs the deep rung at every depth, as the
+            // renderer has it (`deep_rung_always`); so does Manowar.
+            let floatexp = zoom > 48.0 || matches!(formula, "manowar" | "phoenix" | "spider");
+            let (a, b) = (records_on(&esc, 64, 48, floatexp, true, false), records_on(&twin, 64, 48, floatexp, true, false));
+            // The truth, in big floats, at every seventh pixel: the
+            // twin's own program, its parameters as the GPU holds them.
+            let src = twin.custom_formula.as_ref().unwrap();
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = f64::from(esc.bailout);
+                } else if let Some(v) = esc.formula_params.get(&x.name) {
+                    params.values[i].0 = f64::from(*v);
+                }
+            }
+            let plane = julia.map(|(jr, ji)| crate::escape::lang::builtins::C64::new(f64::from(jr), f64::from(ji)));
+            let truth = truth_counts_on(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), zoom, max_iter, (64, 48), 7, 6, plane);
+            let agree = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, n)| r[*i].n == *n).count();
+            let (built_in_true, twin_true) = (agree(&a), agree(&b));
+            let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            println!(
+                "{formula} at zoom {zoom}: of {} pixels in big floats ({escaped} escape), the built-in counts {built_in_true} right, the twin {twin_true}",
+                truth.len()
+            );
+            assert!(escaped > truth.len() / 4, "{formula}: the view escapes too little");
+            assert!(twin_true + truth.len() / 50 >= built_in_true, "{formula}: the twin {twin_true}, the built-in {built_in_true}");
+        }
+
+        // A convergent formula whose test reads its previous z (carried,
+        // step 5): Newton's method for z^3 = 1 at the suite's Newton deep
+        // view, against the truth.
+        const NEWTON: &str = "N {\ninit:\n z = #pixel\n zold = 0\nloop:\n zold = z\n z = z - (z^3 - 1) / (3 * z^2)\n\
+                              bailout:\n |z - zold| > 1e-8\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.50000000000000000".into();
+        esc.center_im = "0.23019701107058421".into();
+        esc.zoom_log2 = 30.0;
+        esc.max_iter = 400;
+        let newton = with_custom(esc, Some((NEWTON, "N")), None);
+        crate::escape::custom::ensure(&newton);
+        let tier = crate::escape::EscapeRenderer::perturb_tier(&newton);
+        assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { width: 2, .. })), "newton: {tier:?}");
+        let got = records_on(&newton, 64, 48, true, true, false);
+        let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, newton.custom_formula.as_ref().unwrap()).unwrap();
+        let params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+        let truth = truth_counts_of(std::sync::Arc::new(prog), params, ("-0.50000000000000000", "0.23019701107058421"), 30.0, 400, (64, 48), 7, 6);
+        let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+        let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+        let settled = truth.iter().filter(|(_, n)| *n < 400).count();
+        println!("newton at zoom 30: of {} pixels in big floats ({settled} settle), the custom formula counts {right} right, {near} within one", truth.len());
+        assert!(settled > truth.len() / 2, "newton: the view settles too little");
+        assert!(near as f64 >= 0.95 * truth.len() as f64, "newton: {near} of {}", truth.len());
+
+        // Transcendental functions by their difference forms (step 6):
+        // the sine map, a map taking sqrt, log, tan, cabs, expm1 and log1p
+        // at once, and a user function by its choice (sin, log), just
+        // outside boundary points found by bisection. (On the boundary,
+        // escaping after thousands of chaotic steps, f32 deviations lose
+        // the count as f64 ones do, only sooner.)
+        const SINE: &str = "S {\ninit:\n z = #pixel\nloop:\n z = sin(z) * #pixel\nbailout:\n abs(imag(z)) < 40\n}";
+        const MANY: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel + 0.01 * (sqrt(z + 2) + log(z + 3) + tan(z * 0.1) + cabs(z) + expm1(z * 0.1) + log1p(z * 0.1))\n\
+                            bailout:\n |z| < 4\n}";
+        const USER: &str = "U {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel + 0.1 * @fn1(z)\nbailout:\n |z| < 4\n\
+                            default:\n func fn1\n  default = sin()\n endfunc\n}";
+        let choice = |name: &str| crate::escape::lang::builtins::USER_FUNCTIONS.iter().position(|f| f.name() == name).unwrap();
+        // Branches on the iterate (step 6c): Barnsley's on Re z, and a
+        // chain on both parts' signs.
+        const BARNSLEY: &str = "B {\ninit:\n z = #pixel\nloop:\n if real(z) >= 0\n  z = (z - 1) * #pixel\n else\n  z = (z + 1) * #pixel\n endif\n\
+                                bailout:\n |z| < 4\n}";
+        const QUADRANT: &str = "Q {\ninit:\n z = 0\nloop:\n if real(z) > 0 && imag(z) > 0\n  z = sqr(z) + #pixel\n elseif real(z) > 0\n  z = sqr(z) * 1.1 + #pixel\n\
+                                else\n  z = sqr(z) - 0.1 * z + #pixel\n endif\nbailout:\n |z| < 4\n}";
+        let cases: [(&str, &str, (&str, &str), u32, Option<usize>); 6] = [
+            (SINE, "S", ("2.5", "0.16980302245877532"), 3000, None),
+            (MANY, "M", ("-0.75", "0.21462864355418923"), 3000, None),
+            (USER, "U", ("-0.6843621955053129", "0.41170997894266725"), 1000, Some(choice("sin"))),
+            (USER, "U", ("0.20587744975930583", "0.5295480163576282"), 1000, Some(choice("log"))),
+            (BARNSLEY, "B", ("-0.22631372474281347", "1.2433485650826654"), 1000, None),
+            (QUADRANT, "Q", ("0.29662119681736226", "0.4226893135391632"), 1000, None),
+        ];
+        for (src, name, (cre, cim), max_iter, func) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = max_iter;
+            if let Some(k) = func {
+                esc.formula_params.insert("fn1".into(), k as f32);
+            }
+            let custom = with_custom(esc, Some((src, name)), None);
+            crate::escape::custom::ensure(&custom);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{name}: {tier:?}");
+            let got = records_on(&custom, 64, 48, false, true, false);
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, custom.custom_formula.as_ref().unwrap()).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            if let Some(k) = func {
+                params.funcs[0] = k;
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), params, (cre, cim), 30.0, max_iter, (64, 48), 7, 6);
+            let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+            let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+            let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            let name = format!("{name}{}", func.map_or(String::new(), |k| format!(" ({})", crate::escape::lang::builtins::USER_FUNCTIONS[k].name())));
+            println!("{name} at zoom 30: of {} pixels in big floats ({escaped} escape), the custom formula counts {right} right, {near} within one", truth.len());
+            assert!(escaped > truth.len() / 4, "{name}: the view escapes too little");
+            assert!(right as f64 >= 0.95 * truth.len() as f64, "{name}: {right} of {}", truth.len());
+            // The floatexp rung too: its own forms over CFe2, a user
+            // function's helper, a branch's tests.
+            {
+                let got = records_on(&custom, 64, 48, true, true, false);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                println!("{name} on the floatexp rung: {right} right");
+                assert!(right as f64 >= 0.95 * truth.len() as f64, "{name} floatexp: {right} of {}", truth.len());
+            }
+        }
+    }
+
+    /// Littlewood's twin deep-zooms, which the built-in cannot: its greedy
+    /// digit is a branch on the iterate, and the derived equations follow
+    /// it (the plan's look at the formulas thought native for good).
+    /// Against the big-float truth at the root cloud's edge, zoom 30, the
+    /// view's points found by bisection along a ray. The map expands by
+    /// |lambda| every step, so any difference grows as |lambda|^n -- the
+    /// GPU's pixel, an f32 offset from the reference, sits 2^-24 of that
+    /// offset from the truth's, and past ~ln(2^24 / offset) / ln|lambda|
+    /// steps the two sample a field that is noise at this depth (at
+    /// |lambda| 1.28 and 150 iterations both rungs counted 359 and 360 of
+    /// 439, every miss past 100). These views escape within 100 at
+    /// |lambda| 1.32 and 1.23.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_littlewood_twin_deep_zooms() {
+        let src = crate::escape::twins::custom_source("littlewood").unwrap();
+        for (digit_set, (cre, cim)) in [(0.0f32, ("0.4772929003733922", "1.2276697019857257")), (1.0, ("1.011542751811001", "0.6920336294844374"))] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            esc.formula_params.insert("digit_set".into(), digit_set);
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = 100;
+            esc.bailout = 4.0;
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "digit set {digit_set}: {tier:?}");
+            let got = records_on(&esc, 64, 48, false, true, false);
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 4.0;
+                } else if x.name == "digit_set" {
+                    params.values[i].0 = f64::from(digit_set);
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(params), (cre, cim), 30.0, 100, (64, 48), 7, 6);
+            let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+            let escaped = truth.iter().filter(|(_, n)| *n < 100).count();
+            let deep = records_on(&esc, 64, 48, true, true, false);
+            let deep_right = truth.iter().filter(|(i, n)| deep[*i].n == *n).count();
+            println!("littlewood, digit set {digit_set}, at zoom 30: of {} pixels in big floats ({escaped} escape), the twin counts {right} right, {deep_right} on the floatexp rung", truth.len());
+            assert!(escaped > truth.len() / 4, "digit set {digit_set}: the view escapes too little");
+            assert!(right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set}: {right} of {}", truth.len());
+            assert!(deep_right as f64 >= 0.95 * truth.len() as f64, "digit set {digit_set} floatexp: {deep_right} of {}", truth.len());
+        }
+    }
+
+    /// Fractint's Frothy Basin, Volterra-Lotka and Unity, written in Rhai
+    /// (`assets/formulas`; that they run as Fractint's loops is
+    /// `escape::legacy`'s): on the GPU at their home views the direct path,
+    /// and at zoom 30 on a boundary (`escape::legacy::print_boundary_views`)
+    /// the perturbed path on both rungs, count as the program does in big
+    /// floats -- within 8% of the pixels f64 itself gets right, which is
+    /// what a chaotic map allows. Measured (of 439 sampled):
+    /// Volterra-Lotka 439 everywhere, as f64. Unity 430 at home (f64 433);
+    /// at depth on its escaping side 399 on both rungs (f64 411) -- its
+    /// circle test asks for |r^2 - 1| under a pixel, which nothing short of
+    /// big floats resolves at depth (f64: 0 of 439 on a settling boundary),
+    /// so a deep view settles wrong there. Frothy Basin 407 at home in f32
+    /// (f64 439: its landing test is 1e-6 on a chaotic orbit); at depth 318
+    /// scaled, 347 floatexp (f64 351): riddled basins. `PT_LEGACY=print`
+    /// prints only.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_fractint_legacy_formulas_render_and_deep_zoom() {
+        let print_only = std::env::var("PT_LEGACY").is_ok_and(|v| v == "print");
+        // (file, bailout, home centre and zoom, the deep view's centre)
+        let cases: &[(&str, f32, (&str, &str), f32, (&str, &str))] = &[
+            ("volterra-lotka.rhai", 256.0, ("3.0", "2.25"), -0.169925, ("0.30524156307476624", "2.0")),
+            ("unity.rhai", 4.0, ("0.0", "0.0"), 0.415037, ("-1.40535280925440076", "0.13")),
+            ("frothy-basin.rhai", 7.0, ("0.0", "-0.255"), -0.070389, ("-0.59099555910093771", "-0.6")),
+        ];
+        for &(file, bailout, home, home_zoom, deep) in cases {
+            let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
+            let src = crate::config::escape::CustomSource {
+                dialect: crate::config::escape::CustomDialect::Rhai,
+                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                source: text.to_string(),
+                variations: Vec::new(),
+            };
+            let prog = std::sync::Arc::new(crate::escape::lang::rhai::program(text).unwrap());
+            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    values.values[i].0 = f64::from(bailout);
+                }
+            }
+            let values = as_on_the_gpu(values);
+            for (centre, zoom, max_iter) in [(home, home_zoom, 150u32), (deep, 30.0, 300)] {
+                let mut esc = crate::config::escape::EscapeConfig::default();
+                esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                esc.custom_formula = Some(src.clone());
+                esc.center_re = centre.0.into();
+                esc.center_im = centre.1.into();
+                esc.zoom_log2 = zoom.into();
+                esc.max_iter = max_iter;
+                esc.bailout = bailout;
+                crate::escape::custom::ensure(&esc);
+                let truth = truth_counts_of(prog.clone(), values.clone(), centre, f64::from(zoom), max_iter, (64, 48), 7, 6);
+                let distinct = truth.iter().map(|(_, n)| *n).collect::<std::collections::BTreeSet<_>>().len();
+                // f64 itself, unperturbed, at the same pixels: the bar a
+                // chaotic map sets.
+                let (cx, cy) = (centre.0.parse::<f64>().unwrap(), centre.1.parse::<f64>().unwrap());
+                let span_y = 4.0 / f64::from(zoom).exp2();
+                let span_x = span_y * 64.0 / 48.0;
+                let f64_right = truth
+                    .iter()
+                    .filter(|(idx, n)| {
+                        let (px, py) = (*idx as u32 % 64, *idx as u32 / 64);
+                        let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
+                        let mut env = crate::escape::lang::interp::Env::at(c, max_iter);
+                        env.magn = f64::from(zoom).exp2();
+                        crate::escape::lang::interp::run(&prog, &values, None, &env).n == *n
+                    })
+                    .count();
+                println!("{file} at zoom {zoom}: f64 {f64_right} of {} right", truth.len());
+                let rungs: &[(bool, bool)] = if zoom < 1.0 { &[(false, false)] } else { &[(false, true), (true, true)] };
+                for &(floatexp, perturbed) in rungs {
+                    let got = records_on(&esc, 64, 48, floatexp, perturbed, !perturbed);
+                    let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                    let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+                    let how = if !perturbed { "direct" } else if floatexp { "floatexp" } else { "scaled" };
+                    println!("{file} at zoom {zoom}, {how}: {right} of {} right, {near} within one ({distinct} distinct counts)", truth.len());
+                    if !print_only {
+                        assert!(distinct > 3, "{file} at zoom {zoom}: the view shows too little");
+                        assert!(right + truth.len() * 8 / 100 >= f64_right, "{file} at zoom {zoom}, {how}: {right} of {}, f64 {f64_right}", truth.len());
+                    }
+                }
+            }
+        }
+    }
+
+    /// The twins of the built-ins without a native deep tier deep-zoom by
+    /// derived equations (order of work, item 2): those escaping on `Re z`
+    /// or `|Im z|` (batch 1) and Barnsley, whose steps branch on the
+    /// iterate (batch 3), against the big-float truth at zoom 30, on both
+    /// rungs, at views by the edge found by bisection.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_twins_without_a_native_tier_deep_zoom() {
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f32, u32)] = &[
+            ("exponential", &[], ("1.028396859500487", "-2.5"), 50.0, 300),
+            ("trig", &[("variant", 0.0)], ("-2.498552209316636", "-1.25"), 50.0, 300),
+            ("lambda_sine", &[], ("-0.9686709039042004", "-0.25"), 50.0, 300),
+            ("collatz", &[], ("0.9760853061268013", "-0.08"), 10.0, 300),
+            ("tetration", &[], ("2.3523916463991066", "-3.0"), 50.0, 300),
+            ("barnsley", &[("variant", 0.0)], ("-0.9790606547635894", "0.56"), 4.0, 300),
+            ("barnsley", &[("variant", 1.0)], ("-0.24909749436944575", "-0.72"), 4.0, 300),
+            ("barnsley", &[("variant", 2.0)], ("0.13063281077701902", "-0.32"), 4.0, 300),
+        ];
+        for &(formula, params, (cre, cim), bailout, max_iter) in cases {
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = max_iter;
+            esc.bailout = bailout;
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    values.values[i].0 = f64::from(bailout);
+                } else if let Some(v) = esc.formula_params.get(&x.name) {
+                    values.values[i].0 = f64::from(*v);
+                }
+            }
+            let truth = truth_counts_of(std::sync::Arc::new(prog), as_on_the_gpu(values), (cre, cim), 30.0, max_iter, (64, 48), 7, 6);
+            let escaped = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            assert!(escaped > truth.len() / 4 && escaped < truth.len() * 9 / 10, "{formula}: {escaped} of {} escape", truth.len());
+            for floatexp in [false, true] {
+                let got = records_on(&esc, 64, 48, floatexp, true, false);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                println!("{formula} at zoom 30{}: {right} of {} right ({escaped} escape)", if floatexp { ", floatexp" } else { "" }, truth.len());
+                assert!(right as f64 >= 0.95 * truth.len() as f64, "{formula}, floatexp {floatexp}: {right} of {}", truth.len());
+            }
+        }
+    }
+
+    /// The convergent twins deep-zoom by derived equations at basin
+    /// boundaries (order of work, item 2, batch 4): Newton on the
+    /// dynamical plane, `z^3 - 1` (which the native tier also takes) and
+    /// `z^p sin z - 1` (which it does not), and Novaretti, whose orbits
+    /// only settle, on the parameter plane -- each at zoom 30 on a basin's
+    /// boundary found by bisection, where pixels settle long before their
+    /// reference, against the twin's program in big floats, both rungs. A settle count is held within one: the test,
+    /// `|z - prev|^2 < 1e-12`, sits at f32's resolution of an O(1) z, so
+    /// the pass it fires on is rounding's (`builtin_twins_render_and_deep_zoom_as_their_builtins`'s
+    /// convergent Newton counts so too). On a boundary the orbits wander
+    /// before they settle, chaotic past double precision: f64 itself,
+    /// unperturbed, counts Novaretti's view within one on 401 of 439 at
+    /// 150 passes (72% at 300). The bar is f64's: each rung within 2% of
+    /// it (`slack` the divisor), save the one recorded below.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_convergent_twins_deep_zoom() {
+        // Not `sin z - 1` nor `cosh z - 1`: their roots are double, where f
+        // cancels to f32's noise as z nears one, so no f32 path counts
+        // their settling (the direct one at zoom -1.5 off f64's by more
+        // than one on 22% and 51% of pixels, the built-in's as the twin's).
+        // (formula, params, centre, iterations, slack against f64's count)
+        // `z^p sin z - 1` short of f64's by 6%: the same on both rungs, so
+        // not the deviation's precision, and the equations' f64 model
+        // counts 437 -- f32's rounding of what the rungs share, where the
+        // pixels settle and the reference, its sin growing as e^|Im z|,
+        // wanders on (the plan's order of work, item 6).
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), u32, usize)] = &[
+            ("newton", &[("func", 0.0)], ("0.6982638162659913", "-1.0990000000000002"), 300, 50),
+            ("newton", &[("func", 5.0)], ("-1.4976661726096265", "-2.0"), 300, 14),
+            ("novaretti", &[], ("-1.1495849563492808", "-2.0"), 150, 50),
+        ];
+        for &(formula, params, (cre, cim), max_iter, slack) in cases {
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = 30.0;
+            esc.max_iter = max_iter;
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let prog = crate::escape::lang::rhai::program(&src.source).unwrap();
+            let mut values = crate::escape::lang::interp::ParamValues::defaults(&prog);
+            for (i, x) in prog.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    values.values[i].0 = f64::from(esc.bailout);
+                } else if let Some(v) = esc.formula_params.get(&x.name) {
+                    values.values[i].0 = f64::from(*v);
+                }
+            }
+            let values = as_on_the_gpu(values);
+            let truth = truth_counts_of(std::sync::Arc::new(prog.clone()), values.clone(), (cre, cim), 30.0, max_iter, (64, 48), 7, 6);
+            let settled = truth.iter().filter(|(_, n)| *n < max_iter).count();
+            let distinct = truth.iter().map(|(_, n)| *n).collect::<std::collections::BTreeSet<_>>().len();
+            assert!(settled > truth.len() / 20 && distinct > 5, "{formula} {params:?}: {settled} of {} settle, {distinct} counts", truth.len());
+            // f64, unperturbed, at the same pixels: what double precision
+            // resolves of the view.
+            let (cx, cy): (f64, f64) = (cre.parse().unwrap(), cim.parse().unwrap());
+            let span_y = 4.0 / 30f64.exp2();
+            let span_x = span_y * 64.0 / 48.0;
+            let f64_near = truth
+                .iter()
+                .filter(|&&(i, n)| {
+                    let (px, py) = (i as u32 % 64, i as u32 / 64);
+                    let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / 64.0 - 0.5) * span_x, cy - ((py as f64 + 0.5) / 48.0 - 0.5) * span_y);
+                    crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(c, max_iter)).n.abs_diff(n) <= 1
+                })
+                .count();
+            for floatexp in [false, true] {
+                let got = records_on(&esc, 64, 48, floatexp, true, false);
+                let right = truth.iter().filter(|(i, n)| got[*i].n == *n).count();
+                let near = truth.iter().filter(|(i, n)| got[*i].n.abs_diff(*n) <= 1).count();
+                println!(
+                    "{formula} {params:?} at zoom 30{}: of {} pixels ({settled} settle, {distinct} counts), {right} right, {near} within one (f64 {f64_near})",
+                    if floatexp { ", floatexp" } else { "" },
+                    truth.len()
+                );
+                assert!(near + truth.len() / slack >= f64_near, "{formula} {params:?}, floatexp {floatexp}: {near} of {}, f64 {f64_near}", truth.len());
+            }
+        }
+    }
+
+    /// Rhai colourings (phase 4, step 3) through the whole renderer, beside
+    /// the built-in Mandelbrot: the examples render as their UF twins,
+    /// and UF's example colourings render as they do once converted.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn rhai_colourings_render_as_their_uf_twins() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let with_rhai_coloring = |mut esc: crate::config::escape::EscapeConfig, source: String| {
+            let title = crate::escape::lang::rhai::title(&source).unwrap_or_default();
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: title, source, variations: Vec::new() };
+            esc.coloring = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+            esc.custom_coloring = Some(src);
+            esc
+        };
+        const UF_TRAP: &str = "T {\ninit:\n float c = cabs(#z - @point)\nloop:\n float d = cabs(#z - @point)\n if d < c\n  c = d\n endif\n\
+                               final:\n if c < @width\n  #solid = true\n else\n  #index = sqrt(c) * @scale\n endif\n\
+                               default:\n param point\n  default = (0, 0)\n endparam\n float param width\n  default = 0\n endparam\n\
+                               float param scale\n  default = 2\n endparam\n}";
+        let examples = include_str!("../../assets/formulas/examples.ucl");
+        // (what, the UF source and entry, the Rhai source)
+        let mut cases: Vec<(String, String, String, String)> = vec![
+            ("smooth".into(), examples.into(), "Smooth".into(), include_str!("../../assets/formulas/smooth.rhai").into()),
+            ("orbit trap".into(), UF_TRAP.into(), "T".into(), include_str!("../../assets/formulas/orbit-trap.rhai").into()),
+        ];
+        let (parsed, _) = crate::escape::lang::parser::parse_file(examples);
+        for e in &parsed.entries {
+            let rhai = crate::escape::custom::convert_to_rhai(examples, &e.name, EntryKind::Coloring, CustomDialect::UltraFractal, "examples.ucl")
+                .unwrap_or_else(|why| panic!("{}: {why}", e.name));
+            cases.push((format!("{} converted", e.name), examples.into(), e.name.clone(), rhai));
+        }
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.max_iter = 200;
+        esc.bailout = 4.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        for (what, uf_text, entry, rhai) in &cases {
+            let uf = with_custom(esc.clone(), None, Some((uf_text, entry)));
+            let want = output_on(&device, &queue, &renderer, &uf, w, h, false);
+            let rc = with_rhai_coloring(esc.clone(), rhai.clone());
+            let got = output_on(&device, &queue, &renderer, &rc, w, h, false);
+            assert_eq!(crate::escape::get_coloring(&rc.coloring).name, rc.coloring, "{what} did not compile");
+            let covered = want.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&want, &got);
+            println!("{what}: the Rhai colouring differs from its UF twin on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.001, "{what}: {:.3}%", d * 100.0);
+        }
+    }
+
+    /// A one-group hybrid renders as the built-in it spells: the
+    /// presets KF's "To Hybrid" would map, through the whole renderer.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_hybrid_renders_as_its_built_in() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let presets = crate::escape::lang::hybrid::presets();
+        let preset = |name: &str| presets.iter().find(|(n, _)| *n == name).unwrap().1.clone();
+        // (preset, built-in formula, its params, centre, zoom)
+        let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64)] = &[
+            ("Mandelbrot", "mandelbrot", &[], ("-0.6", "0"), 0.4),
+            ("Cubic Mandelbrot", "multibrot", &[("power", 3.0)], ("0", "0"), 0.2),
+            ("Burning Ship", "burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5),
+            ("Perpendicular Mandelbrot", "burning_ship", &[("variant", 1.0)], ("-0.5", "0"), 0.4),
+            ("Perpendicular Burning Ship", "burning_ship", &[("variant", 2.0)], ("-0.5", "0"), 0.4),
+            ("Tricorn", "tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2),
+        ];
+        for &(name, formula, params, (cre, cim), zoom) in cases {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let hybrid = with_hybrid(esc.clone(), &preset(name));
+            let got = output_on(&device, &queue, &renderer, &hybrid, w, h, false);
+            assert!(crate::escape::get_formula(&hybrid.formula).has_feature(crate::escape::FormulaFeature::Program), "{name} did not compile");
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "{name}: the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{name}: the hybrid differs from {formula} on {:.3}% of pixels", d * 100.0);
+            assert!(d <= 0.03, "{name}: {:.3}%", d * 100.0);
+        }
+    }
+
+    /// The share of pixels two renders disagree on, by colour or by
+    /// coverage.
+    fn differing(a: &[f32], b: &[f32]) -> f64 {
+        let px = a.len() / 4;
+        let bad = (0..px)
+            .filter(|&i| (0..4).any(|k| (a[i * 4 + k] - b[i * 4 + k]).abs() > 1e-4))
+            .count();
+        bad as f64 / px as f64
+    }
+
+    /// Built-ins rewritten in the formula language render as the
+    /// built-ins do (plan step 5). Exact where the arithmetic is the
+    /// same; Multibrot and Tricorn raise to a power by polar form where
+    /// the language multiplies, and Burning Ship doubles one product
+    /// (`2 ax ay`) where `sqr` adds two (`ax ay + ay ax`), which the
+    /// driver may fuse into an fma: equal in exact arithmetic, an ulp
+    /// apart in f32, which the ship's chaotic boundary amplifies in a
+    /// few percent of its pixels (measured 1.95%). And a custom
+    /// colouring renders as its built-in on the
+    /// PERTURBED path at depth, which is where custom colourings reach
+    /// in phase 1.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_entries_render_as_their_built_ins() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const EC: &str = "EC(OUTSIDE) {\nfinal:\n #index = #numiter * @scale\ndefault:\n float param scale\n  default = 0.05\n endparam\n}";
+        let base = || {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 200;
+            esc.bailout = 16.0;
+            esc
+        };
+        // (what, built-in formula, its params, centre, zoom, source, entry, allowed share)
+        let cases: &[(&str, &str, &[(&str, f32)], (&str, &str), f64, &str, &str, f64)] = &[
+            ("mandelbrot", "mandelbrot", &[], ("-0.6", "0"), 0.4,
+             "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}", "M", 0.0),
+            ("burning ship", "burning_ship", &[("variant", 0.0)], ("-0.5", "-0.4"), 0.5,
+             "B {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n}", "B", 0.03),
+            ("lambda", "lambda", &[], ("1", "0"), -0.5,
+             "L {\ninit:\n z = 0.5\nloop:\n z = #pixel * (z * (1 - z))\nbailout:\n |z| < @bailout\n}", "L", 0.0),
+            ("magnet I", "magnet", &[("variant", 0.0)], ("1", "0"), -0.8,
+             "Mg {\ninit:\n z = 0\nloop:\n zold = z\n z = sqr((z^2 + #pixel - 1) / (2*z + #pixel - 2))\n\
+              bailout:\n |z| < @bailout && |z - zold| >= 1e-12\n}", "Mg", 0.0),
+            ("multibrot 3", "multibrot", &[("power", 3.0)], ("0", "0"), 0.2,
+             "M3 {\ninit:\n z = 0\nloop:\n z = z^3 + #pixel\nbailout:\n |z| < @bailout\n}", "M3", 0.03),
+            ("tricorn", "tricorn", &[("power", 2.0)], ("-0.3", "0"), 0.2,
+             "T {\ninit:\n z = 0\nloop:\n z = sqr(conj(z)) + #pixel\nbailout:\n |z| < @bailout\n}", "T", 0.03),
+        ];
+        for &(what, formula, params, (cre, cim), zoom, src, entry, allowed) in cases {
+            let mut esc = base();
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            // The same view with the custom formula, and then also the
+            // custom colouring: two substitutions, one at a time.
+            let custom_f = with_custom(esc.clone(), Some((src, entry)), None);
+            let both = with_custom(custom_f.clone(), None, Some((EC, "EC")));
+            let a = output_on(&device, &queue, &renderer, &custom_f, w, h, false);
+            let b = output_on(&device, &queue, &renderer, &both, w, h, false);
+            assert!(crate::escape::get_formula(&custom_f.formula).has_feature(crate::escape::FormulaFeature::Program), "{what} did not compile");
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "{what}: the view shows too little ({covered})");
+            let (da, db) = (differing(&built_in, &a), differing(&built_in, &b));
+            println!("{what}: custom formula differs on {:.3}% of pixels, with the custom colouring {:.3}%", da * 100.0, db * 100.0);
+            assert!(da <= allowed, "{what}: the custom formula differs on {:.3}%", da * 100.0);
+            assert!(db <= allowed, "{what}: the custom colouring differs on {:.3}%", db * 100.0);
+        }
+
+        // An accumulating colouring at depth, perturbed: the same z every
+        // iteration, the same arithmetic, the same picture.
+        const MA: &str = "MA {\ninit:\n float s = 0\n float n = 0\nloop:\n s = s + cabs(#z)\n n = n + 1\n\
+                          final:\n #index = (s / n - @offset) * @scale\ndefault:\n float param scale\n  default = 1\n endparam\n\
+                          float param offset\n  default = 0\n endparam\n}";
+        let mut deep = crate::config::escape::EscapeConfig::default();
+        deep.formula = "mandelbrot".into();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        deep.coloring = "magnitude_average".into();
+        deep.coloring_params.insert("scale".into(), 0.3);
+        deep.coloring_params.insert("offset".into(), 0.0);
+        deep.coloring_params.insert("deband".into(), 0.0);
+        let built_in = output_on(&device, &queue, &renderer, &deep, w, h, true);
+        let custom = with_custom(deep.clone(), None, Some((MA, "MA")));
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, true);
+        let d = differing(&built_in, &got);
+        println!("perturbed magnitude average: custom differs on {:.3}%", d * 100.0);
+        assert!(d == 0.0, "the custom colouring at depth differs on {:.3}% of pixels", d * 100.0);
+    }
+
+    /// Arrays through the renderer (plan, item 3, step 3a): a formula
+    /// whose step reads global tables and keeps a per-pixel history
+    /// renders as the built-in Mandelbrot it equals -- a table picks the
+    /// branch and adds a zero, leaving the step's arithmetic alone (a
+    /// factor of one read at run time lets the driver contract `z^2 * k
+    /// + c` otherwise: 0.03% of pixels moved, a scalar global's alike) --
+    /// and a colouring counting its passes
+    /// in an array, its scale in a global one, as escape count's custom
+    /// twin, on the direct path and perturbed at depth.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_arrays_render_as_their_scalars() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const MA: &str = "MA {\nglobal:\n int sel[3]\n sel[2] = 1\n complex m[2, 2]\n m[1, 1] = (0, 0)\n\
+                          init:\n z = 0\n complex hist[2]\nloop:\n hist[1] = hist[0]\n hist[0] = z\n\
+                          if sel[2] == 1\n  z = sqr(z) + #pixel + m[1, 1]\n else\n  z = hist[1]\n endif\nbailout:\n |z| < @bailout\n}";
+        const EC: &str = "EC(OUTSIDE) {\nfinal:\n #index = #numiter * @scale\ndefault:\n float param scale\n  default = 0.05\n endparam\n}";
+        const ECA: &str = "ECA(OUTSIDE) {\nglobal:\n float wt[2]\n wt[1] = @scale\ninit:\n int count[2]\nloop:\n count[1] = count[1] + 1\n\
+                           final:\n #index = count[1] * wt[1]\ndefault:\n float param scale\n  default = 0.05\n endparam\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 200;
+        esc.bailout = 16.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+        let custom = with_custom(esc.clone(), Some((MA, "MA")), None);
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+        assert!(crate::escape::get_formula(&custom.formula).has_feature(crate::escape::FormulaFeature::Program), "the array formula did not compile");
+        let d = differing(&built_in, &got);
+        println!("an array formula differs from the Mandelbrot on {:.3}% of pixels", d * 100.0);
+        assert!(d == 0.0, "the array formula differs on {:.3}%", d * 100.0);
+        // The colourings, each custom, on the direct path and perturbed.
+        let mut deep = esc.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        // At depth, by derived equations reading the tables from `fdata`:
+        // as the same formula without them.
+        const MT: &str = "MT {\nglobal:\n int sel[3]\n sel[2] = 1\n complex m[2, 2]\n m[1, 1] = (0, 0)\ninit:\n z = 0\n\
+                          loop:\n if sel[2] == 1\n  z = sqr(z) + #pixel + m[1, 1]\n else\n  z = sqr(z)\n endif\nbailout:\n |z| < @bailout\n}";
+        const M: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}";
+        let tables = with_custom(deep.clone(), Some((MT, "MT")), None);
+        crate::escape::custom::ensure(&tables);
+        assert!(matches!(crate::escape::EscapeRenderer::perturb_tier(&tables), Some(crate::escape::assembler::PerturbTier::Custom { .. })), "the tables' formula derives");
+        let (a, b) = (output_on(&device, &queue, &renderer, &tables, w, h, true), output_on(&device, &queue, &renderer, &with_custom(deep.clone(), Some((M, "M")), None), w, h, true));
+        let d = differing(&a, &b);
+        println!("at depth, a formula reading tables differs from it without on {:.3}% of pixels", d * 100.0);
+        assert!(d == 0.0, "at depth the tables' formula differs on {:.3}%", d * 100.0);
+        for (what, view, perturbed) in [("direct", &esc, false), ("perturbed", &deep, true)] {
+            let a = output_on(&device, &queue, &renderer, &with_custom(view.clone(), None, Some((EC, "EC"))), w, h, perturbed);
+            let b = output_on(&device, &queue, &renderer, &with_custom(view.clone(), None, Some((ECA, "ECA"))), w, h, perturbed);
+            let covered = a.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100, "{what}: the view shows too little ({covered})");
+            let d = differing(&a, &b);
+            println!("{what}: an array colouring differs from its scalar twin on {:.3}% of pixels", d * 100.0);
+            assert!(d == 0.0, "{what}: the array colouring differs on {:.3}%", d * 100.0);
+        }
+    }
+
+    /// Arrays sized by the settings (plan, item 3, step 3f): a formula
+    /// and a colouring whose tables are sized by a parameter and by
+    /// `#maxiter`, rendered at values other than their defaults (the
+    /// renderer compiles them at those sizes, `custom::resolve`), as the
+    /// built-ins they reduce to; and the same converted to Rhai. Each
+    /// term is zero only at the right size (at the default's a clamped
+    /// write lands on the element read:
+    /// `custom::tests::a_size_the_settings_fix_compiles_at_them`).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn custom_arrays_sized_by_the_settings_render_at_their_sizes() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 112u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const MS: &str = "MS {\nglobal:\n float t[@n]\n int i = 0\n while i < @n\n  t[i] = i\n  i = i + 1\n endwhile\n\
+                          float u[trunc(#maxiter / 2)]\n u[trunc(#maxiter / 2) - 1] = 5\ninit:\n z = 0\n float h[@n + 1]\n int j = 0\n while j <= @n\n  h[j] = j\n  j = j + 1\n endwhile\n\
+                          loop:\n z = sqr(z) + #pixel + (t[2] - 2) + (h[3] - 3) + (u[#maxiter + 10] - 5)\nbailout:\n |z| < @bailout\n\
+                          default:\n int param n\n  default = 3\n endparam\n}";
+        const ECS: &str = "ECS(OUTSIDE) {\nglobal:\n float wt[@k]\n int i = 0\n while i < @k\n  wt[i] = i\n  i = i + 1\n endwhile\n\
+                           final:\n #index = #numiter * @scale + (wt[1] - 1)\ndefault:\n float param scale\n  default = 0.05\n endparam\n\
+                           int param k\n  default = 2\n endparam\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 200;
+        esc.bailout = 16.0;
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0".into();
+        esc.zoom_log2 = 0.4;
+        let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+        let mut custom = with_custom(esc.clone(), Some((MS, "MS")), Some((ECS, "ECS")));
+        custom.formula_params.insert("n".into(), 7.0);
+        custom.coloring_params.insert("k".into(), 5.0);
+        let resolved = crate::escape::custom::resolve(&custom);
+        assert_ne!(resolved.formula, custom.formula, "the formula is compiled at its sizes");
+        assert_ne!(resolved.coloring, custom.coloring, "the colouring is compiled at its sizes");
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+        let d = differing(&built_in, &got);
+        println!("at their sizes, the formula and colouring differ from the built-ins on {:.3}% of pixels", d * 100.0);
+        assert!(d == 0.0, "at their sizes they differ on {:.3}%", d * 100.0);
+        // Converted to Rhai, at the same settings.
+        use crate::config::escape::{CustomDialect, CustomSource};
+        use crate::escape::lang::EntryKind;
+        let mut rhai = custom.clone();
+        for (kind, text, entry) in [(EntryKind::Formula, MS, "MS"), (EntryKind::Coloring, ECS, "ECS")] {
+            let converted = crate::escape::custom::convert_to_rhai(text, entry, kind, CustomDialect::UltraFractal, "test").expect("converts");
+            let src = CustomSource { dialect: CustomDialect::Rhai, entry: entry.into(), source: converted, variations: Vec::new() };
+            match kind {
+                EntryKind::Formula => {
+                    rhai.formula = crate::escape::custom::name_of(kind, &src);
+                    rhai.custom_formula = Some(src);
+                }
+                EntryKind::Coloring => {
+                    rhai.coloring = crate::escape::custom::name_of(kind, &src);
+                    rhai.custom_coloring = Some(src);
+                }
+                EntryKind::Transform | EntryKind::Solid => unreachable!("a formula and a colouring"),
+            }
+        }
+        let got = output_on(&device, &queue, &renderer, &rhai, w, h, false);
+        let d = differing(&built_in, &got);
+        println!("converted to Rhai, they differ on {:.3}%", d * 100.0);
+        assert!(d == 0.0, "converted to Rhai they differ on {:.3}%", d * 100.0);
+    }
+
+    /// `#solid` leaves a pixel to the background on every path, and the
+    /// environment (`#pixel`) reaches a colouring there too: a colouring
+    /// solid exactly on the interior covers what escape count covers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_colourings_solid_and_pixel_work_on_every_path() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (128u32, 96u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const S: &str = "S {
+final:
+ #index = cabs(#pixel) + #numiter * 0.01
+ if #numiter >= #maxiter
+  #solid = true
+ endif
+}";
+        for (zoom, perturbed) in [(0.5, false), (14.5, true)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = "-0.743643887037158704752191506114774".into();
+            esc.center_im = "0.131825904205311970493132056385139".into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 400;
+            esc.coloring = "escape_count".into();
+            let reference = output_on(&device, &queue, &renderer, &esc, w, h, perturbed);
+            let custom = with_custom(esc, None, Some((S, "S")));
+            let px = output_on(&device, &queue, &renderer, &custom, w, h, perturbed);
+            let covered = |v: &[f32]| v.chunks(4).map(|p| p[3] > 0.5).collect::<Vec<_>>();
+            let (want, got) = (covered(&reference), covered(&px));
+            let n_in = want.iter().filter(|c| !**c).count();
+            println!("zoom {zoom}: {n_in} interior pixels");
+            assert!(n_in > 0 && n_in < want.len(), "zoom {zoom}: the view is all one side");
+            let lost = want.iter().zip(&got).filter(|(w, g)| **w && !**g).count();
+            let gained = want.iter().zip(&got).filter(|(w, g)| !**w && **g).count();
+            println!("zoom {zoom}: covered by escape count but solid: {lost}; interior but covered: {gained}");
+            // A pixel that escapes ON the last iteration has #numiter ==
+            // #maxiter: UF's test calls it inside, the engine outside.
+            // Measured: one such pixel at 14.5, none at 0.5.
+            assert_eq!(gained, 0, "zoom {zoom}: an interior pixel was covered");
+            assert!(lost <= 2, "zoom {zoom}: {lost} escaping pixels went solid");
+        }
+    }
+
+    /// A Fractint formula reading `ismand` follows the Julia toggle: off,
+    /// it renders the built-in Mandelbrot; on, the built-in Julia set of
+    /// its `p1` -- pixel for pixel, the arithmetic being the same.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_fractint_formula_follows_the_julia_toggle_through_ismand() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let src = CustomSource {
+            dialect: CustomDialect::Fractint,
+            entry: "MJ".into(),
+            source: "MJ {\n if (ismand)\n  c = pixel, z = 0\n else\n  c = p1, z = pixel\n endif\n :\n z = sqr(z) + c, |z| <= 4\n}".into(),
+            variations: Vec::new(),
+        };
+        for julia in [false, true] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 120;
+            esc.bailout = 4.0;
+            esc.center_re = if julia { "0".into() } else { "-0.6".into() };
+            esc.zoom_log2 = 0.3;
+            esc.julia = julia;
+            esc.julia_re = -0.8;
+            esc.julia_im = 0.156;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let mut custom = esc.clone();
+            custom.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            custom.custom_formula = Some(src.clone());
+            custom.formula_params.insert("p1.re".into(), -0.8);
+            custom.formula_params.insert("p1.im".into(), 0.156);
+            let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+            let def = crate::escape::get_formula(&custom.formula);
+            assert!(crate::escape::formula_julia_is_meaningful(def), "ismand offers the Julia toggle");
+            let d = differing(&built_in, &got);
+            println!("julia {julia}: differs on {:.3}%", d * 100.0);
+            assert!(d == 0.0, "julia {julia}: the Fractint formula differs on {:.3}% of pixels", d * 100.0);
+        }
+    }
+
+    /// UF's `switch:` is the Julia toggle (lang::switch): its own example
+    /// pair renders the built-in Mandelbrot with the toggle off, and the
+    /// built-in Julia set with it on, the seed read from the Julia
+    /// constant. On is exact; off measured 0.031% (6 boundary pixels):
+    /// the f64 interpreter runs the pair identically to each entry alone
+    /// (`lang::switch` tests), so the ulps are the driver's code for the
+    /// loop inside the toggle's branch, which the boundary amplifies.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_switch_pair_follows_the_julia_toggle() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const PAIR: &str = "Mandelbrot {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                            default:\n float param bailout\n  default = 4\n endparam\nswitch:\n type = \"Julia\"\n\
+                            seed = #pixel\n bailout = bailout\n}\n\n\
+                            Julia {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < @bailout\n\
+                            default:\n param seed\n  default = (-0.75, 0.2)\n endparam\n float param bailout\n  default = 4\n\
+                            endparam\nswitch:\n type = \"Mandelbrot\"\n bailout = bailout\n}\n";
+        for julia in [false, true] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), 0.05);
+            esc.max_iter = 150;
+            esc.bailout = 4.0;
+            esc.center_re = if julia { "0".into() } else { "-0.6".into() };
+            esc.zoom_log2 = 0.3;
+            esc.julia = julia;
+            esc.julia_re = -0.123;
+            esc.julia_im = 0.745;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let custom = with_custom(esc.clone(), Some((PAIR, "Mandelbrot")), None);
+            if let Err(e) = crate::escape::custom::compile_formula(custom.custom_formula.as_ref().unwrap(), &custom.formula) {
+                panic!("{:?}", e.iter().map(|d| d.render(PAIR)).collect::<Vec<_>>());
+            }
+            let def = crate::escape::get_formula(&custom.formula);
+            assert!(def.has_feature(crate::escape::FormulaFeature::Program), "did not compile");
+            assert!(crate::escape::formula_julia_is_meaningful(def), "the switch offers the Julia toggle");
+            let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("julia {julia}: the switch pair differs on {:.3}%", d * 100.0);
+            assert!(d <= 0.001, "julia {julia}: the switch pair differs on {:.3}%", d * 100.0);
+        }
+    }
+
+    /// A custom formula carries its own derivative (lang::derive), and
+    /// distance estimation reads it as it reads a built-in's: the same
+    /// arithmetic (`2 z dz + 1`, scaled by a real 2), the same picture,
+    /// on both planes.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formulas_derivative_drives_distance_estimation() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        let uf = CustomSource {
+            dialect: CustomDialect::UltraFractal,
+            entry: "M".into(),
+            source: "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}".into(),
+            variations: Vec::new(),
+        };
+        let fractint = CustomSource {
+            dialect: CustomDialect::Fractint,
+            entry: "MJ".into(),
+            source: "MJ {\n if (ismand)\n  c = pixel, z = 0\n else\n  c = p1, z = pixel\n endif\n :\n z = sqr(z) + c, |z| <= 4\n}".into(),
+            variations: Vec::new(),
+        };
+        for (src, julia) in [(&uf, false), (&fractint, false), (&fractint, true)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "distance_estimate".into();
+            esc.max_iter = 200;
+            esc.bailout = 4.0;
+            esc.center_re = if julia { "0".into() } else { "-0.6".into() };
+            esc.zoom_log2 = 0.3;
+            esc.julia = julia;
+            esc.julia_re = -0.8;
+            esc.julia_im = 0.156;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let mut custom = esc.clone();
+            custom.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, src);
+            custom.custom_formula = Some(src.clone());
+            custom.formula_params.insert("p1.re".into(), -0.8);
+            custom.formula_params.insert("p1.im".into(), 0.156);
+            let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+            assert!(!crate::escape::get_formula(&custom.formula).wgsl_derivative.is_empty(), "{}: no derivative", src.entry);
+            assert!(crate::escape::EscapeRenderer::derivative_gap(&custom, 1080).is_none());
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("{} julia {julia}: distance estimate differs on {:.3}%", src.entry, d * 100.0);
+            assert!(d == 0.0, "{} julia {julia}: differs on {:.3}% of pixels", src.entry, d * 100.0);
+        }
+        // A formula iterating through a fold has a Jacobian (phase 4, step
+        // 9d): the Burning Ship's twin, and a formula with a user function
+        // set to `abs`. No gap, and each pixel's derivative as the records
+        // hold it (per render pixel) is the interpreter's.
+        let user = CustomSource {
+            dialect: CustomDialect::UltraFractal,
+            entry: "B".into(),
+            source: "B {\ninit:\n z = 0\nloop:\n z = sqr(@fn1(z)) + #pixel\nbailout:\n |z| < @bailout\ndefault:\n func fn1\n  default = abs()\n endfunc\n}".into(),
+            variations: Vec::new(),
+        };
+        let (rw, rh) = (64u32, 48u32);
+        for src in [crate::escape::twins::custom_source("burning_ship").unwrap(), user] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "distance_estimate".into();
+            esc.max_iter = 200;
+            esc.bailout = 4.0;
+            esc.center_re = "-0.5".into();
+            esc.center_im = "-0.5".into();
+            esc.zoom_log2 = 0.5;
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            crate::escape::custom::ensure(&esc);
+            assert!(crate::escape::EscapeRenderer::derivative_gap(&esc, 1080).is_none(), "{}", src.entry);
+            let recs = records_on(&esc, rw, rh, false, false, true);
+            let prog = crate::escape::custom::check_entry(crate::escape::lang::EntryKind::Formula, &src).unwrap();
+            let d = crate::escape::lang::derive::with_derivative(&prog).unwrap();
+            assert!(d.dzq_var.is_some(), "{}: a Jacobian", src.entry);
+            let mut params = crate::escape::lang::interp::ParamValues::defaults(&d);
+            for (i, x) in d.params.iter().enumerate() {
+                if x.name == "bailout" {
+                    params.values[i].0 = 4.0;
+                }
+            }
+            let span_y = 4.0 / esc.zoom_log2.exp2();
+            let span_x = span_y * rw as f64 / rh as f64;
+            let (mut tested, mut agree) = (0, 0);
+            for (idx, r) in recs.iter().enumerate() {
+                if r.n == 0 || r.n > 40 || r.n >= esc.max_iter {
+                    continue;
+                }
+                let (px, py) = (idx as u32 % rw, idx as u32 / rw);
+                let c = crate::escape::lang::builtins::C64::new(
+                    -0.5 + ((px as f64 + 0.5) / rw as f64 - 0.5) * span_x,
+                    -0.5 - ((py as f64 + 0.5) / rh as f64 - 0.5) * span_y,
+                );
+                let want = crate::escape::lang::interp::run(&d, &params, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter));
+                // Per render pixel, as every path reports it.
+                let want = want.dz.scale(span_y / rh as f64);
+                let got = crate::escape::lang::builtins::C64::new(r.dz[0] as f64, r.dz[1] as f64);
+                tested += 1;
+                if got.sub(want).abs() <= 1e-3 * want.abs() {
+                    agree += 1;
+                }
+            }
+            println!("{}: the GPU's derivative is the interpreter's on {agree} of {tested} escaping pixels", src.entry);
+            assert!(tested > 200 && agree * 100 >= tested * 95, "{}: {agree} of {tested}", src.entry);
+        }
+    }
+
+    /// `global:` values reach the GPU: a formula's in `fdata`, a
+    /// colouring's after its parameters, recomputed when a parameter
+    /// they read changes. Each entry computes its built-in's constant
+    /// there (doubling, exact), so the pictures are the built-ins'.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn global_values_reach_the_gpu() {
+        use crate::config::escape::{CustomDialect, CustomSource};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const J: &str = "J {\nglobal:\n complex c = @seed * 2\n float r = @radius * 2\ninit:\n z = #pixel\nloop:\n\
+                         z = sqr(z) + c\nbailout:\n |z| < r\ndefault:\n param seed\n  default = (-0.4, 0.078)\n endparam\n\
+                         float param radius\n  default = 2\n endparam\n}";
+        const EC: &str = "EC(OUTSIDE) {\nglobal:\n float s = @half * 2\nfinal:\n #index = #numiter * s\ndefault:\n\
+                          float param half\n  default = 0.025\n endparam\n}";
+        let custom = |text: &str, entry: &str| CustomSource { dialect: CustomDialect::UltraFractal, entry: entry.into(), source: text.into(), variations: Vec::new() };
+        for (seed, half) in [((-0.4f32, 0.078f32), 0.025f32), ((-0.0615, 0.3725), 0.0125)] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "escape_count".into();
+            esc.coloring_params.insert("scale".into(), half * 2.0);
+            esc.max_iter = 150;
+            esc.bailout = 4.0;
+            esc.center_re = "0".into();
+            esc.zoom_log2 = 0.3;
+            esc.julia = true;
+            esc.julia_re = seed.0 * 2.0;
+            esc.julia_im = seed.1 * 2.0;
+            let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+            let mut c = esc.clone();
+            let (f, col) = (custom(J, "J"), custom(EC, "EC"));
+            c.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &f);
+            c.custom_formula = Some(f);
+            c.coloring = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &col);
+            c.custom_coloring = Some(col);
+            c.formula_params.insert("seed.re".into(), seed.0);
+            c.formula_params.insert("seed.im".into(), seed.1);
+            c.formula_params.insert("radius".into(), 2.0);
+            c.coloring_params.insert("half".into(), half);
+            let got = output_on(&device, &queue, &renderer, &c, w, h, false);
+            let covered = built_in.chunks(4).filter(|p| p[3] > 0.5).count();
+            assert!(covered > 100 && covered + 100 < (w * h) as usize, "the view shows too little ({covered})");
+            let d = differing(&built_in, &got);
+            println!("seed {seed:?}, half {half}: differs on {:.3}%", d * 100.0);
+            assert_eq!(d, 0.0, "seed {seed:?}, half {half}: the globals' picture differs");
+        }
+    }
+
+    /// A custom colouring keeping more than four floats (20 here, five
+    /// vec4s) keeps them all where the accumulator goes: in the records,
+    /// so a palette edit recolours to exactly what a fresh render draws,
+    /// and in the perturbed resume state, so a render split into many
+    /// chunks draws exactly what one chunk does. Each float weighs in
+    /// the index, so one lost anywhere changes the picture.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn an_extended_colouring_survives_records_and_chunks() {
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let mut config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let decls: String = (0..20).map(|i| format!(" float s{i} = 0\n")).collect();
+        let sums: String = (0..20).map(|i| format!(" s{i} = s{i} + real(#z) * {} + imag(#z) * {i}\n", i + 1)).collect();
+        let total: String = (0..20).map(|i| format!(" + s{i} * {}", 1.0 / (i as f64 + 3.0))).collect();
+        let wide = format!("Wide {{\ninit:\n{decls}loop:\n{sums}final:\n #index = (0{total}) * 0.01\n}}");
+        let mut esc = with_custom(crate::config::escape::EscapeConfig::default(), None, Some((&wide, "Wide")));
+        esc.center_re = "-0.6".into();
+        esc.center_im = "0.1".into();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 100;
+        crate::escape::custom::ensure(&esc);
+        assert_eq!(crate::escape::config_accum_width(&esc), crate::escape::AccumWidth::Extended(4));
+
+        // The records: a palette edit recolours, to a fresh render's picture.
+        let settle = |escape: &mut crate::escape::EscapeRenderer, renderer: &mut crate::renderer::compute_kernel::FlameRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("extended") });
+                let settled = escape.render(&device, &queue, &mut enc, esc, renderer.escape_palette_view(false), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("extended tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+        };
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_direct = true;
+        let before = settle(&mut escape, &mut renderer, &esc);
+        config.palette_reverse = true;
+        renderer.update_palette(&device, &queue, &config.palette, config.palette_rotation,
+            config.palette_squeeze, config.palette_squeeze_mode, config.palette_squeeze_falloff,
+            config.palette_log_strength, config.palette_reverse);
+        let after = settle(&mut escape, &mut renderer, &esc);
+        assert_eq!(escape.last_path, "recolor", "a palette edit should recolour from the records");
+        assert_ne!(before, after, "the palette edit changed nothing");
+        let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+        fresh.force_direct = true;
+        assert_eq!(after, settle(&mut fresh, &mut renderer, &esc), "the recolour differs from a fresh render");
+        fresh.destroy();
+        escape.destroy();
+
+        // The resume state: perturbed at depth, many chunks against one.
+        let mut deep = esc.clone();
+        deep.center_re = "-0.743643887037158704752191506114774".into();
+        deep.center_im = "0.131825904205311970493132056385139".into();
+        deep.zoom_log2 = 20.0;
+        deep.max_iter = 1500;
+        let one = output_with(&device, &queue, &renderer, &deep, w, h, true, |e| e.chunk_override = Some(1_000_000));
+        let many = output_with(&device, &queue, &renderer, &deep, w, h, true, |e| e.chunk_override = Some(37));
+        let covered = one.chunks(4).filter(|p| p[3] > 0.5).count();
+        assert!(covered > 1000, "the deep view shows too little ({covered})");
+        let d = differing(&one, &many);
+        assert_eq!(d, 0.0, "split into chunks, the extended state differs on {:.3}% of pixels", d * 100.0);
+    }
+
+    /// A custom formula with UF's perturbation equations takes the
+    /// perturbed path by them (plan, phase 3), and at depth, where f32
+    /// has long run out, counts its pixels' iterations as exactly as the
+    /// built-in Mandelbrot's tier does: the language's Mandelbrot with
+    /// UF's own example equations against the built-in, both held to the
+    /// truth, each sampled pixel iterated in big floats. Measured (GTX
+    /// 1660): at zoom 20 with 300 iterations, 438 and 439 of 439 exact;
+    /// with 2000 in the seahorse valley, where f32's rounding grows
+    /// chaotically, 402 and 404 with the same plain reference (410 with
+    /// the built-in's nucleus reference, which custom formulas lack).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_perturbs_by_its_own_equations() {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
+        const PM: &str = "PM {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                          perturbinit:\n #dz = 0\nperturbloop:\n #dz = 2 * #z * #dz + sqr(#dz) + #dpixel\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        let prog = {
+            let (file, _) = lang::parser::parse_file(PM);
+            std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap())
+        };
+        let (w, h) = (64u32, 48u32);
+        // Zoom 20 on the scaled rung; past 48 the floatexp rung, at the
+        // visual suite's deep edge views (`fe-threshold-floatexp`,
+        // `fe-zoom-60-edge`).
+        let shallow = ("-0.743643887037158704752191506114774", "0.131825904205311970493132056385139");
+        let threshold = ("-0.74364388703715870475481082977993857803", "0.13182590420531251981651559677435626549");
+        let edge = ("-0.74364388703715870475481082977993857803", "0.13182590420531291981651559677435626549");
+        // The deep views skip by BLA (phase 4, step 9: the custom
+        // formula's table from its own derivative, the same as the
+        // built-in's for z^2 + c), which trades accuracy for speed as the
+        // built-in does: both count the same pixels exactly there.
+        for (centre, zoom, iters, need, stride) in [
+            (shallow, 20.0f64, 300u32, 0.99, 7usize),
+            (shallow, 20.0, 2000, 0.0, 7),
+            (threshold, 48.5, 8000, 0.8, 13),
+            (edge, 60.0, 30000, 0.8, 29),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = centre.0.into();
+            esc.center_im = centre.1.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let custom = with_custom(esc.clone(), Some((PM, "PM")), None);
+            crate::escape::custom::ensure(&custom);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, .. })), "{tier:?}");
+            let built_in = records_on(&esc, w, h, false, true, false);
+            let got = records_on(&custom, w, h, false, true, false);
+            // The truth: each sampled pixel's orbit in big floats, wide
+            // enough for the view.
+            let n = if zoom > 50.0 { 6 } else { 4 };
+            let centre = BigComplex::from_fixed(&FixedComplex {
+                re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(),
+                im: FixedPoint::from_decimal(&esc.center_im, n).unwrap(),
+            });
+            let span_y = 4.0 / esc.zoom_log2.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let (mut exact_built_in, mut exact_custom, mut total) = (0usize, 0usize, 0usize);
+            let mut counts = std::collections::BTreeSet::new();
+            for idx in (0..(w * h) as usize).step_by(stride) {
+                let (px, py) = (idx as u32 % w, idx as u32 / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                let env = lang::interp::Env::at(lang::builtins::C64::ZERO, iters);
+                let params = lang::interp::ParamValues { values: vec![(4.0, 0.0)], funcs: vec![] };
+                let mut m = lang::bigeval::BigMachine::new(prog.clone(), params, env, centre.add(&BigComplex::from_f64(dx, dy, n)), n).unwrap();
+                let mut count = iters;
+                for i in 0..iters {
+                    if !m.step().unwrap() {
+                        count = i + 1;
+                        break;
+                    }
+                }
+                total += 1;
+                counts.insert(count);
+                exact_built_in += usize::from(built_in[idx].n == count);
+                exact_custom += usize::from(got[idx].n == count);
+            }
+            println!(
+                "zoom {zoom}, {iters} iterations: of {total} pixels ({} distinct counts), the built-in tier counts {exact_built_in} exactly, the custom {exact_custom}",
+                counts.len()
+            );
+            assert!(counts.len() > 20, "zoom {zoom}: a view of {} counts tests little", counts.len());
+            assert!(exact_custom as f64 >= need * total as f64, "{iters}: {exact_custom} of {total} exact");
+            assert!(exact_custom + total * 3 / 100 >= exact_built_in, "{iters}: {exact_custom} against the built-in's {exact_built_in}");
+        }
+
+        // The Julia plane: the deviation starts at the pixel's offset
+        // (`#dz = #dpixel`) and no offset enters the step.
+        const PJ: &str = "PJ {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < @bailout\n\
+                          perturbinit:\n #dz = #dpixel\nperturbloop:\n #dz = 2 * #z * #dz + sqr(#dz)\n\
+                          default:\n param seed\n  default = (-0.8, 0.156)\n endparam\n float param bailout\n  default = 4\n endparam\n}";
+        let prog = {
+            let (file, _) = lang::parser::parse_file(PJ);
+            std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap())
+        };
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "0.0312461250000003".into();
+        esc.center_im = "0.6458823041987114".into();
+        esc.zoom_log2 = 24.0;
+        esc.max_iter = 600;
+        esc.bailout = 4.0;
+        esc.julia = true;
+        esc.julia_re = -0.8;
+        esc.julia_im = 0.156;
+        let mut custom = with_custom(esc.clone(), Some((PJ, "PJ")), None);
+        custom.julia = false;
+        crate::escape::custom::ensure(&custom);
+        assert!(crate::escape::EscapeRenderer::perturb_tier(&custom).is_some());
+        let built_in = records_on(&esc, w, h, false, true, false);
+        let got = records_on(&custom, w, h, false, true, false);
+        let n = 4;
+        let centre = BigComplex::from_fixed(&FixedComplex {
+            re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(),
+            im: FixedPoint::from_decimal(&esc.center_im, n).unwrap(),
+        });
+        let span_y = 4.0 / esc.zoom_log2.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        let (mut exact_built_in, mut exact_custom, mut total, mut escaped) = (0usize, 0usize, 0usize, 0usize);
+        for idx in (0..(w * h) as usize).step_by(7) {
+            let (px, py) = (idx as u32 % w, idx as u32 / w);
+            let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+            let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+            let env = lang::interp::Env::at(lang::builtins::C64::ZERO, 600);
+            let params = lang::interp::ParamValues { values: vec![(-0.8f32 as f64, 0.156f32 as f64), (4.0, 0.0)], funcs: vec![] };
+            let mut m = lang::bigeval::BigMachine::new(prog.clone(), params, env, centre.add(&BigComplex::from_f64(dx, dy, n)), n).unwrap();
+            let mut count = 600;
+            for i in 0..600 {
+                if !m.step().unwrap() {
+                    count = i + 1;
+                    break;
+                }
+            }
+            total += 1;
+            escaped += usize::from(count < 600);
+            exact_built_in += usize::from(built_in[idx].n == count);
+            exact_custom += usize::from(got[idx].n == count);
+        }
+        println!("Julia: of {total} pixels ({escaped} escaping), the built-in tier counts {exact_built_in} exactly, the custom {exact_custom}");
+        assert!(escaped > total / 10, "the Julia view shows too little ({escaped} escape)");
+        assert!(exact_custom + total * 3 / 100 >= exact_built_in && exact_custom * 10 >= total * 9, "Julia: {exact_custom} against {exact_built_in}");
+    }
+
+    /// Each sampled pixel's iteration count, iterated in big floats
+    /// `n_limbs` wide: the truth the perturbed paths are held to.
+    #[allow(clippy::too_many_arguments)]
+    fn truth_counts(
+        src: &str,
+        params: crate::escape::lang::interp::ParamValues,
+        centre: (&str, &str),
+        zoom: f64,
+        iters: u32,
+        (w, h): (u32, u32),
+        stride: usize,
+        n_limbs: usize,
+    ) -> Vec<(usize, u32)> {
+        use crate::escape::lang;
+        let (file, _) = lang::parser::parse_file(src);
+        let prog = std::sync::Arc::new(lang::check::check(&file.entries[0], lang::EntryKind::Formula, lang::Dialect::UltraFractal).0.unwrap());
+        truth_counts_of(prog, params, centre, zoom, iters, (w, h), stride, n_limbs)
+    }
+
+    /// Parameter values as the GPU holds them, in f32: the map the
+    /// perturbed path and its reference iterate, and so the truth's.
+    fn as_on_the_gpu(p: crate::escape::lang::interp::ParamValues) -> crate::escape::lang::interp::ParamValues {
+        let f = |v: f64| f64::from(v as f32);
+        crate::escape::lang::interp::ParamValues { values: p.values.into_iter().map(|(a, b)| (f(a), f(b))).collect(), funcs: p.funcs }
+    }
+
+    /// [`truth_counts`] of a checked program.
+    #[allow(clippy::too_many_arguments)]
+    fn truth_counts_of(
+        prog: std::sync::Arc<crate::escape::lang::ir::Program>,
+        params: crate::escape::lang::interp::ParamValues,
+        centre: (&str, &str),
+        zoom: f64,
+        iters: u32,
+        dims: (u32, u32),
+        stride: usize,
+        n_limbs: usize,
+    ) -> Vec<(usize, u32)> {
+        truth_counts_on(prog, params, centre, zoom, iters, dims, stride, n_limbs, None)
+    }
+
+    /// [`truth_counts_of`] on the Julia plane of `julia` where it is one.
+    #[allow(clippy::too_many_arguments)]
+    fn truth_counts_on(
+        prog: std::sync::Arc<crate::escape::lang::ir::Program>,
+        params: crate::escape::lang::interp::ParamValues,
+        centre: (&str, &str),
+        zoom: f64,
+        iters: u32,
+        (w, h): (u32, u32),
+        stride: usize,
+        n_limbs: usize,
+        julia: Option<crate::escape::lang::builtins::C64>,
+    ) -> Vec<(usize, u32)> {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
+        let c = BigComplex::from_fixed(&FixedComplex {
+            re: FixedPoint::from_decimal(centre.0, n_limbs).unwrap(),
+            im: FixedPoint::from_decimal(centre.1, n_limbs).unwrap(),
+        });
+        let span_y = 4.0 / zoom.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        (0..(w * h) as usize)
+            .step_by(stride)
+            .map(|idx| {
+                let (px, py) = (idx as u32 % w, idx as u32 / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                let mut env = lang::interp::Env::at(lang::builtins::C64::ZERO, iters);
+                if let Some(j) = julia {
+                    (env.julia, env.julia_c) = (true, j);
+                }
+                let mut m = lang::bigeval::BigMachine::new(prog.clone(), params.clone(), env, c.add(&BigComplex::from_f64(dx, dy, n_limbs)), n_limbs).unwrap();
+                let mut count = iters;
+                for i in 0..iters {
+                    if !m.step().unwrap() {
+                        count = i + 1;
+                        break;
+                    }
+                }
+                (idx, count)
+            })
+            .collect()
+    }
+
+    /// A hybrid deep-zooms with a reference per phase (plan, phase 3,
+    /// step 5b), held to the truth in big floats at a boundary walked
+    /// down to the scaled rung (zoom 24) and the floatexp one (zoom 51).
+    /// The hybrids alternate the Mandelbrot with a slightly turned copy
+    /// of itself (`z^2 * (1, 2^-7)`): groups that differ, so a pixel
+    /// stepped by the wrong phase's equations goes wrong at depth, in
+    /// dynamics as tame as the Mandelbrot's, so the counts can be exact
+    /// at all. One alternates (period 2), one starts with a cubic pass
+    /// and repeats the turned group twice (prefix 1, period 3). Alternating
+    /// the Mandelbrot with the Burning Ship walks into regions where the
+    /// counts need 53 to 128 bits a pixel -- f64 misses a fifth of them
+    /// at zoom 6, where 4 and 10 limbs agree on all -- so that preset is
+    /// held only where it is countable, shallow and forced perturbed:
+    /// the folds through the phases.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_hybrid_perturbs_with_a_reference_per_phase() {
+        use crate::escape::lang::hybrid::{Combine, Group, Hybrid, Line, Operator};
+        let (w, h) = (64u32, 48u32);
+        let op = |power: u32, mul: [f64; 2]| Operator { power, mul, ..Default::default() };
+        let group = |repeats: u32, o: Operator| Group::of_lines(repeats, vec![Line { one: o, two: None, combine: Combine::Add }]);
+        // 2^-7: the same number in f32, where the GPU holds parameters,
+        // as in the truth's big floats.
+        let turned = op(2, [1.0, 0.0078125]);
+        // Formulas as groups (phase 4, step 7): the Mandelbrot's and the
+        // Burning Ship's twins taking turns, composed.
+        let twin = |name: &str| {
+            let src = crate::escape::twins::source(name).unwrap();
+            Group::of_formula(1, &crate::escape::lang::rhai::title(src).unwrap(), src)
+        };
+        let hybrids = [
+            ("alternating", Hybrid { groups: vec![group(1, op(2, [1.0, 0.0])), group(1, turned.clone())], loop_start: 0 }),
+            ("with a prefix", Hybrid { groups: vec![group(1, op(3, [1.0, 0.0])), group(1, op(2, [1.0, 0.0])), group(2, turned)], loop_start: 1 }),
+            ("twins taking turns", Hybrid { groups: vec![twin("mandelbrot"), twin("burning_ship")], loop_start: 0 }),
+            // One group, no cycle: the Mandelbrot's twin, skipping by its
+            // own BLA table (phase 4, step 9) at the walked edges.
+            ("the Mandelbrot's twin alone", Hybrid { groups: vec![twin("mandelbrot")], loop_start: 0 }),
+        ];
+        // The twins' hybrid has a fold, which at these walked edges KF's
+        // lines of the same hybrid count far less well on too (80 and
+        // 62 of 439): composed, it must count as well as they do there.
+        let lines_of = |name: &str| {
+            (name == "twins taking turns")
+                .then(|| crate::escape::lang::hybrid::presets().into_iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1)
+        };
+        let view = |hybrid: &Hybrid, cx: &str, cy: &str, zoom: f64, iters: u32| {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.center_re = cx.into();
+            esc.center_im = cy.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let esc = with_hybrid(esc, hybrid);
+            crate::escape::custom::ensure(&esc);
+            esc
+        };
+        for (name, hybrid) in &hybrids {
+            let prog = std::sync::Arc::new(hybrid.program().unwrap());
+            let params = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            // Walk to the boundary: the slowest escaping pixel, three
+            // octaves at a time, on the direct path and then the
+            // perturbed one.
+            let (mut cx, mut cy, mut zoom) = (-0.5f64, 0.0f64, 0.0f64);
+            let mut tested = 0;
+            while zoom <= 51.0 {
+                let iters = 500 + 30 * zoom as u32;
+                let deep = zoom > 15.0;
+                let esc = view(hybrid, &format!("{cx:.20}"), &format!("{cy:.20}"), zoom, iters);
+                if zoom == 24.0 || zoom == 51.0 {
+                    let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+                    let stride = if hybrid.groups.len() > 1 { 1 + hybrid.cycle().period as u8 } else { 1 };
+                    assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, stride: s, .. }) if s == stride), "{name}: {tier:?}");
+                    let got = records_on(&esc, w, h, false, true, false);
+                    let truth = truth_counts_of(prog.clone(), params.clone(), (&esc.center_re, &esc.center_im), zoom, iters, (w, h), 7, 6);
+                    let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+                    let exact = truth.iter().filter(|(i, c)| got[*i].n == *c).count();
+                    println!("{name} zoom {zoom}: of {} pixels ({} distinct counts) the phases count {exact} exactly", truth.len(), distinct.len());
+                    assert!(distinct.len() > 10, "{name} zoom {zoom}: the view tests little");
+                    // The scaled rung's f32 on busy views (as the derived cubic's
+                    // 381 of 439 at its own walked edge); the floatexp rung's
+                    // double float at depth.
+                    let floor = if zoom < 48.0 { 75 } else { 80 };
+                    match lines_of(name) {
+                        Some(lines) => {
+                            let esc = view(&lines, &esc.center_re, &esc.center_im, zoom, iters);
+                            let theirs = records_on(&esc, w, h, false, true, false);
+                            let theirs = truth.iter().filter(|(i, c)| theirs[*i].n == *c).count();
+                            println!("{name} zoom {zoom}: KF's lines of it count {theirs}");
+                            assert!(exact + truth.len() / 50 >= theirs, "{name} zoom {zoom}: {exact}, the lines {theirs}");
+                        }
+                        None => assert!(exact * 100 >= truth.len() * floor, "{name} zoom {zoom}: {exact} of {}", truth.len()),
+                    }
+                    tested += 1;
+                }
+                let recs = records_on(&esc, w, h, false, deep, !deep);
+                let Some((i, _)) = recs.iter().enumerate().filter(|(_, r)| r.n < iters).max_by_key(|(_, r)| r.n) else { break };
+                let (px, py) = (i as u32 % w, i as u32 / w);
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                cx += ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                cy -= ((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                zoom += 3.0;
+            }
+            assert_eq!(tested, 2, "{name}: the walk stopped at zoom {zoom}");
+        }
+
+        // The folds through the phases: the Mandelbrot / Burning Ship
+        // preset at a view still countable, perturbed by force.
+        let presets = crate::escape::lang::hybrid::presets();
+        let ms = presets.iter().find(|(n, _)| *n == "Mandelbrot / Burning Ship").unwrap().1.clone();
+        let prog = std::sync::Arc::new(ms.program().unwrap());
+        let params = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+        let esc = view(&ms, "-0.25", "-0.75", 3.0, 500);
+        let direct = records_on(&esc, w, h, false, false, true);
+        let got = records_on(&esc, w, h, false, true, false);
+        let truth = truth_counts_of(prog, params, (&esc.center_re, &esc.center_im), 3.0, 500, (w, h), 7, 6);
+        let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+        let (ed, ep) = (truth.iter().filter(|(i, c)| direct[*i].n == *c).count(), truth.iter().filter(|(i, c)| got[*i].n == *c).count());
+        println!("Mandelbrot / Burning Ship zoom 3: of {} pixels ({} distinct counts) direct {ed}, the phases {ep}", truth.len(), distinct.len());
+        assert!(distinct.len() > 10, "the fold view tests little");
+        assert!(ep * 10 >= truth.len() * 9 && ep + truth.len() / 50 >= ed, "{ep} against {ed}");
+    }
+
+    /// A custom formula with no perturbation equations of its own gets
+    /// them from its loop (`lang::delta`) and takes the perturbed path
+    /// by them on both rungs: the plain language Mandelbrot and a cubic,
+    /// held to the truth (big floats) beside the built-in tiers.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_custom_formula_perturbs_by_derived_equations() {
+        const M: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                         default:\n float param bailout\n  default = 4\n endparam\n}";
+        const C3: &str = "C3 {\ninit:\n z = 0\n c = #pixel\nloop:\n z = z^3 + c\nbailout:\n |z| < @bailout\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        // The Mandelbrot through a branch on a parameter, z written in
+        // steps, the test reading the init's copy of the bailout.
+        const MB: &str = "MB {\ninit:\n z = 0\n b = @bailout\nloop:\n if @mode == 1\n  z = sqr(z)\n else\n  z = z^3\n endif\n\
+                          z = z + #pixel\nbailout:\n |z| < b\ndefault:\n float param bailout\n  default = 4\n endparam\n\
+                          int param mode\n  default = 1\n endparam\n}";
+        // The Burning Ship: abs by diffabs.
+        const SH: &str = "SH {\ninit:\n z = 0\nloop:\n z = sqr(abs(z)) + #pixel\nbailout:\n |z| < @bailout\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        // The Mandelbrot from its pixel, as many UF formulas start: Z_0 is
+        // the reference's c, and the scaled rung's rebase must not subtract
+        // it from the full value in f32 (step 9c: 58 of 439 right at the
+        // seahorse view at zoom 42 before).
+        const MP: &str = "MP {\ninit:\n z = #pixel\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n\
+                          default:\n float param bailout\n  default = 4\n endparam\n}";
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        // The visual suite's deep Ship views (ship-deep-perturbed,
+        // ship-deep-floatexp).
+        let ship_shallow = ("-1.5716", "0.0");
+        let ship_deep = (
+            "-1.57157854065215755011786748993868954298323462588175571130705",
+            "-0.00000777222351578037991074677002308517488925824657687722262413561",
+        );
+        let threshold = ("-0.74364388703715870475481082977993857803", "0.13182590420531251981651559677435626549");
+        let shallow = ("-0.743643887037158704752191506114774", "0.131825904205311970493132056385139");
+        let (w, h) = (64u32, 48u32);
+        let params = crate::escape::lang::interp::ParamValues { values: vec![(4.0, 0.0)], funcs: vec![] };
+        let mb_params = crate::escape::lang::interp::ParamValues { values: vec![(4.0, 0.0), (1.0, 0.0)], funcs: vec![] };
+        // The cubic's boundary: the slowest escaping pixel, walked in
+        // three octaves at a time on the direct path.
+        let cubic_edge = {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "multibrot".into();
+            esc.formula_params.insert("power".into(), 3.0);
+            esc.max_iter = 1000;
+            let (mut cx, mut cy, mut zoom) = (-0.3f64, 0.6f64, 0.0f64);
+            while zoom < 15.0 {
+                esc.center_re = format!("{cx:.17}");
+                esc.center_im = format!("{cy:.17}");
+                esc.zoom_log2 = zoom.into();
+                let recs = records_on(&esc, w, h, false, false, true);
+                let Some((i, _)) = recs.iter().enumerate().filter(|(_, r)| r.n < 1000).max_by_key(|(_, r)| r.n) else { break };
+                let (px, py) = (i as u32 % w, i as u32 / w);
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                cx += ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                cy -= ((py as f64 + 0.5) / h as f64 - 0.5) * span_y;
+                zoom += 3.0;
+            }
+            (format!("{cx:.17}"), format!("{cy:.17}"))
+        };
+        // The last field: the share of pixels counted exactly that the
+        // equations must reach, in percent, per step. The deep Ship's
+        // 25000 iterations cross a chaotic region the built-in tier counts
+        // 60% of exactly per step. With their BLA tables (step 9b), both
+        // count within a few pixels of each other: a skip's error, 2^-24
+        // of the linear part, decides there which pixels come out right
+        // (per step the built-in 64 of 106, the equations 84; with BLA 74
+        // and 78).
+        for (src, entry, params, built_in_formula, power, centre, zoom, iters, stride, n, floor) in [
+            (M, "M", &params, "mandelbrot", None, shallow, 20.0f64, 600u32, 7usize, 4usize, 80usize),
+            (M, "M", &params, "mandelbrot", None, threshold, 48.5, 4000, 13, 6, 80),
+            (C3, "C3", &params, "multibrot", Some(3.0f32), (cubic_edge.0.as_str(), cubic_edge.1.as_str()), 24.0, 1000, 7, 4, 80),
+            (MB, "MB", &mb_params, "mandelbrot", None, shallow, 20.0, 600, 7, 4, 80),
+            (MB, "MB", &mb_params, "mandelbrot", None, threshold, 48.5, 4000, 13, 6, 80),
+            (SH, "SH", &params, "burning_ship", None, ship_shallow, 16.0, 2000, 7, 4, 80),
+            (SH, "SH", &params, "burning_ship", None, ship_deep, 60.0, 25000, 29, 6, 75),
+            (MP, "MP", &params, "mandelbrot", None, shallow, 20.0, 600, 7, 4, 80),
+            (MP, "MP", &params, "mandelbrot", None, seahorse, 42.0, 8000, 7, 4, 80),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = built_in_formula.into();
+            if let Some(p) = power {
+                esc.formula_params.insert("power".into(), p);
+            }
+            esc.center_re = centre.0.into();
+            esc.center_im = centre.1.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let custom = with_custom(esc.clone(), Some((src, entry)), None);
+            crate::escape::custom::ensure(&custom);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&custom);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { rebase: true, .. })), "{entry}: {tier:?}");
+            let truth = truth_counts(src, params.clone(), centre, zoom, iters, (w, h), stride, n);
+            let distinct: std::collections::BTreeSet<u32> = truth.iter().map(|t| t.1).collect();
+            let exact = |r: &[crate::escape::renderer::IterRecord]| truth.iter().filter(|(i, c)| r[*i].n == *c).count();
+            assert!(distinct.len() > 10, "{entry} zoom {zoom}: the view tests little");
+            for bla in [false, true] {
+                let built_in = records_with(&esc, w, h, false, true, false, bla);
+                let got = records_with(&custom, w, h, false, true, false, bla);
+                let (eb, ec) = (exact(&built_in), exact(&got));
+                let how = if bla { "with BLA" } else { "per step" };
+                println!("{entry} zoom {zoom} {how}: of {} pixels ({} distinct counts), the built-in tier counts {eb} exactly, the derived equations {ec}", truth.len(), distinct.len());
+                assert!((bla || ec * 100 >= truth.len() * floor) && ec + truth.len() * 3 / 100 >= eb, "{entry} zoom {zoom} {how}: {ec} against {eb}");
+            }
+        }
+    }
+
+    /// A parameter past the first 16 floats reaches the GPU: the block
+    /// holds 64 (UF's public formulas need them). Nine complex
+    /// parameters come first, so the seed sits in slots 18 and 19.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_parameter_past_sixteen_floats_reaches_the_gpu() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const J: &str = "J {\nglobal:\n float unused = real(@d1 + @d2 + @d3 + @d4 + @d5 + @d6 + @d7 + @d8 + @d9)\n\
+                         init:\n z = #pixel\nloop:\n z = sqr(z) + @seed\nbailout:\n |z| < 4\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.coloring = "escape_count".into();
+        esc.coloring_params.insert("scale".into(), 0.05);
+        esc.max_iter = 150;
+        esc.bailout = 4.0;
+        esc.zoom_log2 = 0.3;
+        esc.julia = true;
+        esc.julia_re = -0.123;
+        esc.julia_im = 0.745;
+        let built_in = output_on(&device, &queue, &renderer, &esc, w, h, false);
+        let mut custom = with_custom(esc.clone(), Some((J, "J")), None);
+        custom.formula_params.insert("seed.re".into(), -0.123);
+        custom.formula_params.insert("seed.im".into(), 0.745);
+        let got = output_on(&device, &queue, &renderer, &custom, w, h, false);
+        let def = crate::escape::get_formula(&custom.formula);
+        assert_eq!(def.parameters.iter().position(|p| p.name == "seed.re"), Some(18));
+        let d = differing(&built_in, &got);
+        assert_eq!(d, 0.0, "the seed in slots 18-19 did not arrive ({:.3}% differ)", d * 100.0);
+    }
+
+    /// A program's interior detection compares its whole state
+    /// (`formula_same`), and is as invisible as a built-in's: a state
+    /// that repeats to the bit is periodic, so stopping renders what
+    /// running to the limit would. Its speedup is printed.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_programs_interior_detection_is_invisible() {
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (192u32, 128u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        // A state beyond z: a counter that wraps, a float and a bool the
+        // test reads. Every type `formula_same` compares.
+        const M: &str = "M {\ninit:\n z = 0\n int k = 0\n float r = 0\n bool far = false\nloop:\n\
+                         k = (k + 1) % 3\n z = sqr(z) + #pixel\n r = cabs(z)\n far = r > 2\n\
+                         bailout:\n !far && k >= 0\n}";
+        let mut esc = with_custom(crate::config::escape::EscapeConfig::default(), Some((M, "M")), None);
+        assert_eq!(esc.coloring, "smooth", "smooth leaves the interior to the background");
+        esc.zoom_log2 = 0.0;
+        esc.max_iter = 20_000;
+        let time = |disable: bool| {
+            let t = std::time::Instant::now();
+            let px = output_with(&device, &queue, &renderer, &esc, w, h, false, |e| e.disable_interior = disable);
+            (px, t.elapsed())
+        };
+        let _ = time(false);
+        let (off, t_off) = time(true);
+        let (on, t_on) = time(false);
+        let interior = off.chunks(4).filter(|p| p[3] < 0.5).count();
+        assert!(interior > 1000, "the view shows too little interior ({interior})");
+        assert_eq!(differing(&off, &on), 0.0, "interior detection changed the picture");
+        println!(
+            "program interior detection: {:.0} ms -> {:.0} ms ({:.1}x) at max_iter {}",
+            t_off.as_secs_f64() * 1000.0,
+            t_on.as_secs_f64() * 1000.0,
+            t_off.as_secs_f64() / t_on.as_secs_f64().max(1e-9),
+            esc.max_iter
+        );
+    }
+
+    /// Embossed runs a program's own functions for its pair: the
+    /// language's Mandelbrot embosses as the built-in does, every
+    /// reduction.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_program_embosses_as_its_built_in() {
+        use crate::config::escape::{EmbossType, ShadingField};
+        let (device, queue) = repro_device();
+        let config = crate::config::FractalConfig::default();
+        let (w, h) = (160u32, 120u32);
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size,
+        );
+        const M: &str = "M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| < @bailout\n}";
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.75".into();
+        esc.center_im = "0.1".into();
+        esc.zoom_log2 = 1.5;
+        esc.max_iter = 64;
+        esc.bailout = 4.0;
+        esc.supersample = 1;
+        esc.shading.enabled = true;
+        esc.shading.field = ShadingField::Embossed;
+        esc.shading.offset = 0.004;
+        for kind in EmbossType::ALL {
+            let mut e = esc.clone();
+            e.shading.emboss = kind;
+            e.shading.emboss_sections = 3;
+            let built_in = output_on(&device, &queue, &renderer, &e, w, h, false);
+            let custom = output_on(&device, &queue, &renderer, &with_custom(e.clone(), Some((M, "M")), None), w, h, false);
+            let flat = output_on(&device, &queue, &renderer, &{ let mut f = e.clone(); f.shading.enabled = false; f }, w, h, false);
+            let lit = differing(&built_in, &flat);
+            assert!(lit > 0.01, "{kind:?}: the relief shows too little ({lit})");
+            let d = differing(&built_in, &custom);
+            println!("{kind:?}: the program's emboss differs on {:.3}%", d * 100.0);
+            assert_eq!(d, 0.0, "{kind:?}: the program embosses differently");
+        }
+    }
+
+    /// The crease field (`ShadingField::Creases`) the iterate pass stores
+    /// is `origami_creases_at`'s: the height in the relief channel and
+    /// the slope -- a tenth of -grad h, rotation 0, no supersampling --
+    /// in blue and alpha, at every pixel, the interior's too. Two
+    /// settings, so the pattern and the flip reach the shader, and a
+    /// terrain made of creases, so its reach does. One renderer draws
+    /// all three, so each is an EDIT of the last: a recolour of the
+    /// stored records, which has no formula code, would keep the old
+    /// creases or none (`EscapeConfig::wants_creases`).
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_crease_field_matches_its_reference() {
+        use crate::config::escape::{CreasePattern, CreaseSettings, ShadingField};
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let zoom = -1.0f64;
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        // The built-in, and its twin's `creases` (plan, item 3, step 3e).
+        let cases = [
+            (CreaseSettings { pattern: CreasePattern::Alternate, decay: 0.6, flip: false }, false),
+            (CreaseSettings { pattern: CreasePattern::Random, decay: 0.8, flip: true }, false),
+            (CreaseSettings { pattern: CreasePattern::Valley, decay: 0.6, flip: false }, true),
+        ];
+        for (twin, (creases, terrain)) in [false, true].into_iter().flat_map(|t| cases.clone().into_iter().map(move |c| (t, c))) {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = "origami".to_string();
+            if twin {
+                let src = crate::escape::twins::custom_source("origami").unwrap();
+                esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                esc.custom_formula = Some(src);
+            }
+            esc.coloring = "position_map".to_string();
+            esc.center_re = "0.0".to_string();
+            esc.center_im = "0.0".to_string();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = 32;
+            esc.formula_params.insert("seed".to_string(), 8.0);
+            esc.formula_params.insert("spread".to_string(), 2.0);
+            esc.shading.enabled = true;
+            esc.shading.field = ShadingField::Creases;
+            esc.shading.creases = creases.clone();
+            if terrain {
+                esc.terrain.enabled = true;
+                esc.terrain.source = crate::config::escape::TerrainSource::Creases;
+            }
+
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("creases") });
+                let settled =
+                    escape.render(&device, &queue, &mut enc, &esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 10_000, "render did not settle");
+            }
+            let read = |ch| pollster::block_on(escape.read_height_channel(&device, &queue, false, ch)).expect("height");
+            let (relief, sx, sy) = (read(1), read(2), read(3));
+
+            let params = [8.0f32, 2.0];
+            let row = creases.to_gpu(terrain);
+            let span_y = 4.0 / zoom.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let (mut close, mut total) = (0usize, 0usize);
+            for py in 0..h {
+                for px in 0..w {
+                    let p = [
+                        (((px as f64 + 0.5) / w as f64 - 0.5) * span_x) as f32,
+                        (-(((py as f64 + 0.5) / h as f64 - 0.5) * span_y)) as f32,
+                    ];
+                    let r = crate::escape::formulas::origami_creases_at(&params, row, 32, p);
+                    let i = (py * w + px) as usize;
+                    total += 1;
+                    // A pixel whose point lies within rounding of a crease
+                    // can land on the other side of it in f32 on the GPU.
+                    if (relief[i] - r[0]).abs() < 1e-3
+                        && (sx[i] + 0.1 * r[1]).abs() < 1e-4
+                        && (sy[i] + 0.1 * r[2]).abs() < 1e-4
+                    {
+                        close += 1;
+                    }
+                }
+            }
+            println!("creases {:?} (terrain {terrain}, twin {twin}): {close}/{total} pixels match the reference", creases.pattern);
+            assert!(
+                close * 100 >= total * 99,
+                "{:?}: only {close}/{total} pixels match the reference",
+                creases.pattern
+            );
+        }
+        escape.destroy();
+    }
+
     /// `position_average` must average POSITIONS, not magnitudes.
     ///
     /// The distinction is the whole point of the coloring and it is
@@ -2884,6 +5672,31 @@ mod tests {
         deep: bool,
         perturbed: bool,
     ) -> Vec<crate::escape::renderer::IterRecord> {
+        records_on(esc, w, h, deep, perturbed, false)
+    }
+
+    /// As [`records_via`], `direct` forcing the direct path however deep.
+    fn records_on(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        deep: bool,
+        perturbed: bool,
+        direct: bool,
+    ) -> Vec<crate::escape::renderer::IterRecord> {
+        records_with(esc, w, h, deep, perturbed, direct, true)
+    }
+
+    /// `records_on`, with BLA or per step.
+    fn records_with(
+        esc: &crate::config::escape::EscapeConfig,
+        w: u32,
+        h: u32,
+        deep: bool,
+        perturbed: bool,
+        direct: bool,
+        bla: bool,
+    ) -> Vec<crate::escape::renderer::IterRecord> {
         let (device, queue) = repro_device();
         let config = crate::config::FractalConfig::default();
         let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
@@ -2897,7 +5710,9 @@ mod tests {
         );
         let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
         escape.force_perturbed = perturbed;
+        escape.force_direct = direct;
         escape.force_floatexp = deep && perturbed;
+        escape.disable_bla = !bla;
         let mut guard = 0u32;
         loop {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3373,6 +6188,93 @@ mod tests {
             .collect()
     }
 
+    /// [`exact_mean_magnitude`] of a custom formula: its own program in
+    /// big floats at each pixel, the mean of `|z|` over its passes.
+    fn exact_mean_magnitude_of(esc: &crate::config::escape::EscapeConfig, w: u32, h: u32) -> Vec<f64> {
+        use crate::escape::bigfloat::BigComplex;
+        use crate::escape::fixedpoint::{FixedComplex, FixedPoint};
+        use crate::escape::lang;
+        use rayon::prelude::*;
+        let src = esc.custom_formula.as_ref().expect("a custom formula");
+        let prog = std::sync::Arc::new(crate::escape::custom::check_entry(lang::EntryKind::Formula, src).unwrap());
+        let mut values = lang::interp::ParamValues::defaults(&prog);
+        for (i, x) in prog.params.iter().enumerate() {
+            if let Some(v) = esc.formula_params.get(&x.name) {
+                values.values[i].0 = f64::from(*v);
+            }
+        }
+        let values = as_on_the_gpu(values);
+        let n = 6;
+        let c = BigComplex::from_fixed(&FixedComplex { re: FixedPoint::from_decimal(&esc.center_re, n).unwrap(), im: FixedPoint::from_decimal(&esc.center_im, n).unwrap() });
+        let span_y = 4.0 / esc.zoom_log2.exp2();
+        let span_x = span_y * w as f64 / h as f64;
+        (0..w * h)
+            .into_par_iter()
+            .map(|i| {
+                let (px, py) = (i % w, i / w);
+                let dx = ((px as f64 + 0.5) / w as f64 - 0.5) * span_x;
+                let dy = -(((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                let mut env = lang::interp::Env::at(lang::builtins::C64::ZERO, esc.max_iter);
+                if esc.julia {
+                    (env.julia, env.julia_c) = (true, lang::builtins::C64::new(f64::from(esc.julia_re), f64::from(esc.julia_im)));
+                }
+                let mut m = lang::bigeval::BigMachine::new(prog.clone(), values.clone(), env, c.add(&BigComplex::from_f64(dx, dy, n)), n).unwrap();
+                let mut sum = 0.0;
+                for _ in 0..esc.max_iter {
+                    m.step().unwrap();
+                    let z = m.z();
+                    sum += z.re.to_f64().hypot(z.im.to_f64());
+                }
+                sum / f64::from(esc.max_iter)
+            })
+            .collect()
+    }
+
+    /// The twins of the built-ins that never escape deep-zoom by derived
+    /// equations (order of work, item 2, batch 3): the orbit-average
+    /// field against the twin's own program in big floats, both rungs,
+    /// at the native tiers' deep views for Kaliset and Ducks. Lattès has
+    /// no native tier, and its maps are ergodic: at zoom 30 five passes
+    /// leave the field flat and more leave it chaos, so its view is at
+    /// zoom 12, where five passes carry the contrast and stay determined.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_twins_that_never_escape_deep_zoom() {
+        let (w, h) = (96u32, 72u32);
+        let cases: &[(&str, &[(&str, f32)], (&str, &str), f64, u32, Option<(f32, f32)>)] = &[
+            ("kaliset", &[("plus_c", 0.0)], ("1.22551892238358673", "1.57367616586387160"), 30.0, 60, None),
+            ("kaliset", &[("plus_c", 1.0)], ("-1.79112587335209006", "-0.87051608470578978"), 30.0, 60, None),
+            ("ducks", &[("variant", 0.0)], ("-0.08431922458112219", "1.53503858856856801"), 30.0, 80, Some((0.1, -0.62))),
+            ("ducks", &[("variant", 4.0)], ("0.15", "-0.2"), 30.0, 40, Some((0.1, -0.62))),
+            ("lattes", &[("variant", 0.0)], ("0.3", "0.2"), 12.0, 5, None),
+        ];
+        for &(formula, params, (cre, cim), zoom, max_iter, julia) in cases {
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src);
+            esc.coloring = "magnitude_average".into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cre.into();
+            esc.center_im = cim.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = max_iter;
+            if let Some((jr, ji)) = julia {
+                (esc.julia, esc.julia_re, esc.julia_im) = (true, jr, ji);
+            }
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            assert!(matches!(tier, Some(crate::escape::assembler::PerturbTier::Custom { .. })), "{formula}: {tier:?}");
+            let truth = exact_mean_magnitude_of(&esc, w, h);
+            for deep in [false, true] {
+                let gpu = perturbed_records(&esc, w, h, deep);
+                compare_means(&format!("{formula} {params:?} deep {deep}"), &gpu, &truth);
+            }
+        }
+    }
+
     /// Compare the records' `magnitude_average` accumulators against
     /// the exact means: relative error per pixel, with the view's own
     /// spread as the degeneracy guard.
@@ -3430,8 +6332,7 @@ mod tests {
             ("ducks", "magnitude_average", "-0.4", "0.3", 20.0, false, &[]),
             ("ducks", "magnitude_average", "-0.4", "0.3", 20.0, false, &[("variant", 4.0)]),
             ("ducks", "magnitude_average", "0.15", "-0.2", 20.0, true, &[]),
-            // Kaliset carries a floor of 24 (tier_min_zoom).
-            ("kaliset", "magnitude_average", "0.35", "0.28", 26.0, false, &[]),
+            ("kaliset", "magnitude_average", "0.35", "0.28", 20.0, false, &[]),
         ];
         for (formula, coloring, cre, cim, zoom, julia, params) in cases {
             let mut esc = crate::config::escape::EscapeConfig::default();
@@ -3482,81 +6383,80 @@ mod tests {
         }
     }
 
-    /// The non-escaping tiers must engage only where their delta
-    /// form is actually better than the path it replaces.
+    /// The non-escaping tiers' deltas are at least as good as the
+    /// direct path from the shallowest zoom the switch hands them.
     ///
-    /// This is the test the user's report earned: "it changes the
-    /// moment perturbation starts" is a real failure mode, and the
-    /// only way to answer it is to score BOTH paths against exact
-    /// per-pixel orbits rather than against each other.
+    /// "It changes the moment perturbation starts" is a real failure
+    /// mode, and the only way to answer it is to score BOTH paths
+    /// against exact per-pixel orbits rather than against each other.
     ///
     /// Measured (mean relative error of the orbit-average field vs
-    /// exact orbits, 96x72, 60 iterations):
+    /// exact orbits, 96x72):
     ///
-    ///   kaliset (0.35, 0.28)   z10  direct 2.1e-3   perturbed 3.7e-1
-    ///                          z14  direct 2.3e-3   perturbed 2.0e-1
-    ///                          z18/24/30 perturbed 2.4e-2 / 3.6e-4 / 5.7e-6
-    ///   kaliset (1.226, 1.574) z14  direct 2.2e-2   perturbed 9.4e-3
-    ///   ducks   (-0.4, 0.3)    every depth 10..30: both ~4e-7
-    ///   ducks   (0.15, -0.2)   every depth 10..30: both ~1e-7
+    ///   kaliset (0.35, 0.28)   z8   direct 2.7e-3   perturbed 1.9e-3
+    ///                          z14  direct 2.3e-3   perturbed 2.1e-5
+    ///   kaliset julia (24 it)  z8   direct 5.2e-5   perturbed 1.3e-5
+    ///                          z14  direct 1.7e-4   perturbed 4.3e-6
+    ///   ducks   (-0.4, 0.3)    z8, z14: both 4.0e-7
     ///
-    /// So Ducks is safe from the ordinary threshold and Kaliset needs
-    /// its own floor -- see `tier_min_zoom`.
+    /// Kaliset carried a floor of 24 from the first view's old numbers,
+    /// 3.7e-1 at zoom 10 and 2.0e-1 at 14, read as its inversion
+    /// amplifying the delta. They were its scaled rung starting every
+    /// parameter-plane delta at ZERO -- the reference's seed, not the
+    /// pixel's: the template hard-coded the zero start instead of
+    /// splicing `w_init`, which seeds Kaliset at d0. The deep rung had
+    /// the seed all along.
     #[test]
     #[ignore = "needs a GPU"]
-    fn the_non_escaping_tiers_engage_only_where_they_are_accurate() {
-        use crate::escape::EscapeRenderer;
-        let mut esc = crate::config::escape::EscapeConfig::default();
-        esc.coloring = "magnitude_average".to_string();
-        esc.max_iter = 60;
-
-        esc.formula = "kaliset".to_string();
-        esc.center_re = "0.35".to_string();
-        esc.center_im = "0.28".to_string();
-        for z in [14.0, 18.0, 23.0] {
-            esc.zoom_log2 = z;
-            assert!(
-                !EscapeRenderer::wants_perturbation(&esc),
-                "kaliset must not perturb at zoom {z}: measured worse than direct there"
-            );
-        }
-        esc.zoom_log2 = 26.0;
-        assert!(
-            EscapeRenderer::wants_perturbation(&esc),
-            "kaliset must perturb past its floor, or it gains no depth at all"
-        );
-
-        // Ducks: accurate from the ordinary threshold, and the check
-        // that its delta really is as good as direct where both work.
-        esc.formula = "ducks".to_string();
-        esc.center_re = "-0.4".to_string();
-        esc.center_im = "0.3".to_string();
-        esc.zoom_log2 = 16.0;
-        assert!(EscapeRenderer::wants_perturbation(&esc));
-        esc.zoom_log2 = 10.0;
+    fn the_non_escaping_tiers_are_accurate_from_the_floor() {
+        use crate::escape::reference::{MAP_DUCKS, MAP_KALISET};
         let (w, h) = (96u32, 72u32);
-        let truth =
-            exact_mean_magnitude(&esc, w, h, crate::escape::reference::MAP_DUCKS, [0.0, 0.0]);
-        let score = |what: &str, recs: &[crate::escape::renderer::IterRecord]| -> f64 {
-            let mut total = 0.0;
-            for (r, t) in recs.iter().zip(&truth) {
-                let m = r.accum[0] as f64 / (r.accum[1] as f64).max(1.0);
-                total += (m - t).abs() / t.abs().max(1e-9);
+        // A Julia orbit decorrelates from its neighbours within a few
+        // dozen steps here, and past that both paths only sample the
+        // chaos: 24 iterations keep it a field.
+        for (what, formula, (cre, cim), julia, max_iter, map) in [
+            ("kaliset plane", "kaliset", ("0.35", "0.28"), None, 60, MAP_KALISET),
+            ("kaliset julia", "kaliset", ("-0.0595709", "0.5576624"), Some((0.6, 0.4)), 24, MAP_KALISET),
+            ("ducks plane", "ducks", ("-0.4", "0.3"), None, 60, MAP_DUCKS),
+        ] {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.coloring = "magnitude_average".to_string();
+            esc.formula = formula.to_string();
+            esc.center_re = cre.to_string();
+            esc.center_im = cim.to_string();
+            esc.max_iter = max_iter;
+            if let Some((re, im)) = julia {
+                esc.julia = true;
+                esc.julia_re = re;
+                esc.julia_im = im;
             }
-            let mean = total / truth.len() as f64;
-            println!("ducks {what}: mean relative error vs exact orbits {mean:.3e}");
-            mean
-        };
-        let direct = score("direct", &records_via(&esc, w, h, false, false));
-        let perturbed = score("perturbed", &records_via(&esc, w, h, false, true));
-        assert!(
-            perturbed < 1e-5 && perturbed <= direct * 4.0,
-            "ducks perturbed {perturbed:.3e} vs direct {direct:.3e} -- the delta has regressed"
-        );
+            for z in [crate::escape::renderer::PERTURB_FLOOR_ZOOM + 2.0, 14.0] {
+                esc.zoom_log2 = z;
+                let truth = exact_mean_magnitude(&esc, w, h, map, [0.0, 0.0]);
+                let score = |recs: &[crate::escape::renderer::IterRecord]| -> f64 {
+                    recs.iter()
+                        .zip(&truth)
+                        .map(|(r, t)| (r.accum[0] as f64 / (r.accum[1] as f64).max(1.0) - t).abs() / t.abs().max(1e-9))
+                        .sum::<f64>()
+                        / truth.len() as f64
+                };
+                let direct = score(&records_on(&esc, w, h, false, false, true));
+                let perturbed = score(&records_on(&esc, w, h, false, true, false));
+                println!("{what} z{z}: direct {direct:.2e} perturbed {perturbed:.2e}");
+                assert!(
+                    perturbed <= 2.0 * direct + 1e-6,
+                    "{what} at zoom {z}: perturbed {perturbed:.3e} against direct {direct:.3e}"
+                );
+            }
+        }
     }
 
     /// Kaliset on the parameter plane at zoom 30, both sign branches,
-    /// both rungs: the orbit-average field against exact orbits.
+    /// both rungs: the orbit-average field against exact orbits. Then
+    /// the view whose orbit depends most on its SEED, against the
+    /// field's own step from pixel to pixel -- the absolute tolerance
+    /// above passed a scaled rung that seeded every pixel at the view
+    /// centre, 275 pixel steps out at every depth.
     #[test]
     #[ignore = "needs a GPU"]
     fn perturbed_kaliset_matches_an_exact_orbit_at_depth() {
@@ -3583,6 +6483,30 @@ mod tests {
                 let gpu = perturbed_records(&esc, w, h, deep);
                 compare_means(&format!("kaliset plus_c {plus} deep {deep}"), &gpu, &truth);
             }
+        }
+
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "kaliset".to_string();
+        esc.coloring = "magnitude_average".to_string();
+        esc.center_re = "0.35".to_string();
+        esc.center_im = "0.28".to_string();
+        esc.zoom_log2 = 24.0;
+        esc.max_iter = 60;
+        let truth = exact_mean_magnitude(&esc, w, h, crate::escape::reference::MAP_KALISET, [0.0, 0.0]);
+        let step = (0..truth.len() - 1)
+            .map(|i| (truth[i + 1] - truth[i]).abs() / truth[i].abs().max(1e-9))
+            .sum::<f64>()
+            / truth.len() as f64;
+        for deep in [false, true] {
+            let gpu = perturbed_records(&esc, w, h, deep);
+            let err = gpu
+                .iter()
+                .zip(&truth)
+                .map(|(g, t)| (g.accum[0] as f64 / (g.accum[1] as f64).max(1.0) - t).abs() / t.abs().max(1e-9))
+                .sum::<f64>()
+                / truth.len() as f64;
+            println!("kaliset seed view deep {deep}: error {err:.2e} against a pixel step of {step:.2e}");
+            assert!(err < 0.25 * step, "deep {deep}: {err:.3e} is {:.0} pixel steps", err / step);
         }
     }
 
@@ -3704,14 +6628,14 @@ mod tests {
         esc.zoom_log2 = 20.0;
         esc.formula_params.insert("variant".to_string(), 0.0);
         assert!(
-            EscapeRenderer::wants_perturbation(&esc),
+            EscapeRenderer::wants_perturbation(&esc, 720),
             "the view must want perturbation, or this tests nothing"
         );
 
         let stride = crate::escape::assembler::iter_state_bytes(
             crate::escape::assembler::PerturbTier::Ducks(0),
             false,
-            crate::escape::accum_is_wide_named(&esc.coloring),
+            crate::escape::config_accum_width(&esc),
             false,
         );
         let lim = device.limits();
@@ -5210,7 +8134,7 @@ fn main() {
         esc.bailout = 4.0;
         esc.formula_params.insert("variant".to_string(), 0.0);
         assert!(
-            crate::escape::EscapeRenderer::wants_perturbation(&esc),
+            crate::escape::EscapeRenderer::wants_perturbation(&esc, h),
             "the reported view must be past the threshold, or this tests nothing"
         );
         let truth =
@@ -6860,6 +9784,59 @@ fn main() {
         }
     }
 
+    /// The identity tone curve changes nothing. Its LUT holds `f(i/255)`
+    /// in texel `i`, and the tonemap sampled it at `u = x` with linear
+    /// filtering -- half a texel off, so even the identity returned
+    /// `x + (x - 0.5)/255`: about 0.002 off every channel near black,
+    /// palette bytes below 15 floored to 0, 25 read as 21 (the colouring
+    /// survey, §6 item 8). Sampled at `(255x + 0.5)/256`, through a
+    /// black-to-white ramp the curve on is the curve off to a byte.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_identity_tone_curve_changes_nothing() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "-0.75".to_string();
+        config.escape.center_im = "0.1".to_string();
+        config.escape.zoom_log2 = 1.5;
+        config.escape.max_iter = 300;
+        config.escape.coloring_params.insert("scale".to_string(), 0.05);
+        config.tonemap_curve = crate::scene::tonemap::ToneCurve::linear();
+        let render = |c: &crate::config::FractalConfig| {
+            let job = crate::renderer::RenderJob::new(c, w, h);
+            pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
+        };
+        config.use_curve = true;
+        let on = render(&config);
+        config.use_curve = false;
+        let off = render(&config);
+        let (mut worst, mut worst_at, mut dark) = (0i32, 0u8, 0usize);
+        for (a, b) in on.chunks_exact(4).zip(off.chunks_exact(4)) {
+            if b[0] < 40 {
+                dark += 1;
+            }
+            for k in 0..3 {
+                let d = (a[k] as i32 - b[k] as i32).abs();
+                if d > worst {
+                    worst = d;
+                    worst_at = b[k];
+                }
+            }
+        }
+        println!("identity curve: worst {worst} levels (where the curve off reads {worst_at}), {dark} dark pixels");
+        assert!(dark > 500, "the ramp's dark end is in the frame: {dark}");
+        assert!(worst <= 1, "the identity curve moved a pixel {worst} levels (at {worst_at})");
+    }
+
     /// The shader's curves are the ones `TransferCurve::shape` and
     /// `PaletteCurve::apply` define -- the panel's tooltips describe
     /// those, and nothing else would catch a WGSL constant typed wrong.
@@ -6881,12 +9858,6 @@ fn main() {
         config.exposure = 1.0;
         config.gamma = 1.0;
         config.levels_enabled = false;
-        // The tone curve's LUT is sampled half a texel off, which
-        // takes about 0.002 off every channel in linear light even
-        // when the curve is the identity: it floors the darkest
-        // palette entries to black. Off, so this measures the palette
-        // map alone.
-        config.use_curve = false;
         config.background_color = [0.0, 0.0, 0.0];
         let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
         config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
@@ -8648,6 +11619,110 @@ fn main() {
         escape.destroy();
     }
 
+    /// The lens and the transformations move the points iterated, so an
+    /// edit of either re-iterates: with one renderer kept across the
+    /// edits, as the app keeps it, each step's picture is a fresh
+    /// render's and differs from the step before. Keyed without them, the
+    /// recolour cache answered every such edit with the old records
+    /// recoloured, and the view changed only when something else did.
+    /// The same config again still recolours.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn editing_the_maps_reiterates() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let _diag = diag_lock();
+        let (device, queue) = repro_device();
+        let (w, h) = (160u32, 120u32);
+        let config = crate::config::FractalConfig::default();
+        let mut renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(
+            &device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &config.flame, config.palette_size,
+        );
+        renderer.update_background_color(&queue, [0.0, 0.0, 0.0]);
+        let mut settle = |escape: &mut crate::escape::EscapeRenderer, esc: &crate::config::escape::EscapeConfig| {
+            let mut guard = 0u32;
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("maps") });
+                let settled = escape.render(
+                    &device,
+                    &queue,
+                    &mut enc,
+                    esc,
+                    renderer.escape_palette_view(esc.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+                guard += 1;
+                assert!(guard < 100_000, "render did not settle");
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("maps tonemap") });
+            renderer.tonemap_pass_with_input(&device, &queue, &mut enc, escape.output_view());
+            queue.submit(std::iter::once(enc.finish()));
+            pollster::block_on(renderer.read_fractal_pixels(&device, &queue, false, [0.0, 0.0, 0.0])).expect("readback").2
+        };
+        let transform = |stage, variation: &str, amount: f32| EscapeTransform::new(stage, variation, amount);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.center_re = "-0.6".to_string();
+        esc.center_im = "0.1".to_string();
+        esc.zoom_log2 = 0.4;
+        esc.max_iter = 200;
+        esc.coloring = "smooth".to_string();
+        let mut steps: Vec<(&str, crate::config::escape::EscapeConfig)> = Vec::new();
+        esc.lens = "eyefish".to_string();
+        esc.lens_amount = 1.0;
+        steps.push(("pick a lens", esc.clone()));
+        esc.lens_amount = 0.5;
+        steps.push(("the lens's amount", esc.clone()));
+        esc.transforms.push(transform(TransformStage::Plane, "sinusoidal", 1.0));
+        steps.push(("add a Plane transformation", esc.clone()));
+        esc.transforms[0].amount = 0.5;
+        steps.push(("its amount", esc.clone()));
+        esc.transforms[0] = transform(TransformStage::Plane, "curl", 0.5);
+        steps.push(("another variation", esc.clone()));
+        esc.transforms[0].params.insert("c1".to_string(), 0.4);
+        steps.push(("a parameter", esc.clone()));
+        esc.transforms[0].stage = TransformStage::Iteration;
+        steps.push(("another stage", esc.clone()));
+        // Order matters within a stage; each stage applies its own.
+        esc.transforms.push(transform(TransformStage::Iteration, "sinusoidal", 0.5));
+        steps.push(("a second", esc.clone()));
+        esc.transforms.swap(0, 1);
+        steps.push(("their order", esc.clone()));
+        esc.transforms.clear();
+        steps.push(("remove them", esc.clone()));
+        // Orbit, under a colouring that reads the orbit.
+        esc.coloring = "orbit_trap".to_string();
+        steps.push(("a trap colouring", esc.clone()));
+        esc.transforms.push(transform(TransformStage::Orbit, "swirl", 1.0));
+        steps.push(("add an Orbit transformation", esc.clone()));
+        esc.transforms[0].amount = 0.5;
+        steps.push(("its amount", esc.clone()));
+
+        let mut escape = crate::escape::EscapeRenderer::new(&device, w, h);
+        escape.force_direct = true;
+        let mut plain = steps[0].1.clone();
+        plain.lens.clear();
+        let mut before = settle(&mut escape, &plain);
+        for (what, esc) in &steps {
+            let cached = settle(&mut escape, esc);
+            assert_ne!(escape.last_path, "recolor", "{what}: recoloured the old records");
+            assert!(cached != before, "{what}: the picture did not change");
+            let mut fresh = crate::escape::EscapeRenderer::new(&device, w, h);
+            fresh.force_direct = true;
+            assert!(cached == settle(&mut fresh, esc), "{what}: differs from a fresh render");
+            fresh.destroy();
+            before = cached;
+        }
+        let again = settle(&mut escape, &steps.last().unwrap().1);
+        assert_eq!(escape.last_path, "recolor", "the same config again re-iterated");
+        assert!(again == before, "the same config again changed the picture");
+        escape.destroy();
+    }
+
     /// Equalize spends the palette evenly over the frame: with a grey
     /// ramp and one turn, every tenth of the palette covers about a tenth
     /// of the drawn pixels, where Auto range leaves the smooth count
@@ -9736,6 +12811,106 @@ fn main() {
                 assert!(painted > n / 20, "{name}: only {painted} pixels painted");
                 assert!(agree * 100 >= n * 98, "{name}: only {agree} of {n} pixels agree with techmatt's trace");
             }
+        }
+    }
+
+    /// Direct orbit traps on McMullen and Collatz paint what techmatt's
+    /// trace paints: at the formula x colouring sweep's view (the plane
+    /// about 0, 64 iterations, the colouring's defaults -- a Screen ring),
+    /// an f64 port of the trace through each formula's own step, against
+    /// the render through a grey ramp. The sweep found these two pairings
+    /// lighting about 150 pixels of 12,288 and left open whether that was
+    /// the shape being sparse or a fault; this settles it per pixel.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn direct_traps_paint_what_the_trace_paints_on_mcmullen_and_collatz() {
+        let (device, queue) = repro_device();
+        let (w, h) = (128u32, 96u32);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = crate::scene::transforms::RenderMode::Escape;
+        config.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        config.exposure = 1.0;
+        config.gamma = 1.0;
+        config.levels_enabled = false;
+        config.use_curve = false;
+        config.background_color = [0.0, 0.0, 0.0];
+        let stop = |position: f32, v: f32| crate::scene::palette::ColorStop { position, color: [v, v, v] };
+        config.palette.stops = vec![stop(0.0, 0.0), stop(1.0, 1.0)];
+        config.escape.center_re = "0".to_string();
+        config.escape.center_im = "0".to_string();
+        config.escape.max_iter = 64;
+        config.escape.supersample = 1;
+        config.escape.coloring = "direct_traps".to_string();
+        let bailout = config.escape.bailout as f64;
+        let span_y = 4.0;
+        let span_x = span_y * w as f64 / h as f64;
+        // The colouring's defaults: a ring of radius 1, threshold 0.0597,
+        // opacity 0.45, Screen, from black, linear key.
+        let (thr, op) = (0.0597f64, 0.45f64);
+        let mul = |a: [f64; 2], b: [f64; 2]| [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+        let pow = |z: [f64; 2], p: f64| {
+            let (r, t) = (z[0].hypot(z[1]), z[1].atan2(z[0]));
+            let rp = r.powf(p);
+            [rp * (p * t).cos(), rp * (p * t).sin()]
+        };
+        type Step = Box<dyn Fn([f64; 2], [f64; 2]) -> ([f64; 2], bool)>;
+        let cases: [(&str, Step); 2] = [
+            ("mcmullen", Box::new(move |z: [f64; 2], c: [f64; 2]| {
+                let z = if z[0] * z[0] + z[1] * z[1] < 1e-20 { [1e20, 0.0] } else {
+                    let a = pow(z, 2.0);
+                    let b = mul(c, pow(z, -3.0));
+                    [a[0] + b[0], a[1] + b[1]]
+                };
+                (z, z[0] * z[0] + z[1] * z[1] > bailout)
+            })),
+            ("collatz", Box::new(move |z: [f64; 2], _c: [f64; 2]| {
+                let pi = std::f64::consts::PI;
+                let (x, y) = (pi * z[0], pi * z[1]);
+                let cz = [x.cos() * y.cosh(), -x.sin() * y.sinh()];
+                let t = mul([2.0 + 5.0 * z[0], 5.0 * z[1]], cz);
+                let z = [0.25 * (2.0 + 7.0 * z[0] - t[0]), 0.25 * (7.0 * z[1] - t[1])];
+                (z, z[1].abs() > bailout)
+            })),
+        ];
+        for (name, step) in cases {
+            let mut c = config.clone();
+            c.escape.formula = name.to_string();
+            let job = crate::renderer::RenderJob::new(&c, w, h);
+            let out = pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data;
+            let (mut agree, mut painted, mut lit_cpu, mut lit_gpu, mut worst) = (0usize, 0usize, 0usize, 0usize, 0.0f64);
+            for (i, p) in out.chunks_exact(4).enumerate() {
+                let (px, py) = ((i % w as usize) as f64, (i / w as usize) as f64);
+                let pc = [((px + 0.5) / w as f64 - 0.5) * span_x, -(((py + 0.5) / h as f64 - 0.5) * span_y)];
+                let mut z = pc;
+                let mut col = 0.0f64;
+                let mut hits = 0;
+                for _ in 0..64 {
+                    let (next, escaped) = step(z, pc);
+                    z = next;
+                    let d = (z[0].hypot(z[1]) - 1.0).abs();
+                    if d < thr {
+                        hits += 1;
+                        let key = (d / thr).clamp(0.0, 1.0);
+                        let sample = key.powf(2.2);
+                        let alpha = op * (1.0 - key);
+                        let screened = 1.0 - (1.0 - col) * (1.0 - sample);
+                        col = screened * alpha + col * (1.0 - alpha);
+                    }
+                    if escaped {
+                        break;
+                    }
+                }
+                painted += usize::from(hits > 0);
+                let want = col.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0;
+                lit_cpu += usize::from(want > 8.0);
+                lit_gpu += usize::from(p[0] > 8);
+                let e = (p[0] as f64 - want).abs();
+                worst = worst.max(e);
+                agree += usize::from(e <= 2.0);
+            }
+            let n = (w * h) as usize;
+            println!("{name}: {agree}/{n} within two levels, worst {worst:.1}; the trace paints {painted} and lights {lit_cpu}, the render lights {lit_gpu}");
+            assert!(agree * 100 >= n * 98, "{name}: only {agree} of {n} pixels agree with the trace");
         }
     }
 
@@ -13460,13 +16635,22 @@ fn main() {
         assert_has_structure("nova", &img);
         check("nova-floatexp", &nv_cfg, true);
 
-        // Kaliset is deliberately NOT here. It is non-escaping and
-        // inverting, and its delta form only becomes accurate past
-        // zoom 24 (`tier_min_zoom`), so forcing it onto a shallow view
-        // would be testing it outside the regime the engine ever uses
-        // it in. Its accuracy is pinned by the exact-orbit test at
-        // zoom 30 and by
-        // `the_non_escaping_tiers_engage_only_where_they_are_accurate`.
+        // Kaliset seeds its parameter plane at the PIXEL, like Manowar,
+        // and on a view whose orbit leans on that seed. Left out of
+        // here while its delta was believed inaccurate shallower than
+        // zoom 24 -- which was the scaled rung seeding every pixel at
+        // the view centre, a different picture at every depth that
+        // this comparison draws in one glance.
+        let mut ks_cfg = crate::config::escape::EscapeConfig::default();
+        ks_cfg.formula = "kaliset".to_string();
+        ks_cfg.coloring = "magnitude_average".to_string();
+        ks_cfg.center_re = "0.35".to_string();
+        ks_cfg.center_im = "0.28".to_string();
+        ks_cfg.zoom_log2 = 8.0;
+        ks_cfg.max_iter = 60;
+        let img = check("kaliset", &ks_cfg, false);
+        assert_has_structure("kaliset", &img);
+        check("kaliset-floatexp", &ks_cfg, true);
 
         // Ducks: the transcendental one. Its delta is log1p of the
         // fold's ratio, and it is the tier whose branch cut bites --
@@ -13706,7 +16890,13 @@ fn main() {
                 // settle time can exceed the probe's 64 iterations —
                 // verified visually instead (novaretti-period corpus).
                 let period_on_nonescaping = non_escaping && c.name == "period";
-                if (!non_escaping || colors_interior) && !period_on_nonescaping {
+                // Direct orbit traps paint only the iterates that pass near
+                // the trap, and at this view McMullen's and Collatz's pass
+                // the ring on about 150 pixels: sparse by design, pixel for
+                // pixel what techmatt's trace paints
+                // (`direct_traps_paint_what_the_trace_paints_on_mcmullen_and_collatz`).
+                let sparse_traps = c.name == "direct_traps" && matches!(f.name, "mcmullen" | "collatz");
+                if (!non_escaping || colors_interior) && !period_on_nonescaping && !sparse_traps {
                     assert!(
                         lit > (128 * 96) / 50,
                         "{} x {} lit only {lit} pixels",
@@ -13720,12 +16910,228 @@ fn main() {
         escape.destroy();
         renderer.destroy();
     }
+
+    /// MEASUREMENT (plan, phase 4, step 9): a deep view rendered whole by
+    /// the built-in Mandelbrot -- with its BLA skips and without -- and by
+    /// its Rhai twin on the custom tier, warm, wall-clock to settled.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_the_custom_tier_against_the_native_one() {
+        let (device, queue) = repro_device();
+        let (w, h) = (512u32, 384u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let mut esc = crate::config::escape::EscapeConfig::default();
+        esc.formula = "mandelbrot".into();
+        esc.center_re = "-0.7436438870371587047548108297799385780".into();
+        esc.center_im = "0.13182590420531251981651559677435626549".into();
+        esc.zoom_log2 = 42.0;
+        esc.max_iter = 8000;
+        esc.bailout = 4.0;
+        let twin = {
+            let src = crate::escape::twins::custom_source("mandelbrot").unwrap();
+            let mut t = esc.clone();
+            t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            t.custom_formula = Some(src);
+            crate::escape::custom::ensure(&t);
+            t
+        };
+        let time = |esc: &crate::config::escape::EscapeConfig, bla: bool, floatexp: bool| -> f64 {
+            let mut best = f64::INFINITY;
+            for _ in 0..2 {
+                let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+                r.force_perturbed = true;
+                r.force_floatexp = floatexp;
+                r.disable_bla = !bla;
+                let start = std::time::Instant::now();
+                loop {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                    let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if settled {
+                        break;
+                    }
+                }
+                best = best.min(start.elapsed().as_secs_f64());
+                r.destroy();
+            }
+            best
+        };
+        for (zoom, iters) in [(42.0, 8000), (60.0, 30000)] {
+            let (mut esc, mut twin) = (esc.clone(), twin.clone());
+            for e in [&mut esc, &mut twin] {
+                e.zoom_log2 = zoom;
+                e.max_iter = iters;
+            }
+            for floatexp in [false, true] {
+                if zoom > 48.0 && !floatexp {
+                    continue;
+                }
+                let native = time(&esc, true, floatexp);
+                let native_per_step = time(&esc, false, floatexp);
+                let custom = time(&twin, false, floatexp);
+                let custom_bla = time(&twin, true, floatexp);
+                println!(
+                    "zoom {zoom}, {w}x{h}, {iters} iterations, {}: built-in with BLA {native:.2} s, per step {native_per_step:.2} s; twin with BLA {custom_bla:.2} s, per step {custom:.2} s",
+                    if floatexp { "floatexp rung" } else { "scaled rung" }
+                );
+            }
+        }
+    }
+
+    /// MEASUREMENT (the speed work after phase 4, step 9e): each twin
+    /// against its built-in at deep views, BLA as users get it, from cold:
+    /// the whole render, the reference orbit's build, the BLA table's,
+    /// and the rest, which is the GPU's.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_twins_against_their_builtins() {
+        let (device, queue) = repro_device();
+        let (w, h) = (512u32, 384u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        // One render from cold (no stored orbit): its time, and the
+        // reference's and the table's builds as the diagnostics hold them.
+        let run = |esc: &crate::config::escape::EscapeConfig, floatexp: bool| -> (f64, f32, f32, u32) {
+            if let Some(dir) = crate::escape::orbit_store::test_store_dir() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            crate::escape::diag::reset();
+            let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+            r.force_perturbed = true;
+            r.force_floatexp = floatexp;
+            let start = std::time::Instant::now();
+            loop {
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                if settled {
+                    break;
+                }
+            }
+            let t = start.elapsed().as_secs_f64();
+            r.destroy();
+            let d = crate::escape::diag::snapshot();
+            (t, d.orbit_ms, d.bla_build_ms, d.orbit_len)
+        };
+        let seahorse = ("-0.7436438870371587047548108297799385780", "0.13182590420531251981651559677435626549");
+        let ship_deep = ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851");
+        let views: &[(&str, &[(&str, f32)], (&str, &str), f64, u32, bool)] = &[
+            ("mandelbrot", &[], seahorse, 42.0, 8000, false),
+            ("mandelbrot", &[], seahorse, 60.0, 30000, true),
+            ("mandelbrot", &[], ("-1.75487766624669276", "0.00000000000001"), 30.0, 20000, false),
+            ("multibrot", &[("power", 4.0)], ("-0.9641787397769701302601128871474335232", "0.20113415795567669775171048165243266489"), 30.0, 2660, false),
+            ("tricorn", &[("power", 2.0)], ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000, false),
+            ("tricorn", &[("power", 2.0)], ("-0.2", "0.0"), 30.0, 20000, false),
+            ("burning_ship", &[("variant", 0.0)], ship_deep, 60.0, 25000, true),
+            ("burning_ship", &[("variant", 0.0)], ("-0.5", "-0.5"), 30.0, 20000, false),
+            ("lambda", &[], ("2.88438199954338481", "0.46729682466198574"), 30.0, 3000, false),
+            ("phoenix", &[("p_re", -0.5), ("p_im", 0.0)], ("-0.8767148663342849324908252535085789479", "0.68253971831422086306603135717477825677"), 48.001, 256, true),
+            ("manowar", &[], ("-0.03909223238627110991", "0.00103869199752806211"), 26.0, 3000, true),
+        ];
+        println!("{w}x{h}, with BLA where the tier has it; times in ms: whole render, reference build, BLA table build, the rest (GPU)");
+        for &(formula, params, (cx, cy), zoom, iters, floatexp) in views {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.into();
+            for (k, v) in params {
+                esc.formula_params.insert(k.to_string(), *v);
+            }
+            esc.center_re = cx.into();
+            esc.center_im = cy.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let src = crate::escape::twins::custom_source(formula).unwrap();
+            let mut twin = esc.clone();
+            twin.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            twin.custom_formula = Some(src);
+            crate::escape::custom::ensure(&twin);
+            // Warm the shaders' compiles, which neither should pay here.
+            let _ = run(&esc, floatexp);
+            let _ = run(&twin, floatexp);
+            for (who, cfg) in [("built-in", &esc), ("twin", &twin)] {
+                // The best of three: a single run swings by half.
+                let (t, orbit, bla, len) = (0..3).map(|_| run(cfg, floatexp)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+                let rest = t * 1000.0 - f64::from(orbit) - f64::from(bla);
+                println!(
+                    "{formula} {params:?} zoom {zoom}, {iters} it., {}: {who:8} {:7.0} | reference {:6.1} ({len} entries) | table {:6.1} | rest {:7.0}",
+                    if floatexp { "floatexp" } else { "scaled" },
+                    t * 1000.0,
+                    orbit,
+                    bla,
+                    rest
+                );
+            }
+        }
+    }
+
+    /// MEASUREMENT (plan, phase 4, step 9b): the fold and conjugate
+    /// tiers with their real-linear BLA tables and per step, the built-in
+    /// and its twin, at the visual suite's deep Ship and Tricorn views.
+    #[test]
+    #[ignore = "measurement: needs a GPU"]
+    fn measure_real_linear_bla() {
+        let (device, queue) = repro_device();
+        let (w, h) = (512u32, 384u32);
+        let config = crate::config::FractalConfig::default();
+        let renderer = crate::renderer::compute_kernel::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &config.flame, config.palette_size);
+        let time = |esc: &crate::config::escape::EscapeConfig, bla: bool, floatexp: bool| -> f64 {
+            let mut best = f64::INFINITY;
+            for _ in 0..2 {
+                let mut r = crate::escape::EscapeRenderer::new(&device, w, h);
+                r.force_perturbed = true;
+                r.force_floatexp = floatexp;
+                r.disable_bla = !bla;
+                let start = std::time::Instant::now();
+                loop {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("speed") });
+                    let settled = r.render(&device, &queue, &mut enc, esc, renderer.palette_view(), renderer.palette_generation());
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                    if settled {
+                        break;
+                    }
+                }
+                best = best.min(start.elapsed().as_secs_f64());
+                r.destroy();
+            }
+            best
+        };
+        // The suite's deep views (escaping early), and interiors, where
+        // every pixel runs to the cap: BLA's best case.
+        let views: [(&str, &str, f32, (&str, &str), f64, u32, bool); 5] = [
+            ("burning_ship", "variant", 0.0, ("-1.5715785406521575501178674899386895429", "-0.0000077722235157803799107467700230851"), 60.0, 25000, true),
+            ("tricorn", "power", 2.0, ("-0.90755797705302632", "0.10050898208800299"), 28.0, 20000, false),
+            ("burning_ship", "variant", 0.0, ("-0.5", "-0.5"), 30.0, 20000, false),
+            ("burning_ship", "variant", 0.0, ("-0.5", "-0.5"), 60.0, 20000, true),
+            ("tricorn", "power", 2.0, ("-0.2", "0.0"), 30.0, 20000, false),
+        ];
+        for (formula, param, value, (cx, cy), zoom, iters, floatexp) in views {
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = formula.into();
+            esc.formula_params.insert(param.into(), value);
+            esc.center_re = cx.into();
+            esc.center_im = cy.into();
+            esc.zoom_log2 = zoom;
+            esc.max_iter = iters;
+            esc.bailout = 4.0;
+            let twin = {
+                let src = crate::escape::twins::custom_source(formula).unwrap();
+                let mut t = esc.clone();
+                t.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+                t.custom_formula = Some(src);
+                crate::escape::custom::ensure(&t);
+                t
+            };
+            println!(
+                "{formula} at zoom {zoom}, {iters} iterations, {w}x{h}: built-in with BLA {:.2} s, per step {:.2} s; twin with BLA {:.2} s, per step {:.2} s",
+                time(&esc, true, floatexp),
+                time(&esc, false, floatexp),
+                time(&twin, true, floatexp),
+                time(&twin, false, floatexp)
+            );
+        }
+    }
 }
-
-
-
-
-
-
-
-

@@ -1,0 +1,533 @@
+# Path tracing: research and plan
+
+> **Archived 2026-10-21** -- finished: the agreed order built by 2026-10-20 -- the denoiser's fixes (D1-D5), adaptive sampling (V2), the ray tolerance; S1 measured, S2 built slower and parked. What is left is in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*TODO: the solid path tracer's speed*). Read [TERRAIN.md](../../main/TERRAIN.md) for how it works now; this is the record of what was planned and measured when it was written.
+
+Researched 2026-10-19 at the user's request -- "anything to speed up or
+improve the quality of Path Tracing is something we should plan on doing
+... the denoiser speeds up rendering, but can also make areas look a little
+odd and sometimes speckled ... I'd like to research this more before we
+make any major decisions that rewrite Path Tracing." **Research and plan
+only**: nothing here is built except where a line says so. The tracer as
+it is: [TERRAIN.md](../../main/TERRAIN.md), *The path tracer*; its speed so far:
+[escape-sim-followups.md](../../projects/escape-sim-followups.md), *the solid path
+tracer's speed*. Weighed against the Mandelbulb as well as the Menger: the
+sponge's flat faces hide what the filter and the materials do on a curve.
+
+## What is wrong now (read from the code)
+
+1. **The denoiser's guide is noisy where there is a highlight or a coat.**
+   The share of a pixel's light the albedo does not shape (`first_white`
+   in `pt_path`, `path_core.rs`) is built from the light's *sampled* cone
+   direction and the shadow ray's visibility, so it varies from sample to
+   sample; the filter divides the light by that guide and multiplies it
+   back, so the speckle returns on glossy and highlit areas. A guide must
+   be noise-free (OIDN's "clean aux").
+2. **The variance is underestimated at few samples.** A pixel whose few
+   samples all missed a rare bright path has near-zero variance, so the
+   luminance stop closes on it and it keeps its value: speckle. The
+   variance is blurred 3x3, too little; SVGF's per-pixel moments assume a
+   long temporal history, which one accumulation does not have.
+3. **The normal stop is cos^128** (a 10-degree difference weighs 0.14,
+   20 degrees 4e-4). On the Menger's flat faces the filter runs at full
+   width and the stride-8 and -16 taps leave mid-frequency residue --
+   **blotches**; on the Mandelbulb the normals differ pixel to pixel, the
+   filter all but stops -- **speckle**. That pair is the user's "odd areas,
+   sometimes speckled", and why the Menger alone misleads.
+4. **The firefly clamp is on the whole path** (10x the brightest light):
+   direct light counts against it, so a bright highlight is darkened with
+   the fireflies.
+5. **No multiple importance sampling, and a light cannot be hit**: a
+   bounce that escapes sees only the sky. Below roughness about 0.15 the
+   coat's peak is narrower than a light's cone (2.4 degrees at Shadow
+   sharpness 12), next-event estimation rarely lands in it -- speckle --
+   and the clamp darkens what it does find. Polished surfaces never
+   reflect the lights.
+6. **Why gloss reads black and white:** the coat's reflectance is one
+   number (white reflections); at gloss toward 1 the diffuse share goes to
+   0 and the colour with it; the environment is uniform -- the background
+   colour, near black on the usual backdrop -- so a reflection is near
+   black; lights are not in reflections (5); and Linear with Clip clips
+   the highlights. On the Menger each flat face reflects one direction of
+   a uniform sky: one flat tone.
+
+## Ranked: what to do, by expected value for this tracer
+
+| # | Item | Effect | Cost | Main risk |
+|---|---|---|---|---|
+| 1 | Denoiser fixes D1-D4 (below) | less speckle and blotching at 4-64 samples | S each | re-tuning `DENOISE_SIGMA` / `DENOISE_FULL` |
+| 2 | MIS, metallic, energy compensation (P4) | polished and metal looks converge; lights in reflections | S-M | keeping the lit tier in step |
+| 3 | A structured environment, larger lights, AgX (P4) | the "Blender look" | S-M (procedural) | an HDRI needs a decision |
+| 4 | Measure SIMD efficiency, then a fused march loop with lane refill | 1.3-2x a sample if efficiency is 50% or less | S to measure, M-L to build | registers; the invariance tests |
+| 5 | Adaptive sampling (half sums) | 1.5-3x to a given quality | M | per-pixel counts change the resolve |
+| 6 | Specular and diffuse denoised apart | reflections not smeared, once metals exist | M | bytes a pixel under the binding cap |
+| 7 | Blue-noise error across pixels | quality to the eye; helps the filter at 1-16 samples | S-M | RMSE will not show it |
+| 8 | A learned denoiser (OIDN) for stills | the best at 4-64 samples | M (desktop, CPU) / L (WGSL) | a dependency, weights, the web |
+| 9 | Russian roulette on shadow rays past the first surface | 5-10% | S | some noise |
+| 10 | A wavefront rewrite | about as 4, at far more cost | L | storage-buffer limits, the scheduler |
+| 11 | A coarse distance-cache grid | unknown | L | measure first |
+
+### Denoising
+
+- **D1. Clean guides (S).** The white share from deterministic terms only:
+  the light's centre direction, no visibility -- or the coat's
+  pre-integrated reflectance (the split-sum DFG term, Karis 2013). Gate:
+  the field-reported terrain sun-glint banding stays fixed.
+- **D2. Variance (S).** Until about 32 samples, the larger of the spatial
+  estimate (the existing few-sample 7x7 branch) and the per-pixel moments,
+  blending to the moments as samples gather; a 5x5 prefilter.
+- **D3. Outliers before the filter (S).** Split the clamp: the first
+  surface's direct light high or unclamped, the indirect lower (Cycles'
+  Clamp Direct / Clamp Indirect). Path regularisation: after a diffuse
+  bounce, the coat at least roughness 0.3-0.5 (Kaplanyan and Dachsbacher
+  2013; Cycles' Filter Glossy). Below about 16 samples, a pixel's
+  demodulated light clamped to its 3x3 neighbours' maximum. (Zirr et al.
+  2018's re-weighting is the robust version, at three to six more vec4 a
+  pixel: stills only.)
+- **D4. Edge stops for fractals (S).** The guide holds the summed normal;
+  |sum n| / coverage below 1 means the normals vary inside the pixel --
+  there the exponent drops (128 |n|^8, at least 8) and the distance stop
+  carries it. Strides 16, then 8, dropped as samples pass about 8; and
+  each pixel blended back to its raw value once its standard error is
+  under about 1%.
+- **D5. Specular and diffuse apart (M)** (SVGF; NVIDIA NRD's ReLAX): two
+  sums by the first lobe, the diffuse divided by the albedo, the specular
+  by its pre-integrated reflectance, the specular filtered by roughness
+  (little or none when polished). Packed into the existing bindings: a
+  browser's 128 MB floor allows about 60 bytes a pixel at 1080p.
+- **D6. A stronger filter.** A solid's sample takes seconds and the
+  filter milliseconds, so a costlier filter is affordable: first-order
+  feature regression (Bitterli et al. 2016) or BMFR (Koskela et al. 2019)
+  in WGSL; or OIDN -- on the desktop through Intel's library (built from
+  its official release, never a third-party binary), roughly a second at
+  1080p on the CPU (unmeasured); in WGSL, the MIT-licensed pmndrs/denoiser
+  runs OIDN's Apache-2.0 weights, validated only on Apple GPUs. A learned
+  filter smooths detail its albedo and normal buffers do not hold, and its
+  weights are megabytes (the web would fetch them when asked).
+
+### Variance reduction
+
+- **V1. MIS (S-M; Veach and Guibas 1995).** A bounce that escapes inside a
+  light's cone (and short of a point light) adds the light's radiance,
+  each estimate weighted by the power heuristic. Nearly free for
+  directional lights: the bounce is the shadow ray. The Blinn-Phong
+  highlight stays out (it is not a sampled lobe). Part of P4. **Built
+  2026-10-19** for the coat's lobe (TERRAIN.md); it also undid most of
+  item 5's clamp darkening (0.068 of a true 0.42 before, 0.376 after).
+- **V2. Adaptive sampling (M; as Cycles).** Odd samples also summed apart;
+  the error |A - B| / sqrt(luminance) (Dammertz et al. 2010); a pixel stops
+  after a minimum count and an unconverged one wakes its neighbours;
+  active pixels compacted so a band does not run masked lanes; per-pixel
+  sample indices keep it batch-invariant. The half sums also feed D2/D4.
+- **V3. Blue noise (S-M).** Ahmed and Wonka 2020: pixels drawing one
+  Owen-scrambled Sobol sequence in a scrambled Z-order -- no tables,
+  progressive and adaptive. At 1-16 samples the error becomes blue noise,
+  which the filter's fine levels remove.
+- **V4. Shadow rays past the first surface (S).** Russian roulette on them
+  rather than one light by power (measured 2026-10-19: half the error
+  again, rejected); or resampled by unshadowed contribution (Talbot 2005).
+
+### Speed (the march loop is about 90% of a sample)
+
+- **S1. Measure first (S).** Distance calls a lane per march phase (the
+  camera ray; a march a light and the bounce, per bounce), and SIMD
+  efficiency -- the lanes' steps over 32 times each group's longest -- on
+  the Menger, the Mandelbulb and the Mandelbox. `subgroupMax` where the
+  device has subgroups, else a debug buffer summed on the CPU.
+- **S2. One fused march loop with lane refill (M-L).** `pt_path` as a state
+  machine, an iteration one distance step of the lane's current ray,
+  shading on the transitions (Aila and Laine 2009's persistent threads;
+  path regeneration, van Antwerpen 2011, Novák et al. 2010): a warp's time
+  is its lanes' longest total rather than the sum of each phase's longest;
+  threads pulling a band's pixels from an atomic counter cut the
+  dispatch's tail. One kernel, no new storage. 1.3-2x if S1 finds
+  efficiency at or under 50%, little if over 75%. Risks: registers (unused
+  code alone cost a fifth, `4a8671ae`), the random draws' order a lane.
+- **S3. Wavefront (L; Laine, Karras and Aila 2013).** Its gains came from
+  material divergence and register pressure; ours is divergence in march
+  lengths, which a wavefront march only fixes by refilling lanes -- S2 plus
+  queues, some 200 MB of path state at 1080p, indirect dispatch, and the
+  browsers' storage-buffer count. Only if S2's registers prove fatal.
+- **S4. More compiled in or out (S):** the coat or metal, MIS, the shadow
+  strength's mix, the bounce and light counts -- as `placed_lights` is.
+- **S5. A distance cache (L, speculative):** a coarse 3D texture of
+  conservative distances; only if a step histogram shows many far-field
+  steps (the sponge's tunnels and grazing shadow rays are near-field).
+
+### Not recommended
+
+- **Path guiding, ReSTIR:** they pay with many bounces and many lights;
+  here two bounces, at most four lights, a sky.
+- **Over-relaxed marching:** measured slower (2026-10-19), and unsafe on
+  the Mandelbulb, whose estimate is not a strict bound.
+- **Segment tracing:** needs Lipschitz bounds the fractals do not give.
+- **Cone or bundled shadow rays:** jittered light directions and scattered
+  bounce origins leave no coherence.
+- **Temporal reprojection for solids:** a sample takes seconds (worth it
+  for terrains only).
+
+## Gates for any of it
+
+`path_quality_against_a_reference` (a seed of its own for the reference)
+with `PT_PRESET` the Mandelbulb and the Mandelbox as well as the Menger
+Sponge, and gloss/metal variants (roughness 0.1 and 0.4, metallic 0 and 1):
+RMSE and bias at **equal time** -- the honest axis for MIS and adaptive
+sampling; the denoised error at 4, 16 and 64 samples, and FLIP (Andersson
+et al. 2020), since RMSE under-weights blotches and speckle; flat and
+curved pixels measured apart. Gloss 0 and metallic 0 bit-identical;
+`solid_samples_are_band_invariant` and the batch-invariance tests hold.
+
+## Proposed order, for the user's decision
+
+1. Within P4 (materials, [3d-look-and-tools.md](3d-look-and-tools.md)):
+   V1 MIS, metallic, energy compensation, the environment, AgX -- needed
+   for the polished look, small, and gated as above.
+2. **Decide:** the denoiser fixes D1-D4 (small, each measured), then D5
+   once metals exist.
+3. **Decide:** S1's measurement (cheap), and S2 only if it finds the
+   lanes idle half the time or more.
+4. **Decide:** V2 adaptive sampling.
+5. **Decide:** a learned denoiser for stills (D6), and an HDRI environment
+   (reopens 2026-10-02's decision to skip image files).
+
+## Agreed 2026-10-20: order of work
+
+The user: "Yes" to 2, 3 and 4 above (item 1 was built within P4). In
+this order, each change measured before it lands:
+
+0. [ ] **The gate:** `denoise_quality` (`solid_path.rs`, ignored): the
+   Menger Sponge, the Mandelbulb and the Mandelbox, each matte, glossy
+   (gloss 0.04, roughness 0.15) and metal (metallic 1, roughness 0.4), at
+   4, 16 and 64 samples, raw and denoised, against 1024 undenoised samples
+   from a stream of their own (cached in `PT_REF_DIR`). The luminance
+   error over covered pixels as a share of the mean, split by scale:
+   **fine** (the error less its 3x3 mean: speckle) and **coarse** (its 9x9
+   mean: blotches) -- in place of FLIP, the two failures the user named,
+   which RMSE weighs alike.
+   **What the gate found first (2026-10-20).** Every solid denoiser test
+   so far -- and the tuning of `DENOISE_SIGMA` and `DENOISE_FULL` on
+   solids -- ran with an all-white palette (the tests' `white_palette`),
+   so the albedo guide never had a colour to separate; the gate's first
+   run did too, and was redone with each preset's palette. With colour:
+   - **The denoiser removes little on a fractal solid**: on average it
+     left 98% of the raw error, and from 16 samples it often made the
+     picture *worse* (the Mandelbox at 64 samples: 1.09% raw, 1.61%
+     denoised) -- the blotches, as coarse error.
+   - **Most of a coloured solid's error is the colouring's own sub-pixel
+     variation**: the Mandelbulb at 4 samples is 17.8% from its reference
+     white, 46% with its palette. A filter that divides out the pixel's
+     mean albedo and multiplies it back leaves that untouched; filtering
+     the whole colour instead (the guide white) was no better.
+   - **Gloss and metal are fireflies**: 30-200% at 4 samples, 6-43% at 64.
+1. [~] D1 clean guides: built; within 1% everywhere -- the guide's noise
+   is not what limits the filter here. Kept (correct, and free).
+2. [x] D2 the variance: built, measured, **dropped** -- a wider stop
+   blurred more detail than noise (mean denoised/raw 0.982 -> 1.014; the
+   Mandelbox at 16 samples 3.84% -> 4.66%).
+   **In its place, a confidence bound on the filter** (`finish`): a pixel
+   may move from its own mean by no more than its standard error times
+   `max(1, sqrt(16 / n))`, measured on the largest channel, shrinking
+   past it as (bound / gap)^2 -- so a disagreement within the noise is
+   noise removed, and a larger one, the picture's detail, goes back to
+   the samples' own; from 8 samples on. Mean denoised/raw 0.979 -> 0.934;
+   from 16 samples the denoised picture is at most 2% worse than raw (it
+   had been up to 48%; the Mandelbox at 64: 1.61% -> 1.11%, its coarse
+   error halved), and it
+   converges to the samples' mean. (A hard clamp at 2 and 1 errors: 0.967,
+   0.948; by luminance alone the colours still bled.)
+3. [x] D3 outliers, measured against references of 4096 samples with no
+   firefly clamp (`PT_REF_TRUTH`), so a change to the estimator shows its
+   bias:
+   - **The clamp split** (direct light at 10x the bound): **dropped** --
+     less bias, more noise from the highlights at these counts (glossy
+     Mandelbulb at 16 samples 62.6% -> 74.0% raw); MIS had already undone
+     most of the darkening the whole-path clamp was blamed for.
+   - **Path regularisation** (a coat past a diffuse bounce at least
+     roughness 0.4, `PT_REGULAR_ROUGH`): kept -- glossy 1-4% better, nothing
+     worse (a metal never bounces diffusely).
+   - **The neighbourhood clamp** (`prepare`): a pixel's light no brighter
+     than twice its brightest neighbour's on the same surface (normals
+     within 37 degrees), loosening in proportion past 16 samples so it
+     fades rather than switching off. Kept: glossy at 4 samples 76% (the
+     Mandelbox), 32% (the Menger) and 21% (the Mandelbulb) less error,
+     metal 13-17%; at its neighbours' maximum itself it darkened a metal's
+     real glints (the Mandelbox metal +33%), and held at 2x to every count
+     it biased one at 64 samples (+16%).
+4. [x] D4 edge stops:
+   - **The normals' stop eased where a pixel holds several facets**
+     (their mean's length; a fourth texture): **dropped** -- neutral (mean
+     0.866 -> 0.865), a little less speckle for a little more blotch.
+   - **The widest strides dropped as samples gather** (16 from 8 samples,
+     8 from 32; `denoise_steps`): kept -- neutral in error, two passes of
+     five fewer.
+   - **Back to the raw value once converged**: superseded by the
+     confidence bound (2. above).
+
+   **D1-D4 together, 2026-10-20** (both against the 4096-sample truth):
+   the denoised picture's error as a share of the raw's, averaged over
+   the 27 cases, **0.986 -> 0.866**; from 16 samples the denoised picture
+   is worse than raw in 6 of 18 cases, by at most 3.2% (it was in 11, by
+   up to 51%: the Mandelbox matte at 64). Kept: D1, the
+   confidence bound, path regularisation, the neighbourhood clamp, the
+   stride schedule.
+5. [x] **S1 measured 2026-10-20** (`march_lane_efficiency`: one sample
+   at 320x180, the shader patched to count each lane's distance steps by
+   phase; a warp an 8x4 block). The share of a warp's lanes busy, and what
+   S2 could gain at best:
+
+   | Solid | busy now | fused alone | fused, with refill |
+   |---|---|---|---|
+   | Menger Sponge | 25% | 1.53x | 3.97x |
+   | Mandelbulb | 20% | 1.33x | 4.88x |
+   | Mandelbox | 50% | 1.09x | 1.99x |
+
+   The camera ray keeps 58-80% of the lanes busy; a bounce's march
+   15-29%, the first light's shadow 25-41% -- only some lanes have one
+   to trace, and the rest wait. Past the agreed bar (idle half the time or
+   more) on two of three, so **S2 goes ahead**, with refill: fusing alone
+   is worth little. Steps are distance calls, not their cost (a fractal's
+   iteration count varies within each), so the gains are ceilings.
+   [x] **S2's design** (built, measured slower, parked -- below). Mode D's solids only (a terrain's trace is a
+   traversal of sections, not a distance march, and keeps `pt_path`):
+   - **One loop, one distance step an iteration**, of whichever ray the
+     lane holds -- the camera ray, a light's shadow ray, a bounce -- with
+     the shading on the transitions: a hit's surface, each light's
+     contribution (seen and unseen, added when its shadow ray ends), the
+     bounce's lobe. The draws in the order `pt_path` makes them, so a
+     sample's random numbers, and so its value, do not change.
+   - **Refill within the workgroup**: a workgroup takes a tile of several
+     pixels a lane, and its lanes pull pixels from a `var<workgroup>`
+     atomic counter as they finish -- no new storage binding (the solid's
+     path tracer is near a browser's eight), the bands and their pricing
+     as they are. A lane owns a pixel until its samples are in, so the sum
+     is written without atomics, and in sample order.
+   - **Gates**: the picture to the last bit or within f32 reordering
+     against the current tracer (`solid_samples_are_band_invariant`, the
+     tier tests); the time a sample on the three solids at 320x180 and
+     1080p (`path_quality_against_a_reference`).
+
+   **S2 built and measured 2026-10-20 -- slower; parked.** The fused
+   march with refill was built as designed (`main_fused`, beside `main`)
+   and gave the same picture: identical to the bit on a flame cube, a
+   metal Mandelbox and a band split in tiles, and to the last bits on a
+   glossy Mandelbulb. But a sample took **2.6-3.5x longer at 1080p**
+   (the Mandelbulb 46 -> 162 ms, the Mandelbox 21 -> 55) and up to 25x at
+   320x180, and holding less state (the shading recomputed, the sums in
+   memory) made it slower still (184 ms). Why, as far as measured:
+   - **Tiles cost parallelism**: 512 pixels a workgroup gave a 320x180
+     frame 113 workgroups, a third of what the GPU holds; the Menger's
+     8-row bands got 5 where `main` dispatched 40 -- the 25x.
+   - **The surfaces serialise**: a hit costs a normal (six distance calls)
+     and a colouring's walk. In `main` the lanes that hit in a phase
+     evaluate theirs together; in the fused loop lanes hit on different
+     iterations, and the warp evaluates one lane's surface at a time.
+     S1 counted only march steps (6-8 a pixel); the surfaces are about as
+     much work again, so its ceilings (4-5x) were too high.
+   A version that could win would take the normal's six calls as steps of
+   the one loop and batch the colourings' walks, and size its tiles to the
+   band -- a deeper rewrite of the tracer, with the gain now uncertain:
+   **for the user's decision**, not built. Kept from S2: `pt_path` on shared
+   pieces (`pt_shade`, `pt_light`, `pt_light_add`, `pt_bounce`,
+   `pt_escape`, `pt_guide_white`), the same pictures to the bit (a solid,
+   a metal, a terrain, a flame's solid), the same speed within noise.
+6. [x] **V2 adaptive sampling** -- built 2026-10-20, off by default (a
+   Noise threshold in the Rendering section; TERRAIN.md, *Adaptive
+   sampling*, has how it works).
+   **Its ceiling, measured first (`adaptive_sampling_potential`):** each
+   gate case rendered twice at 64 samples from two streams; on the CPU,
+   the gate's error with the same samples dealt per pixel in proportion
+   to its standard deviation as the first render estimates it (above a
+   minimum of 4 or 8), judged by the second render's variances, against
+   the same samples dealt evenly -- over the pixels a sample hit (75% of
+   these frames are sky). The samples an even deal needs to match it:
+
+   | Solid | matte | gloss | metal |
+   |---|---|---|---|
+   | Menger Sponge | 2.6-2.9x | 3.3-3.4x | 3.7-4.0x |
+   | Mandelbulb | 3.4-3.9x | 4.2-4.8x | 3.7-4.3x |
+   | Mandelbox | 7.3-8.6x | 94-115x | 42-55x |
+
+   On the glossy and metal Mandelbox 1% of the pixels hold 95-99% of the
+   error, the same pixels in both streams. A ceiling in samples, which
+   prices a sample the same on every pixel -- and that is what the build
+   found false.
+   **As built:**
+   - Per-pixel statistics after the sums, in the same binding (the solid
+     path tracer is near a browser's storage-buffer count): the samples'
+     luminance squared, the odd samples' luminance, the pixel's own count
+     (negative once converged) and its noise at the last check.
+   - The check at fixed counts (16, then each eighth more), so a picture
+     does not depend on its batching: each pixel's noise as the display
+     shows it -- its mean's standard error one up, through the exposure
+     and the display's power, in levels of 255 -- and a pixel converged
+     where it and its eight neighbours are under the threshold; the check
+     lists the pixels still sampling, and the count comes back without
+     waiting.
+   - After a check the trace takes the list, a thread an entry, so a
+     warp's lanes all still sample; each pixel draws from its own count,
+     and its sum is the plain tracer's at that count, to the bit
+     (`adaptive_pixels_draw_their_own_streams`, and the terrain's).
+   - The resolve and the denoiser read each pixel's count; a new
+     threshold reflags at the next check without restarting.
+   **Measured at equal time** (`adaptive_quality`: the time the even deal
+   needs for the adaptive picture's error, over the adaptive picture's;
+   thresholds 8, 4 and 2 levels, at most 256 samples; the Mandelbulb and
+   the Mandelbox at 1280x720 against 4096 samples, the Menger at 640x360
+   against 1024), by the gate's error / as the display shows it:
+
+   | Solid | matte | gloss | metal |
+   |---|---|---|---|
+   | Menger Sponge | 1.2-1.6x / 1.2-1.7x | 1.5-2.4x / 1.4-1.8x | 1.1-1.5x / 1.0-1.3x |
+   | Mandelbulb | 0.7-1.05x / 1.0-1.1x | 1.0x / 0.9-1.0x | 0.95-1.2x / 0.9-1.1x |
+   | Mandelbox | 1.2-2.5x / 0.9-1.4x | 2.5-6.1x / 1.8-3.3x | 1.7-3.6x / 0.9-1.9x |
+
+   At threshold 4, the mean over the nine: **1.95x** by the gate, **1.44x**
+   as shown. The samples saved were 2.5-5x; the time saved is less
+   because **the pixels that stay noisy are the costly ones** -- a sample
+   of a pixel still sampling late cost about five times the frame's
+   average on the Mandelbulb, 2.7 times on the Menger (crevices: long
+   marches, bounces that do not escape) -- so on the Mandelbulb it breaks
+   even. Below threshold 4 the gain shrinks: more pixels run to the cap,
+   and the error stalls at theirs.
+   **On the way there:**
+   - **Converged lanes were not the cost.** Without a list, a pass with
+     3.6% of the pixels still sampling kept 12.5% of the warps busy and
+     cost two thirds of a full pass: the late passes were dispatches whose
+     time is their slowest pixel's.
+   - **A barrier in the trace kernel made it 3.4 times slower** (a GTX
+     1660 SUPER): a workgroup sharing out its own block's pixels, through
+     workgroup memory and a barrier, took 1.9 s where the plain kernel took
+     0.56 s for the same samples -- without the list, without the loop,
+     with the barrier alone. Why is not measured; the list is built in
+     the check instead.
+   - **Tuning:** a first check at 8 samples, not 16, was worse on the
+     matte Mandelbox as shown (0.7-1.2x against 0.9-1.4x); the noise from
+     the odd half (|odd - all|, Cycles') was about even with the moments'
+     and a little worse at 8. Kept: 16 and the moments.
+   - **For your decision: the default.** Off keeps every picture as it
+     was. On at 4 would make most solids faster to a given noise, and the
+     Mandelbulb about as fast.
+   **Revised 2026-10-20 after the user's report** ("noise increases with
+   more samples. There's certainly more speckles"): on a gold Mandelbulb
+   under the Sunflowers sky, strong speckles (pixels 50 levels brighter
+   than 256 samples) went 1362, 1619, 1290, 1696, 680 at 7, 8, 16, 32 and
+   64 samples -- up at 8 (the confidence bound switched on whole) and at 32
+   (the neighbourhood clamp loosened by the count from 16). Two causes in
+   the bound: switched on at once, and as one error times
+   `max(1, sqrt(16 / n))` it shrank as 1 / n, faster than the noise, so
+   below 16 samples a noisy pixel kept more of its noise with every
+   sample. Now: 1.5 errors (constant), eased in from 8 samples over 24;
+   and the clamp holds at every count but only while a pixel's excess is
+   within two of its standard errors (a rare path is one sample far from
+   the rest; a real glint is bright in every sample). Speckles then
+   1363, 1204, 862, 795, 208, falling at every count
+   (`more_samples_are_never_speckier`); the gate's mean 0.879 of raw from
+   0.864 -- the price, most on the metal Mandelbox's sub-pixel glints at 64
+   samples (+16%). Measured and not kept: the bound eased but as before
+   (8 to 16 still rose on the metal Mandelbulb), 2 errors (0.883), no
+   bound (0.905).
+7. [x] **D5 specular and diffuse denoised apart** -- built 2026-10-20, on
+   for a coated or metal material (TERRAIN.md, *Resolve and the
+   denoiser*). The specular share is a sample's first surface's coat and
+   metal terms of the direct light and all a first bounce brings back
+   when it took the coat's lobe; each share filtered by its own noise.
+   Measured on the gate (`denoise_quality`, 4096 unclamped samples;
+   `PT_D5=none` against), the denoised error over the raw, averaged over
+   the 27 cases:
+
+   | Specular rule | mean | coarse | worse than raw from 16 | worst / best against not splitting |
+   |---|---|---|---|---|
+   | not split (committed) | 0.867 | 1.072 | 6, at most 3.3% | -- |
+   | filtered as the diffuse | 0.870 | 1.132 | 6 | -- |
+   | not filtered | 0.880 | 0.996 | 3 | 1.21 / 0.90 |
+   | by roughness | 0.866 | 1.043 | 4 | 1.07 / 0.90 |
+   | **by roughness, whole at few samples** | **0.864** | 1.051 | 4, at most 2.3% | **1.023 / 0.923** |
+
+   (The last three with the highlight left diffuse; see below.) Kept:
+   the last. Glossy: the Mandelbox 7.7% better at 16 samples, the
+   Mandelbulb's coarse error 15% and 14% lower at 16 and 64; metal within
+   1%; matte the same picture (no coat, no split).
+   On the way:
+   - **The highlight is diffuse.** Split out with the coat, the matte
+     Mandelbulb's highlight made its denoised picture worse (coarse error
+     5.3% to 7.9% at 4 samples) whether filtered or not, and clamping the
+     whole light rather than each share did not help: it is the lit
+     tier's shine on the direct light, no lobe a bounce samples.
+   - **Each share's own moment**, the whole's variance their sum (the
+     shares' covariance not gathered): the same results as the whole's
+     own moment where not split (0.867 both).
+   - **Filtered by the roughness alone**, a polished coat at 4 samples
+     kept its reflection's noise: up to 7% worse there.
+   - The committed D1-D4 tables were re-measured first: the gate's
+     numbers at the commit (e24da347) differ from the session's table
+     by up to a few percent case by case (the table's last run was of an
+     uncommitted intermediate), the mean the same (0.867 against 0.866).
+   Cost: the guides 48 bytes a pixel from 32 (a browser's 128 MB binding
+   floor denoises up to about 2.8 million pixels, from 4: 1080p fits,
+   1440p no longer does), two more textures and the specular's passes
+   where split.
+
+## Found on the way (2026-10-20)
+
+Measured while building V2, at the user's invitation to look for more
+("if you find anything else worth researching or possible
+performance/quality wins"). Built since: the ray tolerance.
+
+- **A ray leaving a surface is marched far finer than its pixel** --
+  now a setting, **Ray tolerance** (built 2026-10-20 at the user's word,
+  TERRAIN.md *The UI*; Fine by default). Its hit tolerance is the smaller
+  of 0.4 of its footprint and a ten-thousandth of the solid's ball
+  (`pt_ifs_leave`, as the walk's shadows are), and at the presets' views
+  the ball's term always binds -- two pixels of footprint in place of 0.4
+  (`wide`) changed nothing. Loosening that cap is the largest saving
+  found (`path_quality_against_a_reference` with `PT_PATCH`, 1080p, 64
+  samples against 1024):
+
+  | Cap | Mandelbulb | Mandelbox | Menger Sponge |
+  |---|---|---|---|
+  | 3e-4 of the ball | 1.39x faster; RMSE 10.0% -> 14.5%, bias -1.1% | 1.24x; 2.8% -> 9.0%, -0.6% | 1.24x (640x360: 1.40x, RMSE 3.3% -> 3.3%) |
+  | 1e-3 of the ball | 1.89x; 10.0% -> 30.8%, -3.1% | 1.51x; 2.8% -> 19.7%, -1.4% | 1.59x (640x360: 2.03x, 3.3% -> 3.8%) |
+
+  The cost: near-misses count as hits, so fine shadows and crevices
+  darken -- most on the Mandelbulb, whose distance estimate is not a
+  strict bound; the Menger's flat faces keep their picture. A tolerance
+  by the pixel instead was not tried: `ifs_shadow`'s comment records a
+  pixel-wide hit test erasing the Menger's sub-squares. The setting moves
+  both tiers' shadows, so Auto stays one picture (the lit tier changes
+  little: 10 pixels of 9216 at Coarse on the Mandelbulb).
+- **A hit's normal is not a cost.** Four distance calls at a
+  tetrahedron's corners (`tetra`) in place of six were no faster, and
+  moved the picture far more than a normal estimate should (RMSE 9% to
+  56% on the Mandelbulb at 320x180): the solids' estimates are not smooth
+  at that scale. Not worth more.
+- **A polished metal's speckle under a sky's sun is its second
+  surface's glints** (user-reported 2026-10-20: an orange glow in a gold
+  Mandelbulb's crevices, speckled, more speckled with more samples). By
+  elimination (`sun_threshold_speckles`, the Gold Mandelbulb preset at
+  roughness 0.05 under Sunflowers): not the sun's aureole left in the map
+  (lifting it into the sun at 30-1000 times the median changed nothing),
+  not the map (without the sun the speckle falls with samples), not the
+  last surface's light samples unweighted by MIS (weighting them, with a
+  coat sample there toward the lights, changed nothing); at 0 bounces
+  the sun alone leaves 61-70 speckles, at 1 bounce 267-325 rising with
+  samples -- the sun seen in a second gold surface, a glint far smaller
+  than a pixel, kept at the whole clamp's ten times the light. **Built:**
+  the light from past the first surface clamped apart at the brightest
+  light (`clamp_indirect`), the sky's sun counted in it: speckle at 8,
+  16, 32 samples 320, 240, 306 -> 331, 183, 106, the picture 1% darker.
+  At 8 samples it does not help (the glint is still 1/8 of the clamp);
+  there the denoiser carries it. The orange is physical: gold's
+  reflectance falls from red to blue, and light reflected twice in it
+  is gold squared.
+- **Noise and cost go together on these solids** (V2 above): a pixel
+  still noisy late costs 3-5 times the average sample. Anything that
+  shortens a crevice's path -- Russian roulette from the first bounce
+  rather than the second, the cap above for bounce rays alone -- is worth
+  more here than its share of pixels suggests. Unmeasured.
+
+Sources: Blender 4.0 shading release notes; Veach and Guibas 1995; Dammertz
+et al. 2010; Kaplanyan and Dachsbacher 2013; Karis 2013, 2014; Kulla and
+Conty 2017; Turquin 2019; Zirr et al. 2018; Bitterli et al. 2016; Koskela
+et al. 2019; Ahmed and Wonka 2020; Talbot 2005; Aila and Laine 2009; van
+Antwerpen 2011; Novák et al. 2010; Laine, Karras and Aila 2013; Andersson et
+al. 2020 (FLIP); Tokuyoshi and Kaplanyan 2019; pmndrs/denoiser; Intel Open
+Image Denoise.

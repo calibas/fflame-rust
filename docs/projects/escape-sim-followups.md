@@ -76,6 +76,28 @@ would need to carry a flat track onto layer 0.
 
 ## TODO: the solid path tracer's speed
 
+**Since (2026-10-20):** researched and the agreed order built -- the
+denoiser's fixes, adaptive sampling, specular and diffuse denoised
+apart, the ray tolerance, the fused march measured slower and parked
+([path-tracing-research.md](../archive/projects/path-tracing-research.md), archived; TERRAIN.md
+for how it works now). The record below is where that work started.
+Left, for the user's decision or later:
+- **S2's deeper rewrite** (the march fused with the path's state; parked
+  slower as built) and **S3, a wavefront path tracer** (a pass per
+  bounce) -- the speed levers left.
+- **D6, a learned denoiser** (Intel Open Image Denoise, or a small
+  network of our own): a model and a library.
+- **V3, blue-noise sampling** (Ahmed and Wonka 2020); **V4, Russian
+  roulette on shadow rays past the first surface** (5-10%, some noise),
+  and from the first bounce rather than the second -- a crevice's long
+  paths are the costly ones.
+- **S4, more compiled in or out** (the coat, MIS, the shadow rays) and
+  **S5, a coarse distance cache** (speculative).
+- **Zirr et al. 2018's outlier re-weighting** for stills (three to six
+  vec4 a pixel more).
+- **Adaptive sampling's default**: off (as shipped), or on at a
+  threshold of 4.
+
 **Where it stands** (GTX 1660 SUPER, the shipped Menger Sponge at
 1080p, default settings -- two bounces, two lights, shadows 0.7): a
 sample takes **6.2 s** in the viewport, **4.7 s** in an export; the lit
@@ -134,6 +156,39 @@ the Menger and the tetrahedron at 64+ samples, and the
 5. **A lower default sample count for solids,** leaning on the
    denoiser.
 
+**Tried 2026-10-19** (`path_quality_against_a_reference`: a preset path
+traced at 320x180, the time a sample takes as a still renders it, and
+the RMSE over the solid's pixels against a 1024-sample reference of the
+tracer as it was, rendered on a seed of its own -- the first measurements
+shared the reference's stream and flattered the baseline). Repeat runs
+move a sample's time about 5%.
+
+| Candidate | Menger: ms a sample, RMSE at 64 | Tetrahedron | Verdict |
+|---|---|---|---|
+| As it was | 155.5, 1.7% (0.9% at 256) | 57.7, 3.5% (1.8% at 256) | |
+| 4. One light by power past the first surface | 147.6, 2.3% | | No: half the samples again for the noise |
+| 2. Bounce rays hit at 0.4 of a pixel | 121.1, 2.0%, bias +0.40% | | No: biased |
+| 2. ... at ten times the tight hit, capped there | 132.4, 1.7% | 46.4, 4.4%, bias +1.34% | No: light leaks past the tetrahedron's thin walls |
+| 3. Over-relaxed (ω 1.5, 1.2) on top | 142.1, 142.7 | | No: slower; the sponge's tunnels fail the overlap often |
+| Each distance's precision from the last distance | 152.6, 1.7% (0.9%) | 58.4, 3.7% (2.2% at 256) | No: no faster, and the tetrahedron moves |
+
+**What the time is:** parallelism. A 1080p row of the Menger costs about
+11 ms, so a 40 ms call is three or four rows -- a few thousand threads,
+too few to fill the card, and each dispatch waits on its slowest pixel.
+Measured at 1920 (`menger_band_costs`): a sample takes 6.5 s in 40 ms
+calls, 6.2 in 100, 5.8 in 160, 4.9 in 250. **Done: candidate 1** --
+`IDLE_FRAME_MS`, the export's 250 ms call, once no input has come for two
+seconds and nothing plays (the app's `last_input_time`); any input goes
+back to 40 ms after the call in flight. No pixel changes. The lever left
+is the integrator's shape: a wavefront path tracer (a pass per bounce,
+the paths' state in a buffer) would fill the card within a short call,
+at the cost of a rewrite of `pt_path` and both geometries' sides.
+
+Found on the way: the lighting work (lights-in-the-fractal) had made a
+directional-only sample a fifth slower -- 130 ms to 158 -- by the
+positional light code's registers; fixed by compiling it in only when a
+light uses it (`4a8671ae`).
+
 **Measuring.** The ignored tests in
 [src/escape/renderer/solid_path.rs](../../src/escape/renderer/solid_path.rs):
 `menger_band_costs` (the lit walk for scale, bands, a sample at each
@@ -143,18 +198,41 @@ call budget, whole frames at 640 wide or less; `MENGER_W`,
 `PACE_W`, `PACE_SHIFT`). Measure small: a band near two seconds
 resets the display driver for the whole desktop.
 
+## 3D views: not built
+
+From finished plans, archived 2026-10-21:
+- **From [3d-look-and-tools.md](../archive/projects/3d-look-and-tools.md):** underlining a
+  formula check's errors in the Formula Editor's text (it keeps the
+  messages, not their spans; P1); a light's size apart from its shadow
+  sharpness -- a broad highlight under a sharp shadow, left for the user
+  (P4); Iteration transformations for every solid, which needs a step
+  factor (the built-ins' distance estimates cannot know a variation's
+  stretch; P5).
+- **From [lights-in-the-fractal.md](../archive/projects/lights-in-the-fractal.md):** a point
+  light on a terrain (its world moves with the view; it needs a fixed
+  frame -- greyed in the panel now); more than four lights (the geometry
+  record holds four shadow terms); placing a light by clicking a surface,
+  or a fly-mode key to drop one; emissive geometry (Glow lights nothing
+  else).
+- **From [origami-creases.md](../archive/projects/origami-creases.md):** a Paper preset.
+- **From [hdri-environment.md](../archive/projects/hdri-environment.md):** presets that show
+  the skies; the web build's skies and skies past 1K are in
+  [online-assets.md](online-assets.md).
+
 ## Known gaps, not fixed in PR #129
 
-- The video's deep-zoom memory check looks only at the base config, not
-  at each frame's zoom.
+- ~~The video's deep-zoom memory check looks only at the base config, not
+  at each frame's zoom.~~ Fixed 2026-10-19: every frame is checked at its
+  own zoom, and only the frames that render perturbed (EXPORT.md, *What a
+  frame is*).
 - No PNG input for `export` (a PNG's embedded config); flame-only
   metadata fields are written for escape and simulation pictures.
 - Browser exports don't generate texture layers, for a 2D or a terrain
   picture.
 - The Spanish, Japanese and Chinese locales fall back to English for
   most panels.
-- The animation picker's View and Rendering categories are not yet
-  gated by render mode -- deferred to the camera/View panel work.
+- ~~The animation picker's View and Rendering categories are not yet
+  gated by render mode.~~ They are (`target_selector.rs`).
 
 ## The escape engine: not built
 
@@ -176,10 +254,6 @@ else in that record is built. These are not:
   Recorded so it is not re-attempted blind.
 - **Series approximation** — absent, and still unmeasured against
   BLA. Worth a Phase-0 measurement before any building.
-- **Kaliset's zoom-24 floor** — it perturbs correctly above zoom 24
-  and declines below it, because the inversion amplifies the delta
-  faster than the rung holds. The panel's depth hint does not yet
-  express that nuance (it reads "unlimited" from zoom 14).
 - **Row banding of the perturbed path** — would let a frame exceed a
   device's buffer limit by sizing the per-pixel state to a band, as
   the direct path already does via `tile_y0`. Only needed where a
@@ -192,6 +266,10 @@ else in that record is built. These are not:
 - **GPU reference-orbit computation (the NTT direction)** —
   measurement-gated go/no-go, never run. See
   [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md).
+- **Mode C, the escape-time IFS buffer** -- closed for affine maps by
+  decision D9 (2026-09-10; ESCAPE.md, the modes' table): mode D gives
+  its level in one pass. Folds and non-invertible maps would be its only
+  ground, should it be revived.
 - **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
   since before 2026-09-02; verified pre-existing against a stashed
   tree. Unrelated to the tiers.

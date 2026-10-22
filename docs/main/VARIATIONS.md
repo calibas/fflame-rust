@@ -479,6 +479,55 @@ The registry's rules:
 
 A flame that uses a local plugin renders only where the plugin is
 installed (`local_plugin_dependencies` reports it).
+
+### Variations written in Rhai
+
+A **custom variation** (`Provenance::Custom`, `variations::custom`) is
+a Rhai transformation from the Formula Editor -- `fn variation(z, p)`,
+a point to a point ([ESCAPE.md](ESCAPE.md#the-formula-language)) --
+compiled to the same `VariationDownload` a plug-in is: its parameters
+(a complex one as two, `name_re` and `name_im`), category `plugin`,
+phase normal, and WGSL from the formula language's emitter. The 2D
+function takes the point, and the ids when it has parameters (as
+`shader_builder_v2::variation_call` passes them); the 3D one runs the
+2D body on `p.xy` and passes `p.z` through. Helpers are prefixed
+`cv_<name>_`.
+- **The flame carries the source** (`Flame::custom_variations`, skip if
+  empty; `ConfigPath::FlameCustomVariations`, one undo step), so a saved
+  flame renders anywhere. `custom::ensure` registers a flame's sources
+  (and its subflames') before anything reads the registry for it: on
+  load (`missing_variations_in`, so it is not fetched from the API),
+  when a `FlameRenderer` is built, `load_config`, `update_flame`, and
+  `render_with` (an escape lens, CLI, thumbnails, video).
+- **Names**: a lowercase identifier from `INFO.name`; refused when a
+  built-in, a download or a plug-in has it, and a download or plug-in
+  cannot displace one. Using a source again replaces it, and the
+  registry's version rebuilds the shader.
+- **`.flame` export drops it** (JWildfire has no such variation): its
+  weight, its parameters and its `plugins=` entry, with a warning.
+- **As a lens**: the lens menu lists custom variations after the
+  measured ones (`lens::lens_menu`).
+- **Inside a formula**: `vary("name", z)` inlines one into an escape
+  formula or colouring, the entry carrying its source
+  ([ESCAPE.md](ESCAPE.md#the-formula-language)). A Rhai solid calls a
+  BUILT-IN variation's 3D body on a vector the same way, through the
+  maps flame built in 3D (`flame_map3`).
+- **Hooks** (`escape::lang::wgsl::variation_shape`): `rand()` declares
+  `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
+  `WritesColor`; `init(p)` and `this.name` are per-thread state
+  (`state_count`, the seeding call as `wgsl_state_init`); state or
+  `ctx.weight` without parameters declares `NeedsTransform` for the
+  ids. The function takes them in `variation_call`'s order. Gate:
+  `the_hooked_twins_render_as_the_builtins` (`blur`, `macmillan`).
+- **3D**: `fn variation3(v, p)` is the 3D body, its point a vector; alone
+  it makes the variation `only_3d` (no 2D body, kept out of the lens
+  menu). Either body takes the hooks either needs, and a 3D body
+  declares `AlwaysZ`. Gate: `the_3d_twins_render_as_the_builtins`
+  (`spherical3D`, `hemisphere`, `zcone`, in a pitched 3D flame).
+- Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
+  render as the built-ins in a flame, by density
+  (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
+  for pixel (`the_twins_are_lenses_as_the_builtins`).
 `VariationPhase::Any` has no wire form yet, so a downloaded variation
 cannot honour `fx_priority`. The catalog, caching and curation are in
 [ONLINE.md](ONLINE.md); the design record is
@@ -515,6 +564,13 @@ stays unknown.
 
 ## Testing
 
+- **Unit tests never write the global registry** (`register`,
+  `register_from_api`, `custom::ensure` on a flame that carries a
+  source). Tests run in parallel, and some read it under a guard they
+  re-take inside (`every_variation_validates_in_the_layer_warp`): a
+  writer queued behind the first read blocks the second, and the suite
+  hangs. Use a local `VariationRegistry`, or the `custom` module's own
+  map; GPU gates (`#[ignore]`, run alone) may register.
 - **Shader lints** (`shader_lint` in [mod.rs](../../src/variations/mod.rs))
   scan every registered variation's four WGSL strings and every file
   under `shaders/`.

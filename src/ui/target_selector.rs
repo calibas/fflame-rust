@@ -417,6 +417,19 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             ConfigPath::EscapeFormulaParam { param: p.name.to_string() },
             &format!("{}: {}", formula_label, p.display_name),
         ));
+        // A complex parameter also as a point in polar form, to animate
+        // around the origin (`EscapeConfig::formula_param`).
+        if let Some(base) = p.name.strip_suffix(".im") {
+            if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
+                let caption = p.display_name.strip_suffix(" (im)").unwrap_or(p.display_name);
+                for (part, label) in [("r", "radius"), ("angle", "angle, degrees")] {
+                    items.push(TargetItem::new(
+                        ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") },
+                        &format!("{formula_label}: {caption} ({label})"),
+                    ));
+                }
+            }
+        }
     }
     let coloring_params: &[crate::escape::EscapeParamDef] =
         match (ifs, crate::escape::fields::get_field(&esc.formula)) {
@@ -469,12 +482,15 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapeShadingHeightPre, "Relief: Height before curve"),
             TargetItem::new(ConfigPath::EscapeShadingHeightPost, "Relief: Height after curve"),
             TargetItem::new(ConfigPath::EscapeShadingOffset, "Relief: Offset"),
+            TargetItem::new(ConfigPath::EscapeShadingCreaseDecay, "Relief: Crease decay"),
             TargetItem::new(ConfigPath::EscapeShadingSoftness, "Relief: Softness"),
             TargetItem::new(ConfigPath::EscapeShadingAmbient, "Relief: Ambient"),
             TargetItem::new(ConfigPath::EscapeShadingShadowStrength, "Relief: Shadow strength"),
             TargetItem::new(ConfigPath::EscapeShadingHighlightStrength, "Relief: Highlight strength"),
             TargetItem::new(ConfigPath::EscapeShadingTextureStrength, "Relief: Texture strength"),
             TargetItem::new(ConfigPath::EscapeShadingTextureScale, "Relief: Texture scale"),
+            TargetItem::new(ConfigPath::EscapeShadingTextureAngle, "Relief: Texture slope angle"),
+            TargetItem::new(ConfigPath::EscapeShadingTextureAngleSoft, "Relief: Texture slope softness"),
         ]);
     }
 
@@ -489,6 +505,27 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
                 items.push(TargetItem::new(
                     ConfigPath::EscapeLensParam { param: p.name.clone() },
                     &format!("Lens: {}", p.display_name),
+                ));
+            }
+        }
+    }
+
+    // The transformations (the KIFS plan, C4), where they render -- mode
+    // A, as the panel shows them: each one's amount and its variation's
+    // parameters, named by place and variation. A track follows its
+    // transformation through a move or a removal by id
+    // (`TargetBinding::EscapeTransform`).
+    if crate::escape::fields::get_field(&esc.formula).is_none() && ifs.is_none() {
+        let registry = crate::variations::global_registry();
+        for (i, t) in esc.transforms.iter().enumerate() {
+            let info = registry.get(&t.variation);
+            let name = info.map_or(t.variation.clone(), |v| v.display_name.clone());
+            let label = format!("Transformation {} ({name})", i + 1);
+            items.push(TargetItem::new(ConfigPath::EscapeTransformAmount { index: i }, &format!("{label}: Amount")));
+            for p in info.map(|v| v.parameters.as_slice()).unwrap_or_default() {
+                items.push(TargetItem::new(
+                    ConfigPath::EscapeTransformParam { index: i, param: p.name.clone() },
+                    &format!("{label}: {}", p.display_name),
                 ));
             }
         }
@@ -793,15 +830,15 @@ fn get_view_items(config: &FractalConfig) -> Vec<TargetItem> {
         ]);
     }
     if config.render_mode == RenderMode::ThreeD || solid {
-        items.extend(lighting_items());
+        items.extend(lighting_items(config));
     }
     items
 }
 
-/// The Solid Lighting panel's animatable settings: the shade pass's, and
+/// The Lighting & Material panel's animatable settings: the shade pass's, and
 /// what a solid's or a terrain's lit tier reads of them.
-fn lighting_items() -> Vec<TargetItem> {
-    vec![
+fn lighting_items(config: &FractalConfig) -> Vec<TargetItem> {
+    let mut items = vec![
         // Lighting (shade pass) — all animatable; lighting params don't
         // even reset accumulation (ShadingOnly).
         TargetItem::new(ConfigPath::ShadingStrength, "Shading Strength"),
@@ -811,18 +848,36 @@ fn lighting_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::SolidShininess, "Shininess"),
         // The material's coat and glow: every tier's (materials.md).
         TargetItem::new(ConfigPath::SolidGloss, "Gloss"),
+        TargetItem::new(ConfigPath::SolidMetallic, "Metallic"),
+        TargetItem::new(ConfigPath::SolidReflectance, "Reflectance"),
         TargetItem::new(ConfigPath::SolidRoughness, "Roughness"),
         TargetItem::new(ConfigPath::SolidGlow, "Glow"),
         TargetItem::new(ConfigPath::SsaoStrength, "SSAO Strength"),
         TargetItem::new(ConfigPath::SsaoRadius, "SSAO Radius"),
         TargetItem::new(ConfigPath::SolidShadowStrength, "Shadow Strength"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "azimuth".to_string() }, "Light 1 Azimuth"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "elevation".to_string() }, "Light 1 Elevation"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 0, param: "intensity".to_string() }, "Light 1 Intensity"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "azimuth".to_string() }, "Light 2 Azimuth"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "elevation".to_string() }, "Light 2 Elevation"),
-        TargetItem::new(ConfigPath::SolidLightParam { index: 1, param: "intensity".to_string() }, "Light 2 Intensity"),
-    ]
+    ];
+    // Each light by its kind (lights-in-the-fractal, L6): the first two
+    // always, as before, and any other that is on. A directional light's
+    // angles; a point's position and reach; a headlamp's reach, cone and
+    // lift; every light's intensity.
+    use crate::config::LightKind;
+    for (i, l) in config.solid_shading.lights.iter().enumerate() {
+        if i >= 2 && !l.enabled {
+            continue;
+        }
+        let params: &[(&str, &str)] = match l.kind {
+            LightKind::Directional => &[("azimuth", "Azimuth"), ("elevation", "Elevation")],
+            LightKind::Point => &[("x", "X"), ("y", "Y"), ("z", "Z"), ("reach", "Reach")],
+            LightKind::Headlamp => &[("reach", "Reach"), ("cone", "Cone"), ("lift", "Lift")],
+        };
+        for (param, label) in params.iter().chain(&[("intensity", "Intensity")]) {
+            items.push(TargetItem::new(
+                ConfigPath::SolidLightParam { index: i, param: param.to_string() },
+                &format!("Light {} {label}", i + 1),
+            ));
+        }
+    }
+    items
 }
 
 /// Get color parameter items
@@ -1361,6 +1416,29 @@ mod escape_target_tests {
         );
     }
 
+    /// Each light offers what its kind has: a directional light's angles,
+    /// a point's position and reach, a headlamp's reach, cone and lift
+    /// (lights-in-the-fractal, L6).
+    #[test]
+    fn each_light_offers_what_its_kind_has() {
+        use crate::config::LightKind;
+        let mut c = solid_config();
+        c.solid_shading.lights[2].enabled = true;
+        c.solid_shading.lights[2].kind = LightKind::Point;
+        c.solid_shading.lights[3].enabled = true;
+        c.solid_shading.lights[3].kind = LightKind::Headlamp;
+        let k: Vec<String> = super::all_items_for_test(&c).iter().map(|p| p.to_string_key()).collect();
+        for want in [
+            "SolidLight.0.azimuth", "SolidLight.1.intensity",
+            "SolidLight.2.x", "SolidLight.2.y", "SolidLight.2.z", "SolidLight.2.reach", "SolidLight.2.intensity",
+            "SolidLight.3.reach", "SolidLight.3.cone", "SolidLight.3.lift",
+        ] {
+            assert!(k.contains(&want.to_string()), "`{want}` is not offered: {k:?}");
+        }
+        assert!(!k.contains(&"SolidLight.2.azimuth".to_string()), "a point has no direction");
+        assert!(!k.contains(&"SolidLight.3.x".to_string()), "a headlamp's place is the camera's");
+    }
+
     /// The lens follows the lens, the way the formula's parameters
     /// follow the formula.
     #[test]
@@ -1376,6 +1454,28 @@ mod escape_target_tests {
         let k = keys(&c);
         assert!(k.contains(&"Escape.LensAmount".to_string()), "{k:?}");
         assert!(k.contains(&"Escape.LensParam.c1".to_string()), "{k:?}");
+    }
+
+    /// Each transformation offers its amount and its variation's
+    /// parameters, by its place in the list, where it renders: not under
+    /// mode D, whose panel does not show them.
+    #[test]
+    fn each_transformation_is_offered() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        assert!(!keys(&c).iter().any(|s| s.starts_with("Escape.Transform.")));
+        c.escape.transforms = vec![
+            EscapeTransform::new(TransformStage::Plane, "sinusoidal", 1.0),
+            EscapeTransform::new(TransformStage::Orbit, "curl", 1.0),
+        ];
+        let k = keys(&c);
+        for want in ["Escape.Transform.0.Amount", "Escape.Transform.1.Amount", "Escape.Transform.1.Param.c1", "Escape.Transform.1.Param.c2"] {
+            assert!(k.contains(&want.to_string()), "`{want}` is not offered: {k:?}");
+        }
+        assert!(!k.iter().any(|s| s.starts_with("Escape.Transform.0.Param.")), "sinusoidal has no parameters");
+        c.escape.formula = "ifs_flame".to_string();
+        assert!(!keys(&c).iter().any(|s| s.starts_with("Escape.Transform.")), "offered under mode D");
     }
 
     /// A camera-target track carries a NUMBER and lands as the decimal

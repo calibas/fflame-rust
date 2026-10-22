@@ -15,15 +15,45 @@ use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::scene::transforms::RenderMode;
 use rust_i18n::t;
 
+/// The Escape panel's Edit as Formula: the built-in `builtin`'s twin
+/// becomes the config's formula, one undo step (its parameters carry over
+/// by name, the view and the colouring stay), and the Formula Editor opens
+/// it in use, so with Live on an edit re-renders.
+fn edit_as_formula(
+    config_manager: &mut ConfigManager,
+    builtin: &str,
+    src: crate::config::escape::CustomSource,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
+) {
+    use crate::escape::lang::EntryKind;
+    let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
+    let changes = vec![
+        (ConfigPath::EscapeCustomFormula, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),
+        (ConfigPath::EscapeFormula, ConfigValue::String(name)),
+    ];
+    if config_manager.update_batch(changes, "history.action.edit_as_formula".to_string()).is_err() {
+        return;
+    }
+    let file = crate::storage::formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "formula.rhai".into());
+    formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).open_in_use(file, &src);
+    *open_formula_editor = true;
+}
+
 /// Render the Escape Fractal panel.
 pub fn render_escape_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
     terrain_range: Option<[f32; 2]>,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
 ) {
     let config = config_manager.active_config().clone();
     let esc = config.escape.clone();
+    // A formula or colouring the config carries as source: compiled and
+    // registered before anything below resolves its name.
+    crate::escape::custom::ensure(&esc);
 
     // ---- A way in, not a toggle ----
     //
@@ -86,7 +116,10 @@ pub fn render_escape_content(
     // which registry resolves the name routes everything downstream.
     let field = crate::escape::fields::get_field(&esc.formula);
     let ifs_def = crate::escape::ifs::get_ifs(&esc.formula);
-    let formula = crate::escape::get_formula(&esc.formula);
+    // A mode-A formula only when the name is neither a field nor a solid:
+    // looked up for those, it logged "Unknown escape formula" on every
+    // draw and highlighted the Mandelbrot it falls back to.
+    let formula = (field.is_none() && ifs_def.is_none()).then(|| crate::escape::get_formula(&esc.formula));
     let selected_label = formula_display_name(&esc.formula);
     ui.horizontal(|ui| {
         ui.label(t!("escape_panel.formula"));
@@ -96,7 +129,7 @@ pub fn render_escape_content(
                 for f in crate::escape::FORMULAS {
                     if ui
                         .selectable_label(
-                            field.is_none() && f.name == formula.name,
+                            formula.is_some_and(|m| m.name == f.name),
                             f.display_name,
                         )
                         .clicked()
@@ -160,7 +193,9 @@ pub fn render_escape_content(
                         .clicked()
                         && esc.formula != d.name
                     {
-                        let _ = config_manager.update_batch(
+                        // A solid from a plane: the 3D look with it.
+                        let _ = super::render_mode::apply_with_look(
+                            config_manager,
                             vec![
                                 (
                                     ConfigPath::EscapeFormula,
@@ -171,11 +206,21 @@ pub fn render_escape_content(
                                     ConfigValue::String(d.default_coloring.to_string()),
                                 ),
                             ],
-                            "history.param.escape_formula".to_string(),
+                            "history.param.escape_formula",
                         );
                     }
                 }
             });
+        // A built-in with a twin in Rhai (`escape::twins`): put the twin
+        // in its place, the picture unchanged, and open it in the Formula
+        // Editor as the user's own to change.
+        if field.is_none() && ifs_def.is_none() {
+            if let Some(src) = crate::escape::twins::custom_source(&esc.formula) {
+                if ui.button(t!("escape_panel.edit_as_formula")).on_hover_text(t!("escape_panel.edit_as_formula_tip")).clicked() {
+                    edit_as_formula(config_manager, &esc.formula, src, formula_editor, open_formula_editor);
+                }
+            }
+        }
     });
 
     // ---- Mode D: does the loaded flame qualify? ----
@@ -236,6 +281,17 @@ pub fn render_escape_content(
         }
     }
 
+    // A custom entry whose arrays, sized by its parameters or the
+    // iteration count, do not fit at these settings renders at its
+    // default sizes: say why rather than draw something else silently.
+    if let Some(why) = crate::escape::custom::size_failure(&esc) {
+        ui.label(
+            egui::RichText::new(t!("escape_panel.sizes_failed", why = why))
+                .small()
+                .color(egui::Color32::from_rgb(220, 160, 60)),
+        );
+    }
+
     // How deep this formula goes, said out loud. 17 of the 23
     // formulas stop resolving around zoom 14 -- the direct path's f32
     // pixel mapping runs out -- and nothing in the panel used to say
@@ -275,9 +331,21 @@ pub fn render_escape_content(
     let (formula_params, owner) = match (ifs_def, field) {
         (Some(d), _) => (d.parameters, d.name),
         (None, Some(f)) => (f.parameters, f.name),
-        (None, None) => (formula.parameters, formula.name),
+        (None, None) => formula.map_or((&[][..], ""), |m| (m.parameters, m.name)),
     };
+    let program = formula.is_some_and(|m| m.has_feature(crate::escape::FormulaFeature::Program));
     for p in formula_params {
+        // A compiled formula's `bailout` parameter is the bailout control
+        // below (the renderer binds it), so it has no slider of its own.
+        if program && matches!(p.name, "bailout" | "bailout.re" | "bailout.im") {
+            continue;
+        }
+        // A solid's shadows and occlusion are the Lighting & Material
+        // panel's (3d-look-and-tools P3): formula parameters in the file,
+        // drawn with the rest of the light.
+        if ifs_def.is_some() && crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name) {
+            continue;
+        }
         let mut v = esc.formula_params.get(p.name).copied().unwrap_or(p.default);
         let slow = crate::escape::is_slow_param(owner, p.name);
         if param_control(ui, &mut v, p, "formula", slow) {
@@ -286,6 +354,34 @@ pub fn render_escape_content(
                 v.into(),
             );
         }
+        // A complex parameter, after its two parts: the same point in
+        // polar form (radius, angle), what animating it around the origin
+        // keys (`EscapeConfig::formula_param`).
+        if let Some(base) = p.name.strip_suffix(".im") {
+            if formula_params.iter().any(|q| q.name.strip_suffix(".re") == Some(base)) {
+                let get = |part: &str| {
+                    f32::try_from(config_manager.get_value(&ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }).unwrap_or(ConfigValue::Float(0.0))).unwrap_or(0.0)
+                };
+                let (mut r, mut angle) = (get("r"), get("angle"));
+                let mut changed = None;
+                ui.horizontal(|ui| {
+                    ui.weak(t!("escape_panel.as_a_point"));
+                    if ui.add(egui::DragValue::new(&mut r).speed(0.005).max_decimals(4).prefix("r ")).on_hover_text(t!("escape_panel.radius_tip")).changed() {
+                        changed = Some(("r", r));
+                    }
+                    if ui.add(egui::DragValue::new(&mut angle).speed(0.5).max_decimals(2).suffix("°")).on_hover_text(t!("escape_panel.angle_tip")).changed() {
+                        changed = Some(("angle", angle));
+                    }
+                });
+                if let Some((part, v)) = changed {
+                    let _ = config_manager.update_param(ConfigPath::EscapeFormulaParam { param: format!("{base}.{part}") }, v.into());
+                }
+            }
+        }
+    }
+
+    if ifs_def.is_some_and(|d| d.parameters.iter().any(|p| crate::escape::ifs::LIGHTING_PARAMS.contains(&p.name))) {
+        ui.label(egui::RichText::new(t!("escape_panel.lighting_elsewhere")).small().weak());
     }
 
     // ---- Julia toggle ----
@@ -394,10 +490,16 @@ pub fn render_escape_content(
                     // smallest closing period is the wrong answer at depth,
                     // because a shallow atom's wrap is not exact there.
                     let zoom = esc.zoom_log2;
+                    // A custom formula's closure is its own (plan, phase
+                    // 4, step 9c).
+                    let custom = esc.formula.starts_with(crate::escape::custom::PREFIX).then(|| esc.clone());
                     std::thread::spawn(move || {
-                        let found = crate::escape::nucleus::detect_period_for_zoom(
-                            &re, &im, power, 8_000_000, zoom,
-                        );
+                        let found = match custom {
+                            Some(view) => crate::escape::custom::detect_period(&view, 8_000_000),
+                            None => crate::escape::nucleus::detect_period_for_zoom(
+                                &re, &im, power, 8_000_000, zoom,
+                            ),
+                        };
                         *out.lock().unwrap() = PeriodSearch::Done(found);
                     });
                 }
@@ -489,7 +591,10 @@ pub fn render_escape_content(
                 _ => None,
             }
         };
-        if let Some(power) = nav_power {
+        // A custom formula's nucleus comes through its own derivative
+        // (plan, phase 4, step 9c).
+        let custom_nav = nav_power.is_none() && crate::escape::custom::offers_nucleus(&esc);
+        if nav_power.is_some() || custom_nav {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let pending = minibrot_search_slot();
@@ -508,15 +613,21 @@ pub fn render_escape_content(
                     .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
                     .clicked()
                 {
-                    let re = esc.center_re.clone();
-                    let im = esc.center_im.clone();
-                    let zoom = esc.zoom_log2;
+                    let view = esc.clone();
                     *pending.lock().unwrap() = MinibrotSearch::Running;
                     let slot = pending.clone();
                     std::thread::spawn(move || {
-                        let hit = crate::escape::nucleus::locate_minibrot(
-                            &re, &im, zoom, 100_000, power, 100_000,
-                        );
+                        let hit = match nav_power {
+                            Some(power) => crate::escape::nucleus::locate_minibrot(
+                                &view.center_re,
+                                &view.center_im,
+                                view.zoom_log2,
+                                100_000,
+                                power,
+                                100_000,
+                            ),
+                            None => crate::escape::custom::locate_nucleus(&view, 100_000, 100_000),
+                        };
                         *slot.lock().unwrap() = MinibrotSearch::Done(hit);
                     });
                 }
@@ -559,14 +670,18 @@ pub fn render_escape_content(
                     .on_hover_text(t!("escape_panel.tooltip_center_minibrot"))
                     .clicked()
                 {
-                    if let Some(hit) = crate::escape::nucleus::locate_minibrot(
-                        &esc.center_re,
-                        &esc.center_im,
-                        esc.zoom_log2,
-                        20_000,
-                        power,
-                        5_000,
-                    ) {
+                    let hit = match nav_power {
+                        Some(power) => crate::escape::nucleus::locate_minibrot(
+                            &esc.center_re,
+                            &esc.center_im,
+                            esc.zoom_log2,
+                            20_000,
+                            power,
+                            5_000,
+                        ),
+                        None => crate::escape::custom::locate_nucleus(&esc, 20_000, 5_000),
+                    };
+                    if let Some(hit) = hit {
                         let _ = config_manager.update_batch(
                             vec![
                                 (ConfigPath::EscapeCenterRe, ConfigValue::String(hit.re)),
@@ -729,7 +844,7 @@ pub fn render_escape_content(
                     ui.label(t!("escape_panel.contrast_clip"));
                     let mut v = ct.clip;
                     if ui
-                        .add(egui::Slider::new(&mut v, 0.0..=0.25).fixed_decimals(3))
+                        .add(egui::Slider::new(&mut v, 0.0..=0.25).fixed_decimals(3).clamping(egui::SliderClamping::Edits))
                         .on_hover_text(t!("escape_panel.tooltip_contrast_clip"))
                         .changed()
                     {
@@ -820,75 +935,8 @@ pub fn render_escape_content(
                     }
                 });
                 relief_lighting_controls(ui, config_manager, &sh);
-                // ---- Surface texture ----
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.shading_texture"));
-                    let cur = sh.texture_kind;
-                    egui::ComboBox::from_id_salt("escape_shading_texture")
-                        .selected_text(match cur {
-                            ShadingTexture::None => t!("escape_panel.texture_none"),
-                            ShadingTexture::Grain => t!("escape_panel.texture_grain"),
-                            ShadingTexture::Paper => t!("escape_panel.texture_paper"),
-                            ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
-                        })
-                        .show_ui(ui, |ui| {
-                            for k in [
-                                ShadingTexture::None,
-                                ShadingTexture::Grain,
-                                ShadingTexture::Paper,
-                                ShadingTexture::Simulation,
-                            ] {
-                                let label = match k {
-                                    ShadingTexture::None => t!("escape_panel.texture_none"),
-                                    ShadingTexture::Grain => t!("escape_panel.texture_grain"),
-                                    ShadingTexture::Paper => t!("escape_panel.texture_paper"),
-                                    ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
-                                };
-                                if ui.selectable_label(cur == k, label.as_ref()).clicked()
-                                    && cur != k
-                                {
-                                    let _ = config_manager.update_param(
-                                        ConfigPath::EscapeShadingTextureKind,
-                                        ConfigValue::String(k.as_str().to_string()),
-                                    );
-                                }
-                            }
-                        });
-                })
-                .response
-                .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
-                if sh.texture_kind == ShadingTexture::Simulation && esc.texture.is_none() {
-                    ui.weak(t!("escape_panel.texture_simulation_none"));
-                }
-                if sh.texture_kind != ShadingTexture::None {
-                    ui.horizontal(|ui| {
-                        ui.label(t!("escape_panel.texture_strength"));
-                        let mut v = sh.texture_strength;
-                        if ui
-                            .add(egui::Slider::new(&mut v, 0.0..=4.0))
-                            .on_hover_text(t!("escape_panel.tooltip_texture_strength"))
-                            .changed()
-                        {
-                            let _ = config_manager.update_param(
-                                ConfigPath::EscapeShadingTextureStrength,
-                                v.into(),
-                            );
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(t!("escape_panel.texture_scale"));
-                        let mut v = sh.texture_scale;
-                        if ui
-                            .add(egui::Slider::new(&mut v, 0.25..=64.0).logarithmic(true))
-                            .on_hover_text(t!("escape_panel.tooltip_texture_scale"))
-                            .changed()
-                        {
-                            let _ = config_manager
-                                .update_param(ConfigPath::EscapeShadingTextureScale, v.into());
-                        }
-                    });
-                }
-
+                let folds = crate::escape::get_formula(&esc.formula)
+                    .has_feature(crate::escape::FormulaFeature::Creases);
                 ui.horizontal(|ui| {
                     ui.label(t!("escape_panel.shading_field"));
                     let cur = sh.field;
@@ -900,6 +948,7 @@ pub fn render_escape_content(
                             ShadingField::Analytic => t!("escape_panel.shading_field_analytic"),
                             ShadingField::Offset => t!("escape_panel.shading_field_offset"),
                             ShadingField::Embossed => t!("escape_panel.shading_field_embossed"),
+                            ShadingField::Creases => t!("escape_panel.shading_field_creases"),
                         })
                         .show_ui(ui, |ui| {
                             for f in [
@@ -909,7 +958,12 @@ pub fn render_escape_content(
                                 ShadingField::Analytic,
                                 ShadingField::Offset,
                                 ShadingField::Embossed,
+                                ShadingField::Creases,
                             ] {
+                                // Paper only a folding formula has.
+                                if f == ShadingField::Creases && !folds && cur != f {
+                                    continue;
+                                }
                                 let label = match f {
                                     ShadingField::Smooth => {
                                         t!("escape_panel.shading_field_smooth")
@@ -928,6 +982,9 @@ pub fn render_escape_content(
                                     }
                                     ShadingField::Embossed => {
                                         t!("escape_panel.shading_field_embossed")
+                                    }
+                                    ShadingField::Creases => {
+                                        t!("escape_panel.shading_field_creases")
                                     }
                                 };
                                 if ui.selectable_label(f == cur, label).clicked() && f != cur {
@@ -1013,7 +1070,7 @@ pub fn render_escape_content(
                             let _ = config_manager.update_param(ConfigPath::EscapeShadingOffset, v.into());
                         }
                     });
-                    if crate::escape::EscapeRenderer::wants_perturbation(&esc) {
+                    if crate::escape::EscapeRenderer::wants_perturbation(&esc, crate::escape::viewport_render_lines()) {
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 170, 90),
                             if embossed {
@@ -1027,7 +1084,7 @@ pub fn render_escape_content(
                 // Analytic slopes need the derivative orbit: flat where
                 // there is none, and said so rather than left silent.
                 if sh.field == ShadingField::Analytic {
-                    if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
+                    if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc, crate::escape::viewport_render_lines()) {
                         let msg = match gap {
                             crate::escape::DerivativeGap::Formula => t!(
                                 "escape_panel.analytic_relief_no_formula",
@@ -1038,6 +1095,13 @@ pub fn render_escape_content(
                             }
                         };
                         ui.colored_label(egui::Color32::from_rgb(220, 170, 90), msg);
+                    }
+                }
+                if sh.field == ShadingField::Creases {
+                    if folds {
+                        crease_controls(ui, config_manager, &sh.creases, "relief", false);
+                    } else {
+                        no_creases_note(ui, &esc.formula);
                     }
                 }
 
@@ -1067,6 +1131,16 @@ pub fn render_escape_content(
                     ConfigPath::EscapeShadingHighlightBlend,
                 );
             });
+            // The surface texture: the relief's and the 3D terrain's alike.
+            // A terrain's is the Lighting & Material panel's Surface (P3).
+            ui.separator();
+            if esc.terrain_active() {
+                ui.label(egui::RichText::new(t!("escape_panel.texture_elsewhere")).small().weak());
+            } else {
+                ui.add_enabled_ui(sh.enabled, |ui| {
+                    surface_texture_controls(ui, config_manager, &esc, &sh);
+                });
+            }
         });
 
     // ---- Iteration controls, shown only where the shader reads them ----
@@ -1148,6 +1222,14 @@ pub fn render_escape_content(
 
     // ---- Coloring ----
     show_coloring_section(ui, config_manager, &esc, field, ifs_def);
+
+    // ---- Transformations (the KIFS plan, C4): mode A's formulas, and a
+    // solid's Orbit stage (3d-look-and-tools P5) ----
+    let solid = ifs_def.is_some_and(|d| d.solid);
+    if field.is_none() && (ifs_def.is_none() || solid) {
+        ui.separator();
+        super::escape_transforms::show_transforms_section(ui, config_manager, solid);
+    }
 }
 
 /// A starting `scale` for a coloring, from the iteration cap.
@@ -1177,9 +1259,15 @@ fn param_slider<'a>(
     p: &'static crate::escape::EscapeParamDef,
 ) -> egui::Slider<'a> {
     let decades = p.min > 0.0 && p.max / p.min >= 1e5;
+    // A custom formula's parameter declared `exponential` (phase 4,
+    // step 8).
+    #[cfg(feature = "engine-escape")]
+    let declared = p.min > 0.0 && crate::escape::custom::is_exponential(p);
+    #[cfg(not(feature = "engine-escape"))]
+    let declared = false;
     egui::Slider::new(v, p.min..=p.max)
         .text(p.display_name)
-        .logarithmic(decades)
+        .logarithmic(decades || declared)
 }
 
 /// One escape parameter's control: a DROPDOWN when the definition
@@ -1201,7 +1289,7 @@ fn param_slider<'a>(
 /// so a live drag would overshoot: a small whole-number range is a
 /// dropdown, anything else commits when the drag ends
 /// (`slow_controls`).
-fn param_control(
+pub(crate) fn param_control(
     ui: &mut egui::Ui,
     v: &mut f32,
     p: &'static crate::escape::EscapeParamDef,
@@ -1362,6 +1450,7 @@ fn suggested_coloring_scale(coloring: &str, max_iter: u32) -> f32 {
 /// The ConfigPaths of a block of path-tracing settings.
 pub(crate) struct PathPaths {
     pub samples: ConfigPath,
+    pub noise_threshold: ConfigPath,
     pub bounces: ConfigPath,
     pub environment: ConfigPath,
     pub aperture: ConfigPath,
@@ -1369,19 +1458,33 @@ pub(crate) struct PathPaths {
     pub denoise: ConfigPath,
     pub sky: ConfigPath,
     pub zenith: ConfigPath,
+    pub studio: ConfigPath,
+    /// The HDRI sky's: its id, turn, horizon, stars and backdrop.
+    pub environment_map: ConfigPath,
+    pub environment_rotation: ConfigPath,
+    pub environment_horizon: ConfigPath,
+    pub environment_stars: ConfigPath,
+    pub environment_backdrop: ConfigPath,
 }
 
 /// The escape view's: a terrain's and a solid's.
 pub(crate) fn escape_path_paths() -> PathPaths {
     PathPaths {
         samples: ConfigPath::EscapePathSamples,
+        noise_threshold: ConfigPath::EscapePathNoiseThreshold,
         bounces: ConfigPath::EscapePathBounces,
         environment: ConfigPath::EscapePathEnvironment,
         aperture: ConfigPath::EscapePathAperture,
         denoise: ConfigPath::EscapePathDenoise,
         sky: ConfigPath::EscapePathSky,
         zenith: ConfigPath::EscapePathZenith,
+        studio: ConfigPath::EscapePathStudio,
         focus: ConfigPath::EscapePathFocus,
+        environment_map: ConfigPath::EscapePathEnvironmentMap,
+        environment_rotation: ConfigPath::EscapePathEnvironmentRotation,
+        environment_horizon: ConfigPath::EscapePathEnvironmentHorizon,
+        environment_stars: ConfigPath::EscapePathEnvironmentStars,
+        environment_backdrop: ConfigPath::EscapePathEnvironmentBackdrop,
     }
 }
 
@@ -1390,7 +1493,9 @@ pub(crate) fn escape_path_paths() -> PathPaths {
 /// (escape's are shared by a terrain and a solid, each with its own tier;
 /// a simulation's terrain keeps its own), written through `paths`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn show_path_tracing(
+/// The render tier and the path tracer's sampling: the Lighting &
+/// Material panel's Rendering section.
+pub(crate) fn show_render_tier(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     pt: &crate::config::escape::PathTraceConfig,
@@ -1419,21 +1524,6 @@ pub(crate) fn show_path_tracing(
             .response
             .on_hover_text(t!("escape_panel.terrain_tier_tip"));
     });
-    // The sky, which every tier draws: the background alone, or a
-    // gradient from it at the horizon to the zenith's colour.
-    ui.horizontal(|ui| {
-        let mut on = pt.sky_gradient;
-        if ui.checkbox(&mut on, t!("escape_panel.path_sky")).on_hover_text(t!("escape_panel.path_sky_tip")).changed() {
-            let _ = config_manager.update_param(paths.sky.clone(), on.into());
-        }
-        if pt.sky_gradient {
-            let mut rgb = pt.zenith;
-            if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.path_zenith_tip")).changed() {
-                let _ = config_manager.update_param(paths.zenith.clone(), ConfigValue::ColorRgb(rgb));
-            }
-            ui.label(t!("escape_panel.path_zenith"));
-        }
-    });
     if tier == RenderTier::Lit {
         return;
     }
@@ -1449,6 +1539,17 @@ pub(crate) fn show_path_tracing(
         }
     });
     ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.path_noise_threshold"));
+        let mut v = pt.noise_threshold;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=16.0).step_by(0.25).clamping(egui::SliderClamping::Edits))
+            .on_hover_text(t!("escape_panel.path_noise_threshold_tip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(paths.noise_threshold.clone(), v.into());
+        }
+    });
+    ui.horizontal(|ui| {
         // Every bounce is another trace a pixel: a dropdown, not a
         // slider a drag would overshoot (`slow_controls`).
         let mut v = pt.bounces as f32;
@@ -1461,19 +1562,64 @@ pub(crate) fn show_path_tracing(
     if ui.checkbox(&mut denoise, t!("escape_panel.path_denoise")).on_hover_text(t!("escape_panel.path_denoise_tip")).changed() {
         let _ = config_manager.update_param(paths.denoise.clone(), denoise.into());
     }
-    let mut row = |ui: &mut egui::Ui, label: &str, tip: &str, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>| {
-        ui.horizontal(|ui| {
-            ui.label(t!(label));
-            let mut v = value;
-            if ui.add(egui::Slider::new(&mut v, range)).on_hover_text(t!(tip)).changed() {
-                let _ = config_manager.update_param(path, v.into());
+}
+
+/// The sky, which every tier draws -- the background colour alone, or a
+/// gradient from it at the horizon to the zenith's colour -- and its
+/// light, the path tracer's: the Lighting & Material panel's Sky section.
+/// The background is the Colors panel's too (a 2D picture's backdrop).
+pub(crate) fn show_sky(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    background: [f32; 3],
+    pt: &crate::config::escape::PathTraceConfig,
+    paths: &PathPaths,
+    tier: crate::config::escape::RenderTier,
+    mapped: bool,
+) {
+    use crate::config::escape::RenderTier;
+    ui.horizontal(|ui| {
+        let mut rgb = background;
+        if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("lighting.sky_colour_tip")).changed() {
+            let _ = config_manager.update_param(ConfigPath::BackgroundColor, rgb.into());
+        }
+        ui.label(t!("lighting.sky_colour"));
+    });
+    // An HDRI sky lights in place of the gradient and the studio.
+    let rows = !mapped;
+    ui.horizontal(|ui| {
+        if !rows {
+            return;
+        }
+        let mut on = pt.sky_gradient;
+        if ui.checkbox(&mut on, t!("escape_panel.path_sky")).on_hover_text(t!("escape_panel.path_sky_tip")).changed() {
+            let _ = config_manager.update_param(paths.sky.clone(), on.into());
+        }
+        if pt.sky_gradient {
+            let mut rgb = pt.zenith;
+            if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.path_zenith_tip")).changed() {
+                let _ = config_manager.update_param(paths.zenith.clone(), ConfigValue::ColorRgb(rgb));
             }
-        });
-    };
-    // The sky's light. The material is the picture's, every tier's
-    // (the Lighting & Material section's); the lens is the View panel's
-    // Depth of Field ([`show_path_dof`]).
-    row(ui, "escape_panel.terrain_environment", "escape_panel.terrain_environment_tip", paths.environment.clone(), pt.environment, 0.0..=4.0);
+            ui.label(t!("escape_panel.path_zenith"));
+        }
+    });
+    let mut studio = pt.studio;
+    if rows && ui.checkbox(&mut studio, t!("lighting.studio")).on_hover_text(t!("lighting.studio_tip")).changed() {
+        let _ = config_manager.update_param(paths.studio.clone(), studio.into());
+    }
+    // The sky's light, which the lit tier does not trace -- but for the
+    // studio's and an HDRI sky's sun, which it lights by too. The lens is
+    // the View panel's Depth of Field ([`show_path_dof`]).
+    if tier == RenderTier::Lit && !pt.studio && !mapped {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.terrain_environment"));
+        let mut v = pt.environment;
+        if ui.add(egui::Slider::new(&mut v, 0.0..=4.0)).on_hover_text(t!("escape_panel.terrain_environment_tip")).changed() {
+            let _ = config_manager.update_param(paths.environment.clone(), v.into());
+        }
+    });
 }
 
 /// The path tracer's lens: its aperture and where it focuses (0 is sharp
@@ -1520,7 +1666,12 @@ fn show_terrain_section(
                 .on_hover_text(t!("escape_panel.terrain_tip"))
                 .changed()
             {
-                let _ = config_manager.update_param(ConfigPath::EscapeTerrainEnabled, enabled.into());
+                // On, from a plane: the 3D look with it.
+                let _ = super::render_mode::apply_with_look(
+                    config_manager,
+                    vec![(ConfigPath::EscapeTerrainEnabled, enabled.into())],
+                    "history.param.escape_terrain_enabled",
+                );
             }
             if solid {
                 ui.label(egui::RichText::new(t!("escape_panel.terrain_solid")).small().weak());
@@ -1532,17 +1683,24 @@ fn show_terrain_section(
             ui.label(egui::RichText::new(t!("escape_panel.terrain_gestures")).small().weak());
 
             // How the height is made.
+            let folds =
+                crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Creases);
             ui.horizontal(|ui| {
                 ui.label(t!("escape_panel.terrain_source"));
                 let label = |s: TerrainSource| match s {
                     TerrainSource::Distance => t!("escape_panel.terrain_source_distance"),
                     TerrainSource::EscapeCount => t!("escape_panel.terrain_source_count"),
                     TerrainSource::Relief => t!("escape_panel.terrain_source_relief"),
+                    TerrainSource::Creases => t!("escape_panel.terrain_source_creases"),
                 };
                 egui::ComboBox::from_id_salt("terrain_source")
                     .selected_text(label(t.source))
                     .show_ui(ui, |ui| {
                         for s in TerrainSource::ALL {
+                            // Paper only a folding formula has.
+                            if s == TerrainSource::Creases && !folds && t.source != s {
+                                continue;
+                            }
                             if ui.selectable_label(t.source == s, label(s)).clicked() && s != t.source {
                                 let _ = config_manager.update_param(
                                     ConfigPath::EscapeTerrainSource,
@@ -1556,6 +1714,15 @@ fn show_terrain_section(
                 && crate::escape::get_formula(&esc.formula).wgsl_derivative.is_empty()
             {
                 ui.label(egui::RichText::new(t!("escape_panel.terrain_no_derivative")).small().weak());
+            }
+            // The paper the relief draws, held to the release here: every
+            // change renders the terrain's sections again.
+            if t.source == TerrainSource::Creases {
+                if folds {
+                    crease_controls(ui, config_manager, &esc.shading.creases, "terrain", true);
+                } else {
+                    no_creases_note(ui, &esc.formula);
+                }
             }
             let mut percent = |ui: &mut egui::Ui, label: String, path: ConfigPath, value: f32, range: std::ops::RangeInclusive<f32>, tip: String| {
                 ui.horizontal(|ui| {
@@ -1709,24 +1876,9 @@ fn show_terrain_section(
                     });
             });
             if t.interior == TerrainInterior::Lake {
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.terrain_lake_tint"));
-                    let mut rgb = t.lake_tint;
-                    if ui.color_edit_button_rgb(&mut rgb).on_hover_text(t!("escape_panel.terrain_lake_tint_tip")).changed() {
-                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainLakeTint, ConfigValue::ColorRgb(rgb));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(t!("escape_panel.terrain_lake_roughness"));
-                    let mut v = t.lake_roughness;
-                    if ui
-                        .add(egui::Slider::new(&mut v, 0.02..=1.0).logarithmic(true))
-                        .on_hover_text(t!("escape_panel.terrain_lake_roughness_tip"))
-                        .changed()
-                    {
-                        let _ = config_manager.update_param(ConfigPath::EscapeTerrainLakeRoughness, v.into());
-                    }
-                });
+                // Its tint and roughness are a material: the Lighting &
+                // Material panel's Surface (3d-look-and-tools P3).
+                ui.label(egui::RichText::new(t!("escape_panel.lake_elsewhere")).small().weak());
             }
             // How finely it is sampled. The camera, far and haze, the
             // lighting and the path tracer are the View panel's
@@ -1773,7 +1925,7 @@ fn show_terrain_section(
                 let mut v = t.softness;
                 // Each step re-renders the ground: a coarse step.
                 let r = ui
-                    .add(egui::Slider::new(&mut v, 0.0..=crate::config::escape::MAX_TERRAIN_SOFTNESS).step_by(0.25))
+                    .add(egui::Slider::new(&mut v, 0.0..=crate::config::escape::MAX_TERRAIN_SOFTNESS).step_by(0.25).clamping(egui::SliderClamping::Edits))
                     .on_hover_text(t!("escape_panel.terrain_softness_tip"));
                 if r.changed() {
                     let _ = config_manager.update_param(ConfigPath::EscapeTerrainSoftness, v.into());
@@ -1990,8 +2142,12 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
                     });
                 });
             if let Some(name) = pick {
-                let _ = config_manager
-                    .update_batch(lens_choice(&name), "history.param.escape_lens".to_string());
+                let mut changes = lens_choice(&name);
+                // A variation of the user's: the flame carries its source.
+                if let Some(carry) = crate::variations::custom::carry_change(config_manager.active_config(), [name.as_str()]) {
+                    changes.push(carry);
+                }
+                let _ = config_manager.update_batch(changes, "history.param.escape_lens".to_string());
             }
 
             if current.is_empty() {
@@ -2378,7 +2534,7 @@ fn show_coloring_section(
     // missing one). Flat is honest but silent, so say why — otherwise
     // the only signal is a blank picture.
     if coloring.has_feature(crate::escape::ColoringFeature::NeedsDerivative) {
-        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc) {
+        if let Some(gap) = crate::escape::EscapeRenderer::derivative_gap(&esc, crate::escape::viewport_render_lines()) {
             let msg = match gap {
                 crate::escape::DerivativeGap::Formula => t!(
                     "escape_panel.no_derivative_formula",
@@ -2815,7 +2971,7 @@ mod tests {
         for _ in 0..2 {
             let out = ctx.run_ui(Default::default(), |ui| {
                 egui::CentralPanel::default().show_inside(ui, |ui| {
-                    render_escape_content(ui, &mut manager, &mut None, None);
+                    render_escape_content(ui, &mut manager, &mut None, None, &mut None, &mut false);
                 });
             });
             labels = out
@@ -2826,6 +2982,64 @@ mod tests {
                 .collect();
         }
         labels
+    }
+
+    /// Edit as Formula: the built-in's twin becomes the formula, its
+    /// parameters and the view kept, one undo step back to the built-in;
+    /// the Formula Editor holds the twin in use and asks to be opened.
+    #[test]
+    fn edit_as_formula_puts_the_twin_in_place_and_opens_it() {
+        let mut config = crate::config::FractalConfig::default();
+        config.escape.formula = "burning_ship".into();
+        config.escape.formula_params.insert("variant".into(), 3.0);
+        config.escape.center_re = "-1.75".into();
+        config.escape.zoom_log2 = 7.5;
+        let mut manager = ConfigManager::new(config);
+        let (mut editor, mut open) = (None, false);
+        let src = crate::escape::twins::custom_source("burning_ship").unwrap();
+        edit_as_formula(&mut manager, "burning_ship", src.clone(), &mut editor, &mut open);
+        let esc = &manager.config().escape;
+        assert!(esc.formula.starts_with(crate::escape::custom::PREFIX), "{}", esc.formula);
+        assert_eq!(esc.custom_formula.as_ref().map(|s| s.source.as_str()), Some(src.source.as_str()));
+        assert_eq!(esc.formula_params.get("variant"), Some(&3.0), "the variant carries over");
+        assert_eq!((esc.center_re.as_str(), esc.zoom_log2), ("-1.75", 7.5), "the view stays");
+        assert!(open && editor.is_some(), "the editor opens");
+        crate::escape::custom::ensure(esc);
+        assert!(crate::escape::get_formula(&esc.formula).has_feature(crate::escape::FormulaFeature::Program));
+        let _ = manager.undo();
+        assert_eq!(manager.config().escape.formula, "burning_ship", "one undo step");
+    }
+
+    /// The Transformations section (the KIFS plan, C4) lays out with one
+    /// of each stage -- a variation with parameters, one without, one the
+    /// registry does not know -- and its paths edit the config: the list
+    /// as one undo step, an amount and a parameter by index.
+    #[test]
+    fn the_transformations_lay_out_and_edit() {
+        use crate::config::escape::{EscapeTransform, TransformStage};
+        let t = |stage, variation: &str| EscapeTransform::new(stage, variation, 0.5);
+        let mut config = crate::config::FractalConfig::default();
+        config.render_mode = RenderMode::Escape;
+        config.escape.transforms = vec![t(TransformStage::Plane, "julian"), t(TransformStage::Orbit, "spherical"), t(TransformStage::Iteration, "no_such_variation")];
+        let _ = lay_out(config.clone());
+
+        let mut manager = ConfigManager::new(crate::config::FractalConfig::default());
+        let list = serde_json::to_string(&config.escape.transforms).unwrap();
+        manager.update_batch(vec![(ConfigPath::EscapeTransforms, ConfigValue::String(list))], "add".into()).unwrap();
+        assert_eq!(manager.config().escape.transforms.len(), 3);
+        manager.update_param(ConfigPath::EscapeTransformAmount { index: 1 }, 0.25f32.into()).unwrap();
+        manager.update_param(ConfigPath::EscapeTransformParam { index: 0, param: "power".into() }, 5.0f32.into()).unwrap();
+        let esc = &manager.config().escape;
+        assert_eq!(esc.transforms[1].amount, 0.25);
+        assert_eq!(esc.transforms[0].params.get("power"), Some(&5.0));
+        // An unset parameter reads as its variation's default.
+        let dist = manager.get_value(&ConfigPath::EscapeTransformParam { index: 0, param: "dist".into() }).unwrap();
+        assert_eq!(dist, ConfigValue::Float(1.0));
+        assert!(manager.update_param(ConfigPath::EscapeTransformAmount { index: 7 }, 1.0f32.into()).is_err(), "no transformation 7");
+        let _ = manager.undo();
+        let _ = manager.undo();
+        let _ = manager.undo();
+        assert!(manager.config().escape.transforms.is_empty(), "the list was one undo step");
     }
 
     #[test]
@@ -2922,7 +3136,7 @@ mod tests {
 
             let src = assembler::assemble(f, &colorings::DISTANCE_ESTIMATE, false);
             let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
-            let panel_says = EscapeRenderer::derivative_gap(&esc).is_none();
+            let panel_says = EscapeRenderer::derivative_gap(&esc, 720).is_none();
             assert_eq!(
                 shader_has, panel_says,
                 "{}: the shader compiles HAS_DERIVATIVE={shader_has} but the panel \
@@ -2946,7 +3160,7 @@ mod tests {
             if f.name == "mcmullen" {
                 esc.julia = true;
             }
-            if !EscapeRenderer::wants_perturbation(&esc) {
+            if !EscapeRenderer::wants_perturbation(&esc, 720) {
                 continue;
             }
             let tier = EscapeRenderer::perturb_tier(&esc).expect("a perturbed view has a tier");
@@ -2960,7 +3174,7 @@ mod tests {
                 EscapeRenderer::perturbed_derivative(&esc, floatexp),
             );
             let shader_has = src.contains("const HAS_DERIVATIVE: bool = true;");
-            let panel_says = EscapeRenderer::derivative_gap(&esc).is_none();
+            let panel_says = EscapeRenderer::derivative_gap(&esc, 720).is_none();
             assert_eq!(shader_has, panel_says, "{}: the perturbed shader and the hint disagree", f.name);
         }
     }
@@ -2977,21 +3191,21 @@ mod tests {
 
         esc.zoom_log2 = 4.0;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "shallow Mandelbrot renders direct and has its derivative"
         );
 
         esc.zoom_log2 = 30.0;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "the scaled rung carries the derivative"
         );
 
         esc.zoom_log2 = 60.0;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "the floatexp rung carries the derivative too"
         );
@@ -2999,7 +3213,7 @@ mod tests {
         // A formula with no derivative is blamed as the formula, at any
         // depth.
         esc.formula = "burning_ship".to_string();
-        assert_eq!(EscapeRenderer::derivative_gap(&esc), Some(DerivativeGap::Formula));
+        assert_eq!(EscapeRenderer::derivative_gap(&esc, 720), Some(DerivativeGap::Formula));
         esc.formula = "mandelbrot".to_string();
 
         // Damping takes the same view OFF the perturbed path, so the
@@ -3007,7 +3221,7 @@ mod tests {
         // it would keep warning here.
         esc.damping_re = 0.5;
         assert_eq!(
-            EscapeRenderer::derivative_gap(&esc),
+            EscapeRenderer::derivative_gap(&esc, 720),
             None,
             "damping renders direct at any depth, so the derivative is available"
         );
@@ -3086,6 +3300,188 @@ mod tests {
             }
         }
     }
+}
+
+/// The surface texture (docs/projects/surface-textures.md): its kind,
+/// strength and scale, and where on the slope it applies. One set for the
+/// 2D relief and the 3D terrain.
+pub(crate) fn surface_texture_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    esc: &crate::config::escape::EscapeConfig,
+    sh: &crate::config::escape::EscapeShading,
+) {
+    use crate::config::escape::{TextureWhere, TEXTURE_ANGLE_RANGE, TEXTURE_ANGLE_SOFT_RANGE};
+    let name = |k: ShadingTexture| match k {
+        ShadingTexture::None => t!("escape_panel.texture_none"),
+        ShadingTexture::Grain => t!("escape_panel.texture_grain"),
+        ShadingTexture::Paper => t!("escape_panel.texture_paper"),
+        ShadingTexture::Rock => t!("escape_panel.texture_rock"),
+        ShadingTexture::Simulation => t!("escape_panel.texture_simulation"),
+    };
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.shading_texture"));
+        let cur = sh.texture_kind;
+        egui::ComboBox::from_id_salt("escape_shading_texture")
+            .selected_text(name(cur))
+            .show_ui(ui, |ui| {
+                for k in ShadingTexture::ALL {
+                    if ui.selectable_label(cur == k, name(k).as_ref()).clicked() && cur != k {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingTextureKind,
+                            ConfigValue::String(k.as_str().to_string()),
+                        );
+                    }
+                }
+            });
+    })
+    .response
+    .on_hover_text(t!("escape_panel.tooltip_shading_texture"));
+    if sh.texture_kind == ShadingTexture::Simulation && esc.texture.is_none() {
+        ui.weak(t!("escape_panel.texture_simulation_none"));
+    }
+    if sh.texture_kind == ShadingTexture::None {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.texture_strength"));
+        let mut v = sh.texture_strength;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.0..=4.0))
+            .on_hover_text(t!("escape_panel.tooltip_texture_strength"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureStrength, v.into());
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.texture_scale"));
+        let mut v = sh.texture_scale;
+        if ui
+            .add(egui::Slider::new(&mut v, 0.25..=64.0).logarithmic(true))
+            .on_hover_text(t!("escape_panel.tooltip_texture_scale"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureScale, v.into());
+        }
+    });
+    let place = |w: TextureWhere| match w {
+        TextureWhere::Everywhere => t!("escape_panel.texture_where_everywhere"),
+        TextureWhere::Steep => t!("escape_panel.texture_where_steep"),
+        TextureWhere::Flat => t!("escape_panel.texture_where_flat"),
+    };
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.texture_where"));
+        egui::ComboBox::from_id_salt("escape_texture_where")
+            .selected_text(place(sh.texture_where))
+            .show_ui(ui, |ui| {
+                for w in TextureWhere::ALL {
+                    if ui.selectable_label(sh.texture_where == w, place(w).as_ref()).clicked() && sh.texture_where != w {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingTextureWhere,
+                            ConfigValue::String(w.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_texture_where"));
+    });
+    if sh.texture_where != TextureWhere::Everywhere {
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.texture_angle"));
+            let mut v = sh.texture_angle;
+            let (lo, hi) = TEXTURE_ANGLE_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).suffix("°"))
+                .on_hover_text(t!("escape_panel.tooltip_texture_angle"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureAngle, v.into());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(t!("escape_panel.texture_angle_soft"));
+            let mut v = sh.texture_angle_soft;
+            let (lo, hi) = TEXTURE_ANGLE_SOFT_RANGE;
+            if ui
+                .add(egui::Slider::new(&mut v, lo..=hi).suffix("°"))
+                .on_hover_text(t!("escape_panel.tooltip_texture_angle_soft"))
+                .changed()
+            {
+                let _ = config_manager.update_param(ConfigPath::EscapeShadingTextureAngleSoft, v.into());
+            }
+        });
+    }
+}
+
+/// A folding formula's paper (`CreaseSettings`), for the Creases relief
+/// field and terrain source alike: they draw the same paper. `hold`
+/// commits the decay on release, for a terrain, whose every change
+/// renders its sections again.
+fn crease_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    creases: &crate::config::escape::CreaseSettings,
+    salt: &str,
+    hold: bool,
+) {
+    use crate::config::escape::{CreasePattern, CREASE_DECAY_RANGE};
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.crease_pattern"));
+        let name = |p: CreasePattern| match p {
+            CreasePattern::Valley => t!("escape_panel.crease_valley"),
+            CreasePattern::Alternate => t!("escape_panel.crease_alternate"),
+            CreasePattern::Random => t!("escape_panel.crease_random"),
+        };
+        egui::ComboBox::from_id_salt(("crease_pattern", salt))
+            .selected_text(name(creases.pattern))
+            .show_ui(ui, |ui| {
+                for p in CreasePattern::ALL {
+                    if ui.selectable_label(p == creases.pattern, name(p)).clicked() && p != creases.pattern {
+                        let _ = config_manager.update_param(
+                            ConfigPath::EscapeShadingCreasePattern,
+                            ConfigValue::String(p.as_str().to_string()),
+                        );
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("escape_panel.tooltip_crease_pattern"));
+        let mut flip = creases.flip;
+        if ui
+            .checkbox(&mut flip, t!("escape_panel.crease_flip"))
+            .on_hover_text(t!("escape_panel.tooltip_crease_flip"))
+            .changed()
+        {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingCreaseFlip, flip.into());
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(t!("escape_panel.crease_decay"));
+        let mut v = creases.decay;
+        let (lo, hi) = CREASE_DECAY_RANGE;
+        let slider = |ui: &mut egui::Ui, v: &mut f32| {
+            ui.add(egui::Slider::new(v, lo..=hi)).on_hover_text(t!("escape_panel.tooltip_crease_decay"))
+        };
+        let changed = if hold {
+            super::slow_controls::on_release(ui, ui.id().with(("crease_decay", salt)), &mut v, slider).1
+        } else {
+            slider(ui, &mut v).changed()
+        };
+        if changed {
+            let _ = config_manager.update_param(ConfigPath::EscapeShadingCreaseDecay, v.into());
+        }
+    });
+}
+
+/// Creases picked on a formula that folds no paper: they are flat, and
+/// said so rather than left silent.
+fn no_creases_note(ui: &mut egui::Ui, formula: &str) {
+    ui.colored_label(
+        egui::Color32::from_rgb(220, 170, 90),
+        t!("escape_panel.creases_no_formula", formula = crate::escape::get_formula(formula).display_name),
+    );
 }
 
 /// One side of the relief layer — shadows or highlights. They carry

@@ -1650,7 +1650,8 @@ fn register_sim(engine: &mut Engine) {
                     // Order matters: dt first, because switching model
                     // set it to the model default and a preset may
                     // override; then parameters over the defaults.
-                    cfg.sim.dt = model.default_dt;
+                    cfg.sim.dt = p.dt.unwrap_or(model.default_dt);
+                    cfg.sim.boundary = p.boundary;
                     for (k, v) in p.params {
                         model_params(&mut cfg).insert((*k).to_string(), *v);
                     }
@@ -1789,6 +1790,202 @@ fn register_escape(engine: &mut Engine) {
             Ok(())
         },
     );
+
+    // A formula or colouring written in Ultra Fractal's language (or
+    // Fractint's), compiled here and carried in the config as source
+    // (escape::custom). A compile error throws, with each message's
+    // line and column in the source.
+    #[cfg(feature = "engine-escape")]
+    fn custom_source(
+        source: &str,
+        entry: &str,
+        dialect: &str,
+    ) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
+        use crate::config::escape::CustomDialect;
+        let dialect = match dialect {
+            "uf" | "ultra_fractal" | "ufm" | "ucl" => CustomDialect::UltraFractal,
+            "fractint" | "frm" => CustomDialect::Fractint,
+            "rhai" => CustomDialect::Rhai,
+            other => return Err(err(format!("unknown formula language `{other}` - use \"rhai\", \"uf\" or \"fractint\""))),
+        };
+        Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string(), variations: Vec::new() })
+    }
+    #[cfg(feature = "engine-escape")]
+    fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::escape::lang::Diag]) -> Box<EvalAltResult> {
+        let lines: Vec<String> = diags
+            .iter()
+            .filter(|d| d.severity == crate::escape::lang::Severity::Error)
+            .map(|d| d.render(&src.source))
+            .collect();
+        err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
+    }
+    #[cfg(feature = "engine-escape")]
+    fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
+        use crate::escape::lang::EntryKind;
+        // With the variations it calls (`vary`), which the config carries.
+        let src = crate::escape::custom::with_called_variations(EntryKind::Formula, src);
+        let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
+        if let Err(d) = crate::escape::custom::compile_formula(&src, &name) {
+            return Err(compile_error(&src, &d));
+        }
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        if cfg.escape.formula != name {
+            cfg.escape.formula_params.clear();
+        }
+        cfg.escape.formula = name;
+        cfg.escape.custom_formula = Some(src);
+        Ok(())
+    }
+    #[cfg(feature = "engine-escape")]
+    fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
+        use crate::escape::lang::EntryKind;
+        let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
+        let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
+        if let Err(d) = crate::escape::custom::compile_coloring(&src, &name) {
+            return Err(compile_error(&src, &d));
+        }
+        let mut cfg = e.cfg.borrow_mut();
+        enter(&mut cfg);
+        if cfg.escape.coloring != name {
+            cfg.escape.coloring_params.clear();
+        }
+        cfg.escape.coloring = name;
+        cfg.escape.custom_coloring = Some(src);
+        Ok(())
+    }
+    #[cfg(feature = "engine-escape")]
+    {
+        engine.register_fn(
+            "custom_formula",
+            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+                set_custom_formula(e, custom_source(source, entry, "uf")?)
+            },
+        );
+        engine.register_fn(
+            "custom_formula",
+            |e: &mut EscapeHandle, source: &str, entry: &str, dialect: &str| -> Result<(), Box<EvalAltResult>> {
+                set_custom_formula(e, custom_source(source, entry, dialect)?)
+            },
+        );
+        engine.register_fn(
+            "custom_coloring",
+            |e: &mut EscapeHandle, source: &str, entry: &str| -> Result<(), Box<EvalAltResult>> {
+                set_custom_coloring(e, custom_source(source, entry, "uf")?)
+            },
+        );
+        // A Rhai formula: its source alone, one formula to a source
+        // (phase 4, step 8).
+        engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
+            let entry = crate::escape::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
+            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
+        });
+        // A formula from the script's own function `f(z, c)`, its step:
+        // the Mandelbrot's shape on both planes. The config carries it as
+        // Rhai source, so the saved file renders anywhere.
+        engine.register_fn("formula_fn", |ctx: rhai::NativeCallContext, e: &mut EscapeHandle, name: &str| -> Result<(), Box<EvalAltResult>> {
+            let mut fns: Vec<(String, rhai::ScriptFuncDef)> = Vec::new();
+            let mut found = false;
+            for m in ctx.iter_namespaces() {
+                for (_, _, n, params, def) in m.iter_script_fn_info() {
+                    found |= n == name && params == 2;
+                    fns.push((n.to_string(), (**def).clone()));
+                }
+            }
+            if !found {
+                return Err(err(format!("no function `{name}(z, c)` in the script")));
+            }
+            let p = crate::escape::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
+                err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
+            })?;
+            let source = crate::escape::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
+            set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
+        });
+        // A hybrid composed in the script: the Hybrid Designer's groups.
+        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, hybrid_source(&groups, 0)?)
+        });
+        engine.register_fn("hybrid", |e: &mut EscapeHandle, groups: Array, loop_start: i64| -> Result<(), Box<EvalAltResult>> {
+            set_custom_formula(e, hybrid_source(&groups, loop_start)?)
+        });
+    }
+
+    // A hybrid's groups from a script's maps: `repeats`, and what the
+    // group runs -- `formula` (Rhai source) or `twin` (a built-in's
+    // name), optionally `blend` / `blend_twin` to mix with, or KF's
+    // `lines` as the hybrid's JSON has them.
+    #[cfg(feature = "engine-escape")]
+    fn hybrid_source(groups: &Array, loop_start: i64) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
+        use crate::escape::lang::hybrid::{Hybrid, Member};
+        let member = |source: Option<String>, twin: Option<String>| -> Result<Option<serde_json::Value>, Box<EvalAltResult>> {
+            let rhai = match (source, twin) {
+                (Some(s), _) => s,
+                (None, Some(t)) => crate::escape::twins::source(&t)
+                    .ok_or_else(|| err(format!("no built-in twin `{t}` - the twins are {}", crate::escape::twins::TWINS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))))?
+                    .to_string(),
+                (None, None) => return Ok(None),
+            };
+            let title = crate::escape::lang::rhai::title(&rhai).unwrap_or_else(|| "Formula".into());
+            Ok(Some(serde_json::to_value(Member { title, rhai }).expect("a member serialises")))
+        };
+        // Maps too, which a config value never is.
+        fn to_json(d: &Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {
+            if let Some(m) = d.clone().try_cast::<rhai::Map>() {
+                let mut out = serde_json::Map::new();
+                for (k, v) in m {
+                    out.insert(k.to_string(), to_json(&v)?);
+                }
+                return Ok(serde_json::Value::Object(out));
+            }
+            if let Some(a) = d.clone().try_cast::<Array>() {
+                return a.iter().map(to_json).collect::<Result<Vec<_>, _>>().map(serde_json::Value::Array);
+            }
+            dynamic_to_json(d)
+        }
+        let mut out = Vec::new();
+        for (k, g) in groups.iter().enumerate() {
+            let serde_json::Value::Object(mut map) = to_json(g)? else {
+                return Err(err(format!("group {}: a map, `#{{ twin: \"mandelbrot\", repeats: 1 }}`", k + 1)));
+            };
+            let mut take = |key: &str| map.remove(key).and_then(|v| v.as_str().map(str::to_string));
+            let (formula, twin, blend, blend_twin) = (take("formula"), take("twin"), take("blend"), take("blend_twin"));
+            if let Some(m) = member(formula, twin)? {
+                map.insert("formula".into(), m);
+            }
+            if let Some(m) = member(blend, blend_twin)? {
+                map.insert("blend".into(), m);
+            }
+            map.entry("repeats").or_insert(serde_json::Value::from(1));
+            out.push(serde_json::Value::Object(map));
+        }
+        let json = serde_json::json!({ "groups": out, "loop_start": loop_start.max(0) });
+        let h = Hybrid::from_json(&json.to_string()).map_err(err)?;
+        h.validate().map_err(err)?;
+        Ok(crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Hybrid, entry: "Hybrid".into(), source: h.to_json(), variations: Vec::new() })
+    }
+
+    // The formula's parameters, each a map of its metadata and value:
+    // what a script needs to sweep or animate them (phase 4, step 8).
+    engine.register_fn("formula_params", |e: &mut EscapeHandle| -> Array {
+        let cfg = e.cfg.borrow();
+        let Some(def) = crate::escape::find_formula(&cfg.escape.formula) else { return Array::new() };
+        def.parameters
+            .iter()
+            .map(|p| {
+                let mut m = rhai::Map::new();
+                m.insert("name".into(), Dynamic::from(p.name.to_string()));
+                m.insert("caption".into(), Dynamic::from(p.display_name.to_string()));
+                m.insert("min".into(), Dynamic::from(f64::from(p.min)));
+                m.insert("max".into(), Dynamic::from(f64::from(p.max)));
+                m.insert("default".into(), Dynamic::from(f64::from(p.default)));
+                m.insert("value".into(), Dynamic::from(f64::from(cfg.escape.formula_params.get(p.name).copied().unwrap_or(p.default))));
+                m.insert("choices".into(), Dynamic::from(p.choices.iter().map(|c| Dynamic::from(c.to_string())).collect::<Array>()));
+                #[cfg(feature = "engine-escape")]
+                m.insert("exponential".into(), Dynamic::from(crate::escape::custom::is_exponential(p)));
+                Dynamic::from(m)
+            })
+            .collect()
+    });
 
     engine.register_fn("formulas", |_e: &mut EscapeHandle| -> Array {
         crate::escape::FORMULAS
@@ -1950,7 +2147,7 @@ fn register_escape(engine: &mut Engine) {
         },
     );
     engine.register_fn("shading_field", |e: &mut EscapeHandle, field: &str| -> Result<(), Box<EvalAltResult>> {
-        const FIELDS: [&str; 6] = ["smooth", "banded", "layer", "analytic", "offset", "embossed"];
+        const FIELDS: [&str; 7] = ["smooth", "banded", "layer", "analytic", "offset", "embossed", "creases"];
         let f = field.trim().to_ascii_lowercase();
         if !FIELDS.contains(&f.as_str()) {
             return Err(err(format!("unknown relief field '{field}'; one of {}", FIELDS.join(", "))));
@@ -2045,6 +2242,24 @@ fn register_escape(engine: &mut Engine) {
         set_emboss(e, kind, Some(sections))
     });
 
+    engine.register_fn(
+        "shading_creases",
+        |e: &mut EscapeHandle, pattern: &str, decay: Dynamic, flip: bool| -> Result<(), Box<EvalAltResult>> {
+            use crate::config::escape::{CreasePattern, CREASE_DECAY_RANGE};
+            let p = CreasePattern::ALL.into_iter().find(|p| p.as_str() == pattern).ok_or_else(|| {
+                let names: Vec<&str> = CreasePattern::ALL.iter().map(|p| p.as_str()).collect();
+                err(format!("unknown crease pattern '{pattern}'; one of {}", names.join(", ")))
+            })?;
+            let decay = num(&decay, "decay")? as f32;
+            let mut cfg = e.cfg.borrow_mut();
+            enter(&mut cfg);
+            cfg.escape.shading.creases.pattern = p;
+            cfg.escape.shading.creases.decay = decay.clamp(CREASE_DECAY_RANGE.0, CREASE_DECAY_RANGE.1);
+            cfg.escape.shading.creases.flip = flip;
+            Ok(())
+        },
+    );
+
     // ---- Palette mapping --------------------------------------------
     // Curve names are checked, unlike the shading selectors: a typo in
     // a curve renders a perfectly plausible Linear picture, and nobody
@@ -2113,11 +2328,13 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::FORMULAS
-                .iter()
-                .find(|f| f.name == cfg.escape.formula)
+            let def = crate::escape::find_formula(&cfg.escape.formula)
                 .ok_or_else(|| err(format!("no such formula `{}`", cfg.escape.formula)))?;
-            if !def.parameters.iter().any(|p| p.name == name) {
+            // `name.r` / `name.angle`: a complex parameter as a point in
+            // polar form (`EscapeConfig::formula_param`).
+            let polar = name.strip_suffix(".r").or_else(|| name.strip_suffix(".angle"));
+            let complex = polar.is_some_and(|base| def.parameters.iter().any(|p| p.name.strip_suffix(".re") == Some(base)));
+            if !complex && !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
                 return Err(err(format!(
                     "`{}` has no parameter `{name}` (it has: {})",
@@ -2126,7 +2343,10 @@ fn register_escape(engine: &mut Engine) {
                 )));
             }
             enter(&mut cfg);
-            cfg.escape.formula_params.insert(name.to_string(), value as f32);
+            let defaults = |p: &str| def.parameters.iter().find(|q| q.name == p).map(|q| q.default);
+            for (k, v) in cfg.escape.formula_param_writes(name, value as f32, defaults) {
+                cfg.escape.formula_params.insert(k, v);
+            }
             Ok(())
         },
     );
@@ -2135,9 +2355,7 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::COLORINGS
-                .iter()
-                .find(|c| c.name == cfg.escape.coloring)
+            let def = crate::escape::find_coloring(&cfg.escape.coloring)
                 .ok_or_else(|| err(format!("no such coloring `{}`", cfg.escape.coloring)))?;
             if !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
@@ -2190,9 +2408,7 @@ fn register_escape(engine: &mut Engine) {
         |e: &mut EscapeHandle, name: &str, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
             let value = num(&value, name)?;
             let mut cfg = e.cfg.borrow_mut();
-            let def = crate::escape::COLORINGS
-                .iter()
-                .find(|c| c.name == cfg.escape.layer.coloring)
+            let def = crate::escape::find_coloring(&cfg.escape.layer.coloring)
                 .ok_or_else(|| err("no texture layer - call escape.layer(...) first"))?;
             if !def.parameters.iter().any(|p| p.name == name) {
                 let known: Vec<&str> = def.parameters.iter().map(|p| p.name).collect();
@@ -2214,9 +2430,7 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn("params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        crate::escape::FORMULAS
-            .iter()
-            .find(|f| f.name == cfg.escape.formula)
+        crate::escape::find_formula(&cfg.escape.formula)
             .map(|d| {
                 d.parameters
                     .iter()
@@ -2227,9 +2441,7 @@ fn register_escape(engine: &mut Engine) {
     });
     engine.register_fn("coloring_params", |e: &mut EscapeHandle| -> Array {
         let cfg = e.cfg.borrow();
-        crate::escape::COLORINGS
-            .iter()
-            .find(|c| c.name == cfg.escape.coloring)
+        crate::escape::find_coloring(&cfg.escape.coloring)
             .map(|d| {
                 d.parameters
                     .iter()

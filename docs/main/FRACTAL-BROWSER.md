@@ -159,13 +159,13 @@ complete configs. `global_preset_library()` loads it once per run:
   that is present but malformed lands here too; it does not fall back to
   the embedded copy.
 
-The file holds 20 presets:
+The file holds 43 presets:
 
 | Mode | Count | Presets |
 |---|---|---|
 | 2D flame | 6 | Grand Julian, Julian Disc, Plastic, Spherical3, Square Tile, Flower |
 | 3D flame | 3 | Cup (3D), JuliaN Bubble (3D), Bubbles (3D) |
-| Escape-time | 11 | Sierpinski Gasket, Sierpinski Carpet, Heighway Dragon, Koch Curve, Douady Rabbit, Julia Dendrite, Cubic Pair, Blob Flower (formula `ifs_flame`); Sierpinski Tetrahedron, Menger Sponge (`ifs_flame_3d`); Quaternion Julia (`quaternion_julia_solid`) |
+| Escape-time | 34 | Frothy Basin, Volterra-Lotka, Unity (Fractint's, written in Rhai: each carries its formula; ESCAPE.md, *The formulas*); Sierpinski Gasket, Sierpinski Carpet, Heighway Dragon, Koch Curve, Douady Rabbit, Julia Dendrite, Cubic Pair, Blob Flower (formula `ifs_flame`); Sierpinski Tetrahedron, Menger Sponge (`ifs_flame_3d`); Quaternion Julia, Lacquered Julia (`quaternion_julia_solid`); KIFS Menger, Tetrahedron, Octahedron, Turned, Bloom, Columns, Icosahedron, Icosahedral Flake, Dodecahedron, Chrome Octahedron (`kifs_solid`); Mandelbox, Mandelbox Scale 3, Mandelbox Inverted, Mandelbox Julia, Lacquered Mandelbox (`mandelbox_solid`); Mandelbulb, Mandelbulb Power 4, Mandelbulb Julia, Gold Mandelbulb (`mandelbulb_solid`) |
 | Simulation | 0 | |
 
 To add a preset, save the config (File ▸ Save As) and append its JSON

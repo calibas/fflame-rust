@@ -17,18 +17,24 @@
 use super::fixedpoint::{
     add_mag, cmp_mag, frac_bits, scale_pow2, shl_small, shr_small, sub_mag, FixedPoint,
 };
+use smallvec::{smallvec, SmallVec};
+
+/// A big float's limbs, eight (512 bits) inline: the reference orbits of
+/// custom formulas step through these a value an operation, and on the
+/// heap every one was an allocation.
+pub type Limbs = SmallVec<[u64; 8]>;
 
 /// `± (limbs as integer) · 2^exp`.
 #[derive(Clone, Debug)]
 pub struct BigFloat {
     pub neg: bool,
     pub exp: i64,
-    pub limbs: Vec<u64>,
+    pub limbs: Limbs,
 }
 
 impl BigFloat {
     pub fn zero(n_limbs: usize) -> Self {
-        Self { neg: false, exp: 0, limbs: vec![0; n_limbs] }
+        Self { neg: false, exp: 0, limbs: smallvec![0; n_limbs] }
     }
 
     pub fn is_zero(&self) -> bool {
@@ -92,12 +98,12 @@ impl BigFloat {
         let exp;
         if n > have {
             let k = n - have;
-            limbs = vec![0u64; k];
+            limbs = smallvec![0u64; k];
             limbs.extend_from_slice(&self.limbs);
             exp = self.exp.saturating_sub(64 * k as i64);
         } else {
             let k = have - n;
-            limbs = self.limbs[k..].to_vec();
+            limbs = Limbs::from_slice(&self.limbs[k..]);
             exp = self.exp.saturating_add(64 * k as i64);
         }
         let mut out = Self { neg: self.neg, exp, limbs };
@@ -154,7 +160,7 @@ impl BigFloat {
         let mut out = Self {
             neg: v.neg,
             exp: -(frac_bits(v.n_limbs()) as i64),
-            limbs: v.limbs.clone(),
+            limbs: Limbs::from_slice(&v.limbs),
         };
         out.normalize();
         out
@@ -275,7 +281,7 @@ impl BigFloat {
         if self.is_zero() || other.is_zero() {
             return Self::zero(n);
         }
-        let mut prod = vec![0u64; 2 * n];
+        let mut prod: SmallVec<[u64; 16]> = smallvec![0u64; 2 * n];
         for i in 0..n {
             let mut carry = 0u64;
             for j in 0..n {
@@ -298,7 +304,7 @@ impl BigFloat {
                 .exp
                 .saturating_add(other.exp)
                 .saturating_add(64 * n as i64),
-            limbs: prod[n..].to_vec(),
+            limbs: Limbs::from_slice(&prod[n..]),
         };
         out.normalize();
         out
@@ -928,7 +934,7 @@ mod tests {
         let one = bf(1.0);
         let tiny_exp = -200i64;
         let tiny = BigFloat { neg: false, exp: tiny_exp, limbs: {
-            let mut l = vec![0u64; N];
+            let mut l: Limbs = smallvec![0u64; N];
             l[0] = 1;
             l
         }};

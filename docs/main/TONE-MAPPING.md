@@ -77,8 +77,8 @@ changes the compute shader, so it restarts accumulation.
 3. **HSV**: hue shift, then saturation, skipped when both are neutral.
 4. **Exposure**, for Logarithmic. Linear applied it in step 2; Density
    used it as its sensitivity.
-5. **Highlights**: negative channels to 0, then Clip, MaxNorm, Reinhard
-   or Filmic brings the colour into [0, 1].
+5. **Highlights**: negative channels to 0, then Clip, MaxNorm, Reinhard,
+   Filmic, AgX or AgX Punchy brings the colour into [0, 1].
 6. **Tone curve**, if enabled and the pixel was hit.
 7. **Alpha**: the mode's alpha blended with a linear alpha, then capped
    by Levels when they are on.
@@ -242,6 +242,11 @@ included. Every mode first sets negative channels to 0.
 | MaxNorm | 1 | if the largest channel exceeds 1, divide all three by it: the hue is exact and the brightest channel lands on 1 |
 | Reinhard | 2 | scale by `(L / (1 + L)) / L`, where `L` is Rec. 709 luminance, then `min(c, 1)`. It compresses every value, not only those above 1. |
 | Filmic | 3 | the ACES fit of Narkowicz, `x(2.51x + 0.03) / (x(2.43x + 0.59) + 0.14)` per channel, clamped to [0, 1] |
+| AgX | 4 | AgX (Troy Sobotka's, Blender's view transform; Benjamin Wrensch's minimal fit): into a wider gamut (the inset matrix), a log2 encoding clamped to [-12.47, 4.03] stops and normalised, a sixth-order sigmoid, and back (the outset), clamped and decoded by 2.2 for the output encode to restore. Bright colours roll toward white keeping their hue; scene middle grey 0.18 lands at 0.497 on the display. Added 2026-10-19 (3d-look-and-tools P4). |
+| AgX Punchy | 5 | AgX with Wrensch's Punchy look before the outset: a power of 1.35 and saturation 1.4 about Rec. 709 luminance -- more contrast and colour, the same roll-off |
+
+AgX's curve has a CPU twin (`tonemap::agx_display`); the shader is it to
+the 8-bit rounding on a grey ramp (`agx_in_the_tonemap_is_the_curve`).
 
 ## The tone curve
 
@@ -254,10 +259,15 @@ curve passes through every point without overshooting.
 `generate_lut` samples it at `x = i/255` into a 256-entry `Rgba16Float`
 texture (the value in R). The shader reads it through a linear-filtering
 sampler once per channel, sampling unconditionally and choosing after,
-because a browser requires `textureSample` in uniform control flow. The
-curve is applied when `use_curve` is on and the pixel's `count` exceeds
-0.001. `use_curve` defaults to on with the identity curve, so by default
-it changes nothing.
+because a browser requires `textureSample` in uniform control flow. Texel
+`i`'s centre is at `u = (i + 0.5)/256`, so `f(x)` is read at
+`(255x + 0.5)/256`. The curve is applied when `use_curve` is on and the
+pixel's `count` exceeds 0.001. `use_curve` defaults to on with the
+identity curve, so by default it changes nothing
+(`the_identity_tone_curve_changes_nothing`: to a byte). Until 2026-10-19
+the shader read it at `u = x`, half a texel off, and even the identity
+took about 0.002 off every channel near black: bytes below 15 came out
+0, 25 came out 21.
 
 In the Colors panel's *Tone Curve* section: an enable box; presets Linear,
 S-Curve, Brighten Shadows and Darken Highlights; and an editor where
@@ -403,6 +413,14 @@ A config already on Linear or Density, or moving between the two
 non-flame modes, keeps its values. Under Linear the alpha is
 `coverage · density_scale`.
 
+**Entering a lit 3D view** (a solid, an escape or simulation terrain) from
+a view that draws none sets Linear, exposure 2.0 and gamma 1.0 whatever the
+tone map was, with saturation 1.0 and no hue shift
+(`ui::render_mode::look_3d`). The surface's colour is linear light and the
+tone map encodes sRGB itself, so gamma 1.0 is the one correct encode; a
+flame's saturation (the startup flames use 1.8 and 3.0) oversaturates a
+lit surface.
+
 **The Colors panel** in these modes (`Control` in
 [src/ui/visibility.rs](../../src/ui/visibility.rs)):
 
@@ -500,7 +518,7 @@ means the control is read only by the logarithmic branch.
 | Saturation | `saturation` | 0–3 | 1.0 | all modes |
 | Hue Shift | `hue_shift` | −360–360 | 0 | all modes |
 | Tone Map Mode | `tonemap_mode` | Linear, Logarithmic, Density | Logarithmic | |
-| Highlight Clipping | `highlight_mode` | Clip, MaxNorm, Reinhard, Filmic | Clip | all modes |
+| Highlight Clipping | `highlight_mode` | Clip, MaxNorm, Reinhard, Filmic, AgX, AgX Punchy | Clip | all modes |
 | Alpha Blend Low | `alpha_blend_low` | 0–1 | 0.3 | Log, Density |
 | Alpha Blend High | `alpha_blend_high` | 0–1 | 0.8 | Log, Density |
 | Density Scale | `density_scale` | 0.01–10 | 1.0 | all modes |

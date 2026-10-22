@@ -73,6 +73,11 @@ pub struct TerrainTiers {
     /// output.
     picture: Option<(Texture, TextureView)>,
     showing_picture: bool,
+    /// The viewport's path tracer was still adding to its sum: when it
+    /// finds itself done between frames (adaptive sampling's count of
+    /// the pixels still sampling comes back as none), its picture is
+    /// resolved once more, current.
+    tracing: bool,
 }
 
 impl TerrainTiers {
@@ -96,7 +101,7 @@ impl TerrainTiers {
         }
         // The tier too: from Auto's traced picture to Lit, the lit
         // accumulation had finished and the traced picture stayed up.
-        let key = format!("{:?}|{}|{:?}|{:?}", (i.view)([0.0, 0.0]), terrain.tile_version(), i.settings, i.tier);
+        let key = format!("{:?}|{}|{}|{:?}", (i.view)([0.0, 0.0]), terrain.tile_version(), i.settings.restart_key(), i.tier);
         if self.key.as_deref() != Some(key.as_str()) {
             self.key = Some(key);
             self.lit_samples = 0;
@@ -124,8 +129,17 @@ impl TerrainTiers {
         }
         let target = i.samples.max(1);
         let have = terrain.path_samples();
+        // Done -- found so between frames, its picture resolved once more.
+        if terrain.path_done(device, target, i.settings.noise_threshold) {
+            if self.tracing {
+                terrain.resolve_path(device, queue);
+            }
+            self.tracing = false;
+            return false;
+        }
+        self.tracing = true;
         // Path traced: a sample a ground while it fills.
-        if have >= target || (i.filling && have >= 1) {
+        if i.filling && have >= 1 {
             return false;
         }
         // As many samples as fit the frame at the measured cost.
@@ -133,11 +147,12 @@ impl TerrainTiers {
         let n = per_frame.min(target - have);
         self.trace(terrain, device, queue, i, n);
         // The last picture current, whatever the denoiser's schedule.
-        if terrain.path_samples() >= target {
+        if terrain.path_done(device, target, i.settings.noise_threshold) {
             terrain.resolve_path(device, queue);
+            self.tracing = false;
         }
         self.showing_path = i.tier == RenderTier::PathTraced || terrain.path_samples() >= PATH_SHOW_SAMPLES;
-        terrain.path_samples() < target
+        !terrain.path_done(device, target, i.settings.noise_threshold)
     }
 
     /// The export's picture, `frame` in pixels: path traced at `samples`
@@ -262,7 +277,7 @@ impl TerrainTiers {
         let target = i.samples.max(1);
         // A batch the watchdog never notices: about a quarter second at
         // the measured cost, from a cautious start.
-        while terrain.path_samples() < target {
+        while !terrain.path_done(device, target, i.settings.noise_threshold) {
             let per = self.path_ms().map_or(2, |ms| (250.0 / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
             let n = per.min(target - terrain.path_samples());
             self.trace(terrain, device, queue, i, n);

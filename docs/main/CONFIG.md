@@ -122,6 +122,15 @@ and gamma 1.0 for Escape (`ESCAPE_EXPOSURE`, `ESCAPE_GAMMA`), the flame
 defaults for Simulation. A Log-calibrated flame tone map renders either
 engine's unit-range image black.
 
+Entering a lit 3D view -- a solid formula, an escape or simulation
+terrain -- from a view that draws none sets **the 3D look**
+(`ui::render_mode::look_3d`) in the same undo step: Linear, exposure 2.0,
+gamma 1.0, saturation 1.0, no hue shift, and, when the lighting rig is
+untouched, shading strength 1.0 and ambient 0.0. The mode switch, the
+Escape panel's formula picker and terrain switch, the Simulation panel's
+terrain switch and the Formula Editor's Use go through it
+(`apply_with_look`).
+
 **Changing a default changes old files.** Serialization omits values
 equal to their default, so a file saved before the change and relying
 on the old default renders with the new one. A default change needs a
@@ -185,7 +194,7 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 
 ## Versioning and migration
 
-`CURRENT_CONFIG_VERSION` is **4** (`src/config/fractal_config.rs`).
+`CURRENT_CONFIG_VERSION` is **6** (`src/config/fractal_config.rs`).
 `migrate_value` upgrades one version per arm:
 
 | arm | what it does |
@@ -194,6 +203,8 @@ written this way (`PngMetadata::from_app_state`); see the warning under
 | v1 → v2 | nothing. v2 is the cloud "opaque blob" format ([api-v2.md](../archive/api-v1-v2/api-v2.md)): the `.fflame` JSON stored as-is |
 | v2 → v3 | lifts the scene-level render fields from `flame` to the top level: `render_mode` (absent: `"2d"`), `perspective_strength` (or the legacy `projection` enum, converted), `depth_density_compensation`, `far_density_fade`, `far_density_fade_start`, and `preserve_z` (absent: `true`) |
 | v3 → v4 | for a file saved as v3 only: an absent `levels_gamma` becomes 1.0. A v3 save skipped the field at 1.0, the pre-2026-05-31 default, rather than at its 0.5 default; every v3 file postdates that change, so absent meant 1.0. Older files keep loading at 0.5, as that change intended |
+| v4 → v5 | the Shadows default rose from 0.7 to 0.98 (2026-10-19): an absent `shadow` becomes 0.7 in `escape.formula_params` when the formula is a solid (a built-in solid's name, or a `custom-` formula whose carried source has `fn distance`), and in `escape.terrain` and `sim.terrain` when the file has them |
+| v5 → v6 | a solid's directional lights became the fractal's (2026-10-19): `solid_shading.lights_follow_camera` becomes true when the formula is a solid (as v4 → v5 tells one), so an older solid keeps the camera's lights and renders as it did. The shipped solid presets were converted to the fractal's at their own cameras and saved as v6 (`scripts/presets_lights_to_world.py`) |
 
 A value **without a `version`** is read as v0, with two exceptions. A
 top-level `render_mode` with none on `flame`, or one of `"escape"` or
@@ -327,7 +338,7 @@ accumulates the GPU work edits imply.
 | method | use |
 | --- | --- |
 | `update_param(path, value)` | one value; a history entry, coalesced (below). Returns `Result<UpdateType, ConfigError>`; an unchanged value (`ConfigValue::approx_eq`) returns `UpdateType::None` and records nothing. |
-| `update_batch(changes, description)` | several values as one history entry under the given description; each delta's update type is recorded separately, so the actions are their union. Coalesces like a single edit when consecutive batches change the same paths, or carry the same gesture description. |
+| `update_batch(changes, description)` | several values as one history entry under the given description; each delta's update type is recorded separately, so the actions are their union. The changes apply in order, each one's old value read as the earlier ones left the config, so a later path whose default depends on an earlier one (a colouring and its parameters) is never dropped as a false no-op. A batch holding a setter that changes more than its own field (the simulation's model, a layer's model, the grid mode, the init kind) is recorded as the config before and after, as a single such edit is. A change that fails leaves the config as it was. Coalesces like a single edit when consecutive batches change the same paths, or carry the same gesture description. |
 | `update_param_silent`, `update_param_silent_on(target, …)` | no history: animation playback, and tracks aimed at a subflame |
 | `apply_value_detached(config, target, path, value)` | apply one value to a detached config with the manager's own setters and clamps, no history or disk; the video exporter's way to apply tracks |
 | `remove_variation(xref, name)` | removes a variation and records the whole transform before and after, so undo restores its parameters and order |

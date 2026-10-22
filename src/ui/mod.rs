@@ -19,7 +19,7 @@ pub mod render_mode;
 pub mod visibility;
 mod palette_editor;
 pub mod render_progress;
-mod rhai_highlight;
+mod code_highlight;
 mod palette_library;
 mod panel_viewer;
 /// Shared viewport pan entry (drag semantics; routes to escape-mode
@@ -30,7 +30,7 @@ mod random_generator;
 mod scripts_panel;
 pub mod response;
 mod settings;
-mod solid_panel;
+mod lighting_panel;
 mod subflames;
 // `pub(crate)` for tests only: the animation exporter checks that it
 // applies every target this module offers, and that check has to
@@ -50,9 +50,13 @@ mod variation_params;
 mod view;
 mod view_controls;
 mod escape_panel;
+/// The escape panel's Transformations (the KIFS plan, C4).
+mod escape_transforms;
 mod sim_panel;
 pub mod slow_controls;
 mod textures_panel;
+mod formula_editor;
+mod hybrid_designer;
 pub mod workspace;
 mod palette_generate;
 mod script_params;
@@ -914,6 +918,8 @@ pub struct EguiLayer {
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
     /// The Texture panel's state, created when the panel is first shown.
     textures_panel: Option<textures_panel::TexturesPanel>,
+    formula_editor: Option<formula_editor::FormulaEditorPanel>,
+    hybrid_designer: Option<hybrid_designer::HybridDesignerPanel>,
 
     // API: flame metadata loaded from Online tab (passed through to UiResponse)
     loaded_api_flame_id: Option<String>,
@@ -1089,6 +1095,8 @@ impl EguiLayer {
             script_animation: None,
             fractal_browser_panel: None,
             textures_panel: None,
+            formula_editor: None,
+            hybrid_designer: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
             loaded_api_flame_user_id: None,
@@ -1525,6 +1533,8 @@ impl EguiLayer {
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
         let mut open_random_generator = false;
+        let mut open_formula_editor = false;
+        let mut open_lighting_panel = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -1783,6 +1793,8 @@ impl EguiLayer {
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
                         open_random_generator: &mut open_random_generator,
+                        open_formula_editor: &mut open_formula_editor,
+                        open_lighting_panel: &mut open_lighting_panel,
 
                         // UI state
                         paused,
@@ -1896,6 +1908,8 @@ impl EguiLayer {
                         // Fractal browser panel state
                         fractal_browser_panel: &mut self.fractal_browser_panel,
                         textures_panel: &mut self.textures_panel,
+                        formula_editor: &mut self.formula_editor,
+                        hybrid_designer: &mut self.hybrid_designer,
 
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,
@@ -2530,6 +2544,8 @@ impl EguiLayer {
             open_triangle_editor,
             open_preset_library,
             open_random_generator,
+            open_formula_editor,
+            open_lighting_panel,
             fractal_viewport_size,
             fly_mouse_drag,
             fly_mode_toggle_requested,

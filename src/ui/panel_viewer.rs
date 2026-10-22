@@ -308,6 +308,11 @@ pub struct PanelContext<'a> {
     pub open_triangle_editor: &'a mut bool,
     pub open_preset_library: &'a mut bool,
     pub open_random_generator: &'a mut bool,
+    /// A panel put a formula in the Formula Editor (the Escape panel's
+    /// Edit as Formula): the app opens it.
+    pub open_formula_editor: &'a mut bool,
+    /// The View panel's Lighting & Material button.
+    pub open_lighting_panel: &'a mut bool,
 
     // UI state
     pub paused: &'a mut bool,
@@ -434,6 +439,8 @@ pub struct PanelContext<'a> {
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
     pub textures_panel: &'a mut Option<super::textures_panel::TexturesPanel>,
+    pub formula_editor: &'a mut Option<super::formula_editor::FormulaEditorPanel>,
+    pub hybrid_designer: &'a mut Option<super::hybrid_designer::HybridDesignerPanel>,
 
     // Histogram for density visualization (levels now in ConfigManager)
     pub density_histogram: &'a crate::renderer::DensityHistogram,
@@ -790,12 +797,26 @@ impl<'a> PanelViewer<'a> {
                     self.context.config_manager,
                     self.context.workspace_layout_requested,
                     self.context.terrain_range,
+                    self.context.formula_editor,
+                    self.context.open_formula_editor,
                 );
             }
             PanelType::Textures => {
                 self.context
                     .textures_panel
                     .get_or_insert_with(super::textures_panel::TexturesPanel::new)
+                    .render(ui, self.context.config_manager);
+            }
+            PanelType::FormulaEditor => {
+                self.context
+                    .formula_editor
+                    .get_or_insert_with(super::formula_editor::FormulaEditorPanel::new)
+                    .render(ui, self.context.config_manager, self.context.window);
+            }
+            PanelType::HybridDesigner => {
+                self.context
+                    .hybrid_designer
+                    .get_or_insert_with(super::hybrid_designer::HybridDesignerPanel::new)
                     .render(ui, self.context.config_manager);
             }
             PanelType::Simulation => {
@@ -946,6 +967,7 @@ impl<'a> PanelViewer<'a> {
             self.context.fly_mode_toggle_requested,
             self.context.deep_zoom,
             self.context.escape_aa,
+            self.context.open_lighting_panel,
         );
     }
 
@@ -959,12 +981,12 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render the Solid Rendering & Lighting panel
+    /// Render the Lighting & Material panel (`PanelType::SolidLighting`)
     fn render_solid_lighting_panel(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                super::solid_panel::render_solid_panel_content(
+                super::lighting_panel::render_lighting_panel_content(
                     ui,
                     self.context.config_manager,
                 );
