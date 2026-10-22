@@ -93,7 +93,7 @@ pub struct UiResponse {
     pub open_random_generator: bool,
     /// Open the Formula Editor, which a panel just gave a formula to.
     pub open_formula_editor: bool,
-    /// Open the Lighting & Material panel (the View panel's button).
+    /// Open the Lighting panel (the View panel's button).
     pub open_lighting_panel: bool,
 
     // Fractal viewport size (for matching texture dimensions to panel)
@@ -187,11 +187,6 @@ pub struct UiResponse {
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
     /// Downloaded variations to re-fetch at the catalog's version.
     pub variation_update_requested: Vec<String>,
-    /// A panel asked for a different workspace layout. Entering escape
-    /// mode requests the Escape layout, because the panels that make
-    /// sense either side of that switch are almost disjoint — the
-    /// alternative is a dock full of editors that do nothing.
-    pub workspace_layout_requested: Option<super::workspace::WorkspaceLayout>,
 }
 
 /// API save action type (flame only — animation is separate)
@@ -295,7 +290,6 @@ impl Default for UiResponse {
             clear_variation_cache_requested: false,
             script_cloud_request: None,
             variation_update_requested: Vec::new(),
-            workspace_layout_requested: None,
         }
     }
 }

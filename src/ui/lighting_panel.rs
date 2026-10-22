@@ -2,7 +2,7 @@ use crate::camera::gesture::ViewKind;
 use crate::config::{ConfigManager, ConfigPath, ConfigValue, FractalConfig, SolidShadingSettings};
 use rust_i18n::t;
 
-/// The Lighting & Material panel (docs/archive/projects/3d-look-and-tools.md, P3):
+/// The Lighting panel (docs/archive/projects/3d-look-and-tools.md, P3):
 /// every lit 3D view's lighting, shadows, material and surface in one
 /// place, in sections -- Rendering, Sky, Lights, Shading, Shadows,
 /// Material, Surface -- each drawn where the view has it. A solid's
@@ -668,7 +668,7 @@ mod tests {
     #[cfg(feature = "engine-escape")]
     fn escape_text(config: &FractalConfig) -> Vec<String> {
         let mut m = ConfigManager::new(config.clone());
-        drawn(&mut m, &mut |ui, m| super::super::escape_panel::render_escape_content(ui, m, &mut None, None, &mut None, &mut false))
+        drawn(&mut m, &mut |ui, m| super::super::escape_panel::render_escape_content(ui, m, None, &mut None, &mut false))
     }
 
     fn view_text(config: &FractalConfig) -> Vec<String> {
@@ -707,7 +707,7 @@ mod tests {
         text.iter().any(|t| t == what)
     }
 
-    /// A solid's light is drawn in the Lighting & Material panel alone
+    /// A solid's light is drawn in the Lighting panel alone
     /// (3d-look-and-tools P3): its Shadows, Shadow Sharpness and Occlusion
     /// Reach -- formula parameters -- there and not among the Escape
     /// panel's parameters, and the rig no longer in the View panel.

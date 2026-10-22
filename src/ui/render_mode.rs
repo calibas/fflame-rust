@@ -58,7 +58,7 @@ pub fn look_3d(before: &FractalConfig, after: &FractalConfig) -> Vec<(ConfigPath
 }
 
 /// What an untouched lighting rig becomes when a lit 3D view takes it
-/// over -- on entry (the 3D look) and at the Lighting & Material panel's
+/// over -- on entry (the 3D look) and at the Lighting panel's
 /// first change of it: full strength and no ambient (3d-look-and-tools
 /// P2), the rest as stored, and light 0 where the untouched rig's key
 /// light was, so taking the rig over does not swing it: on a terrain the
@@ -120,15 +120,84 @@ pub fn lights_to_world(config: &FractalConfig) -> Vec<(ConfigPath, ConfigValue)>
 /// solid, a terrain switched on, a Rhai solid put to use.
 pub fn apply_with_look(
     config_manager: &mut ConfigManager,
-    mut changes: Vec<(ConfigPath, ConfigValue)>,
+    changes: Vec<(ConfigPath, ConfigValue)>,
     description: &str,
 ) -> Result<UpdateType, ConfigError> {
-    let before = config_manager.active_config().clone();
+    let mode = config_manager.active_config().render_mode;
+    choose(config_manager, changes, description, mode)
+}
+
+/// What else `changes` imply when they take `before` into `mode`: the
+/// mode itself if it is another, and then the 3D look ([`look_3d`]) when
+/// the result is a lit 3D view `before` did not draw, or else the tone
+/// map's rescue (`entry_tone_mapping`: a flame's Log-calibrated mapping
+/// renders a non-flame engine's unit-range image black). In `mode`
+/// already, only the look the changes themselves bring.
+///
+/// For a caller that cannot go through [`choose`] -- a structural
+/// snapshot applies these to its `after` detached.
+pub fn entering_changes(
+    before: &FractalConfig,
+    changes: &[(ConfigPath, ConfigValue)],
+    mode: RenderMode,
+) -> Vec<(ConfigPath, ConfigValue)> {
     let mut after = before.clone();
-    for (path, value) in &changes {
+    for (path, value) in changes {
         let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, path, value.clone());
     }
-    changes.extend(look_3d(&before, &after));
+    implied(before, after, mode)
+}
+
+/// [`entering_changes`] for a choice made as a whole-config snapshot (a
+/// layered simulation preset, a texture): what entering `mode` implies,
+/// applied to `after` in place, so the snapshot is still one undo step.
+pub fn enter_snapshot(before: &FractalConfig, after: &mut FractalConfig, mode: RenderMode) {
+    for (path, value) in implied(before, after.clone(), mode) {
+        let _ = ConfigManager::apply_value_detached(after, EditingTarget::Main, &path, value);
+    }
+}
+
+/// What entering `mode` adds to `after`, which is `before` with a choice
+/// made in it.
+fn implied(before: &FractalConfig, mut after: FractalConfig, mode: RenderMode) -> Vec<(ConfigPath, ConfigValue)> {
+    let entering = after.render_mode != mode;
+    let mut out = Vec::new();
+    if entering {
+        out.push((ConfigPath::RenderMode, mode.into()));
+        let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, &ConfigPath::RenderMode, mode.into());
+    }
+    let look = look_3d(before, &after);
+    if !look.is_empty() {
+        out.extend(look);
+    } else if entering {
+        // Escape output has its own calibration; a simulation keeps the
+        // flame defaults (`entry_tone_mapping`, shared with the script
+        // handles).
+        if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(before, mode) {
+            out.push((ConfigPath::TonemapMode, crate::scene::tonemap::ToneMapMode::Linear.into()));
+            out.push((ConfigPath::Exposure, exposure.into()));
+            out.push((ConfigPath::Gamma, gamma.into()));
+        }
+    }
+    out
+}
+
+/// `changes` made in `mode`, as one undo step: choosing something for an
+/// engine takes the config into its mode (one-workspace plan, decision
+/// 4) -- a formula picked, a Rhai entry put to use, a simulation model, a
+/// texture -- with what entering implies ([`entering_changes`]). In the
+/// mode already, the changes with the look they bring.
+pub fn choose(
+    config_manager: &mut ConfigManager,
+    mut changes: Vec<(ConfigPath, ConfigValue)>,
+    description: &str,
+    mode: RenderMode,
+) -> Result<UpdateType, ConfigError> {
+    let extra = entering_changes(config_manager.active_config(), &changes, mode);
+    changes.extend(extra);
+    if changes.is_empty() {
+        return Ok(UpdateType::None);
+    }
     config_manager.update_batch(changes, description.to_string())
 }
 
@@ -164,51 +233,18 @@ pub fn apply_with_look(
 /// It loses exposure and gamma, two sliders, and it is visible the
 /// instant it happens because the picture changes.
 ///
-/// If it is ever fixed, the shape is a per-mode stash mirroring
-/// `Workspace::stashed`: recorded on every entry rather than only when
-/// the reset fires, stamped with the config's load generation so a
-/// load invalidates it, and applied inside the same batch as the mode
-/// change so one undo still reverses the whole thing.
+/// If it is ever fixed, the shape is a per-mode stash: recorded on
+/// every entry rather than only when the reset fires, stamped with the
+/// config's load generation so a load invalidates it, and applied
+/// inside the same batch as the mode change so one undo still reverses
+/// the whole thing.
 pub fn switch_render_mode(
     config_manager: &mut ConfigManager,
     mode: RenderMode,
 ) -> Result<(), ConfigError> {
-    let config = config_manager.active_config();
-    if config.render_mode == mode {
-        return Ok(());
-    }
     // Into a lit 3D view (a solid, a terrain): its look, which includes
     // the tone map's reset, in the same undo step.
-    let mut after = config.clone();
-    let _ = ConfigManager::apply_value_detached(&mut after, EditingTarget::Main, &ConfigPath::RenderMode, mode.into());
-    let look = look_3d(config, &after);
-    if !look.is_empty() {
-        let mut changes = vec![(ConfigPath::RenderMode, mode.into())];
-        changes.extend(look);
-        return config_manager.update_batch(changes, "history.param.render_mode".to_string()).map(|_| ());
-    }
-    // Escape output has its own calibration; a simulation keeps the flame
-    // defaults (`entry_tone_mapping`, shared with the script handles).
-    if let Some((exposure, gamma)) = crate::config::defaults::entry_tone_mapping(config, mode) {
-        config_manager
-            .update_batch(
-                vec![
-                    (ConfigPath::RenderMode, mode.into()),
-                    (
-                        ConfigPath::TonemapMode,
-                        crate::scene::tonemap::ToneMapMode::Linear.into(),
-                    ),
-                    (ConfigPath::Exposure, exposure.into()),
-                    (ConfigPath::Gamma, gamma.into()),
-                ],
-                "history.param.render_mode".to_string(),
-            )
-            .map(|_| ())
-    } else {
-        config_manager
-            .update_param(ConfigPath::RenderMode, mode.into())
-            .map(|_| ())
-    }
+    choose(config_manager, Vec::new(), "history.param.render_mode", mode).map(|_| ())
 }
 
 /// The two engines that are not the chaos game.
@@ -217,35 +253,16 @@ pub fn is_non_flame(mode: RenderMode) -> bool {
     mode.is_non_flame()
 }
 
-/// The workspace a mode wants, and the panel that edits it.
-///
-/// `None` for the flame modes: they share the Standard workspace, and
-/// a caller leaving a non-flame mode reads that as "go back to
-/// Standard". Written as a table rather than nested ifs because a
-/// third mode made the branching the part most likely to gain a hole.
-/// The canonical copy -- `app::follow_loaded_render_mode` used to keep
-/// its own.
-pub fn layout_for(
-    mode: RenderMode,
-) -> Option<(super::workspace::WorkspaceLayout, super::workspace::PanelType)> {
-    use super::workspace::{PanelType, WorkspaceLayout};
+/// The panel that edits a mode's picture, which a change into the mode
+/// brings to the front (one-workspace plan): one workspace holds all
+/// three, as tabs, and a mode change closes and swaps nothing.
+pub fn main_panel_for(mode: RenderMode) -> super::workspace::PanelType {
+    use super::workspace::PanelType;
     match mode {
-        RenderMode::Escape => Some((WorkspaceLayout::EscapeTime, PanelType::Escape)),
-        RenderMode::Simulation => Some((WorkspaceLayout::Simulation, PanelType::Simulation)),
-        RenderMode::TwoD | RenderMode::ThreeD => None,
+        RenderMode::TwoD | RenderMode::ThreeD => PanelType::Transforms,
+        RenderMode::Escape => PanelType::Escape,
+        RenderMode::Simulation => PanelType::Simulation,
     }
-}
-
-/// The workspace a "build it fresh" request means in `mode`: Reset
-/// Workspace, and the compact layout's way back to the desktop.
-///
-/// Both applied Standard whatever the mode, so in Escape or Simulation
-/// they threw away the workspace that holds the mode's own editor and
-/// left a flame workspace around a picture no flame panel edits.
-pub fn workspace_for(mode: RenderMode) -> super::workspace::WorkspaceLayout {
-    layout_for(mode)
-        .map(|(layout, _)| layout)
-        .unwrap_or(super::workspace::WorkspaceLayout::Standard)
 }
 
 /// Does this mode need the escape engine's GPU state resident?
@@ -604,42 +621,48 @@ mod tests {
         }
     }
 
-    /// Reset Workspace rebuilds the mode's own workspace.
+    /// Each mode brings its own editor forward: the flame modes the
+    /// Transforms panel, the other two their own -- and each acts in its
+    /// mode, or a mode change would open onto a panel saying it does not.
     #[test]
-    fn a_reset_workspace_is_the_modes_own() {
-        use super::super::workspace::WorkspaceLayout;
-        assert_eq!(workspace_for(RenderMode::TwoD), WorkspaceLayout::Standard);
-        assert_eq!(workspace_for(RenderMode::ThreeD), WorkspaceLayout::Standard);
-        assert_eq!(workspace_for(RenderMode::Escape), WorkspaceLayout::EscapeTime);
-        assert_eq!(workspace_for(RenderMode::Simulation), WorkspaceLayout::Simulation);
+    fn each_mode_brings_its_own_panel_forward() {
+        use super::super::workspace::PanelType;
+        assert_eq!(main_panel_for(RenderMode::TwoD), PanelType::Transforms);
+        assert_eq!(main_panel_for(RenderMode::ThreeD), PanelType::Transforms);
+        assert_eq!(main_panel_for(RenderMode::Escape), PanelType::Escape);
+        assert_eq!(main_panel_for(RenderMode::Simulation), PanelType::Simulation);
+        for m in RenderMode::ALL {
+            assert!(
+                super::super::visibility::panel(main_panel_for(*m), *m, super::super::visibility::Solid::No).is_active(),
+                "{m:?} brings forward a panel inactive in it"
+            );
+        }
     }
 
-    /// Each non-flame mode brings its own workspace and its own
-    /// editor; the flame modes share Standard.
+    /// Choosing something for another engine takes the config into its
+    /// mode in the same undo step, with the tone map's rescue from a
+    /// Log-mapped flame; in the mode already, the changes alone.
     #[test]
-    fn only_the_non_flame_modes_bring_a_workspace() {
-        use super::super::workspace::{PanelType, WorkspaceLayout};
-        assert_eq!(layout_for(RenderMode::TwoD), None);
-        assert_eq!(layout_for(RenderMode::ThreeD), None);
-        assert_eq!(
-            layout_for(RenderMode::Escape),
-            Some((WorkspaceLayout::EscapeTime, PanelType::Escape))
-        );
-        assert_eq!(
-            layout_for(RenderMode::Simulation),
-            Some((WorkspaceLayout::Simulation, PanelType::Simulation))
-        );
-        // And each mode's own editor is available in it -- a workspace
-        // that opens a panel the visibility policy greys would be a
-        // contradiction.
-        for m in RenderMode::ALL {
-            if let Some((_, panel)) = layout_for(*m) {
-                assert!(
-                    super::super::visibility::panel(panel, *m, super::super::visibility::Solid::No)
-                        .is_show(),
-                    "{m:?} opens a panel it also greys"
-                );
-            }
-        }
+    fn choosing_enters_the_mode_in_one_undo_step() {
+        use crate::config::ConfigValue;
+        let mut m = manager_in(RenderMode::TwoD);
+        m.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()).expect("tonemap");
+        let before = m.history_len();
+        choose(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("burning_ship".into()))], "history.param.escape_formula", RenderMode::Escape)
+            .expect("choose");
+        let c = m.active_config();
+        assert_eq!((c.render_mode, c.escape.formula.as_str(), c.tonemap_mode), (RenderMode::Escape, "burning_ship", ToneMapMode::Linear));
+        assert_eq!(m.history_len() - before, 1, "one undo step");
+        m.undo().expect("undo");
+        let c = m.active_config();
+        assert_eq!((c.render_mode, c.tonemap_mode), (RenderMode::TwoD, ToneMapMode::Logarithmic), "one undo reverses it all");
+        assert_ne!(c.escape.formula, "burning_ship");
+
+        // In the mode already: the change, nothing else.
+        let mut m = manager_in(RenderMode::Escape);
+        m.update_param(ConfigPath::Exposure, 3.0f32.into()).expect("exposure");
+        choose(&mut m, vec![(ConfigPath::EscapeFormula, ConfigValue::String("burning_ship".into()))], "history.param.escape_formula", RenderMode::Escape)
+            .expect("choose");
+        assert_eq!((m.active_config().escape.formula.as_str(), m.active_config().exposure), ("burning_ship", 3.0));
     }
 }

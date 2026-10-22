@@ -161,110 +161,93 @@ fn param_control(ui: &mut egui::Ui, v: &mut f32, p: &'static SimParamDef, salt: 
 pub fn render_sim_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    workspace_request: &mut Option<super::workspace::WorkspaceLayout>,
     mut state: SimUiState<'_>,
 ) {
     let config = config_manager.active_config().clone();
     let sim = config.sim.clone();
     let active = config.render_mode == RenderMode::Simulation;
 
-    // ---- A way in, not a toggle ----
-    // Same as the escape panel: the Mode menu owns switching, so this
-    // only enters.
-    if !active {
-        if ui
-            .add(egui::Button::new(t!("sim_panel.toggle_on").as_ref()))
-            .on_hover_text(t!("sim_panel.toggle_tip"))
-            .clicked()
-        {
-            if let Err(e) =
-                super::render_mode::switch_render_mode(config_manager, RenderMode::Simulation)
-            {
-                log::error!("Failed to switch render mode: {e}");
-            } else {
-                *state.reseed = true;
-                workspace_request.replace(super::workspace::WorkspaceLayout::Simulation);
-            }
-        }
+    // Drawn in every mode (one-workspace plan). Outside Simulation the
+    // dispatcher's banner says the panel is not used; its controls edit
+    // the config's simulation all the same, and a choice -- a model, a
+    // preset -- enters the mode (`choose`). The transport and the step
+    // readout are a run's, and no run exists outside the mode.
+    if active {
         ui.separator();
-        ui.label(t!("sim_panel.inactive_hint"));
-        return;
-    }
 
-    ui.separator();
-
-    // ---- Transport ----
-    // The section escape has no analogue for. A simulation's picture is
-    // "the state at step N", so the counter is not decoration: it is
-    // what makes a still identifiable.
-    // While the timeline drives the step count the transport is
-    // inert, so it is greyed rather than left looking live.
-    let driven = state.timeline_driven;
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(!driven, |ui| {
-            let run_label = if *state.running {
-                t!("sim_panel.pause")
-            } else {
-                t!("sim_panel.run")
-            };
-            if ui.button(run_label.as_ref()).clicked() {
-                *state.running = !*state.running;
-            }
-            if ui
-                .add_enabled(!*state.running, egui::Button::new(t!("sim_panel.step").as_ref()))
-                .on_hover_text(t!("sim_panel.step_tip"))
-                .clicked()
-            {
-                *state.step_once = true;
-            }
-            if ui
-                .button(t!("sim_panel.reset").as_ref())
-                .on_hover_text(t!("sim_panel.reset_tip"))
-                .clicked()
-            {
-                *state.reseed = true;
+        // ---- Transport ----
+        // The section escape has no analogue for. A simulation's picture is
+        // "the state at step N", so the counter is not decoration: it is
+        // what makes a still identifiable.
+        // While the timeline drives the step count the transport is
+        // inert, so it is greyed rather than left looking live.
+        let driven = state.timeline_driven;
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!driven, |ui| {
+                let run_label = if *state.running {
+                    t!("sim_panel.pause")
+                } else {
+                    t!("sim_panel.run")
+                };
+                if ui.button(run_label.as_ref()).clicked() {
+                    *state.running = !*state.running;
+                }
+                if ui
+                    .add_enabled(!*state.running, egui::Button::new(t!("sim_panel.step").as_ref()))
+                    .on_hover_text(t!("sim_panel.step_tip"))
+                    .clicked()
+                {
+                    *state.step_once = true;
+                }
+                if ui
+                    .button(t!("sim_panel.reset").as_ref())
+                    .on_hover_text(t!("sim_panel.reset_tip"))
+                    .clicked()
+                {
+                    *state.reseed = true;
+                }
+            });
+            if driven {
+                ui.label("⏱").on_hover_text(t!("sim_panel.timeline_owns_steps").as_ref());
             }
         });
-        if driven {
-            ui.label("⏱").on_hover_text(t!("sim_panel.timeline_owns_steps").as_ref());
+        save_as_texture_row(ui, &config, &mut state);
+
+        // Three readouts, because "step 340" alone cannot tell a run that
+        // has arrived from one still walking toward a target from one that
+        // is deliberately holding.
+        let readout = match state.timeline_target {
+            Some(target) if target < state.step_index => t!(
+                "sim_panel.step_readout_restarting",
+                target = target.to_string(),
+                width = state.grid.0.to_string(),
+                height = state.grid.1.to_string()
+            ),
+            Some(target) if target != state.step_index => t!(
+                "sim_panel.step_readout_seeking",
+                step = state.step_index.to_string(),
+                target = target.to_string(),
+                width = state.grid.0.to_string(),
+                height = state.grid.1.to_string()
+            ),
+            _ => t!(
+                "sim_panel.step_readout",
+                step = state.step_index.to_string(),
+                width = state.grid.0.to_string(),
+                height = state.grid.1.to_string()
+            ),
+        };
+        ui.label(readout.as_ref());
+        if state.timeline_holding {
+            ui.label(
+                egui::RichText::new(t!("sim_panel.timeline_holding").as_ref())
+                    .small()
+                    .italics(),
+            );
         }
-    });
-    save_as_texture_row(ui, &config, &mut state);
 
-    // Three readouts, because "step 340" alone cannot tell a run that
-    // has arrived from one still walking toward a target from one that
-    // is deliberately holding.
-    let readout = match state.timeline_target {
-        Some(target) if target < state.step_index => t!(
-            "sim_panel.step_readout_restarting",
-            target = target.to_string(),
-            width = state.grid.0.to_string(),
-            height = state.grid.1.to_string()
-        ),
-        Some(target) if target != state.step_index => t!(
-            "sim_panel.step_readout_seeking",
-            step = state.step_index.to_string(),
-            target = target.to_string(),
-            width = state.grid.0.to_string(),
-            height = state.grid.1.to_string()
-        ),
-        _ => t!(
-            "sim_panel.step_readout",
-            step = state.step_index.to_string(),
-            width = state.grid.0.to_string(),
-            height = state.grid.1.to_string()
-        ),
-    };
-    ui.label(readout.as_ref());
-    if state.timeline_holding {
-        ui.label(
-            egui::RichText::new(t!("sim_panel.timeline_holding").as_ref())
-                .small()
-                .italics(),
-        );
+        ui.separator();
     }
-
-    ui.separator();
 
     // Everything below the transport scrolls; the transport itself
     // does not. This is the panel's ONE scroll area -- egui_dock's was
@@ -1571,7 +1554,7 @@ fn render_model_section(
                                     changes.push((ConfigPath::SimBoundary, first.boundary.name().to_string().into()));
                                 }
                             }
-                            let _ = config_manager.update_batch(changes, "history.action.sim_model".to_string());
+                            let _ = super::render_mode::choose(config_manager, changes, "history.action.sim_model", RenderMode::Simulation);
                         }
                     }
                 });
@@ -1616,9 +1599,11 @@ fn render_model_section(
                     ui.label(t!("sim_panel.presets").as_ref());
                     for pre in model.presets {
                         if ui.small_button(pre.display_name).clicked() {
-                            let _ = config_manager.update_batch(
+                            let _ = super::render_mode::choose(
+                                config_manager,
                                 preset_changes(model, pre, slot),
-                                "history.action.sim_preset".to_string(),
+                                "history.action.sim_preset",
+                                RenderMode::Simulation,
                             );
                             *reseed = true;
                         }
@@ -1799,7 +1784,10 @@ fn render_model_section(
             .show_ui(ui, |ui| {
                 for p in crate::sim::LAYERED_PRESETS {
                     if ui.selectable_label(false, p.display_name).on_hover_text(p.description).clicked() {
-                        structural(config_manager, &|s: &mut SimConfig| p.apply(s));
+                        let mut after = config.clone();
+                        p.apply(&mut after.sim);
+                        super::render_mode::enter_snapshot(config, &mut after, RenderMode::Simulation);
+                        let _ = config_manager.apply_config_edit(after, "history.action.sim_layers".to_string());
                     }
                 }
             });

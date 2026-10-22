@@ -35,53 +35,61 @@ the app through `UiResponse` (see [Cross-panel results](#cross-panel-results-uir
 | The picture | Fractal Viewport (effectively always present) |
 | The camera, every mode's | View (see [The View panel](#the-view-panel)) |
 | The flame | Transforms, Triangle Editor, Variations, Xaos Editor, Subflames, Paths |
-| The other engines | Escape Fractal, Formula Editor, Hybrid Designer, Simulation, Textures |
+| The other engines | Escape, Formula Editor, Hybrid Designer, Simulation, Textures |
 | Appearance, shared by every engine | Colors, Palette Editor, Palette Library, Effects |
-| Light, every 3D view's | Lighting & Material (see [The Lighting & Material panel](#the-lighting--material-panel)) |
+| Light, every 3D view's | Lighting (see [The Lighting panel](#the-lighting-panel)) |
 | Workflow | Fractal Browser, History, Animation, Signals, Scripts, Random Generator, Export, Config Import/Export, Rendering, Performance, Help, Keyboard Shortcuts, Account, Save Online |
 
-**Which of these is available depends on the render mode** — see
+**Every panel is drawn in every render mode**; one the mode does not
+use says so at its top — see
 [Render modes and the UI](#render-modes-and-the-ui). Do not add a
 `matches!(render_mode, ...)` to a panel; add a case to
 `src/ui/visibility.rs`.
 
 ### Workspace layouts
 
-`WorkspaceLayout` (same file) holds six presets:
+One workspace serves every mode
+([one-workspace.md](../projects/one-workspace.md)). `WorkspaceLayout`
+(same file) holds seven presets:
 
-| Layout | Left dock | Right dock (tabs) | Other |
+| Layout | Left dock (tabs) | Right dock (tabs) | Other |
 |---|---|---|---|
-| Standard | Transforms | Colors, View, Triangle Editor, Rendering, History | |
-| Animation | Transforms | Colors, View, Triangle Editor, Rendering, History | Animation docked below the viewport |
+| Standard | Transforms, Escape, Simulation | Colors, View, Triangle Editor, Rendering, History | the default |
+| Flames | Transforms | Colors, View, Triangle Editor, Rendering, History | |
+| Escape Time | Escape | Colors, View, Lighting, History | |
+| Simulation | Simulation | Colors, View, Lighting, History | |
+| Animation | Transforms, Escape, Simulation | Colors, View, Triangle Editor, Rendering, History | Animation docked below the viewport |
 | Scripting | Scripts | Fractal Browser | |
-| Escape Time | Escape Fractal | Colors, View, Textures, History | |
-| Simulation | Simulation | Colors, View, Textures, History | |
 | Compact | — | — | the viewport alone |
 
-- Window ▸ Workspace Layout offers Standard, Animation and Scripting.
-  Escape Time and Simulation are not offered there: they arrive with
-  their mode (`render_mode::layout_for`).
-- Window ▸ Reset Workspace rebuilds the mode's own workspace (Standard
-  for the flame modes, Escape Time, Simulation;
-  `render_mode::workspace_for`), as does the compact menu's Desktop
-  View. Window ▸ Mobile View applies Compact.
+**No layout belongs to a mode.** Flames, Escape Time and Simulation are
+each engine's own arrangement, picked from the menu; a mode change never
+applies one.
+
+- **A mode change brings the mode's editor forward and closes nothing.**
+  `render_mode::main_panel_for` names it (Transforms for 2D and 3D,
+  Escape, Simulation), and `Workspace::show_main_panel` brings its tab
+  to the front where it is; closed, it opens as a tab beside another
+  mode's editor (in Escape Time, Transforms joins Escape), or floating
+  when none is open (Scripting). In Compact a flame mode opens nothing
+  and the other two dock their editor.
+- Window ▸ Workspace Layout offers Standard, Flames, Escape Time,
+  Simulation, Animation and Scripting. Window ▸ Reset Workspace rebuilds
+  the layout that is up; the compact menu's Desktop View builds
+  Standard; Window ▸ Mobile View applies Compact. A layout built
+  anew brings the mode's editor forward on its next frame
+  (`Workspace::take_needs_main_panel`), so a reset, or a boot, in Escape
+  opens on the Escape tab.
 - The layouts other than Standard and Compact re-add the Help panel as a
   floating window if it was open.
-- A newly built layout raises each side dock to at least 260 points
-  (`MIN_SIDE_DOCK_POINTS`) on its first frame, once, so a laptop window
-  does not open on a clipped Transforms panel.
+- A newly built layout raises the right dock to at least 260 points
+  (`MIN_SIDE_DOCK_POINTS`) and the left to 325 (`MIN_LEFT_DOCK_POINTS`,
+  room for Standard's three tab names) on its first frame, once, so a laptop
+  window does not open on a clipped panel.
 
-Two ways to change layout:
-
-- `Workspace::apply_layout` **forces** a rebuild from code. This is
-  what Reset Workspace and the Workspace Layout menu do.
-- `Workspace::switch_layout` **remembers**: it stashes the dock state
-  it is leaving and restores the one it is entering, falling back to
-  `apply_layout` the first time a layout is entered. Mode changes use
-  this, so switching modes does not throw away an arrangement.
-
-The stash is session-only. Nothing about the dock tree is persisted, so
-a restart opens on the built-in layouts.
+`Workspace::apply_layout` rebuilds from code; it is what Reset Workspace
+and the Workspace Layout menu do. Nothing about the dock tree is
+persisted, so a restart opens on the built-in layouts.
 
 ---
 
@@ -100,10 +108,16 @@ actions by folding them into the frame's `UiResponse`.
 | File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online features (the `online_mode` switch; [ONLINE.md](ONLINE.md)), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
-| **Mode** | The four render modes as radio rows, built from `RenderMode::ALL`, each with a hover description |
-| Rendering | Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), Frame-Time Governor, and the Workgroups a frame dispatches while the governor is off, Reset to Defaults. **Hidden outside the flame modes** — every item configures the chaos game |
+| Rendering | Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), Frame-Time Governor, and the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Every item configures the chaos game, so outside the flame modes the menu says so and its rows are disabled; it is always there, so nothing after it moves with the mode |
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout |
 | Help | Help, Keyboard Shortcuts, Report Bug, About |
+
+**The render mode is a button in the bar itself**, after Help, outlined
+as the Fly Mode button is and named by the current mode ("2D Flame ⏷").
+Its menu lists the four modes built from `RenderMode::ALL`, the active
+one selected, each with its hover description (`mode_label_key`,
+`mode_tip_key`). There is no Mode menu. The compact menu's first row is
+the same, "Mode: 2D Flame", a submenu of the four.
 
 Right-aligned, when the window is at least 500 points wide, from the
 right: the progress bar, the language picker (a globe menu; see
@@ -112,9 +126,9 @@ only), and the Fly Mode button, which is greyed in a 2D view
 (`MenuState::fly_available`, from `visibility::fly_mode`).
 
 **The panel rows in both Window menus come from one table**,
-`visibility::WINDOW_MENU`. Each row asks `visibility::panel` whether it
-is available; an unavailable row is drawn disabled with its reason on
-hover. The compact menu keeps its own order — touch priority, transforms
+`visibility::WINDOW_MENU`. Every row opens its panel in every mode; a
+panel the mode does not use shows its reason on hover. The compact menu
+keeps its own order — touch priority, transforms
 first — in `COMPACT_WINDOW_MENU`, but takes its labels from the shared
 table, and a test asserts it is a subset. Add a panel row there, not in
 either menu.
@@ -186,34 +200,46 @@ with the mode change into one undo entry. Switching between the two
 non-flame modes does not reset, and **leaving does not restore**; the
 function's doc comment records why.
 
-The Mode menu (desktop and compact), the enter buttons on the Escape
-Fractal and Simulation panels, and the View panel's 2D/3D switch all go
-through `switch_render_mode`. A script sets the mode in the config it
-returns, applying the same tone-map rule (`entry_tone_mapping`), and
-that config loads as a whole.
+The mode button in the menu bar (desktop and compact), an unused panel's
+Switch button, and the View panel's 2D/3D switch all go through
+`switch_render_mode`. A script sets the mode in the config it returns,
+applying the same tone-map rule (`entry_tone_mapping`), and that config
+loads as a whole.
 
 Entering a lit 3D view (a solid formula, a terrain) from one that is not
 sets **the 3D look** (`look_3d`: Linear, exposure 2, gamma 1, saturation
 1, no hue shift, an untouched rig at strength 1 and ambient 0) in the
-same undo entry. Besides the mode switch, the Escape panel's formula
-picker and terrain switch, the Simulation panel's terrain switch and the
-Formula Editor's Use go through `apply_with_look`.
+same undo entry.
+
+**Choosing something for an engine enters its mode; tweaking does not.**
+`choose(manager, changes, description, mode)` makes the changes, the
+mode, and what entering implies (the 3D look, or else the tone map's
+rescue) one undo step; `switch_render_mode` is `choose` with no changes,
+and `apply_with_look` is `choose` in the current mode (a terrain
+switched on). `enter_snapshot` does the same to a whole-config edit.
+The choices:
+
+| Panel | Choices that enter the mode |
+|---|---|
+| Escape | the formula picker and the preset it lands on, Preset, the colouring pickers, Edit as Formula |
+| Simulation | the model picker, its presets, Layered Presets |
+| Formula Editor | Use as Formula, Use as Coloring, Use as Solid (Escape; a colouring is drawn over the escape formula the config has) |
+| Hybrid Designer | Use, Use Preset (a structural edit of the hybrid in use re-applies it without entering) |
+| Textures | picking a texture (Clear does not) |
+| Random Generator | a generated flame loads with its own mode |
 
 Also in that module:
 
-- `layout_for(mode)` — the workspace and editor panel a mode wants.
-  `App::follow_loaded_render_mode` ([src/app/mod.rs](../../src/app/mod.rs))
-  consults it: a non-flame mode switches to its layout, and a flame mode
-  leaves the Escape Time or Simulation layout for Standard. In the
-  compact layout it docks the engine's panel instead.
+- `main_panel_for(mode)` — the editor a mode brings forward (above).
 - `keeps_escape_engine` / `keeps_sim_engine` — which engine's GPU state
   a mode needs resident (below).
 - `space_runs_the_simulation` — the spacebar drives the simulation's
   transport in Simulation mode and the animation everywhere else.
 - `mode_label_key` / `mode_tip_key` — the `mode.*` locale keys.
 
-The app compares the mode every frame, so a change from the Mode menu,
-a panel, a script or an **undo** all bring the workspace with them.
+The app compares the mode every frame (`last_render_mode`), so a change
+from the menu bar, a panel, a load, a script or an **undo** all bring the
+mode's editor forward and release the engine left behind.
 
 ### What each mode makes available
 
@@ -223,51 +249,56 @@ panel or a new mode will not compile until someone decides what it
 means.
 
 ```rust
+pub enum PanelUse { Active, Inactive { reason: &'static str, enter: &'static [RenderMode] } }
+pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> PanelUse;
+pub fn inactive_banner(ui, mode, reason, enter) -> Option<RenderMode>;
 pub enum Vis { Show, Grey(&'static str), Hide }
-pub fn panel(p: PanelType, m: RenderMode, solid: Solid) -> Vis;
 pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis;
 pub fn fly_mode(kind: ViewKind) -> Vis;
 ```
 
-The `&'static str` is a `visibility.*` locale key naming the
-**reason**, shown on hover, so a user who goes looking for a control
-learns why it is not there instead of wondering whether it exists.
+Each `&'static str` is a `visibility.*` locale key naming the
+**reason**, so a user who goes looking for something learns why it does
+nothing here instead of wondering whether it exists.
 
-**No panel is ever `Hide`.** Hiding a panel's menu row would make it
-unreachable *and* undiscoverable, so an unavailable panel is greyed in
-the Window menu and its body shows the reason instead of its controls
-(`PanelViewer::render_panel`). `Hide` is for whole sections and
-controls inside a panel.
+**Every panel is drawn in every mode, its controls editable**
+([one-workspace.md](../projects/one-workspace.md)). `panel` says whether
+it acts on the picture; an `Inactive` one wears a banner at its top
+(`PanelViewer::render_panel` draws `inactive_banner`): "Not used in
+*mode* mode", the reason, and a Switch to *mode* button for each mode
+in `enter`. What its controls set is kept for that mode, and a choice
+in it enters the mode (`render_mode::choose`, above). The Window menus
+show the reason on a row's hover. `Vis::Hide` and `Vis::Grey` are for
+sections and controls inside a panel.
 
-Panels:
+Panels the modes do not use (every other panel acts in every mode):
 
-| Panel | 2D | 3D | Escape | Simulation |
-|---|---|---|---|---|
-| Transforms, Triangle Editor, Variations | Show | Show | Show | Show |
-| Xaos Editor, Subflames, Paths | Show | Show | Grey (flame only) | Grey (flame only) |
-| Random Generator | Show | Show | Grey (makes a flame) | Grey (makes a flame) |
-| Escape Fractal | Show | Show | Show | Grey (other engine) |
-| Simulation | Show | Show | Grey (other engine) | Show |
-| Textures | Grey | Grey | Show | Show |
-| Formula Editor (escape-time formulas and colourings, Rhai and Ultra Fractal's and Fractint's languages; in the flame modes, Rhai variations; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Show | Show | Show | Grey (other engine) |
-| Hybrid Designer (Kalles Fraktaler-style hybrid formulas; [ESCAPE.md](ESCAPE.md#the-formula-language)) | Grey | Grey | Show | Grey (other engine) |
-| Lighting & Material (follows `Solid::of`, not the mode) | Grey | Show | Show for a solid formula or a terrain, else Grey | Show for a terrain, else Grey |
-| Every other panel | Show | Show | Show | Show |
+| Panel | Unused in | Its buttons lead to |
+|---|---|---|
+| Xaos Editor, Subflames, Paths | Escape, Simulation | 2D Flame, 3D Flame |
+| Escape | 2D, 3D, Simulation | Escape Time |
+| Simulation | 2D, 3D, Escape | Simulation |
+| Textures | 2D, 3D, Simulation | Escape Time |
+| Hybrid Designer (Kalles Fraktaler-style hybrid formulas; [ESCAPE.md](ESCAPE.md#the-formula-language)) | 2D, 3D, Simulation | Escape Time |
+| Lighting (follows `Solid::of`, not the mode) | any view with no surface | 3D Flame from 2D; otherwise none (the reason says to pick a solid or turn on a terrain) |
 
-- **The transform editors are available in every mode.** Escape mode D
-  renders the flame's attractor as a distance field, and a simulation
-  uses the flame's transforms as its per-layer warps when
-  `sim.use_transforms` is on, so in both, editing a transform edits the
-  picture. Elsewhere the panels prepare a flame before switching.
-- **Each engine's panel is the way into its mode**, so both are offered
-  from a flame mode; each greys the other's, because a config is exactly
-  one mode.
+- **The transform editors act in every mode.** Escape mode D renders the
+  flame's attractor as a distance field, and a simulation uses the
+  flame's transforms as its per-layer warps when `sim.use_transforms` is
+  on, so in both, editing a transform edits the picture. Elsewhere the
+  panels prepare a flame before switching.
+- **The Formula Editor** (escape-time formulas, colourings and solids,
+  Rhai and Ultra Fractal's and Fractint's languages, and Rhai variations;
+  [ESCAPE.md](ESCAPE.md#the-formula-language)) acts in every mode: Use as
+  Formula, Coloring or Solid enters Escape, and Use as Variation adds to
+  the flame (in Escape, Use as Lens).
+- **The Random Generator** acts in every mode: what it generates loads
+  with its own flame mode.
 - **Textures** go into an escape-time fractal and are made in Simulation
-  mode (Save as texture), so the panel is available in both; picking a
-  texture acts only in Escape.
-- **Everything else is available everywhere**, because both non-flame
-  engines write an image in the flame accumulator's layout and go
-  through the same density-effects → tonemap → colour-effects tail.
+  mode (Save as texture), where the panel manages the library.
+- **Everything else acts everywhere**, because both non-flame engines
+  write an image in the flame accumulator's layout and go through the
+  same density-effects → tonemap → colour-effects tail.
 - **Fly mode** is a question about the camera, not the mode:
   `fly_mode(ViewKind)` offers it for every 3D view (a 3D flame, a solid,
   an escape terrain, a simulation terrain).
@@ -373,8 +404,8 @@ contract.
 | Subflames | [subflames.rs](../../src/ui/subflames.rs) | which flame the editors operate on |
 | Paths | [paths_panel.rs](../../src/ui/paths_panel.rs) | Focused Rendering's plan as a tree of paths; see [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md) |
 | View | [view.rs](../../src/ui/view.rs), [view_controls.rs](../../src/ui/view_controls.rs) | below |
-| Lighting & Material | [lighting_panel.rs](../../src/ui/lighting_panel.rs) | below |
-| Escape Fractal | [escape_panel.rs](../../src/ui/escape_panel.rs) | below |
+| Lighting | [lighting_panel.rs](../../src/ui/lighting_panel.rs) | below |
+| Escape | [escape_panel.rs](../../src/ui/escape_panel.rs) | below |
 | Simulation | [sim_panel.rs](../../src/ui/sim_panel.rs) | below |
 | Textures | [textures_panel.rs](../../src/ui/textures_panel.rs) | below |
 | Colors / Tone Mapping | [tone_mapping.rs](../../src/ui/tone_mapping.rs) | below; see [TONE-MAPPING.md](TONE-MAPPING.md), [COLOR.md](COLOR.md) |
@@ -411,14 +442,15 @@ have no effect in 2D.
 
 See [The View panel](#the-view-panel).
 
-### Lighting & Material
+### Lighting
 
-See [The Lighting & Material panel](#the-lighting--material-panel).
+See [The Lighting panel](#the-lighting-panel).
 
-### Escape Fractal
+### Escape
 
-The whole editing surface for escape-time mode. Outside Escape it shows
-only an enter button. Inside: the formula and its parameters (sliders
+The whole editing surface for escape-time mode, drawn in every mode:
+outside Escape a choice in it (a formula, a preset, a colouring) enters
+the mode. It holds the formula and its parameters (sliders
 generated from the formula registry), presets, the Julia switch and
 constant, the iteration cap and bailout, the coloring and its
 parameters, and the sections Auto Contrast, Palette Mapping, Relief
@@ -431,7 +463,9 @@ coalescing and animation tracks work unmodified. See
 ### Simulation
 
 The same shape as the escape panel, plus a **transport**: Run, Pause,
-Step and Reset, and the step counter, because a simulation is stateful.
+Step and Reset, and the step counter, because a simulation is stateful
+(in Simulation mode only: no run exists outside it, where a model or a
+preset picked enters the mode).
 Then the Model section (one list whose first entry is the model and the
 rest its layers), Settings (the grid, Warp and more), Colouring, 3D
 terrain, Matte and Couplings, with parameter sliders generated from the
@@ -444,9 +478,10 @@ The simulation textures an escape-time config can use: the shipped
 presets (`assets/textures/*.fflame`) and the user's own, saved from
 Simulation mode with Save as texture, each with a generated preview
 (desktop generates one a frame; the web spawns them). Picking one
-writes it into the config as one undo step, and only in Escape mode; in
-Simulation the panel browses and manages the saved list. The Overlay
-section sets how the texture is drawn over the picture.
+writes it into the config as one undo step and, from another mode,
+enters Escape with it; in Simulation the panel also manages the saved
+list. The Overlay section sets how the texture is drawn over the
+picture.
 
 ### Paths
 
@@ -507,7 +542,7 @@ in [CAMERA.md](CAMERA.md).
 | 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A camera that stores a target shows its eye as a readout; a terrain's target has a lift |
 | Camera Lens | an escape plane or solid | a variation used as a lens on the pixels or rays |
 | Image | every escape view; a 2D simulation | escape: antialiasing (supersampling) and how the samples combine; simulation: the resolve filters (upscale, fit, downscale) and tiling a periodic field |
-| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting & Material panel |
+| Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting panel |
 | Deep Zoom | flames (`Control::DeepZoom`) | auto exposure and the Focused Rendering switch |
 | Render Mode, Preserve Z, post symmetry | flames | the 2D/3D switch (through `switch_render_mode`), JWildfire's `preserve_z` (3D), post symmetry |
 
@@ -516,7 +551,7 @@ beyond (`view_controls::angle_slider`); the config stores radians.
 
 ---
 
-## The Lighting & Material panel
+## The Lighting panel
 
 Every lit 3D view's light in one place (`PanelType::SolidLighting`, the
 name saved layouts know; [lighting_panel.rs](../../src/ui/lighting_panel.rs);

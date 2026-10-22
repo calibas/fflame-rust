@@ -399,7 +399,7 @@ image black.
 
 **Entering the mode.** `entry_tone_mapping` in
 [src/config/defaults.rs](../../src/config/defaults.rs) is the one rule,
-applied by the Mode menu ([src/ui/render_mode.rs](../../src/ui/render_mode.rs))
+applied by every mode switch and every choice that enters a mode ([src/ui/render_mode.rs](../../src/ui/render_mode.rs))
 and by a script's `escape` and `sim` handles. When a config moves from a
 flame mode to Escape or Simulation while its tone map is Logarithmic, it
 becomes Linear:
