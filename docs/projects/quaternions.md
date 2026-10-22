@@ -1,6 +1,7 @@
 # Quaternions in Rhai, Halayka's sets, escape paths
 
-Decided 2026-10-22. The user's words: "I found other 3d quaternion
+Decided 2026-10-22; built the same day (branch `quaternions`). The
+user's words: "I found other 3d quaternion
 fractals ... I want to see about implementing the above fractals, and I'd
 like to make quaternion fractals compatible with our Rhai scripts", and,
 of the second paper, "a way of coloring these fractals that I'm not sure
@@ -60,24 +61,49 @@ scalar code.
 - A solid's state `z` may be a quaternion; the walk's trap reads its
   vector part.
 
-## Halayka's sets as Rhai solids (`assets/formulas/`)
+## Halayka's sets as a Rhai solid (`assets/formulas/solid-halayka-quaternions.rhai`)
 
-The six, each with its exact running derivative, at the paper's settings
-by default (8 iterations, threshold 4): the distance outside is
-`(|Z_k| - 4) / dr_k` at the iteration `k` that escaped (a lower bound on
-the distance to that iteration's level set, which holds the set). The two
-complements: inside, the least of `(4 - |Z_k|) / dr_k` over the
-iterations, intersected with the box. Presets at the paper's views.
-Z^2 + C in Rhai checked against the built-in quaternion Julia solid.
+One solid, its Step a choice of the six, its exact running derivative
+(each step stretches by `|1 + C|` or `|C|` times `max(|g'|, |Im g| / r)`).
+As built:
 
-## Escape paths as fibres (`assets/formulas/`, a flame preset)
+- **Outside**, `(|Z_k| - 4) / dr_k` at the step `k` that escaped, halved
+  and capped at a tenth of the box: first-order, it holds near the
+  surface; past a critical point (exp(Z^2)'s origin, where `dr` is 0) the
+  cap keeps it a number.
+- **Inside** there is no bound -- an orbit that settles shrinks `dr`, and
+  `(4 - |Z_k|) / dr_k` read units where the surface was a tenth away
+  (found by the ray test below) -- so the set is marched through in
+  steps of a fortieth of the box, the reading taking over within one.
+- **Draw**: the set, the complement, or the surface between them. The
+  paper's figures are marching-cubes isosurfaces of a lattice, which have
+  no faces where the set meets the lattice's edge: the complement drawn
+  as a solid shows the box's walls, so figures 6 and 8 are drawn as the
+  surface -- a shell a step thick on the escaped side, so a step from
+  inside the set stops in it.
+- **A point with no number** (inv(sinh Z) at Z = 0) is outside, as the
+  paper's lattice has it (`!(m <= threshold)`).
+- **What it is**: at 8 iterations these are the shapes of a few
+  iterations, smooth -- Z^4 + C is a ball, Z^2 + C a ball with a hollow
+  core and a thin shell; the paper's coarse lattice smooths what we draw
+  sharp. Membership is checked against the paper's definition at a
+  lattice (`halaykas_sets_hold_what_the_paper_says`), and marching
+  against sampled crossings along rays (`halaykas_sets_are_never_stepped_through`).
+- Presets, figures 3 to 8 (1 and 2 are the standard set, the built-in
+  Quaternion Julia's): `escape::halayka`, written from the files and kept
+  to them by `the_presets_carry_the_examples`.
+
+## Escape paths as fibres (`assets/formulas/variation-escape-paths.rhai`)
 
 A Rhai `variation3` that ignores its input: a random lattice point of
-the box, iterated 8 times (another drawn if it escapes, a few tries), a
-random `t` in [0, 0.2], the Bezier point of the orbit at `t` summed as
+the box, iterated 8 times (another drawn if it escapes, 24 tries), a
+random `t` in [0, Length], the Bezier point of the orbit at `t` summed as
 the orbit runs (Bernstein weights; no arrays), out with its colour `t /
-0.2`. A preset 3D flame of it with a rainbow palette from the paper's
-hues; the lattice's spacing and the path's share are parameters.
+Length`. Its points are checked against the paths in f64
+(`the_escape_paths_lie_on_their_orbits_paths`). Two presets, the 2018
+paper's figures 1 (Z^2 + C) and 5 (sin Z + C sin Z): a 3D flame on black
+with the solid shade pass (`solid_strength` 1), which lights the fibres
+as tubes; the paper's palette, `HSBtoRGB(300 t, 75, 100)`.
 
 ## Order of work
 

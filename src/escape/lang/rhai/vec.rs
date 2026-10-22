@@ -1409,7 +1409,9 @@ fn escaped(s, p) { s.z.norm_sqr() + length(s.w) * 0.0 > p.bailout }
     fn halayka(q: Q, f: impl Fn(f64, f64) -> (f64, f64)) -> Q {
         let r = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
         let (a, b) = f(q[0], r);
-        [a, b * q[1] / r, b * q[2] / r, b * q[3] / r]
+        // On the scalar axis the vector part stays zero (b is zero there).
+        let k = if r > 0.0 { b / r } else { 0.0 };
+        [a, k * q[1], k * q[2], k * q[3]]
     }
 
     /// The same through the complex plane `t + i r`.
@@ -1655,5 +1657,247 @@ fn distance(s, p) {
             let got = VariationRun::new(&p, &params, 1).call3(v, [0.0; 3], 1.0).0;
             assert!(got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-10), "{got:?} against {want:?}");
         }
+    }
+
+    /// Halayka's (2009) six steps written in f64, each with its power and
+    /// constant as the paper's figures have them: `(step, power, C, f)`.
+    fn halayka_steps() -> Vec<(f64, f64, Q, Box<dyn Fn(Q) -> Q>)> {
+        let c1: Q = [0.3, 0.5, 0.4, 0.2];
+        let c2: Q = [1.0, 1.0, 1.0, 1.0];
+        let add = |a: Q, b: Q| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
+        let sin = |q: Q| halayka(q, |t, r| (t.sin() * r.cosh(), t.cos() * r.sinh()));
+        let cos = |q: Q| halayka(q, |t, r| (t.cos() * r.cosh(), -t.sin() * r.sinh()));
+        let exp = |q: Q| halayka(q, |t, r| (t.exp() * r.cos(), t.exp() * r.sin()));
+        let sinh = |q: Q| halayka(q, |t, r| (t.sinh() * r.cos(), t.cosh() * r.sin()));
+        let cosh = |q: Q| halayka(q, |t, r| (t.cosh() * r.cos(), t.sinh() * r.sin()));
+        vec![
+            (0.0, 4.0, c1, Box::new(move |z: Q| {
+                let z2 = hamilton(z, z);
+                add(hamilton(z2, z2), c1)
+            })),
+            (1.0, 2.0, c1, Box::new(move |z: Q| add(sin(z), hamilton(c1, sin(z))))),
+            (2.0, 2.0, c1, Box::new(move |z: Q| add(cos(z), hamilton(c1, cos(z))))),
+            (3.0, 2.0, c1, Box::new(move |z: Q| add(exp(hamilton(z, z)), c1))),
+            (4.0, 2.0, c2, Box::new(move |z: Q| add(inverse(sinh(z)), hamilton(c2, inverse(sinh(z)))))),
+            (5.0, 2.0, c2, Box::new(move |z: Q| hamilton(c2, hamilton(inverse(sinh(z)), cosh(z))))),
+        ]
+    }
+
+    /// Whether `pos` is in Halayka's set: 8 steps keep |Z| within 4, a
+    /// step with no number (a singular point) leaving it, as the paper's
+    /// lattice has it.
+    fn in_halaykas_set(f: &dyn Fn(Q) -> Q, pos: [f64; 3]) -> bool {
+        let mut z: Q = [pos[0], pos[1], pos[2], 0.0];
+        (0..8).all(|_| {
+            z = f(z);
+            z.iter().map(|x| x * x).sum::<f64>().sqrt() <= 4.0
+        })
+    }
+
+    /// The shipped solid, and its parameters at a step of `halayka_steps`
+    /// and a `draw`.
+    fn halayka_solid() -> crate::escape::lang::ir::Program {
+        let src = include_str!("../../../../assets/formulas/solid-halayka-quaternions.rhai").replace("\r\n", "\n");
+        crate::escape::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(&src)).collect::<Vec<_>>()))
+    }
+
+    fn halayka_params(p: &crate::escape::lang::ir::Program, step: f64, power: f64, c: Q, draw: usize) -> ParamValues {
+        let mut params = ParamValues::defaults(p);
+        let mut set = |name: &str, v: f64| {
+            let i = p.params.iter().position(|x| x.name == name).unwrap_or_else(|| panic!("no parameter {name}"));
+            params.values[i] = (v, 0.0);
+        };
+        set("step", step);
+        set("power", power);
+        for (k, v) in ["c_w", "c_x", "c_y", "c_z"].iter().zip(c) {
+            set(k, v);
+        }
+        set("draw", draw as f64);
+        params
+    }
+
+    /// The shipped solid of Halayka's sets (`solid-halayka-quaternions.rhai`)
+    /// holds each lattice point the paper's definition does -- in the set
+    /// while 8 steps keep |Z| within 4, Z = (x, y, z, 0) -- for each of its
+    /// six steps, against the steps written in f64 here; its estimate is
+    /// positive outside the set and zero inside (the complement's the other
+    /// way about, the surface's positive in the set and on the escaped side
+    /// past its shell), and never more than the distance to a lattice
+    /// point of the other kind.
+    #[test]
+    fn halaykas_sets_hold_what_the_paper_says() {
+        use crate::escape::lang::interp;
+        let p = halayka_solid();
+        const N: usize = 9;
+        let lattice: Vec<[f64; 3]> = (0..N * N * N).map(|i| [i % N, (i / N) % N, i / (N * N)].map(|k| -1.4 + 2.8 * k as f64 / (N - 1) as f64)).collect();
+        for (step, power, c, f) in &halayka_steps() {
+            let inside: Vec<bool> = lattice.iter().map(|pos| in_halaykas_set(f, *pos)).collect();
+            let held = inside.iter().filter(|x| **x).count();
+            assert!(held > 0 && held < lattice.len(), "step {step}: the lattice holds both ({held})");
+            for draw in 0..3 {
+                let params = halayka_params(&p, *step, *power, *c, draw);
+                for (i, pos) in lattice.iter().enumerate() {
+                    let d = interp::solid(&p, &params, *pos, 8);
+                    assert!(d.is_finite() && d >= 0.0, "step {step}, draw {draw} at {pos:?}: {d}");
+                    // The set, the complement, or the surface between them:
+                    // a shell on its escaped side, so a point of the set is
+                    // never in it, and one that escapes may be.
+                    match draw {
+                        0 => assert_eq!(d == 0.0, inside[i], "step {step}, the set at {pos:?}: {d}"),
+                        1 => assert_eq!(d == 0.0, !inside[i], "step {step}, the complement at {pos:?}: {d}"),
+                        _ => assert!(d > 0.0 || !inside[i], "step {step}, the surface at {pos:?}, in the set: {d}"),
+                    }
+                    if d > 0.0 {
+                        let nearest = lattice
+                            .iter()
+                            .zip(&inside)
+                            .filter(|(_, ins)| **ins != inside[i])
+                            .map(|(q, _)| ((q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) + (q[2] - pos[2]).powi(2)).sqrt())
+                            .fold(f64::INFINITY, f64::min);
+                        assert!(d <= nearest + 1e-9, "step {step}, draw {draw} at {pos:?}: {d} oversteps a point {nearest} away");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The solid's march never passes the surface it is after: rays from
+    /// points of the box, sphere-traced by its estimate, stop no later than
+    /// the first change of membership sampling finds along them (a two
+    /// hundredth of a unit apart), for each step and each way of drawing --
+    /// within a step where they march through the set (a fortieth of the
+    /// box: there is no bound inside). The estimate's caps are what this
+    /// holds to.
+    #[test]
+    fn halaykas_sets_are_never_stepped_through() {
+        use crate::escape::lang::interp;
+        let p = halayka_solid();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        const SAMPLE: f64 = 0.005;
+        for (step, power, c, f) in &halayka_steps() {
+            for draw in 0..3 {
+                let params = halayka_params(&p, *step, *power, *c, draw);
+                // What the solid holds at a point of the box.
+                let solid = |pos: [f64; 3]| {
+                    let ins = in_halaykas_set(f.as_ref(), pos);
+                    match draw {
+                        0 => ins,
+                        1 => !ins,
+                        _ => false,
+                    }
+                };
+                let mut traced = 0;
+                for k in 0..48 {
+                    // From a point of the box, in any direction; half of
+                    // them near its middle, where the smaller sets are.
+                    let reach = if k % 2 == 0 { 1.4 } else { 0.6 };
+                    let o = [(next() * 2.0 - 1.0) * reach, (next() * 2.0 - 1.0) * reach, (next() * 2.0 - 1.0) * reach];
+                    let mut d = [next() - 0.5, next() - 0.5, next() - 0.5];
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    d = d.map(|x| x / len);
+                    let at = |t: f64| [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
+                    let start = in_halaykas_set(f.as_ref(), o);
+                    if solid(o) {
+                        continue;
+                    }
+                    // The first change: into the solid, or across the
+                    // surface (draw 2), by sampling.
+                    let inside_box = |q: [f64; 3]| q.iter().all(|x| x.abs() <= 1.5);
+                    let mut first = f64::INFINITY;
+                    let mut t = 0.0;
+                    while inside_box(at(t)) {
+                        let ins = in_halaykas_set(f.as_ref(), at(t));
+                        if (draw == 2 && ins != start) || (draw != 2 && solid(at(t))) {
+                            first = t;
+                            break;
+                        }
+                        t += SAMPLE;
+                    }
+                    // The march, by the estimate.
+                    let mut t = 0.0;
+                    let mut hit = f64::INFINITY;
+                    for _ in 0..4000 {
+                        let e = interp::solid(&p, &params, at(t), 8);
+                        if e < 1e-4 {
+                            hit = t;
+                            break;
+                        }
+                        t += e;
+                        if !inside_box(at(t)) {
+                            break;
+                        }
+                    }
+                    // Through the set (the complement, the surface), steps
+                    // of a fortieth of the box; outside it, the reading.
+                    let slack = if draw == 0 || !start { SAMPLE } else { SAMPLE + 0.025 * 1.5 };
+                    assert!(hit <= first + slack, "step {step}, draw {draw}: from {o:?} along {d:?} the march stopped at {hit}, past the surface at {first}");
+                    traced += usize::from(first.is_finite());
+                }
+                assert!(traced > 2, "step {step}, draw {draw}: rays that meet the surface: {traced}");
+            }
+        }
+    }
+
+    /// The escape-path variation (`variation-escape-paths.rhai`) gives
+    /// points on the Bezier paths of orbits that stay: on a coarse lattice
+    /// and a short path, each point's start is the lattice point it lies
+    /// by, that start is in the set, and the point is the path's at the t
+    /// its colour gives (t = colour x Length), the orbit Z0 .. Z8 the
+    /// control points -- against the same written in f64.
+    #[test]
+    fn the_escape_paths_lie_on_their_orbits_paths() {
+        use crate::escape::lang::interp::VariationRun;
+        let src = include_str!("../../../../assets/formulas/variation-escape-paths.rhai").replace("\r\n", "\n");
+        let dl = crate::variations::custom::compile(&src).unwrap_or_else(|e| panic!("{e}"));
+        assert!(dl.shader_3d.is_some() && dl.shader_2d.is_none());
+        let p = crate::escape::lang::rhai::transformation3(&src).unwrap();
+        let mut params = ParamValues::defaults(&p);
+        let mut set = |name: &str, v: f64| {
+            let i = p.params.iter().position(|x| x.name == name).unwrap_or_else(|| panic!("no parameter {name}"));
+            params.values[i] = (v, 0.0);
+        };
+        let (spacing, length) = (0.5, 0.01);
+        set("spacing", spacing);
+        set("length", length);
+        let c: Q = [0.3, 0.5, 0.4, 0.2];
+        let step = |z: Q| {
+            let sq = hamilton(z, z);
+            [sq[0] + c[0], sq[1] + c[1], sq[2] + c[2], sq[3] + c[3]]
+        };
+        let mut run = VariationRun::new(&p, &params, 7);
+        let mut on_paths = 0;
+        for _ in 0..200 {
+            let (got, color) = run.call3([0.0; 3], [0.0; 3], 1.0);
+            let color = color.expect("a colour");
+            if got[2] > 1.0e3 {
+                continue;
+            }
+            assert!((0.0..=1.0).contains(&color), "{color}");
+            let t = color * length;
+            // The lattice point it started from.
+            let a = got.map(|x| ((x / spacing).floor() + 0.5) * spacing);
+            let mut z: Q = [a[0], a[1], a[2], 0.0];
+            assert!(in_halaykas_set(&step, a), "a path from {a:?}, whose orbit escapes");
+            let (n, u) = (8usize, 1.0 - t);
+            let mut w = u.powi(n as i32);
+            let mut sum = z.map(|x| x * w);
+            for k in 0..n {
+                z = step(z);
+                w *= (n - k) as f64 / (k + 1) as f64 * t / u;
+                for (s, x) in sum.iter_mut().zip(z) {
+                    *s += x * w;
+                }
+            }
+            let want = [sum[0], sum[1], sum[2]];
+            assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-9), "{got:?} against {want:?} from {a:?} at t {t}");
+            on_paths += 1;
+        }
+        assert!(on_paths > 100, "most draws find a start: {on_paths}");
     }
 }
