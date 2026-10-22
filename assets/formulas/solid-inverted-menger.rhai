@@ -11,10 +11,13 @@
 //
 // A variation stretches space, and the distance a solid gives must be in
 // the space the camera marches through. The inversion's stretch at `pos`
-// is `1 / |pos|^2`, so a distance measured on the inverted sponge is
-// multiplied back by `|pos|^2` (`s.r2` below). For a variation whose
-// stretch you do not know, divide the distance by a margin instead: the
-// march then takes smaller, safer steps.
+// is `1 / |pos|^2`, but a step is not a point: the stretch changes along
+// it. The sponge `d` away from the inverted point `q` is at least
+// `d |pos|^2 / (1 + d |pos|)` away from `pos` (`distance` below). The
+// stretch at `pos` alone, `d |pos|^2`, can be twice that where `d` is
+// long beside `|q|`, and the march steps through the solid there. For a
+// variation whose stretch you do not know, divide the distance by a
+// margin instead: the march then takes smaller, safer steps.
 
 const PARAMS = #{
     scale: #{ value: 3.0, min: 1.1, max: 4.0, caption: "Scale", hint: "How much each iteration enlarges space after the mirrors" },
@@ -60,7 +63,13 @@ fn escaped(s, p) {
 }
 
 // The sponge's distance (each step stretches by at most the scale), taken
-// back through the inversion.
+// back through the inversion: `|pos|^2 / (1 + d |pos|)`, the least the
+// inversion shrinks a step of `d` from here (see the top).
 fn distance(s, p) {
-    if s.out { max(length(s.z) - p.radius, 0.0) * p.scale ** (-s.k.to_float()) * s.r2 } else { 0.0 }
+    if s.out {
+        let d = max(length(s.z) - p.radius, 0.0) * p.scale ** (-s.k.to_float());
+        d * s.r2 / (1.0 + d * sqrt(s.r2))
+    } else {
+        0.0
+    }
 }
