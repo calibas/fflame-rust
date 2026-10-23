@@ -76,7 +76,8 @@ Some details the table leaves out:
   Flame Attractor).
 - **The terrain cameras have no field for their eye.** Each stores a
   target, a distance (or a zoom that sets one) and angles. The View
-  panel shows their eye as a read-only Position.
+  panel shows their eye as a read-only Position. Mode D's stores the
+  same, but its Position is editable: an edit moves the target with it.
 - **The simulation's 2D view is display only.** The colour pass reads
   it and the step never does, so moving it never changes the run. `tile`
   repeats the field past its edges, under a periodic boundary only. See
@@ -366,9 +367,13 @@ written back as pitch, yaw and bank with the roll held.
 | Near the poles | turns through them | stops a hair short of straight up or down |
 | Q / E rise along | the screen's up | world up |
 
-A solid-convention camera's pitch is ±90° in the config. A look past
-that is written as the same orientation the other way round: the pitch
-reflected, the heading reversed, the bank `π − bank` (`canonical`).
+A terrain's pitch is ±90° in the config. A look past that is written as
+the same orientation the other way round: the pitch reflected, the
+heading reversed, the bank `π − bank` (`canonical`). Mode D's has no
+poles: a look or an orbit carries on over the top, the camera upside
+down past 90°, the pitch wrapped at ±180° (the ConfigManager clamps
+`EscapeCamPitch` to the poles only while the escape terrain shows;
+`a_solid_turns_over_the_top`).
 
 ### The pivot
 
@@ -566,8 +571,10 @@ to bring it to every mode, under this convention, is
 - **The View panel** (`src/ui/view.rs`) lays itself out by `ViewKind`.
   It uses the shared widgets in `src/ui/view_controls.rs`:
   - `camera_2d` for the 2D views and a 3D flame's projected picture;
-  - `camera_3d` for every 3D camera: position (a readout where the camera
-    stores a target), target, lift, zoom or distance, pitch, yaw, bank,
+  - `camera_3d` for every 3D camera: position (a terrain's a readout;
+    mode D's moves the camera as a whole, its target by the eye's offset
+    in exact decimals, the angles and distance kept: `place_solid_eye`),
+    target, lift, zoom or distance, pitch, yaw, bank,
     roll, field of view or perspective, Reset, then fly mode;
   - `atmosphere_3d`, `depth_of_field_3d` and `lighting_3d`.
 
