@@ -346,8 +346,13 @@ simulation pictures, and the panel hides the section there.
 **The Density Levels section** of the Colors panel shows the density
 histogram ([src/ui/histogram.rs](../../src/ui/histogram.rs)): 256
 log-spaced bins of `accum.a`, read back from the accumulator every 30
-frames (`DensityHistogram` in
-[src/renderer/histogram.rs](../../src/renderer/histogram.rs)), bar
+frames while the section is open, and at once when it opens
+(`DensityHistogram` in
+[src/renderer/histogram.rs](../../src/renderer/histogram.rs); the section
+notes the frame it was drawn in, `tone_mapping::histogram_shown`). The
+readback copies the whole accumulator and the desktop's frame waits for
+it -- a 20-50 ms hitch every 30 frames, which the app used to pay with
+the section closed and in modes without Levels. Bar
 heights on a log scale, with the minimum, maximum and median. Markers
 show Low (black), High (white) and the midpoint (grey, at
 `1 / (1 + levels_gamma)` of the way between them). *Auto* sets Low and

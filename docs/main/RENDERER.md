@@ -571,6 +571,25 @@ three.
   the widest that cost at most 1.25 × the narrower — on a GPU that runs
   the whole batch at once, width costs nothing and shedding it only
   loses throughput.
+- **Filling the frame** (`fill_step`, `gpu::timer`): the governor only
+  sheds from the full batch, and under vsync the frame lasts the refresh
+  interval however little the GPU did -- a light flame's full batch used
+  about 2 ms of a 16.7 ms frame, so the app drew 490M iterations a
+  second where the CLI drew 4.2G. At the full batch, the trajectory
+  dispatch is timed on the GPU (timestamp queries, one measurement in
+  flight, never waited on), and the dispatch is made LONGER -- `fill`
+  times the iterations a thread, at full width -- toward half the frame
+  budget (`FILL_TARGET`), growing at most 1.25x a measurement, falling at
+  once, at most 64x and 16,384 a thread. Persistent orbits make the
+  length free for the picture. A late frame gives back the fill before
+  the scale. The fill starts again from the batch at every restart of
+  the accumulation, in overwrite mode and during playback (a change may
+  change the cost), and a measurement tagged before the restart is not
+  used. Without timestamp queries (some browsers) it stays at the batch.
+  Measured at 754x786 on a GTX 1660 SUPER: 4 billion iterations of Julian
+  Disc in 1.6 s (8.1 s before; the CLI 0.94 s), 1.8 s at the default 256
+  a thread; Grand Julian 5.5 s (8.1 s; the CLI 2.9 s); heavy flames,
+  which the governor already sheds, unchanged.
 - **`Batch::while_planning`**: while a Focused Rendering plan is being
   made, the dispatch is capped to the floor's length and the governor
   stops measuring — the planner shares the render's queue.

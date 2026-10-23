@@ -227,6 +227,19 @@ fn paint_enabled_dot(ui: &egui::Ui, header_rect: egui::Rect) {
     ui.painter().circle_filled(center, 4.0, egui::Color32::from_rgb(60, 200, 90));
 }
 
+/// Where the Histogram section notes the frame it was last drawn in.
+const HISTOGRAM_SHOWN: &str = "tonemap_histogram_shown";
+
+/// Whether the Histogram section was drawn in the last frame or two. It
+/// is the density histogram's only reader, and the histogram costs a
+/// blocking readback of the whole accumulator -- measured at 20-50 ms
+/// every 30th frame, which the app paid with the section closed and in
+/// modes that do not show it.
+pub fn histogram_shown(ctx: &egui::Context) -> bool {
+    let drawn = ctx.data(|d| d.get_temp::<u64>(egui::Id::new(HISTOGRAM_SHOWN)));
+    drawn.is_some_and(|frame| ctx.cumulative_frame_nr().saturating_sub(frame) <= 2)
+}
+
 /// Render the Colors panel content (tone mapping, color mode, palette)
 ///
 /// This is the panel version without the Window wrapper.
@@ -525,6 +538,8 @@ pub fn render_colors_content(
     let levels_resp = show_levels.then(|| egui::CollapsingHeader::new(t!("tonemap.histogram"))
         .default_open(false)
         .show(ui, |ui| {
+            // The app reads the histogram back only while this is drawn.
+            ui.data_mut(|d| d.insert_temp(egui::Id::new(HISTOGRAM_SHOWN), ui.ctx().cumulative_frame_nr()));
             // Render histogram visualization with levels markers from config
             render_histogram_with_config(ui, histogram, config_manager);
 

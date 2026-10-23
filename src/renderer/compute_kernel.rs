@@ -677,6 +677,14 @@ pub struct FlameRenderer {
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of normal transforms
+    /// The trajectory dispatch's GPU time, measured for the app's
+    /// governor (`enable_dispatch_timing`); None in exports and where the
+    /// device cannot time a pass.
+    dispatch_timer: Option<crate::gpu::timer::PassTimer>,
+    /// The caller's tag for the dispatches timed from now on.
+    timing_tag: u64,
+    /// The last finished measurement, until taken.
+    last_timing: Option<crate::gpu::timer::PassTiming>,
 }
 
 impl FlameRenderer {
@@ -925,6 +933,9 @@ impl FlameRenderer {
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
             census: false,
+            dispatch_timer: None,
+            timing_tag: 0,
+            last_timing: None,
         }
     }
 
@@ -1391,9 +1402,15 @@ impl FlameRenderer {
         if self.compute_bind_group.bindings != self.pipelines.compute_bindings() {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         }
+        // A measurement the last frames recorded may have landed.
+        if let Some(timing) = self.dispatch_timer.as_mut().and_then(|t| t.collect()) {
+            self.last_timing = Some(timing);
+        }
+        let timestamp_writes = self.dispatch_timer.as_ref().and_then(|t| t.writes());
+        let timed = timestamp_writes.is_some();
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
-            timestamp_writes: None,
+            timestamp_writes,
         });
 
         // Select pipeline based on render mode
@@ -1404,8 +1421,35 @@ impl FlameRenderer {
         compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
 
         drop(compute_pass);
+        if timed {
+            if let Some(timer) = self.dispatch_timer.as_mut() {
+                let iterations = num_workgroups as u64 * 64 * iterations_per_thread as u64;
+                timer.after_pass(encoder, iterations, self.timing_tag);
+            }
+        }
 
         samples_this_frame
+    }
+
+    /// Time the trajectory dispatches on the GPU from now on, for the
+    /// app's governor (`take_dispatch_timing`). Nothing where the device
+    /// cannot time a pass.
+    pub fn enable_dispatch_timing(&mut self, device: &Device, queue: &Queue) {
+        if self.dispatch_timer.is_none() {
+            self.dispatch_timer = crate::gpu::timer::PassTimer::new(device, queue);
+        }
+    }
+
+    /// Tag the dispatches timed from now on: a measurement comes back
+    /// with the tag its dispatch had, so the caller can tell one made
+    /// before a change it cares about.
+    pub fn set_timing_tag(&mut self, tag: u64) {
+        self.timing_tag = tag;
+    }
+
+    /// The last finished dispatch timing, once.
+    pub fn take_dispatch_timing(&mut self) -> Option<crate::gpu::timer::PassTiming> {
+        self.last_timing.take()
     }
 
     /// Run adjust scale pass to dynamically adjust per-pixel scales based on density
