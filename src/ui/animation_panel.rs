@@ -60,15 +60,15 @@ fn default_video_output_path() -> std::path::PathBuf {
     std::path::PathBuf::from("animation.mp4")
 }
 
-/// Export settings for animation rendering
+/// Export settings for animation rendering. The frame size is the
+/// picture's (`FractalConfig::image_size`, the View panel's), read when
+/// the export starts; the encoder -- codec, encoder and its quality,
+/// preset and tune -- is the device's (`SystemSettings::video_encoding`),
+/// loaded when the panel opens and saved when it changes.
 #[derive(Clone)]
 pub struct AnimationExportSettings {
     /// Output video file path
     pub output_path: std::path::PathBuf,
-    /// Frame width
-    pub width: u32,
-    /// Frame height
-    pub height: u32,
     /// Frames per second
     pub fps: u32,
     /// Iterations per thread (GPU batching)
@@ -99,10 +99,8 @@ pub struct AnimationExportSettings {
 
 impl Default for AnimationExportSettings {
     fn default() -> Self {
-        Self {
+        let mut s = Self {
             output_path: default_video_output_path(),
-            width: 1920,
-            height: 1080,
             fps: 30,
             iterations_per_thread: 256,
             max_iterations: 10_000_000,
@@ -116,7 +114,38 @@ impl Default for AnimationExportSettings {
             audio_fade_in: 0.0,
             audio_fade_out: 0.0,
             audio_bitrate: 192,
+        };
+        s.set_encoding(&crate::storage::SystemSettings::default().video_encoding);
+        s
+    }
+}
+
+impl AnimationExportSettings {
+    /// The encoder: what `SystemSettings::video_encoding` keeps.
+    pub fn encoding(&self) -> crate::animation::export::VideoEncodingSettings {
+        crate::animation::export::VideoEncodingSettings {
+            codec: self.video_codec,
+            hardware_accel: self.hardware_accel,
+            quality: self.video_quality,
+            preset: self.preset,
+            tune: self.tune,
         }
+    }
+
+    /// Take a saved encoder. An encoder that cannot make the codec --
+    /// saved on a device with other hardware, or by hand -- falls back to
+    /// software, and a preset that is not the encoder's to its default, as
+    /// the panel's own choices do; the output's extension follows the
+    /// codec.
+    pub fn set_encoding(&mut self, e: &crate::animation::export::VideoEncodingSettings) {
+        use crate::animation::export::EncodingPreset;
+        self.video_codec = e.codec;
+        self.hardware_accel = if e.hardware_accel.supports_codec(e.codec) { e.hardware_accel } else { HardwareAccel::None };
+        self.video_quality = e.quality.min(51);
+        let presets = EncodingPreset::available_for(self.hardware_accel);
+        self.preset = if presets.contains(&e.preset) { e.preset } else { EncodingPreset::default_for(self.hardware_accel) };
+        self.tune = e.tune;
+        self.output_path.set_extension(self.video_codec.extension());
     }
 }
 
@@ -548,6 +577,9 @@ pub fn render_export_panel(
     ctx: &egui::Context,
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
+    // The picture's size, which the frames are rendered at.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    image_size: (u32, u32),
     // Only read on desktop (the wasm branch shows "not available").
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     export_active: bool,
@@ -583,7 +615,7 @@ pub fn render_export_panel(
                 }
 
                 ui.add_enabled_ui(has_animation && !export_active && ffmpeg_available, |ui| {
-                    render_export_settings(ui, controller, settings, &mut export_request, window);
+                    render_export_settings(ui, controller, settings, image_size, &mut export_request, window);
                 });
             }
 
@@ -602,6 +634,7 @@ fn render_export_settings(
     ui: &mut Ui,
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
+    image_size: (u32, u32),
     export_request: &mut Option<AnimationExportSettings>,
     window: &winit::window::Window,
 ) {
@@ -754,29 +787,12 @@ fn render_export_settings(
 
     ui.separator();
 
-    // Resolution
+    // The frame size is the picture's: the View panel's Output Size.
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.resolution"));
-        ui.add(super::VkbDragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
-        ui.label("×");
-        ui.add(super::VkbDragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
+        ui.label(egui::RichText::new(format!("{} × {}", image_size.0, image_size.1)).strong());
     });
-
-    // Quick resolution presets
-    ui.horizontal(|ui| {
-        if ui.small_button("720p").clicked() {
-            settings.width = 1280;
-            settings.height = 720;
-        }
-        if ui.small_button("1080p").clicked() {
-            settings.width = 1920;
-            settings.height = 1080;
-        }
-        if ui.small_button("4K").clicked() {
-            settings.width = 3840;
-            settings.height = 2160;
-        }
-    });
+    ui.small(t!("animation_panel.resolution_from_view"));
 
     // FPS
     ui.horizontal(|ui| {

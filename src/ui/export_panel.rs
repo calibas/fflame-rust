@@ -65,35 +65,48 @@ fn max_export_pixels(spatial_filter: bool, solid: bool, lighting: bool, dof: boo
 }
 
 /// Minimum export dimension.
-const MIN_EXPORT_DIM: u32 = 64;
+const MIN_EXPORT_DIM: u32 = crate::config::MIN_IMAGE_DIM;
 
-/// Clamp `dim` (the just-edited field) so `dim * other` stays within `max_px`,
-/// also respecting the per-dimension GPU texture cap `max_dim`. The other field
-/// is left untouched, so editing one shrinks only the one you're editing.
-fn clamp_to_budget(dim: &mut u32, other: u32, max_dim: u32, max_px: u64) {
-    let other = (other as u64).max(1);
-    let max_for_dim = (max_px / other).max(MIN_EXPORT_DIM as u64);
-    let ceil = (max_for_dim.min(max_dim as u64)) as u32;
-    *dim = (*dim).clamp(MIN_EXPORT_DIM, ceil.max(MIN_EXPORT_DIM));
+/// What the export budget weighs of a config: the spatial filter, a solid,
+/// its lighting, its depth of field.
+fn export_features(config: &crate::config::FractalConfig) -> (bool, bool, bool, bool) {
+    let solid = config.solid_depth_active();
+    (config.filter_radius > 0.0, solid, solid && config.solid_shading.active(), solid && config.dof_blur_strength > 0.0)
+}
+
+/// The size a PNG export renders at: the picture's (`image_size`, the
+/// View panel's Output Size), scaled down with its aspect kept to what
+/// the export can hold -- the GPU's per-axis texture limit (half of it,
+/// supersampled) and the pixel budget for the config's features (a
+/// quarter of it, supersampled).
+pub fn fit_export_size(config: &crate::config::FractalConfig, supersample: bool, max_texture_dimension: u32) -> (u32, u32) {
+    let (spatial, solid, lighting, dof) = export_features(config);
+    let max_px = (max_export_pixels(spatial, solid, lighting, dof) / if supersample { 4 } else { 1 }) as f64;
+    let ceiling = if supersample { max_texture_dimension / 2 } else { max_texture_dimension }.max(MIN_EXPORT_DIM);
+    let (mut w, mut h) = (config.image_size.0.max(MIN_EXPORT_DIM) as f64, config.image_size.1.max(MIN_EXPORT_DIM) as f64);
+    let axis = (ceiling as f64 / w.max(h)).min(1.0);
+    let budget = (max_px / (w * h)).sqrt().min(1.0);
+    let k = axis.min(budget);
+    w = (w * k).floor();
+    h = (h * k).floor();
+    ((w as u32).clamp(MIN_EXPORT_DIM, ceiling), (h as u32).clamp(MIN_EXPORT_DIM, ceiling))
 }
 
 /// Render the Export panel content. Live progress is shown by the menu
 /// bar's progress bar (`render_progress.rs`); `export_active`
 /// only gates the buttons so a second export can't be started mid-render.
 ///
-/// `max_export_dimension` is the GPU's `max_texture_dimension_2d` — the hard
-/// per-axis ceiling. Within it, the megapixel budget is the real limit.
+/// The size is the picture's (`FractalConfig::image_size`), set in the
+/// View panel; `max_export_dimension` is the GPU's
+/// `max_texture_dimension_2d`, which with the megapixel budget fits it
+/// ([`fit_export_size`]).
 pub fn render_export_content(
     ui: &mut egui::Ui,
     png_export_with_background: &mut bool,
     png_export_transparent: &mut bool,
-    export_width: &mut u32,
-    export_height: &mut u32,
-    use_custom_export_size: &mut bool,
     png_export_premultiplied: &mut bool,
     png_export_supersample: &mut bool,
     config_manager: &mut ConfigManager,
-    viewport_size: Option<(u32, u32)>,
     export_active: bool,
     max_export_dimension: u32,
 ) {
@@ -151,101 +164,46 @@ pub fn render_export_content(
     ui.separator();
     ui.add_space(4.0);
 
-    // Show actual export resolution
-    let (actual_width, actual_height) = if *use_custom_export_size {
-        (*export_width, *export_height)
-    } else {
-        viewport_size.unwrap_or((800, 600))
-    };
-    ui.label(t!("export.resolution", width = actual_width, height = actual_height));
-
-    // Custom size options
-    ui.checkbox(use_custom_export_size, t!("export.use_custom_size"));
-
-    // Feature-aware pixel budget: the histogram spatial filter (Apophysis
-    // `filter`) adds a full-res scratch buffer, so it lowers the max export
-    // size — most on WASM, where the whole image lives in VRAM.
-    let spatial_filter = config_manager.active_config().filter_radius > 0.0;
-    let (solid_on, lighting_on, dof_on) = {
-        let c = config_manager.active_config();
-        let solid = c.solid_depth_active();
-        (solid, solid && c.solid_shading.active(), solid && c.dof_blur_strength > 0.0)
-    };
-    // 2× supersampling renders at doubled dimensions: 4× the pixel
-    // budget per requested pixel, and half the per-axis texture ceiling.
-    let ss_factor: u64 = if *png_export_supersample { 4 } else { 1 };
-    let max_px = max_export_pixels(spatial_filter, solid_on, lighting_on, dof_on) / ss_factor;
-    // Per-axis widget ceiling: the GPU's max texture size (the pixel budget
-    // constrains the product within it). Guard against a degenerate 0.
-    let dim_ceiling = if *png_export_supersample {
-        (max_export_dimension / 2).max(MIN_EXPORT_DIM)
-    } else {
-        max_export_dimension.max(MIN_EXPORT_DIM)
-    };
-
-    // Keep the current size within the (feature-dependent) budget — e.g. when
-    // the flame's spatial filter toggles on and lowers the cap. Shrink
-    // proportionally so the aspect ratio is preserved.
-    let total_px = *export_width as u64 * *export_height as u64;
-    if total_px > max_px {
-        let scale = (max_px as f64 / total_px as f64).sqrt();
-        let w = ((*export_width as f64 * scale) as u32).clamp(MIN_EXPORT_DIM, dim_ceiling);
-        let h = ((*export_height as f64 * scale) as u32).clamp(MIN_EXPORT_DIM, dim_ceiling);
-        if w != *export_width || h != *export_height {
-            *export_width = w;
-            *export_height = h;
-            let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemExportWidth, (*export_width).into());
-            let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemExportHeight, (*export_height).into());
-        }
+    // The picture's size, and what this export makes of it.
+    let config = config_manager.active_config();
+    let (w, h) = config.image_size;
+    let (ow, oh) = fit_export_size(config, *png_export_supersample, max_export_dimension);
+    ui.label(t!("export.resolution", width = w, height = h));
+    ui.small(t!("export.size_from_view"));
+    if (ow, oh) != (w, h) {
+        ui.colored_label(
+            egui::Color32::from_rgb(230, 180, 90),
+            t!("export.size_fitted", width = ow, height = oh),
+        );
     }
 
-    ui.add_enabled_ui(*use_custom_export_size, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(t!("export.width"));
-            if ui.add(super::VkbDragValue::new(export_width).range(MIN_EXPORT_DIM..=dim_ceiling).speed(10)).changed() {
-                // Shared pixel budget: shrink the field just edited so the total
-                // stays within `max_px` (height left as-is).
-                clamp_to_budget(export_width, *export_height, dim_ceiling, max_px);
-                let _ = config_manager.update_system_setting(
-                    crate::config::ConfigPath::SystemExportWidth,
-                    (*export_width).into()
-                );
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label(t!("export.height"));
-            if ui.add(super::VkbDragValue::new(export_height).range(MIN_EXPORT_DIM..=dim_ceiling).speed(10)).changed() {
-                clamp_to_budget(export_height, *export_width, dim_ceiling, max_px);
-                let _ = config_manager.update_system_setting(
-                    crate::config::ConfigPath::SystemExportHeight,
-                    (*export_height).into()
-                );
-            }
-        });
-
-        // Pixel-budget readout. `max_px` drops when the spatial filter is on.
-        let mp = (*export_width as u64 * *export_height as u64) as f64 / 1e6;
-        let max_mp = max_px as f64 / 1e6;
-        let mut factors: Vec<&str> = Vec::new();
-        if spatial_filter {
-            factors.push("spatial filter");
-        }
-        if lighting_on {
-            factors.push("lighting");
-        } else if solid_on {
-            factors.push("solid");
-        }
-        let suffix = if factors.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", factors.join(", "))
-        };
-        ui.label(
-            egui::RichText::new(format!("{:.1} MP / {:.0} MP max{}", mp, max_mp, suffix))
-                .small()
-                .color(egui::Color32::GRAY),
-        );
-    });
+    // The pixel budget, which the spatial filter (Apophysis `filter`),
+    // a solid, its lighting and 2x supersampling lower -- most on WASM,
+    // where the whole image lives in VRAM.
+    let (spatial_filter, solid_on, lighting_on, dof_on) = export_features(config);
+    let ss_factor: u64 = if *png_export_supersample { 4 } else { 1 };
+    let max_px = max_export_pixels(spatial_filter, solid_on, lighting_on, dof_on) / ss_factor;
+    let mp = (ow as u64 * oh as u64) as f64 / 1e6;
+    let max_mp = max_px as f64 / 1e6;
+    let mut factors: Vec<&str> = Vec::new();
+    if spatial_filter {
+        factors.push("spatial filter");
+    }
+    if lighting_on {
+        factors.push("lighting");
+    } else if solid_on {
+        factors.push("solid");
+    }
+    let suffix = if factors.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", factors.join(", "))
+    };
+    ui.label(
+        egui::RichText::new(format!("{:.1} MP / {:.0} MP max{}", mp, max_mp, suffix))
+            .small()
+            .color(egui::Color32::GRAY),
+    );
 }
 
 #[cfg(test)]
@@ -253,31 +211,31 @@ pub fn render_export_content(
 mod tests {
     use super::*;
 
+    /// The picture's size, as is when it fits; past the GPU's per-axis
+    /// limit or the pixel budget, scaled down whole -- the shape kept --
+    /// to the tighter of them; supersampling halves the axis limit and
+    /// quarters the budget.
     #[test]
-    fn budget_clamp_caps_total_pixels() {
+    fn an_export_is_the_pictures_size_fitted() {
+        let at = |w: u32, h: u32| {
+            let mut c = crate::config::FractalConfig::default();
+            c.image_size = (w, h);
+            c
+        };
         let max_dim = 32768;
-        let max_px = max_export_pixels(false, false, false, false); // desktop: 400 MP
-        // Over budget at this height → width shrinks so the product fits.
-        let mut w = 30000;
-        clamp_to_budget(&mut w, 20000, max_dim, max_px);
-        assert!((w as u64) * 20000 <= max_px);
-        assert_eq!(w, 20000); // 400M / 20000
-
-        // Wide aspect allowed within the budget, but the GPU axis cap binds first.
-        let mut w2 = 60000;
-        clamp_to_budget(&mut w2, 8000, max_dim, max_px);
-        assert_eq!(w2, max_dim);
-        assert!((w2 as u64) * 8000 <= max_px);
-
-        // Tiny other dimension: budget allows huge width, GPU cap still bounds it.
-        let mut w3 = 1_000_000;
-        clamp_to_budget(&mut w3, MIN_EXPORT_DIM, max_dim, max_px);
-        assert_eq!(w3, max_dim);
-
-        // Already within budget → unchanged.
-        let mut w4 = 12000;
-        clamp_to_budget(&mut w4, 12000, max_dim, max_px);
-        assert_eq!(w4, 12000);
+        assert_eq!(fit_export_size(&at(1920, 1080), false, max_dim), (1920, 1080));
+        assert_eq!(fit_export_size(&at(1080, 1920), false, max_dim), (1080, 1920));
+        // Over the 400 MP budget: 32000 x 16000 is 512 MP.
+        let (w, h) = fit_export_size(&at(32000, 16000), false, max_dim);
+        assert!((w as u64) * (h as u64) <= 400_000_000, "{w}x{h}");
+        assert!((w as f64 / h as f64 - 2.0).abs() < 1e-3, "the shape kept: {w}x{h}");
+        // Past the axis limit first.
+        let (w, h) = fit_export_size(&at(20000, 1000), false, 16384);
+        assert_eq!(w, 16384);
+        assert!((w as f64 / h as f64 - 20.0).abs() < 0.05, "{w}x{h}");
+        // Supersampled: half the axis limit, a quarter of the budget.
+        let (w, h) = fit_export_size(&at(16000, 9000), true, max_dim);
+        assert!(w <= max_dim / 2 && (w as u64) * (h as u64) <= 100_000_000, "{w}x{h}");
     }
 
     #[test]
