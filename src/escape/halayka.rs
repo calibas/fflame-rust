@@ -44,8 +44,9 @@ fn halayka_palette() -> serde_json::Value {
 
 /// The presets: six of Halayka's (2009) sets as the Rhai solid, at the
 /// paper's figures' settings (8 iterations, threshold 4), the two drawn as
-/// complements in the paper as their surface; and two of his (2018)
-/// escape paths, a 3D flame of the Rhai variation each.
+/// complements in the paper as their surface, coloured by the step each
+/// piece of the surface comes from; and two of his (2018) escape paths, a
+/// 3D flame of the Rhai variation each.
 fn presets() -> Vec<serde_json::Value> {
     let bundled: Vec<serde_json::Value> = serde_json::from_str(crate::resources::presets::PRESETS_JSON).expect("the presets parse");
     // The quaternion Julia's: the 3D look, its rig.
@@ -70,10 +71,15 @@ fn presets() -> Vec<serde_json::Value> {
             let mut p = template.clone();
             p["flame"]["name"] = serde_json::json!(name);
             p["palette"] = halayka_palette();
+            // Some ambient: the sets' rings and sheets face every way, and
+            // one light leaves most of them dark.
+            p["solid_shading"]["ambient"] = serde_json::json!(0.3);
+            // Coloured by the solid's own `address`: the step each piece
+            // of the surface comes from (its Colour, "Nearest step").
             p["escape"] = serde_json::json!({
                 "cam_pitch": pitch,
                 "cam_yaw": yaw,
-                "coloring": "ifs_trap",
+                "coloring": "ifs_address",
                 "custom_formula": solid,
                 "formula": solid_name,
                 "formula_params": {
@@ -133,6 +139,41 @@ fn presets() -> Vec<serde_json::Value> {
 fn write_presets() {
     let _ = std::fs::create_dir_all("output");
     std::fs::write("output/halayka-presets.json", serde_json::to_string_pretty(&presets()).unwrap()).unwrap();
+}
+
+/// The solid's ball follows its cut -- `prepare`'s `ball`, a box's corner
+/// or the ball, a hair over -- in place of the Ball Radius parameter, so
+/// the march and the camera take in a larger cut; its colourings read the
+/// whole orbit (`INFO.depth`), and it is marched inside (`INFO.march`).
+/// A solid's `INFO` takes only what those mean.
+#[test]
+fn the_solids_ball_follows_its_cut() {
+    let text = example("solid-halayka-quaternions.rhai");
+    let src = CustomSource { dialect: CustomDialect::Rhai, entry: rhai::title(&text).unwrap_or_default(), source: text, variations: Vec::new() };
+    let name = super::custom::name_of(EntryKind::Formula, &src);
+    let def = super::custom::compile_solid(&src, &name).unwrap_or_else(|e| panic!("{:?}", e.iter().map(|d| d.render(&src.source)).collect::<Vec<_>>()));
+    assert!(def.march_inside);
+    assert!(def.parameters.iter().all(|p| p.name != "radius"), "no Ball Radius");
+    assert_eq!(def.parameters.iter().find(|p| p.name == "colour_depth").map(|p| p.default), Some(12.0));
+    let mut escape = crate::config::escape::EscapeConfig { formula: name, ..Default::default() };
+    for (cut, size, want) in [(0.0, 1.5, 1.5 * 3f64.sqrt()), (0.0, 3.0, 3.0 * 3f64.sqrt()), (1.0, 2.6, 2.6)] {
+        escape.formula_params.insert("cut".into(), cut as f32);
+        escape.formula_params.insert("size".into(), size as f32);
+        let r = super::ifs::standalone_radius(def, &escape);
+        assert!((r - 1.01 * want).abs() < 1e-5, "cut {cut}, size {size}: a ball of {r}");
+    }
+
+    let solid = |info: &str| {
+        let src = format!(
+            "const PARAMS = #{{}};\nconst INFO = #{{ title: \"t\"{info} }};\n\
+             fn start(pos, p) {{ #{{ z: pos }} }}\nfn step(s, p) {{ s.z = s.z * 0.5; s }}\nfn distance(s, p) {{ length(s.z) - 1.0 }}\n"
+        );
+        rhai::solid(&src).is_ok()
+    };
+    assert!(solid(", march: \"inside\", depth: 8, radius: 2.0"));
+    for bad in [", march: \"far\"", ", depth: 13", ", depth: 2.5", ", ball: 2.0"] {
+        assert!(!solid(bad), "INFO {bad}");
+    }
 }
 
 /// The bundled presets carry the solid and the variation as the example

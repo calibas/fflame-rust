@@ -1720,10 +1720,10 @@ fn distance(s, p) {
     /// holds each lattice point the paper's definition does -- in the set
     /// while 8 steps keep |Z| within 4, Z = (x, y, z, 0) -- for each of its
     /// six steps, against the steps written in f64 here; its estimate is
-    /// positive outside the set and zero inside (the complement's the other
-    /// way about, the surface's positive in the set and on the escaped side
-    /// past its shell), and never more than the distance to a lattice
-    /// point of the other kind.
+    /// positive outside the set and none or less inside (the complement's
+    /// the other way about, the surface's positive in the set and on the
+    /// escaped side past its shell), and never more than the distance to a
+    /// lattice point of the other kind.
     #[test]
     fn halaykas_sets_hold_what_the_paper_says() {
         use crate::escape::lang::interp;
@@ -1738,13 +1738,14 @@ fn distance(s, p) {
                 let params = halayka_params(&p, *step, *power, *c, draw);
                 for (i, pos) in lattice.iter().enumerate() {
                     let d = interp::solid(&p, &params, *pos, 8);
-                    assert!(d.is_finite() && d >= 0.0, "step {step}, draw {draw} at {pos:?}: {d}");
-                    // The set, the complement, or the surface between them:
-                    // a shell on its escaped side, so a point of the set is
+                    assert!(d.is_finite(), "step {step}, draw {draw} at {pos:?}: {d}");
+                    // The set, the complement, or the surface between them
+                    // (signed: none or less in the solid); the surface a
+                    // shell on its escaped side, so a point of the set is
                     // never in it, and one that escapes may be.
                     match draw {
-                        0 => assert_eq!(d == 0.0, inside[i], "step {step}, the set at {pos:?}: {d}"),
-                        1 => assert_eq!(d == 0.0, !inside[i], "step {step}, the complement at {pos:?}: {d}"),
+                        0 => assert_eq!(d <= 0.0, inside[i], "step {step}, the set at {pos:?}: {d}"),
+                        1 => assert_eq!(d <= 0.0, !inside[i], "step {step}, the complement at {pos:?}: {d}"),
                         _ => assert!(d > 0.0 || !inside[i], "step {step}, the surface at {pos:?}, in the set: {d}"),
                     }
                     if d > 0.0 {
@@ -1766,8 +1767,8 @@ fn distance(s, p) {
     /// the first change of membership sampling finds along them (a two
     /// hundredth of a unit apart), for each step and each way of drawing --
     /// within a step where they march through the set (a fortieth of the
-    /// box: there is no bound inside). The estimate's caps are what this
-    /// holds to.
+    /// box: there is no bound inside) -- and stop only in the solid. The
+    /// estimate's caps are what this holds to.
     #[test]
     fn halaykas_sets_are_never_stepped_through() {
         use crate::escape::lang::interp;
@@ -1819,16 +1820,19 @@ fn distance(s, p) {
                         }
                         t += SAMPLE;
                     }
-                    // The march, by the estimate.
+                    // The march, by the estimate, as the solid's
+                    // `march: "inside"` has it: a hit only where the
+                    // estimate is none, each step at least the pixel.
+                    const PIXEL: f64 = 1e-4;
                     let mut t = 0.0;
                     let mut hit = f64::INFINITY;
                     for _ in 0..4000 {
                         let e = interp::solid(&p, &params, at(t), 8);
-                        if e < 1e-4 {
+                        if e <= 0.0 {
                             hit = t;
                             break;
                         }
-                        t += e;
+                        t += e.max(PIXEL);
                         if !inside_box(at(t)) {
                             break;
                         }
@@ -1837,6 +1841,11 @@ fn distance(s, p) {
                     // of a fortieth of the box; outside it, the reading.
                     let slack = if draw == 0 || !start { SAMPLE } else { SAMPLE + 0.025 * 1.5 };
                     assert!(hit <= first + slack, "step {step}, draw {draw}: from {o:?} along {d:?} the march stopped at {hit}, past the surface at {first}");
+                    // And where it stops is the solid: the set, or the
+                    // escaped side (the complement, the surface's shell).
+                    if hit.is_finite() {
+                        assert_eq!(in_halaykas_set(f.as_ref(), at(hit)), draw == 0, "step {step}, draw {draw}: from {o:?} along {d:?} the march stopped at {hit}, out of the solid");
+                    }
                     traced += usize::from(first.is_finite());
                 }
                 assert!(traced > 2, "step {step}, draw {draw}: rays that meet the surface: {traced}");

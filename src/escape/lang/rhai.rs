@@ -137,19 +137,32 @@ pub fn solid(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Solid)
 }
 
-/// A number field of a script's `INFO` (a solid's `radius`).
+/// A number field of a script's `INFO` (a solid's `radius`, `depth`).
 pub fn info_number(source: &str, key: &str) -> Option<f64> {
+    info_field(source, key, |v| match v {
+        Expr::FloatConstant(f, _) => Some(**f),
+        Expr::IntegerConstant(i, _) => Some(*i as f64),
+        _ => None,
+    })
+}
+
+/// A string field of a script's `INFO` (a solid's `march`, a
+/// transformation's `name`).
+pub fn info_string(source: &str, key: &str) -> Option<String> {
+    info_field(source, key, |v| match v {
+        Expr::StringConstant(s, _) => Some(s.to_string()),
+        _ => None,
+    })
+}
+
+fn info_field<T>(source: &str, key: &str, read: impl Fn(&Expr) -> Option<T>) -> Option<T> {
     let (ast, _) = parse(source).ok()?;
     ast.statements().iter().find_map(|st| {
         let Stmt::Var(x, _, _) = st else { return None };
         let (ident, value, _) = &**x;
         let Expr::Map(m, _) = value else { return None };
         (ident.name.as_str() == "INFO").then_some(())?;
-        m.0.iter().find(|(k, _)| k.name.as_str() == key).and_then(|(_, v)| match v {
-            Expr::FloatConstant(f, _) => Some(**f),
-            Expr::IntegerConstant(i, _) => Some(*i as f64),
-            _ => None,
-        })
+        m.0.iter().find(|(k, _)| k.name.as_str() == key).and_then(|(_, v)| read(v))
     })
 }
 
@@ -217,21 +230,6 @@ fn variation_source(name: &str) -> Option<String> {
 /// beside it. Empty when it calls none or does not compile.
 pub fn variations_called(source: &str, kind: EntryKind) -> Vec<(String, String)> {
     lower_as(source, kind).map(|l| l.variations).unwrap_or_default()
-}
-
-/// A string field of a script's `INFO`.
-fn info_string(source: &str, key: &str) -> Option<String> {
-    let (ast, _) = parse(source).ok()?;
-    ast.statements().iter().find_map(|st| {
-        let Stmt::Var(x, _, _) = st else { return None };
-        let (ident, value, _) = &**x;
-        let Expr::Map(m, _) = value else { return None };
-        (ident.name.as_str() == "INFO").then_some(())?;
-        m.0.iter().find(|(k, _)| k.name.as_str() == key).and_then(|(_, v)| match v {
-            Expr::StringConstant(s, _) => Some(s.to_string()),
-            _ => None,
-        })
-    })
 }
 
 /// A formula from a script's own function `f(z, c)` (phase 4, step 8):
@@ -704,7 +702,17 @@ impl<'s> Lowerer<'s> {
                     Expr::FloatConstant(..) | Expr::IntegerConstant(..) => {}
                     _ => return self.err(*p, "`radius` is a number"),
                 },
-                o if kind == EntryKind::Solid => return self.err(*p, format!("a solid's `INFO` has `title` and `radius`, not `{o}`")),
+                // Its colour depth's default (`info_number`).
+                "depth" if kind == EntryKind::Solid => match v {
+                    Expr::IntegerConstant(n, _) if (1..=12).contains(n) => {}
+                    _ => return self.err(*p, "`depth` is a whole number from 1 to 12: how many iterations the colourings read"),
+                },
+                // How it is marched (`info_string`; `IfsDef::march_inside`).
+                "march" if kind == EntryKind::Solid => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "near" | "inside") => {}
+                    _ => return self.err(*p, "`march` is \"near\" (a hit within a pixel of the solid) or \"inside\" (a hit only in it)"),
+                },
+                o if kind == EntryKind::Solid => return self.err(*p, format!("a solid's `INFO` has `title`, `radius`, `depth` and `march`, not `{o}`")),
                 "center" | "magn" | "maxiter" | "angle" if !self.coloring => {
                     let value = self.literal(v)?;
                     default.items.push(Setting { name: name.clone(), value: SettingValue::Expr(value), span: self.pos.span(*p) });

@@ -415,8 +415,10 @@ pub fn solid_error(p: &ir::Program) -> Option<String> {
 
 /// Compile a Rhai solid (the KIFS plan, B3) and register it under `name`
 /// as a mode-D entry: the template's parameters, the solid's own from
-/// slot 7, its colour depth and its ball (`INFO.radius`, a parameter the
-/// panel can move), and its walk (`lang::wgsl::solid`).
+/// slot 7, its colour depth (`INFO.depth`, else 3) and its ball
+/// (`INFO.radius`, a parameter the panel can move, unless `prepare`
+/// computes it: [`solid_ball`]), its march (`INFO.march`), and its walk
+/// (`lang::wgsl::solid`).
 pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::ifs::IfsDef, Vec<Diag>> {
     if let Some(def) = super::ifs::get_ifs(name) {
         return Ok(def);
@@ -440,29 +442,45 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
     let wgsl = lang::wgsl::solid(&p, template.len(), depth_slot).map_err(fail)?;
     #[cfg(not(target_arch = "wasm32"))]
     lang::wgsl::validate_solid(&wgsl).map_err(|e| fail(format!("the compiler produced invalid WGSL (a bug): {e}")))?;
-    let radius = lang::rhai::info_number(&src.source, "radius").unwrap_or(2.0).max(1e-3);
+    let radius = lang::rhai::info_number(&src.source, "radius");
+    // A ball `prepare` computes follows the parameters, and takes the
+    // Ball Radius parameter's place.
+    let ball = ball_global(&p);
+    if let Some(v) = ball {
+        if !matches!(p.vars[v].ty, ir::Ty::Float | ir::Ty::Int) || p.vars[v].is_array() {
+            return Err(fail("`prepare`'s `ball` is a number: the radius of the ball the set lies in".into()));
+        }
+        if radius.is_some() {
+            return Err(fail("`prepare` gives the ball (`ball`), so `INFO.radius` would not be read: one or the other".into()));
+        }
+    }
+    let radius = radius.unwrap_or(2.0).max(1e-3);
+    let depth = lang::rhai::info_number(&src.source, "depth").unwrap_or(3.0).clamp(1.0, 12.0).round();
     let mut parameters: Vec<EscapeParamDef> = template.to_vec();
     parameters.extend(own);
     parameters.push(EscapeParamDef {
         name: "colour_depth",
         display_name: "Colour Depth",
-        default: 3.0,
+        default: depth as f32,
         min: 1.0,
         max: 12.0,
         tooltip: "How many of the first iterations the colourings read: the orbit trap's closest approach, the level's \
                   running derivative and the address. Raise it when zoomed in.",
         choices: &[],
     });
-    parameters.push(EscapeParamDef {
-        name: "radius",
-        display_name: "Ball Radius",
-        default: radius as f32,
-        min: 0.01,
-        max: (radius * 4.0).max(4.0) as f32,
-        tooltip: "The ball the set lies in, which the march starts from (INFO.radius). Too small cuts the solid; too \
-                  large spends steps on empty space.",
-        choices: &[],
-    });
+    // Its slot is kept without it: `prepare`'s values start after it.
+    if ball.is_none() {
+        parameters.push(EscapeParamDef {
+            name: "radius",
+            display_name: "Ball Radius",
+            default: radius as f32,
+            min: 0.01,
+            max: (radius * 4.0).max(4.0) as f32,
+            tooltip: "The ball the set lies in, which the march starts from (INFO.radius). Too small cuts the solid; too \
+                      large spends steps on empty space.",
+            choices: &[],
+        });
+    }
     let def = super::ifs::IfsDef {
         name: leak(name.to_string()),
         display_name: leak(p.name.clone()),
@@ -472,6 +490,7 @@ pub fn compile_solid(src: &CustomSource, name: &str) -> Result<&'static super::i
         parameters: Box::leak(parameters.into_boxed_slice()),
         presets: &[],
         wgsl: leak(wgsl),
+        march_inside: lang::rhai::info_string(&src.source, "march").as_deref() == Some("inside"),
     };
     let def: &'static super::ifs::IfsDef = Box::leak(Box::new(def));
     super::ifs::register_custom_solid(def);
@@ -1317,6 +1336,32 @@ pub fn globals(name: &str, block: &[f32], env: &lang::interp::Env) -> Option<(us
         l.insert(name.to_string(), (key, values.clone()));
     }
     Some((at, values))
+}
+
+/// The ball a solid's `prepare` computes (`ball`) at the config's
+/// parameters: the radius its set lies within, which
+/// `ifs::standalone_radius` frames the camera and bounds the march by,
+/// so a parameter that grows the solid grows its ball. Read from the
+/// parameters alone (`prepare`'s image is a pixel's). `None` for a solid
+/// without one, which has the Ball Radius parameter instead
+/// ([`compile_solid`]).
+pub fn solid_ball(def: &super::ifs::IfsDef, params: &std::collections::BTreeMap<String, f32>) -> Option<f64> {
+    let (p, base) = {
+        let r = registry().read().ok()?;
+        (r.programs.get(def.name)?.clone(), r.solid_globals.get(def.name)?.0)
+    };
+    let v = ball_global(&p)?;
+    let at: usize = p.globals.iter().take_while(|&&g| g != v).map(|&g| p.vars[g].floats()).sum();
+    let mut block = vec![0.0f32; def.parameters.len()];
+    super::pack_params(def.parameters, params, &mut block);
+    let params = lang::interp::ParamValues::from_slots(&p, block.get(base..)?);
+    let env = lang::interp::Env::at(lang::builtins::C64::ZERO, 1);
+    lang::interp::globals(&p, &params, &env).get(at).map(|&r| f64::from(r))
+}
+
+/// `prepare`'s `ball`, if it gives one.
+fn ball_global(p: &ir::Program) -> Option<ir::VarId> {
+    p.globals.iter().copied().find(|&v| p.vars[v].name == "g_ball")
 }
 
 /// Register the config's embedded sources under the names it gives
