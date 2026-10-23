@@ -532,9 +532,10 @@ function takes the point, and the ids when it has parameters (as
   transform. `assets/formulas/variation-moran.rhai` draws level-dependent
   IFSs (Moran sets: one map per level, each level's from its own set, so
   a Sierpinski triangle can be made of ferns); `escape::moran` holds its
-  presets and tests, and
-  [level-dependent-flames.md](../projects/level-dependent-flames.md) the
-  plan for levels of the user's own transforms.
+  presets and tests. Levels of the user's own transforms need no
+  variation: xaos and a subflame draw them ([TRANSFORMS.md](TRANSFORMS.md#xaos),
+  and the record,
+  [level-dependent-flames.md](../archive/projects/level-dependent-flames.md)).
 - Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
