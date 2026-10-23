@@ -351,8 +351,11 @@ fn variation_module(p: &Program, own: &VariationShape, sig: &str, three: bool, p
 pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, String> {
     let find = |name: &str| p.vars.iter().position(|v| v.name == name && !v.global && !v.is_array());
     let (Some(zx), Some(zy), Some(zz)) = (find("s_z__x"), find("s_z__y"), find("s_z__z")) else {
-        return Err("the state needs `z`, the iterate, a vector".into());
+        return Err("the state needs `z`, the iterate, a vector or a quaternion".into());
     };
+    // A quaternion's scalar part (docs/projects/quaternions.md): the trap
+    // reads its vector part, and the escape test its whole length.
+    let zw = find("s_z__w");
     let dr = find("s_dr");
     let address = find("s_address");
     let mut g = Gen::new(p, Ctx::Formula, "ufs_");
@@ -380,6 +383,10 @@ pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, Stri
     g.stmts(&p.final_body, 1, &mut body);
     body.push_str("    return index;\n}\n\n");
     let z = format!("vec3<f32>({}, {}, {})", g.var(zx), g.var(zy), g.var(zz));
+    let r = match zw {
+        Some(zw) => format!("length(vec4<f32>({}, z))", g.var(zw)),
+        None => "length(z)".to_string(),
+    };
     let spread = dr.map(|v| format!("            spread = f32({});\n", g.var(v))).unwrap_or_default();
     let addr = address.map(|v| format!("            address = fract(f32({}));\n", g.var(v))).unwrap_or_default();
     let _ = write!(
@@ -413,7 +420,7 @@ pub fn solid(p: &Program, base: usize, depth_slot: usize) -> Result<String, Stri
         s = solid_step(s, pos.xy, pos.z);
         k = k + 1u;
         let z = {z};
-        let r = length(z);
+        let r = {r};
         if (k <= depth) {{
 {spread}            // What the trap measures: `z`, through the Orbit
             // transformations when there are any.

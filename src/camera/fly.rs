@@ -167,15 +167,17 @@ fn level_turn(f: &Frame, drag: [f64; 2], s: LookSettings) -> Option<Quat> {
     Some(rp * ry)
 }
 
-/// The stored angles in their canonical range: a solid-convention pitch
-/// within ±90° (the config's range for those cameras), past which the
-/// same orientation is the pitch the other way round, the heading
-/// reversed and the camera upside down.
-fn canonical(conv: Convention, a: Angles) -> Angles {
+/// The stored angles in their canonical range. With `poles` (a
+/// terrain's), a solid-convention pitch within ±90° (the config's range
+/// for those cameras), past which the same orientation is the pitch the
+/// other way round, the heading reversed and the camera upside down.
+/// Without (mode D's), the pitch only wraps at a half turn, so a look
+/// carries on over the top as an orbit does.
+fn canonical(conv: Convention, a: Angles, poles: bool) -> Angles {
     let mut a = a;
     if let Convention::Solid { .. } = conv {
         a.pitch = wrap_pi(a.pitch);
-        if a.pitch.abs() > FRAC_PI_2 {
+        if poles && a.pitch.abs() > FRAC_PI_2 {
             a.pitch -= PI * a.pitch.signum();
             a.yaw += PI;
             a.bank = PI - a.bank;
@@ -194,7 +196,7 @@ pub fn look(config: &FractalConfig, drag: [f32; 2], settings: LookSettings, pane
     let f = conv.frame_of(&q);
     let drag = [drag[0] as f64, drag[1] as f64];
     let r = if settings.free_look { free_turn(&f, drag, settings) } else { level_turn(&f, drag, settings) }?;
-    let to = canonical(conv, conv.angles_near(&(q * r.conjugate()), from));
+    let to = canonical(conv, conv.angles_near(&(q * r.conjugate()), from), kind != ViewKind::Solid);
     let mut changes: Vec<(ConfigPath, ConfigValue)> = vec![
         (paths[0].clone(), (to.pitch as f32).into()),
         (paths[1].clone(), (to.yaw as f32).into()),
@@ -799,9 +801,11 @@ mod tests {
                 let want = conv.frame_of(&q);
                 let err = dist(got.forward, want.forward).max(dist(got.up, want.up));
                 assert!(err < 2e-3, "{name} step {i}: {err}");
-                // The stored values cannot pass the conventions' range.
+                // The stored values cannot pass the conventions' range: a
+                // terrain's poles, a solid's half turn.
+                let range = if name == "solid" { PI } else { FRAC_PI_2 };
                 if name != "flame" {
-                    assert!(a.pitch.abs() <= FRAC_PI_2 + 1e-6, "{name} step {i}: pitch {}", a.pitch);
+                    assert!(a.pitch.abs() <= range + 1e-6, "{name} step {i}: pitch {}", a.pitch);
                 }
                 // Re-sync, as the written angles are f32.
                 q = conv2.orientation(a);
@@ -867,16 +871,48 @@ mod tests {
         }
     }
 
-    /// The canonical angles rebuild the same orientation.
+    /// The canonical angles rebuild the same orientation: within the poles
+    /// for a terrain, a solid's pitch past them as it was.
     #[test]
     fn canonical_angles_are_the_same_camera() {
         let conv = Convention::Solid { yaw_offset: 0.3 };
-        for pitch in [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0] {
-            let a = Angles { pitch, yaw: 0.7, bank: 0.2, roll: 0.1 };
-            let b = canonical(conv, a);
-            assert!(b.pitch.abs() <= FRAC_PI_2 + 1e-12, "{b:?}");
-            let (fa, fb) = (conv.frame(a), conv.frame(b));
-            assert!(dist(fa.forward, fb.forward) < 1e-9 && dist(fa.up, fb.up) < 1e-9, "{pitch}");
+        for poles in [true, false] {
+            for pitch in [-5.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0] {
+                let a = Angles { pitch, yaw: 0.7, bank: 0.2, roll: 0.1 };
+                let b = canonical(conv, a, poles);
+                if poles {
+                    assert!(b.pitch.abs() <= FRAC_PI_2 + 1e-12, "{b:?}");
+                } else {
+                    assert!((b.pitch - wrap_pi(pitch)).abs() < 1e-12 && b.yaw == 0.7 && b.bank == 0.2, "{b:?}");
+                }
+                let (fa, fb) = (conv.frame(a), conv.frame(b));
+                assert!(dist(fa.forward, fb.forward) < 1e-9 && dist(fa.up, fb.up) < 1e-9, "{pitch}");
+            }
         }
+    }
+
+    /// A solid's orbit and a solid's look carry on over the top: dragged
+    /// far enough down, the pitch passes 90 degrees and the view keeps
+    /// turning (mode D's pitch has no poles; a terrain's does).
+    #[test]
+    #[cfg(feature = "engine-escape")]
+    fn a_solid_turns_over_the_top() {
+        let (_, solid) = cameras().into_iter().find(|(n, _)| *n == "solid").expect("a solid");
+        // An orbit: the drag down tips the camera over the target.
+        let mut c = solid.clone();
+        for _ in 0..12 {
+            let e = crate::camera::gesture::orbit(&c, ViewKind::Solid, 0.0, 0.2).expect("an orbit");
+            c = applied(&c, &e);
+        }
+        assert!(c.escape.cam_pitch.abs() > FRAC_PI_2 as f32, "an orbit passed the pole: {}", c.escape.cam_pitch);
+        // A look: FreeLook along the screen's vertical, through the pole
+        // (folded, the pitch would stay within it, the yaw flipped).
+        let mut c = solid.clone();
+        let mut furthest = 0.0f32;
+        for _ in 0..40 {
+            c = applied(&c, &look(&c, [0.0, 10.0], settings(true), PANEL).expect("a look"));
+            furthest = furthest.max(c.escape.cam_pitch.abs());
+        }
+        assert!(furthest > FRAC_PI_2 as f32 + 0.1, "the look passed the pole: {furthest}");
     }
 }

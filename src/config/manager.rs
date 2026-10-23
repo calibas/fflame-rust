@@ -3236,11 +3236,18 @@ impl ConfigManager {
                 self.current.escape.cam_target_z = value.try_into()?;
             }
             ConfigPath::EscapeCamPitch => {
-                // To the poles and no further: past them the elevation
-                // would mean the same view with the yaw reversed, and
-                // a slider that wraps a view is a slider that jumps.
+                // A terrain's to the poles and no further: past them the
+                // elevation would mean the same view with the yaw
+                // reversed, and a slider that wraps a view is a slider
+                // that jumps. A solid's has no poles: an orbit carries on
+                // over the top, the camera upside down, and the angle
+                // wraps at a half turn either way.
                 let v: f32 = value.try_into()?;
-                self.current.escape.cam_pitch = v.clamp(-1.5708, 1.5708);
+                self.current.escape.cam_pitch = if self.current.escape.terrain_active() {
+                    v.clamp(-1.5708, 1.5708)
+                } else {
+                    v - std::f32::consts::TAU * (v / std::f32::consts::TAU).round()
+                };
             }
             ConfigPath::EscapeCamYaw => {
                 self.current.escape.cam_yaw = value.try_into()?;

@@ -76,6 +76,14 @@ pub struct IfsDef {
     pub parameters: &'static [EscapeParamDef],
     pub presets: &'static [super::EscapePreset],
     pub wgsl: &'static str,
+    /// A solid whose distance is a safe step and no more (a Rhai solid's
+    /// `INFO.march = "inside"`): a small reading need not mean a surface
+    /// is near, so the march stops only inside the solid, where the
+    /// distance is none, and steps at least a pixel; its shadows are
+    /// hard and its occlusion counts what its probes land in
+    /// (`assembler::march_inside`). `false` for every built-in, whose
+    /// distance bounds the way to the surface.
+    pub march_inside: bool,
 }
 
 /// A mode-D coloring: the four quantities of §2.3 → palette position
@@ -100,6 +108,7 @@ pub static IFS_FLAME: IfsDef = IfsDef {
     name: "ifs_flame",
     display_name: "Flame Attractor (Distance)",
     solid: false,
+    march_inside: false,
     needs_flame: true,
     default_coloring: "ifs_distance",
     presets: &[],
@@ -803,6 +812,7 @@ pub static IFS_FLAME_3D: IfsDef = IfsDef {
     name: "ifs_flame_3d",
     display_name: "Flame Attractor (Solid)",
     solid: true,
+    march_inside: false,
     needs_flame: true,
     default_coloring: "ifs_address",
     presets: &[],
@@ -1866,6 +1876,7 @@ pub static IFS_QUATERNION_JULIA: IfsDef = IfsDef {
     name: "quaternion_julia_solid",
     display_name: "Quaternion Julia (Solid)",
     solid: true,
+    march_inside: false,
     needs_flame: false,
     default_coloring: "ifs_level",
     presets: &[],
@@ -2186,6 +2197,7 @@ pub static IFS_KIFS: IfsDef = IfsDef {
     name: "kifs_solid",
     display_name: "KIFS (Solid)",
     solid: true,
+    march_inside: false,
     needs_flame: false,
     default_coloring: "ifs_level",
     presets: &[],
@@ -2608,6 +2620,7 @@ pub static IFS_MANDELBOX: IfsDef = IfsDef {
     name: "mandelbox_solid",
     display_name: "Mandelbox (Solid)",
     solid: true,
+    march_inside: false,
     needs_flame: false,
     default_coloring: "ifs_trap",
     presets: &[],
@@ -2891,6 +2904,7 @@ pub static IFS_MANDELBULB: IfsDef = IfsDef {
     name: "mandelbulb_solid",
     display_name: "Mandelbulb (Solid)",
     solid: true,
+    march_inside: false,
     needs_flame: false,
     default_coloring: "ifs_trap",
     presets: &[],
@@ -3157,8 +3171,8 @@ pub fn pack_standalone(def: &IfsDef, escape: &crate::config::escape::EscapeConfi
 
 /// The radius of the ball a def that needs no flame frames and bounds
 /// its march by, which its set lies within: a KIFS's offset's length,
-/// the Mandelbox's and the Mandelbulb's escape bounds, else the bailout
-/// (the quaternion Julia's).
+/// the Mandelbox's and the Mandelbulb's escape bounds, a Rhai solid's
+/// own, else the bailout (the quaternion Julia's).
 pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeConfig) -> f64 {
     let value = |name: &str| -> Option<f64> {
         let p = def.parameters.iter().find(|p| p.name == name)?;
@@ -3178,7 +3192,11 @@ pub fn standalone_radius(def: &IfsDef, escape: &crate::config::escape::EscapeCon
         let c = julia().then(constant);
         return mandelbulb_radius(value("power").unwrap_or(8.0), c);
     }
-    // A user's solid gives its ball as a parameter (B3).
+    // A user's solid computes its ball from its parameters (`prepare`'s
+    // `ball`), or gives it as a parameter (B3).
+    if let Some(r) = super::custom::solid_ball(def, &escape.formula_params) {
+        return r.max(1e-3);
+    }
     if let Some(r) = value("radius") {
         return r.max(1e-3);
     }

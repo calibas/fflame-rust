@@ -47,6 +47,9 @@ pub mod twins;
 /// Rhai (`assets/formulas`), run as Fractint does.
 #[cfg(test)]
 mod legacy;
+/// Tests: Halayka's quaternion sets and escape paths, their presets.
+#[cfg(test)]
+mod halayka;
 pub mod diag;
 pub mod environment;
 pub mod path_core;

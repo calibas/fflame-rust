@@ -150,6 +150,8 @@ pub enum PanelUse {
 }
 
 impl PanelUse {
+    /// The tests' question; the app matches on the banner's reason.
+    #[cfg(test)]
     pub fn is_active(self) -> bool {
         matches!(self, PanelUse::Active)
     }
