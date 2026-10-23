@@ -1822,17 +1822,20 @@ fn distance(s, p) {
                     }
                     // The march, by the estimate, as the solid's
                     // `march: "inside"` has it: a hit only where the
-                    // estimate is none, each step at least the pixel.
+                    // estimate is none, each step at least the pixel and
+                    // an eighth more for each in a row under two.
                     const PIXEL: f64 = 1e-4;
                     let mut t = 0.0;
                     let mut hit = f64::INFINITY;
+                    let mut crawl = 0.0;
                     for _ in 0..4000 {
                         let e = interp::solid(&p, &params, at(t), 8);
                         if e <= 0.0 {
                             hit = t;
                             break;
                         }
-                        t += e.max(PIXEL);
+                        crawl = if e < 2.0 * PIXEL { crawl + 1.0 } else { 0.0 };
+                        t += e.max(PIXEL * (1.0 + 0.125 * crawl));
                         if !inside_box(at(t)) {
                             break;
                         }
