@@ -125,6 +125,23 @@ complement, a box of 3.
   - What remains is real: at threshold 16 and |C| near 5 the complement
     has sheets far thinner than a pixel (the poles' preimages), which
     alias as any sub-pixel geometry does.
+  - Then (user: "a smooth, rounded red section ... most of the right half
+    doesn't appear to be rendering correctly, like it's got the wrong
+    normals", `exp(Z^2) + C`, the surface, metallic, path traced): the
+    shell read a step deep right at its face with the set, which reads
+    none, and the normal saw that jump and snapped toward the axes. Now
+    the shell is measured to the nearer of its faces
+    (`halaykas_distance_has_no_jump_at_the_sets_boundary`; the old field
+    jumped at 48 of 48 faces).
+  - **Open:** the shell's other face, on the escaped side, is a level of
+    the outside reading, which is piecewise -- the step an orbit escapes
+    at changes across a seam -- so it has a cliff where a seam meets it
+    (11-21% of its crossings for steps 0-2; none for 3 and 5, the
+    presets' surfaces), and it lies a step off the true surface. The
+    principled surface is a march of its own: a hit at the first change
+    of sign from either side, no shell, the normal turned to the ray --
+    an engine change through the march, the shadows, the occlusion and
+    the path tracer, not built.
 - **The distortion was the ball.** Box 3 reaches 5.2 from the centre;
   the ball was 2.6, so the march started on a sphere cut through the
   solid, the camera sat 0.17 outside it, and a turn took the eye inside
