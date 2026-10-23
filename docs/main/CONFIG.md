@@ -73,7 +73,7 @@ field loads with its default.
 | effects | `density_effects`, `color_effects` (lists of `EffectInstance`; see [EFFECTS.md](EFFECTS.md)) |
 | focused rendering | `importance`, `cylinder_targeting`, `cylinder_always`, `cylinder_trim`, `cylinder_trim_levels`, `word_removals`, `auto_exposure` (see [FOCUSED-RENDERING.md](FOCUSED-RENDERING.md)) |
 | other engines | `escape: EscapeConfig`, `sim: SimConfig` (below) |
-| file | `image_size` — JWildfire/Apophysis's `size`, round-tripped through `.flame` XML; the app uses it only to pre-fill the export panel's custom size |
+| file | `image_size` — the picture's size: what the app's PNG and video exports render at (the View panel's Output Size; `ImageWidth`/`ImageHeight`, clamped to `MIN_IMAGE_DIM..=MAX_IMAGE_DIM`), and the shape the viewport letterboxes to; JWildfire/Apophysis's `size`, round-tripped through `.flame` XML. The CLI's `export` does not read it (`--width`/`-H`) |
 
 Points worth knowing:
 
@@ -575,8 +575,9 @@ no undo, saved on every change, the same for every picture.
 | | `fly_move_speed`, `fly_sprint_multiplier` | 1.0, 3.0 |
 | | `fly_invert_y` | false |
 | | `fly_camera_mode` (`FreeLook` or `Fps`) | `FreeLook` |
-| export | `default_export_width`, `default_export_height` | 1920, 1080 |
+| export | `video_encoding` — the Export Animation panel's codec, encoder, quality (CRF), preset and tune, loaded when the panel opens and saved when one changes (on the pointer's release); read leniently, so an encoder a later build renamed costs only itself | H.265, software, CRF 12, Medium, Animation |
 | | `png_export_strip_metadata` | false |
+| viewport | `viewport_letterbox` — the viewport in the picture's shape, black bars around it | false |
 | UI | `language` | `"en"` |
 | | `show_help_on_startup` | true |
 | | `compact_mode` | detected on first run |
