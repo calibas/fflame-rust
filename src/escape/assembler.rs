@@ -8792,33 +8792,49 @@ pub fn assemble_ifs_rig(
 /// shadows that were not there, and moved as the camera did (the pixel
 /// is the hit test). Spliced line for line, so every other solid's text
 /// is what it was.
+///
+/// A reading under the pixel is then no hit and no measure, and the ray
+/// steps at least the pixel -- an eighth of a pixel more for each step in
+/// a row that read under two (`crawl`). A ray grazing a surface it misses
+/// reads a pixel or two all along it, and so does one crossing space the
+/// reading cannot measure (its stretch bound loose); stepped a pixel at a
+/// time, such a ray ran out of steps short of what lay behind -- a black
+/// outline round a silhouette -- and the path tracer's rays, floored at
+/// their hit tolerance, a fraction of a pixel, crawled for twice the time.
+/// A step that grew passes only what is thinner than itself, a pixel or
+/// so where the crawl is short, and a hit is refined back to where the
+/// ray entered.
 const MARCH_INSIDE: &[(&str, &str)] = &[
     // The camera's march: a reading is a step of at least the pixel and
     // never a hit; the hit is a step into the solid, refined back to
     // where the ray entered (`ifs_refine`).
+    ("var t_prev = t;", "var t_prev = t;\nvar crawl = 0.0;"),
     (
         "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target",
-        "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target\nif (d > 0.0) {\n    d = max(d, eps);\n}",
+        "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target\nif (d > 0.0) {\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * eps);\n    d = max(d, eps * (1.0 + 0.125 * crawl));\n}",
     ),
     // A shadow: hard, as a reading is no measure of how near the ray
-    // passed.
+    // passed; its floor the pixel where it leaves the surface (the bias
+    // is four).
+    ("var shade = 1.0;", "var shade = 1.0;\nvar crawl = 0.0;"),
     (
         "let d = ifs_distance_at(p + light * t, eps);",
-        "let d = ifs_distance_at(p + light * t, eps);\nif (d > 0.0) {\n    t = t + max(d, eps);\n    i = i + 1u;\n    continue;\n}",
+        "let d = ifs_distance_at(p + light * t, eps);\nif (d > 0.0) {\n    crawl = select(0.0, crawl + 1.0, d < bias * 0.5);\n    t = t + max(d, bias * 0.25 * (1.0 + 0.125 * crawl));\n    i = i + 1u;\n    continue;\n}",
     ),
     // Occlusion: what each probe lands in.
     (
         "let vis = clamp(ifs_distance_at(p + dir * h, h * 0.01) / h, 0.0, 1.0);",
         "let vis = select(0.0, 1.0, ifs_distance_at(p + dir * h, h * 0.01) > 0.0);",
     ),
-    // The path tracer's rays, as the camera's.
+    // The path tracer's rays, as the camera's: a bounce's floor the pixel
+    // at the length of its path.
     (
         "let dist = ifs_distance_at(o + d * t, eps);",
-        "var dist = ifs_distance_at(o + d * t, eps);\nif (dist > 0.0) {\n    dist = max(dist, eps);\n}",
+        "var dist = ifs_distance_at(o + d * t, eps);\nif (dist > 0.0) {\n    let px = pt_ifs_eps(travelled + t);\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * px);\n    dist = max(dist, px * (1.0 + 0.125 * crawl));\n}",
     ),
     (
         "let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);",
-        "var dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);\nif (dist > 0.0) {\n    dist = max(dist, eps);\n}",
+        "var dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);\nif (dist > 0.0) {\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * eps);\n    dist = max(dist, eps * (1.0 + 0.125 * crawl));\n}",
     ),
 ];
 
@@ -10959,17 +10975,20 @@ mod lens_tests {
         let path = assemble_ifs_path(&inside, col, 1, None, false, false);
         // The camera's march, the shadow, the occlusion; the path's two.
         for (text, needle, n) in [
-            (&walk, "d = max(d, eps);", 1),
-            (&walk, "t = t + max(d, eps);", 1),
+            (&walk, "d = max(d, eps * (1.0 + 0.125 * crawl));", 1),
+            (&walk, "t = t + max(d, bias * 0.25 * (1.0 + 0.125 * crawl));", 1),
             (&walk, "let vis = select(0.0, 1.0,", 1),
-            (&path, "dist = max(dist, eps);", 2),
+            (&walk, "var crawl = 0.0;", 2),
+            (&path, "dist = max(dist, ", 2),
+            // The shadow's, the bounce's and the camera ray's.
+            (&path, "var crawl = 0.0;", 3),
         ] {
             assert_eq!(text.matches(needle).count(), n, "{needle}");
         }
         validate_lens(&walk, "the walk, marched inside");
         validate_lens(&path, "the path tracer, marched inside");
         let plain = assemble_ifs(near, col, 1) + assemble_ifs_path(near, col, 1, None, false, false).as_str();
-        for needle in ["max(d, eps)", "let vis = select(", "max(dist, eps)"] {
+        for needle in ["crawl", "let vis = select(", "max(dist, "] {
             assert!(!plain.contains(needle), "marched near: {needle}");
         }
     }

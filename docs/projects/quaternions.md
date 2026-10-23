@@ -133,6 +133,29 @@ complement, a box of 3.
     the shell is measured to the nearer of its faces
     (`halaykas_distance_has_no_jump_at_the_sets_boundary`; the old field
     jumped at 48 of 48 faces).
+  - Then (user: "black outlines around certain objects ... when there's
+    one section in front of another ... Like the rays are stopping when
+    it gets close to the section in the middle", and "extremely slow,
+    like 10x slower than what most solid escape time performs at";
+    exp(Z^2) + C, the surface, path traced): the outlines were rays out
+    of steps. Grazing a silhouette, the readings stay a pixel or two
+    (they run about a fifth of the distance, a twentieth along a ray at
+    the median), and stepped a pixel at a time the ray ran out before
+    the section behind; the path tracer's rays, floored at their hit
+    tolerance, crawled finer still. Now a run of readings under two
+    pixels grows the floor by an eighth of a pixel a step, and the path
+    tracer's rays floor at the pixel: no ray out of steps on the CPU
+    (14 of 16,000 before), none on the GPU at 192 steps, the path traced
+    frame 1.42 s to 1.07 s at 640x400 (the near march, wrong, 0.80 s).
+    The 10x is the solid's: the built-in Quaternion Julia, path traced
+    alike, is 0.08 s -- eight iterations of quaternion exp per reading,
+    about 60 readings a ray. Measured and not taken: the derivative
+    carried exactly (three tangents through each step's Jacobian, the
+    Newton reading `(|Z_k| - 4) / |grad|Z_k||`) reads only 15% more than
+    `dr` does; the inside reading at a half rather than a quarter cut the
+    steps 13% but read a few thousandths a thousandth from the boundary
+    (`halaykas_distance_has_no_jump_at_the_sets_boundary`); the colour
+    code costs nothing measurable.
   - **Open:** the shell's other face, on the escaped side, is a level of
     the outside reading, which is piecewise -- the step an orbit escapes
     at changes across a seam -- so it has a cliff where a seam meets it

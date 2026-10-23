@@ -573,9 +573,13 @@ fn escaped(s, p) {
   - `march`: `"near"` (the default) stops the march within a pixel of
     the solid, for a distance that bounds the way to the surface;
     `"inside"` stops it only where the distance is none or less, each
-    step at least a pixel, shadows hard and occlusion by what its probes
-    land in (`IfsDef::march_inside`, `assembler::MARCH_INSIDE`, spliced
-    line for line so every other solid's WGSL is what it was). For a
+    step at least a pixel -- an eighth of a pixel more for each step in a
+    row that read under two (`crawl`), so a ray grazing a surface it
+    misses gets past it within its steps -- shadows hard and occlusion by
+    what its probes land in (`IfsDef::march_inside`,
+    `assembler::MARCH_INSIDE`, spliced line for line so every other
+    solid's WGSL is what it was; the path tracer's rays floored at the
+    pixel at their path's length, not their hit tolerance). For a
     distance that is a safe step and no measure of how near a surface
     is: read as a clearance, a small reading where an orbit nearly
     escapes far from any surface drew surfaces and shadows that were not
