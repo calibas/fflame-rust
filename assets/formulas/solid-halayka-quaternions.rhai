@@ -179,15 +179,16 @@ fn distance(s, p) {
     let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };
     // Signed: the reading of the side the point is not on, negative in
     // the solid, so the normals, which the march takes where it stepped
-    // in, see the surface from both sides. The surface: a shell a step
-    // thick on the escaped side, which a step from inside the set cannot
-    // cross.
+    // in, see the surface from both sides -- and none at every face, or
+    // they see the jump instead and snap toward the axes. The surface: a
+    // shell a step thick on the escaped side, which a step from inside
+    // the set cannot cross, measured in it to the nearer of its faces.
     let set = if p.draw == 0 {
         if s.out { outside } else { -inside }
     } else if p.draw == 1 {
         if s.out { -outside } else { inside }
     } else if s.out {
-        outside - step
+        max(outside - step, -outside)
     } else {
         inside
     };

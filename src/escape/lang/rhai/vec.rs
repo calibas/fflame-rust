@@ -1853,6 +1853,57 @@ fn distance(s, p) {
         }
     }
 
+    /// The solid's distance is none or near it on both sides of the set's
+    /// boundary, for each step and each way of drawing: where it changes
+    /// sign there, between two points a thousandth apart along a ray,
+    /// neither reads more than a few thousandths. The march takes the
+    /// normal where it stepped in, from the distance a pixel either side;
+    /// a jump at a face (the surface's shell read a step deep against the
+    /// set's none) is what it saw there instead, and snapped those normals
+    /// toward the axes. The surface's other face, the shell's escaped side,
+    /// is a level of a piecewise reading -- the step an orbit escapes at
+    /// changes across a seam -- and has a cliff where a seam meets it, so
+    /// it is not held here (docs/projects/quaternions.md).
+    #[test]
+    fn halaykas_distance_has_no_jump_at_the_sets_boundary() {
+        use crate::escape::lang::interp;
+        let p = halayka_solid();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        const DT: f64 = 1e-3;
+        for (step, power, c, f) in &halayka_steps() {
+            for draw in 0..3 {
+                let params = halayka_params(&p, *step, *power, *c, draw);
+                let (mut faces, mut jumps) = (0, 0);
+                for _ in 0..24 {
+                    let o = [(next() * 2.0 - 1.0) * 1.4, (next() * 2.0 - 1.0) * 1.4, (next() * 2.0 - 1.0) * 1.4];
+                    let mut d = [next() - 0.5, next() - 0.5, next() - 0.5];
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    d = d.map(|x| x / len);
+                    let at = |t: f64| [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
+                    let mut before = (interp::solid(&p, &params, at(0.0), 8), in_halaykas_set(f.as_ref(), at(0.0)));
+                    let mut t = DT;
+                    while at(t).iter().all(|x| x.abs() <= 1.5) {
+                        let here = (interp::solid(&p, &params, at(t), 8), in_halaykas_set(f.as_ref(), at(t)));
+                        if (before.0 <= 0.0) != (here.0 <= 0.0) && before.1 != here.1 {
+                            faces += 1;
+                            jumps += usize::from(before.0.abs().max(here.0.abs()) > 4.0 * DT);
+                        }
+                        before = here;
+                        t += DT;
+                    }
+                }
+                assert!(faces > 4, "step {step}, draw {draw}: faces crossed: {faces}");
+                assert!(jumps * 20 <= faces, "step {step}, draw {draw}: {jumps} of {faces} faces with a jump");
+            }
+        }
+    }
+
     /// The escape-path variation (`variation-escape-paths.rhai`) gives
     /// points on the Bezier paths of orbits that stay: on a coarse lattice
     /// and a short path, each point's start is the lattice point it lies
