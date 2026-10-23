@@ -527,6 +527,15 @@ function takes the point, and the ids when it has parameters (as
   body may compute with quaternions (`quat`; [ESCAPE.md](ESCAPE.md), the
   formula language's Quaternions): `assets/formulas/variation-escape-paths.rhai`
   draws Halayka's escape paths of quaternion orbits as a flame's fibres.
+- **A variation that builds its own points**: one that ignores its input
+  and returns a fresh point each call draws a whole set from one
+  transform. `assets/formulas/variation-moran.rhai` draws level-dependent
+  IFSs (Moran sets: one map per level, each level's from its own set, so
+  a Sierpinski triangle can be made of ferns); `escape::moran` holds its
+  presets and tests. Levels of the user's own transforms need no
+  variation: xaos and a subflame draw them ([TRANSFORMS.md](TRANSFORMS.md#xaos),
+  and the record,
+  [level-dependent-flames.md](../archive/projects/level-dependent-flames.md)).
 - Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
