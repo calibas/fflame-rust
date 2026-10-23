@@ -311,6 +311,15 @@ impl Checker {
             reads(b, &mut f);
         }
         let mut globals: Vec<VarId> = f.exposed.into_iter().filter(|&v| program.vars[v].global).collect();
+        // A solid's ball (`prepare`'s `ball`), which the engine reads to
+        // frame the camera and start the march (`custom::solid_ball`).
+        if self.kind == EntryKind::Solid {
+            if let Some(&v) = self.var_ids.get("g_ball") {
+                if program.vars[v].global && !globals.contains(&v) {
+                    globals.push(v);
+                }
+            }
+        }
         globals.sort_unstable();
         program.globals = globals;
         if program.param_slots() > PARAM_SLOTS {

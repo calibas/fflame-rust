@@ -70,7 +70,8 @@ As built:
 - **Outside**, `(|Z_k| - 4) / dr_k` at the step `k` that escaped, halved
   and capped at a tenth of the box: first-order, it holds near the
   surface; past a critical point (exp(Z^2)'s origin, where `dr` is 0) the
-  cap keeps it a number.
+  cap keeps it a number. (Neither reading is a clearance: *After use*,
+  below.)
 - **Inside** there is no bound -- an orbit that settles shrinks `dr`, and
   `(4 - |Z_k|) / dr_k` read units where the surface was a tenth away
   (found by the ray test below) -- so the set is marched through in
@@ -92,6 +93,56 @@ As built:
 - Presets, figures 3 to 8 (1 and 2 are the standard set, the built-in
   Quaternion Julia's): `escape::halayka`, written from the files and kept
   to them by `the_presets_carry_the_examples`.
+
+### After use (2026-10-22)
+
+The user's words: "It's tricky to color it properly, none of our current
+coloring methods match the structure very well ... I'm thinking we can
+derive coloring using the same method that determines the escape path?
+Other techinques? Something odd about the shadows sometimes, they make
+strange patterns that warp as I move around ... There's also times when
+the camera seems distored ... especially when turning the camera." Their
+config: C inv(sinh Z) cosh Z, C = (1, 2.7, -4, -0.6), threshold 16, the
+complement, a box of 3.
+
+- **The patterns were surfaces that were not there.** Either reading is
+  small wherever an orbit nearly crosses the threshold, near a surface or
+  not, and the march stopped within a pixel of the solid: it stopped
+  there, at a depth that moved with the pixel, so with the camera; soft
+  shadows and occlusion read the same readings as clearances. Where an
+  orbit grazed, the march crawled until its steps ran out (the black
+  frames). And with the paper's settings the outside reading is small
+  over wide regions, its bound loose: the near march drew every one of
+  the six presets fattened -- figure 3's "can" was mostly those false
+  hits; the set itself, sampled on the CPU and on the GPU (a slab at
+  z = 0), is the two lobes the inside march draws.
+  - Fix: `INFO.march = "inside"` (ESCAPE.md, *A Rhai solid*): a hit only
+    in the solid, each step at least a pixel, the hit refined back to
+    where the ray entered (`ifs_refine`), hard shadows, occlusion by
+    membership. The distance is signed (negative in the solid) so the
+    normal, taken where the march stepped in, sees both sides; a flat 0
+    inside snapped normals toward the axes and left the presets dark.
+  - What remains is real: at threshold 16 and |C| near 5 the complement
+    has sheets far thinner than a pixel (the poles' preimages), which
+    alias as any sub-pixel geometry does.
+- **The distortion was the ball.** Box 3 reaches 5.2 from the centre;
+  the ball was 2.6, so the march started on a sphere cut through the
+  solid, the camera sat 0.17 outside it, and a turn took the eye inside
+  the solid (a black frame). Fix: `prepare` gives `ball` (the cut's: a
+  box's corner or the ball, a hair over), which the march and the camera
+  take in place of the Ball Radius (`custom::solid_ball`). The user's
+  tubes came from that sphere cut: **Cut** offers a ball, a real cut
+  with its own normals and shadows.
+- **Colour** (`address`, the Branch Address colouring; `INFO.depth = 12`
+  so it reads the whole orbit): each piece of the surface is where
+  `|Z_k|` reaches the threshold for one `k`, and from outside the orbit
+  escapes there, from inside it comes nearest to escaping there, so the
+  step of the orbit's largest `|Z|` and the angle `Z_k` makes with the
+  real axis there colour a piece alike from either side: Nearest step,
+  Exit angle, Step and angle. And the escape path's (2018): Path heading
+  (where its Bezier curve leaves the point, `Z1 - Z0` about the z axis)
+  and Path length (how far the orbit runs). The presets: Nearest step,
+  ambient 0.3 (one light left most of the rings dark).
 
 ## Escape paths as fibres (`assets/formulas/variation-escape-paths.rhai`)
 
