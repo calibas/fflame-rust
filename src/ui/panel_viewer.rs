@@ -326,9 +326,7 @@ pub struct PanelContext<'a> {
     pub load_subflame_into: &'a mut Option<usize>,
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
-    pub export_width: &'a mut u32,
-    pub export_height: &'a mut u32,
-    pub use_custom_export_size: &'a mut bool,
+    pub png_export_current: &'a mut bool,
     pub png_export_premultiplied: &'a mut bool,
     pub png_export_supersample: &'a mut bool,
     /// GPU `max_texture_dimension_2d` — per-axis ceiling for export size.
@@ -1077,11 +1075,16 @@ impl<'a> PanelViewer<'a> {
         // Handle open export panel request (Phase 5)
         if response.open_export_panel {
             self.context.export_panel_state.is_open = true;
-            // Auto-fill export settings from current config
+            // Auto-fill export settings from current config, and the
+            // encoder as this device last left it.
             self.context.animation_export_settings.iterations_per_thread =
                 self.context.config_manager.system_settings().iterations_per_thread;
             self.context.animation_export_settings.max_iterations =
                 self.context.config_manager.active_config().max_iterations;
+            let encoding = self.context.config_manager.system_settings().video_encoding.clone();
+            self.context.animation_export_settings.set_encoding(&encoding);
+            // The frame size starts from the picture's every time.
+            self.context.animation_export_settings.size_override = None;
         }
 
         // Handle animation load response
@@ -1230,9 +1233,24 @@ impl<'a> PanelViewer<'a> {
         ui.visuals_mut().panel_fill = bg_color32;
 
         if let Some(texture_id) = self.context.fractal_texture_id {
+            // Letterboxed to the picture's shape (`viewport_letterbox`):
+            // black bars, the fractal in the largest rect of its shape,
+            // centred, and none of it under the tab bar (the cover is black
+            // then too). Everything below -- the renderer's size, a drag, a
+            // zoom at the cursor -- is that rect's.
+            let letterbox = self
+                .context
+                .config_manager
+                .system_settings()
+                .viewport_letterbox
+                .then(|| {
+                    let panel = ui.available_rect_before_wrap();
+                    ui.painter().rect_filled(panel, 0.0, egui::Color32::BLACK);
+                    super::view_controls::letterbox_rect(panel, self.context.config_manager.active_config().image_size)
+                });
             // Get the actual panel size and report it for texture sizing
-            let available_size = ui.available_size();
-            let tab_bar_h = self.context.viewport_tab_bar_height;
+            let available_size = letterbox.map_or_else(|| ui.available_size(), |r| r.size());
+            let tab_bar_h = if letterbox.is_some() { 0.0 } else { self.context.viewport_tab_bar_height };
             // Inflate texture height to include the tab bar area so the fractal
             // covers the entire node seamlessly (the tab bar cover draws the top slice)
             let total_height = available_size.y + tab_bar_h;
@@ -1254,7 +1272,10 @@ impl<'a> PanelViewer<'a> {
                 .maintain_aspect_ratio(false) // Fill entire panel
                 .sense(egui::Sense::click_and_drag()); // Enable drag interaction
 
-            let response = ui.add(image);
+            let response = match letterbox {
+                Some(rect) => ui.put(rect, image),
+                None => ui.add(image),
+            };
 
             // Deep-zoom reference builds take minutes and the frame
             // cannot start until one exists, so say so rather than
@@ -1753,13 +1774,10 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.png_export_with_background,
             self.context.png_export_transparent,
-            self.context.export_width,
-            self.context.export_height,
-            self.context.use_custom_export_size,
+            self.context.png_export_current,
             self.context.png_export_premultiplied,
             self.context.png_export_supersample,
             self.context.config_manager,
-            *self.context.fractal_viewport_size,
             self.context.export_active,
             self.context.max_export_dimension,
         );

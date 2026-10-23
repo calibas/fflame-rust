@@ -164,14 +164,21 @@ pub struct SystemSettings {
     #[serde(default)]
     pub fly_proximity: bool,
 
-    // Export Defaults
-    /// Default export width in pixels
-    #[serde(default = "default_export_width")]
-    pub default_export_width: u32,
+    // Export
+    /// The video export's encoder: the codec, which encoder (software or
+    /// a GPU's), and that encoder's quality, preset and tune -- what this
+    /// device's ffmpeg and its user's taste decide, kept between sessions.
+    /// The size is the picture's (`FractalConfig::image_size`); the frame
+    /// rate and the iterations are the export's own, not kept.
+    #[serde(default = "default_video_encoding", deserialize_with = "lenient_video_encoding")]
+    pub video_encoding: crate::animation::export::VideoEncodingSettings,
 
-    /// Default export height in pixels
-    #[serde(default = "default_export_height")]
-    pub default_export_height: u32,
+    /// Letterbox the viewport to the picture's aspect
+    /// (`FractalConfig::image_size`), black bars beside or above it, so
+    /// what shows is what an export frames. Off: the viewport fills its
+    /// panel.
+    #[serde(default)]
+    pub viewport_letterbox: bool,
 
     /// Omit metadata from exported PNGs.
     ///
@@ -252,12 +259,18 @@ fn default_api_base_url() -> String {
     "http://localhost:3000".to_string()
 }
 
-fn default_export_width() -> u32 {
-    1920
+/// The Export Animation panel's encoder as it opens on a new device:
+/// H.265 in software, CRF 12, the medium preset, tuned for animation.
+pub fn default_video_encoding() -> crate::animation::export::VideoEncodingSettings {
+    crate::animation::export::VideoEncodingSettings { quality: 12, ..Default::default() }
 }
 
-fn default_export_height() -> u32 {
-    1080
+/// The encoder as saved, or the defaults where it no longer reads -- a
+/// codec a later build renamed -- rather than the whole settings file
+/// failing to load over it.
+fn lenient_video_encoding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::animation::export::VideoEncodingSettings, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_else(|_| default_video_encoding()))
 }
 
 fn default_fly_mouse_sensitivity() -> f32 {
@@ -302,8 +315,8 @@ impl Default for SystemSettings {
             fly_camera_mode: FlyCameraMode::default(),
             fly_collisions: true,
             fly_proximity: false,
-            default_export_width: default_export_width(),
-            default_export_height: default_export_height(),
+            video_encoding: default_video_encoding(),
+            viewport_letterbox: false,
             png_export_strip_metadata: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_opened_file: None,
@@ -404,12 +417,12 @@ impl SystemSettings {
         // api_base_url: skip_serializing handles this (deprecated field)
         // auth_token and auth_email use skip_serializing_if = "Option::is_none"
 
-        // Export Defaults
-        if current.default_export_width == defaults.default_export_width {
-            obj.remove("default_export_width");
+        // Export
+        if current.video_encoding == defaults.video_encoding {
+            obj.remove("video_encoding");
         }
-        if current.default_export_height == defaults.default_export_height {
-            obj.remove("default_export_height");
+        if current.viewport_letterbox == defaults.viewport_letterbox {
+            obj.remove("viewport_letterbox");
         }
 
         // File Paths (Desktop only) - already use skip_serializing_if
@@ -578,8 +591,8 @@ mod tests {
         assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
         assert_eq!(settings.show_help_on_startup, true);
-        assert_eq!(settings.default_export_width, 1920);
-        assert_eq!(settings.default_export_height, 1080);
+        assert_eq!(settings.video_encoding, default_video_encoding());
+        assert!(!settings.viewport_letterbox);
     }
 
     #[test]
@@ -599,8 +612,8 @@ mod tests {
         assert!(!json.contains("\"manual_workgroups\""), "default manual_workgroups should be omitted");
         assert!(!json.contains("\"language\""), "default language should be omitted");
         assert!(!json.contains("\"show_help_on_startup\""), "default show_help_on_startup should be omitted");
-        assert!(!json.contains("\"default_export_width\""), "default export_width should be omitted");
-        assert!(!json.contains("\"default_export_height\""), "default export_height should be omitted");
+        assert!(!json.contains("\"video_encoding\""), "default video_encoding should be omitted");
+        assert!(!json.contains("\"viewport_letterbox\""), "default viewport_letterbox should be omitted");
     }
 
     #[test]
@@ -623,8 +636,7 @@ mod tests {
 
         // Unchanged defaults should still be omitted
         assert!(!json.contains("\"iterations_per_thread\""));
-        assert!(!json.contains("\"default_export_width\""));
-        assert!(!json.contains("\"default_export_height\""));
+        assert!(!json.contains("\"video_encoding\""));
     }
 
     #[test]
@@ -639,13 +651,14 @@ mod tests {
             "default_export_height": 2160
         }"#;
 
+        // The export size settings are gone (the size is the picture's,
+        // `FractalConfig::image_size`): an old file still reads.
+
         let settings = SystemSettings::from_json(json).unwrap();
         assert_eq!(settings.vsync_enabled, false);
         assert_eq!(settings.target_fps, 120.0);
         assert_eq!(settings.iterations_per_thread, 512);
         assert_eq!(settings.language, "es");
-        assert_eq!(settings.default_export_width, 3840);
-        assert_eq!(settings.default_export_height, 2160);
     }
 
     #[test]
@@ -661,8 +674,6 @@ mod tests {
         assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
         assert_eq!(settings.show_help_on_startup, true);
-        assert_eq!(settings.default_export_width, 1920);
-        assert_eq!(settings.default_export_height, 1080);
     }
 
     #[test]
@@ -699,8 +710,14 @@ mod tests {
         original.target_fps = 144.0;
         original.iterations_per_thread = 512;
         original.language = "fr".to_string();
-        original.default_export_width = 2560;
-        original.default_export_height = 1440;
+        original.video_encoding = crate::animation::export::VideoEncodingSettings {
+            codec: crate::animation::export::VideoCodec::VP9,
+            hardware_accel: crate::animation::export::HardwareAccel::Qsv,
+            quality: 30,
+            preset: crate::animation::export::EncodingPreset::QsvSlow,
+            tune: crate::animation::export::EncodingTune::Grain,
+        };
+        original.viewport_letterbox = true;
 
         // Serialize and deserialize
         let json = original.to_json().unwrap();
@@ -711,8 +728,22 @@ mod tests {
         assert_eq!(restored.target_fps, original.target_fps);
         assert_eq!(restored.iterations_per_thread, original.iterations_per_thread);
         assert_eq!(restored.language, original.language);
-        assert_eq!(restored.default_export_width, original.default_export_width);
-        assert_eq!(restored.default_export_height, original.default_export_height);
+        assert_eq!(restored.video_encoding, original.video_encoding);
+        assert_eq!(restored.viewport_letterbox, original.viewport_letterbox);
+    }
+
+    /// An encoder this build cannot read -- a codec a later build renamed
+    /// -- falls back to the defaults, and the rest of the file still loads.
+    #[test]
+    fn an_unreadable_encoder_costs_only_itself() {
+        let json = r#"{
+            "version": 4,
+            "language": "es",
+            "video_encoding": { "codec": "AV2", "hardware_accel": "Nvenc", "quality": 20, "preset": "NvencP5", "tune": "None" }
+        }"#;
+        let settings = SystemSettings::from_json(json).unwrap();
+        assert_eq!(settings.language, "es");
+        assert_eq!(settings.video_encoding, default_video_encoding());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

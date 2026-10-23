@@ -3,6 +3,7 @@ pub mod signal_panel;
 mod config_dialog;
 mod effects_panel;
 mod export_panel;
+pub use export_panel::fit_export_size;
 pub mod export_status;
 mod font_loader;
 mod formatting;
@@ -1330,9 +1331,6 @@ impl EguiLayer {
         can_undo: bool,
         can_redo: bool,
         workspace: &mut workspace::Workspace,
-        export_width: &mut u32,
-        export_height: &mut u32,
-        use_custom_export_size: &mut bool,
         png_export_premultiplied: &mut bool,
         png_export_supersample: &mut bool,
         export_status: &export_status::ExportStatus,
@@ -1524,6 +1522,7 @@ impl EguiLayer {
         // Export
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
+        let mut png_export_current = false;
         // let mut png_export_requested = false;
 
         // Panel open requests
@@ -1668,13 +1667,17 @@ impl EguiLayer {
                     .frame(egui::Frame::NONE)
                     .show(ctx, |ui| {
                         if let Some(texture_id) = fractal_texture_id {
-                            let available = ui.available_size();
-                            ui.add(egui::Image::new(egui::load::SizedTexture::new(
-                                texture_id,
-                                available,
-                            )));
+                            // Letterboxed as the docked viewport is.
+                            let panel = ui.available_rect_before_wrap();
+                            let rect = if config_manager.system_settings().viewport_letterbox {
+                                ui.painter().rect_filled(panel, 0.0, egui::Color32::BLACK);
+                                view_controls::letterbox_rect(panel, config_manager.active_config().image_size)
+                            } else {
+                                panel
+                            };
+                            ui.put(rect, egui::Image::new(egui::load::SizedTexture::new(texture_id, rect.size())));
                             // Track viewport size for renderer resize
-                            fractal_viewport_size = Some((available.x as u32, available.y as u32));
+                            fractal_viewport_size = Some((rect.width() as u32, rect.height() as u32));
                         }
                     });
 
@@ -1800,9 +1803,7 @@ impl EguiLayer {
                         view_subflame_in_isolation,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
-                        export_width,
-                        export_height,
-                        use_custom_export_size,
+                        png_export_current: &mut png_export_current,
                         png_export_premultiplied,
                         png_export_supersample,
                         max_export_dimension: device.limits().max_texture_dimension_2d,
@@ -1995,6 +1996,10 @@ impl EguiLayer {
                         let leaf_size = leaf_rect.size();
                         // The touch's Alt, the viewport's Pan/Turn toggle.
                         let turn_lock = self.touch_tracker.turn_lock;
+                        // Letterboxed, the strip is a bar: black, the texture
+                        // not under it, and not a place to steer from (the
+                        // picture's rect is elsewhere in the leaf).
+                        let letterbox = config_manager.system_settings().viewport_letterbox;
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
                             .order(egui::Order::Background)
@@ -2004,17 +2009,24 @@ impl EguiLayer {
                                     tab_bar_rect.size(),
                                     egui::Sense::click_and_drag(),
                                 );
-                                if let Some(tid) = texture_id {
-                                    // Draw the top slice of the inflated texture (matches the
-                                    // UV offset used in render_fractal_viewport for the body)
-                                    let uv_bottom = tab_bar_h / full_height;
-                                    let uv = egui::Rect::from_min_max(
-                                        egui::pos2(0.0, 0.0),
-                                        egui::pos2(1.0, uv_bottom),
-                                    );
-                                    ui.painter().image(tid, rect, uv, egui::Color32::WHITE);
-                                } else {
-                                    ui.painter().rect_filled(rect, 0.0, color);
+                                match texture_id {
+                                    _ if letterbox => {
+                                        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+                                        return;
+                                    }
+                                    Some(tid) => {
+                                        // Draw the top slice of the inflated texture (matches the
+                                        // UV offset used in render_fractal_viewport for the body)
+                                        let uv_bottom = tab_bar_h / full_height;
+                                        let uv = egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, uv_bottom),
+                                        );
+                                        ui.painter().image(tid, rect, uv, egui::Color32::WHITE);
+                                    }
+                                    None => {
+                                        ui.painter().rect_filled(rect, 0.0, color);
+                                    }
                                 }
 
                                 // Forward pan/zoom input so the cover strip is
@@ -2111,12 +2123,23 @@ impl EguiLayer {
                 ctx,
                 animation_controller,
                 &mut self.animation_export_settings,
+                config_manager.active_config().image_size,
                 export_status.active,
                 &mut self.export_panel_state,
                 #[cfg(not(target_arch = "wasm32"))]
                 window,
             ) {
                 animation_export_requested = Some(export_settings);
+            }
+            // The encoder is the device's: kept the moment it changes, once
+            // the pointer lets go (a dragged quality would save each frame).
+            if self.export_panel_state.is_open && !ctx.input(|i| i.pointer.any_down()) {
+                let encoding = self.animation_export_settings.encoding();
+                if encoding != config_manager.system_settings().video_encoding {
+                    let settings = config_manager.system_settings_mut();
+                    settings.video_encoding = encoding;
+                    let _ = settings.save();
+                }
             }
 
             // Show Track Editor panel (unified Add/Edit track panel)
@@ -2526,6 +2549,7 @@ impl EguiLayer {
             redo_requested,
             png_export_with_background,
             png_export_transparent,
+            png_export_current,
             add_transform,
             delete_transform,
             clone_transform,

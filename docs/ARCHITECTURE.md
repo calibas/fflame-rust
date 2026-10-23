@@ -291,8 +291,10 @@ viewport does not use it; `App::render` drives the renderers directly.
 
 ### Export
 
-- Still PNG: a viewport-size flame export reads back the live renderer;
-  custom sizes and 2x supersampling go through the custom-size path. Above the
+- Still PNG: rendered afresh at the picture's size (`image_size`, the View
+  panel's Output Size, fitted to the export's budget), 2x supersampling
+  included, through the custom-size path; Export Current Image reads back
+  the live renderer instead. Above the
   storage-binding limit `pick_strategy` routes to tiled rendering or a
   CPU histogram (`src/export/`). `--engine` on the CLI forces a path.
   Transparency is a mode of the tonemap shader (`transparent_mode`), with

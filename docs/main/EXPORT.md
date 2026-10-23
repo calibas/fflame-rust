@@ -56,8 +56,8 @@ engine, `HighResExporter`.
 
 | path | entry | device | engine |
 | --- | --- | --- | --- |
-| app, viewport size | the export panel's buttons (`src/app/mod.rs`) | the app's | none: reads back what the viewport has drawn |
-| app, custom size or 2× AA | `App::export_custom_size` (`src/app/config.rs`) | the app's, or a device of its own in the background | `render`, or `HighResExporter` |
+| app | Export with Background, Export Transparent → `App::export_custom_size` (`src/app/config.rs`) | the app's, or a device of its own in the background | `render`, or `HighResExporter` |
+| app, current image | Export Current Image → `App::export_current_image` | the app's | none: reads back what the viewport has drawn |
 | CLI `export` | `export_mode` → `export_headless` | its own | `render`, or `HighResExporter` |
 | video, CLI and app | `export_animation` (`src/animation/export.rs`) | its own | `render_with`, frame by frame |
 | web API | `WasmApi::export_png` → `export_headless_wasm` | its own | `render` |
@@ -202,8 +202,18 @@ quad's median + 64, so a single lucky bucket does not survive as a
 bright dot; alpha is averaged unclamped. The PNG's metadata embeds the
 original config, not the scaled copy.
 
-In the app, 2× AA always goes through the custom-size machinery, even at
-viewport size, since the viewport's own image cannot be supersampled.
+In the app, Export with Background and Export Transparent render
+afresh: the picture's size (`FractalConfig::image_size`, the View
+panel's Output Size), fitted to what the export can hold by
+`ui::fit_export_size` -- the GPU's per-axis texture limit and the pixel
+budget for the config's features, halved and quartered under 2× AA --
+with the shape kept. The Export panel shows the size, and the fitted one
+when they differ. **Export Current Image** saves the viewport's picture
+as it stands instead -- its size (with the letterbox, the picture's
+shape), the iterations it has so far, its colour effects -- read back
+from the live renderer, opaque, without rendering again
+(`App::export_current_image`; in the browser the pixels are copied at
+once and mapped after, before the next frame draws over them).
 
 ---
 
@@ -413,7 +423,7 @@ FractalArtEditor export -i scene.flame -o out/ --transparent --supersample
 | --- | --- | --- |
 | `-i`, `--input` | required | a `.fflame` file (one config), a `.flame` XML file (each `<flame>` in it), or a directory (every `*.fflame` in it, not `.flame`, ordered by flame name) |
 | `-o`, `--output` | required | a PNG path for a single config; otherwise a directory, created if missing |
-| `-w`, `--width` | 1920 | the config's `image_size` is not used |
+| `-w`, `--width` | 1920 | the config's `image_size` is not used (the app's exports read it) |
 | `-H`, `--height` | 1080 | |
 | `-c`, `--category` | none | written into the PNG metadata |
 | `--iterations-per-thread` | 1024 | `DEFAULT_EXPORT_ITERATIONS_PER_THREAD`; the app uses 256. A depth-versus-breadth trade-off, not a quality setting (see the constant's comment) |

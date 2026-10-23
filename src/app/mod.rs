@@ -606,10 +606,8 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     pub(super) last_viewport_resize_time: Option<web_time::Instant>,
 
-    // PNG export settings (UI state only, not in config)
-    pub(super) export_width: u32,
-    pub(super) export_height: u32,
-    pub(super) use_custom_export_size: bool,
+    // PNG export settings (UI state only, not in config; the size is the
+    // picture's, `FractalConfig::image_size`)
     /// Transparent PNG export uses premultiplied alpha (vs the default
     /// straight-alpha flatten-over-black reconstruction). Set in the Export panel.
     pub(super) png_export_premultiplied: bool,
@@ -860,17 +858,12 @@ impl App {
         // Get initial size before moving gpu
         let initial_viewport_size = (gpu.size.width, gpu.size.height);
 
-        // Get export dimensions before moving config_manager
         // The privacy switch is persisted, but every export reads it
         // from a global at encode time — so mirror it before anything
         // can export, or the first export of a session ignores it.
         crate::png_metadata::set_strip_metadata(
             config_manager.system_settings().png_export_strip_metadata,
         );
-
-        let export_width = config_manager.system_settings().default_export_width;
-        let export_height = config_manager.system_settings().default_export_height;
-
         // Create effect chain for post-processing effects
         let effect_chain = crate::renderer::effect_chain::EffectChainRunner::new(
             &gpu.device,
@@ -938,9 +931,6 @@ impl App {
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             #[cfg(target_arch = "wasm32")]
             last_viewport_resize_time: None,
-            export_width,
-            export_height,
-            use_custom_export_size: false,  // Default to viewport size
             png_export_premultiplied: false,
             png_export_supersample: false,
             export_status: Arc::new(Mutex::new(ExportStatus::default())),
@@ -1791,9 +1781,6 @@ impl App {
             can_undo,
             can_redo,
             &mut self.workspace,
-            &mut self.export_width,
-            &mut self.export_height,
-            &mut self.use_custom_export_size,
             &mut self.png_export_premultiplied,
             &mut self.png_export_supersample,
             &export_status,
@@ -2069,444 +2056,74 @@ impl App {
         // Poll API health check and trigger periodic checks
         self.poll_health_check();
 
-                // Handle PNG export
+        // Handle PNG export: rendered at the picture's size -- the View
+        // panel's Output Size, `FractalConfig::image_size` -- fitted to the
+        // export's pixel budget as the Export panel shows it.
         if ui_response.png_export_with_background || ui_response.png_export_transparent {
             let transparent = ui_response.png_export_transparent;
+            let export_config = self.export_config();
+            let max_dim = self.gpu.device.limits().max_texture_dimension_2d;
+            let (out_width, out_height) =
+                crate::ui::fit_export_size(&export_config, self.png_export_supersample, max_dim);
 
             #[cfg(not(target_arch = "wasm32"))]
             {
-                // Desktop: use blocking task for both capture and save
-                // Build metadata before borrowing renderer
-                let export_config = self.export_config();
                 let render_time_ms = self.metrics.render_time_ms;
-
-                // Toast outcome for the synchronous viewport-size path (the
-                // custom-size path reports through the unified export status).
-                let mut viewport_toast: Option<(String, bool)> = None;
-
-                // Check if we need custom-size export. 2× AA also routes
-                // through the custom-size machinery (at viewport dims):
-                // the viewport fast path below reads back the LIVE
-                // renderer's texture and can't supersample.
-                if self.use_custom_export_size || self.png_export_supersample {
-                    let (ow, oh) = if self.use_custom_export_size {
-                        (self.export_width, self.export_height)
-                    } else {
-                        // Viewport-size export: match what the user sees.
-                        let (vw, vh) = self.fractal_viewport_size;
-                        (vw.max(64), vh.max(64))
-                    };
-                    self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms, ow, oh);
-                } else if let Some(ref mut renderer) = self.flame_renderer {
-                    // Viewport-size export: use current renderer
-                    let total_iterations = renderer.total_iterations();
-                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
-
-                    // For transparent export, we need to re-run tonemap with transparent_mode=1
-                    // and then re-run color effects if enabled
-                    if transparent {
-                        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-                        renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
-
-                        // Run tonemap pass with transparent mode
-                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                            label: Some("Transparent Export Tonemap"),
-                        });
-                        // A non-flame engine has already rendered its
-                        // image and the flame accumulator is empty, so
-                        // re-tonemap from that image like the frame
-                        // loop does. Each of these sites used to name
-                        // Escape alone, so a transparent PNG in
-                        // Simulation encoded the empty accumulator.
-                        // Written as field access rather than a helper
-                        // because `renderer` above holds
-                        // `&mut self.flame_renderer`, and only
-                        // field-level borrows are disjoint from it.
-                        let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => escape_view(
-                                &self.escape_renderer,
-                                #[cfg(feature = "terrain")]
-                                &self.escape_terrain,
-                                &export_config,
-                            ),
-                            #[cfg(feature = "engine-sim")]
-                            crate::scene::transforms::RenderMode::Simulation => {
-                                sim_view(
-                                    &self.sim_renderer,
-                                    #[cfg(feature = "terrain")]
-                                    &self.sim_terrain,
-                                    &export_config,
-                                )
-                            }
-                            _ => None,
-                        };
-                        match non_flame_view {
-                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
-                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
-                        }
-
-                        // Re-run color effects if enabled (they need to process the new tonemapped output)
-                        if has_color_effects {
-                            self.effect_chain.reset_slots();
-                            self.effect_chain.run_color_effects(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                &mut encoder,
-                                renderer.get_fractal_texture_view(),
-                                &export_config.color_effects,
-                            );
-                        }
-
-                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
-                    }
-
-                    // Read pixels from effect chain output if color effects are enabled,
-                    // otherwise read from renderer's fractal texture
-                    let pixels_result: Result<(u32, u32, Vec<u8>), String> = if has_color_effects {
-                        pollster::block_on(
-                            self.effect_chain.read_color_output_pixels(&self.gpu.device, &self.gpu.queue)
-                        )
-                    } else {
-                        pollster::block_on(
-                            renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color)
-                        ).map_err(|e| e.to_string())
-                    };
-
-                    match pixels_result {
-                        Ok((width, height, rgba_data)) => {
-                            // Build metadata with captured values
-                            // A simulation's picture here is the run as it
-                            // stands, which need not have reached the config's
-                            // cap: the PNG records the step it shows, so it
-                            // re-renders as saved.
-                            #[cfg(feature = "engine-sim")]
-                            let export_config = match (&self.sim_renderer, export_config.render_mode) {
-                                (Some(sim), crate::scene::transforms::RenderMode::Simulation) if sim.step_index() > 0 => {
-                                    let mut c = export_config.clone();
-                                    c.sim.steps = sim.step_index();
-                                    c
-                                }
-                                _ => export_config.clone(),
-                            };
-                            let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                width,
-                                height,
-                                total_iterations,
-                                render_time_ms,
-                                self.config_manager.system_settings().iterations_per_thread,
-                                export_config.speed_factor,
-                                &export_config,
-                            );
-
-                            // Encode PNG with metadata
-                            match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-                                Ok(png_data) => {
-                                    // Open file dialog
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .set_parent(self.window.as_ref())
-                                        .add_filter("PNG Image", &["png"])
-                                        .set_file_name("fractal.png")
-                                        .save_file()
-                                    {
-                                        match std::fs::write(&path, png_data) {
-                                            Err(e) => {
-                                                eprintln!("Failed to save PNG: {}", e);
-                                                viewport_toast = Some((format!("Save failed: {e}"), true));
-                                            }
-                                            Ok(()) => {
-                                                println!("PNG saved to: {}", path.display());
-                                                viewport_toast = Some((format!("PNG saved · {}",
-                                                    path.file_name().map(|n| n.to_string_lossy().into_owned())
-                                                        .unwrap_or_else(|| path.display().to_string())), false));
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to encode PNG: {}", e);
-                                    viewport_toast = Some((format!("PNG encode failed: {e}"), true));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to capture pixels: {}", e);
-                            viewport_toast = Some((format!("Export failed: {e}"), true));
-                        }
-                    }
-
-                    // Reset transparent mode back to normal for display
-                    if transparent {
-                        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-                        renderer.set_transparent_mode(&self.gpu.queue, false, false, &export_config, iterations_per_thread);
-
-                        // Run tonemap pass to restore normal display
-                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                            label: Some("Restore Normal Tonemap"),
-                        });
-                        // A non-flame engine has already rendered its
-                        // image and the flame accumulator is empty, so
-                        // re-tonemap from that image like the frame
-                        // loop does. Each of these sites used to name
-                        // Escape alone, so a transparent PNG in
-                        // Simulation encoded the empty accumulator.
-                        // Written as field access rather than a helper
-                        // because `renderer` above holds
-                        // `&mut self.flame_renderer`, and only
-                        // field-level borrows are disjoint from it.
-                        let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => escape_view(
-                                &self.escape_renderer,
-                                #[cfg(feature = "terrain")]
-                                &self.escape_terrain,
-                                &export_config,
-                            ),
-                            #[cfg(feature = "engine-sim")]
-                            crate::scene::transforms::RenderMode::Simulation => {
-                                sim_view(
-                                    &self.sim_renderer,
-                                    #[cfg(feature = "terrain")]
-                                    &self.sim_terrain,
-                                    &export_config,
-                                )
-                            }
-                            _ => None,
-                        };
-                        match non_flame_view {
-                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
-                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
-                        }
-
-                        // Re-run color effects with normal tonemap output
-                        if has_color_effects {
-                            self.effect_chain.reset_slots();
-                            self.effect_chain.run_color_effects(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                &mut encoder,
-                                renderer.get_fractal_texture_view(),
-                                &export_config.color_effects,
-                            );
-                        }
-
-                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
-                    }
-                }
-
-                // Surface the viewport-export outcome as a toast (renderer
-                // borrow has ended). The custom-size path toasts itself.
-                if let Some((message, is_error)) = viewport_toast {
-                    self.egui_layer.show_api_notification(&message, is_error);
-                }
+                self.export_custom_size(transparent, self.png_export_premultiplied, export_config, render_time_ms, out_width, out_height);
             }
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: Use async task for pixel reading and file save
+                // `render()` on the app's device, as the desktop's export
+                // runs it: the pipeline every other export shares -- the
+                // shade pass, DoF, density effects, the exact density
+                // fraction, every engine, the burn-in setting. On the app's
+                // device, not a second one: beside the live device a large
+                // export runs out of memory. `render()` frees its renderer's
+                // iteration buffers before the colour effects allocate, and
+                // pins escape chunks.
                 use wasm_bindgen_futures::spawn_local;
-
-                let export_config = self.export_config();
                 let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
-
-                if self.use_custom_export_size {
-                    // Custom size: `render()` on the app's device, as the
-                    // desktop's custom-size export runs it. That is the
-                    // pipeline every other export shares -- the shade pass,
-                    // DoF, density effects, the exact density fraction,
-                    // every engine, the burn-in setting -- where this was a
-                    // copy of it without them. On the app's device, not a
-                    // second one: beside the live device a large export
-                    // runs out of memory. `render()` frees its renderer's
-                    // iteration buffers before the colour effects allocate,
-                    // as this did for 8K headroom, and pins escape chunks.
-                    let (export_width, export_height) = (self.export_width, self.export_height);
-                    let burn_in = self.config_manager.system_settings().burn_in;
-                    let premultiplied = self.png_export_premultiplied;
-                    let device = self.gpu.device.clone();
-                    let queue = self.gpu.queue.clone();
-                    log::info!("WASM: Exporting at custom size {}×{}", export_width, export_height);
-                    spawn_local(async move {
-                        use crate::renderer::render::{render, NoProgress, RenderJob};
-                        let job = RenderJob::new(&export_config, export_width, export_height)
-                            .with_iterations_per_thread(iterations_per_thread)
-                            .with_burn_in(burn_in)
-                            .with_transparent(transparent)
-                            .with_premultiplied(premultiplied);
-                        match render(&device, &queue, job, &mut NoProgress).await {
-                            Ok(out) => {
-                                let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                    out.width,
-                                    out.height,
-                                    out.total_iterations,
-                                    out.render_time_ms,
-                                    iterations_per_thread,
-                                    export_config.speed_factor,
-                                    &export_config,
-                                );
-                                match crate::renderer::compute_kernel::encode_png_from_rgba(out.width, out.height, out.rgba_data, Some(metadata)) {
-                                    Ok(png_data) => match trigger_browser_download(&png_data, "fractal.png", "image/png") {
-                                        Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", out.width, out.height, out.render_time_ms / 1000.0),
-                                        Err(e) => log::error!("Failed to trigger download: {}", e),
-                                    },
-                                    Err(e) => log::error!("Failed to encode PNG: {}", e),
-                                }
-                            }
-                            Err(e) => log::error!("Custom-size export failed: {}", e),
-                        }
-                    });
-                } else if let Some(ref mut renderer) = self.flame_renderer {
-                    // Viewport size export: use current renderer
-                    //
-                    // IMPORTANT: We must read pixels BEFORE spawning the async task, because
-                    // the next frame will overwrite fractal_texture with a new render.
-                    // The async task is only used for the file dialog and write.
-
-                    let total_iterations = renderer.total_iterations();
-                    let render_time_ms = self.metrics.render_time_ms;
-                    let speed_factor = export_config.speed_factor;
-                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
-
-                    // For transparent export, set transparent mode and run tonemap before reading
-                    // Also re-run color effects if enabled
-                    if transparent {
-                        renderer.set_transparent_mode(&self.gpu.queue, true, self.png_export_premultiplied, &export_config, iterations_per_thread);
-
-                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                            label: Some("Transparent Export Tonemap"),
-                        });
-                        // A non-flame engine has already rendered its
-                        // image and the flame accumulator is empty, so
-                        // re-tonemap from that image like the frame
-                        // loop does. Each of these sites used to name
-                        // Escape alone, so a transparent PNG in
-                        // Simulation encoded the empty accumulator.
-                        // Written as field access rather than a helper
-                        // because `renderer` above holds
-                        // `&mut self.flame_renderer`, and only
-                        // field-level borrows are disjoint from it.
-                        let non_flame_view = match export_config.render_mode {
-                            crate::scene::transforms::RenderMode::Escape => escape_view(
-                                &self.escape_renderer,
-                                #[cfg(feature = "terrain")]
-                                &self.escape_terrain,
+                let burn_in = self.config_manager.system_settings().burn_in;
+                let premultiplied = self.png_export_premultiplied;
+                let device = self.gpu.device.clone();
+                let queue = self.gpu.queue.clone();
+                log::info!("WASM: Exporting at {}×{}", out_width, out_height);
+                spawn_local(async move {
+                    use crate::renderer::render::{render, NoProgress, RenderJob};
+                    let job = RenderJob::new(&export_config, out_width, out_height)
+                        .with_iterations_per_thread(iterations_per_thread)
+                        .with_burn_in(burn_in)
+                        .with_transparent(transparent)
+                        .with_premultiplied(premultiplied);
+                    match render(&device, &queue, job, &mut NoProgress).await {
+                        Ok(out) => {
+                            let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                out.width,
+                                out.height,
+                                out.total_iterations,
+                                out.render_time_ms,
+                                iterations_per_thread,
+                                export_config.speed_factor,
                                 &export_config,
-                            ),
-                            #[cfg(feature = "engine-sim")]
-                            crate::scene::transforms::RenderMode::Simulation => {
-                                sim_view(
-                                    &self.sim_renderer,
-                                    #[cfg(feature = "terrain")]
-                                    &self.sim_terrain,
-                                    &export_config,
-                                )
-                            }
-                            _ => None,
-                        };
-                        match non_flame_view {
-                            Some(view) => renderer.tonemap_pass_with_input(&self.gpu.device, &self.gpu.queue, &mut encoder, view),
-                            None => renderer.tonemap_pass(&self.gpu.queue, &mut encoder),
-                        }
-
-                        // Re-run color effects if enabled
-                        if has_color_effects {
-                            self.effect_chain.reset_slots();
-                            self.effect_chain.run_color_effects(
-                                &self.gpu.device,
-                                &self.gpu.queue,
-                                &mut encoder,
-                                renderer.get_fractal_texture_view(),
-                                &export_config.color_effects,
                             );
-                        }
-
-                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
-                    }
-
-                    // Read pixels NOW, before the next frame overwrites the texture
-                    // Use effect chain output if color effects are enabled
-                    let width = renderer.width;
-                    let height = renderer.height;
-
-                    let (staging_buffer, padded_bytes_per_row) = if has_color_effects && self.effect_chain.has_color_output() {
-                        self.effect_chain.create_color_staging_buffer(&self.gpu.device)
-                    } else {
-                        renderer.create_pixel_staging_buffer(&self.gpu.device)
-                    };
-
-                    // Copy texture to staging buffer
-                    let mut copy_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                        label: Some("Viewport Export Copy"),
-                    });
-
-                    if has_color_effects && self.effect_chain.has_color_output() {
-                        self.effect_chain.copy_color_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
-                    } else {
-                        renderer.copy_fractal_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
-                    }
-                    self.gpu.queue.submit(std::iter::once(copy_encoder.finish()));
-
-                    // Clone Arc handle for the async task
-                    let device = self.gpu.device.clone();
-
-                    spawn_local(async move {
-                        // Map the staging buffer (this is the async part)
-                        let buffer_slice = staging_buffer.slice(..);
-                        let (tx, rx) = futures::channel::oneshot::channel();
-                        buffer_slice.map_async(egui_wgpu::wgpu::MapMode::Read, move |result| {
-                            let _ = tx.send(result);
-                        });
-                        let _ = device.poll(egui_wgpu::wgpu::PollType::Wait { submission_index: None, timeout: None });
-
-                        match rx.await {
-                            Ok(Ok(())) => {
-                                let data = buffer_slice.get_mapped_range();
-
-                                // Extract RGBA data from staging buffer (handle row padding)
-                                let bytes_per_pixel = 4u32;
-                                let unpadded_bytes_per_row = (width * bytes_per_pixel) as usize;
-                                let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
-
-                                for y in 0..height {
-                                    let row_start = (y * padded_bytes_per_row) as usize;
-                                    // Only copy the actual pixel data, not the padding
-                                    let row_data = &data[row_start..row_start + unpadded_bytes_per_row];
-                                    // For opaque export, the shader already blended with background (transparent_mode=0)
-                                    // For transparent export, we ran tonemap with transparent_mode=1
-                                    rgba_data.extend_from_slice(row_data);
-                                }
-                                drop(data);
-                                staging_buffer.unmap();
-
-                                // Build metadata and encode PNG
-                                let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                    width,
-                                    height,
-                                    total_iterations,
-                                    render_time_ms,
-                                    iterations_per_thread,
-                                    speed_factor,
-                                    &export_config,
-                                );
-
-                                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-                                    Ok(png_data) => {
-                                        // Trigger direct browser download
-                                        match trigger_browser_download(&png_data, "fractal.png", "image/png") {
-                                            Ok(()) => log::info!("PNG download started!"),
-                                            Err(e) => log::error!("Failed to trigger download: {}", e),
-                                        }
-                                    }
-                                    Err(e) => log::error!("Failed to encode PNG: {}", e),
-                                }
+                            match crate::renderer::compute_kernel::encode_png_from_rgba(out.width, out.height, out.rgba_data, Some(metadata)) {
+                                Ok(png_data) => match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                    Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", out.width, out.height, out.render_time_ms / 1000.0),
+                                    Err(e) => log::error!("Failed to trigger download: {}", e),
+                                },
+                                Err(e) => log::error!("Failed to encode PNG: {}", e),
                             }
-                            Ok(Err(e)) => log::error!("Buffer map error: {:?}", e),
-                            Err(_) => log::error!("Failed to receive buffer map result"),
                         }
-                        // Explicit, because dropping frees nothing on
-                        // WebGPU — this staging buffer is per export.
-                        staging_buffer.destroy();
-                    });
-                }
+                        Err(e) => log::error!("PNG export failed: {}", e),
+                    }
+                });
             }
+        }
+
+        // Export Current Image: the viewport's picture as it stands.
+        if ui_response.png_export_current {
+            self.export_current_image();
         }
 
         // Handle animation export request
@@ -2529,13 +2146,17 @@ impl App {
                 // Clone config and override max_iterations from export settings
                 let mut config = self.config_manager.active_config().clone();
                 config.max_iterations = export_settings.max_iterations;
+                // The frames are the picture's size (the View panel's
+                // Output Size), or the size this export was given; the
+                // exporter rounds an odd side down.
+                let (width, height) = export_settings.size_override.unwrap_or(config.image_size);
 
                 let export_config = AnimationExportConfig {
                     config,
                     animation: animation.clone(),
                     output_path: export_settings.output_path.clone(),
-                    width: export_settings.width,
-                    height: export_settings.height,
+                    width,
+                    height,
                     fps: export_settings.fps,
                     iterations_per_thread: export_settings.iterations_per_thread,
                     video_settings: VideoEncodingSettings {
