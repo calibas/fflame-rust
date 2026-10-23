@@ -8803,7 +8803,11 @@ pub fn assemble_ifs_rig(
 /// their hit tolerance, a fraction of a pixel, crawled for twice the time.
 /// A step that grew passes only what is thinner than itself, a pixel or
 /// so where the crawl is short, and a hit is refined back to where the
-/// ray entered.
+/// ray entered. The pixel is the OUTPUT pixel (`params.flags` bits 4-7,
+/// the supersample factor, as `esc_supersample` reads them): a
+/// supersampled grid's rays each stepping a fraction of one ran out of
+/// steps where readings stayed small, and its holes grew with the
+/// antialiasing. The path tracer's is the output pixel already.
 const MARCH_INSIDE: &[(&str, &str)] = &[
     // The camera's march: a reading is a step of at least the pixel and
     // never a hit; the hit is a step into the solid, refined back to
@@ -8811,7 +8815,7 @@ const MARCH_INSIDE: &[(&str, &str)] = &[
     ("var t_prev = t;", "var t_prev = t;\nvar crawl = 0.0;"),
     (
         "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target",
-        "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target\nif (d > 0.0) {\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * eps);\n    d = max(d, eps * (1.0 + 0.125 * crawl));\n}",
+        "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target\nif (d > 0.0) {\n    let px = eps * f32(max((params.flags >> 4u) & 15u, 1u));\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * px);\n    d = max(d, px * (1.0 + 0.125 * crawl));\n}",
     ),
     // A shadow: hard, as a reading is no measure of how near the ray
     // passed; its floor the pixel where it leaves the surface (the bias
@@ -8819,7 +8823,7 @@ const MARCH_INSIDE: &[(&str, &str)] = &[
     ("var shade = 1.0;", "var shade = 1.0;\nvar crawl = 0.0;"),
     (
         "let d = ifs_distance_at(p + light * t, eps);",
-        "let d = ifs_distance_at(p + light * t, eps);\nif (d > 0.0) {\n    crawl = select(0.0, crawl + 1.0, d < bias * 0.5);\n    t = t + max(d, bias * 0.25 * (1.0 + 0.125 * crawl));\n    i = i + 1u;\n    continue;\n}",
+        "let d = ifs_distance_at(p + light * t, eps);\nif (d > 0.0) {\n    let px = bias * 0.25 * f32(max((params.flags >> 4u) & 15u, 1u));\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * px);\n    t = t + max(d, px * (1.0 + 0.125 * crawl));\n    i = i + 1u;\n    continue;\n}",
     ),
     // Occlusion: what each probe lands in.
     (
@@ -10975,8 +10979,8 @@ mod lens_tests {
         let path = assemble_ifs_path(&inside, col, 1, None, false, false);
         // The camera's march, the shadow, the occlusion; the path's two.
         for (text, needle, n) in [
-            (&walk, "d = max(d, eps * (1.0 + 0.125 * crawl));", 1),
-            (&walk, "t = t + max(d, bias * 0.25 * (1.0 + 0.125 * crawl));", 1),
+            (&walk, "d = max(d, px * (1.0 + 0.125 * crawl));", 1),
+            (&walk, "t = t + max(d, px * (1.0 + 0.125 * crawl));", 1),
             (&walk, "let vis = select(0.0, 1.0,", 1),
             (&walk, "var crawl = 0.0;", 2),
             (&path, "dist = max(dist, ", 2),

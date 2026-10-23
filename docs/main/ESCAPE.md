@@ -578,8 +578,11 @@ fn escaped(s, p) {
     misses gets past it within its steps -- shadows hard and occlusion by
     what its probes land in (`IfsDef::march_inside`,
     `assembler::MARCH_INSIDE`, spliced line for line so every other
-    solid's WGSL is what it was; the path tracer's rays floored at the
-    pixel at their path's length, not their hit tolerance). For a
+    solid's WGSL is what it was; the pixel the output's, not a
+    supersampled grid's, whose rays each stepping a fraction of one ran
+    out of steps where readings stayed small; the path tracer's rays
+    floored at the pixel at their path's length, not their hit
+    tolerance). For a
     distance that is a safe step and no measure of how near a surface
     is: read as a clearance, a small reading where an orbit nearly
     escapes far from any surface drew surfaces and shadows that were not
