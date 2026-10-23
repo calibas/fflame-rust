@@ -50,6 +50,9 @@ mod legacy;
 /// Tests: Halayka's quaternion sets and escape paths, their presets.
 #[cfg(test)]
 mod halayka;
+/// Tests: the level-dependent flame example, its presets.
+#[cfg(test)]
+mod moran;
 pub mod diag;
 pub mod environment;
 pub mod path_core;
