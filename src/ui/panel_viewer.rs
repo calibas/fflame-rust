@@ -326,6 +326,7 @@ pub struct PanelContext<'a> {
     pub load_subflame_into: &'a mut Option<usize>,
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
+    pub png_export_current: &'a mut bool,
     pub png_export_premultiplied: &'a mut bool,
     pub png_export_supersample: &'a mut bool,
     /// GPU `max_texture_dimension_2d` — per-axis ceiling for export size.
@@ -1082,6 +1083,8 @@ impl<'a> PanelViewer<'a> {
                 self.context.config_manager.active_config().max_iterations;
             let encoding = self.context.config_manager.system_settings().video_encoding.clone();
             self.context.animation_export_settings.set_encoding(&encoding);
+            // The frame size starts from the picture's every time.
+            self.context.animation_export_settings.size_override = None;
         }
 
         // Handle animation load response
@@ -1771,6 +1774,7 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.png_export_with_background,
             self.context.png_export_transparent,
+            self.context.png_export_current,
             self.context.png_export_premultiplied,
             self.context.png_export_supersample,
             self.context.config_manager,

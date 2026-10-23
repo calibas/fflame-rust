@@ -2121,6 +2121,11 @@ impl App {
             }
         }
 
+        // Export Current Image: the viewport's picture as it stands.
+        if ui_response.png_export_current {
+            self.export_current_image();
+        }
+
         // Handle animation export request
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref export_settings) = ui_response.animation_export_requested {
@@ -2142,8 +2147,9 @@ impl App {
                 let mut config = self.config_manager.active_config().clone();
                 config.max_iterations = export_settings.max_iterations;
                 // The frames are the picture's size (the View panel's
-                // Output Size); the exporter rounds an odd side down.
-                let (width, height) = config.image_size;
+                // Output Size), or the size this export was given; the
+                // exporter rounds an odd side down.
+                let (width, height) = export_settings.size_override.unwrap_or(config.image_size);
 
                 let export_config = AnimationExportConfig {
                     config,

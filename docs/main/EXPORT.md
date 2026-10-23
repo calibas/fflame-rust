@@ -56,7 +56,8 @@ engine, `HighResExporter`.
 
 | path | entry | device | engine |
 | --- | --- | --- | --- |
-| app | the export panel's buttons → `App::export_custom_size` (`src/app/config.rs`) | the app's, or a device of its own in the background | `render`, or `HighResExporter` |
+| app | Export with Background, Export Transparent → `App::export_custom_size` (`src/app/config.rs`) | the app's, or a device of its own in the background | `render`, or `HighResExporter` |
+| app, current image | Export Current Image → `App::export_current_image` | the app's | none: reads back what the viewport has drawn |
 | CLI `export` | `export_mode` → `export_headless` | its own | `render`, or `HighResExporter` |
 | video, CLI and app | `export_animation` (`src/animation/export.rs`) | its own | `render_with`, frame by frame |
 | web API | `WasmApi::export_png` → `export_headless_wasm` | its own | `render` |
@@ -201,14 +202,18 @@ quad's median + 64, so a single lucky bucket does not survive as a
 bright dot; alpha is averaged unclamped. The PNG's metadata embeds the
 original config, not the scaled copy.
 
-In the app every PNG export renders afresh: the picture's size
-(`FractalConfig::image_size`, the View panel's Output Size), fitted to
-what the export can hold by `ui::fit_export_size` -- the GPU's per-axis
-texture limit and the pixel budget for the config's features, halved
-and quartered under 2× AA -- with the shape kept. The Export panel shows
-the size, and the fitted one when they differ. (A viewport-size export
-that read back the live renderer went with the custom-size switch,
-2026-10-23: an export is the picture at its size, at full quality.)
+In the app, Export with Background and Export Transparent render
+afresh: the picture's size (`FractalConfig::image_size`, the View
+panel's Output Size), fitted to what the export can hold by
+`ui::fit_export_size` -- the GPU's per-axis texture limit and the pixel
+budget for the config's features, halved and quartered under 2× AA --
+with the shape kept. The Export panel shows the size, and the fitted one
+when they differ. **Export Current Image** saves the viewport's picture
+as it stands instead -- its size (with the letterbox, the picture's
+shape), the iterations it has so far, its colour effects -- read back
+from the live renderer, opaque, without rendering again
+(`App::export_current_image`; in the browser the pixels are copied at
+once and mapped after, before the next frame draws over them).
 
 ---
 
