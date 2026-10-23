@@ -307,6 +307,11 @@ pub enum ConfigPath {
     /// each iteration. Flipping it changes the `FLATTEN_Z_PER_ITER`
     /// shader gate and forces a shader rebuild via ShaderConstants.
     PreserveZ,
+    /// The picture's size in pixels (`FractalConfig::image_size`): what
+    /// the PNG and video exports render at, and the aspect the viewport
+    /// letterboxes to when asked. A `.flame`'s `size`.
+    ImageWidth,
+    ImageHeight,
 
     // ===== Effects (post-processing, no iteration reset needed) =====
     /// Enable/disable a density effect
@@ -695,8 +700,6 @@ pub enum ConfigPath {
     /// Fly mode's collisions and proximity speed (3d-look-and-tools P6).
     SystemFlyCollisions,
     SystemFlyProximity,
-    SystemExportWidth,
-    SystemExportHeight,
     SystemPngStripMetadata,
     SystemLanguage,
     SystemShowHelpOnStartup,
@@ -1425,6 +1428,8 @@ impl Display for ConfigPath {
             ConfigPath::PostSymmetryDistance => write!(f, "Symmetry Distance"),
             ConfigPath::PostSymmetryRotation => write!(f, "Symmetry Rotation"),
             ConfigPath::PreserveZ => write!(f, "Preserve Z"),
+            ConfigPath::ImageWidth => write!(f, "Image Width"),
+            ConfigPath::ImageHeight => write!(f, "Image Height"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -1467,8 +1472,6 @@ impl Display for ConfigPath {
             ConfigPath::SystemFlyCollisions => write!(f, "System: Fly Collisions"),
             ConfigPath::SystemFlyProximity => write!(f, "System: Fly Proximity Speed"),
             ConfigPath::SystemFlyCameraMode => write!(f, "System: Fly Camera Mode"),
-            ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
-            ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
             ConfigPath::SystemPngStripMetadata => write!(f, "System: Strip PNG Metadata"),
             ConfigPath::SystemLanguage => write!(f, "System: Language"),
             ConfigPath::SystemShowHelpOnStartup => write!(f, "System: Show Help On Startup"),
@@ -2172,6 +2175,8 @@ impl ConfigPath {
             ConfigPath::PostSymmetryDistance => I18nKey::simple("history.param.post_symmetry_distance"),
             ConfigPath::PostSymmetryRotation => I18nKey::simple("history.param.post_symmetry_rotation"),
             ConfigPath::PreserveZ => I18nKey::simple("history.param.preserve_z"),
+            ConfigPath::ImageWidth => I18nKey::simple("history.param.image_width"),
+            ConfigPath::ImageHeight => I18nKey::simple("history.param.image_height"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
@@ -2230,8 +2235,6 @@ impl ConfigPath {
             ConfigPath::SystemFlyCollisions => I18nKey::simple("history.param.system_fly_collisions"),
             ConfigPath::SystemFlyProximity => I18nKey::simple("history.param.system_fly_proximity"),
             ConfigPath::SystemFlyCameraMode => I18nKey::simple("history.param.system_fly_camera_mode"),
-            ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
-            ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
             ConfigPath::SystemPngStripMetadata => I18nKey::simple("history.param.system_png_strip_metadata"),
             ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
             ConfigPath::SystemShowHelpOnStartup => I18nKey::simple("history.param.system_show_help_on_startup"),
@@ -3449,6 +3452,11 @@ impl ConfigPath {
             | ConfigPath::AddDensityEffect { .. }
             | ConfigPath::RemoveDensityEffect { .. } => UpdateType::ToneMappingOnly,
 
+            // The size the exports render at. Nothing on screen changes,
+            // or the viewport's letterbox takes the new aspect, which
+            // resizes the renderers as any resize of the panel does.
+            ConfigPath::ImageWidth | ConfigPath::ImageHeight => UpdateType::None,
+
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             // Disk housekeeping only: nothing on the GPU changes.
@@ -3461,7 +3469,7 @@ impl ConfigPath {
             // the work is sliced changes nothing to reset.
             ConfigPath::SystemFrameGovernor | ConfigPath::SystemManualWorkgroups => UpdateType::None,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps | ConfigPath::SystemFlyMouseSensitivity | ConfigPath::SystemFlyMoveSpeed | ConfigPath::SystemFlySprintMultiplier | ConfigPath::SystemFlyInvertY | ConfigPath::SystemFlyCameraMode | ConfigPath::SystemFlyCollisions | ConfigPath::SystemFlyProximity => UpdateType::ViewOnly,
-            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
+            ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup
             // Nothing to re-render: it only changes what a future
             // export writes into the file.
             | ConfigPath::SystemPngStripMetadata => UpdateType::None,
@@ -3938,6 +3946,8 @@ impl ConfigPath {
             ConfigPath::PostSymmetryDistance => "PostSymmetryDistance".to_string(),
             ConfigPath::PostSymmetryRotation => "PostSymmetryRotation".to_string(),
             ConfigPath::PreserveZ => "PreserveZ".to_string(),
+            ConfigPath::ImageWidth => "ImageWidth".to_string(),
+            ConfigPath::ImageHeight => "ImageHeight".to_string(),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
@@ -3964,8 +3974,6 @@ impl ConfigPath {
             ConfigPath::SystemFlyCollisions => "System.FlyCollisions".to_string(),
             ConfigPath::SystemFlyProximity => "System.FlyProximity".to_string(),
             ConfigPath::SystemFlyCameraMode => "System.FlyCameraMode".to_string(),
-            ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
-            ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
             ConfigPath::SystemPngStripMetadata => "System.PngStripMetadata".to_string(),
             ConfigPath::SystemLanguage => "System.Language".to_string(),
             ConfigPath::SystemShowHelpOnStartup => "System.ShowHelpOnStartup".to_string(),
@@ -4084,6 +4092,8 @@ impl ConfigPath {
             "PostSymmetryDistance" => return Some(ConfigPath::PostSymmetryDistance),
             "PostSymmetryRotation" => return Some(ConfigPath::PostSymmetryRotation),
             "PreserveZ" => return Some(ConfigPath::PreserveZ),
+            "ImageWidth" => return Some(ConfigPath::ImageWidth),
+            "ImageHeight" => return Some(ConfigPath::ImageHeight),
 
             _ => {}
         }
@@ -4572,8 +4582,6 @@ impl ConfigPath {
                 "FlyCollisions" => return Some(ConfigPath::SystemFlyCollisions),
                 "FlyProximity" => return Some(ConfigPath::SystemFlyProximity),
                 "FlyCameraMode" => return Some(ConfigPath::SystemFlyCameraMode),
-                "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
-                "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "PngStripMetadata" => return Some(ConfigPath::SystemPngStripMetadata),
                 "Language" => return Some(ConfigPath::SystemLanguage),
                 "ShowHelpOnStartup" => return Some(ConfigPath::SystemShowHelpOnStartup),
@@ -4935,8 +4943,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemBurnIn
         | ConfigPath::SystemManualWorkgroups
         | ConfigPath::SystemOrbitCacheMb
-        | ConfigPath::SystemExportWidth
-        | ConfigPath::SystemExportHeight
+        | ConfigPath::ImageWidth
+        | ConfigPath::ImageHeight
         | ConfigPath::SystemPngStripMetadata
         | ConfigPath::CylinderTrimLevels
         | ConfigPath::PathMapLevel => {
@@ -5890,8 +5898,8 @@ mod tests {
             ConfigPath::SystemFlyCameraMode,
             ConfigPath::SystemFlyCollisions,
             ConfigPath::SystemFlyProximity,
-            ConfigPath::SystemExportWidth,
-            ConfigPath::SystemExportHeight,
+            ConfigPath::ImageWidth,
+            ConfigPath::ImageHeight,
             ConfigPath::SystemPngStripMetadata,
             ConfigPath::SystemLanguage,
             ConfigPath::SystemShowHelpOnStartup,

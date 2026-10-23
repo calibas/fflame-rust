@@ -89,38 +89,6 @@ impl App {
         // making the image very dim and effects invisible until accumulation builds up.
         self.use_overwrite_next_frame = true;
 
-        // Pre-fill the Custom Export Size inputs with the flame's saved
-        // image dimensions. This is the user-facing payoff for
-        // `FractalConfig::image_size`: the Export PNG dialog now lands
-        // on the flame's authored canvas dimensions by default, so a
-        // 16:9 portrait flame doesn't get exported at the previous
-        // flame's 4K square pref.
-        //
-        // Two writes per dimension because the export panel reads from
-        // *both* sides: `App.export_{width,height}` are the live
-        // session values bound directly to the DragValue widgets
-        // (initialized from system_settings at App::new but otherwise
-        // independent), and `system_settings.default_export_{width,
-        // height}` are the disk-persisted values that survive a
-        // restart. Updating one without the other leaves a stale
-        // value sitting in the panel until either a startup or an
-        // explicit edit. Update both so the next render of the panel
-        // picks up the flame's image_size in the input boxes AND the
-        // pref persists across sessions until the next flame load
-        // overrides it. Best effort; failures are silent because
-        // this is UX polish, not a load blocker.
-        let (w, h) = self.config_manager.active_config().image_size;
-        self.export_width = w;
-        self.export_height = h;
-        let _ = self.config_manager.update_system_setting(
-            crate::config::ConfigPath::SystemExportWidth,
-            w.into(),
-        );
-        let _ = self.config_manager.update_system_setting(
-            crate::config::ConfigPath::SystemExportHeight,
-            h.into(),
-        );
-
         // Check for unknown variations and fetch them from the API.
         // This pauses rendering until fetches complete (or fail/timeout).
         let missing = crate::variations::missing_variations_in(

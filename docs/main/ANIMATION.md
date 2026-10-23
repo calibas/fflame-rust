@@ -663,8 +663,12 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
 - **Where.** Desktop only: the export window says it is unavailable on
   the web. In the app it opens from **Export Animation**; it fills
   iterations per thread and Max Iterations from the current settings,
-  and defaults to 1920×1080, 30 fps, H.265, CRF 12, into the platform's
-  Videos folder. The CLI:
+  and the encoder -- codec, encoder, quality, preset, tune -- as this
+  device last left it (`SystemSettings::video_encoding`, saved when one
+  changes; at first H.265 in software, CRF 12). The frames are the
+  picture's size (`FractalConfig::image_size`, the View panel's Output
+  Size, shown read-only here); the frame rate (30) and the iterations
+  are the export's own. Into the platform's Videos folder. The CLI:
 
   ```bash
   FractalArtEditor export-animation -c config.fflame -a anim.anim -o out.mp4 \

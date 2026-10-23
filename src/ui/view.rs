@@ -22,6 +22,12 @@ pub fn render_view_content(
     use crate::camera::gesture::{self, ViewKind};
     let kind = gesture::view_kind(&config);
 
+    // ── The picture's size, every mode's: what the exports render at,
+    // and the shape the viewport can letterbox to.
+    egui::CollapsingHeader::new(t!("view.output_size").as_ref())
+        .default_open(true)
+        .show(ui, |ui| super::view_controls::output_size(ui, config_manager));
+
     // ── Camera: the 2D views, and a 3D flame's picture after its
     // projection (its pan, zoom and roll).
     if !kind.is_3d() || kind == ViewKind::Flame3d {
@@ -395,6 +401,43 @@ mod tests {
         assert!(offenders.is_empty(), "showing the View and Lighting panels wrote:
 {}", offenders.join("
 "));
+    }
+
+    /// A letterboxed viewport is the largest rect of the picture's shape in
+    /// its panel, centred, in whole pixels: bars beside a wide panel, above
+    /// and below a tall one, none when the shapes agree.
+    #[test]
+    fn a_letterbox_is_the_pictures_shape_centred() {
+        use super::super::view_controls::letterbox_rect;
+        let panel = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(1000.0, 400.0));
+        let r = letterbox_rect(panel, (1920, 1080));
+        assert_eq!(r.size(), egui::vec2(711.0, 400.0), "bars beside: {r:?}");
+        assert!((r.center() - panel.center()).length() < 0.51);
+        let tall = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 900.0));
+        let r = letterbox_rect(tall, (1920, 1080));
+        assert_eq!(r.size(), egui::vec2(500.0, 281.0), "bars above and below: {r:?}");
+        let same = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+        assert_eq!(letterbox_rect(same, (1920, 1080)), same);
+    }
+
+    /// The Output Size edits the picture's size through the history: a side
+    /// within the range, clamped to it, and a preset both sides in one step
+    /// that undo takes back whole.
+    #[test]
+    fn the_output_size_is_the_pictures_and_undoable() {
+        let mut m = ConfigManager::new(FractalConfig::default());
+        let _ = m.update_param(ConfigPath::ImageWidth, 1000u32.into());
+        assert_eq!(m.active_config().image_size, (1000, 1080));
+        let _ = m.update_param(ConfigPath::ImageHeight, 1u32.into());
+        assert_eq!(m.active_config().image_size.1, crate::config::MIN_IMAGE_DIM);
+        let before = m.active_config().image_size;
+        let _ = m.update_batch(
+            vec![(ConfigPath::ImageWidth, 3840u32.into()), (ConfigPath::ImageHeight, 2160u32.into())],
+            "history.action.output_size".to_string(),
+        );
+        assert_eq!(m.active_config().image_size, (3840, 2160));
+        m.undo().expect("an undo");
+        assert_eq!(m.active_config().image_size, before);
     }
 
     #[test]

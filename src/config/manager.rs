@@ -1140,14 +1140,6 @@ impl ConfigManager {
                     _ => crate::storage::FlyCameraMode::FreeLook,
                 };
             }
-            ConfigPath::SystemExportWidth => {
-                let value: u32 = new_value.try_into()?;
-                self.system_settings.default_export_width = value;
-            }
-            ConfigPath::SystemExportHeight => {
-                let value: u32 = new_value.try_into()?;
-                self.system_settings.default_export_height = value;
-            }
             ConfigPath::SystemPngStripMetadata => {
                 let value: bool = new_value.try_into()?;
                 self.system_settings.png_export_strip_metadata = value;
@@ -2861,6 +2853,8 @@ impl ConfigManager {
             ConfigPath::PostSymmetryDistance => Ok(flame.post_symmetry.distance.into()),
             ConfigPath::PostSymmetryRotation => Ok(flame.post_symmetry.rotation_deg.into()),
             ConfigPath::PreserveZ => Ok(config.preserve_z.into()),
+            ConfigPath::ImageWidth => Ok(config.image_size.0.into()),
+            ConfigPath::ImageHeight => Ok(config.image_size.1.into()),
 
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
@@ -2874,8 +2868,6 @@ impl ConfigManager {
             | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemFlyCollisions
             | ConfigPath::SystemFlyProximity
-            | ConfigPath::SystemExportWidth
-            | ConfigPath::SystemExportHeight
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn
@@ -4807,6 +4799,16 @@ impl ConfigManager {
             ConfigPath::PreserveZ => {
                 self.current.preserve_z = value.try_into()?;
             }
+            // Within what an export can be: the GPU's texture limit is
+            // the export panel's to enforce, against the pixel budget.
+            ConfigPath::ImageWidth => {
+                let v: u32 = value.try_into()?;
+                self.current.image_size.0 = v.clamp(crate::config::MIN_IMAGE_DIM, crate::config::MAX_IMAGE_DIM);
+            }
+            ConfigPath::ImageHeight => {
+                let v: u32 = value.try_into()?;
+                self.current.image_size.1 = v.clamp(crate::config::MIN_IMAGE_DIM, crate::config::MAX_IMAGE_DIM);
+            }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)
             // Use config_manager.update_system_setting() instead
@@ -4820,8 +4822,6 @@ impl ConfigManager {
             | ConfigPath::SystemFlyCameraMode
             | ConfigPath::SystemFlyCollisions
             | ConfigPath::SystemFlyProximity
-            | ConfigPath::SystemExportWidth
-            | ConfigPath::SystemExportHeight
             | ConfigPath::SystemPngStripMetadata
             | ConfigPath::SystemLanguage
             | ConfigPath::SystemBurnIn

@@ -12,13 +12,17 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::animation::{Animation, AnimationController};
 use crate::config::{ConfigPath, EditingTarget, FractalConfig, json_to_config_value};
 use crate::scene::transforms::Flame;
 use crate::signal::{Signal, SignalManager};
 
-/// Video codec options for ffmpeg encoding
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Video codec options for ffmpeg encoding. Saved by name in the system
+/// settings (`SystemSettings::video_encoding`): renaming a variant resets
+/// a device's saved encoder to the defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum VideoCodec {
     /// H.264 (libx264) - Best compatibility, good compression
     H264,
@@ -60,8 +64,9 @@ impl VideoCodec {
     }
 }
 
-/// Hardware acceleration options for video encoding
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Hardware acceleration options for video encoding (saved by name, as
+/// [`VideoCodec`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum HardwareAccel {
     /// Software encoding (CPU) - always available, slower but compatible
     #[default]
@@ -149,8 +154,8 @@ impl HardwareAccel {
     }
 }
 
-/// Encoding preset (speed/quality tradeoff)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Encoding preset (speed/quality tradeoff; saved by name, as [`VideoCodec`])
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EncodingPreset {
     // CPU presets (libx264/libx265)
     Ultrafast,
@@ -312,8 +317,9 @@ impl EncodingPreset {
     }
 }
 
-/// Encoding tune (optimization target) - CPU encoders only
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Encoding tune (optimization target) - CPU encoders only (saved by name,
+/// as [`VideoCodec`])
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EncodingTune {
     None,        // No tune parameter
     Film,        // Live action with grain
@@ -368,7 +374,8 @@ impl EncodingTune {
 }
 
 /// Video encoding settings
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VideoEncodingSettings {
     /// Video codec to use
     pub codec: VideoCodec,

@@ -24,6 +24,65 @@ pub fn angle_slider(ui: &mut egui::Ui, radians: f32, label: &str) -> Option<f32>
     changed.then(|| deg.to_radians())
 }
 
+/// The picture's size (`FractalConfig::image_size`, undoable): what the
+/// PNG and video exports render at, with the common sizes a click away
+/// and a swap for portrait. Then whether the viewport letterboxes to its
+/// shape -- a device setting, saved at once, outside the history.
+pub fn output_size(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
+    use crate::config::{MAX_IMAGE_DIM, MIN_IMAGE_DIM};
+    let (w, h) = config_manager.active_config().image_size;
+    let tip = t!("view.output_size_tip");
+    let set_both = |config_manager: &mut ConfigManager, w: u32, h: u32| {
+        let _ = config_manager.update_batch(
+            vec![(ConfigPath::ImageWidth, w.into()), (ConfigPath::ImageHeight, h.into())],
+            "history.action.output_size".to_string(),
+        );
+    };
+    ui.horizontal(|ui| {
+        ui.label(t!("view.output_size_label").as_ref()).on_hover_text(tip.as_ref());
+        // Clamped on edits only, so a size outside the range -- a .flame's
+        // -- shows as it is and showing it writes nothing.
+        let mut nw = w;
+        let mut nh = h;
+        fn side(v: &mut u32) -> egui::DragValue<'_> {
+            egui::DragValue::new(v).range(MIN_IMAGE_DIM..=MAX_IMAGE_DIM).clamp_existing_to_range(false).speed(4.0)
+        }
+        if ui.add(side(&mut nw)).on_hover_text(tip.as_ref()).changed() {
+            let _ = config_manager.update_param(ConfigPath::ImageWidth, nw.into());
+        }
+        ui.label("×");
+        if ui.add(side(&mut nh)).on_hover_text(tip.as_ref()).changed() {
+            let _ = config_manager.update_param(ConfigPath::ImageHeight, nh.into());
+        }
+        if ui.small_button(t!("view.output_size_swap").as_ref()).on_hover_text(t!("view.output_size_swap_tip")).clicked() {
+            set_both(config_manager, h, w);
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        for (label, size) in [("720p", (1280, 720)), ("1080p", (1920, 1080)), ("1440p", (2560, 1440)), ("4K", (3840, 2160)), ("1:1", (2048, 2048))] {
+            if ui.selectable_label((w, h) == size, label).clicked() && (w, h) != size {
+                set_both(config_manager, size.0, size.1);
+            }
+        }
+    });
+    let mut letterbox = config_manager.system_settings().viewport_letterbox;
+    if ui.checkbox(&mut letterbox, t!("view.letterbox").as_ref()).on_hover_text(t!("view.letterbox_tip")).changed() {
+        let settings = config_manager.system_settings_mut();
+        settings.viewport_letterbox = letterbox;
+        let _ = settings.save();
+    }
+}
+
+/// The largest rect of the picture's shape (`image_size`) inside `panel`,
+/// centred: where a letterboxed viewport draws, black bars around it.
+pub fn letterbox_rect(panel: egui::Rect, image_size: (u32, u32)) -> egui::Rect {
+    let aspect = image_size.0.max(1) as f32 / image_size.1.max(1) as f32;
+    let (pw, ph) = (panel.width().max(1.0), panel.height().max(1.0));
+    let size = if pw / ph > aspect { egui::vec2(ph * aspect, ph) } else { egui::vec2(pw, pw / aspect) };
+    // Whole pixels, so the renderer's texture and the rect agree.
+    egui::Rect::from_center_size(panel.center(), egui::vec2(size.x.floor().max(1.0), size.y.floor().max(1.0)))
+}
+
 /// A zoom shown as a magnification on a logarithmic slider, typed values
 /// beyond the range allowed.
 fn zoom_slider(ui: &mut egui::Ui, zoom: f32, label: &str, range: std::ops::RangeInclusive<f32>) -> Option<f32> {
