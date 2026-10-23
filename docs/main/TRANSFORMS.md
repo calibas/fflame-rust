@@ -428,6 +428,14 @@ normals only; Linked and Final members are outside the chaos game.
   thread in `ORBIT_REFRESH_PERIOD = 4` to redraw it.
   See [persistent-orbits.md](../archive/projects/persistent-orbits.md) §3.7.
 - **`.flame`**: each `<xform>`'s `chaos` attribute is its row.
+- **Levels (Moran sets).** Xaos and opacity can give each level of a
+  flame's construction its own set of maps -- a Sierpinski triangle made
+  of ferns. Put one copy of the coarse set's transforms per level and
+  chain them (level k to level k - 1 only, level 1 back to the start),
+  plotting only level 1's copies; for a split, the fine set as a
+  subflame read by one hidden `subflame_wf` transform at the chain's
+  start. The recipe and what it was tested against are in
+  [level-dependent-flames.md](../archive/projects/level-dependent-flames.md).
 
 **Xaos-linked transforms** are a different thing from the Linked pool,
 despite the name. They are an Apophysis convention inferred from the
