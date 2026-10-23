@@ -7196,5 +7196,533 @@
     "solid_strength": 1.0,
     "version": 6,
     "zoom": 0.75
+  },
+  {
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_moran_flame",
+          "source": "// Level-dependent IFS (\"Moran\" flames): a flame whose large-scale shape\n// and fine texture are different fractals -- a Sierpinski triangle made\n// of ferns, a carpet made of dragons. An ordinary flame repeats one set\n// of maps at every scale; here each point is a composition of one map per\n// level, the coarsest level outermost, and each level takes its map from\n// the set its schedule names. A schedule that repeats (Alternate) is only\n// an ordinary IFS of composed maps; the split and the Sturmian schedules\n// are not, and the chaos game cannot draw them.\n//\n// It ignores the point it is given: use it as the only variation of a\n// flame's only transform, with Direct Color at 1 for its colours (the\n// coarsest level's map). Every set is drawn in the unit square: view it\n// at zoom 3 around (0.5, 0.5).\n//\n// It shows a variation building each point itself: a loop of `depth`\n// levels from a fixed start, a draw per level (`rand()`), and functions\n// choosing and applying each set's maps.\n\nconst PARAMS = #{\n    coarse: #{ value: 0, caption: \"Coarse\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the levels the schedule calls coarse\" },\n    fine: #{ value: 2, caption: \"Fine\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the other levels\" },\n    schedule: #{ value: 0, caption: \"Schedule\", choices: [\"Coarse above the split\", \"Alternate\", \"Sturmian (golden)\"], hint: \"Which levels are coarse: the first Split levels, every other level, or the golden ratio's never-repeating sequence\" },\n    split: #{ value: 3, min: 1, max: 16, caption: \"Split\", hint: \"With the first schedule, how many of the coarsest levels are coarse\" },\n    depth: #{ value: 24, min: 2, max: 40, caption: \"Depth\", hint: \"How many levels make each point: the fern shrinks slowly, and needs the most\" },\n};\n\nconst INFO = #{ title: \"Moran Flame (Rhai)\", name: \"rhai_moran_flame\" };\n\n// How many maps a set has.\nfn count(set) {\n    if set == 0 { 3 } else if set == 1 { 8 } else if set == 2 { 4 } else { 2 }\n}\n\n// Which of a set's maps a draw `r` in [0, 1) picks: the fern's by\n// Barnsley's weights, the rest alike.\nfn choose(set, r) {\n    if set == 2 {\n        if r < 0.01 { 0 } else if r < 0.86 { 1 } else if r < 0.93 { 2 } else { 3 }\n    } else {\n        let n = count(set);\n        let i = (r * n.to_float()).floor().to_int();\n        if i >= n { n - 1 } else { i }\n    }\n}\n\n// The set's map `i`, applied to `z` in the unit square.\nfn apply(set, i, z) {\n    if set == 0 {\n        // Sierpinski triangle.\n        let o = if i == 0 { complex(0.0, 0.0) } else if i == 1 { complex(0.5, 0.0) } else { complex(0.25, 0.4330127) };\n        z * 0.5 + o\n    } else if set == 1 {\n        // Sierpinski carpet: the 3x3 grid less its centre.\n        let n = if i >= 4 { i + 1 } else { i };\n        z / 3.0 + complex((n % 3).to_float() / 3.0, (n.to_float() / 3.0).floor() / 3.0)\n    } else if set == 2 {\n        // Barnsley's fern, its own coordinates fitted to the square.\n        let w = complex((z.re - 0.258) * 10.0 - 2.182, z.im * 10.0);\n        let v = if i == 0 {\n            complex(0.0, 0.16 * w.im)\n        } else if i == 1 {\n            complex(0.85 * w.re + 0.04 * w.im, -0.04 * w.re + 0.85 * w.im + 1.6)\n        } else if i == 2 {\n            complex(0.2 * w.re - 0.26 * w.im, 0.23 * w.re + 0.22 * w.im + 1.6)\n        } else {\n            complex(-0.15 * w.re + 0.28 * w.im, 0.26 * w.re + 0.24 * w.im + 0.44)\n        };\n        complex((v.re + 2.182) * 0.1 + 0.258, v.im * 0.1)\n    } else if set == 3 {\n        // Heighway's dragon, fitted to the square.\n        let w = complex(z.re * 1.5 - 0.333, (z.im - 0.167) * 1.5 - 0.333);\n        let v = if i == 0 { w * complex(0.5, 0.5) } else { complex(1.0, 0.0) - w * complex(0.5, -0.5) };\n        complex((v.re + 0.333) / 1.5, (v.im + 0.333) / 1.5 + 0.167)\n    } else {\n        // Levy's C curve, fitted to the square.\n        let w = complex(z.re * 2.0 - 0.5, (z.im - 0.19) * 2.0 - 1.0);\n        let v = if i == 0 { w * complex(0.5, -0.5) } else { complex(1.0, 0.0) + (w - complex(1.0, 0.0)) * complex(0.5, 0.5) };\n        complex((v.re + 0.5) / 2.0, (v.im + 1.0) / 2.0 + 0.19)\n    }\n}\n\n// Whether level `k` (1 the coarsest) takes the coarse set.\nfn coarse_at(k, schedule, split) {\n    if schedule == 0 {\n        k <= split\n    } else if schedule == 1 {\n        k % 2 == 1\n    } else {\n        let a = 0.6180339887;\n        let kf = k.to_float();\n        ((kf + 1.0) * a).floor() - (kf * a).floor() > 0.5\n    }\n}\n\nfn variation(z, p) {\n    // The deepest level first, the coarsest last: the outermost map. A\n    // fixed start: where the levels have not shrunk the square below a\n    // pixel (the slow fern), a random start would show its images.\n    let w = complex(0.5, 0.5);\n    let colour = 0.0;\n    let k = p.depth;\n    while k >= 1 {\n        let set = if coarse_at(k, p.schedule, p.split) { p.coarse } else { p.fine };\n        let i = choose(set, rand());\n        w = apply(set, i, w);\n        if k == 1 {\n            colour = (i.to_float() + 0.5) / count(set).to_float();\n        }\n        k -= 1;\n    }\n    // Up the screen: a flame draws its +y down it.\n    #{ z: complex(w.re, 1.0 - w.im), color: colour }\n}\n"
+        }
+      ],
+      "name": "Moran: Triangle of Ferns",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_moran_flame.coarse": 0.0,
+            "rhai_moran_flame.depth": 24.0,
+            "rhai_moran_flame.fine": 2.0,
+            "rhai_moran_flame.schedule": 0.0,
+            "rhai_moran_flame.split": 2.0
+          },
+          "variations": {
+            "rhai_moran_flame": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.30000001192092896,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.800000011920929,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.800000011920929
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "pan_x": 0.5,
+    "pan_y": 0.5,
+    "render_mode": "2d",
+    "version": 6,
+    "zoom": 3.0
+  },
+  {
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_moran_flame",
+          "source": "// Level-dependent IFS (\"Moran\" flames): a flame whose large-scale shape\n// and fine texture are different fractals -- a Sierpinski triangle made\n// of ferns, a carpet made of dragons. An ordinary flame repeats one set\n// of maps at every scale; here each point is a composition of one map per\n// level, the coarsest level outermost, and each level takes its map from\n// the set its schedule names. A schedule that repeats (Alternate) is only\n// an ordinary IFS of composed maps; the split and the Sturmian schedules\n// are not, and the chaos game cannot draw them.\n//\n// It ignores the point it is given: use it as the only variation of a\n// flame's only transform, with Direct Color at 1 for its colours (the\n// coarsest level's map). Every set is drawn in the unit square: view it\n// at zoom 3 around (0.5, 0.5).\n//\n// It shows a variation building each point itself: a loop of `depth`\n// levels from a fixed start, a draw per level (`rand()`), and functions\n// choosing and applying each set's maps.\n\nconst PARAMS = #{\n    coarse: #{ value: 0, caption: \"Coarse\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the levels the schedule calls coarse\" },\n    fine: #{ value: 2, caption: \"Fine\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the other levels\" },\n    schedule: #{ value: 0, caption: \"Schedule\", choices: [\"Coarse above the split\", \"Alternate\", \"Sturmian (golden)\"], hint: \"Which levels are coarse: the first Split levels, every other level, or the golden ratio's never-repeating sequence\" },\n    split: #{ value: 3, min: 1, max: 16, caption: \"Split\", hint: \"With the first schedule, how many of the coarsest levels are coarse\" },\n    depth: #{ value: 24, min: 2, max: 40, caption: \"Depth\", hint: \"How many levels make each point: the fern shrinks slowly, and needs the most\" },\n};\n\nconst INFO = #{ title: \"Moran Flame (Rhai)\", name: \"rhai_moran_flame\" };\n\n// How many maps a set has.\nfn count(set) {\n    if set == 0 { 3 } else if set == 1 { 8 } else if set == 2 { 4 } else { 2 }\n}\n\n// Which of a set's maps a draw `r` in [0, 1) picks: the fern's by\n// Barnsley's weights, the rest alike.\nfn choose(set, r) {\n    if set == 2 {\n        if r < 0.01 { 0 } else if r < 0.86 { 1 } else if r < 0.93 { 2 } else { 3 }\n    } else {\n        let n = count(set);\n        let i = (r * n.to_float()).floor().to_int();\n        if i >= n { n - 1 } else { i }\n    }\n}\n\n// The set's map `i`, applied to `z` in the unit square.\nfn apply(set, i, z) {\n    if set == 0 {\n        // Sierpinski triangle.\n        let o = if i == 0 { complex(0.0, 0.0) } else if i == 1 { complex(0.5, 0.0) } else { complex(0.25, 0.4330127) };\n        z * 0.5 + o\n    } else if set == 1 {\n        // Sierpinski carpet: the 3x3 grid less its centre.\n        let n = if i >= 4 { i + 1 } else { i };\n        z / 3.0 + complex((n % 3).to_float() / 3.0, (n.to_float() / 3.0).floor() / 3.0)\n    } else if set == 2 {\n        // Barnsley's fern, its own coordinates fitted to the square.\n        let w = complex((z.re - 0.258) * 10.0 - 2.182, z.im * 10.0);\n        let v = if i == 0 {\n            complex(0.0, 0.16 * w.im)\n        } else if i == 1 {\n            complex(0.85 * w.re + 0.04 * w.im, -0.04 * w.re + 0.85 * w.im + 1.6)\n        } else if i == 2 {\n            complex(0.2 * w.re - 0.26 * w.im, 0.23 * w.re + 0.22 * w.im + 1.6)\n        } else {\n            complex(-0.15 * w.re + 0.28 * w.im, 0.26 * w.re + 0.24 * w.im + 0.44)\n        };\n        complex((v.re + 2.182) * 0.1 + 0.258, v.im * 0.1)\n    } else if set == 3 {\n        // Heighway's dragon, fitted to the square.\n        let w = complex(z.re * 1.5 - 0.333, (z.im - 0.167) * 1.5 - 0.333);\n        let v = if i == 0 { w * complex(0.5, 0.5) } else { complex(1.0, 0.0) - w * complex(0.5, -0.5) };\n        complex((v.re + 0.333) / 1.5, (v.im + 0.333) / 1.5 + 0.167)\n    } else {\n        // Levy's C curve, fitted to the square.\n        let w = complex(z.re * 2.0 - 0.5, (z.im - 0.19) * 2.0 - 1.0);\n        let v = if i == 0 { w * complex(0.5, -0.5) } else { complex(1.0, 0.0) + (w - complex(1.0, 0.0)) * complex(0.5, 0.5) };\n        complex((v.re + 0.5) / 2.0, (v.im + 1.0) / 2.0 + 0.19)\n    }\n}\n\n// Whether level `k` (1 the coarsest) takes the coarse set.\nfn coarse_at(k, schedule, split) {\n    if schedule == 0 {\n        k <= split\n    } else if schedule == 1 {\n        k % 2 == 1\n    } else {\n        let a = 0.6180339887;\n        let kf = k.to_float();\n        ((kf + 1.0) * a).floor() - (kf * a).floor() > 0.5\n    }\n}\n\nfn variation(z, p) {\n    // The deepest level first, the coarsest last: the outermost map. A\n    // fixed start: where the levels have not shrunk the square below a\n    // pixel (the slow fern), a random start would show its images.\n    let w = complex(0.5, 0.5);\n    let colour = 0.0;\n    let k = p.depth;\n    while k >= 1 {\n        let set = if coarse_at(k, p.schedule, p.split) { p.coarse } else { p.fine };\n        let i = choose(set, rand());\n        w = apply(set, i, w);\n        if k == 1 {\n            colour = (i.to_float() + 0.5) / count(set).to_float();\n        }\n        k -= 1;\n    }\n    // Up the screen: a flame draws its +y down it.\n    #{ z: complex(w.re, 1.0 - w.im), color: colour }\n}\n"
+        }
+      ],
+      "name": "Moran: Triangle of Ferns, Four Levels",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_moran_flame.coarse": 0.0,
+            "rhai_moran_flame.depth": 24.0,
+            "rhai_moran_flame.fine": 2.0,
+            "rhai_moran_flame.schedule": 0.0,
+            "rhai_moran_flame.split": 4.0
+          },
+          "variations": {
+            "rhai_moran_flame": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.30000001192092896,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.800000011920929,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.800000011920929
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "pan_x": 0.5,
+    "pan_y": 0.5,
+    "render_mode": "2d",
+    "version": 6,
+    "zoom": 3.0
+  },
+  {
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_moran_flame",
+          "source": "// Level-dependent IFS (\"Moran\" flames): a flame whose large-scale shape\n// and fine texture are different fractals -- a Sierpinski triangle made\n// of ferns, a carpet made of dragons. An ordinary flame repeats one set\n// of maps at every scale; here each point is a composition of one map per\n// level, the coarsest level outermost, and each level takes its map from\n// the set its schedule names. A schedule that repeats (Alternate) is only\n// an ordinary IFS of composed maps; the split and the Sturmian schedules\n// are not, and the chaos game cannot draw them.\n//\n// It ignores the point it is given: use it as the only variation of a\n// flame's only transform, with Direct Color at 1 for its colours (the\n// coarsest level's map). Every set is drawn in the unit square: view it\n// at zoom 3 around (0.5, 0.5).\n//\n// It shows a variation building each point itself: a loop of `depth`\n// levels from a fixed start, a draw per level (`rand()`), and functions\n// choosing and applying each set's maps.\n\nconst PARAMS = #{\n    coarse: #{ value: 0, caption: \"Coarse\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the levels the schedule calls coarse\" },\n    fine: #{ value: 2, caption: \"Fine\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the other levels\" },\n    schedule: #{ value: 0, caption: \"Schedule\", choices: [\"Coarse above the split\", \"Alternate\", \"Sturmian (golden)\"], hint: \"Which levels are coarse: the first Split levels, every other level, or the golden ratio's never-repeating sequence\" },\n    split: #{ value: 3, min: 1, max: 16, caption: \"Split\", hint: \"With the first schedule, how many of the coarsest levels are coarse\" },\n    depth: #{ value: 24, min: 2, max: 40, caption: \"Depth\", hint: \"How many levels make each point: the fern shrinks slowly, and needs the most\" },\n};\n\nconst INFO = #{ title: \"Moran Flame (Rhai)\", name: \"rhai_moran_flame\" };\n\n// How many maps a set has.\nfn count(set) {\n    if set == 0 { 3 } else if set == 1 { 8 } else if set == 2 { 4 } else { 2 }\n}\n\n// Which of a set's maps a draw `r` in [0, 1) picks: the fern's by\n// Barnsley's weights, the rest alike.\nfn choose(set, r) {\n    if set == 2 {\n        if r < 0.01 { 0 } else if r < 0.86 { 1 } else if r < 0.93 { 2 } else { 3 }\n    } else {\n        let n = count(set);\n        let i = (r * n.to_float()).floor().to_int();\n        if i >= n { n - 1 } else { i }\n    }\n}\n\n// The set's map `i`, applied to `z` in the unit square.\nfn apply(set, i, z) {\n    if set == 0 {\n        // Sierpinski triangle.\n        let o = if i == 0 { complex(0.0, 0.0) } else if i == 1 { complex(0.5, 0.0) } else { complex(0.25, 0.4330127) };\n        z * 0.5 + o\n    } else if set == 1 {\n        // Sierpinski carpet: the 3x3 grid less its centre.\n        let n = if i >= 4 { i + 1 } else { i };\n        z / 3.0 + complex((n % 3).to_float() / 3.0, (n.to_float() / 3.0).floor() / 3.0)\n    } else if set == 2 {\n        // Barnsley's fern, its own coordinates fitted to the square.\n        let w = complex((z.re - 0.258) * 10.0 - 2.182, z.im * 10.0);\n        let v = if i == 0 {\n            complex(0.0, 0.16 * w.im)\n        } else if i == 1 {\n            complex(0.85 * w.re + 0.04 * w.im, -0.04 * w.re + 0.85 * w.im + 1.6)\n        } else if i == 2 {\n            complex(0.2 * w.re - 0.26 * w.im, 0.23 * w.re + 0.22 * w.im + 1.6)\n        } else {\n            complex(-0.15 * w.re + 0.28 * w.im, 0.26 * w.re + 0.24 * w.im + 0.44)\n        };\n        complex((v.re + 2.182) * 0.1 + 0.258, v.im * 0.1)\n    } else if set == 3 {\n        // Heighway's dragon, fitted to the square.\n        let w = complex(z.re * 1.5 - 0.333, (z.im - 0.167) * 1.5 - 0.333);\n        let v = if i == 0 { w * complex(0.5, 0.5) } else { complex(1.0, 0.0) - w * complex(0.5, -0.5) };\n        complex((v.re + 0.333) / 1.5, (v.im + 0.333) / 1.5 + 0.167)\n    } else {\n        // Levy's C curve, fitted to the square.\n        let w = complex(z.re * 2.0 - 0.5, (z.im - 0.19) * 2.0 - 1.0);\n        let v = if i == 0 { w * complex(0.5, -0.5) } else { complex(1.0, 0.0) + (w - complex(1.0, 0.0)) * complex(0.5, 0.5) };\n        complex((v.re + 0.5) / 2.0, (v.im + 1.0) / 2.0 + 0.19)\n    }\n}\n\n// Whether level `k` (1 the coarsest) takes the coarse set.\nfn coarse_at(k, schedule, split) {\n    if schedule == 0 {\n        k <= split\n    } else if schedule == 1 {\n        k % 2 == 1\n    } else {\n        let a = 0.6180339887;\n        let kf = k.to_float();\n        ((kf + 1.0) * a).floor() - (kf * a).floor() > 0.5\n    }\n}\n\nfn variation(z, p) {\n    // The deepest level first, the coarsest last: the outermost map. A\n    // fixed start: where the levels have not shrunk the square below a\n    // pixel (the slow fern), a random start would show its images.\n    let w = complex(0.5, 0.5);\n    let colour = 0.0;\n    let k = p.depth;\n    while k >= 1 {\n        let set = if coarse_at(k, p.schedule, p.split) { p.coarse } else { p.fine };\n        let i = choose(set, rand());\n        w = apply(set, i, w);\n        if k == 1 {\n            colour = (i.to_float() + 0.5) / count(set).to_float();\n        }\n        k -= 1;\n    }\n    // Up the screen: a flame draws its +y down it.\n    #{ z: complex(w.re, 1.0 - w.im), color: colour }\n}\n"
+        }
+      ],
+      "name": "Moran: Carpet of Dragons",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_moran_flame.coarse": 1.0,
+            "rhai_moran_flame.depth": 24.0,
+            "rhai_moran_flame.fine": 3.0,
+            "rhai_moran_flame.schedule": 0.0,
+            "rhai_moran_flame.split": 1.0
+          },
+          "variations": {
+            "rhai_moran_flame": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.30000001192092896,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.800000011920929,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.800000011920929
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "pan_x": 0.5,
+    "pan_y": 0.5,
+    "render_mode": "2d",
+    "version": 6,
+    "zoom": 3.0
+  },
+  {
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_moran_flame",
+          "source": "// Level-dependent IFS (\"Moran\" flames): a flame whose large-scale shape\n// and fine texture are different fractals -- a Sierpinski triangle made\n// of ferns, a carpet made of dragons. An ordinary flame repeats one set\n// of maps at every scale; here each point is a composition of one map per\n// level, the coarsest level outermost, and each level takes its map from\n// the set its schedule names. A schedule that repeats (Alternate) is only\n// an ordinary IFS of composed maps; the split and the Sturmian schedules\n// are not, and the chaos game cannot draw them.\n//\n// It ignores the point it is given: use it as the only variation of a\n// flame's only transform, with Direct Color at 1 for its colours (the\n// coarsest level's map). Every set is drawn in the unit square: view it\n// at zoom 3 around (0.5, 0.5).\n//\n// It shows a variation building each point itself: a loop of `depth`\n// levels from a fixed start, a draw per level (`rand()`), and functions\n// choosing and applying each set's maps.\n\nconst PARAMS = #{\n    coarse: #{ value: 0, caption: \"Coarse\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the levels the schedule calls coarse\" },\n    fine: #{ value: 2, caption: \"Fine\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the other levels\" },\n    schedule: #{ value: 0, caption: \"Schedule\", choices: [\"Coarse above the split\", \"Alternate\", \"Sturmian (golden)\"], hint: \"Which levels are coarse: the first Split levels, every other level, or the golden ratio's never-repeating sequence\" },\n    split: #{ value: 3, min: 1, max: 16, caption: \"Split\", hint: \"With the first schedule, how many of the coarsest levels are coarse\" },\n    depth: #{ value: 24, min: 2, max: 40, caption: \"Depth\", hint: \"How many levels make each point: the fern shrinks slowly, and needs the most\" },\n};\n\nconst INFO = #{ title: \"Moran Flame (Rhai)\", name: \"rhai_moran_flame\" };\n\n// How many maps a set has.\nfn count(set) {\n    if set == 0 { 3 } else if set == 1 { 8 } else if set == 2 { 4 } else { 2 }\n}\n\n// Which of a set's maps a draw `r` in [0, 1) picks: the fern's by\n// Barnsley's weights, the rest alike.\nfn choose(set, r) {\n    if set == 2 {\n        if r < 0.01 { 0 } else if r < 0.86 { 1 } else if r < 0.93 { 2 } else { 3 }\n    } else {\n        let n = count(set);\n        let i = (r * n.to_float()).floor().to_int();\n        if i >= n { n - 1 } else { i }\n    }\n}\n\n// The set's map `i`, applied to `z` in the unit square.\nfn apply(set, i, z) {\n    if set == 0 {\n        // Sierpinski triangle.\n        let o = if i == 0 { complex(0.0, 0.0) } else if i == 1 { complex(0.5, 0.0) } else { complex(0.25, 0.4330127) };\n        z * 0.5 + o\n    } else if set == 1 {\n        // Sierpinski carpet: the 3x3 grid less its centre.\n        let n = if i >= 4 { i + 1 } else { i };\n        z / 3.0 + complex((n % 3).to_float() / 3.0, (n.to_float() / 3.0).floor() / 3.0)\n    } else if set == 2 {\n        // Barnsley's fern, its own coordinates fitted to the square.\n        let w = complex((z.re - 0.258) * 10.0 - 2.182, z.im * 10.0);\n        let v = if i == 0 {\n            complex(0.0, 0.16 * w.im)\n        } else if i == 1 {\n            complex(0.85 * w.re + 0.04 * w.im, -0.04 * w.re + 0.85 * w.im + 1.6)\n        } else if i == 2 {\n            complex(0.2 * w.re - 0.26 * w.im, 0.23 * w.re + 0.22 * w.im + 1.6)\n        } else {\n            complex(-0.15 * w.re + 0.28 * w.im, 0.26 * w.re + 0.24 * w.im + 0.44)\n        };\n        complex((v.re + 2.182) * 0.1 + 0.258, v.im * 0.1)\n    } else if set == 3 {\n        // Heighway's dragon, fitted to the square.\n        let w = complex(z.re * 1.5 - 0.333, (z.im - 0.167) * 1.5 - 0.333);\n        let v = if i == 0 { w * complex(0.5, 0.5) } else { complex(1.0, 0.0) - w * complex(0.5, -0.5) };\n        complex((v.re + 0.333) / 1.5, (v.im + 0.333) / 1.5 + 0.167)\n    } else {\n        // Levy's C curve, fitted to the square.\n        let w = complex(z.re * 2.0 - 0.5, (z.im - 0.19) * 2.0 - 1.0);\n        let v = if i == 0 { w * complex(0.5, -0.5) } else { complex(1.0, 0.0) + (w - complex(1.0, 0.0)) * complex(0.5, 0.5) };\n        complex((v.re + 0.5) / 2.0, (v.im + 1.0) / 2.0 + 0.19)\n    }\n}\n\n// Whether level `k` (1 the coarsest) takes the coarse set.\nfn coarse_at(k, schedule, split) {\n    if schedule == 0 {\n        k <= split\n    } else if schedule == 1 {\n        k % 2 == 1\n    } else {\n        let a = 0.6180339887;\n        let kf = k.to_float();\n        ((kf + 1.0) * a).floor() - (kf * a).floor() > 0.5\n    }\n}\n\nfn variation(z, p) {\n    // The deepest level first, the coarsest last: the outermost map. A\n    // fixed start: where the levels have not shrunk the square below a\n    // pixel (the slow fern), a random start would show its images.\n    let w = complex(0.5, 0.5);\n    let colour = 0.0;\n    let k = p.depth;\n    while k >= 1 {\n        let set = if coarse_at(k, p.schedule, p.split) { p.coarse } else { p.fine };\n        let i = choose(set, rand());\n        w = apply(set, i, w);\n        if k == 1 {\n            colour = (i.to_float() + 0.5) / count(set).to_float();\n        }\n        k -= 1;\n    }\n    // Up the screen: a flame draws its +y down it.\n    #{ z: complex(w.re, 1.0 - w.im), color: colour }\n}\n"
+        }
+      ],
+      "name": "Moran: Dragon of Carpets",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_moran_flame.coarse": 3.0,
+            "rhai_moran_flame.depth": 24.0,
+            "rhai_moran_flame.fine": 1.0,
+            "rhai_moran_flame.schedule": 0.0,
+            "rhai_moran_flame.split": 4.0
+          },
+          "variations": {
+            "rhai_moran_flame": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.30000001192092896,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.800000011920929,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.800000011920929
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "pan_x": 0.5,
+    "pan_y": 0.5,
+    "render_mode": "2d",
+    "version": 6,
+    "zoom": 3.0
+  },
+  {
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_moran_flame",
+          "source": "// Level-dependent IFS (\"Moran\" flames): a flame whose large-scale shape\n// and fine texture are different fractals -- a Sierpinski triangle made\n// of ferns, a carpet made of dragons. An ordinary flame repeats one set\n// of maps at every scale; here each point is a composition of one map per\n// level, the coarsest level outermost, and each level takes its map from\n// the set its schedule names. A schedule that repeats (Alternate) is only\n// an ordinary IFS of composed maps; the split and the Sturmian schedules\n// are not, and the chaos game cannot draw them.\n//\n// It ignores the point it is given: use it as the only variation of a\n// flame's only transform, with Direct Color at 1 for its colours (the\n// coarsest level's map). Every set is drawn in the unit square: view it\n// at zoom 3 around (0.5, 0.5).\n//\n// It shows a variation building each point itself: a loop of `depth`\n// levels from a fixed start, a draw per level (`rand()`), and functions\n// choosing and applying each set's maps.\n\nconst PARAMS = #{\n    coarse: #{ value: 0, caption: \"Coarse\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the levels the schedule calls coarse\" },\n    fine: #{ value: 2, caption: \"Fine\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the other levels\" },\n    schedule: #{ value: 0, caption: \"Schedule\", choices: [\"Coarse above the split\", \"Alternate\", \"Sturmian (golden)\"], hint: \"Which levels are coarse: the first Split levels, every other level, or the golden ratio's never-repeating sequence\" },\n    split: #{ value: 3, min: 1, max: 16, caption: \"Split\", hint: \"With the first schedule, how many of the coarsest levels are coarse\" },\n    depth: #{ value: 24, min: 2, max: 40, caption: \"Depth\", hint: \"How many levels make each point: the fern shrinks slowly, and needs the most\" },\n};\n\nconst INFO = #{ title: \"Moran Flame (Rhai)\", name: \"rhai_moran_flame\" };\n\n// How many maps a set has.\nfn count(set) {\n    if set == 0 { 3 } else if set == 1 { 8 } else if set == 2 { 4 } else { 2 }\n}\n\n// Which of a set's maps a draw `r` in [0, 1) picks: the fern's by\n// Barnsley's weights, the rest alike.\nfn choose(set, r) {\n    if set == 2 {\n        if r < 0.01 { 0 } else if r < 0.86 { 1 } else if r < 0.93 { 2 } else { 3 }\n    } else {\n        let n = count(set);\n        let i = (r * n.to_float()).floor().to_int();\n        if i >= n { n - 1 } else { i }\n    }\n}\n\n// The set's map `i`, applied to `z` in the unit square.\nfn apply(set, i, z) {\n    if set == 0 {\n        // Sierpinski triangle.\n        let o = if i == 0 { complex(0.0, 0.0) } else if i == 1 { complex(0.5, 0.0) } else { complex(0.25, 0.4330127) };\n        z * 0.5 + o\n    } else if set == 1 {\n        // Sierpinski carpet: the 3x3 grid less its centre.\n        let n = if i >= 4 { i + 1 } else { i };\n        z / 3.0 + complex((n % 3).to_float() / 3.0, (n.to_float() / 3.0).floor() / 3.0)\n    } else if set == 2 {\n        // Barnsley's fern, its own coordinates fitted to the square.\n        let w = complex((z.re - 0.258) * 10.0 - 2.182, z.im * 10.0);\n        let v = if i == 0 {\n            complex(0.0, 0.16 * w.im)\n        } else if i == 1 {\n            complex(0.85 * w.re + 0.04 * w.im, -0.04 * w.re + 0.85 * w.im + 1.6)\n        } else if i == 2 {\n            complex(0.2 * w.re - 0.26 * w.im, 0.23 * w.re + 0.22 * w.im + 1.6)\n        } else {\n            complex(-0.15 * w.re + 0.28 * w.im, 0.26 * w.re + 0.24 * w.im + 0.44)\n        };\n        complex((v.re + 2.182) * 0.1 + 0.258, v.im * 0.1)\n    } else if set == 3 {\n        // Heighway's dragon, fitted to the square.\n        let w = complex(z.re * 1.5 - 0.333, (z.im - 0.167) * 1.5 - 0.333);\n        let v = if i == 0 { w * complex(0.5, 0.5) } else { complex(1.0, 0.0) - w * complex(0.5, -0.5) };\n        complex((v.re + 0.333) / 1.5, (v.im + 0.333) / 1.5 + 0.167)\n    } else {\n        // Levy's C curve, fitted to the square.\n        let w = complex(z.re * 2.0 - 0.5, (z.im - 0.19) * 2.0 - 1.0);\n        let v = if i == 0 { w * complex(0.5, -0.5) } else { complex(1.0, 0.0) + (w - complex(1.0, 0.0)) * complex(0.5, 0.5) };\n        complex((v.re + 0.5) / 2.0, (v.im + 1.0) / 2.0 + 0.19)\n    }\n}\n\n// Whether level `k` (1 the coarsest) takes the coarse set.\nfn coarse_at(k, schedule, split) {\n    if schedule == 0 {\n        k <= split\n    } else if schedule == 1 {\n        k % 2 == 1\n    } else {\n        let a = 0.6180339887;\n        let kf = k.to_float();\n        ((kf + 1.0) * a).floor() - (kf * a).floor() > 0.5\n    }\n}\n\nfn variation(z, p) {\n    // The deepest level first, the coarsest last: the outermost map. A\n    // fixed start: where the levels have not shrunk the square below a\n    // pixel (the slow fern), a random start would show its images.\n    let w = complex(0.5, 0.5);\n    let colour = 0.0;\n    let k = p.depth;\n    while k >= 1 {\n        let set = if coarse_at(k, p.schedule, p.split) { p.coarse } else { p.fine };\n        let i = choose(set, rand());\n        w = apply(set, i, w);\n        if k == 1 {\n            colour = (i.to_float() + 0.5) / count(set).to_float();\n        }\n        k -= 1;\n    }\n    // Up the screen: a flame draws its +y down it.\n    #{ z: complex(w.re, 1.0 - w.im), color: colour }\n}\n"
+        }
+      ],
+      "name": "Moran: Carpet and Levy C, Sturmian",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_moran_flame.coarse": 1.0,
+            "rhai_moran_flame.depth": 24.0,
+            "rhai_moran_flame.fine": 4.0,
+            "rhai_moran_flame.schedule": 2.0,
+            "rhai_moran_flame.split": 3.0
+          },
+          "variations": {
+            "rhai_moran_flame": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.30000001192092896,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.800000011920929,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.800000011920929
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "pan_x": 0.5,
+    "pan_y": 0.5,
+    "render_mode": "2d",
+    "version": 6,
+    "zoom": 3.0
+  },
+  {
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_moran_flame",
+          "source": "// Level-dependent IFS (\"Moran\" flames): a flame whose large-scale shape\n// and fine texture are different fractals -- a Sierpinski triangle made\n// of ferns, a carpet made of dragons. An ordinary flame repeats one set\n// of maps at every scale; here each point is a composition of one map per\n// level, the coarsest level outermost, and each level takes its map from\n// the set its schedule names. A schedule that repeats (Alternate) is only\n// an ordinary IFS of composed maps; the split and the Sturmian schedules\n// are not, and the chaos game cannot draw them.\n//\n// It ignores the point it is given: use it as the only variation of a\n// flame's only transform, with Direct Color at 1 for its colours (the\n// coarsest level's map). Every set is drawn in the unit square: view it\n// at zoom 3 around (0.5, 0.5).\n//\n// It shows a variation building each point itself: a loop of `depth`\n// levels from a fixed start, a draw per level (`rand()`), and functions\n// choosing and applying each set's maps.\n\nconst PARAMS = #{\n    coarse: #{ value: 0, caption: \"Coarse\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the levels the schedule calls coarse\" },\n    fine: #{ value: 2, caption: \"Fine\", choices: [\"Sierpinski triangle\", \"Sierpinski carpet\", \"Fern\", \"Dragon\", \"Levy C\"], hint: \"The set of the other levels\" },\n    schedule: #{ value: 0, caption: \"Schedule\", choices: [\"Coarse above the split\", \"Alternate\", \"Sturmian (golden)\"], hint: \"Which levels are coarse: the first Split levels, every other level, or the golden ratio's never-repeating sequence\" },\n    split: #{ value: 3, min: 1, max: 16, caption: \"Split\", hint: \"With the first schedule, how many of the coarsest levels are coarse\" },\n    depth: #{ value: 24, min: 2, max: 40, caption: \"Depth\", hint: \"How many levels make each point: the fern shrinks slowly, and needs the most\" },\n};\n\nconst INFO = #{ title: \"Moran Flame (Rhai)\", name: \"rhai_moran_flame\" };\n\n// How many maps a set has.\nfn count(set) {\n    if set == 0 { 3 } else if set == 1 { 8 } else if set == 2 { 4 } else { 2 }\n}\n\n// Which of a set's maps a draw `r` in [0, 1) picks: the fern's by\n// Barnsley's weights, the rest alike.\nfn choose(set, r) {\n    if set == 2 {\n        if r < 0.01 { 0 } else if r < 0.86 { 1 } else if r < 0.93 { 2 } else { 3 }\n    } else {\n        let n = count(set);\n        let i = (r * n.to_float()).floor().to_int();\n        if i >= n { n - 1 } else { i }\n    }\n}\n\n// The set's map `i`, applied to `z` in the unit square.\nfn apply(set, i, z) {\n    if set == 0 {\n        // Sierpinski triangle.\n        let o = if i == 0 { complex(0.0, 0.0) } else if i == 1 { complex(0.5, 0.0) } else { complex(0.25, 0.4330127) };\n        z * 0.5 + o\n    } else if set == 1 {\n        // Sierpinski carpet: the 3x3 grid less its centre.\n        let n = if i >= 4 { i + 1 } else { i };\n        z / 3.0 + complex((n % 3).to_float() / 3.0, (n.to_float() / 3.0).floor() / 3.0)\n    } else if set == 2 {\n        // Barnsley's fern, its own coordinates fitted to the square.\n        let w = complex((z.re - 0.258) * 10.0 - 2.182, z.im * 10.0);\n        let v = if i == 0 {\n            complex(0.0, 0.16 * w.im)\n        } else if i == 1 {\n            complex(0.85 * w.re + 0.04 * w.im, -0.04 * w.re + 0.85 * w.im + 1.6)\n        } else if i == 2 {\n            complex(0.2 * w.re - 0.26 * w.im, 0.23 * w.re + 0.22 * w.im + 1.6)\n        } else {\n            complex(-0.15 * w.re + 0.28 * w.im, 0.26 * w.re + 0.24 * w.im + 0.44)\n        };\n        complex((v.re + 2.182) * 0.1 + 0.258, v.im * 0.1)\n    } else if set == 3 {\n        // Heighway's dragon, fitted to the square.\n        let w = complex(z.re * 1.5 - 0.333, (z.im - 0.167) * 1.5 - 0.333);\n        let v = if i == 0 { w * complex(0.5, 0.5) } else { complex(1.0, 0.0) - w * complex(0.5, -0.5) };\n        complex((v.re + 0.333) / 1.5, (v.im + 0.333) / 1.5 + 0.167)\n    } else {\n        // Levy's C curve, fitted to the square.\n        let w = complex(z.re * 2.0 - 0.5, (z.im - 0.19) * 2.0 - 1.0);\n        let v = if i == 0 { w * complex(0.5, -0.5) } else { complex(1.0, 0.0) + (w - complex(1.0, 0.0)) * complex(0.5, 0.5) };\n        complex((v.re + 0.5) / 2.0, (v.im + 1.0) / 2.0 + 0.19)\n    }\n}\n\n// Whether level `k` (1 the coarsest) takes the coarse set.\nfn coarse_at(k, schedule, split) {\n    if schedule == 0 {\n        k <= split\n    } else if schedule == 1 {\n        k % 2 == 1\n    } else {\n        let a = 0.6180339887;\n        let kf = k.to_float();\n        ((kf + 1.0) * a).floor() - (kf * a).floor() > 0.5\n    }\n}\n\nfn variation(z, p) {\n    // The deepest level first, the coarsest last: the outermost map. A\n    // fixed start: where the levels have not shrunk the square below a\n    // pixel (the slow fern), a random start would show its images.\n    let w = complex(0.5, 0.5);\n    let colour = 0.0;\n    let k = p.depth;\n    while k >= 1 {\n        let set = if coarse_at(k, p.schedule, p.split) { p.coarse } else { p.fine };\n        let i = choose(set, rand());\n        w = apply(set, i, w);\n        if k == 1 {\n            colour = (i.to_float() + 0.5) / count(set).to_float();\n        }\n        k -= 1;\n    }\n    // Up the screen: a flame draws its +y down it.\n    #{ z: complex(w.re, 1.0 - w.im), color: colour }\n}\n"
+        }
+      ],
+      "name": "Moran: Dragon and Levy C, Sturmian",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_moran_flame.coarse": 3.0,
+            "rhai_moran_flame.depth": 24.0,
+            "rhai_moran_flame.fine": 4.0,
+            "rhai_moran_flame.schedule": 2.0,
+            "rhai_moran_flame.split": 3.0
+          },
+          "variations": {
+            "rhai_moran_flame": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.30000001192092896,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.800000011920929,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.800000011920929
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "pan_x": 0.5,
+    "pan_y": 0.5,
+    "render_mode": "2d",
+    "version": 6,
+    "zoom": 3.0
   }
 ]

@@ -18,6 +18,7 @@ which rewrites the references in code comments too).
 | [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Planned 2026-10-12: hold any slider's drag once its frames turn slow, beyond the listed slow settings. |
 | [quaternions.md](quaternions.md) | Decided and built 2026-10-22 (branch `quaternions`): a `quat` type in Rhai solids and 3D variations; Halayka's (2009) quaternion sets as a solid, his (2018) escape paths as a flame variation, with presets. |
 | [online-assets.md](online-assets.md) | Planned 2026-10-21, decided the same day, not started: skies and textures listed by providers (Poly Haven first), downloaded and kept locally; every resolution; textures on solids and terrains with valley, slope and plateau targets. |
+| [level-dependent-flames.md](level-dependent-flames.md) | 2026-10-23 (branch `level-dependent-flames`): a flame whose levels each draw from their own transform set (Moran sets) -- a triangle of ferns, a carpet of dragons. The Rhai variation shipped as an example with six presets; levels of the user's own transforms (expanded to xaos and opacity, tested by hand) and in mode D planned, waiting on the user's testing. |
 | [one-workspace.md](one-workspace.md) | Decided and built 2026-10-22 (branch `one-workspace`): one workspace for every mode, every panel drawn in every mode with a banner where unused, choosing enters the mode, the mode button in the menu bar; Flames, Escape Time and Simulation as layouts to pick. |
 
 ## Paused
