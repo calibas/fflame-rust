@@ -104,6 +104,7 @@ pub fn render_export_content(
     ui: &mut egui::Ui,
     png_export_with_background: &mut bool,
     png_export_transparent: &mut bool,
+    png_export_current: &mut bool,
     png_export_premultiplied: &mut bool,
     png_export_supersample: &mut bool,
     config_manager: &mut ConfigManager,
@@ -125,6 +126,11 @@ pub fn render_export_content(
                 *png_export_transparent = true;
             }
         });
+        // The viewport's picture as it stands -- its size, its
+        // iterations so far -- saved at once, not rendered again.
+        if ui.button(t!("export.current_image")).on_hover_text(t!("export.current_image_tip")).clicked() {
+            *png_export_current = true;
+        }
     });
 
     // Transparent-alpha mode. Default (off): straight-alpha reconstruction —

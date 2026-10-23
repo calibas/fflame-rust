@@ -62,13 +62,18 @@ fn default_video_output_path() -> std::path::PathBuf {
 
 /// Export settings for animation rendering. The frame size is the
 /// picture's (`FractalConfig::image_size`, the View panel's), read when
-/// the export starts; the encoder -- codec, encoder and its quality,
-/// preset and tune -- is the device's (`SystemSettings::video_encoding`),
-/// loaded when the panel opens and saved when it changes.
+/// the export starts, unless this export sets its own; the encoder --
+/// codec, encoder and its quality, preset and tune -- is the device's
+/// (`SystemSettings::video_encoding`), loaded when the panel opens and
+/// saved when it changes.
 #[derive(Clone)]
 pub struct AnimationExportSettings {
     /// Output video file path
     pub output_path: std::path::PathBuf,
+    /// This export's frame size, when not the picture's: set in the panel,
+    /// for one export only -- cleared when the panel opens and when the
+    /// export starts, and never the picture's size.
+    pub size_override: Option<(u32, u32)>,
     /// Frames per second
     pub fps: u32,
     /// Iterations per thread (GPU batching)
@@ -101,6 +106,7 @@ impl Default for AnimationExportSettings {
     fn default() -> Self {
         let mut s = Self {
             output_path: default_video_output_path(),
+            size_override: None,
             fps: 30,
             iterations_per_thread: 256,
             max_iterations: 10_000_000,
@@ -787,12 +793,40 @@ fn render_export_settings(
 
     ui.separator();
 
-    // The frame size is the picture's: the View panel's Output Size.
+    // The frame size: the picture's (the View panel's Output Size), or one
+    // set here for this export only. Unclamped on draw, so a picture larger
+    // than a video can be shows as it is and is not taken for an edit.
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.resolution"));
-        ui.label(egui::RichText::new(format!("{} × {}", image_size.0, image_size.1)).strong());
+        let (mut w, mut h) = settings.size_override.unwrap_or(image_size);
+        fn side(v: &mut u32, max: u32) -> egui::DragValue<'_> {
+            egui::DragValue::new(v).range(64..=max).clamp_existing_to_range(false).speed(4.0)
+        }
+        let edited = ui.add(side(&mut w, 7680)).changed() | {
+            ui.label("×");
+            ui.add(side(&mut h, 4320)).changed()
+        };
+        if edited {
+            settings.size_override = Some((w, h));
+        }
+        if settings.size_override.is_some()
+            && ui.small_button("↺").on_hover_text(t!("animation_panel.resolution_reset_tip")).clicked()
+        {
+            settings.size_override = None;
+        }
     });
-    ui.small(t!("animation_panel.resolution_from_view"));
+    ui.horizontal(|ui| {
+        for (label, size) in [("720p", (1280, 720)), ("1080p", (1920, 1080)), ("1440p", (2560, 1440)), ("4K", (3840, 2160))] {
+            if ui.small_button(label).clicked() {
+                settings.size_override = Some(size);
+            }
+        }
+    });
+    ui.small(if settings.size_override.is_some() {
+        t!("animation_panel.resolution_this_export")
+    } else {
+        t!("animation_panel.resolution_from_view")
+    });
 
     // FPS
     ui.horizontal(|ui| {
@@ -936,8 +970,10 @@ fn render_export_settings(
 
     ui.separator();
 
-    // Export button
+    // Export button. A size set here was this export's: the next one starts
+    // from the picture's again.
     if ui.button(t!("animation_panel.export_video")).clicked() {
         *export_request = Some(settings.clone());
+        settings.size_override = None;
     }
 }

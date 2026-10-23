@@ -1522,6 +1522,7 @@ impl EguiLayer {
         // Export
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
+        let mut png_export_current = false;
         // let mut png_export_requested = false;
 
         // Panel open requests
@@ -1802,6 +1803,7 @@ impl EguiLayer {
                         view_subflame_in_isolation,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
+                        png_export_current: &mut png_export_current,
                         png_export_premultiplied,
                         png_export_supersample,
                         max_export_dimension: device.limits().max_texture_dimension_2d,
@@ -2547,6 +2549,7 @@ impl EguiLayer {
             redo_requested,
             png_export_with_background,
             png_export_transparent,
+            png_export_current,
             add_transform,
             delete_transform,
             clone_transform,

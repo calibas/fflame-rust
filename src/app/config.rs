@@ -705,4 +705,150 @@ impl App {
             }
         });
     }
+
+    /// The config a saved viewport records: the export config, and for a
+    /// simulation the step it shows, which need not have reached the
+    /// config's cap -- so the PNG re-renders as saved.
+    fn current_image_config(&self) -> FractalConfig {
+        let config = self.export_config();
+        #[cfg(feature = "engine-sim")]
+        if let (Some(sim), crate::scene::transforms::RenderMode::Simulation) = (&self.sim_renderer, config.render_mode) {
+            if sim.step_index() > 0 {
+                let mut c = config;
+                c.sim.steps = sim.step_index();
+                return c;
+            }
+        }
+        config
+    }
+
+    /// Export Current Image: the viewport's picture as it stands -- its
+    /// size, the iterations it has so far, its colour effects -- read back
+    /// and saved, not rendered again (Export with Background and Export
+    /// Transparent render the picture's size afresh). Opaque, as it shows.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn export_current_image(&mut self) {
+        let config = self.current_image_config();
+        let render_time_ms = self.metrics.render_time_ms;
+        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+        let Some(renderer) = self.flame_renderer.as_mut() else {
+            return;
+        };
+        let total_iterations = renderer.total_iterations();
+        // The viewport shows the colour effects' output when there is one.
+        let pixels: Result<(u32, u32, Vec<u8>), String> = if config.color_effects.iter().any(|e| e.enabled) {
+            pollster::block_on(self.effect_chain.read_color_output_pixels(&self.gpu.device, &self.gpu.queue))
+        } else {
+            pollster::block_on(renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, false, config.background_color))
+                .map_err(|e| e.to_string())
+        };
+        let outcome = match pixels {
+            Err(e) => Some((format!("Export failed: {e}"), true)),
+            Ok((width, height, rgba)) => {
+                let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                    width,
+                    height,
+                    total_iterations,
+                    render_time_ms,
+                    iterations_per_thread,
+                    config.speed_factor,
+                    &config,
+                );
+                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba, Some(metadata)) {
+                    Err(e) => Some((format!("PNG encode failed: {e}"), true)),
+                    Ok(png) => rfd::FileDialog::new()
+                        .set_parent(self.window.as_ref())
+                        .add_filter("PNG Image", &["png"])
+                        .set_file_name("fractal.png")
+                        .save_file()
+                        .map(|path| match std::fs::write(&path, png) {
+                            Err(e) => (format!("Save failed: {e}"), true),
+                            Ok(()) => (
+                                format!(
+                                    "PNG saved · {}",
+                                    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+                                ),
+                                false,
+                            ),
+                        }),
+                }
+            }
+        };
+        if let Some((message, is_error)) = outcome {
+            self.egui_layer.show_api_notification(&message, is_error);
+        }
+    }
+
+    /// Export Current Image in the browser: the pixels copied now, before
+    /// the next frame draws over them, and mapped and downloaded after.
+    #[cfg(target_arch = "wasm32")]
+    pub fn export_current_image(&mut self) {
+        use wasm_bindgen_futures::spawn_local;
+        let config = self.current_image_config();
+        let render_time_ms = self.metrics.render_time_ms;
+        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+        let Some(renderer) = self.flame_renderer.as_ref() else {
+            return;
+        };
+        let total_iterations = renderer.total_iterations();
+        let (width, height) = (renderer.width, renderer.height);
+        let effects = config.color_effects.iter().any(|e| e.enabled) && self.effect_chain.has_color_output();
+        let (staging, padded_bytes_per_row) = if effects {
+            self.effect_chain.create_color_staging_buffer(&self.gpu.device)
+        } else {
+            renderer.create_pixel_staging_buffer(&self.gpu.device)
+        };
+        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+            label: Some("Current Image Export Copy"),
+        });
+        if effects {
+            self.effect_chain.copy_color_to_buffer(&mut encoder, &staging, padded_bytes_per_row);
+        } else {
+            renderer.copy_fractal_to_buffer(&mut encoder, &staging, padded_bytes_per_row);
+        }
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+        let device = self.gpu.device.clone();
+        spawn_local(async move {
+            let slice = staging.slice(..);
+            let (tx, rx) = futures::channel::oneshot::channel();
+            slice.map_async(egui_wgpu::wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            let _ = device.poll(egui_wgpu::wgpu::PollType::Wait { submission_index: None, timeout: None });
+            match rx.await {
+                Ok(Ok(())) => {
+                    let data = slice.get_mapped_range();
+                    let row = (width * 4) as usize;
+                    let mut rgba = Vec::with_capacity(row * height as usize);
+                    for y in 0..height {
+                        let start = (y * padded_bytes_per_row) as usize;
+                        rgba.extend_from_slice(&data[start..start + row]);
+                    }
+                    drop(data);
+                    staging.unmap();
+                    let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                        width,
+                        height,
+                        total_iterations,
+                        render_time_ms,
+                        iterations_per_thread,
+                        config.speed_factor,
+                        &config,
+                    );
+                    match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba, Some(metadata)) {
+                        Ok(png) => match super::trigger_browser_download(&png, "fractal.png", "image/png") {
+                            Ok(()) => log::info!("PNG download started"),
+                            Err(e) => log::error!("Failed to trigger download: {}", e),
+                        },
+                        Err(e) => log::error!("Failed to encode PNG: {}", e),
+                    }
+                }
+                Ok(Err(e)) => log::error!("Buffer map error: {:?}", e),
+                Err(_) => log::error!("Failed to receive buffer map result"),
+            }
+            // Explicit, because dropping frees nothing on WebGPU -- this
+            // staging buffer is per export.
+            staging.destroy();
+        });
+    }
 }

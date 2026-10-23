@@ -667,8 +667,11 @@ in [EXPORT.md](EXPORT.md) (*Video Export*). What belongs to animation:
   device last left it (`SystemSettings::video_encoding`, saved when one
   changes; at first H.265 in software, CRF 12). The frames are the
   picture's size (`FractalConfig::image_size`, the View panel's Output
-  Size, shown read-only here); the frame rate (30) and the iterations
-  are the export's own. Into the platform's Videos folder. The CLI:
+  Size), or a size set in the window for that export alone
+  (`AnimationExportSettings::size_override`, with 720p/1080p/1440p/4K
+  and a reset; cleared when the window opens and when the export starts,
+  and never written to the picture); the frame rate (30) and the
+  iterations are the export's own. Into the platform's Videos folder. The CLI:
 
   ```bash
   FractalArtEditor export-animation -c config.fflame -a anim.anim -o out.mp4 \

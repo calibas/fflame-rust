@@ -63,6 +63,8 @@ pub struct UiResponse {
     // Export operations
     pub png_export_with_background: bool,
     pub png_export_transparent: bool,
+    /// Save the viewport's picture as it stands, at its size.
+    pub png_export_current: bool,
 
     // Transform management (creates config deltas but needs special handling)
     pub add_transform: bool,
@@ -242,6 +244,7 @@ impl Default for UiResponse {
             redo_requested: false,
             png_export_with_background: false,
             png_export_transparent: false,
+            png_export_current: false,
             add_transform: false,
             delete_transform: None,
             clone_transform: None,
