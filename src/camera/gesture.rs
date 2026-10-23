@@ -610,6 +610,36 @@ mod escape {
         Some((ifs3, cam))
     }
 
+    /// Put the solid's eye at `eye`, where `ifs::solid_camera` puts it:
+    /// the camera moves as a whole -- its target by the eye's offset, its
+    /// angles and distance kept -- as the flame's position and fly mode
+    /// move theirs. The target takes the offset exactly, in its decimals;
+    /// an empty one is the attractor's centre, and becomes explicit. `None`
+    /// with no solid to move, or nothing moved.
+    pub fn place_solid_eye(config: &FractalConfig, eye: [f64; 3]) -> Option<CameraEdit> {
+        let (ifs3, cam) = solid_view(config)?;
+        let esc = &config.escape;
+        let mut changes = Vec::new();
+        for (k, (path, s)) in [
+            (ConfigPath::EscapeCamTargetX, &esc.cam_target_x),
+            (ConfigPath::EscapeCamTargetY, &esc.cam_target_y),
+            (ConfigPath::EscapeCamTargetZ, &esc.cam_target_z),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = eye[k] - cam.eye[k];
+            if offset == 0.0 || !offset.is_finite() {
+                continue;
+            }
+            let base = if s.trim().is_empty() { format!("{}", ifs3.ball.centre[k]) } else { s.trim().to_string() };
+            if let Some(next) = FixedPoint::decimal_add_f64(&base, offset, esc.zoom_log2) {
+                changes.push((path, ConfigValue::String(next)));
+            }
+        }
+        (!changes.is_empty()).then(|| CameraEdit::batch(changes, PAN))
+    }
+
     /// The solid's target after a screen offset `(dx, dy)` in pixels is
     /// applied in the target's plane -- once per `(view, sign)` in
     /// `terms`, each at that view's zoom, so a pan is one term and a
@@ -996,7 +1026,7 @@ mod escape {
 }
 
 #[cfg(feature = "engine-escape")]
-pub use escape::{escape_pan, escape_pan_plane, escape_zoom, screen_to_world as escape_screen_to_world};
+pub use escape::{escape_pan, escape_pan_plane, escape_zoom, place_solid_eye, screen_to_world as escape_screen_to_world};
 #[cfg(feature = "terrain")]
 pub use escape::terrain_pan;
 
@@ -1180,6 +1210,35 @@ mod tests {
             out.push(("sim terrain", sim));
         }
         out
+    }
+
+    /// A solid's eye goes where it is put -- each axis alone, and all three
+    /// -- its target moving by the same offset, the angles and the zoom
+    /// kept; an empty target (the attractor's centre) becomes explicit.
+    #[test]
+    #[cfg(feature = "engine-escape")]
+    fn a_solids_eye_goes_where_it_is_put() {
+        let (_, mut c) = cameras_3d().into_iter().find(|(n, _)| *n == "solid").expect("a solid");
+        // A solid that needs no flame: the default flame qualifies for none.
+        c.escape.formula = "quaternion_julia_solid".to_string();
+        let eye_of = |c: &FractalConfig| escape::solid_view(c).expect("a solid view").1.eye;
+        let before = eye_of(&c);
+        for want in [
+            [before[0] + 0.25, before[1], before[2]],
+            [before[0], before[1] - 0.5, before[2]],
+            [before[0], before[1], before[2] + 1.0],
+            [-0.3, 0.7, 1.9],
+        ] {
+            let edit = place_solid_eye(&c, want).expect("the eye moves");
+            let after = applied(&c, &edit);
+            let got = eye_of(&after);
+            assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{got:?} against {want:?}");
+            let (a, b) = (&c.escape, &after.escape);
+            assert!(a.cam_pitch == b.cam_pitch && a.cam_yaw == b.cam_yaw && a.cam_bank == b.cam_bank && a.zoom_log2 == b.zoom_log2);
+            let (fa, fb) = (frame_of(&c), frame_of(&after));
+            assert!(fa.forward.iter().zip(fb.forward).all(|(x, y)| (x - y).abs() < 1e-12), "it looks the same way");
+        }
+        assert!(place_solid_eye(&c, before).is_none(), "nothing moved");
     }
 
     fn frame_of(c: &FractalConfig) -> crate::camera::view3d::Frame {

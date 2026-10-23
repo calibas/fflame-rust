@@ -539,7 +539,7 @@ in [CAMERA.md](CAMERA.md).
 | Section | Shown for | Holds |
 |---|---|---|
 | Camera | 2D views, and a 3D flame's projected picture | zoom, centre (the escape centre as exact decimals), rotation, an arrow pad and Reset, through `camera::gesture` as the keys and the mouse are |
-| 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A camera that stores a target shows its eye as a readout; a terrain's target has a lift |
+| 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A terrain shows its eye as a readout; a solid's eye is editable, and moving it moves the camera, target and all; a terrain's target has a lift |
 | Camera Lens | an escape plane or solid | a variation used as a lens on the pixels or rays |
 | Image | every escape view; a 2D simulation | escape: antialiasing (supersampling) and how the samples combine; simulation: the resolve filters (upscale, fit, downscale) and tiling a periodic field |
 | Atmosphere, Depth of Field | every 3D view | fog, a flame's depth weighting, a terrain's far and haze; a flame's focus and blur or the path tracer's lens; then a button that opens the Lighting panel |
