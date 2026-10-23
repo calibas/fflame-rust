@@ -1,5 +1,6 @@
-//! Level-dependent flames (docs/projects/level-dependent-flames.md): the
-//! presets that show them, written from the example file
+//! Level-dependent flames (the record:
+//! docs/archive/projects/level-dependent-flames.md): the presets that
+//! show them, written from the example file
 //! (`assets/formulas/variation-moran.rhai`), the test that keeps the
 //! bundled presets carrying the file as it is, and the tests of what the
 //! file draws -- each set in the unit square, the levels composed with

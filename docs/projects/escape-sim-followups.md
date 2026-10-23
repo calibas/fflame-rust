@@ -270,6 +270,16 @@ else in that record is built. These are not:
   decision D9 (2026-09-10; ESCAPE.md, the modes' table): mode D gives
   its level in one pass. Folds and non-invertible maps would be its only
   ground, should it be revived.
+- **Mode D ignores opacity.** It draws the attractor of every map, where
+  the chaos game plots only the points whose last map plots: any flame
+  with a hidden transform (opacity 0) draws more in mode D. Found
+  2026-10-23 with level flames, whose hidden levels mode D drew over the
+  picture
+  ([level-dependent-flames.md](../archive/projects/level-dependent-flames.md)).
+  The fix: the walk's first inverse -- the CPU's handover prefix
+  (`seed_beam`) and the shader's level 0 -- admits only transforms with
+  opacity above 0; xaos admits the rest. Test: a two-map flame with one
+  map hidden, mode D against the chaos game's coverage.
 - **`timeline_of_a_cached_revisit`** fails (148 vs 197 limbs) and has
   since before 2026-09-02; verified pre-existing against a stashed
   tree. Unrelated to the tiers.
