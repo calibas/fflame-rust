@@ -170,12 +170,13 @@ fn escaped(s, p) {
 }
 
 fn distance(s, p) {
-    // Half: the stretch is the steps' largest, the distance a first-order
-    // reading of it, which holds near the surface; farther, and past a
-    // critical point, no step is longer than a tenth of the cut. Never
-    // none: the solid is where the distance is none or less.
+    // Outside, nine tenths: the stretch is the steps' largest, and the
+    // reading measured at most nine tenths of the distance to the set
+    // (sampled, every step), a fifth at the median; past a critical point
+    // no step is longer than a tenth of the cut. Never none: the solid is
+    // where the distance is none or less.
     let step = 0.025 * p.size;
-    let outside = if s.out { max(min(0.5 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };
+    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };
     let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };
     // Signed: the reading of the side the point is not on, negative in
     // the solid, so the normals, which the march takes where it stepped

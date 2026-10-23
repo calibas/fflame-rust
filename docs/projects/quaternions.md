@@ -68,7 +68,8 @@ One solid, its Step a choice of the six, its exact running derivative
 As built:
 
 - **Outside**, `(|Z_k| - 4) / dr_k` at the step `k` that escaped, halved
-  and capped at a tenth of the box: first-order, it holds near the
+  (nine tenths since: *After use*) and capped at a tenth of the box:
+  first-order, it holds near the
   surface; past a critical point (exp(Z^2)'s origin, where `dr` is 0) the
   cap keeps it a number. (Neither reading is a clearance: *After use*,
   below.)
@@ -156,6 +157,21 @@ complement, a box of 3.
     steps 13% but read a few thousandths a thousandth from the boundary
     (`halaykas_distance_has_no_jump_at_the_sets_boundary`); the colour
     code costs nothing measurable.
+  - Then (user: "there seem to be holes still though in one of the
+    preset when zooming in closer ... The holes also get worse when I
+    increase AA in Lit mode"; figure 7, the set): rays out of steps again,
+    in long stretches where the readings stay a few pixels -- not a
+    crawl, so its floor never grew. A supersampled grid's pixel is a
+    fraction of the output's, so each of its rays marched finer: out of
+    steps 0, 34 and 305 of 16,000 at 1x, 2x and 4x (CPU). Now the floor
+    is the output pixel, and the outside reading is nine tenths of
+    `(|Z_k| - 4) / dr_k` rather than half: sampled, it measured at most
+    0.85-0.91 of the distance to the set for steps 1, 3 and 4, a fifth to
+    two fifths at the median. Zoomed in 1.5 stops, no ray out of steps
+    on any preset (up to 200 before), a quarter fewer steps. Not taken:
+    the reading corrected for a pole (`m / 4` times the Newton reading),
+    which read up to 11 times the distance for inv(sinh Z) and 3,000 for
+    exp(Z^2).
   - **Open:** the shell's other face, on the escaped side, is a level of
     the outside reading, which is piecewise -- the step an orbit escapes
     at changes across a seam -- so it has a cliff where a seam meets it
