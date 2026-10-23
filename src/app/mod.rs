@@ -447,6 +447,9 @@ pub struct App {
     /// renderer: it consumes the flame renderer's palette texture and
     /// tonemap tail but owns its own pipelines and output.
     pub(super) escape_renderer: Option<crate::escape::EscapeRenderer>,
+    /// Mode D's packed flame, analysed again only when it changes
+    /// (`escape::ifs::PackCache`).
+    pub(super) ifs_pack_cache: crate::escape::ifs::PackCache,
     /// The 3D terrain view of the escape picture
     /// (docs/archive/terrain/heightfield-3d.md): its footprint's renderer and
     /// the terrain renderer. Held instead of `escape_renderer` while
@@ -554,6 +557,15 @@ pub struct App {
     // per-frame iterations_per_thread down when frames blow the target
     // budget and back up when there is headroom. 1.0 = full batch.
     pub(super) iter_scale: f64,
+    /// The dispatch's length past the full batch, from the GPU's timing
+    /// (`fill_step`); 1 is the batch.
+    pub(super) batch_fill: f64,
+    /// Bumped whenever the fill starts again: a timing tagged with an
+    /// older one measured something else.
+    pub(super) fill_tag: u64,
+    /// The renderer's iteration count last frame: a smaller one is a
+    /// restart.
+    pub(super) fill_last_total: u64,
     pub(super) last_iter_frame: Option<web_time::Instant>,
     /// The previous two frames' budget ratios, for the governor's
     /// median-of-3 outlier filter. Neutral (1.0) at rest.
@@ -626,6 +638,9 @@ pub struct App {
 
     // Histogram computation (computed periodically, not every frame)
     pub(super) histogram_frame_counter: u32,
+    /// Whether the Histogram section was on screen last frame: it opening
+    /// reads the histogram at once.
+    pub(super) histogram_was_shown: bool,
     // WASM: async histogram result slot + in-flight guard
     #[cfg(target_arch = "wasm32")]
     pub(super) histogram_result_slot: Option<std::sync::Arc<std::sync::Mutex<Option<crate::renderer::DensityHistogram>>>>,
@@ -878,6 +893,7 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             escape_renderer: None,
+            ifs_pack_cache: Default::default(),
             #[cfg(feature = "terrain")]
             escape_terrain: None,
             escape_dirty: true,
@@ -910,6 +926,9 @@ impl App {
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
             iter_scale: 1.0,
+            batch_fill: 1.0,
+            fill_tag: 0,
+            fill_last_total: 0,
             last_iter_frame: None,
             governor_ratio_prev: [1.0, 1.0],
             governor_knee: crate::app::Knee::Shedding { over: 0 },
@@ -936,6 +955,7 @@ impl App {
             export_status: Arc::new(Mutex::new(ExportStatus::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
+            histogram_was_shown: false,
             #[cfg(target_arch = "wasm32")]
             histogram_result_slot: None,
             #[cfg(target_arch = "wasm32")]
@@ -2338,7 +2358,7 @@ impl App {
                 // escape config says when it changed.
                 if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
                     let registry = crate::variations::global_registry();
-                    let packed = crate::escape::ifs::pack_for(def, &final_config, &registry);
+                    let packed = self.ifs_pack_cache.pack_for(def, &final_config, &registry);
                     let fp = terrain.footprint_renderer();
                     fp.set_ifs(packed);
                     fp.ensure_coarse(device, queue, &final_config.escape, &final_config.flame);
@@ -2442,12 +2462,12 @@ impl App {
                 // flame edit has to reach the escape image — and
                 // nothing else marks it dirty, because every other
                 // escape formula is a function of the escape config
-                // alone. Re-analysing each frame is a handful of
-                // affines and a ball refinement; `set_ifs` reports
-                // whether it actually changed, which is the cue.
+                // alone. Asked each frame, analysed again only when the
+                // flame changed (`PackCache`); `set_ifs` reports whether
+                // the packing changed, which is the cue.
                 if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
                     let registry = crate::variations::global_registry();
-                    let packed = crate::escape::ifs::pack_for(def, &final_config, &registry);
+                    let packed = self.ifs_pack_cache.pack_for(def, &final_config, &registry);
                     if escape.set_ifs(packed) {
                         self.escape_dirty = true;
                     }
@@ -2974,12 +2994,44 @@ impl App {
                         a.max(b).min(a.min(b).max(c)) // median of {a, b, c}
                     };
                     self.governor_ratio_prev = [self.governor_ratio_prev[1], ratio];
-                    let (knee, scale) =
-                        crate::app::governor_step(self.governor_knee, self.iter_scale, median, ratio, &batch);
-                    self.governor_knee = knee;
-                    self.iter_scale = scale;
+                    if self.batch_fill > 1.0 && (median > 1.3 || ratio >= 4.0) {
+                        // Late with the dispatch lengthened past the batch
+                        // (`fill_step`): give back the length first.
+                        self.batch_fill = (self.batch_fill / ratio.clamp(1.15, 4.0)).max(1.0);
+                    } else {
+                        let (knee, scale) =
+                            crate::app::governor_step(self.governor_knee, self.iter_scale, median, ratio, &batch);
+                        self.governor_knee = knee;
+                        self.iter_scale = scale;
+                    }
                 }
                 self.last_iter_frame = Some(now);
+                // **Filling the frame** (`fill_step`): at the full batch,
+                // a dispatch the GPU says is short is made longer. Only
+                // while an accumulation runs undisturbed: a restart, a drag
+                // (overwrite mode) or playback may change what a dispatch
+                // costs, so the fill starts again from the batch and waits
+                // for a measurement of the new state (`fill_tag`).
+                renderer.enable_dispatch_timing(&self.gpu.device, &self.gpu.queue);
+                let filling = governed && !planning && !use_overwrite && !is_controller_playing;
+                let total = renderer.total_iterations();
+                if !filling || total < self.fill_last_total {
+                    self.batch_fill = 1.0;
+                    self.fill_tag += 1;
+                    renderer.set_timing_tag(self.fill_tag);
+                }
+                self.fill_last_total = total;
+                if let Some(timing) = renderer.take_dispatch_timing().filter(|t| t.tag == self.fill_tag) {
+                    let at_full_batch = matches!(self.governor_knee, crate::app::Knee::Shedding { .. }) && self.iter_scale >= 1.0;
+                    self.batch_fill = if at_full_batch {
+                        let settings = self.config_manager.system_settings();
+                        let budget_ms = crate::app::frame_budget(settings.vsync_enabled, settings.target_fps, self.display_refresh_mhz) * 1000.0;
+                        let full = batch.max_workgroups as f64 * 64.0 * batch.iterations_per_thread as f64;
+                        crate::app::fill_step(self.batch_fill, timing.ms, timing.iterations as f64, full, budget_ms)
+                    } else {
+                        1.0
+                    };
+                }
                 // Floor of ONE workgroup: at extreme depth x emit x solid
                 // stacks, even 4 workgroups (256 threads x 10k iterations
                 // x 17 plot sources) blow the frame budget, and the only
@@ -2992,6 +3044,13 @@ impl App {
                     batch.while_planning(self.governor_knee, self.iter_scale)
                 } else {
                     batch.shape(self.governor_knee, self.iter_scale)
+                };
+                let effective_ipt = if self.batch_fill > 1.0
+                    && (effective_workgroups, effective_ipt) == (batch.max_workgroups, batch.iterations_per_thread)
+                {
+                    ((effective_ipt as f64 * self.batch_fill).round() as u32).min(crate::app::MAX_FILLED_IPT)
+                } else {
+                    effective_ipt
                 };
 
                 self.frames_since_accumulation += 1;
@@ -3228,7 +3287,12 @@ impl App {
         }
 
         // Update density histogram for Levels controls (every ~30 frames)
+        // while the Histogram section shows it: the readback copies the
+        // whole accumulator, and on desktop the frame waits for it.
         // Skip during animation playback to avoid frame drops from GPU readback
+        let histogram_shown = self.egui_layer.histogram_shown();
+        let histogram_opened = histogram_shown && !self.histogram_was_shown;
+        self.histogram_was_shown = histogram_shown;
         if !self.animation_controller.is_playing() {
             // On WASM, check if an async histogram computation has completed
             #[cfg(target_arch = "wasm32")]
@@ -3241,8 +3305,14 @@ impl App {
                 }
             }
 
-            self.histogram_frame_counter += 1;
-            if self.histogram_frame_counter >= 30 {
+            // Opened: read now, not up to 30 frames on.
+            if histogram_opened {
+                self.histogram_frame_counter = 29;
+            }
+            if histogram_shown {
+                self.histogram_frame_counter += 1;
+            }
+            if histogram_shown && self.histogram_frame_counter >= 30 {
                 self.histogram_frame_counter = 0;
 
                 if let Some(ref renderer) = self.flame_renderer {
@@ -3559,6 +3629,45 @@ pub(crate) fn adjust_iter_scale(scale: f64, median_ratio: f64, raw_ratio: f64, f
     s.clamp(floor, 1.0)
 }
 
+/// The share of the frame budget the trajectory dispatch may fill on the
+/// GPU when the governor lengthens it past the full batch (`fill_step`):
+/// the rest is the tone map, the effects, the UI and the compositor's.
+const FILL_TARGET: f64 = 0.5;
+/// How much the fill may grow a measurement: about a quarter of a second
+/// from the full batch to four times it.
+const FILL_GROWTH: f64 = 1.25;
+/// The longest the fill makes a dispatch, as a multiple of the batch and
+/// in iterations a thread -- belt and braces against a mismeasured cost.
+const MAX_FILL: f64 = 64.0;
+pub(crate) const MAX_FILLED_IPT: u32 = 16_384;
+
+/// **Filling the frame.** The governor only ever sheds from the full
+/// batch (128 workgroups of `iterations_per_thread`), and under vsync it
+/// cannot see how much of a frame that leaves idle: the frame lasts the
+/// refresh interval however little the GPU did. Measured on a GTX 1660
+/// SUPER at 754x786, Julian Disc's full batch at 1,000 a thread took
+/// about 2 ms of a 16.7 ms frame -- the app drew 490 million iterations a
+/// second against the CLI's 4.2 billion, and 4 billion took 8.1 s against
+/// 0.94 s. So when the governor sits at the full batch and the GPU's own
+/// clock (`gpu::timer`) says the dispatch is short, the dispatch is made
+/// LONGER -- `fill` times the iterations a thread, at full width.
+/// Persistent orbits make that free for the picture: a dispatch's length
+/// only slices the work.
+///
+/// `gpu_ms` over `iterations` is a measured dispatch; `full_batch` the
+/// full batch's thread-iterations; `budget_ms` the frame's. The fill
+/// moves toward filling `FILL_TARGET` of the budget, growing at most
+/// `FILL_GROWTH` a measurement and falling at once, never below 1 (the
+/// batch) or above `MAX_FILL`.
+pub(crate) fn fill_step(fill: f64, gpu_ms: f64, iterations: f64, full_batch: f64, budget_ms: f64) -> f64 {
+    let per_iteration = gpu_ms / iterations.max(1.0);
+    if !(per_iteration > 0.0) || !(full_batch > 0.0) {
+        return fill;
+    }
+    let wanted = FILL_TARGET * budget_ms / (per_iteration * full_batch);
+    wanted.min(fill * FILL_GROWTH).clamp(1.0, MAX_FILL)
+}
+
 /// Frames over budget at the floor before the governor asks whether
 /// width was the constraint at all (`Knee`).
 const KNEE_AFTER: u32 = 8;
@@ -3741,7 +3850,7 @@ pub(crate) fn governor_step(knee: Knee, scale: f64, median: f64, raw: f64, batch
 
 #[cfg(test)]
 mod governor_tests {
-    use super::{adjust_iter_scale, frame_budget, governor_step, Batch, Knee};
+    use super::{adjust_iter_scale, fill_step, frame_budget, governor_step, Batch, Knee, MAX_FILL};
 
     /// The slew tests' floor: the scale alone, without a batch.
     const MIN_ITER_SCALE: f64 = 1.0 / 256.0;
@@ -4067,5 +4176,46 @@ mod governor_tests {
             worst_jump <= 1.16,
             "batch jumped {worst_jump:.2}× between frames — visible grain flicker in playback"
         );
+    }
+    /// The fill grows toward half the frame on the GPU, a quarter more a
+    /// measurement at most, and sits there: Julian Disc's full batch at
+    /// 2 ms of a 16.7 ms frame settles near 4.2 times the batch.
+    #[test]
+    fn the_fill_grows_toward_half_the_frame() {
+        let (full, budget) = (128.0 * 64.0 * 1000.0, 1000.0 / 60.0);
+        let per = 2.0 / full;
+        let mut fill = 1.0;
+        let mut steps = 0;
+        loop {
+            let next = fill_step(fill, per * full * fill, full * fill, full, budget);
+            assert!(next <= fill * 1.25 + 1e-9, "grew {fill} to {next}");
+            if (next - fill).abs() < 1e-9 {
+                break;
+            }
+            fill = next;
+            steps += 1;
+            assert!(steps < 20, "did not settle: {fill}");
+        }
+        let gpu_ms = per * full * fill;
+        assert!((gpu_ms - budget / 2.0).abs() < 0.01, "settled at {gpu_ms} ms of {budget}");
+    }
+
+    /// A dispatch costlier than half the frame falls at once, never below
+    /// the batch; a cheap one stops at the cap; a measurement of nothing
+    /// changes nothing.
+    #[test]
+    fn the_fill_falls_at_once_and_is_bounded() {
+        let (full, budget) = (128.0 * 64.0 * 256.0, 1000.0 / 60.0);
+        // Measured at fill 8: 40 ms. Half the frame is 8.3 ms: a fifth of it.
+        let fallen = fill_step(8.0, 40.0, full * 8.0, full, budget);
+        assert!((fallen - 8.0 * (budget / 2.0) / 40.0).abs() < 1e-9, "{fallen}");
+        assert_eq!(fill_step(1.0, 40.0, full, full, budget), 1.0);
+        let mut fill = 1.0;
+        for _ in 0..100 {
+            fill = fill_step(fill, 0.001 * fill, full * fill, full, budget);
+        }
+        assert_eq!(fill, MAX_FILL);
+        assert_eq!(fill_step(3.0, 0.0, full, full, budget), 3.0);
+        assert_eq!(fill_step(3.0, f64::NAN, full, full, budget), 3.0);
     }
 }
