@@ -342,6 +342,21 @@ fn fov_row(ui: &mut egui::Ui, config_manager: &mut ConfigManager, path: ConfigPa
 
 /// Where the eye is, read out: what Position X/Y/Z is for a camera that
 /// stores a target and a distance instead.
+/// Where the eye is, to be moved: X, Y, Z, dragged at `speed` a pixel or
+/// typed. The eye as edited, when it was.
+fn position_edit(ui: &mut egui::Ui, eye: [f64; 3], decimals: usize, speed: f64, tip: &str) -> Option<[f64; 3]> {
+    let mut out = eye;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(t!("view.position").as_ref()).on_hover_text(tip);
+        for (axis, v) in ["X", "Y", "Z"].iter().zip(out.iter_mut()) {
+            ui.label(*axis);
+            changed |= ui.add(egui::DragValue::new(v).speed(speed).max_decimals(decimals)).on_hover_text(tip).changed();
+        }
+    });
+    changed.then_some(out)
+}
+
 fn position_readout(ui: &mut egui::Ui, eye: [f64; 3], decimals: usize, tip: &str) {
     ui.horizontal(|ui| {
         ui.label(t!("view.position").as_ref()).on_hover_text(tip);
@@ -424,13 +439,19 @@ pub fn camera_3d(ui: &mut egui::Ui, config_manager: &mut ConfigManager, fly_mode
         #[cfg(feature = "engine-escape")]
         ViewKind::Solid => {
             let esc = config.escape.clone();
-            let eye = {
+            let cam = {
                 let registry = crate::variations::global_registry();
-                crate::escape::ifs::solid_analysis(&config, &registry)
-                    .map(|ifs3| crate::escape::ifs::solid_camera(&esc, &ifs3).eye)
+                crate::escape::ifs::solid_analysis(&config, &registry).map(|ifs3| crate::escape::ifs::solid_camera(&esc, &ifs3))
             };
-            if let Some(eye) = eye {
-                position_readout(ui, eye, 6, &t!("view.position_tip_solid"));
+            // The eye, which moves the camera as a whole: its target with
+            // it, the angles and the distance kept (`place_solid_eye`).
+            // A drag's pixel is a five-hundredth of the distance.
+            if let Some(cam) = cam {
+                if let Some(eye) = position_edit(ui, cam.eye, 6, cam.distance * 0.002, &t!("view.position_tip_solid")) {
+                    if let Some(edit) = gesture::place_solid_eye(&config, eye) {
+                        edit.apply(config_manager);
+                    }
+                }
             }
             // The target as decimal strings, so a deep zoom's approach to
             // a point keeps its digits; blank is the attractor's centre.

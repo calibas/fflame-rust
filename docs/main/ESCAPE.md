@@ -553,15 +553,44 @@ fn escaped(s, p) {
   being measured -- `z`, the iterate, a vector, and `dr`, the running
   derivative, read by the colourings -- `fn step(s, p)` is one
   iteration, `fn escaped(s, p)` the stop (without it every iteration
-  runs), `fn distance(s, p)` the estimate after the last one; `INFO`
-  has `title` and `radius`. It renders in mode D ("Use as solid"; see
-  *Mode D*). The position is `#pixel` and `#pixelz`, the estimate
-  `#index` in `final:`. `fn prepare(p)` computes values once per picture
-  (UF's `global:`), read as `p.name` -- the CPU runs it
-  (`custom::globals`) and puts them in the solid's parameter block after
-  its Ball Radius, since mode D's `fdata` is the walk's -- and function
-  parameters (`function: "sin"`) are menus as a formula's. Example:
-  `assets/formulas/solid-kifs-menger.rhai`, which uses both.
+  runs), `fn distance(s, p)` the estimate after the last one. It renders
+  in mode D ("Use as solid"; see *Mode D*). The position is `#pixel` and
+  `#pixelz`, the estimate `#index` in `final:`. `fn prepare(p)` computes
+  values once per picture (UF's `global:`), read as `p.name` -- the CPU
+  runs it (`custom::globals`) and puts them in the solid's parameter
+  block after its Ball Radius's slot, since mode D's `fdata` is the
+  walk's -- and function parameters (`function: "sin"`) are menus as a
+  formula's. Example: `assets/formulas/solid-kifs-menger.rhai`, which
+  uses both. `INFO` has `title` and:
+  - `radius`, the ball the set lies in (the Ball Radius parameter's
+    default). Or `prepare` gives `ball`, a number from the parameters,
+    and the solid has no Ball Radius: the ball follows a parameter that
+    grows the solid (`custom::solid_ball`, read by `standalone_radius`;
+    the checker keeps `ball` among the globals though no section reads
+    it). One or the other.
+  - `depth`, 1 to 12: the Colour Depth's default (3 without it), for a
+    solid whose colourings should read the whole orbit.
+  - `march`: `"near"` (the default) stops the march within a pixel of
+    the solid, for a distance that bounds the way to the surface;
+    `"inside"` stops it only where the distance is none or less, each
+    step at least a pixel -- an eighth of a pixel more for each step in a
+    row that read under two (`crawl`), so a ray grazing a surface it
+    misses gets past it within its steps -- shadows hard and occlusion by
+    what its probes land in (`IfsDef::march_inside`,
+    `assembler::MARCH_INSIDE`, spliced line for line so every other
+    solid's WGSL is what it was; the pixel the output's, not a
+    supersampled grid's, whose rays each stepping a fraction of one ran
+    out of steps where readings stayed small; the path tracer's rays
+    floored at the pixel at their path's length, not their hit
+    tolerance). For a
+    distance that is a safe step and no measure of how near a surface
+    is: read as a clearance, a small reading where an orbit nearly
+    escapes far from any surface drew surfaces and shadows that were not
+    there and moved with the camera (the pixel is the hit test). The
+    hit is refined back to where the ray entered (`ifs_refine`, every
+    solid), and the normal is taken there, so such a distance should be
+    signed -- negative in the solid -- for the normal to see both sides.
+    `a_solid_marched_inside_changes_only_its_march`.
 - **A solid calls built-in flame variations** (3d-look-and-tools P5,
   C3; 2026-10-19): `vary("name", v)` or `vary("name", v, #{ param:
   value })` of a vector, in `start`, `step` or `distance`, applies the
@@ -611,6 +640,37 @@ fn escaped(s, p) {
   taken part by part, each part the real part of `f` of it. A vector
   `prepare` gives is read as `p.name` as any. `escaped` stays one test:
   a helper there may give a vector from `let`s, not from an `if`.
+- **Quaternions** (`rhai/vec.rs`, the same machinery: a vector is a kind
+  and its parts; [quaternions.md](../projects/quaternions.md)), in
+  solids and in 3D variations: `quat(w, x, y, z)`, `quat(w, v)` (`v` a
+  `vec3`) or `quat(w)`, `w` the scalar part; `q.w`, `q.x`, `q.y`, `q.z`
+  read and set, `q.v` the vector part (a `vec3`, settable); `+` and `-`
+  (a number to or from the scalar part), unary `-`, `*` Hamilton's
+  product or a scaling, `/` by a number (`q / r` is refused: `q * inv(r)`
+  and `inv(r) * q` differ); `dot`, `length`, `normalize`, `conj`, `inv`;
+  `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `exp`, `ln` (`log` base 10,
+  as Rhai's), `sqrt`, `pow(q, n)` and `q ** n` -- each the complex
+  function `g` of `t + i r` (`t` the scalar part, `r` the vector part's
+  length) carried back along the vector part (`a + i b` gives
+  `a + b v / r`; exact for functions with real coefficients, and
+  Halayka's (2009) equations (17)-(21)); `q.complex()` that `t + i r`. A
+  `PARAMS` entry `quat(...)` is four float parameters, `name_w` first;
+  a solid's state `z` may be a quaternion (the trap reads its vector
+  part, the walk's escape test its whole length). Such a function
+  stretches space by at most `max(|g'|, |Im g| / r)` at `t + i r`, which
+  is what a solid's running derivative reads. Examples:
+  `solid-halayka-quaternions.rhai`, Halayka's six non-standard sets (the
+  set, its complement, or the surface between them, cut to his box or a
+  ball; marched inside, its ball the cut's; coloured through `address` by
+  what the orbit did -- the step it came nearest the threshold, the angle
+  there, its escape path's heading and length; its estimate's caps and
+  their tests are in the file), and
+  `variation-escape-paths.rhai`, his (2018) escape paths as a 3D flame's
+  variation (`escape::halayka` holds their presets). Gates:
+  `quaternions_run_as_the_algebra_says` (every operation against the
+  algebra written independently in f64), `halaykas_sets_hold_what_the_paper_says`,
+  `halaykas_sets_are_never_stepped_through`,
+  `the_escape_paths_lie_on_their_orbits_paths`.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to
@@ -1329,9 +1389,12 @@ in plane units it underflows f32 at zooms the walk still resolves.
 solid entry) register beside these under their `custom-` names
 (`escape::custom::compile_solid`, found by `ifs::get_ifs`, never
 listed): the template's seven parameters, the solid's own from slot 7,
-then Colour Depth and **Ball Radius** (`INFO.radius`, the ball the march
-starts from; a parameter the panel can move, which `standalone_radius`
-reads). The walk around the program (`lang::wgsl::solid`) is the
+then Colour Depth (`INFO.depth`, else 3) and **Ball Radius**
+(`INFO.radius`, the ball the march starts from; a parameter the panel
+can move, which `standalone_radius` reads) -- or, when `prepare` gives
+`ball`, no Ball Radius and that ball, its slot kept. `INFO.march`
+chooses how it is marched (*A Rhai solid*, above). The walk around the
+program (`lang::wgsl::solid`) is the
 built-ins' shape, coloured by "Colouring solids" from the state: the
 closest approach of `z` over the first `colour_depth` iterations (the
 trap), its `dr` (the level), its `address` field if it has one.

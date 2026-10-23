@@ -8307,6 +8307,28 @@ fn ifs_shadow(p: vec3<f32>, light: vec3<f32>, k: f32, bias: f32, max_steps: u32,
     return clamp(shade, 0.0, 1.0);
 }
 
+// Back to the surface from a march that stepped into the solid: the
+// surface lies within its last step, between `t_out` (outside) and
+// `t_in` (where the distance reads none), and halving that step finds
+// it to a 256th. A true distance stops the march short of the surface,
+// so this is for a distance that bounds the step without measuring the
+// way -- a solid marched in fixed steps through space it cannot
+// measure (docs/projects/quaternions.md) -- which would otherwise land
+// as much as a step past it: terraces that shift as the camera moves.
+fn ifs_refine(o: vec3<f32>, d: vec3<f32>, t_out: f32, t_in: f32, eps: f32) -> f32 {
+    var a = t_out;
+    var b = t_in;
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let m = 0.5 * (a + b);
+        if (ifs_distance_at(o + d * m, eps) <= 0.0) {
+            b = m;
+        } else {
+            a = m;
+        }
+    }
+    return b;
+}
+
 // Central differences of the distance function: the normal is a
 // PROPERTY of d, not a reconstruction from neighbouring depths. That
 // is the whole difference from the splat pipeline's screen-space
@@ -8394,6 +8416,7 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var steps = 0u;
         var hit = false;
         var d = 0.0;
+        var t_prev = t;
         loop {
             if (steps >= max_steps || t > t_max) {
                 break;
@@ -8420,9 +8443,14 @@ fn escape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // and 2, which is f32 noise, for an extra 15% of the time.
             d = ifs_distance_at(p, eps * 0.01);  // an offset from the target
             if (d < eps) {
+                // Stepped in: back to the surface (`ifs_refine`).
+                if (d <= 0.0 && steps > 0u) {
+                    t = ifs_refine(eye, dir, t_prev, t, eps * 0.01);
+                }
                 hit = true;
                 break;
             }
+            t_prev = t;
             t = t + d;
             steps = steps + 1u;
         }
@@ -8748,11 +8776,87 @@ pub fn assemble_ifs_rig(
             "const IFS_MAX_BEAM: u32 = 8u;" => {
                 out.push(format!("const IFS_MAX_BEAM: u32 = {beam}u;"))
             }
+            t if def.march_inside && march_inside(t).is_some() => push_march_inside(&mut out, line),
             _ if orbit => out.push(line.replace("ifs_evaluate3(p)", "ifs_colour3(p)")),
             _ => out.push(line.to_string()),
         }
     }
     out.join("\n")
+}
+
+/// The lines of the solid's walk and path tracer that read its distance
+/// as a clearance, and what each becomes for a solid marched only to its
+/// inside (`IfsDef::march_inside`), whose distance is a safe step and no
+/// more: a small reading there may be an orbit that nearly escaped, far
+/// from any surface, and read as a clearance it drew surfaces and
+/// shadows that were not there, and moved as the camera did (the pixel
+/// is the hit test). Spliced line for line, so every other solid's text
+/// is what it was.
+///
+/// A reading under the pixel is then no hit and no measure, and the ray
+/// steps at least the pixel -- an eighth of a pixel more for each step in
+/// a row that read under two (`crawl`). A ray grazing a surface it misses
+/// reads a pixel or two all along it, and so does one crossing space the
+/// reading cannot measure (its stretch bound loose); stepped a pixel at a
+/// time, such a ray ran out of steps short of what lay behind -- a black
+/// outline round a silhouette -- and the path tracer's rays, floored at
+/// their hit tolerance, a fraction of a pixel, crawled for twice the time.
+/// A step that grew passes only what is thinner than itself, a pixel or
+/// so where the crawl is short, and a hit is refined back to where the
+/// ray entered. The pixel is the OUTPUT pixel (`params.flags` bits 4-7,
+/// the supersample factor, as `esc_supersample` reads them): a
+/// supersampled grid's rays each stepping a fraction of one ran out of
+/// steps where readings stayed small, and its holes grew with the
+/// antialiasing. The path tracer's is the output pixel already.
+const MARCH_INSIDE: &[(&str, &str)] = &[
+    // The camera's march: a reading is a step of at least the pixel and
+    // never a hit; the hit is a step into the solid, refined back to
+    // where the ray entered (`ifs_refine`).
+    ("var t_prev = t;", "var t_prev = t;\nvar crawl = 0.0;"),
+    (
+        "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target",
+        "d = ifs_distance_at(p, eps * 0.01);  // an offset from the target\nif (d > 0.0) {\n    let px = eps * f32(max((params.flags >> 4u) & 15u, 1u));\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * px);\n    d = max(d, px * (1.0 + 0.125 * crawl));\n}",
+    ),
+    // A shadow: hard, as a reading is no measure of how near the ray
+    // passed; its floor the pixel where it leaves the surface (the bias
+    // is four).
+    ("var shade = 1.0;", "var shade = 1.0;\nvar crawl = 0.0;"),
+    (
+        "let d = ifs_distance_at(p + light * t, eps);",
+        "let d = ifs_distance_at(p + light * t, eps);\nif (d > 0.0) {\n    let px = bias * 0.25 * f32(max((params.flags >> 4u) & 15u, 1u));\n    crawl = select(0.0, crawl + 1.0, d < 2.0 * px);\n    t = t + max(d, px * (1.0 + 0.125 * crawl));\n    i = i + 1u;\n    continue;\n}",
+    ),
+    // Occlusion: what each probe lands in.
+    (
+        "let vis = clamp(ifs_distance_at(p + dir * h, h * 0.01) / h, 0.0, 1.0);",
+        "let vis = select(0.0, 1.0, ifs_distance_at(p + dir * h, h * 0.01) > 0.0);",
+    ),
+    // The path tracer's rays, as the camera's: a bounce's floor the pixel
+    // at the length of its path.
+    (
+        "let dist = ifs_distance_at(o + d * t, eps);",
+        "var dist = ifs_distance_at(o + d * t, eps);\nif (dist > 0.0) {\n    let px = pt_ifs_eps(travelled + t);\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * px);\n    dist = max(dist, px * (1.0 + 0.125 * crawl));\n}",
+    ),
+    (
+        "let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);",
+        "var dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);\nif (dist > 0.0) {\n    crawl = select(0.0, crawl + 1.0, dist < 2.0 * eps);\n    dist = max(dist, eps * (1.0 + 0.125 * crawl));\n}",
+    ),
+];
+
+/// What a trimmed line becomes when marched inside, if it changes.
+fn march_inside(trimmed: &str) -> Option<&'static str> {
+    MARCH_INSIDE.iter().find(|(from, _)| *from == trimmed).map(|(_, to)| *to)
+}
+
+/// Push `line` as marched inside, at its own indent.
+fn push_march_inside(out: &mut Vec<String>, line: &str) {
+    let Some(to) = march_inside(line.trim()) else {
+        out.push(line.to_string());
+        return;
+    };
+    let indent = &line[..line.len() - line.trim_start().len()];
+    for l in to.lines() {
+        out.push(format!("{indent}{l}"));
+    }
 }
 
 /// Whether a solid's colourings measure through Orbit transformations:
@@ -8877,14 +8981,20 @@ fn pt_ifs_leave(o: vec3<f32>, d: vec3<f32>, t_end: f32, travelled: f32) -> f32 {
     // march's every step tests one number.
     let t_stop = min(span.y, t_end);
     let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
+    var t_prev = t;
     for (var i = 0u; i < max_steps; i = i + 1u) {
         if (t > t_stop) {
             break;
         }
         let dist = ifs_distance_at(o + d * t, eps);
         if (dist < eps) {
+            // Stepped in: back to the surface (`ifs_refine`).
+            if (dist <= 0.0 && i > 0u) {
+                return ifs_refine(o, d, t_prev, t, eps);
+            }
             return t;
         }
+        t_prev = t;
         t = t + dist;
     }
     return -1.0;
@@ -8918,6 +9028,7 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
     var t = span.x;
     let max_steps = u32(clamp(fparam(2u), 4.0, 512.0));
     var hit = false;
+    var t_prev = t;
     for (var i = 0u; i < max_steps; i = i + 1u) {
         if (t > span.y) {
             break;
@@ -8925,9 +9036,14 @@ fn pt_sample(px: u32, py: u32) -> vec4<f32> {
         let eps = pt_ifs_eps(t);
         let dist = ifs_distance_at(ray.o + ray.d * t, eps * 0.01);
         if (dist < eps) {
+            // Stepped in: back to the surface (`ifs_refine`).
+            if (dist <= 0.0 && i > 0u) {
+                t = ifs_refine(ray.o, ray.d, t_prev, t, eps * 0.01);
+            }
             hit = true;
             break;
         }
+        t_prev = t;
         t = t + dist;
     }
     if (!hit) {
@@ -8969,7 +9085,14 @@ pub fn assemble_ifs_path(
     lens_apply_uv(&mut ray, lens, "uv");
     // The surface's colour through a solid's Orbit transformations, as
     // the walk's own (`ifs_trap_point_wgsl`).
-    let surface = if solid_orbit(def, lens) { IFS_PATH_WGSL.replace("ifs_evaluate3(p)", "ifs_colour3(p)") } else { IFS_PATH_WGSL.to_string() };
+    let mut surface = if solid_orbit(def, lens) { IFS_PATH_WGSL.replace("ifs_evaluate3(p)", "ifs_colour3(p)") } else { IFS_PATH_WGSL.to_string() };
+    if def.march_inside {
+        let mut out = Vec::new();
+        for line in surface.lines() {
+            push_march_inside(&mut out, line);
+        }
+        surface = out.join("\n");
+    }
     format!(
         "{}\n{}\n{}",
         &walk[..cut],
@@ -10842,6 +10965,36 @@ mod lens_tests {
             }
         }
         assert!(n > 0, "no solid formula");
+    }
+
+    /// A solid marched only to its inside (`IfsDef::march_inside`) has
+    /// each line that reads its distance as a clearance replaced, once,
+    /// and still validates; marched near, the same solid has none of it.
+    #[test]
+    fn a_solid_marched_inside_changes_only_its_march() {
+        let near = &crate::escape::ifs::IFS_MANDELBULB;
+        let inside = crate::escape::ifs::IfsDef { march_inside: true, ..*near };
+        let col = crate::escape::ifs::get_ifs_coloring("ifs_level", near);
+        let walk = assemble_ifs(&inside, col, 1);
+        let path = assemble_ifs_path(&inside, col, 1, None, false, false);
+        // The camera's march, the shadow, the occlusion; the path's two.
+        for (text, needle, n) in [
+            (&walk, "d = max(d, px * (1.0 + 0.125 * crawl));", 1),
+            (&walk, "t = t + max(d, px * (1.0 + 0.125 * crawl));", 1),
+            (&walk, "let vis = select(0.0, 1.0,", 1),
+            (&walk, "var crawl = 0.0;", 2),
+            (&path, "dist = max(dist, ", 2),
+            // The shadow's, the bounce's and the camera ray's.
+            (&path, "var crawl = 0.0;", 3),
+        ] {
+            assert_eq!(text.matches(needle).count(), n, "{needle}");
+        }
+        validate_lens(&walk, "the walk, marched inside");
+        validate_lens(&path, "the path tracer, marched inside");
+        let plain = assemble_ifs(near, col, 1) + assemble_ifs_path(near, col, 1, None, false, false).as_str();
+        for needle in ["crawl", "let vis = select(", "max(dist, "] {
+            assert!(!plain.contains(needle), "marched near: {needle}");
+        }
     }
 
     /// Every mode-D combination still validates with the SUM rung

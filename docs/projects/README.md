@@ -16,6 +16,7 @@ which rewrites the references in code comments too).
 | [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |
 | [slow-frame-slider-hold.md](slow-frame-slider-hold.md) | Planned 2026-10-12: hold any slider's drag once its frames turn slow, beyond the listed slow settings. |
+| [quaternions.md](quaternions.md) | Decided and built 2026-10-22 (branch `quaternions`): a `quat` type in Rhai solids and 3D variations; Halayka's (2009) quaternion sets as a solid, his (2018) escape paths as a flame variation, with presets. |
 | [online-assets.md](online-assets.md) | Planned 2026-10-21, decided the same day, not started: skies and textures listed by providers (Poly Haven first), downloaded and kept locally; every resolution; textures on solids and terrains with valley, slope and plateau targets. |
 | [one-workspace.md](one-workspace.md) | Decided and built 2026-10-22 (branch `one-workspace`): one workspace for every mode, every panel drawn in every mode with a banner where unused, choosing enters the mode, the mode button in the menu bar; Flames, Escape Time and Simulation as layouts to pick. |
 

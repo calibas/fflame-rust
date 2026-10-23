@@ -5842,5 +5842,1359 @@
     "render_mode": "escape",
     "tonemap_mode": "linear",
     "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.3499999940395355,
+      "cam_yaw": 0.6000000238418579,
+      "coloring": "ifs_address",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Halayka's Quaternions (Rhai)",
+        "source": "// Halayka's quaternion sets: the quaternion Julia set with its step\n// replaced (S. Halayka, \"Some visually interesting non-standard quaternion\n// fractal sets\", Chaos, Solitons and Fractals 41, 2009). Use it from Escape\n// mode (\"Use as solid\").\n//\n// The point (x, y, z) is the quaternion Z = (x, y, z, w), scalar part\n// first, w the slice; it is stepped a few times (Iterations, 8 in the\n// paper) and is in the set while |Z| stays within the threshold (4). So\n// these are the shapes of a few iterations, smooth, not the limit fractal:\n// raise Iterations to sharpen them.\n//\n// It shows quaternions in Rhai: `quat(w, x, y, z)`, `*` Hamilton's\n// product, `inv`, and `sin`, `cos`, `exp`, `sinh`, `cosh` -- each the\n// complex function of `t + i r` (t the scalar part, r the vector part's\n// length) carried back along the vector part, Halayka's equations\n// (17)-(21). `z.complex()` is that `t + i r`.\n//\n// The distance: each step stretches space by at most |1 + C| (or |C|)\n// times the larger of |g'| along the plane and |Im g| / r across it, so\n// `dr` bounds how far the orbit has been stretched, and a point whose\n// orbit passes the threshold at step k is about (|Z_k| - 4) / dr_k from\n// the set: a first-order reading, which holds near the surface, so no\n// step outside is longer than a tenth of the cut. Inside there is no such\n// bound -- an orbit that settles shrinks `dr`, and the reading\n// (4 - |Z_k|) / dr_k says units where the surface is a tenth away -- so the\n// complement and the surface (Halayka's figures 6 and 8) are marched\n// through the set in steps of a fortieth of the cut, the reading taking\n// over within one: a feature thinner than a step may be passed, as the\n// paper's lattice passes what is finer than its spacing, and the surface\n// is drawn a step thick on its escaped side, so a step from inside stops\n// in it.\n//\n// Either reading is small where an orbit nearly crosses the threshold,\n// near a surface or not, so it is a safe step and no measure of how near\n// a surface is: `march: \"inside\"` has the march stop only inside the\n// solid, its shadows hard and its occlusion counting what its probes land\n// in. `prepare` gives the ball the march starts from and the camera\n// frames, the cut's, so it grows with Size.\n//\n// Draw: the set; the complement, the cut less the set; or the surface\n// between them, which is what the paper draws -- an isosurface of the\n// lattice has no faces where the set meets the lattice's edge, so it is\n// open at the box, and both of its sides show. Cut: the paper's box, or a\n// ball, which opens the complement to show its tubes.\n//\n// Colour: what the orbit did, for the Branch Address colouring (`address`;\n// `depth: 12` has the colourings read the whole orbit). Each piece of the\n// surface is where |Z_k| reaches the threshold for one k -- from outside\n// the orbit escapes there, from inside it comes nearest to escaping there\n// -- so the step the orbit came nearest the threshold, and the angle Z_k\n// makes with the real axis there, colour a piece alike from either side.\n// The path's heading and length are its escape path's (Halayka 2018, the\n// escape-paths variation): the direction the Bezier curve through the\n// orbit leaves the point in, about the z axis, and how far the orbit runs.\n\nconst PARAMS = #{\n    step: #{ value: 1, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps: figures 1-2, 3-4, 5, 6, 7 and 8\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"A point whose |Z| passes it is outside the set (Halayka's 4)\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Slice\", hint: \"The quaternion's last part, which the 3D slice pins\" },\n    draw: #{ value: 0, caption: \"Draw\", choices: [\"The set\", \"The complement\", \"The surface\"], hint: \"The set, cut; the cut less the set, the points that escape (figures 6 and 8); or the surface between them, open at the cut and seen from either side, as the paper's crude surface draws them\" },\n    cut: #{ value: 0, caption: \"Cut\", choices: [\"Box\", \"Ball\"], hint: \"What the shape is cut to: the paper's box, or a ball, which opens the complement to show its insides\" },\n    size: #{ value: 1.5, min: 0.1, max: 8.0, caption: \"Size\", hint: \"The box's half-width (Halayka's lattice, -1.5 to 1.5), or the ball's radius\" },\n    colour: #{ value: 0, caption: \"Colour\", choices: [\"Nearest step\", \"Exit angle\", \"Step and angle\", \"Path heading\", \"Path length\"], hint: \"What the Branch Address colouring shows: the step the orbit came nearest the threshold, the angle it made with the real axis there, both, or its escape path's heading and length\" },\n};\n\nconst INFO = #{ title: \"Halayka's Quaternions (Rhai)\", march: \"inside\", depth: 12 };\n\n// The ball the cut lies in, a hair over: a box's corner, or the ball.\nfn prepare(p) {\n    let r = if p.cut == 0 { 1.7320508 * p.size } else { p.size };\n    #{ ball: 1.01 * r }\n}\n\n// How far a function of the plane stretches: along the plane by its\n// derivative `gd`, across it by its imaginary part over the vector part's\n// length.\nfn stretch(gd, g, r) {\n    max(gd.abs(), g.im.abs() / (r + 1e-30))\n}\n\n// The distance to a box of half-width `b` about the origin, negative\n// inside.\nfn box_distance(v, b) {\n    let q = abs(v) - vec3(b);\n    length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0)\n}\n\nfn start(pos, p) {\n    #{ z: quat(pos.x, pos.y, pos.z, p.w), at: pos, dr: 1.0, near: 1.0e30, out: false, d: 0.0,\n       k: 0, peak: 0.0, nearest: 1, angle: 0.0, heading: 0.0, path: 0.0, address: 0.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    let zc = z.complex();\n    let r = zc.im;\n    let k = 0.0;\n    if p.step == 0 {\n        k = p.power * length(z) ** (p.power - 1.0);\n        s.z = pow(z, p.power) + p.c;\n    } else if p.step == 1 {\n        k = length(1.0 + p.c) * stretch(cos(zc), sin(zc), r);\n        s.z = sin(z) + p.c * sin(z);\n    } else if p.step == 2 {\n        k = length(1.0 + p.c) * stretch(-sin(zc), cos(zc), r);\n        s.z = cos(z) + p.c * cos(z);\n    } else if p.step == 3 {\n        let e = exp(zc * zc);\n        k = stretch(2.0 * zc * e, e, r);\n        s.z = exp(z * z) + p.c;\n    } else if p.step == 4 {\n        let sh = sinh(zc);\n        k = length(1.0 + p.c) * stretch(cosh(zc) / (sh * sh), 1.0 / sh, r);\n        s.z = inv(sinh(z)) + p.c * inv(sinh(z));\n    } else {\n        let sh = sinh(zc);\n        k = length(p.c) * stretch(1.0 / (sh * sh), cosh(zc) / sh, r);\n        s.z = p.c * (inv(sinh(z)) * cosh(z));\n    }\n    s.dr = s.dr * k;\n    let m = length(s.z);\n    // A critical point (exp(Z^2)'s origin) stretches by nothing: the\n    // derivative's floor keeps the estimate a number.\n    let dr = max(s.dr, 1e-30);\n    // Written so a point the step has no number for -- inv(sinh Z) at\n    // Z = 0 -- is outside, as the paper's lattice has it.\n    if !(m <= p.threshold) {\n        s.out = true;\n        let d = (m - p.threshold) / dr;\n        s.d = if d >= 0.0 { d } else { 1.0e30 };\n    } else {\n        s.near = min(s.near, (p.threshold - m) / dr);\n    }\n\n    // What the colours read.\n    s.k = s.k + 1;\n    let moved = s.z - z;\n    s.path = s.path + length(moved);\n    if s.k == 1 {\n        // The escape path leaves Z0 toward Z1; the point's own space is\n        // the quaternion's first three parts.\n        s.heading = atan2(moved.x, moved.w) / (2.0 * PI()) + 0.5;\n    }\n    if m > s.peak {\n        let zk = s.z.complex();\n        s.peak = m;\n        s.nearest = s.k;\n        s.angle = atan2(zk.im, zk.re) / PI();\n    }\n    let band = (s.nearest - 1).to_float();\n    s.address = if p.colour == 0 {\n        (band + 0.5) / 8.0\n    } else if p.colour == 1 {\n        s.angle\n    } else if p.colour == 2 {\n        (band + s.angle) / 8.0\n    } else if p.colour == 3 {\n        s.heading\n    } else {\n        s.path / (s.path + p.threshold)\n    };\n    s\n}\n\n// The orbit stops where it first leaves.\nfn escaped(s, p) {\n    s.out\n}\n\nfn distance(s, p) {\n    // Outside, nine tenths: the stretch is the steps' largest, and the\n    // reading measured at most nine tenths of the distance to the set\n    // (sampled, every step), a fifth at the median; past a critical point\n    // no step is longer than a tenth of the cut. Never none: the solid is\n    // where the distance is none or less.\n    let step = 0.025 * p.size;\n    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };\n    let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };\n    // Signed: the reading of the side the point is not on, negative in\n    // the solid, so the normals, which the march takes where it stepped\n    // in, see the surface from both sides -- and none at every face, or\n    // they see the jump instead and snap toward the axes. The surface: a\n    // shell a step thick on the escaped side, which a step from inside\n    // the set cannot cross, measured in it to the nearer of its faces.\n    let set = if p.draw == 0 {\n        if s.out { outside } else { -inside }\n    } else if p.draw == 1 {\n        if s.out { -outside } else { inside }\n    } else if s.out {\n        max(outside - step, -outside)\n    } else {\n        inside\n    };\n    let cut = if p.cut == 0 { box_distance(s.at, p.size) } else { length(s.at) - p.size };\n    max(set, cut)\n}\n"
+      },
+      "formula": "custom-7e4c479b9f762d98",
+      "formula_params": {
+        "c_w": 0.3,
+        "c_x": 0.5,
+        "c_y": 0.4,
+        "c_z": 0.2,
+        "draw": 0.0,
+        "levels": 8.0,
+        "step": 1.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Halayka: sin Z + C sin Z",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.3,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.3499999940395355,
+      "cam_yaw": 0.6000000238418579,
+      "coloring": "ifs_address",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Halayka's Quaternions (Rhai)",
+        "source": "// Halayka's quaternion sets: the quaternion Julia set with its step\n// replaced (S. Halayka, \"Some visually interesting non-standard quaternion\n// fractal sets\", Chaos, Solitons and Fractals 41, 2009). Use it from Escape\n// mode (\"Use as solid\").\n//\n// The point (x, y, z) is the quaternion Z = (x, y, z, w), scalar part\n// first, w the slice; it is stepped a few times (Iterations, 8 in the\n// paper) and is in the set while |Z| stays within the threshold (4). So\n// these are the shapes of a few iterations, smooth, not the limit fractal:\n// raise Iterations to sharpen them.\n//\n// It shows quaternions in Rhai: `quat(w, x, y, z)`, `*` Hamilton's\n// product, `inv`, and `sin`, `cos`, `exp`, `sinh`, `cosh` -- each the\n// complex function of `t + i r` (t the scalar part, r the vector part's\n// length) carried back along the vector part, Halayka's equations\n// (17)-(21). `z.complex()` is that `t + i r`.\n//\n// The distance: each step stretches space by at most |1 + C| (or |C|)\n// times the larger of |g'| along the plane and |Im g| / r across it, so\n// `dr` bounds how far the orbit has been stretched, and a point whose\n// orbit passes the threshold at step k is about (|Z_k| - 4) / dr_k from\n// the set: a first-order reading, which holds near the surface, so no\n// step outside is longer than a tenth of the cut. Inside there is no such\n// bound -- an orbit that settles shrinks `dr`, and the reading\n// (4 - |Z_k|) / dr_k says units where the surface is a tenth away -- so the\n// complement and the surface (Halayka's figures 6 and 8) are marched\n// through the set in steps of a fortieth of the cut, the reading taking\n// over within one: a feature thinner than a step may be passed, as the\n// paper's lattice passes what is finer than its spacing, and the surface\n// is drawn a step thick on its escaped side, so a step from inside stops\n// in it.\n//\n// Either reading is small where an orbit nearly crosses the threshold,\n// near a surface or not, so it is a safe step and no measure of how near\n// a surface is: `march: \"inside\"` has the march stop only inside the\n// solid, its shadows hard and its occlusion counting what its probes land\n// in. `prepare` gives the ball the march starts from and the camera\n// frames, the cut's, so it grows with Size.\n//\n// Draw: the set; the complement, the cut less the set; or the surface\n// between them, which is what the paper draws -- an isosurface of the\n// lattice has no faces where the set meets the lattice's edge, so it is\n// open at the box, and both of its sides show. Cut: the paper's box, or a\n// ball, which opens the complement to show its tubes.\n//\n// Colour: what the orbit did, for the Branch Address colouring (`address`;\n// `depth: 12` has the colourings read the whole orbit). Each piece of the\n// surface is where |Z_k| reaches the threshold for one k -- from outside\n// the orbit escapes there, from inside it comes nearest to escaping there\n// -- so the step the orbit came nearest the threshold, and the angle Z_k\n// makes with the real axis there, colour a piece alike from either side.\n// The path's heading and length are its escape path's (Halayka 2018, the\n// escape-paths variation): the direction the Bezier curve through the\n// orbit leaves the point in, about the z axis, and how far the orbit runs.\n\nconst PARAMS = #{\n    step: #{ value: 1, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps: figures 1-2, 3-4, 5, 6, 7 and 8\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"A point whose |Z| passes it is outside the set (Halayka's 4)\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Slice\", hint: \"The quaternion's last part, which the 3D slice pins\" },\n    draw: #{ value: 0, caption: \"Draw\", choices: [\"The set\", \"The complement\", \"The surface\"], hint: \"The set, cut; the cut less the set, the points that escape (figures 6 and 8); or the surface between them, open at the cut and seen from either side, as the paper's crude surface draws them\" },\n    cut: #{ value: 0, caption: \"Cut\", choices: [\"Box\", \"Ball\"], hint: \"What the shape is cut to: the paper's box, or a ball, which opens the complement to show its insides\" },\n    size: #{ value: 1.5, min: 0.1, max: 8.0, caption: \"Size\", hint: \"The box's half-width (Halayka's lattice, -1.5 to 1.5), or the ball's radius\" },\n    colour: #{ value: 0, caption: \"Colour\", choices: [\"Nearest step\", \"Exit angle\", \"Step and angle\", \"Path heading\", \"Path length\"], hint: \"What the Branch Address colouring shows: the step the orbit came nearest the threshold, the angle it made with the real axis there, both, or its escape path's heading and length\" },\n};\n\nconst INFO = #{ title: \"Halayka's Quaternions (Rhai)\", march: \"inside\", depth: 12 };\n\n// The ball the cut lies in, a hair over: a box's corner, or the ball.\nfn prepare(p) {\n    let r = if p.cut == 0 { 1.7320508 * p.size } else { p.size };\n    #{ ball: 1.01 * r }\n}\n\n// How far a function of the plane stretches: along the plane by its\n// derivative `gd`, across it by its imaginary part over the vector part's\n// length.\nfn stretch(gd, g, r) {\n    max(gd.abs(), g.im.abs() / (r + 1e-30))\n}\n\n// The distance to a box of half-width `b` about the origin, negative\n// inside.\nfn box_distance(v, b) {\n    let q = abs(v) - vec3(b);\n    length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0)\n}\n\nfn start(pos, p) {\n    #{ z: quat(pos.x, pos.y, pos.z, p.w), at: pos, dr: 1.0, near: 1.0e30, out: false, d: 0.0,\n       k: 0, peak: 0.0, nearest: 1, angle: 0.0, heading: 0.0, path: 0.0, address: 0.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    let zc = z.complex();\n    let r = zc.im;\n    let k = 0.0;\n    if p.step == 0 {\n        k = p.power * length(z) ** (p.power - 1.0);\n        s.z = pow(z, p.power) + p.c;\n    } else if p.step == 1 {\n        k = length(1.0 + p.c) * stretch(cos(zc), sin(zc), r);\n        s.z = sin(z) + p.c * sin(z);\n    } else if p.step == 2 {\n        k = length(1.0 + p.c) * stretch(-sin(zc), cos(zc), r);\n        s.z = cos(z) + p.c * cos(z);\n    } else if p.step == 3 {\n        let e = exp(zc * zc);\n        k = stretch(2.0 * zc * e, e, r);\n        s.z = exp(z * z) + p.c;\n    } else if p.step == 4 {\n        let sh = sinh(zc);\n        k = length(1.0 + p.c) * stretch(cosh(zc) / (sh * sh), 1.0 / sh, r);\n        s.z = inv(sinh(z)) + p.c * inv(sinh(z));\n    } else {\n        let sh = sinh(zc);\n        k = length(p.c) * stretch(1.0 / (sh * sh), cosh(zc) / sh, r);\n        s.z = p.c * (inv(sinh(z)) * cosh(z));\n    }\n    s.dr = s.dr * k;\n    let m = length(s.z);\n    // A critical point (exp(Z^2)'s origin) stretches by nothing: the\n    // derivative's floor keeps the estimate a number.\n    let dr = max(s.dr, 1e-30);\n    // Written so a point the step has no number for -- inv(sinh Z) at\n    // Z = 0 -- is outside, as the paper's lattice has it.\n    if !(m <= p.threshold) {\n        s.out = true;\n        let d = (m - p.threshold) / dr;\n        s.d = if d >= 0.0 { d } else { 1.0e30 };\n    } else {\n        s.near = min(s.near, (p.threshold - m) / dr);\n    }\n\n    // What the colours read.\n    s.k = s.k + 1;\n    let moved = s.z - z;\n    s.path = s.path + length(moved);\n    if s.k == 1 {\n        // The escape path leaves Z0 toward Z1; the point's own space is\n        // the quaternion's first three parts.\n        s.heading = atan2(moved.x, moved.w) / (2.0 * PI()) + 0.5;\n    }\n    if m > s.peak {\n        let zk = s.z.complex();\n        s.peak = m;\n        s.nearest = s.k;\n        s.angle = atan2(zk.im, zk.re) / PI();\n    }\n    let band = (s.nearest - 1).to_float();\n    s.address = if p.colour == 0 {\n        (band + 0.5) / 8.0\n    } else if p.colour == 1 {\n        s.angle\n    } else if p.colour == 2 {\n        (band + s.angle) / 8.0\n    } else if p.colour == 3 {\n        s.heading\n    } else {\n        s.path / (s.path + p.threshold)\n    };\n    s\n}\n\n// The orbit stops where it first leaves.\nfn escaped(s, p) {\n    s.out\n}\n\nfn distance(s, p) {\n    // Outside, nine tenths: the stretch is the steps' largest, and the\n    // reading measured at most nine tenths of the distance to the set\n    // (sampled, every step), a fifth at the median; past a critical point\n    // no step is longer than a tenth of the cut. Never none: the solid is\n    // where the distance is none or less.\n    let step = 0.025 * p.size;\n    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };\n    let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };\n    // Signed: the reading of the side the point is not on, negative in\n    // the solid, so the normals, which the march takes where it stepped\n    // in, see the surface from both sides -- and none at every face, or\n    // they see the jump instead and snap toward the axes. The surface: a\n    // shell a step thick on the escaped side, which a step from inside\n    // the set cannot cross, measured in it to the nearer of its faces.\n    let set = if p.draw == 0 {\n        if s.out { outside } else { -inside }\n    } else if p.draw == 1 {\n        if s.out { -outside } else { inside }\n    } else if s.out {\n        max(outside - step, -outside)\n    } else {\n        inside\n    };\n    let cut = if p.cut == 0 { box_distance(s.at, p.size) } else { length(s.at) - p.size };\n    max(set, cut)\n}\n"
+      },
+      "formula": "custom-7e4c479b9f762d98",
+      "formula_params": {
+        "c_w": -0.3,
+        "c_x": 0.5,
+        "c_y": 0.7,
+        "c_z": 0.2,
+        "draw": 0.0,
+        "levels": 8.0,
+        "step": 1.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Halayka: sin Z + C sin Z, Second C",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.3,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.3499999940395355,
+      "cam_yaw": 0.6000000238418579,
+      "coloring": "ifs_address",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Halayka's Quaternions (Rhai)",
+        "source": "// Halayka's quaternion sets: the quaternion Julia set with its step\n// replaced (S. Halayka, \"Some visually interesting non-standard quaternion\n// fractal sets\", Chaos, Solitons and Fractals 41, 2009). Use it from Escape\n// mode (\"Use as solid\").\n//\n// The point (x, y, z) is the quaternion Z = (x, y, z, w), scalar part\n// first, w the slice; it is stepped a few times (Iterations, 8 in the\n// paper) and is in the set while |Z| stays within the threshold (4). So\n// these are the shapes of a few iterations, smooth, not the limit fractal:\n// raise Iterations to sharpen them.\n//\n// It shows quaternions in Rhai: `quat(w, x, y, z)`, `*` Hamilton's\n// product, `inv`, and `sin`, `cos`, `exp`, `sinh`, `cosh` -- each the\n// complex function of `t + i r` (t the scalar part, r the vector part's\n// length) carried back along the vector part, Halayka's equations\n// (17)-(21). `z.complex()` is that `t + i r`.\n//\n// The distance: each step stretches space by at most |1 + C| (or |C|)\n// times the larger of |g'| along the plane and |Im g| / r across it, so\n// `dr` bounds how far the orbit has been stretched, and a point whose\n// orbit passes the threshold at step k is about (|Z_k| - 4) / dr_k from\n// the set: a first-order reading, which holds near the surface, so no\n// step outside is longer than a tenth of the cut. Inside there is no such\n// bound -- an orbit that settles shrinks `dr`, and the reading\n// (4 - |Z_k|) / dr_k says units where the surface is a tenth away -- so the\n// complement and the surface (Halayka's figures 6 and 8) are marched\n// through the set in steps of a fortieth of the cut, the reading taking\n// over within one: a feature thinner than a step may be passed, as the\n// paper's lattice passes what is finer than its spacing, and the surface\n// is drawn a step thick on its escaped side, so a step from inside stops\n// in it.\n//\n// Either reading is small where an orbit nearly crosses the threshold,\n// near a surface or not, so it is a safe step and no measure of how near\n// a surface is: `march: \"inside\"` has the march stop only inside the\n// solid, its shadows hard and its occlusion counting what its probes land\n// in. `prepare` gives the ball the march starts from and the camera\n// frames, the cut's, so it grows with Size.\n//\n// Draw: the set; the complement, the cut less the set; or the surface\n// between them, which is what the paper draws -- an isosurface of the\n// lattice has no faces where the set meets the lattice's edge, so it is\n// open at the box, and both of its sides show. Cut: the paper's box, or a\n// ball, which opens the complement to show its tubes.\n//\n// Colour: what the orbit did, for the Branch Address colouring (`address`;\n// `depth: 12` has the colourings read the whole orbit). Each piece of the\n// surface is where |Z_k| reaches the threshold for one k -- from outside\n// the orbit escapes there, from inside it comes nearest to escaping there\n// -- so the step the orbit came nearest the threshold, and the angle Z_k\n// makes with the real axis there, colour a piece alike from either side.\n// The path's heading and length are its escape path's (Halayka 2018, the\n// escape-paths variation): the direction the Bezier curve through the\n// orbit leaves the point in, about the z axis, and how far the orbit runs.\n\nconst PARAMS = #{\n    step: #{ value: 1, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps: figures 1-2, 3-4, 5, 6, 7 and 8\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"A point whose |Z| passes it is outside the set (Halayka's 4)\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Slice\", hint: \"The quaternion's last part, which the 3D slice pins\" },\n    draw: #{ value: 0, caption: \"Draw\", choices: [\"The set\", \"The complement\", \"The surface\"], hint: \"The set, cut; the cut less the set, the points that escape (figures 6 and 8); or the surface between them, open at the cut and seen from either side, as the paper's crude surface draws them\" },\n    cut: #{ value: 0, caption: \"Cut\", choices: [\"Box\", \"Ball\"], hint: \"What the shape is cut to: the paper's box, or a ball, which opens the complement to show its insides\" },\n    size: #{ value: 1.5, min: 0.1, max: 8.0, caption: \"Size\", hint: \"The box's half-width (Halayka's lattice, -1.5 to 1.5), or the ball's radius\" },\n    colour: #{ value: 0, caption: \"Colour\", choices: [\"Nearest step\", \"Exit angle\", \"Step and angle\", \"Path heading\", \"Path length\"], hint: \"What the Branch Address colouring shows: the step the orbit came nearest the threshold, the angle it made with the real axis there, both, or its escape path's heading and length\" },\n};\n\nconst INFO = #{ title: \"Halayka's Quaternions (Rhai)\", march: \"inside\", depth: 12 };\n\n// The ball the cut lies in, a hair over: a box's corner, or the ball.\nfn prepare(p) {\n    let r = if p.cut == 0 { 1.7320508 * p.size } else { p.size };\n    #{ ball: 1.01 * r }\n}\n\n// How far a function of the plane stretches: along the plane by its\n// derivative `gd`, across it by its imaginary part over the vector part's\n// length.\nfn stretch(gd, g, r) {\n    max(gd.abs(), g.im.abs() / (r + 1e-30))\n}\n\n// The distance to a box of half-width `b` about the origin, negative\n// inside.\nfn box_distance(v, b) {\n    let q = abs(v) - vec3(b);\n    length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0)\n}\n\nfn start(pos, p) {\n    #{ z: quat(pos.x, pos.y, pos.z, p.w), at: pos, dr: 1.0, near: 1.0e30, out: false, d: 0.0,\n       k: 0, peak: 0.0, nearest: 1, angle: 0.0, heading: 0.0, path: 0.0, address: 0.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    let zc = z.complex();\n    let r = zc.im;\n    let k = 0.0;\n    if p.step == 0 {\n        k = p.power * length(z) ** (p.power - 1.0);\n        s.z = pow(z, p.power) + p.c;\n    } else if p.step == 1 {\n        k = length(1.0 + p.c) * stretch(cos(zc), sin(zc), r);\n        s.z = sin(z) + p.c * sin(z);\n    } else if p.step == 2 {\n        k = length(1.0 + p.c) * stretch(-sin(zc), cos(zc), r);\n        s.z = cos(z) + p.c * cos(z);\n    } else if p.step == 3 {\n        let e = exp(zc * zc);\n        k = stretch(2.0 * zc * e, e, r);\n        s.z = exp(z * z) + p.c;\n    } else if p.step == 4 {\n        let sh = sinh(zc);\n        k = length(1.0 + p.c) * stretch(cosh(zc) / (sh * sh), 1.0 / sh, r);\n        s.z = inv(sinh(z)) + p.c * inv(sinh(z));\n    } else {\n        let sh = sinh(zc);\n        k = length(p.c) * stretch(1.0 / (sh * sh), cosh(zc) / sh, r);\n        s.z = p.c * (inv(sinh(z)) * cosh(z));\n    }\n    s.dr = s.dr * k;\n    let m = length(s.z);\n    // A critical point (exp(Z^2)'s origin) stretches by nothing: the\n    // derivative's floor keeps the estimate a number.\n    let dr = max(s.dr, 1e-30);\n    // Written so a point the step has no number for -- inv(sinh Z) at\n    // Z = 0 -- is outside, as the paper's lattice has it.\n    if !(m <= p.threshold) {\n        s.out = true;\n        let d = (m - p.threshold) / dr;\n        s.d = if d >= 0.0 { d } else { 1.0e30 };\n    } else {\n        s.near = min(s.near, (p.threshold - m) / dr);\n    }\n\n    // What the colours read.\n    s.k = s.k + 1;\n    let moved = s.z - z;\n    s.path = s.path + length(moved);\n    if s.k == 1 {\n        // The escape path leaves Z0 toward Z1; the point's own space is\n        // the quaternion's first three parts.\n        s.heading = atan2(moved.x, moved.w) / (2.0 * PI()) + 0.5;\n    }\n    if m > s.peak {\n        let zk = s.z.complex();\n        s.peak = m;\n        s.nearest = s.k;\n        s.angle = atan2(zk.im, zk.re) / PI();\n    }\n    let band = (s.nearest - 1).to_float();\n    s.address = if p.colour == 0 {\n        (band + 0.5) / 8.0\n    } else if p.colour == 1 {\n        s.angle\n    } else if p.colour == 2 {\n        (band + s.angle) / 8.0\n    } else if p.colour == 3 {\n        s.heading\n    } else {\n        s.path / (s.path + p.threshold)\n    };\n    s\n}\n\n// The orbit stops where it first leaves.\nfn escaped(s, p) {\n    s.out\n}\n\nfn distance(s, p) {\n    // Outside, nine tenths: the stretch is the steps' largest, and the\n    // reading measured at most nine tenths of the distance to the set\n    // (sampled, every step), a fifth at the median; past a critical point\n    // no step is longer than a tenth of the cut. Never none: the solid is\n    // where the distance is none or less.\n    let step = 0.025 * p.size;\n    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };\n    let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };\n    // Signed: the reading of the side the point is not on, negative in\n    // the solid, so the normals, which the march takes where it stepped\n    // in, see the surface from both sides -- and none at every face, or\n    // they see the jump instead and snap toward the axes. The surface: a\n    // shell a step thick on the escaped side, which a step from inside\n    // the set cannot cross, measured in it to the nearer of its faces.\n    let set = if p.draw == 0 {\n        if s.out { outside } else { -inside }\n    } else if p.draw == 1 {\n        if s.out { -outside } else { inside }\n    } else if s.out {\n        max(outside - step, -outside)\n    } else {\n        inside\n    };\n    let cut = if p.cut == 0 { box_distance(s.at, p.size) } else { length(s.at) - p.size };\n    max(set, cut)\n}\n"
+      },
+      "formula": "custom-7e4c479b9f762d98",
+      "formula_params": {
+        "c_w": 0.3,
+        "c_x": 0.5,
+        "c_y": 0.4,
+        "c_z": 0.2,
+        "draw": 0.0,
+        "levels": 8.0,
+        "step": 2.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Halayka: cos Z + C cos Z",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.3,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.8999999761581421,
+      "cam_yaw": -0.800000011920929,
+      "coloring": "ifs_address",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Halayka's Quaternions (Rhai)",
+        "source": "// Halayka's quaternion sets: the quaternion Julia set with its step\n// replaced (S. Halayka, \"Some visually interesting non-standard quaternion\n// fractal sets\", Chaos, Solitons and Fractals 41, 2009). Use it from Escape\n// mode (\"Use as solid\").\n//\n// The point (x, y, z) is the quaternion Z = (x, y, z, w), scalar part\n// first, w the slice; it is stepped a few times (Iterations, 8 in the\n// paper) and is in the set while |Z| stays within the threshold (4). So\n// these are the shapes of a few iterations, smooth, not the limit fractal:\n// raise Iterations to sharpen them.\n//\n// It shows quaternions in Rhai: `quat(w, x, y, z)`, `*` Hamilton's\n// product, `inv`, and `sin`, `cos`, `exp`, `sinh`, `cosh` -- each the\n// complex function of `t + i r` (t the scalar part, r the vector part's\n// length) carried back along the vector part, Halayka's equations\n// (17)-(21). `z.complex()` is that `t + i r`.\n//\n// The distance: each step stretches space by at most |1 + C| (or |C|)\n// times the larger of |g'| along the plane and |Im g| / r across it, so\n// `dr` bounds how far the orbit has been stretched, and a point whose\n// orbit passes the threshold at step k is about (|Z_k| - 4) / dr_k from\n// the set: a first-order reading, which holds near the surface, so no\n// step outside is longer than a tenth of the cut. Inside there is no such\n// bound -- an orbit that settles shrinks `dr`, and the reading\n// (4 - |Z_k|) / dr_k says units where the surface is a tenth away -- so the\n// complement and the surface (Halayka's figures 6 and 8) are marched\n// through the set in steps of a fortieth of the cut, the reading taking\n// over within one: a feature thinner than a step may be passed, as the\n// paper's lattice passes what is finer than its spacing, and the surface\n// is drawn a step thick on its escaped side, so a step from inside stops\n// in it.\n//\n// Either reading is small where an orbit nearly crosses the threshold,\n// near a surface or not, so it is a safe step and no measure of how near\n// a surface is: `march: \"inside\"` has the march stop only inside the\n// solid, its shadows hard and its occlusion counting what its probes land\n// in. `prepare` gives the ball the march starts from and the camera\n// frames, the cut's, so it grows with Size.\n//\n// Draw: the set; the complement, the cut less the set; or the surface\n// between them, which is what the paper draws -- an isosurface of the\n// lattice has no faces where the set meets the lattice's edge, so it is\n// open at the box, and both of its sides show. Cut: the paper's box, or a\n// ball, which opens the complement to show its tubes.\n//\n// Colour: what the orbit did, for the Branch Address colouring (`address`;\n// `depth: 12` has the colourings read the whole orbit). Each piece of the\n// surface is where |Z_k| reaches the threshold for one k -- from outside\n// the orbit escapes there, from inside it comes nearest to escaping there\n// -- so the step the orbit came nearest the threshold, and the angle Z_k\n// makes with the real axis there, colour a piece alike from either side.\n// The path's heading and length are its escape path's (Halayka 2018, the\n// escape-paths variation): the direction the Bezier curve through the\n// orbit leaves the point in, about the z axis, and how far the orbit runs.\n\nconst PARAMS = #{\n    step: #{ value: 1, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps: figures 1-2, 3-4, 5, 6, 7 and 8\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"A point whose |Z| passes it is outside the set (Halayka's 4)\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Slice\", hint: \"The quaternion's last part, which the 3D slice pins\" },\n    draw: #{ value: 0, caption: \"Draw\", choices: [\"The set\", \"The complement\", \"The surface\"], hint: \"The set, cut; the cut less the set, the points that escape (figures 6 and 8); or the surface between them, open at the cut and seen from either side, as the paper's crude surface draws them\" },\n    cut: #{ value: 0, caption: \"Cut\", choices: [\"Box\", \"Ball\"], hint: \"What the shape is cut to: the paper's box, or a ball, which opens the complement to show its insides\" },\n    size: #{ value: 1.5, min: 0.1, max: 8.0, caption: \"Size\", hint: \"The box's half-width (Halayka's lattice, -1.5 to 1.5), or the ball's radius\" },\n    colour: #{ value: 0, caption: \"Colour\", choices: [\"Nearest step\", \"Exit angle\", \"Step and angle\", \"Path heading\", \"Path length\"], hint: \"What the Branch Address colouring shows: the step the orbit came nearest the threshold, the angle it made with the real axis there, both, or its escape path's heading and length\" },\n};\n\nconst INFO = #{ title: \"Halayka's Quaternions (Rhai)\", march: \"inside\", depth: 12 };\n\n// The ball the cut lies in, a hair over: a box's corner, or the ball.\nfn prepare(p) {\n    let r = if p.cut == 0 { 1.7320508 * p.size } else { p.size };\n    #{ ball: 1.01 * r }\n}\n\n// How far a function of the plane stretches: along the plane by its\n// derivative `gd`, across it by its imaginary part over the vector part's\n// length.\nfn stretch(gd, g, r) {\n    max(gd.abs(), g.im.abs() / (r + 1e-30))\n}\n\n// The distance to a box of half-width `b` about the origin, negative\n// inside.\nfn box_distance(v, b) {\n    let q = abs(v) - vec3(b);\n    length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0)\n}\n\nfn start(pos, p) {\n    #{ z: quat(pos.x, pos.y, pos.z, p.w), at: pos, dr: 1.0, near: 1.0e30, out: false, d: 0.0,\n       k: 0, peak: 0.0, nearest: 1, angle: 0.0, heading: 0.0, path: 0.0, address: 0.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    let zc = z.complex();\n    let r = zc.im;\n    let k = 0.0;\n    if p.step == 0 {\n        k = p.power * length(z) ** (p.power - 1.0);\n        s.z = pow(z, p.power) + p.c;\n    } else if p.step == 1 {\n        k = length(1.0 + p.c) * stretch(cos(zc), sin(zc), r);\n        s.z = sin(z) + p.c * sin(z);\n    } else if p.step == 2 {\n        k = length(1.0 + p.c) * stretch(-sin(zc), cos(zc), r);\n        s.z = cos(z) + p.c * cos(z);\n    } else if p.step == 3 {\n        let e = exp(zc * zc);\n        k = stretch(2.0 * zc * e, e, r);\n        s.z = exp(z * z) + p.c;\n    } else if p.step == 4 {\n        let sh = sinh(zc);\n        k = length(1.0 + p.c) * stretch(cosh(zc) / (sh * sh), 1.0 / sh, r);\n        s.z = inv(sinh(z)) + p.c * inv(sinh(z));\n    } else {\n        let sh = sinh(zc);\n        k = length(p.c) * stretch(1.0 / (sh * sh), cosh(zc) / sh, r);\n        s.z = p.c * (inv(sinh(z)) * cosh(z));\n    }\n    s.dr = s.dr * k;\n    let m = length(s.z);\n    // A critical point (exp(Z^2)'s origin) stretches by nothing: the\n    // derivative's floor keeps the estimate a number.\n    let dr = max(s.dr, 1e-30);\n    // Written so a point the step has no number for -- inv(sinh Z) at\n    // Z = 0 -- is outside, as the paper's lattice has it.\n    if !(m <= p.threshold) {\n        s.out = true;\n        let d = (m - p.threshold) / dr;\n        s.d = if d >= 0.0 { d } else { 1.0e30 };\n    } else {\n        s.near = min(s.near, (p.threshold - m) / dr);\n    }\n\n    // What the colours read.\n    s.k = s.k + 1;\n    let moved = s.z - z;\n    s.path = s.path + length(moved);\n    if s.k == 1 {\n        // The escape path leaves Z0 toward Z1; the point's own space is\n        // the quaternion's first three parts.\n        s.heading = atan2(moved.x, moved.w) / (2.0 * PI()) + 0.5;\n    }\n    if m > s.peak {\n        let zk = s.z.complex();\n        s.peak = m;\n        s.nearest = s.k;\n        s.angle = atan2(zk.im, zk.re) / PI();\n    }\n    let band = (s.nearest - 1).to_float();\n    s.address = if p.colour == 0 {\n        (band + 0.5) / 8.0\n    } else if p.colour == 1 {\n        s.angle\n    } else if p.colour == 2 {\n        (band + s.angle) / 8.0\n    } else if p.colour == 3 {\n        s.heading\n    } else {\n        s.path / (s.path + p.threshold)\n    };\n    s\n}\n\n// The orbit stops where it first leaves.\nfn escaped(s, p) {\n    s.out\n}\n\nfn distance(s, p) {\n    // Outside, nine tenths: the stretch is the steps' largest, and the\n    // reading measured at most nine tenths of the distance to the set\n    // (sampled, every step), a fifth at the median; past a critical point\n    // no step is longer than a tenth of the cut. Never none: the solid is\n    // where the distance is none or less.\n    let step = 0.025 * p.size;\n    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };\n    let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };\n    // Signed: the reading of the side the point is not on, negative in\n    // the solid, so the normals, which the march takes where it stepped\n    // in, see the surface from both sides -- and none at every face, or\n    // they see the jump instead and snap toward the axes. The surface: a\n    // shell a step thick on the escaped side, which a step from inside\n    // the set cannot cross, measured in it to the nearer of its faces.\n    let set = if p.draw == 0 {\n        if s.out { outside } else { -inside }\n    } else if p.draw == 1 {\n        if s.out { -outside } else { inside }\n    } else if s.out {\n        max(outside - step, -outside)\n    } else {\n        inside\n    };\n    let cut = if p.cut == 0 { box_distance(s.at, p.size) } else { length(s.at) - p.size };\n    max(set, cut)\n}\n"
+      },
+      "formula": "custom-7e4c479b9f762d98",
+      "formula_params": {
+        "c_w": 0.3,
+        "c_x": 0.5,
+        "c_y": 0.4,
+        "c_z": 0.2,
+        "draw": 2.0,
+        "levels": 8.0,
+        "step": 3.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Halayka: exp(Z^2) + C",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.3,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.8999999761581421,
+      "cam_yaw": -0.800000011920929,
+      "coloring": "ifs_address",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Halayka's Quaternions (Rhai)",
+        "source": "// Halayka's quaternion sets: the quaternion Julia set with its step\n// replaced (S. Halayka, \"Some visually interesting non-standard quaternion\n// fractal sets\", Chaos, Solitons and Fractals 41, 2009). Use it from Escape\n// mode (\"Use as solid\").\n//\n// The point (x, y, z) is the quaternion Z = (x, y, z, w), scalar part\n// first, w the slice; it is stepped a few times (Iterations, 8 in the\n// paper) and is in the set while |Z| stays within the threshold (4). So\n// these are the shapes of a few iterations, smooth, not the limit fractal:\n// raise Iterations to sharpen them.\n//\n// It shows quaternions in Rhai: `quat(w, x, y, z)`, `*` Hamilton's\n// product, `inv`, and `sin`, `cos`, `exp`, `sinh`, `cosh` -- each the\n// complex function of `t + i r` (t the scalar part, r the vector part's\n// length) carried back along the vector part, Halayka's equations\n// (17)-(21). `z.complex()` is that `t + i r`.\n//\n// The distance: each step stretches space by at most |1 + C| (or |C|)\n// times the larger of |g'| along the plane and |Im g| / r across it, so\n// `dr` bounds how far the orbit has been stretched, and a point whose\n// orbit passes the threshold at step k is about (|Z_k| - 4) / dr_k from\n// the set: a first-order reading, which holds near the surface, so no\n// step outside is longer than a tenth of the cut. Inside there is no such\n// bound -- an orbit that settles shrinks `dr`, and the reading\n// (4 - |Z_k|) / dr_k says units where the surface is a tenth away -- so the\n// complement and the surface (Halayka's figures 6 and 8) are marched\n// through the set in steps of a fortieth of the cut, the reading taking\n// over within one: a feature thinner than a step may be passed, as the\n// paper's lattice passes what is finer than its spacing, and the surface\n// is drawn a step thick on its escaped side, so a step from inside stops\n// in it.\n//\n// Either reading is small where an orbit nearly crosses the threshold,\n// near a surface or not, so it is a safe step and no measure of how near\n// a surface is: `march: \"inside\"` has the march stop only inside the\n// solid, its shadows hard and its occlusion counting what its probes land\n// in. `prepare` gives the ball the march starts from and the camera\n// frames, the cut's, so it grows with Size.\n//\n// Draw: the set; the complement, the cut less the set; or the surface\n// between them, which is what the paper draws -- an isosurface of the\n// lattice has no faces where the set meets the lattice's edge, so it is\n// open at the box, and both of its sides show. Cut: the paper's box, or a\n// ball, which opens the complement to show its tubes.\n//\n// Colour: what the orbit did, for the Branch Address colouring (`address`;\n// `depth: 12` has the colourings read the whole orbit). Each piece of the\n// surface is where |Z_k| reaches the threshold for one k -- from outside\n// the orbit escapes there, from inside it comes nearest to escaping there\n// -- so the step the orbit came nearest the threshold, and the angle Z_k\n// makes with the real axis there, colour a piece alike from either side.\n// The path's heading and length are its escape path's (Halayka 2018, the\n// escape-paths variation): the direction the Bezier curve through the\n// orbit leaves the point in, about the z axis, and how far the orbit runs.\n\nconst PARAMS = #{\n    step: #{ value: 1, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps: figures 1-2, 3-4, 5, 6, 7 and 8\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"A point whose |Z| passes it is outside the set (Halayka's 4)\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Slice\", hint: \"The quaternion's last part, which the 3D slice pins\" },\n    draw: #{ value: 0, caption: \"Draw\", choices: [\"The set\", \"The complement\", \"The surface\"], hint: \"The set, cut; the cut less the set, the points that escape (figures 6 and 8); or the surface between them, open at the cut and seen from either side, as the paper's crude surface draws them\" },\n    cut: #{ value: 0, caption: \"Cut\", choices: [\"Box\", \"Ball\"], hint: \"What the shape is cut to: the paper's box, or a ball, which opens the complement to show its insides\" },\n    size: #{ value: 1.5, min: 0.1, max: 8.0, caption: \"Size\", hint: \"The box's half-width (Halayka's lattice, -1.5 to 1.5), or the ball's radius\" },\n    colour: #{ value: 0, caption: \"Colour\", choices: [\"Nearest step\", \"Exit angle\", \"Step and angle\", \"Path heading\", \"Path length\"], hint: \"What the Branch Address colouring shows: the step the orbit came nearest the threshold, the angle it made with the real axis there, both, or its escape path's heading and length\" },\n};\n\nconst INFO = #{ title: \"Halayka's Quaternions (Rhai)\", march: \"inside\", depth: 12 };\n\n// The ball the cut lies in, a hair over: a box's corner, or the ball.\nfn prepare(p) {\n    let r = if p.cut == 0 { 1.7320508 * p.size } else { p.size };\n    #{ ball: 1.01 * r }\n}\n\n// How far a function of the plane stretches: along the plane by its\n// derivative `gd`, across it by its imaginary part over the vector part's\n// length.\nfn stretch(gd, g, r) {\n    max(gd.abs(), g.im.abs() / (r + 1e-30))\n}\n\n// The distance to a box of half-width `b` about the origin, negative\n// inside.\nfn box_distance(v, b) {\n    let q = abs(v) - vec3(b);\n    length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0)\n}\n\nfn start(pos, p) {\n    #{ z: quat(pos.x, pos.y, pos.z, p.w), at: pos, dr: 1.0, near: 1.0e30, out: false, d: 0.0,\n       k: 0, peak: 0.0, nearest: 1, angle: 0.0, heading: 0.0, path: 0.0, address: 0.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    let zc = z.complex();\n    let r = zc.im;\n    let k = 0.0;\n    if p.step == 0 {\n        k = p.power * length(z) ** (p.power - 1.0);\n        s.z = pow(z, p.power) + p.c;\n    } else if p.step == 1 {\n        k = length(1.0 + p.c) * stretch(cos(zc), sin(zc), r);\n        s.z = sin(z) + p.c * sin(z);\n    } else if p.step == 2 {\n        k = length(1.0 + p.c) * stretch(-sin(zc), cos(zc), r);\n        s.z = cos(z) + p.c * cos(z);\n    } else if p.step == 3 {\n        let e = exp(zc * zc);\n        k = stretch(2.0 * zc * e, e, r);\n        s.z = exp(z * z) + p.c;\n    } else if p.step == 4 {\n        let sh = sinh(zc);\n        k = length(1.0 + p.c) * stretch(cosh(zc) / (sh * sh), 1.0 / sh, r);\n        s.z = inv(sinh(z)) + p.c * inv(sinh(z));\n    } else {\n        let sh = sinh(zc);\n        k = length(p.c) * stretch(1.0 / (sh * sh), cosh(zc) / sh, r);\n        s.z = p.c * (inv(sinh(z)) * cosh(z));\n    }\n    s.dr = s.dr * k;\n    let m = length(s.z);\n    // A critical point (exp(Z^2)'s origin) stretches by nothing: the\n    // derivative's floor keeps the estimate a number.\n    let dr = max(s.dr, 1e-30);\n    // Written so a point the step has no number for -- inv(sinh Z) at\n    // Z = 0 -- is outside, as the paper's lattice has it.\n    if !(m <= p.threshold) {\n        s.out = true;\n        let d = (m - p.threshold) / dr;\n        s.d = if d >= 0.0 { d } else { 1.0e30 };\n    } else {\n        s.near = min(s.near, (p.threshold - m) / dr);\n    }\n\n    // What the colours read.\n    s.k = s.k + 1;\n    let moved = s.z - z;\n    s.path = s.path + length(moved);\n    if s.k == 1 {\n        // The escape path leaves Z0 toward Z1; the point's own space is\n        // the quaternion's first three parts.\n        s.heading = atan2(moved.x, moved.w) / (2.0 * PI()) + 0.5;\n    }\n    if m > s.peak {\n        let zk = s.z.complex();\n        s.peak = m;\n        s.nearest = s.k;\n        s.angle = atan2(zk.im, zk.re) / PI();\n    }\n    let band = (s.nearest - 1).to_float();\n    s.address = if p.colour == 0 {\n        (band + 0.5) / 8.0\n    } else if p.colour == 1 {\n        s.angle\n    } else if p.colour == 2 {\n        (band + s.angle) / 8.0\n    } else if p.colour == 3 {\n        s.heading\n    } else {\n        s.path / (s.path + p.threshold)\n    };\n    s\n}\n\n// The orbit stops where it first leaves.\nfn escaped(s, p) {\n    s.out\n}\n\nfn distance(s, p) {\n    // Outside, nine tenths: the stretch is the steps' largest, and the\n    // reading measured at most nine tenths of the distance to the set\n    // (sampled, every step), a fifth at the median; past a critical point\n    // no step is longer than a tenth of the cut. Never none: the solid is\n    // where the distance is none or less.\n    let step = 0.025 * p.size;\n    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };\n    let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };\n    // Signed: the reading of the side the point is not on, negative in\n    // the solid, so the normals, which the march takes where it stepped\n    // in, see the surface from both sides -- and none at every face, or\n    // they see the jump instead and snap toward the axes. The surface: a\n    // shell a step thick on the escaped side, which a step from inside\n    // the set cannot cross, measured in it to the nearer of its faces.\n    let set = if p.draw == 0 {\n        if s.out { outside } else { -inside }\n    } else if p.draw == 1 {\n        if s.out { -outside } else { inside }\n    } else if s.out {\n        max(outside - step, -outside)\n    } else {\n        inside\n    };\n    let cut = if p.cut == 0 { box_distance(s.at, p.size) } else { length(s.at) - p.size };\n    max(set, cut)\n}\n"
+      },
+      "formula": "custom-7e4c479b9f762d98",
+      "formula_params": {
+        "c_w": 1.0,
+        "c_x": 1.0,
+        "c_y": 1.0,
+        "c_z": 1.0,
+        "draw": 0.0,
+        "levels": 8.0,
+        "step": 4.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Halayka: inv(sinh Z) + C inv(sinh Z)",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.3,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.3499999940395355,
+      "cam_yaw": 0.6000000238418579,
+      "coloring": "ifs_address",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Halayka's Quaternions (Rhai)",
+        "source": "// Halayka's quaternion sets: the quaternion Julia set with its step\n// replaced (S. Halayka, \"Some visually interesting non-standard quaternion\n// fractal sets\", Chaos, Solitons and Fractals 41, 2009). Use it from Escape\n// mode (\"Use as solid\").\n//\n// The point (x, y, z) is the quaternion Z = (x, y, z, w), scalar part\n// first, w the slice; it is stepped a few times (Iterations, 8 in the\n// paper) and is in the set while |Z| stays within the threshold (4). So\n// these are the shapes of a few iterations, smooth, not the limit fractal:\n// raise Iterations to sharpen them.\n//\n// It shows quaternions in Rhai: `quat(w, x, y, z)`, `*` Hamilton's\n// product, `inv`, and `sin`, `cos`, `exp`, `sinh`, `cosh` -- each the\n// complex function of `t + i r` (t the scalar part, r the vector part's\n// length) carried back along the vector part, Halayka's equations\n// (17)-(21). `z.complex()` is that `t + i r`.\n//\n// The distance: each step stretches space by at most |1 + C| (or |C|)\n// times the larger of |g'| along the plane and |Im g| / r across it, so\n// `dr` bounds how far the orbit has been stretched, and a point whose\n// orbit passes the threshold at step k is about (|Z_k| - 4) / dr_k from\n// the set: a first-order reading, which holds near the surface, so no\n// step outside is longer than a tenth of the cut. Inside there is no such\n// bound -- an orbit that settles shrinks `dr`, and the reading\n// (4 - |Z_k|) / dr_k says units where the surface is a tenth away -- so the\n// complement and the surface (Halayka's figures 6 and 8) are marched\n// through the set in steps of a fortieth of the cut, the reading taking\n// over within one: a feature thinner than a step may be passed, as the\n// paper's lattice passes what is finer than its spacing, and the surface\n// is drawn a step thick on its escaped side, so a step from inside stops\n// in it.\n//\n// Either reading is small where an orbit nearly crosses the threshold,\n// near a surface or not, so it is a safe step and no measure of how near\n// a surface is: `march: \"inside\"` has the march stop only inside the\n// solid, its shadows hard and its occlusion counting what its probes land\n// in. `prepare` gives the ball the march starts from and the camera\n// frames, the cut's, so it grows with Size.\n//\n// Draw: the set; the complement, the cut less the set; or the surface\n// between them, which is what the paper draws -- an isosurface of the\n// lattice has no faces where the set meets the lattice's edge, so it is\n// open at the box, and both of its sides show. Cut: the paper's box, or a\n// ball, which opens the complement to show its tubes.\n//\n// Colour: what the orbit did, for the Branch Address colouring (`address`;\n// `depth: 12` has the colourings read the whole orbit). Each piece of the\n// surface is where |Z_k| reaches the threshold for one k -- from outside\n// the orbit escapes there, from inside it comes nearest to escaping there\n// -- so the step the orbit came nearest the threshold, and the angle Z_k\n// makes with the real axis there, colour a piece alike from either side.\n// The path's heading and length are its escape path's (Halayka 2018, the\n// escape-paths variation): the direction the Bezier curve through the\n// orbit leaves the point in, about the z axis, and how far the orbit runs.\n\nconst PARAMS = #{\n    step: #{ value: 1, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps: figures 1-2, 3-4, 5, 6, 7 and 8\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"A point whose |Z| passes it is outside the set (Halayka's 4)\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Slice\", hint: \"The quaternion's last part, which the 3D slice pins\" },\n    draw: #{ value: 0, caption: \"Draw\", choices: [\"The set\", \"The complement\", \"The surface\"], hint: \"The set, cut; the cut less the set, the points that escape (figures 6 and 8); or the surface between them, open at the cut and seen from either side, as the paper's crude surface draws them\" },\n    cut: #{ value: 0, caption: \"Cut\", choices: [\"Box\", \"Ball\"], hint: \"What the shape is cut to: the paper's box, or a ball, which opens the complement to show its insides\" },\n    size: #{ value: 1.5, min: 0.1, max: 8.0, caption: \"Size\", hint: \"The box's half-width (Halayka's lattice, -1.5 to 1.5), or the ball's radius\" },\n    colour: #{ value: 0, caption: \"Colour\", choices: [\"Nearest step\", \"Exit angle\", \"Step and angle\", \"Path heading\", \"Path length\"], hint: \"What the Branch Address colouring shows: the step the orbit came nearest the threshold, the angle it made with the real axis there, both, or its escape path's heading and length\" },\n};\n\nconst INFO = #{ title: \"Halayka's Quaternions (Rhai)\", march: \"inside\", depth: 12 };\n\n// The ball the cut lies in, a hair over: a box's corner, or the ball.\nfn prepare(p) {\n    let r = if p.cut == 0 { 1.7320508 * p.size } else { p.size };\n    #{ ball: 1.01 * r }\n}\n\n// How far a function of the plane stretches: along the plane by its\n// derivative `gd`, across it by its imaginary part over the vector part's\n// length.\nfn stretch(gd, g, r) {\n    max(gd.abs(), g.im.abs() / (r + 1e-30))\n}\n\n// The distance to a box of half-width `b` about the origin, negative\n// inside.\nfn box_distance(v, b) {\n    let q = abs(v) - vec3(b);\n    length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0)\n}\n\nfn start(pos, p) {\n    #{ z: quat(pos.x, pos.y, pos.z, p.w), at: pos, dr: 1.0, near: 1.0e30, out: false, d: 0.0,\n       k: 0, peak: 0.0, nearest: 1, angle: 0.0, heading: 0.0, path: 0.0, address: 0.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    let zc = z.complex();\n    let r = zc.im;\n    let k = 0.0;\n    if p.step == 0 {\n        k = p.power * length(z) ** (p.power - 1.0);\n        s.z = pow(z, p.power) + p.c;\n    } else if p.step == 1 {\n        k = length(1.0 + p.c) * stretch(cos(zc), sin(zc), r);\n        s.z = sin(z) + p.c * sin(z);\n    } else if p.step == 2 {\n        k = length(1.0 + p.c) * stretch(-sin(zc), cos(zc), r);\n        s.z = cos(z) + p.c * cos(z);\n    } else if p.step == 3 {\n        let e = exp(zc * zc);\n        k = stretch(2.0 * zc * e, e, r);\n        s.z = exp(z * z) + p.c;\n    } else if p.step == 4 {\n        let sh = sinh(zc);\n        k = length(1.0 + p.c) * stretch(cosh(zc) / (sh * sh), 1.0 / sh, r);\n        s.z = inv(sinh(z)) + p.c * inv(sinh(z));\n    } else {\n        let sh = sinh(zc);\n        k = length(p.c) * stretch(1.0 / (sh * sh), cosh(zc) / sh, r);\n        s.z = p.c * (inv(sinh(z)) * cosh(z));\n    }\n    s.dr = s.dr * k;\n    let m = length(s.z);\n    // A critical point (exp(Z^2)'s origin) stretches by nothing: the\n    // derivative's floor keeps the estimate a number.\n    let dr = max(s.dr, 1e-30);\n    // Written so a point the step has no number for -- inv(sinh Z) at\n    // Z = 0 -- is outside, as the paper's lattice has it.\n    if !(m <= p.threshold) {\n        s.out = true;\n        let d = (m - p.threshold) / dr;\n        s.d = if d >= 0.0 { d } else { 1.0e30 };\n    } else {\n        s.near = min(s.near, (p.threshold - m) / dr);\n    }\n\n    // What the colours read.\n    s.k = s.k + 1;\n    let moved = s.z - z;\n    s.path = s.path + length(moved);\n    if s.k == 1 {\n        // The escape path leaves Z0 toward Z1; the point's own space is\n        // the quaternion's first three parts.\n        s.heading = atan2(moved.x, moved.w) / (2.0 * PI()) + 0.5;\n    }\n    if m > s.peak {\n        let zk = s.z.complex();\n        s.peak = m;\n        s.nearest = s.k;\n        s.angle = atan2(zk.im, zk.re) / PI();\n    }\n    let band = (s.nearest - 1).to_float();\n    s.address = if p.colour == 0 {\n        (band + 0.5) / 8.0\n    } else if p.colour == 1 {\n        s.angle\n    } else if p.colour == 2 {\n        (band + s.angle) / 8.0\n    } else if p.colour == 3 {\n        s.heading\n    } else {\n        s.path / (s.path + p.threshold)\n    };\n    s\n}\n\n// The orbit stops where it first leaves.\nfn escaped(s, p) {\n    s.out\n}\n\nfn distance(s, p) {\n    // Outside, nine tenths: the stretch is the steps' largest, and the\n    // reading measured at most nine tenths of the distance to the set\n    // (sampled, every step), a fifth at the median; past a critical point\n    // no step is longer than a tenth of the cut. Never none: the solid is\n    // where the distance is none or less.\n    let step = 0.025 * p.size;\n    let outside = if s.out { max(min(0.9 * s.d, 0.1 * p.size), 1e-30) } else { 0.0 };\n    let inside = if s.out { 0.0 } else { max(min(0.25 * s.near, step), 1e-30) };\n    // Signed: the reading of the side the point is not on, negative in\n    // the solid, so the normals, which the march takes where it stepped\n    // in, see the surface from both sides -- and none at every face, or\n    // they see the jump instead and snap toward the axes. The surface: a\n    // shell a step thick on the escaped side, which a step from inside\n    // the set cannot cross, measured in it to the nearer of its faces.\n    let set = if p.draw == 0 {\n        if s.out { outside } else { -inside }\n    } else if p.draw == 1 {\n        if s.out { -outside } else { inside }\n    } else if s.out {\n        max(outside - step, -outside)\n    } else {\n        inside\n    };\n    let cut = if p.cut == 0 { box_distance(s.at, p.size) } else { length(s.at) - p.size };\n    max(set, cut)\n}\n"
+      },
+      "formula": "custom-7e4c479b9f762d98",
+      "formula_params": {
+        "c_w": 1.0,
+        "c_x": 1.0,
+        "c_y": 1.0,
+        "c_z": 1.0,
+        "draw": 2.0,
+        "levels": 8.0,
+        "step": 5.0
+      },
+      "max_iter": 256,
+      "zoom_log2": -0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Halayka: C inv(sinh Z) cosh Z",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.3,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "background_color": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "camera_rotation_x": 0.45,
+    "camera_rotation_y": 0.6,
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_escape_paths",
+          "source": "// Halayka's escape paths, as a 3D flame variation (S. Halayka, \"Visualizing\n// the escape paths of quaternion fractals\", 2018; the source is\n// github.com/sjhalayka/bezier_fractal). Each point it gives lies on the\n// path of an orbit that stays: a starting point on a lattice in the box\n// whose orbit keeps |Z| within the threshold for all its iterations, the\n// orbit Z0 .. Zn the control points of a Bezier curve, and the point the\n// curve's at a random t in [0, Length] -- the paper draws the first fifth\n// of each path. Its colour is t over Length, so each path runs from one\n// end of the palette at its start to the other.\n//\n// It ignores the point it is given: use it as the only variation of a 3D\n// flame's only transform, with Direct Color at 1 for its colours. The\n// flame's points draw the paths as fibres.\n//\n// It shows quaternions in a 3D variation: `quat(w, x, y, z)`, `*`\n// Hamilton's product, `pow`, `sin`, `inv` and the rest (see\n// solid-halayka-quaternions.rhai), the steps Halayka's (2009). The path's\n// point is summed as the orbit runs, the k-th point weighted C(n, k) t^k\n// (1 - t)^(n - k), so no array holds the orbit.\n\nconst PARAMS = #{\n    step: #{ value: 0, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps the orbits take\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C (the paper's figures 1 to 4 are 2 to 5)\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"An orbit whose |Z| passes it escapes, and draws no path\" },\n    iterations: #{ value: 8, min: 1, max: 16, caption: \"Iterations\", hint: \"How many steps each orbit takes: its path's control points, one more\" },\n    box: #{ value: 1.5, min: 0.1, max: 4.0, caption: \"Box\", hint: \"The half-width of the box the paths start in (Halayka's -1.5 to 1.5)\" },\n    spacing: #{ value: 0.05, min: 0.0, max: 0.5, caption: \"Lattice\", hint: \"The spacing of the paths' starting points: Halayka's lattice. 0 starts them anywhere, a haze rather than fibres\" },\n    length: #{ value: 0.2, min: 0.01, max: 0.95, caption: \"Path Length\", hint: \"How much of each path is drawn, from its start (Halayka's 0.2)\" },\n};\n\nconst INFO = #{ title: \"Escape Paths (Rhai)\", name: \"rhai_escape_paths\" };\n\n// One of Halayka's steps. A helper reads only its arguments: the\n// parameters it needs come as values.\nfn next(z, step, c, power) {\n    if step == 0 {\n        pow(z, power) + c\n    } else if step == 1 {\n        sin(z) + c * sin(z)\n    } else if step == 2 {\n        cos(z) + c * cos(z)\n    } else if step == 3 {\n        exp(z * z) + c\n    } else if step == 4 {\n        inv(sinh(z)) + c * inv(sinh(z))\n    } else {\n        c * (inv(sinh(z)) * cosh(z))\n    }\n}\n\nfn variation3(v, p) {\n    let t = rand() * p.length;\n    let u = 1.0 - t;\n    let n = p.iterations;\n    let found = false;\n    let point = vec3(0.0, 0.0, 0.0);\n    let tries = 0;\n    // A start whose orbit stays: a few draws, as most of the box escapes.\n    while !found && tries < 24 {\n        tries += 1;\n        let a = (vec3(rand(), rand(), rand()) * 2.0 - vec3(1.0)) * p.box;\n        if p.spacing > 0.0 {\n            a = (floor(a / p.spacing) + vec3(0.5)) * p.spacing;\n        }\n        let z = quat(a.x, a.y, a.z, 0.0);\n        let w = u ** n.to_float();\n        let sum = z * w;\n        let stays = true;\n        let k = 0;\n        while k < n {\n            if stays {\n                z = next(z, p.step, p.c, p.power);\n                w = w * (n - k).to_float() / (k + 1).to_float() * t / u;\n                sum = sum + z * w;\n                // Written so a step with no number escapes too.\n                stays = length(z) <= p.threshold;\n            }\n            k += 1;\n        }\n        if stays {\n            found = true;\n            // The path in the space of the quaternion's first three parts,\n            // as the paper draws it.\n            point = vec3(sum.w, sum.x, sum.y);\n        }\n    }\n    // No start found: far out of the picture.\n    let at = if found { point } else { vec3(0.0, 0.0, 1.0e4) };\n    #{ z: at, color: t / p.length }\n}\n"
+        }
+      ],
+      "name": "Halayka Escape Paths: Z^2 + C",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_escape_paths.power": 2.0,
+            "rhai_escape_paths.step": 0.0
+          },
+          "variations": {
+            "rhai_escape_paths": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "perspective_strength": 0.15,
+    "render_mode": "3d",
+    "solid_strength": 1.0,
+    "version": 6,
+    "zoom": 1.2
+  },
+  {
+    "background_color": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "camera_rotation_x": 0.45,
+    "camera_rotation_y": 0.6,
+    "flame": {
+      "custom_variations": [
+        {
+          "dialect": "rhai",
+          "entry": "rhai_escape_paths",
+          "source": "// Halayka's escape paths, as a 3D flame variation (S. Halayka, \"Visualizing\n// the escape paths of quaternion fractals\", 2018; the source is\n// github.com/sjhalayka/bezier_fractal). Each point it gives lies on the\n// path of an orbit that stays: a starting point on a lattice in the box\n// whose orbit keeps |Z| within the threshold for all its iterations, the\n// orbit Z0 .. Zn the control points of a Bezier curve, and the point the\n// curve's at a random t in [0, Length] -- the paper draws the first fifth\n// of each path. Its colour is t over Length, so each path runs from one\n// end of the palette at its start to the other.\n//\n// It ignores the point it is given: use it as the only variation of a 3D\n// flame's only transform, with Direct Color at 1 for its colours. The\n// flame's points draw the paths as fibres.\n//\n// It shows quaternions in a 3D variation: `quat(w, x, y, z)`, `*`\n// Hamilton's product, `pow`, `sin`, `inv` and the rest (see\n// solid-halayka-quaternions.rhai), the steps Halayka's (2009). The path's\n// point is summed as the orbit runs, the k-th point weighted C(n, k) t^k\n// (1 - t)^(n - k), so no array holds the orbit.\n\nconst PARAMS = #{\n    step: #{ value: 0, caption: \"Step\", choices: [\"Z^n + C\", \"sin Z + C sin Z\", \"cos Z + C cos Z\", \"exp(Z^2) + C\", \"inv(sinh Z) + C inv(sinh Z)\", \"C inv(sinh Z) cosh Z\"], hint: \"Which of Halayka's steps the orbits take\" },\n    c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\", hint: \"The constant, scalar part first: Halayka's (0.3, 0.5, 0.4, 0.2)\" },\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of Z^n + C (the paper's figures 1 to 4 are 2 to 5)\" },\n    threshold: #{ value: 4.0, min: 1.0, max: 16.0, caption: \"Threshold\", hint: \"An orbit whose |Z| passes it escapes, and draws no path\" },\n    iterations: #{ value: 8, min: 1, max: 16, caption: \"Iterations\", hint: \"How many steps each orbit takes: its path's control points, one more\" },\n    box: #{ value: 1.5, min: 0.1, max: 4.0, caption: \"Box\", hint: \"The half-width of the box the paths start in (Halayka's -1.5 to 1.5)\" },\n    spacing: #{ value: 0.05, min: 0.0, max: 0.5, caption: \"Lattice\", hint: \"The spacing of the paths' starting points: Halayka's lattice. 0 starts them anywhere, a haze rather than fibres\" },\n    length: #{ value: 0.2, min: 0.01, max: 0.95, caption: \"Path Length\", hint: \"How much of each path is drawn, from its start (Halayka's 0.2)\" },\n};\n\nconst INFO = #{ title: \"Escape Paths (Rhai)\", name: \"rhai_escape_paths\" };\n\n// One of Halayka's steps. A helper reads only its arguments: the\n// parameters it needs come as values.\nfn next(z, step, c, power) {\n    if step == 0 {\n        pow(z, power) + c\n    } else if step == 1 {\n        sin(z) + c * sin(z)\n    } else if step == 2 {\n        cos(z) + c * cos(z)\n    } else if step == 3 {\n        exp(z * z) + c\n    } else if step == 4 {\n        inv(sinh(z)) + c * inv(sinh(z))\n    } else {\n        c * (inv(sinh(z)) * cosh(z))\n    }\n}\n\nfn variation3(v, p) {\n    let t = rand() * p.length;\n    let u = 1.0 - t;\n    let n = p.iterations;\n    let found = false;\n    let point = vec3(0.0, 0.0, 0.0);\n    let tries = 0;\n    // A start whose orbit stays: a few draws, as most of the box escapes.\n    while !found && tries < 24 {\n        tries += 1;\n        let a = (vec3(rand(), rand(), rand()) * 2.0 - vec3(1.0)) * p.box;\n        if p.spacing > 0.0 {\n            a = (floor(a / p.spacing) + vec3(0.5)) * p.spacing;\n        }\n        let z = quat(a.x, a.y, a.z, 0.0);\n        let w = u ** n.to_float();\n        let sum = z * w;\n        let stays = true;\n        let k = 0;\n        while k < n {\n            if stays {\n                z = next(z, p.step, p.c, p.power);\n                w = w * (n - k).to_float() / (k + 1).to_float() * t / u;\n                sum = sum + z * w;\n                // Written so a step with no number escapes too.\n                stays = length(z) <= p.threshold;\n            }\n            k += 1;\n        }\n        if stays {\n            found = true;\n            // The path in the space of the quaternion's first three parts,\n            // as the paper draws it.\n            point = vec3(sum.w, sum.x, sum.y);\n        }\n    }\n    // No start found: far out of the picture.\n    let at = if found { point } else { vec3(0.0, 0.0, 1.0e4) };\n    #{ z: at, color: t / p.length }\n}\n"
+        }
+      ],
+      "name": "Halayka Escape Paths: sin Z + C sin Z",
+      "transforms": [
+        {
+          "a": 1.0,
+          "b": 0.0,
+          "c": 0.0,
+          "color": 0.0,
+          "color_speed": 0.0,
+          "d": 1.0,
+          "direct_color": 1.0,
+          "e": 0.0,
+          "f": 0.0,
+          "opacity": 1.0,
+          "variation_params": {
+            "rhai_escape_paths.power": 2.0,
+            "rhai_escape_paths.step": 1.0
+          },
+          "variations": {
+            "rhai_escape_paths": 1.0
+          },
+          "weight": 1.0
+        }
+      ]
+    },
+    "palette": {
+      "locked": false,
+      "name": "Halayka",
+      "stops": [
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.25
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            0.625
+          ],
+          "position": 0.10000000149011612
+        },
+        {
+          "color": [
+            1.0,
+            0.25,
+            1.0
+          ],
+          "position": 0.20000000298023224
+        },
+        {
+          "color": [
+            0.625,
+            0.25,
+            1.0
+          ],
+          "position": 0.30000001192092896
+        },
+        {
+          "color": [
+            0.25,
+            0.25,
+            1.0
+          ],
+          "position": 0.4000000059604645
+        },
+        {
+          "color": [
+            0.25,
+            0.625,
+            1.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            1.0
+          ],
+          "position": 0.6000000238418579
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.625
+          ],
+          "position": 0.699999988079071
+        },
+        {
+          "color": [
+            0.25,
+            1.0,
+            0.25
+          ],
+          "position": 0.800000011920929
+        },
+        {
+          "color": [
+            0.625,
+            1.0,
+            0.25
+          ],
+          "position": 0.8999999761581421
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.25
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "perspective_strength": 0.15,
+    "render_mode": "3d",
+    "solid_strength": 1.0,
+    "version": 6,
+    "zoom": 0.75
   }
 ]

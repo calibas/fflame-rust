@@ -523,7 +523,10 @@ function takes the point, and the ids when it has parameters (as
   it makes the variation `only_3d` (no 2D body, kept out of the lens
   menu). Either body takes the hooks either needs, and a 3D body
   declares `AlwaysZ`. Gate: `the_3d_twins_render_as_the_builtins`
-  (`spherical3D`, `hemisphere`, `zcone`, in a pitched 3D flame).
+  (`spherical3D`, `hemisphere`, `zcone`, in a pitched 3D flame). A 3D
+  body may compute with quaternions (`quat`; [ESCAPE.md](ESCAPE.md), the
+  formula language's Quaternions): `assets/formulas/variation-escape-paths.rhai`
+  draws Halayka's escape paths of quaternion orbits as a flame's fibres.
 - Gates: Rhai twins of linear, spherical, swirl, polar and horseshoe
   render as the built-ins in a flame, by density
   (`the_twins_render_as_the_builtins_in_a_flame`), and as lenses, pixel
