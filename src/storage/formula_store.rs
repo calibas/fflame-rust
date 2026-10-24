@@ -34,6 +34,8 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("solid-kifs-menger.rhai", include_str!("../../assets/formulas/solid-kifs-menger.rhai")),
     ("solid-inverted-menger.rhai", include_str!("../../assets/formulas/solid-inverted-menger.rhai")),
     ("solid-halayka-quaternions.rhai", include_str!("../../assets/formulas/solid-halayka-quaternions.rhai")),
+    ("solid-bristorbrot.rhai", include_str!("../../assets/formulas/solid-bristorbrot.rhai")),
+    ("solid-quaternionbrot.rhai", include_str!("../../assets/formulas/solid-quaternionbrot.rhai")),
     ("kifs-2d.rhai", include_str!("../../assets/formulas/kifs-2d.rhai")),
     ("whorled-mandelbrot.rhai", include_str!("../../assets/formulas/whorled-mandelbrot.rhai")),
     ("frothy-basin.rhai", include_str!("../../assets/formulas/frothy-basin.rhai")),

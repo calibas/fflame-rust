@@ -671,6 +671,19 @@ fn escaped(s, p) {
   algebra written independently in f64), `halaykas_sets_hold_what_the_paper_says`,
   `halaykas_sets_are_never_stepped_through`,
   `the_escape_paths_lie_on_their_orbits_paths`.
+  And Doug Bristor's sets (bristorbrot.org;
+  [bristorbrot.md](../projects/bristorbrot.md)), each a 3D section of a
+  4D iteration, Mandelbrot or Julia: `solid-bristorbrot.rhai`, his
+  numbers' `z^2 + c` and two cubes, a product of its own written part by
+  part over a `quat` (his rule e_a e_b = sgn(b - a) e_b, not Hamilton's);
+  its distance his viewer's running derivative or the orbit's whole
+  Jacobian carried along three tangents (the product stretches by up to
+  3.3 |z|, not 2 |z|), capped at a tenth of the ball. And
+  `solid-quaternionbrot.rhai`, `q^n + c` beside it, the classic estimate.
+  `escape::bristor` holds their presets and tests:
+  `bristors_rule_gives_his_witnesses`, `the_solids_run_as_their_algebras`
+  (against the product built from the rule in f64),
+  `neither_is_stepped_through`.
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to
