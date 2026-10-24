@@ -240,6 +240,15 @@ pub fn histogram_shown(ctx: &egui::Context) -> bool {
     drawn.is_some_and(|frame| ctx.cumulative_frame_nr().saturating_sub(frame) <= 2)
 }
 
+/// The Histogram section, drawn this frame, says so. The frame number is
+/// read BEFORE the data lock is taken: `cumulative_frame_nr` locks the
+/// context too, and called inside `data_mut`'s closure it deadlocked the
+/// app the moment the section opened.
+fn note_histogram_shown(ui: &egui::Ui) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.data_mut(|d| d.insert_temp(egui::Id::new(HISTOGRAM_SHOWN), frame));
+}
+
 /// Render the Colors panel content (tone mapping, color mode, palette)
 ///
 /// This is the panel version without the Window wrapper.
@@ -539,7 +548,7 @@ pub fn render_colors_content(
         .default_open(false)
         .show(ui, |ui| {
             // The app reads the histogram back only while this is drawn.
-            ui.data_mut(|d| d.insert_temp(egui::Id::new(HISTOGRAM_SHOWN), ui.ctx().cumulative_frame_nr()));
+            note_histogram_shown(ui);
             // Render histogram visualization with levels markers from config
             render_histogram_with_config(ui, histogram, config_manager);
 
@@ -902,6 +911,21 @@ pub fn render_colors_content(
 mod tests {
     use super::*;
     use crate::scene::tonemap::CurvePoint;
+
+    /// The Histogram section notes itself without deadlocking egui's
+    /// context (opening it froze the app), the app sees it, and forgets
+    /// it a couple of frames after it is no longer drawn.
+    #[test]
+    fn the_histogram_section_notes_itself() {
+        let ctx = egui::Context::default();
+        assert!(!histogram_shown(&ctx));
+        let _ = ctx.run_ui(Default::default(), |ui| note_histogram_shown(ui));
+        assert!(histogram_shown(&ctx), "noted");
+        for _ in 0..4 {
+            let _ = ctx.run_ui(Default::default(), |_| {});
+        }
+        assert!(!histogram_shown(&ctx), "forgotten once not drawn");
+    }
 
     fn editor_rect() -> egui::Rect {
         egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0))
