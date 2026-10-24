@@ -7724,5 +7724,1054 @@
     "render_mode": "2d",
     "version": 6,
     "zoom": 3.0
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.30000001192092896,
+      "cam_target_x": "-0.5",
+      "cam_yaw": 1.600000023841858,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Bristorbrot (Rhai)",
+        "source": "// The Bristorbrot: the Mandelbrot and Julia sets of Doug Bristor's\n// numbers (\"Bristorbrot / Doug Bristor, bristorbrot.org\"; his viewer's\n// code, which this follows, is MIT). Use it from Escape mode (\"Use as\n// solid\").\n//\n// The numbers have a real part and ranked imaginary units e1, e2, e3\n// (i, j, k), and multiply by one rule: e_a e_a = -1, and e_a e_b =\n// sgn(b - a) e_b for a != b -- the product is a signed copy of its\n// right-hand factor, so i j = j and j i = -i. Not quaternions (no i j =\n// k); not associative either, so the two cubes (zz)z and z(zz) differ.\n// Its square in the three parts (real, i, j) is the 3D Bristorbrot Jos\n// Leys named in 2009: (x^2 - y^2 - z^2, y (2x - z), z (2x + y)).\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Roll and offset 0 is the 3D\n// Bristorbrot. The Mandelbrot set iterates z = f(z) + c from z = c, the\n// point; the Julia set from z = the point, with c the constant.\n//\n// The distance, 0.5 |z| ln|z| / |dz|, two ways (Distance). Bristor's,\n// as his viewer reads it: |dz| the running derivative of a conformal\n// set, n |z|^(n-1) a step. But the product stretches space by up to\n// 3.3 |z| (the cubes 6.7 and 7.2 |z|^2), so the reading is long -- by\n// the stretches' ratio compounded over the orbit -- and the Julia sets,\n// dust finer than a pixel almost everywhere, show their core as thin\n// ribbons, as his pictures do. The Jacobian: the orbit carries its\n// whole derivative along each of the window's three axes, and |dz| is\n// its Frobenius norm, never less than the stretch, so the dust shows\n// grown by a pixel, fuller. Either is capped at a tenth of the ball: a\n// Julia orbit through 0, where the map's derivative is none, reads any\n// distance, and uncapped Bristor's reading carried rays through the\n// Julia sets (one in thirteen for the square, 13 of 33 for the cubes);\n// capped, neither did. Both are rescaled with the weight of the c term past\n// 1e10, as Bristor's march is, so a deep orbit stays in f32.\n//\n// It shows a product of your own over a `quat` -- four parts, scalar\n// first -- written out part by part, since `*` between quaternions is\n// Hamilton's.\n\nconst PARAMS = #{\n    formula: #{ value: 0, caption: \"Formula\", choices: [\"z^2 + c\", \"(zz)z + c\", \"z(zz) + c\"], hint: \"The square, or one of the two cubes, which differ: the product is not associative\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.7, -0.35, 0.05, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant: real, i, j, k. Bristor's for the square is (-0.7, -0.35, 0.05, 0), for the cubes (0.15, 0.4, 0.05, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k. 0 is the 3D Bristorbrot\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides\" },\n    estimate: #{ value: 0, caption: \"Distance\", choices: [\"Bristor's\", \"Jacobian\"], hint: \"Bristor's: his viewer's running derivative, which reads long, so the Julia sets thin to ribbons as his pictures show them. Jacobian: the orbit's whole stretch, so the dust shows grown by a pixel, fuller -- and three derivatives a step to carry\" },\n};\n\nconst INFO = #{ title: \"Bristorbrot (Rhai)\", radius: 2.5 };\n\n// The product: e_a e_a = -1, e_a e_b = sgn(b - a) e_b. Parts (real, i,\n// j, k) as the quaternion's (w, x, y, z).\nfn bmul(a, b) {\n    quat(a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,\n         a.w * b.x + a.x * b.w - b.x * (a.y + a.z),\n         a.w * b.y + a.y * b.w + b.y * (a.x - a.z),\n         a.w * b.z + a.z * b.w + b.z * (a.x + a.y))\n}\n\n// The map, without c.\nfn bmap(z, formula) {\n    if formula == 0 {\n        bmul(z, z)\n    } else if formula == 1 {\n        bmul(bmul(z, z), z)\n    } else {\n        bmul(z, bmul(z, z))\n    }\n}\n\n// The map's derivative along `v`: the product rule, which needs no\n// associativity -- the square's z v + v z, and through it the cubes'.\nfn bmap_along(z, v, formula) {\n    let sq = bmul(z, v) + bmul(v, z);\n    if formula == 0 {\n        sq\n    } else if formula == 1 {\n        bmul(sq, z) + bmul(bmul(z, z), v)\n    } else {\n        bmul(v, bmul(z, z)) + bmul(z, sq)\n    }\n}\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let z = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    // The derivative along the window's axes starts as the axes.\n    #{ z: z, c: z * k + p.c * (1.0 - k), k: k, ez: quat(0.0, 0.0, cr, sr),\n       m1: quat(1.0, 0.0, 0.0, 0.0), m2: quat(0.0, 1.0, 0.0, 0.0), m3: quat(0.0, 0.0, cr, sr), wt: 1.0, dr: 1.0,\n       sd: 1.0, sw: 1.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    if p.estimate == 1 {\n        let g = s.k * s.wt;\n        s.m1 = bmap_along(z, s.m1, p.formula) + quat(g, 0.0, 0.0, 0.0);\n        s.m2 = bmap_along(z, s.m2, p.formula) + quat(0.0, g, 0.0, 0.0);\n        s.m3 = bmap_along(z, s.m3, p.formula) + s.ez * g;\n    }\n    // Bristor's running derivative, n |z|^(n-1) a step.\n    let n = if p.formula == 0 { 2.0 } else { 3.0 };\n    s.sd = n * length(z) ** (n - 1.0) * s.sd + s.k * s.sw;\n    if s.sd > 1.0e10 {\n        s.sw = s.sw / s.sd;\n        s.sd = 1.0;\n    }\n    s.z = bmap(z, p.formula) + s.c;\n    let big = max(length(s.m1), max(length(s.m2), length(s.m3)));\n    if big > 1.0e10 {\n        s.m1 = s.m1 / big;\n        s.m2 = s.m2 / big;\n        s.m3 = s.m3 / big;\n        s.wt = s.wt / big;\n    }\n    // For the Escape Level colouring: how far the orbit has stretched.\n    s.dr = s.sd / max(s.sw, 1.0e-30);\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        let j = sqrt(dot(s.m1, s.m1) + dot(s.m2, s.m2) + dot(s.m3, s.m3));\n        let d = if p.estimate == 1 { s.wt / max(j, 1.0e-30) } else { s.sw / max(s.sd, 1.0e-30) };\n        min(0.5 * r * ln(r) * d, 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-4389ffdae8e56c27",
+      "formula_params": {
+        "formula": 0.0,
+        "julia": 0.0,
+        "levels": 24.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Bristorbrot",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.6000000238418579,
+      "cam_target_x": "0",
+      "cam_yaw": 2.200000047683716,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Bristorbrot (Rhai)",
+        "source": "// The Bristorbrot: the Mandelbrot and Julia sets of Doug Bristor's\n// numbers (\"Bristorbrot / Doug Bristor, bristorbrot.org\"; his viewer's\n// code, which this follows, is MIT). Use it from Escape mode (\"Use as\n// solid\").\n//\n// The numbers have a real part and ranked imaginary units e1, e2, e3\n// (i, j, k), and multiply by one rule: e_a e_a = -1, and e_a e_b =\n// sgn(b - a) e_b for a != b -- the product is a signed copy of its\n// right-hand factor, so i j = j and j i = -i. Not quaternions (no i j =\n// k); not associative either, so the two cubes (zz)z and z(zz) differ.\n// Its square in the three parts (real, i, j) is the 3D Bristorbrot Jos\n// Leys named in 2009: (x^2 - y^2 - z^2, y (2x - z), z (2x + y)).\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Roll and offset 0 is the 3D\n// Bristorbrot. The Mandelbrot set iterates z = f(z) + c from z = c, the\n// point; the Julia set from z = the point, with c the constant.\n//\n// The distance, 0.5 |z| ln|z| / |dz|, two ways (Distance). Bristor's,\n// as his viewer reads it: |dz| the running derivative of a conformal\n// set, n |z|^(n-1) a step. But the product stretches space by up to\n// 3.3 |z| (the cubes 6.7 and 7.2 |z|^2), so the reading is long -- by\n// the stretches' ratio compounded over the orbit -- and the Julia sets,\n// dust finer than a pixel almost everywhere, show their core as thin\n// ribbons, as his pictures do. The Jacobian: the orbit carries its\n// whole derivative along each of the window's three axes, and |dz| is\n// its Frobenius norm, never less than the stretch, so the dust shows\n// grown by a pixel, fuller. Either is capped at a tenth of the ball: a\n// Julia orbit through 0, where the map's derivative is none, reads any\n// distance, and uncapped Bristor's reading carried rays through the\n// Julia sets (one in thirteen for the square, 13 of 33 for the cubes);\n// capped, neither did. Both are rescaled with the weight of the c term past\n// 1e10, as Bristor's march is, so a deep orbit stays in f32.\n//\n// It shows a product of your own over a `quat` -- four parts, scalar\n// first -- written out part by part, since `*` between quaternions is\n// Hamilton's.\n\nconst PARAMS = #{\n    formula: #{ value: 0, caption: \"Formula\", choices: [\"z^2 + c\", \"(zz)z + c\", \"z(zz) + c\"], hint: \"The square, or one of the two cubes, which differ: the product is not associative\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.7, -0.35, 0.05, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant: real, i, j, k. Bristor's for the square is (-0.7, -0.35, 0.05, 0), for the cubes (0.15, 0.4, 0.05, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k. 0 is the 3D Bristorbrot\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides\" },\n    estimate: #{ value: 0, caption: \"Distance\", choices: [\"Bristor's\", \"Jacobian\"], hint: \"Bristor's: his viewer's running derivative, which reads long, so the Julia sets thin to ribbons as his pictures show them. Jacobian: the orbit's whole stretch, so the dust shows grown by a pixel, fuller -- and three derivatives a step to carry\" },\n};\n\nconst INFO = #{ title: \"Bristorbrot (Rhai)\", radius: 2.5 };\n\n// The product: e_a e_a = -1, e_a e_b = sgn(b - a) e_b. Parts (real, i,\n// j, k) as the quaternion's (w, x, y, z).\nfn bmul(a, b) {\n    quat(a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,\n         a.w * b.x + a.x * b.w - b.x * (a.y + a.z),\n         a.w * b.y + a.y * b.w + b.y * (a.x - a.z),\n         a.w * b.z + a.z * b.w + b.z * (a.x + a.y))\n}\n\n// The map, without c.\nfn bmap(z, formula) {\n    if formula == 0 {\n        bmul(z, z)\n    } else if formula == 1 {\n        bmul(bmul(z, z), z)\n    } else {\n        bmul(z, bmul(z, z))\n    }\n}\n\n// The map's derivative along `v`: the product rule, which needs no\n// associativity -- the square's z v + v z, and through it the cubes'.\nfn bmap_along(z, v, formula) {\n    let sq = bmul(z, v) + bmul(v, z);\n    if formula == 0 {\n        sq\n    } else if formula == 1 {\n        bmul(sq, z) + bmul(bmul(z, z), v)\n    } else {\n        bmul(v, bmul(z, z)) + bmul(z, sq)\n    }\n}\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let z = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    // The derivative along the window's axes starts as the axes.\n    #{ z: z, c: z * k + p.c * (1.0 - k), k: k, ez: quat(0.0, 0.0, cr, sr),\n       m1: quat(1.0, 0.0, 0.0, 0.0), m2: quat(0.0, 1.0, 0.0, 0.0), m3: quat(0.0, 0.0, cr, sr), wt: 1.0, dr: 1.0,\n       sd: 1.0, sw: 1.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    if p.estimate == 1 {\n        let g = s.k * s.wt;\n        s.m1 = bmap_along(z, s.m1, p.formula) + quat(g, 0.0, 0.0, 0.0);\n        s.m2 = bmap_along(z, s.m2, p.formula) + quat(0.0, g, 0.0, 0.0);\n        s.m3 = bmap_along(z, s.m3, p.formula) + s.ez * g;\n    }\n    // Bristor's running derivative, n |z|^(n-1) a step.\n    let n = if p.formula == 0 { 2.0 } else { 3.0 };\n    s.sd = n * length(z) ** (n - 1.0) * s.sd + s.k * s.sw;\n    if s.sd > 1.0e10 {\n        s.sw = s.sw / s.sd;\n        s.sd = 1.0;\n    }\n    s.z = bmap(z, p.formula) + s.c;\n    let big = max(length(s.m1), max(length(s.m2), length(s.m3)));\n    if big > 1.0e10 {\n        s.m1 = s.m1 / big;\n        s.m2 = s.m2 / big;\n        s.m3 = s.m3 / big;\n        s.wt = s.wt / big;\n    }\n    // For the Escape Level colouring: how far the orbit has stretched.\n    s.dr = s.sd / max(s.sw, 1.0e-30);\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        let j = sqrt(dot(s.m1, s.m1) + dot(s.m2, s.m2) + dot(s.m3, s.m3));\n        let d = if p.estimate == 1 { s.wt / max(j, 1.0e-30) } else { s.sw / max(s.sd, 1.0e-30) };\n        min(0.5 * r * ln(r) * d, 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-4389ffdae8e56c27",
+      "formula_params": {
+        "c_w": -0.7,
+        "c_x": -0.35,
+        "c_y": 0.05,
+        "c_z": 0.0,
+        "formula": 0.0,
+        "julia": 1.0,
+        "levels": 48.0,
+        "roll": 27.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Bristorbrot Julia",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.6000000238418579,
+      "cam_target_x": "0",
+      "cam_yaw": 2.200000047683716,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Bristorbrot (Rhai)",
+        "source": "// The Bristorbrot: the Mandelbrot and Julia sets of Doug Bristor's\n// numbers (\"Bristorbrot / Doug Bristor, bristorbrot.org\"; his viewer's\n// code, which this follows, is MIT). Use it from Escape mode (\"Use as\n// solid\").\n//\n// The numbers have a real part and ranked imaginary units e1, e2, e3\n// (i, j, k), and multiply by one rule: e_a e_a = -1, and e_a e_b =\n// sgn(b - a) e_b for a != b -- the product is a signed copy of its\n// right-hand factor, so i j = j and j i = -i. Not quaternions (no i j =\n// k); not associative either, so the two cubes (zz)z and z(zz) differ.\n// Its square in the three parts (real, i, j) is the 3D Bristorbrot Jos\n// Leys named in 2009: (x^2 - y^2 - z^2, y (2x - z), z (2x + y)).\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Roll and offset 0 is the 3D\n// Bristorbrot. The Mandelbrot set iterates z = f(z) + c from z = c, the\n// point; the Julia set from z = the point, with c the constant.\n//\n// The distance, 0.5 |z| ln|z| / |dz|, two ways (Distance). Bristor's,\n// as his viewer reads it: |dz| the running derivative of a conformal\n// set, n |z|^(n-1) a step. But the product stretches space by up to\n// 3.3 |z| (the cubes 6.7 and 7.2 |z|^2), so the reading is long -- by\n// the stretches' ratio compounded over the orbit -- and the Julia sets,\n// dust finer than a pixel almost everywhere, show their core as thin\n// ribbons, as his pictures do. The Jacobian: the orbit carries its\n// whole derivative along each of the window's three axes, and |dz| is\n// its Frobenius norm, never less than the stretch, so the dust shows\n// grown by a pixel, fuller. Either is capped at a tenth of the ball: a\n// Julia orbit through 0, where the map's derivative is none, reads any\n// distance, and uncapped Bristor's reading carried rays through the\n// Julia sets (one in thirteen for the square, 13 of 33 for the cubes);\n// capped, neither did. Both are rescaled with the weight of the c term past\n// 1e10, as Bristor's march is, so a deep orbit stays in f32.\n//\n// It shows a product of your own over a `quat` -- four parts, scalar\n// first -- written out part by part, since `*` between quaternions is\n// Hamilton's.\n\nconst PARAMS = #{\n    formula: #{ value: 0, caption: \"Formula\", choices: [\"z^2 + c\", \"(zz)z + c\", \"z(zz) + c\"], hint: \"The square, or one of the two cubes, which differ: the product is not associative\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.7, -0.35, 0.05, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant: real, i, j, k. Bristor's for the square is (-0.7, -0.35, 0.05, 0), for the cubes (0.15, 0.4, 0.05, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k. 0 is the 3D Bristorbrot\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides\" },\n    estimate: #{ value: 0, caption: \"Distance\", choices: [\"Bristor's\", \"Jacobian\"], hint: \"Bristor's: his viewer's running derivative, which reads long, so the Julia sets thin to ribbons as his pictures show them. Jacobian: the orbit's whole stretch, so the dust shows grown by a pixel, fuller -- and three derivatives a step to carry\" },\n};\n\nconst INFO = #{ title: \"Bristorbrot (Rhai)\", radius: 2.5 };\n\n// The product: e_a e_a = -1, e_a e_b = sgn(b - a) e_b. Parts (real, i,\n// j, k) as the quaternion's (w, x, y, z).\nfn bmul(a, b) {\n    quat(a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,\n         a.w * b.x + a.x * b.w - b.x * (a.y + a.z),\n         a.w * b.y + a.y * b.w + b.y * (a.x - a.z),\n         a.w * b.z + a.z * b.w + b.z * (a.x + a.y))\n}\n\n// The map, without c.\nfn bmap(z, formula) {\n    if formula == 0 {\n        bmul(z, z)\n    } else if formula == 1 {\n        bmul(bmul(z, z), z)\n    } else {\n        bmul(z, bmul(z, z))\n    }\n}\n\n// The map's derivative along `v`: the product rule, which needs no\n// associativity -- the square's z v + v z, and through it the cubes'.\nfn bmap_along(z, v, formula) {\n    let sq = bmul(z, v) + bmul(v, z);\n    if formula == 0 {\n        sq\n    } else if formula == 1 {\n        bmul(sq, z) + bmul(bmul(z, z), v)\n    } else {\n        bmul(v, bmul(z, z)) + bmul(z, sq)\n    }\n}\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let z = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    // The derivative along the window's axes starts as the axes.\n    #{ z: z, c: z * k + p.c * (1.0 - k), k: k, ez: quat(0.0, 0.0, cr, sr),\n       m1: quat(1.0, 0.0, 0.0, 0.0), m2: quat(0.0, 1.0, 0.0, 0.0), m3: quat(0.0, 0.0, cr, sr), wt: 1.0, dr: 1.0,\n       sd: 1.0, sw: 1.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    if p.estimate == 1 {\n        let g = s.k * s.wt;\n        s.m1 = bmap_along(z, s.m1, p.formula) + quat(g, 0.0, 0.0, 0.0);\n        s.m2 = bmap_along(z, s.m2, p.formula) + quat(0.0, g, 0.0, 0.0);\n        s.m3 = bmap_along(z, s.m3, p.formula) + s.ez * g;\n    }\n    // Bristor's running derivative, n |z|^(n-1) a step.\n    let n = if p.formula == 0 { 2.0 } else { 3.0 };\n    s.sd = n * length(z) ** (n - 1.0) * s.sd + s.k * s.sw;\n    if s.sd > 1.0e10 {\n        s.sw = s.sw / s.sd;\n        s.sd = 1.0;\n    }\n    s.z = bmap(z, p.formula) + s.c;\n    let big = max(length(s.m1), max(length(s.m2), length(s.m3)));\n    if big > 1.0e10 {\n        s.m1 = s.m1 / big;\n        s.m2 = s.m2 / big;\n        s.m3 = s.m3 / big;\n        s.wt = s.wt / big;\n    }\n    // For the Escape Level colouring: how far the orbit has stretched.\n    s.dr = s.sd / max(s.sw, 1.0e-30);\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        let j = sqrt(dot(s.m1, s.m1) + dot(s.m2, s.m2) + dot(s.m3, s.m3));\n        let d = if p.estimate == 1 { s.wt / max(j, 1.0e-30) } else { s.sw / max(s.sd, 1.0e-30) };\n        min(0.5 * r * ln(r) * d, 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-4389ffdae8e56c27",
+      "formula_params": {
+        "c_w": 0.15,
+        "c_x": 0.4,
+        "c_y": 0.05,
+        "c_z": 0.0,
+        "formula": 1.0,
+        "julia": 1.0,
+        "levels": 48.0,
+        "roll": 27.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Bristorbrot Julia, (zz)z",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.6000000238418579,
+      "cam_target_x": "0",
+      "cam_yaw": 2.200000047683716,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Bristorbrot (Rhai)",
+        "source": "// The Bristorbrot: the Mandelbrot and Julia sets of Doug Bristor's\n// numbers (\"Bristorbrot / Doug Bristor, bristorbrot.org\"; his viewer's\n// code, which this follows, is MIT). Use it from Escape mode (\"Use as\n// solid\").\n//\n// The numbers have a real part and ranked imaginary units e1, e2, e3\n// (i, j, k), and multiply by one rule: e_a e_a = -1, and e_a e_b =\n// sgn(b - a) e_b for a != b -- the product is a signed copy of its\n// right-hand factor, so i j = j and j i = -i. Not quaternions (no i j =\n// k); not associative either, so the two cubes (zz)z and z(zz) differ.\n// Its square in the three parts (real, i, j) is the 3D Bristorbrot Jos\n// Leys named in 2009: (x^2 - y^2 - z^2, y (2x - z), z (2x + y)).\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Roll and offset 0 is the 3D\n// Bristorbrot. The Mandelbrot set iterates z = f(z) + c from z = c, the\n// point; the Julia set from z = the point, with c the constant.\n//\n// The distance, 0.5 |z| ln|z| / |dz|, two ways (Distance). Bristor's,\n// as his viewer reads it: |dz| the running derivative of a conformal\n// set, n |z|^(n-1) a step. But the product stretches space by up to\n// 3.3 |z| (the cubes 6.7 and 7.2 |z|^2), so the reading is long -- by\n// the stretches' ratio compounded over the orbit -- and the Julia sets,\n// dust finer than a pixel almost everywhere, show their core as thin\n// ribbons, as his pictures do. The Jacobian: the orbit carries its\n// whole derivative along each of the window's three axes, and |dz| is\n// its Frobenius norm, never less than the stretch, so the dust shows\n// grown by a pixel, fuller. Either is capped at a tenth of the ball: a\n// Julia orbit through 0, where the map's derivative is none, reads any\n// distance, and uncapped Bristor's reading carried rays through the\n// Julia sets (one in thirteen for the square, 13 of 33 for the cubes);\n// capped, neither did. Both are rescaled with the weight of the c term past\n// 1e10, as Bristor's march is, so a deep orbit stays in f32.\n//\n// It shows a product of your own over a `quat` -- four parts, scalar\n// first -- written out part by part, since `*` between quaternions is\n// Hamilton's.\n\nconst PARAMS = #{\n    formula: #{ value: 0, caption: \"Formula\", choices: [\"z^2 + c\", \"(zz)z + c\", \"z(zz) + c\"], hint: \"The square, or one of the two cubes, which differ: the product is not associative\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.7, -0.35, 0.05, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant: real, i, j, k. Bristor's for the square is (-0.7, -0.35, 0.05, 0), for the cubes (0.15, 0.4, 0.05, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k. 0 is the 3D Bristorbrot\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides\" },\n    estimate: #{ value: 0, caption: \"Distance\", choices: [\"Bristor's\", \"Jacobian\"], hint: \"Bristor's: his viewer's running derivative, which reads long, so the Julia sets thin to ribbons as his pictures show them. Jacobian: the orbit's whole stretch, so the dust shows grown by a pixel, fuller -- and three derivatives a step to carry\" },\n};\n\nconst INFO = #{ title: \"Bristorbrot (Rhai)\", radius: 2.5 };\n\n// The product: e_a e_a = -1, e_a e_b = sgn(b - a) e_b. Parts (real, i,\n// j, k) as the quaternion's (w, x, y, z).\nfn bmul(a, b) {\n    quat(a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,\n         a.w * b.x + a.x * b.w - b.x * (a.y + a.z),\n         a.w * b.y + a.y * b.w + b.y * (a.x - a.z),\n         a.w * b.z + a.z * b.w + b.z * (a.x + a.y))\n}\n\n// The map, without c.\nfn bmap(z, formula) {\n    if formula == 0 {\n        bmul(z, z)\n    } else if formula == 1 {\n        bmul(bmul(z, z), z)\n    } else {\n        bmul(z, bmul(z, z))\n    }\n}\n\n// The map's derivative along `v`: the product rule, which needs no\n// associativity -- the square's z v + v z, and through it the cubes'.\nfn bmap_along(z, v, formula) {\n    let sq = bmul(z, v) + bmul(v, z);\n    if formula == 0 {\n        sq\n    } else if formula == 1 {\n        bmul(sq, z) + bmul(bmul(z, z), v)\n    } else {\n        bmul(v, bmul(z, z)) + bmul(z, sq)\n    }\n}\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let z = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    // The derivative along the window's axes starts as the axes.\n    #{ z: z, c: z * k + p.c * (1.0 - k), k: k, ez: quat(0.0, 0.0, cr, sr),\n       m1: quat(1.0, 0.0, 0.0, 0.0), m2: quat(0.0, 1.0, 0.0, 0.0), m3: quat(0.0, 0.0, cr, sr), wt: 1.0, dr: 1.0,\n       sd: 1.0, sw: 1.0 }\n}\n\nfn step(s, p) {\n    let z = s.z;\n    if p.estimate == 1 {\n        let g = s.k * s.wt;\n        s.m1 = bmap_along(z, s.m1, p.formula) + quat(g, 0.0, 0.0, 0.0);\n        s.m2 = bmap_along(z, s.m2, p.formula) + quat(0.0, g, 0.0, 0.0);\n        s.m3 = bmap_along(z, s.m3, p.formula) + s.ez * g;\n    }\n    // Bristor's running derivative, n |z|^(n-1) a step.\n    let n = if p.formula == 0 { 2.0 } else { 3.0 };\n    s.sd = n * length(z) ** (n - 1.0) * s.sd + s.k * s.sw;\n    if s.sd > 1.0e10 {\n        s.sw = s.sw / s.sd;\n        s.sd = 1.0;\n    }\n    s.z = bmap(z, p.formula) + s.c;\n    let big = max(length(s.m1), max(length(s.m2), length(s.m3)));\n    if big > 1.0e10 {\n        s.m1 = s.m1 / big;\n        s.m2 = s.m2 / big;\n        s.m3 = s.m3 / big;\n        s.wt = s.wt / big;\n    }\n    // For the Escape Level colouring: how far the orbit has stretched.\n    s.dr = s.sd / max(s.sw, 1.0e-30);\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        let j = sqrt(dot(s.m1, s.m1) + dot(s.m2, s.m2) + dot(s.m3, s.m3));\n        let d = if p.estimate == 1 { s.wt / max(j, 1.0e-30) } else { s.sw / max(s.sd, 1.0e-30) };\n        min(0.5 * r * ln(r) * d, 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-4389ffdae8e56c27",
+      "formula_params": {
+        "c_w": 0.15,
+        "c_x": 0.4,
+        "c_y": 0.05,
+        "c_z": 0.0,
+        "formula": 2.0,
+        "julia": 1.0,
+        "levels": 48.0,
+        "roll": 27.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Bristorbrot Julia, z(zz)",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.30000001192092896,
+      "cam_target_x": "-0.5",
+      "cam_yaw": 1.600000023841858,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Quaternionbrot (Rhai)",
+        "source": "// The Quaternionbrot: the Mandelbrot and Julia sets of q^n + c over\n// Hamilton's quaternions, as Doug Bristor's viewer sets them beside his\n// Bristorbrot (bristorbrot.org; solid-bristorbrot.rhai). Use it from\n// Escape mode (\"Use as solid\").\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Every turn of i, j and k\n// about the real axis is a symmetry of the quaternions, so at offset 0\n// the Mandelbrot set is the plane's, turned about its real axis, and the\n// roll changes nothing; the offset is what cuts it otherwise. The\n// Mandelbrot set iterates q = q^n + c from q = c, the point; the Julia\n// set from q = the point, with c the constant.\n//\n// The distance is the classic one, 0.5 |q| ln|q| / dr: unlike the\n// Bristorian product, q^n stretches space by exactly n |q|^(n-1) at\n// most, so the running derivative bounds the orbit's (rescaled with the\n// weight of the c term past 1e10, so a deep orbit stays in f32). A\n// Julia orbit through 0, where q^n's derivative is none, reads any\n// distance, so a reading is at most a tenth of the ball.\n//\n// It shows `quat` arithmetic: `*` Hamilton's product, `pow(q, n)` the\n// complex power of t + i r carried along the vector part (for a whole n\n// the product n times over).\n\nconst PARAMS = #{\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of q^n + c: Bristor's are 2 and 3\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.2, 0.65, 0.0, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant, scalar part first. Bristor's for q^2 + c is (-0.2, 0.65, 0, 0), for q^3 + c (0.35, 0.62, 0, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides: 0 is the plane's set turned about its real axis\" },\n};\n\nconst INFO = #{ title: \"Quaternionbrot (Rhai)\", radius: 2.5 };\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let q = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    #{ z: q, c: q * k + p.c * (1.0 - k), k: k, dr: 1.0, wt: 1.0 }\n}\n\nfn step(s, p) {\n    let r = length(s.z);\n    s.dr = p.power * r ** (p.power - 1.0) * s.dr + s.k * s.wt;\n    if s.dr > 1.0e10 {\n        s.wt = s.wt / s.dr;\n        s.dr = 1.0;\n    }\n    // The square as the product, exact; any other power by `pow`.\n    let f = if p.power == 2.0 { s.z * s.z } else { pow(s.z, p.power) };\n    s.z = f + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        min(0.5 * r * ln(r) * s.wt / max(s.dr, 1.0e-30), 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-f611cf48066d3e64",
+      "formula_params": {
+        "julia": 0.0,
+        "levels": 24.0,
+        "power": 2.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.3
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Quaternionbrot",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.6000000238418579,
+      "cam_target_x": "0",
+      "cam_yaw": 2.200000047683716,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Quaternionbrot (Rhai)",
+        "source": "// The Quaternionbrot: the Mandelbrot and Julia sets of q^n + c over\n// Hamilton's quaternions, as Doug Bristor's viewer sets them beside his\n// Bristorbrot (bristorbrot.org; solid-bristorbrot.rhai). Use it from\n// Escape mode (\"Use as solid\").\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Every turn of i, j and k\n// about the real axis is a symmetry of the quaternions, so at offset 0\n// the Mandelbrot set is the plane's, turned about its real axis, and the\n// roll changes nothing; the offset is what cuts it otherwise. The\n// Mandelbrot set iterates q = q^n + c from q = c, the point; the Julia\n// set from q = the point, with c the constant.\n//\n// The distance is the classic one, 0.5 |q| ln|q| / dr: unlike the\n// Bristorian product, q^n stretches space by exactly n |q|^(n-1) at\n// most, so the running derivative bounds the orbit's (rescaled with the\n// weight of the c term past 1e10, so a deep orbit stays in f32). A\n// Julia orbit through 0, where q^n's derivative is none, reads any\n// distance, so a reading is at most a tenth of the ball.\n//\n// It shows `quat` arithmetic: `*` Hamilton's product, `pow(q, n)` the\n// complex power of t + i r carried along the vector part (for a whole n\n// the product n times over).\n\nconst PARAMS = #{\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of q^n + c: Bristor's are 2 and 3\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.2, 0.65, 0.0, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant, scalar part first. Bristor's for q^2 + c is (-0.2, 0.65, 0, 0), for q^3 + c (0.35, 0.62, 0, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides: 0 is the plane's set turned about its real axis\" },\n};\n\nconst INFO = #{ title: \"Quaternionbrot (Rhai)\", radius: 2.5 };\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let q = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    #{ z: q, c: q * k + p.c * (1.0 - k), k: k, dr: 1.0, wt: 1.0 }\n}\n\nfn step(s, p) {\n    let r = length(s.z);\n    s.dr = p.power * r ** (p.power - 1.0) * s.dr + s.k * s.wt;\n    if s.dr > 1.0e10 {\n        s.wt = s.wt / s.dr;\n        s.dr = 1.0;\n    }\n    // The square as the product, exact; any other power by `pow`.\n    let f = if p.power == 2.0 { s.z * s.z } else { pow(s.z, p.power) };\n    s.z = f + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        min(0.5 * r * ln(r) * s.wt / max(s.dr, 1.0e-30), 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-f611cf48066d3e64",
+      "formula_params": {
+        "c_w": -0.2,
+        "c_x": 0.65,
+        "c_y": 0.0,
+        "c_z": 0.0,
+        "julia": 1.0,
+        "levels": 48.0,
+        "power": 2.0,
+        "roll": 27.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Quaternionbrot Julia",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.30000001192092896,
+      "cam_target_x": "0",
+      "cam_yaw": 1.600000023841858,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Quaternionbrot (Rhai)",
+        "source": "// The Quaternionbrot: the Mandelbrot and Julia sets of q^n + c over\n// Hamilton's quaternions, as Doug Bristor's viewer sets them beside his\n// Bristorbrot (bristorbrot.org; solid-bristorbrot.rhai). Use it from\n// Escape mode (\"Use as solid\").\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Every turn of i, j and k\n// about the real axis is a symmetry of the quaternions, so at offset 0\n// the Mandelbrot set is the plane's, turned about its real axis, and the\n// roll changes nothing; the offset is what cuts it otherwise. The\n// Mandelbrot set iterates q = q^n + c from q = c, the point; the Julia\n// set from q = the point, with c the constant.\n//\n// The distance is the classic one, 0.5 |q| ln|q| / dr: unlike the\n// Bristorian product, q^n stretches space by exactly n |q|^(n-1) at\n// most, so the running derivative bounds the orbit's (rescaled with the\n// weight of the c term past 1e10, so a deep orbit stays in f32). A\n// Julia orbit through 0, where q^n's derivative is none, reads any\n// distance, so a reading is at most a tenth of the ball.\n//\n// It shows `quat` arithmetic: `*` Hamilton's product, `pow(q, n)` the\n// complex power of t + i r carried along the vector part (for a whole n\n// the product n times over).\n\nconst PARAMS = #{\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of q^n + c: Bristor's are 2 and 3\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.2, 0.65, 0.0, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant, scalar part first. Bristor's for q^2 + c is (-0.2, 0.65, 0, 0), for q^3 + c (0.35, 0.62, 0, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides: 0 is the plane's set turned about its real axis\" },\n};\n\nconst INFO = #{ title: \"Quaternionbrot (Rhai)\", radius: 2.5 };\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let q = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    #{ z: q, c: q * k + p.c * (1.0 - k), k: k, dr: 1.0, wt: 1.0 }\n}\n\nfn step(s, p) {\n    let r = length(s.z);\n    s.dr = p.power * r ** (p.power - 1.0) * s.dr + s.k * s.wt;\n    if s.dr > 1.0e10 {\n        s.wt = s.wt / s.dr;\n        s.dr = 1.0;\n    }\n    // The square as the product, exact; any other power by `pow`.\n    let f = if p.power == 2.0 { s.z * s.z } else { pow(s.z, p.power) };\n    s.z = f + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        min(0.5 * r * ln(r) * s.wt / max(s.dr, 1.0e-30), 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-f611cf48066d3e64",
+      "formula_params": {
+        "julia": 0.0,
+        "levels": 24.0,
+        "power": 3.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.5
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Quaternionbrot Cubed",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
+  },
+  {
+    "escape": {
+      "cam_pitch": 0.6000000238418579,
+      "cam_target_x": "0",
+      "cam_yaw": 2.200000047683716,
+      "coloring": "ifs_level",
+      "custom_formula": {
+        "dialect": "rhai",
+        "entry": "Quaternionbrot (Rhai)",
+        "source": "// The Quaternionbrot: the Mandelbrot and Julia sets of q^n + c over\n// Hamilton's quaternions, as Doug Bristor's viewer sets them beside his\n// Bristorbrot (bristorbrot.org; solid-bristorbrot.rhai). Use it from\n// Escape mode (\"Use as solid\").\n//\n// The iteration is four-dimensional; the solid is a 3D section of it,\n// the window (real, i, cos a j + sin a k) at the Section Roll a, set\n// Section Offset along the axis it hides. Every turn of i, j and k\n// about the real axis is a symmetry of the quaternions, so at offset 0\n// the Mandelbrot set is the plane's, turned about its real axis, and the\n// roll changes nothing; the offset is what cuts it otherwise. The\n// Mandelbrot set iterates q = q^n + c from q = c, the point; the Julia\n// set from q = the point, with c the constant.\n//\n// The distance is the classic one, 0.5 |q| ln|q| / dr: unlike the\n// Bristorian product, q^n stretches space by exactly n |q|^(n-1) at\n// most, so the running derivative bounds the orbit's (rescaled with the\n// weight of the c term past 1e10, so a deep orbit stays in f32). A\n// Julia orbit through 0, where q^n's derivative is none, reads any\n// distance, so a reading is at most a tenth of the ball.\n//\n// It shows `quat` arithmetic: `*` Hamilton's product, `pow(q, n)` the\n// complex power of t + i r carried along the vector part (for a whole n\n// the product n times over).\n\nconst PARAMS = #{\n    power: #{ value: 2.0, min: 2.0, max: 8.0, caption: \"Power\", hint: \"The n of q^n + c: Bristor's are 2 and 3\" },\n    julia: #{ value: 0, caption: \"Variant\", choices: [\"Mandelbrot\", \"Julia\"], hint: \"The Mandelbrot set (c the point) or a Julia set (c the constant below)\" },\n    c: #{ value: quat(-0.2, 0.65, 0.0, 0.0), caption: \"Julia C\", hint: \"The Julia set's constant, scalar part first. Bristor's for q^2 + c is (-0.2, 0.65, 0, 0), for q^3 + c (0.35, 0.62, 0, 0)\" },\n    roll: #{ value: 0.0, min: -180.0, max: 180.0, caption: \"Section Roll\", hint: \"Degrees: the 3D window into the 4D iteration turns from j toward k\" },\n    w: #{ value: 0.0, min: -2.0, max: 2.0, caption: \"Section Offset\", hint: \"How far the window sits along the axis it hides: 0 is the plane's set turned about its real axis\" },\n};\n\nconst INFO = #{ title: \"Quaternionbrot (Rhai)\", radius: 2.5 };\n\nfn start(pos, p) {\n    let a = p.roll * 0.017453292519943295;\n    let cr = cos(a);\n    let sr = sin(a);\n    let q = quat(pos.x, pos.y, cr * pos.z - sr * p.w, sr * pos.z + cr * p.w);\n    // The c term's share: the Mandelbrot set's c is the point.\n    let k = if p.julia == 0 { 1.0 } else { 0.0 };\n    #{ z: q, c: q * k + p.c * (1.0 - k), k: k, dr: 1.0, wt: 1.0 }\n}\n\nfn step(s, p) {\n    let r = length(s.z);\n    s.dr = p.power * r ** (p.power - 1.0) * s.dr + s.k * s.wt;\n    if s.dr > 1.0e10 {\n        s.wt = s.wt / s.dr;\n        s.dr = 1.0;\n    }\n    // The square as the product, exact; any other power by `pow`.\n    let f = if p.power == 2.0 { s.z * s.z } else { pow(s.z, p.power) };\n    s.z = f + s.c;\n    s\n}\n\nfn escaped(s, p) {\n    length(s.z) > 1.0e4\n}\n\nfn distance(s, p) {\n    let r = length(s.z);\n    if r > 1.0e4 {\n        min(0.5 * r * ln(r) * s.wt / max(s.dr, 1.0e-30), 0.25)\n    } else {\n        0.0\n    }\n}\n"
+      },
+      "formula": "custom-f611cf48066d3e64",
+      "formula_params": {
+        "c_w": 0.35,
+        "c_x": 0.62,
+        "c_y": 0.0,
+        "c_z": 0.0,
+        "julia": 1.0,
+        "levels": 48.0,
+        "power": 3.0,
+        "roll": 27.0
+      },
+      "max_iter": 256,
+      "zoom_log2": 0.6
+    },
+    "exposure": 2.0,
+    "flame": {
+      "name": "Quaternionbrot Cubed Julia",
+      "transforms": []
+    },
+    "gamma": 1.0,
+    "levels_gamma": 0.5,
+    "palette": {
+      "locked": false,
+      "name": "Fire",
+      "stops": [
+        {
+          "color": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "position": 0.0
+        },
+        {
+          "color": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "position": 0.25
+        },
+        {
+          "color": [
+            1.0,
+            0.3,
+            0.0
+          ],
+          "position": 0.5
+        },
+        {
+          "color": [
+            1.0,
+            0.8,
+            0.0
+          ],
+          "position": 0.75
+        },
+        {
+          "color": [
+            1.0,
+            1.0,
+            0.8
+          ],
+          "position": 1.0
+        }
+      ]
+    },
+    "preserve_z": false,
+    "render_mode": "escape",
+    "solid_shading": {
+      "ambient": 0.0,
+      "lights": [
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": true,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": -14.4854,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 21.0596,
+          "enabled": false,
+          "intensity": 0.5
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        },
+        {
+          "azimuth": 106.2867,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "elevation": 57.4364,
+          "enabled": false,
+          "intensity": 1.0
+        }
+      ],
+      "shading_strength": 1.0
+    },
+    "tonemap_mode": "linear",
+    "version": 6
   }
 ]
