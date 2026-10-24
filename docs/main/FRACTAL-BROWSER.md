@@ -9,7 +9,7 @@ entry ("Load Preset" in the History panel).
   ([src/ui/fractal_browser.rs](../../src/ui/fractal_browser.rs)).
 - Gallery widget: `FractalConfigGallery`
   ([src/ui/fractal_gallery.rs](../../src/ui/fractal_gallery.rs)), one per
-  local tab.
+  local tab, and one per preset category.
 - Thumbnail cache: `ThumbnailCache`
   ([src/storage/thumbnail_cache.rs](../../src/storage/thumbnail_cache.rs)).
 - Thumbnail render: [src/renderer/thumbnail.rs](../../src/renderer/thumbnail.rs).
@@ -39,7 +39,7 @@ It is available in every render mode.
 
 | Tab label | `BrowserTab` | What it holds |
 |---|---|---|
-| Presets | `Presets` | The built-in presets (see [Presets](#presets)) |
+| Presets | `Presets` | The built-in presets, a tab per category (see [Presets](#presets)) |
 | Random | `Batch` | The last batch from the Random Generator or a Scripts batch, until the next one replaces it. The label shows the count |
 | Files | `Files` | The configs from one file: **Open File...** on the tab, a multi-config `.fflame` or multi-flame `.flame` opened with File ▸ Open, or a multi-flame `.flame` from Import Apophysis. The label shows the count |
 | Online | `Online` | The signed-in user's flames from the API. Shown only in online mode |
@@ -119,13 +119,17 @@ through their own engines.
 
 - **Desktop**: one thumbnail a frame, blocking
   (`render_thumbnail`, which wraps the async function in
-  `pollster::block_on`). The current tab's queue goes first, then the
-  other local tabs'. While a gallery has thumbnails pending it shows a
-  "Generating Thumbnails..." window with a progress bar and the name
-  being rendered, instead of its contents.
+  `pollster::block_on`). A gallery queues its missing thumbnails when it
+  is first drawn, so a preset category's are made when it is opened. The
+  shown gallery's queue goes first, then any other that was shown and is
+  not finished (`next_pending_config`, a `GalleryId` each). While a
+  gallery has thumbnails pending it shows a "Generating Thumbnails..."
+  window with a progress bar and the name being rendered, instead of its
+  contents.
 - **Web**: every missing thumbnail is spawned as an async render
   (`render_thumbnail_async`), and finished ones are picked up on later
-  frames. The gallery stays usable meanwhile.
+  frames. The gallery stays usable meanwhile. A preset category's are
+  spawned the first time it is shown.
 
 Save Online uploads a thumbnail rendered by the same function, at the
 same 512 pixels, as a JPEG.
@@ -159,14 +163,26 @@ complete configs. `global_preset_library()` loads it once per run:
   that is present but malformed lands here too; it does not fall back to
   the embedded copy.
 
-The file holds 43 presets:
+**The Presets tab has a tab per category** (`PresetCategory`), each with
+its count and its own gallery, so opening the browser makes one
+category's thumbnails, not all 80.
+A category with no presets has no tab, and the browser opens on the first
+that has any. `PresetCategory::of` sorts by the camera a config's picture
+is seen through (`camera::gesture::view_kind`): a flame by its render
+mode; an escape-time config 3D when its formula is a solid -- a
+built-in, or its own Rhai solid, told from the source because nothing
+has compiled it when the browser sorts the presets -- or it draws a
+terrain; every simulation one category, terrains too.
 
-| Mode | Count | Presets |
+The file holds 80 presets:
+
+| Category | Count | Presets |
 |---|---|---|
-| 2D flame | 6 | Grand Julian, Julian Disc, Plastic, Spherical3, Square Tile, Flower |
-| 3D flame | 3 | Cup (3D), JuliaN Bubble (3D), Bubbles (3D) |
-| Escape-time | 34 | Frothy Basin, Volterra-Lotka, Unity (Fractint's, written in Rhai: each carries its formula; ESCAPE.md, *The formulas*); Sierpinski Gasket, Sierpinski Carpet, Heighway Dragon, Koch Curve, Douady Rabbit, Julia Dendrite, Cubic Pair, Blob Flower (formula `ifs_flame`); Sierpinski Tetrahedron, Menger Sponge (`ifs_flame_3d`); Quaternion Julia, Lacquered Julia (`quaternion_julia_solid`); KIFS Menger, Tetrahedron, Octahedron, Turned, Bloom, Columns, Icosahedron, Icosahedral Flake, Dodecahedron, Chrome Octahedron (`kifs_solid`); Mandelbox, Mandelbox Scale 3, Mandelbox Inverted, Mandelbox Julia, Lacquered Mandelbox (`mandelbox_solid`); Mandelbulb, Mandelbulb Power 4, Mandelbulb Julia, Gold Mandelbulb (`mandelbulb_solid`) |
-| Simulation | 0 | |
+| 2D Flame | 12 | Grand Julian, Julian Disc, Plastic, Spherical3, Square Tile, Flower; Moran: Triangle of Ferns, its four-level form, Carpet of Dragons, Dragon of Carpets, Carpet and Levy C, Sturmian, Dragon and Levy C, Sturmian (the level-dependent example variation) |
+| 3D Flame | 5 | Cup (3D), JuliaN Bubble (3D), Bubbles (3D); Halayka Escape Paths: Z^2 + C, sin Z + C sin Z |
+| 2D Escape | 11 | Frothy Basin, Volterra-Lotka, Unity (Fractint's, written in Rhai: each carries its formula; ESCAPE.md, *The formulas*); Sierpinski Gasket, Sierpinski Carpet, Heighway Dragon, Koch Curve, Douady Rabbit, Julia Dendrite, Cubic Pair, Blob Flower (formula `ifs_flame`) |
+| 3D Escape | 37 | Sierpinski Tetrahedron, Menger Sponge (`ifs_flame_3d`); Quaternion Julia, Lacquered Julia (`quaternion_julia_solid`); KIFS Menger, Tetrahedron, Octahedron, Turned, Bloom, Columns, Icosahedron, Icosahedral Flake, Dodecahedron, Chrome Octahedron (`kifs_solid`); Mandelbox, Mandelbox Scale 3, Mandelbox Inverted, Mandelbox Julia, Lacquered Mandelbox (`mandelbox_solid`); Mandelbulb, Mandelbulb Power 4, Mandelbulb Julia, Gold Mandelbulb (`mandelbulb_solid`); Halayka's six quaternion sets, the Bristorbrot and its Julia sets, the Quaternionbrot's four (Rhai solids) |
+| Simulation | 15 | Gray-Scott Coral, Gray-Scott Mitosis, Brusselator Beans, Cahn-Hilliard Labyrinth, Cyclic Cellular Automaton, Hodgepodge Machine, FitzHugh-Nagumo Vortex, Oregonator Wave Trains, Lichtenberg Figure, Diffusion-Limited Aggregation, Snow Crystal, Physarum Network, Abelian Sandpile, McCabe Multiscale Turing, Coral Terrain (from the visual suite's simulation configs, `tests/visual/configs/sim/`, each given a palette from the starter or IQ pack) |
 
 To add a preset, save the config (File ▸ Save As) and append its JSON
 object to the array. The desktop app picks it up on the next launch;
