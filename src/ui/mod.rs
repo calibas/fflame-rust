@@ -2766,6 +2766,12 @@ impl EguiLayer {
         // Note: Auto-levels is a one-shot button in render_levels_controls_managed
     }
 
+    /// Whether the density histogram is on screen (the Histogram section
+    /// of the tone mapping panel), and so worth reading back.
+    pub fn histogram_shown(&self) -> bool {
+        tone_mapping::histogram_shown(&self.ctx)
+    }
+
     /// Get a reference to the density histogram
     #[cfg(target_arch = "wasm32")]
     pub fn density_histogram(&self) -> &crate::renderer::DensityHistogram {
