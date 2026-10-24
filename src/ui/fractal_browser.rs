@@ -1,7 +1,8 @@
 //! Fractal Browser panel - unified browser for presets, batch results, files, and online flames
 //!
 //! A tabbed panel that provides views:
-//! - Presets: Built-in presets from assets/presets.fflame
+//! - Presets: Built-in presets from assets/presets.fflame, a gallery per
+//!   category ([`PresetCategory`])
 //! - Batch: Random batch generation results (persists until next batch)
 //! - Files: Loaded .fflame files
 //! - Online: Flames fetched from the API (feature-gated behind `api`)
@@ -23,6 +24,87 @@ pub enum BrowserTab {
     Batch,
     Files,
     Online,
+}
+
+/// **The Presets tab's categories**, each its own gallery and tab. A
+/// gallery makes every thumbnail it is missing before it shows any, and
+/// makes them only once it is shown, so a category's are made when it is
+/// first opened -- not every preset's at once, path-traced solids among
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PresetCategory {
+    #[default]
+    Flame2d,
+    Flame3d,
+    Escape2d,
+    Escape3d,
+    Simulation,
+}
+
+impl PresetCategory {
+    pub const ALL: [PresetCategory; 5] =
+        [Self::Flame2d, Self::Flame3d, Self::Escape2d, Self::Escape3d, Self::Simulation];
+
+    /// The category a config falls in: by the camera its picture is seen
+    /// through (`camera::gesture::view_kind`), an escape solid or terrain
+    /// being a 3D escape picture. A Rhai solid is told from its source,
+    /// which is not compiled yet when the presets are sorted, so the
+    /// solids' registry does not know it.
+    pub fn of(config: &FractalConfig) -> Self {
+        use crate::camera::gesture::{view_kind, ViewKind};
+        match view_kind(config) {
+            ViewKind::Flame2d => Self::Flame2d,
+            ViewKind::Flame3d => Self::Flame3d,
+            ViewKind::EscapePlane if !runs_a_rhai_solid(config) => Self::Escape2d,
+            ViewKind::EscapePlane | ViewKind::Solid | ViewKind::EscapeTerrain => Self::Escape3d,
+            ViewKind::Sim2d | ViewKind::SimTerrain => Self::Simulation,
+        }
+    }
+
+    fn label_key(self) -> &'static str {
+        match self {
+            Self::Flame2d => "browser.presets_flame_2d",
+            Self::Flame3d => "browser.presets_flame_3d",
+            Self::Escape2d => "browser.presets_escape_2d",
+            Self::Escape3d => "browser.presets_escape_3d",
+            Self::Simulation => "browser.presets_simulation",
+        }
+    }
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Whether the config's formula is its own Rhai source, and that source a
+/// solid. The source stays in the config when another formula is picked
+/// (undo finds it), so the formula's name has to be a custom one too.
+fn runs_a_rhai_solid(config: &FractalConfig) -> bool {
+    #[cfg(feature = "engine-escape")]
+    {
+        use crate::config::escape::CustomDialect;
+        use crate::escape::lang::{rhai, EntryKind};
+        let escape = &config.escape;
+        escape.formula.starts_with("custom-")
+            && escape
+                .custom_formula
+                .as_ref()
+                .is_some_and(|src| src.dialect == CustomDialect::Rhai && rhai::kind_of(&src.source) == Some(EntryKind::Solid))
+    }
+    #[cfg(not(feature = "engine-escape"))]
+    {
+        let _ = config;
+        false
+    }
+}
+
+/// Which gallery a thumbnail is made for (desktop).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryId {
+    Preset(PresetCategory),
+    Batch,
+    Files,
 }
 
 /// The Online tab's render-mode filter: the value sent as
@@ -81,11 +163,14 @@ pub struct FractalBrowserPanel {
     current_tab: BrowserTab,
 
     // --- Presets tab ---
-    /// Gallery for presets
-    presets_gallery: FractalConfigGallery,
-    /// Whether preset thumbnails need generation
+    /// A gallery a category, in [`PresetCategory::ALL`] order.
+    preset_galleries: Vec<FractalConfigGallery>,
+    /// The category shown.
+    preset_category: PresetCategory,
+    /// WASM: the categories whose thumbnails are not started yet. Each is
+    /// started when it is first shown.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    presets_needs_generation: bool,
+    presets_unstarted: [bool; 5],
 
     // --- Batch tab ---
     /// Gallery for batch generation results
@@ -146,15 +231,22 @@ impl Default for FractalBrowserPanel {
 impl FractalBrowserPanel {
     /// Create a new fractal browser panel
     pub fn new() -> Self {
-        // Load presets from global library
+        // The presets from the global library, sorted into their
+        // categories in the library's order.
         let preset_library = global_preset_library();
-        let presets: Vec<FractalConfig> = preset_library.presets().iter().cloned().collect();
+        let mut by_category: Vec<Vec<FractalConfig>> = vec![Vec::new(); PresetCategory::ALL.len()];
+        for preset in preset_library.presets() {
+            by_category[PresetCategory::of(preset).index()].push(preset.clone());
+        }
+        // Open on the first category that has any.
+        let preset_category = PresetCategory::ALL.into_iter().find(|c| !by_category[c.index()].is_empty()).unwrap_or_default();
 
         Self {
             current_tab: BrowserTab::Presets,
 
-            presets_gallery: FractalConfigGallery::new(presets),
-            presets_needs_generation: true,
+            preset_galleries: by_category.into_iter().map(FractalConfigGallery::new).collect(),
+            preset_category,
+            presets_unstarted: [true; 5],
 
             batch_gallery: FractalConfigGallery::default(),
             batch_needs_generation: false,
@@ -300,70 +392,60 @@ impl FractalBrowserPanel {
 
     // ========== Thumbnail generation (desktop) ==========
 
-    /// Check if any gallery is generating thumbnails (desktop only)
+    /// The gallery `id` names.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gallery(&self, id: GalleryId) -> &FractalConfigGallery {
+        match id {
+            GalleryId::Preset(c) => &self.preset_galleries[c.index()],
+            GalleryId::Batch => &self.batch_gallery,
+            GalleryId::Files => &self.files_gallery,
+        }
+    }
+
+    /// Check if any gallery is generating thumbnails (desktop only). A
+    /// gallery queues its missing thumbnails only once shown, so a preset
+    /// category never opened is not generating.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn is_generating(&self) -> bool {
-        self.presets_gallery.is_generating()
+        self.preset_galleries.iter().any(|g| g.is_generating())
             || self.batch_gallery.is_generating()
             || self.files_gallery.is_generating()
     }
 
-    /// Get the next config that needs thumbnail generation (desktop only)
-    /// Returns (gallery_id, config) where gallery_id identifies which gallery
+    /// Get the next config that needs thumbnail generation (desktop only):
+    /// the shown gallery's first, then any other's that was shown and is
+    /// not finished.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn next_pending_config(&self) -> Option<(BrowserTab, &FractalConfig)> {
-        // Prioritize current tab
-        match self.current_tab {
-            BrowserTab::Presets => {
-                if let Some(config) = self.presets_gallery.next_pending_config() {
-                    return Some((BrowserTab::Presets, config));
-                }
-            }
-            BrowserTab::Batch => {
-                if let Some(config) = self.batch_gallery.next_pending_config() {
-                    return Some((BrowserTab::Batch, config));
-                }
-            }
-            BrowserTab::Files => {
-                if let Some(config) = self.files_gallery.next_pending_config() {
-                    return Some((BrowserTab::Files, config));
-                }
-            }
-            BrowserTab::Online => {
-                // Online tab doesn't use FractalConfigGallery for thumbnails
-            }
-        }
-
-        // Then check others
-        if let Some(config) = self.presets_gallery.next_pending_config() {
-            return Some((BrowserTab::Presets, config));
-        }
-        if let Some(config) = self.batch_gallery.next_pending_config() {
-            return Some((BrowserTab::Batch, config));
-        }
-        if let Some(config) = self.files_gallery.next_pending_config() {
-            return Some((BrowserTab::Files, config));
-        }
-
-        None
+    pub fn next_pending_config(&self) -> Option<(GalleryId, &FractalConfig)> {
+        let shown = match self.current_tab {
+            BrowserTab::Presets => Some(GalleryId::Preset(self.preset_category)),
+            BrowserTab::Batch => Some(GalleryId::Batch),
+            BrowserTab::Files => Some(GalleryId::Files),
+            // The Online tab doesn't use FractalConfigGallery for thumbnails.
+            BrowserTab::Online => None,
+        };
+        let rest = PresetCategory::ALL.into_iter().map(GalleryId::Preset).chain([GalleryId::Batch, GalleryId::Files]);
+        shown
+            .into_iter()
+            .chain(rest)
+            .find_map(|id| self.gallery(id).next_pending_config().map(|config| (id, config)))
     }
 
     /// Generate one thumbnail for the specified gallery (desktop only)
     #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_one_thumbnail<F>(
         &mut self,
-        tab: BrowserTab,
+        id: GalleryId,
         ctx: &egui::Context,
         render_fn: F,
     ) -> bool
     where
         F: FnOnce(&FractalConfig) -> image::RgbaImage,
     {
-        match tab {
-            BrowserTab::Presets => self.presets_gallery.generate_one_thumbnail(ctx, render_fn),
-            BrowserTab::Batch => self.batch_gallery.generate_one_thumbnail(ctx, render_fn),
-            BrowserTab::Files => self.files_gallery.generate_one_thumbnail(ctx, render_fn),
-            BrowserTab::Online => true, // Online tab doesn't generate thumbnails locally
+        match id {
+            GalleryId::Preset(c) => self.preset_galleries[c.index()].generate_one_thumbnail(ctx, render_fn),
+            GalleryId::Batch => self.batch_gallery.generate_one_thumbnail(ctx, render_fn),
+            GalleryId::Files => self.files_gallery.generate_one_thumbnail(ctx, render_fn),
         }
     }
 
@@ -374,10 +456,11 @@ impl FractalBrowserPanel {
         device: &egui_wgpu::wgpu::Device,
         queue: &egui_wgpu::wgpu::Queue,
     ) {
-        if self.presets_needs_generation {
-            self.presets_gallery
-                .start_async_thumbnail_generation(device, queue);
-            self.presets_needs_generation = false;
+        // A preset category's, the first time it is shown.
+        let shown = self.preset_category.index();
+        if self.current_tab == BrowserTab::Presets && self.presets_unstarted[shown] {
+            self.preset_galleries[shown].start_async_thumbnail_generation(device, queue);
+            self.presets_unstarted[shown] = false;
         }
         if self.batch_needs_generation {
             self.batch_gallery
@@ -461,7 +544,22 @@ impl FractalBrowserPanel {
     }
 
     fn render_presets_tab(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
-        self.presets_gallery.render(ui)
+        // A tab a category that has presets, with its count. Wrapped, as
+        // the browser's own tabs are, for a phone-width panel.
+        ui.horizontal_wrapped(|ui| {
+            for category in PresetCategory::ALL {
+                let count = self.preset_galleries[category.index()].len();
+                if count == 0 {
+                    continue;
+                }
+                let label = format!("{} ({count})", t!(category.label_key()));
+                if ui.selectable_label(self.preset_category == category, label).clicked() {
+                    self.preset_category = category;
+                }
+            }
+        });
+        ui.separator();
+        self.preset_galleries[self.preset_category.index()].render(ui)
     }
 
     fn render_batch_tab(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
@@ -1020,6 +1118,70 @@ mod tests {
     /// A simulation has no transforms and no variations, legitimately;
     /// its row used to read "Reef — Simulation | 0T | " like a broken
     /// flame, because only Escape got the short form.
+    /// A bundled preset, by name.
+    fn preset(name: &str) -> crate::config::FractalConfig {
+        crate::resources::load_presets_with_fallback()
+            .into_iter()
+            .find(|p| p.flame.name == name)
+            .unwrap_or_else(|| panic!("no preset {name}"))
+    }
+
+    /// The bundled presets fall in the categories their pictures are: a
+    /// flame by its render mode; an escape picture 3D when it is a solid --
+    /// a built-in, or a Rhai solid told from its source, which nothing has
+    /// compiled when the browser sorts them -- and every category has some.
+    #[test]
+    fn the_bundled_presets_fall_in_their_categories() {
+        use super::PresetCategory as C;
+        for (name, want) in [
+            ("Julian Disc", C::Flame2d),
+            ("Cup (3D)", C::Flame3d),
+            ("Sierpinski Gasket", C::Escape2d),
+            ("Frothy Basin", C::Escape2d),
+            ("Menger Sponge", C::Escape3d),
+            ("Mandelbulb", C::Escape3d),
+            ("Halayka: sin Z + C sin Z", C::Escape3d),
+            ("Bristorbrot", C::Escape3d),
+            ("Gray-Scott Coral", C::Simulation),
+        ] {
+            assert_eq!(C::of(&preset(name)), want, "{name}");
+        }
+        let presets = crate::resources::load_presets_with_fallback();
+        for category in C::ALL {
+            assert!(presets.iter().any(|p| C::of(p) == category), "{category:?} has no presets");
+        }
+    }
+
+    /// A Rhai solid the config keeps but does not draw -- another formula
+    /// picked, the source kept for undo -- is a plane picture; a terrain
+    /// over a plane is 3D.
+    #[test]
+    fn a_kept_solid_is_not_3d_and_a_terrain_is() {
+        use super::PresetCategory as C;
+        let mut kept = preset("Halayka: sin Z + C sin Z");
+        assert!(kept.escape.custom_formula.is_some());
+        kept.escape.formula = "mandelbrot".to_string();
+        assert_eq!(C::of(&kept), C::Escape2d);
+        let mut terrain = preset("Douady Rabbit");
+        terrain.escape.formula = "mandelbrot".to_string();
+        terrain.escape.terrain.enabled = true;
+        assert_eq!(C::of(&terrain), C::Escape3d);
+    }
+
+    /// The browser holds every preset, each in its category's gallery, and
+    /// opens on the first category.
+    #[test]
+    fn the_browser_sorts_the_presets_into_their_galleries() {
+        use super::PresetCategory as C;
+        let presets = crate::resources::load_presets_with_fallback();
+        let panel = FractalBrowserPanel::new();
+        assert_eq!(panel.preset_category, C::Flame2d);
+        for category in C::ALL {
+            let want = presets.iter().filter(|p| C::of(p) == category).count();
+            assert_eq!(panel.preset_galleries[category.index()].len(), want, "{category:?}");
+        }
+    }
+
     #[test]
     fn a_simulation_row_has_no_transform_columns() {
         let label = online_row_label(&item(ApiRenderMode::Simulation, 0, &[]));
