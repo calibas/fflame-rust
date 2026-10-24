@@ -53,6 +53,9 @@ mod halayka;
 /// Tests: the level-dependent flame example, its presets.
 #[cfg(test)]
 mod moran;
+/// Tests: the Bristorbrot and the Quaternionbrot, their presets.
+#[cfg(test)]
+mod bristor;
 pub mod diag;
 pub mod environment;
 pub mod path_core;
