@@ -227,6 +227,28 @@ fn paint_enabled_dot(ui: &egui::Ui, header_rect: egui::Rect) {
     ui.painter().circle_filled(center, 4.0, egui::Color32::from_rgb(60, 200, 90));
 }
 
+/// Where the Histogram section notes the frame it was last drawn in.
+const HISTOGRAM_SHOWN: &str = "tonemap_histogram_shown";
+
+/// Whether the Histogram section was drawn in the last frame or two. It
+/// is the density histogram's only reader, and the histogram costs a
+/// blocking readback of the whole accumulator -- measured at 20-50 ms
+/// every 30th frame, which the app paid with the section closed and in
+/// modes that do not show it.
+pub fn histogram_shown(ctx: &egui::Context) -> bool {
+    let drawn = ctx.data(|d| d.get_temp::<u64>(egui::Id::new(HISTOGRAM_SHOWN)));
+    drawn.is_some_and(|frame| ctx.cumulative_frame_nr().saturating_sub(frame) <= 2)
+}
+
+/// The Histogram section, drawn this frame, says so. The frame number is
+/// read BEFORE the data lock is taken: `cumulative_frame_nr` locks the
+/// context too, and called inside `data_mut`'s closure it deadlocked the
+/// app the moment the section opened.
+fn note_histogram_shown(ui: &egui::Ui) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.data_mut(|d| d.insert_temp(egui::Id::new(HISTOGRAM_SHOWN), frame));
+}
+
 /// Render the Colors panel content (tone mapping, color mode, palette)
 ///
 /// This is the panel version without the Window wrapper.
@@ -525,6 +547,8 @@ pub fn render_colors_content(
     let levels_resp = show_levels.then(|| egui::CollapsingHeader::new(t!("tonemap.histogram"))
         .default_open(false)
         .show(ui, |ui| {
+            // The app reads the histogram back only while this is drawn.
+            note_histogram_shown(ui);
             // Render histogram visualization with levels markers from config
             render_histogram_with_config(ui, histogram, config_manager);
 
@@ -887,6 +911,21 @@ pub fn render_colors_content(
 mod tests {
     use super::*;
     use crate::scene::tonemap::CurvePoint;
+
+    /// The Histogram section notes itself without deadlocking egui's
+    /// context (opening it froze the app), the app sees it, and forgets
+    /// it a couple of frames after it is no longer drawn.
+    #[test]
+    fn the_histogram_section_notes_itself() {
+        let ctx = egui::Context::default();
+        assert!(!histogram_shown(&ctx));
+        let _ = ctx.run_ui(Default::default(), |ui| note_histogram_shown(ui));
+        assert!(histogram_shown(&ctx), "noted");
+        for _ in 0..4 {
+            let _ = ctx.run_ui(Default::default(), |_| {});
+        }
+        assert!(!histogram_shown(&ctx), "forgotten once not drawn");
+    }
 
     fn editor_rect() -> egui::Rect {
         egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0))

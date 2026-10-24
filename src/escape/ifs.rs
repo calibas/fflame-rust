@@ -3256,6 +3256,52 @@ pub fn pack_for(
     }
 }
 
+/// **[`pack_for`], remembered.** The frame loop asks for the packed IFS
+/// every frame -- nothing else says when the flame mode D draws has
+/// changed -- and the analysis behind it (composition, inverses, the
+/// ball's refinement) measured 3.4-6.1 ms a frame on the nonlinear
+/// classical presets (Douady Rabbit, Blob Flower, Cubic Pair; 1.6 ms on
+/// the Menger Sponge), a fifth to a third of a 60 Hz frame spent on a
+/// flame that had not changed. Keyed on everything `pack_for` reads: the
+/// formula, the flame and the Extent (or, for a def that reads no flame,
+/// the escape config), and the registry's version.
+#[derive(Default)]
+pub struct PackCache {
+    key: Option<u64>,
+    packed: Option<PackedIfs>,
+}
+
+impl PackCache {
+    /// [`pack_for`]'s answer, computed again only when its inputs changed.
+    pub fn pack_for(
+        &mut self,
+        def: &IfsDef,
+        config: &crate::config::FractalConfig,
+        registry: &crate::variations::VariationRegistry,
+    ) -> Option<PackedIfs> {
+        let key = Self::key(def, config, registry);
+        if self.key != Some(key) {
+            self.packed = pack_for(def, config, registry);
+            self.key = Some(key);
+        }
+        self.packed.clone()
+    }
+
+    fn key(def: &IfsDef, config: &crate::config::FractalConfig, registry: &crate::variations::VariationRegistry) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        config.escape.formula.hash(&mut h);
+        registry.version().hash(&mut h);
+        if def.needs_flame {
+            serde_json::to_vec(&config.flame).unwrap_or_default().hash(&mut h);
+            config.escape.formula_params.get("extent").map(|e| e.to_bits()).hash(&mut h);
+        } else {
+            serde_json::to_vec(&config.escape).unwrap_or_default().hash(&mut h);
+        }
+        h.finish()
+    }
+}
+
 /// The analysis a solid's camera is built on, as the renderer builds it
 /// (`pack_for`): the flame's for a def that reads the flame, the def's
 /// own ball for one that does not. `None` for a formula that is not a
@@ -6785,6 +6831,30 @@ mod tests {
         assert_eq!(held.ifs.ball.centre, measured.ifs.ball.centre, "the centre is still measured");
         assert_eq!(held.ifs.frame_radius, measured.ifs.ball.radius, "the framing radius is still measured");
         assert!(!super::packed_bytes_eq(Some(&measured), Some(&held)));
+    }
+
+    /// The cache answers as `pack_for` does, follows an edit of the flame
+    /// and of the Extent, and ignores what `pack_for` does not read (the
+    /// plane's centre, for a def that reads the flame).
+    #[test]
+    fn the_pack_cache_answers_as_pack_for() {
+        let registry = crate::variations::global_registry();
+        let mut cfg = crate::config::FractalConfig::default();
+        cfg.flame = super::gpu_tests::sierpinski_flame();
+        cfg.escape.formula = "ifs_flame".to_string();
+        let def = super::get_ifs("ifs_flame").expect("mode D");
+        let mut cache = super::PackCache::default();
+        let same = |a: &Option<super::PackedIfs>, b: &Option<super::PackedIfs>| super::packed_bytes_eq(a.as_ref(), b.as_ref());
+        let first = cache.pack_for(def, &cfg, &registry);
+        assert!(first.is_some() && same(&first, &super::pack_for(def, &cfg, &registry)));
+        cfg.escape.center_re = "0.25".to_string();
+        assert!(same(&cache.pack_for(def, &cfg, &registry), &first), "the centre is not read");
+        cfg.flame.transforms[0].a *= 0.5;
+        let edited = cache.pack_for(def, &cfg, &registry);
+        assert!(!same(&edited, &first), "an edit of the flame is seen");
+        assert!(same(&edited, &super::pack_for(def, &cfg, &registry)));
+        cfg.escape.formula_params.insert("extent".to_string(), 7.5);
+        assert_eq!(cache.pack_for(def, &cfg, &registry).expect("packs").globals[0][2], 7.5, "the Extent is seen");
     }
 
     /// On a solid the Extent moves the walk's cut and not the camera:
