@@ -30,7 +30,7 @@ pub mod variation_catalog;
 pub use backend::{StorageError, StorageResult};
 pub use custom_palettes::CustomPaletteLibrary;
 pub use settings::{FlyCameraMode, SystemSettings};
-pub use thumbnail_cache::{ThumbnailCache, GalleryItem, TextureCache};
+pub use thumbnail_cache::{shared_thumbnail_cache, ThumbnailCache, GalleryItem, TextureCache};
 
 /// Register everything installed on this machine that did not ship with
 /// the app: cached downloads, then local plugins.

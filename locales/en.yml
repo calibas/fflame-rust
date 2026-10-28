@@ -1556,6 +1556,11 @@ file_browser:
 browser:
   title: "Fractal Browser"
   tab_presets: "Presets"
+  presets_flame_2d: "2D Flame"
+  presets_flame_3d: "3D Flame"
+  presets_escape_2d: "2D Escape"
+  presets_escape_3d: "3D Escape"
+  presets_simulation: "Simulation"
   tab_batch: "Random"
   tab_files: "Files"
   batch_empty_title: "No random batch results"

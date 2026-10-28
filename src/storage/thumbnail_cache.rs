@@ -22,14 +22,23 @@
 //!
 //! The RENDER stays at 512 ([`crate::renderer::THUMBNAIL_SIZE`]) because
 //! the API upload wants that size. Only the local cache shrinks.
+//!
+//! # One index for every gallery
+//!
+//! The index of what is on disk is shared ([`shared_thumbnail_cache`]).
+//! Each gallery used to scan the folder into an index of its own, so a
+//! file one gallery evicted stayed listed in all the others: they never
+//! queued it, their load found nothing, and the thumbnail stayed blank
+//! until a restart rescanned the folder.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::config::FractalConfig;
 
-/// Maximum number of thumbnails to keep in disk cache
-const MAX_CACHE_SIZE: usize = 200;
+/// Maximum number of thumbnails to keep in disk cache (~25 KB each)
+const MAX_CACHE_SIZE: usize = 1000;
 
 /// FNV-1a 64-bit hash - fast, simple, and stable across program runs
 /// Unlike DefaultHasher (SipHash), this produces deterministic output
@@ -56,6 +65,23 @@ pub struct ThumbnailCache {
 
     /// Whether disk operations are enabled
     disk_enabled: bool,
+
+    /// Files kept before the least recently used are evicted
+    /// (`MAX_CACHE_SIZE`; smaller in tests; desktop only)
+    #[allow(dead_code)]
+    limit: usize,
+}
+
+/// The thumbnail cache every gallery shares. Lock it for one call at a
+/// time and drop the guard before anything else might lock it: in
+/// edition 2021 an `if let` keeps its scrutinee's guard alive for the
+/// whole block.
+pub fn shared_thumbnail_cache() -> MutexGuard<'static, ThumbnailCache> {
+    static CACHE: OnceLock<Mutex<ThumbnailCache>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| Mutex::new(ThumbnailCache::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Cache entries are stored at the largest size the gallery can display
@@ -79,20 +105,27 @@ impl ThumbnailCache {
                 cache_dir: PathBuf::new(),
                 cached_hashes: HashSet::new(),
                 disk_enabled: false,
+                limit: MAX_CACHE_SIZE,
             }
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Desktop: Full disk cache
-            let cache_dir = get_cache_dir().join("thumbnails");
-            std::fs::create_dir_all(&cache_dir).ok();
-            let cached_hashes = Self::scan_cache_dir(&cache_dir);
-            Self {
-                cache_dir,
-                cached_hashes,
-                disk_enabled: true,
-            }
+            Self::in_dir(get_cache_dir().join("thumbnails"), MAX_CACHE_SIZE)
+        }
+    }
+
+    /// A disk cache over `cache_dir`, indexing what is already there
+    #[cfg(not(target_arch = "wasm32"))]
+    fn in_dir(cache_dir: PathBuf, limit: usize) -> Self {
+        std::fs::create_dir_all(&cache_dir).ok();
+        let cached_hashes = Self::scan_cache_dir(&cache_dir);
+        Self {
+            cache_dir,
+            cached_hashes,
+            disk_enabled: true,
+            limit,
         }
     }
 
@@ -145,7 +178,7 @@ impl ThumbnailCache {
     /// Load thumbnail from disk cache
     /// Returns None on WASM or if file doesn't exist
     /// Updates file mtime on access for LRU tracking
-    pub fn load(&self, hash: &str) -> Option<image::RgbaImage> {
+    pub fn load(&mut self, hash: &str) -> Option<image::RgbaImage> {
         if !self.disk_enabled {
             return None;
         }
@@ -158,6 +191,10 @@ impl ThumbnailCache {
                 Self::touch_file(&path);
                 Some(img.into_rgba8())
             } else {
+                // Gone (another process, a hand-cleaned folder) or
+                // unreadable: forget it, so `exists` says no and the
+                // gallery renders it again instead of waiting forever.
+                self.cached_hashes.remove(hash);
                 None
             }
         }
@@ -173,14 +210,16 @@ impl ThumbnailCache {
     #[cfg(not(target_arch = "wasm32"))]
     fn touch_file(path: &PathBuf) {
         use std::fs::OpenOptions;
-        // Opening with write access updates mtime
+        // Set explicitly: opening with write access does not move the
+        // mtime (measured on Windows), so eviction was in creation order
+        // and a thumbnail seen every session went first.
         if let Ok(file) = OpenOptions::new().write(true).open(path) {
-            drop(file);
+            let _ = file.set_modified(std::time::SystemTime::now());
         }
     }
 
     /// Save thumbnail to disk cache
-    /// Enforces MAX_CACHE_SIZE limit by removing oldest files (LRU)
+    /// Enforces the size limit by removing the least recently used files
     /// No-op on WASM
     pub fn save(&mut self, hash: &str, image: &image::RgbaImage) -> anyhow::Result<()> {
         // Always add to memory index
@@ -219,10 +258,10 @@ impl ThumbnailCache {
         Ok(())
     }
 
-    /// Remove oldest files if cache exceeds MAX_CACHE_SIZE
+    /// Remove oldest files if cache exceeds the limit
     #[cfg(not(target_arch = "wasm32"))]
     fn enforce_cache_limit(&mut self) {
-        if self.cached_hashes.len() < MAX_CACHE_SIZE {
+        if self.cached_hashes.len() < self.limit {
             return;
         }
 
@@ -247,18 +286,13 @@ impl ThumbnailCache {
         files.sort_by_key(|(_, mtime)| *mtime);
 
         // Remove oldest files until we're under the limit
-        let to_remove = files.len().saturating_sub(MAX_CACHE_SIZE - 1);
+        let to_remove = files.len().saturating_sub(self.limit - 1);
         for (path, _) in files.into_iter().take(to_remove) {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                 self.cached_hashes.remove(stem);
             }
             std::fs::remove_file(&path).ok();
         }
-    }
-
-    /// Mark a hash as cached (for memory-only tracking after GPU texture upload)
-    pub fn mark_cached(&mut self, hash: &str) {
-        self.cached_hashes.insert(hash.to_string());
     }
 
     /// Generate hash from FractalConfig
@@ -363,26 +397,91 @@ impl Default for TextureCache {
 mod tests {
     use super::*;
 
-    /// The cache holds at most MAX_CACHE_SIZE thumbnails, evicting the
+    /// An empty cache folder of the test's own
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fflame-thumb-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        dir
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn key(i: usize) -> String {
+        format!("{i:016x}")
+    }
+
+    /// The cache holds at most its limit of thumbnails, evicting the
     /// oldest. Eviction looked for `.png` files after the cache moved to
     /// JPEG, so it never found any and the cache grew without bound.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_cache_evicts_past_its_limit() {
-        let dir = std::env::temp_dir().join(format!("fflame-thumb-cache-test-{}", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut cache = ThumbnailCache { cache_dir: dir.clone(), cached_hashes: HashSet::new(), disk_enabled: true };
+        let dir = test_dir("evicts");
+        let limit = 8;
+        let mut cache = ThumbnailCache::in_dir(dir.clone(), limit);
         let image = image::RgbaImage::new(8, 8);
-        for i in 0..MAX_CACHE_SIZE + 5 {
-            cache.save(&format!("{i:016x}"), &image).unwrap();
+        for i in 0..limit + 5 {
+            cache.save(&key(i), &image).unwrap();
         }
         let on_disk = std::fs::read_dir(&dir).unwrap().count();
-        assert!(on_disk <= MAX_CACHE_SIZE, "{on_disk} thumbnails on disk, limit {MAX_CACHE_SIZE}");
-        assert!(cache.len() <= MAX_CACHE_SIZE, "{} indexed, limit {MAX_CACHE_SIZE}", cache.len());
-        assert!(cache.exists(&format!("{:016x}", MAX_CACHE_SIZE + 4)), "the newest stays");
+        assert!(on_disk <= limit, "{on_disk} thumbnails on disk, limit {limit}");
+        assert!(cache.len() <= limit, "{} indexed, limit {limit}", cache.len());
+        assert!(cache.exists(&key(limit + 4)), "the newest stays");
         cache.clear();
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "clear removes the files");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two indexes over one folder, as every gallery had: the file one
+    /// evicts stays listed in the other. Its load must find it gone and
+    /// forget it, so the gallery renders it again rather than showing a
+    /// blank card for the rest of the run.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_thumbnail_evicted_elsewhere_is_rendered_again() {
+        let dir = test_dir("elsewhere");
+        let limit = 4;
+        let image = image::RgbaImage::new(8, 8);
+        let mut writer = ThumbnailCache::in_dir(dir.clone(), limit);
+        writer.save(&key(0), &image).unwrap();
+        let mut reader = ThumbnailCache::in_dir(dir.clone(), limit);
+        assert!(reader.exists(&key(0)));
+        for i in 1..=limit {
+            writer.save(&key(i), &image).unwrap();
+        }
+        assert!(!writer.exists(&key(0)), "the writer evicted the oldest");
+
+        assert!(reader.exists(&key(0)), "the reader's index is stale, as a second gallery's was");
+        assert!(reader.load(&key(0)).is_none());
+        assert!(!reader.exists(&key(0)), "a failed load forgets the file, so it is queued again");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Eviction goes by last use, not by age: a thumbnail loaded since
+    /// the others were written outlives them. The load's "touch" opened
+    /// the file for writing, which does not move its mtime, so the
+    /// eviction order was creation order.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn eviction_spares_a_thumbnail_just_looked_at() {
+        let dir = test_dir("lru");
+        let limit = 4;
+        let image = image::RgbaImage::new(8, 8);
+        let mut cache = ThumbnailCache::in_dir(dir.clone(), limit);
+        let now = std::time::SystemTime::now();
+        for i in 0..limit {
+            cache.save(&key(i), &image).unwrap();
+            // Distinct ages, oldest first, whatever the clock's resolution
+            let path = dir.join(format!("{}.{CACHE_EXT}", key(i)));
+            let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_modified(now - std::time::Duration::from_secs((100 - i) as u64)).unwrap();
+        }
+        assert!(cache.load(&key(0)).is_some());
+        cache.save(&key(limit), &image).unwrap();
+
+        assert!(cache.exists(&key(0)), "the one just loaded stays");
+        assert!(!cache.exists(&key(1)), "the least recently used goes");
+        assert!(!dir.join(format!("{}.{CACHE_EXT}", key(1))).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
