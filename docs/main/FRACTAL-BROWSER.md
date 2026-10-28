@@ -165,7 +165,7 @@ complete configs. `global_preset_library()` loads it once per run:
 
 **The Presets tab has a tab per category** (`PresetCategory`), each with
 its count and its own gallery, so opening the browser makes one
-category's thumbnails, not all 80.
+category's thumbnails, not all 84.
 A category with no presets has no tab, and the browser opens on the first
 that has any. `PresetCategory::of` sorts by the camera a config's picture
 is seen through (`camera::gesture::view_kind`): a flame by its render
@@ -174,15 +174,15 @@ built-in, or its own Rhai solid, told from the source because nothing
 has compiled it when the browser sorts the presets -- or it draws a
 terrain; every simulation one category, terrains too.
 
-The file holds 80 presets:
+The file holds 84 presets:
 
 | Category | Count | Presets |
 |---|---|---|
-| 2D Flame | 12 | Grand Julian, Julian Disc, Plastic, Spherical3, Square Tile, Flower; Moran: Triangle of Ferns, its four-level form, Carpet of Dragons, Dragon of Carpets, Carpet and Levy C, Sturmian, Dragon and Levy C, Sturmian (the level-dependent example variation) |
-| 3D Flame | 5 | Cup (3D), JuliaN Bubble (3D), Bubbles (3D); Halayka Escape Paths: Z^2 + C, sin Z + C sin Z |
-| 2D Escape | 11 | Frothy Basin, Volterra-Lotka, Unity (Fractint's, written in Rhai: each carries its formula; ESCAPE.md, *The formulas*); Sierpinski Gasket, Sierpinski Carpet, Heighway Dragon, Koch Curve, Douady Rabbit, Julia Dendrite, Cubic Pair, Blob Flower (formula `ifs_flame`) |
-| 3D Escape | 37 | Sierpinski Tetrahedron, Menger Sponge (`ifs_flame_3d`); Quaternion Julia, Lacquered Julia (`quaternion_julia_solid`); KIFS Menger, Tetrahedron, Octahedron, Turned, Bloom, Columns, Icosahedron, Icosahedral Flake, Dodecahedron, Chrome Octahedron (`kifs_solid`); Mandelbox, Mandelbox Scale 3, Mandelbox Inverted, Mandelbox Julia, Lacquered Mandelbox (`mandelbox_solid`); Mandelbulb, Mandelbulb Power 4, Mandelbulb Julia, Gold Mandelbulb (`mandelbulb_solid`); Halayka's six quaternion sets, the Bristorbrot and its Julia sets, the Quaternionbrot's four (Rhai solids) |
-| Simulation | 15 | Gray-Scott Coral, Gray-Scott Mitosis, Brusselator Beans, Cahn-Hilliard Labyrinth, Cyclic Cellular Automaton, Hodgepodge Machine, FitzHugh-Nagumo Vortex, Oregonator Wave Trains, Lichtenberg Figure, Diffusion-Limited Aggregation, Snow Crystal, Physarum Network, Abelian Sandpile, McCabe Multiscale Turing, Coral Terrain (from the visual suite's simulation configs, `tests/visual/configs/sim/`, each given a palette from the starter or IQ pack) |
+| 2D Flame | 16 | Grand Julian, Julian Disc, Plastic, Spherical3, Square Tile, Flower; Chladni, Chladni Blur, Cymatics3D Slice, Chladni Disc; Moran: Triangle of Ferns, its four-level form, Carpet of Dragons, Dragon of Carpets, Carpet and Levy C, Sturmian, Dragon and Levy C, Sturmian (the level-dependent example variation) |
+| 3D Flame | 6 | Cup (3D), JuliaN Bubble (3D), Bubbles (3D), Cymatics Water; Halayka Escape Paths: Z^2 + C, sin Z + C sin Z |
+| 2D Escape | 12 | Ducks; Frothy Basin, Volterra-Lotka, Unity (Fractint's, written in Rhai: each carries its formula; ESCAPE.md, *The formulas*); Sierpinski Gasket, Sierpinski Carpet, Heighway Dragon, Koch Curve, Douady Rabbit, Julia Dendrite, Cubic Pair, Blob Flower (formula `ifs_flame`) |
+| 3D Escape | 33 | Quaternion Julia, Lacquered Julia (`quaternion_julia_solid`); KIFS Menger, Tetrahedron, Octahedron, Bloom, Columns, Icosahedron, Icosahedral Flake, Dodecahedron (`kifs_solid`); Mandelbox, Mandelbox Scale 3, Mandelbox Inverted, Mandelbox Julia, Lacquered Mandelbox (`mandelbox_solid`); Mandelbulb, Mandelbulb Power 4, Mandelbulb Julia, Gold Mandelbulb (`mandelbulb_solid`); Halayka's six quaternion sets, the Bristorbrot and its Julia sets, the Quaternionbrot's four (Rhai solids) |
+| Simulation | 17 | Gray-Scott Coral, Gray-Scott Mitosis, Brusselator Beans, Cahn-Hilliard Labyrinth, Cyclic Cellular Automaton, Hodgepodge Machine, FitzHugh-Nagumo Vortex, Oregonator Wave Trains, Lichtenberg Figure, Diffusion-Limited Aggregation, Snow Crystal, GG Snowflake, GG Snowflake (3D), Physarum Network, Abelian Sandpile, McCabe Multiscale Turing, Coral Terrain (most began as the visual suite's simulation configs, `tests/visual/configs/sim/`) |
 
 To add a preset, save the config (File ▸ Save As) and append its JSON
 object to the array. The desktop app picks it up on the next launch;

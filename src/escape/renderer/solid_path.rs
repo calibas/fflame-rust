@@ -1486,7 +1486,7 @@ mod tests {
         let w = env("PACE_W").unwrap_or(1920);
         let h = w * 9 / 16;
         let c = if env("PACE_MENGER") == Some(1) {
-            let mut c = crate::resources::load_presets_with_fallback()
+            let mut c = crate::resources::presets::presets_and_test_scenes()
                 .into_iter()
                 .find(|c| c.flame.name == "Menger Sponge")
                 .expect("the preset");
@@ -1552,7 +1552,7 @@ mod tests {
         let (_pt, palette) = white_palette(&device, &queue);
         let w: u32 = std::env::var("MENGER_W").ok().and_then(|v| v.parse().ok()).unwrap_or(320);
         let h = w * 9 / 16;
-        let mut c = crate::resources::load_presets_with_fallback()
+        let mut c = crate::resources::presets::presets_and_test_scenes()
             .into_iter()
             .find(|c| c.flame.name == "Menger Sponge")
             .expect("the preset");
@@ -2541,7 +2541,7 @@ mod tests {
             return;
         };
         const N: u32 = 96;
-        let presets = crate::resources::load_presets_with_fallback();
+        let presets = crate::resources::presets::presets_and_test_scenes();
         let render = |c: &FractalConfig| {
             let job = crate::renderer::RenderJob::new(c, N, N);
             pollster::block_on(crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)).expect("render").rgba_data
@@ -2590,7 +2590,7 @@ mod tests {
         // reference rendered without it.
         let time_only = std::env::var("PT_TIME_ONLY").is_ok();
         let patch = std::env::var("PT_PATCH").ok().map(|p| cost_patch(&p));
-        let mut c = crate::resources::load_presets_with_fallback().into_iter().find(|c| c.flame.name == name).expect("the preset");
+        let mut c = crate::resources::presets::presets_and_test_scenes().into_iter().find(|c| c.flame.name == name).expect("the preset");
         let (_pt, palette) = config_palette(&device, &queue, &c);
         c.escape.solid_tier = RenderTier::PathTraced;
         c.escape.path.denoise = false;
@@ -2679,7 +2679,7 @@ mod tests {
         // estimator (its clamp, its regularisation) is measured with its
         // bias, not against the old estimator's.
         let truth = std::env::var("PT_REF_TRUTH").is_ok();
-        let presets = crate::resources::load_presets_with_fallback();
+        let presets = crate::resources::presets::presets_and_test_scenes();
         let mut table = Vec::new();
         for scene in &scenes {
             let base = presets.iter().find(|c| &c.flame.name == scene).unwrap_or_else(|| panic!("no preset {scene}")).clone();
@@ -2768,7 +2768,7 @@ mod tests {
             )
         }
         let names = ["camera", "b0 light", "b0 lights", "b0 bounce", "b1 light", "b1 lights", "b1 bounce", "b2 light", "b2 lights", "b2 bounce"];
-        let presets = crate::resources::load_presets_with_fallback();
+        let presets = crate::resources::presets::presets_and_test_scenes();
         for scene in ["Menger Sponge", "Mandelbulb", "Mandelbox"] {
             let mut c = presets.iter().find(|c| c.flame.name == scene).expect("the preset").clone();
             let (_pt, palette) = config_palette(&device, &queue, &c);
@@ -2900,7 +2900,7 @@ mod tests {
         let (device, queue) = device().expect("gpu");
         let (w, h) = (320u32, 180u32);
         let samples: u32 = std::env::var("PT_SAMPLES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
-        let presets = crate::resources::load_presets_with_fallback();
+        let presets = crate::resources::presets::presets_and_test_scenes();
         let lum = |p: [f32; 4]| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
         let px = (w * h) as usize;
         let n = samples as f64;
@@ -3003,7 +3003,7 @@ mod tests {
         let halves = std::env::var("PT_HALVES").is_ok();
         let denoise = std::env::var("PT_DENOISE").is_ok();
         let ref_dir = std::env::var("PT_REF_DIR").ok();
-        let presets = crate::resources::load_presets_with_fallback();
+        let presets = crate::resources::presets::presets_and_test_scenes();
         let mut table = Vec::new();
         for scene in &scenes {
             let base = presets.iter().find(|c| &c.flame.name == scene).unwrap_or_else(|| panic!("no preset {scene}")).clone();
