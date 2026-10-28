@@ -141,8 +141,8 @@ same 512 pixels, as a JPEG.
 | Key | FNV-1a 64-bit hash of the config's JSON, as 16 hex digits (`ThumbnailCache::config_hash`). FNV-1a rather than `DefaultHasher`, which is seeded randomly per run. Any change to a config is a new key, so a stale thumbnail is never shown |
 | Format | `{hash}.jpg`: downscaled to 256 × 256 (Lanczos3, the largest size the gallery shows), RGB JPEG at quality 88 |
 | Location | the platform cache directory for "Fractals for All / Fractal Art Editor", in `thumbnails/` (on Windows `%LOCALAPPDATA%\Fractals for All\Fractal Art Editor\cache\thumbnails\`) |
-| Index | built at startup by scanning the folder; a file with a 16-hex-digit name and any other extension (the old PNG cache) is deleted |
-| Size limit | intended at 200 files, oldest-modified first (a load touches the file). See [Known gaps](#known-gaps) |
+| Index | one for every gallery (`shared_thumbnail_cache`), built on first use by scanning the folder; a file with a 16-hex-digit name and any other extension (the old PNG cache) is deleted. A load that finds its file gone forgets it, so the gallery renders that thumbnail again |
+| Size limit | 1000 files (`MAX_CACHE_SIZE`, about 25 MB), least recently used evicted first: a load sets the file's modified time |
 
 The web build has no disk cache: thumbnails are rendered again every
 session.
@@ -187,15 +187,3 @@ The file holds 80 presets:
 To add a preset, save the config (File ▸ Save As) and append its JSON
 object to the array. The desktop app picks it up on the next launch;
 the web build needs a rebuild to embed the new file.
-
----
-
-## Known gaps
-
-Recorded from the code as it stands; the escape-time and simulation
-cases were added to a browser built for flames.
-
-- **The disk cache never shrinks.** `enforce_cache_limit` lists `.png`
-  files, but the cache now writes `.jpg`, so it finds nothing to
-  evict and the folder grows past 200 files. (`ThumbnailCache::clear`,
-  unused, also deletes `.png` names.)
