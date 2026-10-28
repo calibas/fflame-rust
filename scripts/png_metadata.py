@@ -9,6 +9,7 @@ travels with it.
     python scripts/png_metadata.py IMAGE.png              # list everything
     python scripts/png_metadata.py IMAGE.png --config     # just the config JSON
     python scripts/png_metadata.py IMAGE.png -o out.fflame
+    python scripts/png_metadata.py IMAGE.png --save-config  # IMAGE.fflame beside it
 
 No dependencies and no build — tEXt is uncompressed key/NUL/value, so
 this works on a PNG from any version of the app, including one built by
@@ -16,6 +17,7 @@ someone else.
 """
 
 import argparse
+import os
 import struct
 import sys
 import zlib
@@ -74,6 +76,9 @@ def main():
     ap.add_argument("--config", action="store_true",
                     help="print only the embedded FractalConfig JSON")
     ap.add_argument("-o", "--output", help="write the config to a .fflame file")
+    ap.add_argument("--save-config", action="store_true",
+                    help="save the config beside the PNG as a .fflame of the same name; "
+                         "an existing file is never overwritten")
     args = ap.parse_args()
 
     chunks = read_text_chunks(args.image)
@@ -82,14 +87,24 @@ def main():
 
     by_key = dict(chunks)
 
-    if args.config or args.output:
+    if args.config or args.output or args.save_config:
         config = by_key.get("Config")
         if config is None:
             raise SystemExit(
                 f"{args.image} has no `Config` chunk — it was not written by this app, "
                 "or predates config embedding"
             )
-        if args.output:
+        if args.save_config:
+            target = os.path.splitext(args.image)[0] + ".fflame"
+            try:
+                # "x" creates the file or fails: never an overwrite, and no
+                # gap between a check and the write.
+                with open(target, "x", encoding="utf-8") as f:
+                    f.write(config)
+            except FileExistsError:
+                raise SystemExit(f"{target} already exists — not overwritten")
+            print(f"Wrote {target} ({len(config)} bytes)", file=sys.stderr)
+        elif args.output:
             with open(args.output, "w", encoding="utf-8") as f:
                 f.write(config)
             print(f"Wrote {args.output} ({len(config)} bytes)", file=sys.stderr)
