@@ -1138,7 +1138,7 @@ mod tests {
             ("Cup (3D)", C::Flame3d),
             ("Sierpinski Gasket", C::Escape2d),
             ("Frothy Basin", C::Escape2d),
-            ("Menger Sponge", C::Escape3d),
+            ("KIFS Menger", C::Escape3d),
             ("Mandelbulb", C::Escape3d),
             ("Halayka: sin Z + C sin Z", C::Escape3d),
             ("Bristorbrot", C::Escape3d),
