@@ -7349,7 +7349,9 @@ mod tests {
     }
 
     /// The shipped mode-D presets must still qualify, and their saved
-    /// view must actually contain the attractor.
+    /// view must actually contain the attractor. So must the two solids
+    /// that were presets and are test scenes now (other tests steer and
+    /// render them).
     ///
     /// A preset is the one thing a user meets before they know what
     /// the criterion is, so a mode-D preset whose flame stopped
@@ -7361,7 +7363,7 @@ mod tests {
     fn the_shipped_ifs_presets_still_qualify_and_frame_their_attractor() {
         let registry = global_registry();
         let (mut planar, mut solid) = (0, 0);
-        for cfg in crate::resources::presets::load_embedded_presets().expect("presets parse") {
+        for cfg in crate::resources::presets::presets_and_test_scenes() {
             let Some(def) = get_ifs(&cfg.escape.formula) else { continue };
             let name = cfg.flame.name.clone();
             if !def.needs_flame {
@@ -7427,7 +7429,7 @@ mod tests {
             );
         }
         assert_eq!(planar, 8, "expected eight planar IFS presets (four classical, three julia, one blob), found {planar}");
-        assert_eq!(solid, 2, "expected two solid IFS presets, found {solid}");
+        assert_eq!(solid, 2, "expected two solid IFS scenes (the tetrahedron and the sponge), found {solid}");
     }
 
     #[test]
@@ -9499,11 +9501,10 @@ mod gpu_tests {
             eprintln!("no GPU adapter; skipping");
             return;
         };
-        let preset = crate::resources::presets::load_embedded_presets()
-            .expect("presets parse")
+        let preset = crate::resources::presets::presets_and_test_scenes()
             .into_iter()
             .find(|c| c.flame.name == "Menger Sponge")
-            .expect("the sponge ships");
+            .expect("the sponge's test scene");
         let views = [
             (["0.520531140020400689060060", "0.396500536159918481642747", "0.652968641495506081704235"], 1.4850384f64, None, (640u32, 480u32)),
             (["0.530214777819272501069702", "0.369373328080211437307375", "0.687072901524964720531372"], 0.8250214, Some(0.699877f32), (800, 600)),

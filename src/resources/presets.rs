@@ -100,6 +100,19 @@ pub fn load_presets_with_fallback() -> Vec<FractalConfig> {
     }
 }
 
+/// The bundled presets, then the scenes tests still steer and render that
+/// have left them: the Sierpinski Tetrahedron and the Menger Sponge, the
+/// flame-attractor solids (`ifs_flame_3d`; the sponge all flat faces,
+/// its corners on the bounding sphere), kept in `tests/test_configs/`
+/// when they stopped being presets.
+#[cfg(test)]
+pub fn presets_and_test_scenes() -> Vec<FractalConfig> {
+    let mut scenes = load_embedded_presets().expect("presets parse");
+    let solids = include_str!("../../tests/test_configs/ifs-solid-scenes.fflame");
+    scenes.extend(FractalConfig::from_json_multi(solids).expect("the test scenes parse"));
+    scenes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

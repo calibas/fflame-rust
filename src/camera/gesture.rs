@@ -867,12 +867,13 @@ mod escape {
         use super::*;
 
         /// A shipped solid preset -- a real flame, a real camera.
+        /// A solid drawn from its flame, framing itself: the Sierpinski
+        /// Tetrahedron, a test scene since it left the presets.
         fn solid_preset() -> FractalConfig {
-            crate::resources::presets::load_embedded_presets()
-                .expect("presets parse")
+            crate::resources::presets::presets_and_test_scenes()
                 .into_iter()
-                .find(|c| crate::escape::ifs::formula_is_solid(&c.escape.formula))
-                .expect("a solid preset ships")
+                .find(|c| c.flame.name == "Sierpinski Tetrahedron")
+                .expect("the tetrahedron's test scene")
         }
 
         fn target_f64(t: &[String; 3]) -> [f64; 3] {
