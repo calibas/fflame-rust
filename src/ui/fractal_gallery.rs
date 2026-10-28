@@ -14,7 +14,7 @@ use egui::{self, Color32, CursorIcon, Sense, Vec2};
 use rust_i18n::t;
 
 use crate::config::FractalConfig;
-use crate::storage::{GalleryItem, TextureCache, ThumbnailCache};
+use crate::storage::{shared_thumbnail_cache, GalleryItem, TextureCache};
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
@@ -70,11 +70,9 @@ pub struct FractalConfigGallery {
     /// Thumbnail display size (grid view)
     thumbnail_size: f32,
 
-    /// GPU texture cache (hash -> TextureHandle)
+    /// GPU texture cache (hash -> TextureHandle). The disk cache is
+    /// `shared_thumbnail_cache`, one for every gallery.
     texture_cache: TextureCache,
-
-    /// Disk cache reference
-    disk_cache: ThumbnailCache,
 
     /// Queue of items pending thumbnail generation (desktop only)
     pending_generation: VecDeque<usize>,
@@ -102,7 +100,6 @@ impl FractalConfigGallery {
             search_query: String::new(),
             thumbnail_size: 128.0,
             texture_cache: TextureCache::new(),
-            disk_cache: ThumbnailCache::new(),
             pending_generation: VecDeque::new(),
             total_to_generate: 0,
             #[cfg(target_arch = "wasm32")]
@@ -240,7 +237,8 @@ impl FractalConfigGallery {
         let config = self.items[index].config.clone();
 
         // Check disk cache first
-        if let Some(image) = self.disk_cache.load(&hash) {
+        let cached = shared_thumbnail_cache().load(&hash);
+        if let Some(image) = cached {
             self.upload_texture(ctx, &hash, image);
             return self.pending_generation.is_empty();
         }
@@ -249,7 +247,7 @@ impl FractalConfigGallery {
         let image = render_fn(&config);
 
         // Save to disk cache
-        self.disk_cache.save(&hash, &image).ok();
+        shared_thumbnail_cache().save(&hash, &image).ok();
 
         // Upload to GPU texture
         self.upload_texture(ctx, &hash, image);
@@ -279,12 +277,13 @@ impl FractalConfigGallery {
             return;
         }
 
+        let disk_cache = shared_thumbnail_cache();
         for (index, item) in self.items.iter().enumerate() {
             // Skip if already in texture cache or disk cache
             if self.texture_cache.contains(&item.hash) {
                 continue;
             }
-            if self.disk_cache.exists(&item.hash) {
+            if disk_cache.exists(&item.hash) {
                 // Will load from disk on first access
                 continue;
             }
@@ -473,9 +472,11 @@ impl FractalConfigGallery {
                 Vec2::new(side, side),
             );
 
-            // Try to get texture, or load from disk cache
+            // Try to get texture, or load from disk cache (a file that
+            // has gone is forgotten by the load, and queued next frame)
             if !self.texture_cache.contains(hash) {
-                if let Some(image) = self.disk_cache.load(hash) {
+                let cached = shared_thumbnail_cache().load(hash);
+                if let Some(image) = cached {
                     self.upload_texture(ui.ctx(), hash, image);
                 }
             }
@@ -613,7 +614,6 @@ impl FractalConfigGallery {
         );
 
         self.texture_cache.insert(hash.to_string(), texture);
-        self.disk_cache.mark_cached(hash);
     }
 }
 
