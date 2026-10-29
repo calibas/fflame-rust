@@ -3,9 +3,10 @@
 **Status:** planned 2026-10-29, branch `motion-blur`. Built 2026-10-29:
 phase 1 (the model, the shutter, the panel) and phase 2 (escape-time
 2D, export and viewport; checked in the CLI and, with a startup hook
-and a window capture, in the app), phase 3 (flames) and phase 4
-(simulation), each likewise checked. Phase 5 (terrains and solids)
-next; until then a terrain or a path-traced solid ignores the setting.
+and a window capture, in the app), phase 3 (flames), phase 4
+(simulation) and phase 5 (terrains and solids; the viewport's
+path-traced solid is not blurred), each likewise checked. Phase 6 (the
+governor and the docs) next.
 
 Motion blur for animations: each frame is the average of the picture
 over a short **shutter** around its time, as a camera's exposure is. It
@@ -200,10 +201,35 @@ moment.
   its own moment. Nearly free.
 - **A picture that changes within the shutter** (a formula parameter):
   each moment needs its own sections -- `K` times the frame's sections.
-  Same in the app and the export (D5), with the samples as the cost to
-  choose; revisit if it is too slow to use.
+  The export draws them; the viewport cannot afford it and blurs the
+  camera alone over the frame's ground (D5, revised).
 - Mode D solids (lit): `K` renders averaged; path traced: the samples
   spread over the moments.
+- **Built:** the tiers take the moments (`TierInputs::moments`, the view
+  a function of the jitter and the moment): the lit grid's passes go
+  round them as a Latin square over the jitter grid (row by row, each
+  moment took a column -- every sample to one side of the pixel, and a
+  sideways turn blurred wider than its moments), a pass for every moment
+  at least; the path tracer's samples are the moments' in turn, the
+  noise threshold ending only the last share. The escape terrain's
+  export (`render_escape_terrain`) draws moments that share the frame's
+  picture (`EscapeTerrain::same_picture`) on one ground at the frame's
+  cost, and moments whose pictures differ each on its own ground, each
+  still with its share of the antialiasing (`moment_share`: the
+  supersampling also sets the sections' detail, so the ground is drawn
+  from the moment itself), averaged. A simulation's terrain the same way:
+  moments differing in the terrain's own settings share the field's
+  ground; moments whose field differs each walk it, colour it and draw a
+  still, averaged. The viewports pass the moments to the tiers. A solid
+  path traced in an export traces each moment with its share of the
+  samples, averaged; the viewport's traced solid is not blurred.
+- Checked: a terrain turning a radian in 2 s, blurred over 1/30 s, in
+  the app (startup hook, removed): the fine dark filaments smear along
+  the turn. Tests: still moments are the frame exactly; a camera's move
+  on one ground is 0.15 of the sharp frame's distance from the mean of
+  the moments' own stills on that ground; a Julia constant moving, a
+  ground a moment, 0.08; a simulation terrain blurs over a turn and over
+  its steps; a traced solid keeps its light.
 
 ### Phase 6: the governor and the docs
 
@@ -235,7 +261,7 @@ the engines' docs where they changed; the API note.
 | D2 | Where the shutter sits | Centred; clamp / wrap / reflect by loop mode |
 | D3 | Filter | Box |
 | D4 | Blur when paused | No: playing and exports only |
-| D5 | Terrain picture blur in the app | Same as the export; samples are the cost |
+| D5 | Terrain picture blur in the app | Revised: the viewport blurs the camera alone, over the frame's ground; the export draws a ground a moment |
 | D6 | Online animations | Lost until the API stores it; tell the API repo |
 
 ## Tests to write

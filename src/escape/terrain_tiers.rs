@@ -39,8 +39,14 @@ pub fn still_tile(w: u32, h: u32) -> (u32, u32) {
 
 /// What a terrain is drawn as, this frame.
 pub struct TierInputs<'a> {
-    /// The view, its rays offset by a jitter within their pixels.
-    pub view: &'a dyn Fn([f32; 2]) -> TerrainView,
+    /// The view, its rays offset by a jitter within their pixels, at a
+    /// motion-blur moment (0 to `moments`; docs/projects/motion-blur.md).
+    pub view: &'a dyn Fn([f32; 2], usize) -> TerrainView,
+    /// The frame's motion-blur moments, 1 for a sharp frame: the lit
+    /// tier's passes go round them, and the path tracer's samples are
+    /// shared among them in turn -- a camera's move blurred at the
+    /// frame's own cost.
+    pub moments: usize,
     pub settings: PathSettings,
     pub tier: RenderTier,
     /// The path tracer's target: the viewport's, and an export's count.
@@ -55,6 +61,33 @@ pub struct TierInputs<'a> {
     /// instead of 11, the tracer's share of every frame shrinking the
     /// sections' chunks as well as delaying them.
     pub filling: bool,
+}
+
+/// The lit tier's antialiasing grid, a side: the setting's, and blurred
+/// at least a pass for every moment.
+fn lit_grid(i: &TierInputs) -> u32 {
+    let moments = i.moments.max(1) as f64;
+    i.supersample.max(1).max(moments.sqrt().ceil() as u32)
+}
+
+/// The motion-blur moment a lit pass draws: a Latin square over the
+/// jitter grid, so each moment's passes fall in every row and column of
+/// the pixel. Round the grid row by row instead, each moment took a
+/// column, every one of its samples to one side of the pixel -- a
+/// sideways move blurred wider than its moments.
+fn pass_moment(i: &TierInputs, pass: usize) -> usize {
+    let n = lit_grid(i) as usize;
+    (pass % n + pass / n) % i.moments.max(1)
+}
+
+/// The motion-blur moment whose share of `target` path-traced samples
+/// the next `have` falls in, and where that share ends: the samples are
+/// the moments' in turn.
+fn path_round(i: &TierInputs, have: u32, target: u32) -> (usize, u32) {
+    let k = i.moments.max(1) as u64;
+    let target = target.max(1) as u64;
+    let moment = ((have as u64 * k) / target).min(k - 1);
+    (moment as usize, ((moment + 1) * target / k) as u32)
 }
 
 /// The tiers' state between frames.
@@ -101,7 +134,7 @@ impl TerrainTiers {
         }
         // The tier too: from Auto's traced picture to Lit, the lit
         // accumulation had finished and the traced picture stayed up.
-        let key = format!("{:?}|{}|{}|{:?}", (i.view)([0.0, 0.0]), terrain.tile_version(), i.settings.restart_key(), i.tier);
+        let key = format!("{:?}|{}|{}|{:?}", (i.view)([0.0, 0.0], 0), terrain.tile_version(), i.settings.restart_key(), i.tier);
         if self.key.as_deref() != Some(key.as_str()) {
             self.key = Some(key);
             self.lit_samples = 0;
@@ -110,9 +143,9 @@ impl TerrainTiers {
             self.showing_path = false;
         }
         if i.tier != RenderTier::PathTraced {
-            let grid = EscapeRenderer::sample_grid(i.supersample.max(1));
+            let grid = EscapeRenderer::sample_grid(lit_grid(i));
             if let Some(&jitter) = grid.get(self.lit_samples as usize) {
-                terrain.render(device, queue, &(i.view)(jitter));
+                terrain.render(device, queue, &(i.view)(jitter, pass_moment(i, self.lit_samples as usize)));
                 terrain.accumulate(device, queue);
                 self.lit_samples += 1;
                 self.showing_path = false;
@@ -142,10 +175,12 @@ impl TerrainTiers {
         if i.filling && have >= 1 {
             return false;
         }
-        // As many samples as fit the frame at the measured cost.
+        // As many samples as fit the frame at the measured cost, within
+        // the moment's share.
         let per_frame = self.path_ms().map_or(1, |ms| (PATH_FRAME_MS / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
-        let n = per_frame.min(target - have);
-        self.trace(terrain, device, queue, i, n);
+        let (moment, goal) = path_round(i, have, target);
+        let n = per_frame.min(goal.saturating_sub(have).max(1)).min(target - have);
+        self.trace(terrain, device, queue, i, n, moment);
         // The last picture current, whatever the denoiser's schedule.
         if terrain.path_done(device, target, i.settings.noise_threshold) {
             terrain.resolve_path(device, queue);
@@ -266,8 +301,8 @@ impl TerrainTiers {
     fn still_whole(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, wait: &mut impl FnMut(f32) -> bool) -> bool {
         if i.tier == RenderTier::Lit {
             terrain.reset_accumulation();
-            for jitter in EscapeRenderer::sample_grid(i.supersample.max(1)) {
-                terrain.render(device, queue, &(i.view)(jitter));
+            for (pass, jitter) in EscapeRenderer::sample_grid(lit_grid(i)).into_iter().enumerate() {
+                terrain.render(device, queue, &(i.view)(jitter, pass_moment(i, pass)));
                 terrain.accumulate(device, queue);
             }
             self.showing_path = false;
@@ -276,11 +311,23 @@ impl TerrainTiers {
         terrain.reset_path();
         let target = i.samples.max(1);
         // A batch the watchdog never notices: about a quarter second at
-        // the measured cost, from a cautious start.
-        while !terrain.path_done(device, target, i.settings.noise_threshold) {
+        // the measured cost, from a cautious start. Blurred, the moments
+        // in turn, each to its share; the noise threshold may end only
+        // the last.
+        loop {
+            let have = terrain.path_samples();
+            let (moment, goal) = path_round(i, have, target);
+            let done = if moment + 1 < i.moments.max(1) {
+                have >= target
+            } else {
+                terrain.path_done(device, target, i.settings.noise_threshold)
+            };
+            if done {
+                break;
+            }
             let per = self.path_ms().map_or(2, |ms| (250.0 / ms.max(0.05)).floor().clamp(1.0, 64.0) as u32);
-            let n = per.min(target - terrain.path_samples());
-            self.trace(terrain, device, queue, i, n);
+            let n = per.min(goal.saturating_sub(have).max(1)).min(target - have);
+            self.trace(terrain, device, queue, i, n, moment);
             if !wait(terrain.path_samples() as f32 / target as f32) {
                 return false;
             }
@@ -292,9 +339,9 @@ impl TerrainTiers {
 
     /// Add `samples` path-traced samples of the view, timing them. Submits
     /// its own work.
-    fn trace(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, samples: u32) {
+    fn trace(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs, samples: u32, moment: usize) {
         let t0 = web_time::Instant::now();
-        terrain.render_path(device, queue, &(i.view)([0.0, 0.0]), &i.settings, samples, samples);
+        terrain.render_path(device, queue, &(i.view)([0.0, 0.0], moment), &i.settings, samples, samples);
         let slot = Arc::clone(&self.path_done);
         queue.on_submitted_work_done(move || {
             if let Ok(mut g) = slot.lock() {
@@ -325,6 +372,18 @@ impl TerrainTiers {
             return terrain.output_view();
         }
         terrain.accumulated_view().unwrap_or(terrain.output_view())
+    }
+
+    /// The texture behind [`Self::output_view`], for a test to read.
+    #[cfg(test)]
+    pub(crate) fn output_texture<'a>(&'a self, terrain: &'a TerrainRenderer) -> &'a wgpu::Texture {
+        if let (true, Some((p, _))) = (self.showing_picture, self.picture.as_ref()) {
+            return p;
+        }
+        if self.showing_path {
+            return terrain.output_texture();
+        }
+        terrain.accumulated_texture().unwrap_or(terrain.output_texture())
     }
 
     /// Path-traced samples so far, and whether the picture is theirs.

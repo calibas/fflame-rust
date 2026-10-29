@@ -2403,7 +2403,22 @@ impl App {
                 ) {
                     busy = true;
                 }
-                if !exporting && terrain.render_viewport(device, queue, &final_config) {
+                // Motion blur (motion_blur.rs): the passes go round the
+                // frame's moments' views, over the frame's ground -- a
+                // camera's move blurred at the frame's own cost. A picture
+                // changing within the shutter would want a ground a moment,
+                // which the export draws and the viewport cannot afford.
+                let moments = if motion_blur::blurring(&self.animation_controller) {
+                    crate::animation::export::moment_configs(
+                        final_config,
+                        &self.animation_controller,
+                        self.animation_controller.current_time,
+                        Some(&self.signal_manager),
+                    )
+                } else {
+                    Vec::new()
+                };
+                if !exporting && terrain.render_viewport_moments(device, queue, &final_config, &moments) {
                     busy = true;
                 }
                 // Not settled while paused; the export's cadence redraws.
@@ -2897,7 +2912,19 @@ impl App {
                     if !exporting && fly_ground {
                         terrain.probe_ground(device, queue, &final_config);
                     }
-                    if !exporting && terrain.render_viewport(device, queue, &final_config) {
+                    // Motion blur: the moments' views over the field as this
+                    // frame left it (motion_blur.rs; as the escape terrain).
+                    let moments = if motion_blur::blurring(&self.animation_controller) {
+                        crate::animation::export::moment_configs(
+                            final_config,
+                            &self.animation_controller,
+                            self.animation_controller.current_time,
+                            Some(&self.signal_manager),
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    if !exporting && terrain.render_viewport_moments(device, queue, &final_config, &moments) {
                         self.window.request_redraw();
                     }
                 } else if let Some(t) = self.sim_terrain.take() {
