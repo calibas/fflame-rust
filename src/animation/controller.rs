@@ -302,13 +302,7 @@ impl AnimationController {
         signal_manager: Option<&SignalManager>,
         track_idx: Option<usize>,
     ) -> Option<serde_json::Value> {
-        // Resolve end_time sentinel (0.0 = use animation duration)
-        let effective_end = if end_time <= 0.0 { duration } else { end_time };
-
-        // Outside active window → track inactive
-        if time < start_time || time > effective_end {
-            return None;
-        }
+        let effective_end = Self::signal_window(start_time, end_time, time, duration)?;
 
         let manager = signal_manager?;
         // Use get_live_value which checks live producers first, then stored signals
@@ -333,6 +327,36 @@ impl AnimationController {
             raw_value
         };
 
+        Some(Self::signal_output(
+            value, min_output, max_output, start_time, effective_end,
+            fade_in, fade_in_easing, fade_out, fade_out_easing, time,
+        ))
+    }
+
+    /// A signal track's window: its end (0 meaning the animation's), or
+    /// None outside it, where the track is inactive.
+    fn signal_window(start_time: f64, end_time: f64, time: f64, duration: f64) -> Option<f64> {
+        // Resolve end_time sentinel (0.0 = use animation duration)
+        let effective_end = if end_time <= 0.0 { duration } else { end_time };
+        // Outside active window → track inactive
+        (time >= start_time && time <= effective_end).then_some(effective_end)
+    }
+
+    /// A signal's value, faded at the window's ends and mapped to the
+    /// track's output range.
+    #[allow(clippy::too_many_arguments)]
+    fn signal_output(
+        value: f32,
+        min_output: f64,
+        max_output: f64,
+        start_time: f64,
+        effective_end: f64,
+        fade_in: f64,
+        fade_in_easing: EasingFunction,
+        fade_out: f64,
+        fade_out_easing: EasingFunction,
+        time: f64,
+    ) -> serde_json::Value {
         // Calculate fade factor (0.0 = fully faded, 1.0 = fully active)
         let mut fade_factor = 1.0;
 
@@ -350,7 +374,53 @@ impl AnimationController {
 
         // Map signal value (assumed 0-1 range) to output range, applying fade
         let mapped = min_output + fade_factor * (max_output - min_output) * value as f64;
-        Some(serde_json::json!(mapped))
+        serde_json::json!(mapped)
+    }
+
+    /// Every track at a motion-blur moment (`Animation::moments`), leaving
+    /// the controller as it was. A frame's own evaluation advances signal
+    /// smoothing once; its moments must not advance it again, so a
+    /// smoothed signal track holds the frame's smoothed value across the
+    /// shutter, and an unsmoothed one is read at the moment.
+    pub fn evaluate_moment(
+        &self,
+        time: f64,
+        signal_manager: Option<&SignalManager>,
+    ) -> Vec<(EditingTarget, String, serde_json::Value)> {
+        let Some(ref animation) = self.animation else {
+            return Vec::new();
+        };
+        let mut values = Vec::new();
+        for (track_idx, track) in animation.tracks.iter().enumerate() {
+            if track.bound.broken {
+                continue;
+            }
+            let value = match &track.source {
+                TrackSource::Keyframes { keyframes } => {
+                    Self::evaluate_keyframes_pure(keyframes, time, track.interpolation)
+                }
+                TrackSource::Signal {
+                    signal_name, min_output, max_output, smoothing,
+                    start_time, end_time, fade_in, fade_in_easing, fade_out, fade_out_easing,
+                } => (|| {
+                    let effective_end = Self::signal_window(*start_time, *end_time, time, animation.duration)?;
+                    let raw = signal_manager?.get_live_value(signal_name, time)?;
+                    let value = if *smoothing > 0.0 {
+                        self.signal_smoothed.get(&(track_idx, signal_name.clone())).copied().unwrap_or(raw)
+                    } else {
+                        raw
+                    };
+                    Some(Self::signal_output(
+                        value, *min_output, *max_output, *start_time, effective_end,
+                        *fade_in, *fade_in_easing, *fade_out, *fade_out_easing, time,
+                    ))
+                })(),
+            };
+            if let Some(value) = value {
+                values.push((track.flame_target, track.target.clone(), value));
+            }
+        }
+        values
     }
 
     /// Evaluate keyframe track at specific time (pure function)
@@ -694,6 +764,44 @@ mod tests {
         let (at30, at60) = (run(30), run(60));
         assert!(at60 > 0.99, "the step has settled at 60 fps: {at60}");
         assert!((at30 - at60).abs() < 1e-3, "30 fps {at30} vs 60 fps {at60}");
+    }
+
+    /// A frame's motion-blur moments are evaluated without touching the
+    /// controller: the frames after come out the same whether or not the
+    /// moments were taken. A smoothed signal track holds its frame value
+    /// across the shutter; a keyframe track is read at the moment.
+    #[test]
+    fn a_moment_leaves_the_smoothing_as_it_was() {
+        use crate::signal::{Signal, SignalManager, SignalType};
+
+        let data: Vec<f32> = (0..=100).map(|i| i as f32 / 100.0).collect();
+        let mut signals = SignalManager::new();
+        signals.insert(Signal::new("ramp".into(), 100.0, SignalType::Continuous, data));
+        let make = || {
+            let mut controller = AnimationController::new();
+            let mut animation = Animation::new("Moments".into(), 1.0);
+            animation.add_track(Track::signal_with_smoothing("Exposure".into(), "ramp".into(), 0.0, 1.0, 0.8));
+            animation.add_track(Track::linear("Gamma".into(), serde_json::json!(0.0), serde_json::json!(1.0), 1.0));
+            controller.load(animation);
+            controller
+        };
+        let value = |values: &[(EditingTarget, String, serde_json::Value)], key: &str| {
+            values.iter().find(|(_, k, _)| k == key).unwrap().2.as_f64().unwrap()
+        };
+        let (mut plain, mut blurred) = (make(), make());
+        // From the second frame: the first moment of the first falls
+        // before the keyframes, which hold their first value there.
+        for frame in 1..30 {
+            let t = frame as f64 / 30.0;
+            let a = plain.evaluate_at_time_with_signals(t, Some(&signals));
+            let b = blurred.evaluate_at_time_with_signals(t, Some(&signals));
+            assert_eq!(a, b, "frame {frame}: the moments changed what followed");
+            for dt in [-0.01, 0.01] {
+                let moment = blurred.evaluate_moment(t + dt, Some(&signals));
+                assert_eq!(value(&moment, "Exposure"), value(&b, "Exposure"), "the smoothed track holds the frame's value");
+                assert!((value(&moment, "Gamma") - (t + dt)).abs() < 1e-9, "the keyframes are read at the moment");
+            }
+        }
     }
 
 }

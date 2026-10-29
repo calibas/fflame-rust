@@ -23,7 +23,7 @@
 
 use egui::Ui;
 use rust_i18n::t;
-use crate::animation::{Animation, AnimationController, LoopMode, PlaybackState};
+use crate::animation::{Animation, AnimationController, LoopMode, MotionBlur, PlaybackState};
 use crate::animation::export::{VideoCodec, HardwareAccel};
 
 // Video export progress is reported through the unified
@@ -349,6 +349,37 @@ fn render_playback_controls(
         ui.checkbox(&mut controller.sync_audio, t!("animation_panel.sync_audio"))
             .on_hover_text(t!("animation_panel.sync_audio_tooltip"));
     });
+
+    // Row 3: Motion blur (docs/projects/motion-blur.md). The animation's,
+    // so it plays in the app and renders in the video export alike.
+    if let Some(ref mut animation) = controller.animation {
+        let blur = &mut animation.motion_blur;
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut blur.enabled, t!("animation_panel.motion_blur"))
+                .on_hover_text(t!("animation_panel.motion_blur_tooltip"));
+            ui.add_enabled_ui(blur.enabled, |ui| {
+                ui.label(t!("animation_panel.shutter"));
+                // Shown in milliseconds; kept in seconds.
+                let mut ms = blur.shutter * 1000.0;
+                if ui
+                    .add(super::VkbDragValue::new(&mut ms)
+                        .range(1.0..=MotionBlur::MAX_SHUTTER * 1000.0)
+                        .speed(0.5)
+                        .fixed_decimals(1)
+                        .suffix(" ms"))
+                    .on_hover_text(t!("animation_panel.shutter_tooltip"))
+                    .changed()
+                {
+                    blur.shutter = ms / 1000.0;
+                }
+                ui.label(t!("animation_panel.shutter_angle", angle = format!("{:.0}", blur.shutter * 30.0 * 360.0)));
+                ui.separator();
+                ui.label(t!("animation_panel.blur_samples"));
+                ui.add(super::VkbDragValue::new(&mut blur.samples).range(MotionBlur::MIN_SAMPLES..=MotionBlur::MAX_SAMPLES))
+                    .on_hover_text(t!("animation_panel.blur_samples_tooltip"));
+            });
+        });
+    }
 }
 
 /// Context for online API buttons in the animation panel
