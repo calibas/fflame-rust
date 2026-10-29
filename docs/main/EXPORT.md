@@ -443,6 +443,16 @@ is reported and skipped; a config that fails is reported and the batch
 goes on. The exit code is non-zero if any config was not exported, and
 on a missing input or unwritable output.
 
+**Previews of a folder.** `scripts/make_previews.py DIR` renders a
+480 × 480 preview (`--size N` or `WxH`) of every `.fflame`, `.flame`,
+`.anim` and `.json` in a folder (not its subfolders), through `export`,
+one config at a time. Each is named after its file (`Ocean.fflame` makes
+`Ocean.png`), beside it or in `-o DIR`; a file holding several configs
+makes one each, numbered from 1 (`Ocean-1.png`, `Ocean-2.png`, …). An
+animation previews its embedded base config, tracks not played. Nothing
+is overwritten: an existing image, and every config that cannot be
+previewed, is skipped with a warning. It needs a release build.
+
 ### export-animation
 
 ```bash
@@ -526,7 +536,9 @@ chunks at all.
 colour, exposure and gamma are not parsed back and read as fixed
 placeholders. It accepts the old product name, `Fractal Flame Renderer
 v…`, too. `scripts/png_metadata.py` lists the chunks of any PNG and
-extracts the config (`--config`, `-o out.fflame`) without a build.
+extracts the config (`--config`, `-o out.fflame`, or `--save-config`
+for a `.fflame` of the PNG's name beside it, never overwriting one)
+without a build.
 
 ```rust
 use fractal_flame_wgpu::png_metadata::read_png_metadata;
