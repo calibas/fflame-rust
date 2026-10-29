@@ -117,6 +117,15 @@ The defaults differ:
   path tracer renders as it did.
 - **A terrain's `tier` defaults to Auto.**
 
+**Motion blur** ([ANIMATION.md](ANIMATION.md), *Motion blur*): the tiers'
+view is a function of the jitter and a moment (`TierInputs::moments`).
+The lit grid's passes go round the moments as a Latin square over the
+jitter grid, a pass for every moment at least; the path tracer's
+samples are the moments' in turn. A camera's move is blurred at the
+frame's own cost over one ground; a picture changing within the shutter
+needs a ground a moment, which an export draws and the viewport does
+not.
+
 **The terrains' viewport** (`TerrainTiers::viewport`) keys everything on
 the view, the ground's version, the path settings and the tier. Any
 change restarts both accumulations, so "moving" means the key changed

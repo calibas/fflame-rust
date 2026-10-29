@@ -176,6 +176,13 @@ are still seeded per dispatch from `params.seed`.
 - **Burn-in** is paid once per restart, not once per dispatch. So
   `iterations_per_thread` only slices the work: the picture does not
   depend on it, and a short dispatch costs no orbit depth.
+- **Motion-blur moments** (`set_moment`, `set_continuing_frame`;
+  [ANIMATION.md](ANIMATION.md), *Motion blur*): a frame's later moments
+  take over the orbits on their flame's new key without a restart -- the
+  moments are close, and an orbit settles onto the next attractor in a
+  few iterations -- so a frame pays one burn-in; their samples add to the
+  frame's in overwrite mode too. Measured: no bias at 0.15% of a block's
+  density.
 - **Capacity.** The buffer is sized for at least `128 × 64` threads
   from the start, so the governor widening again never loses orbits; a
   wider dispatch grows it once, which restarts the orbits.

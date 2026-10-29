@@ -4,9 +4,11 @@
 phase 1 (the model, the shutter, the panel) and phase 2 (escape-time
 2D, export and viewport; checked in the CLI and, with a startup hook
 and a window capture, in the app), phase 3 (flames), phase 4
-(simulation) and phase 5 (terrains and solids; the viewport's
-path-traced solid is not blurred), each likewise checked. Phase 6 (the
-governor and the docs) next.
+(simulation), phase 5 (terrains and solids; the viewport's path-traced
+solid is not blurred), each likewise checked, and phase 6 (the
+governor, which needed no change, and the docs). Open: the web app's
+playback is untried in a browser; the API does not store the setting;
+per-thread time for flames (no copies at few samples) is not built.
 
 Motion blur for animations: each frame is the average of the picture
 over a short **shutter** around its time, as a camera's exposure is. It
@@ -236,6 +238,18 @@ moment.
 The in-app cost meets the frame governor (supersampling first); the
 docs: ANIMATION.md (the setting, playback), EXPORT.md (the video loop),
 the engines' docs where they changed; the API note.
+
+- **Built:** no governor change was needed. Escape playback's
+  antialiasing governor sheds the supersampling as before, measured on
+  finished blurred frames (`done`, not each moment's settling); a
+  flame's moments share the governed dispatch; the simulation and the
+  terrains are paced. The samples are the look and are not governed:
+  shedding them would show the copies of a fast motion.
+- **Docs:** ANIMATION.md (*Motion blur*, the `.anim` field, the panel
+  row), EXPORT.md (the video frame), ESCAPE.md (the shared average),
+  RENDERER.md (the moments' orbits), TERRAIN.md (the tiers' moments),
+  and the API note and a browser check in
+  [v0.6.0-release.md](v0.6.0-release.md).
 
 ---
 
