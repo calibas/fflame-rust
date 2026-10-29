@@ -1002,21 +1002,53 @@ async fn render_sim(
     // Motion blur (docs/projects/motion-blur.md): the field at each
     // moment's step count, in turn, coloured as that moment colours it,
     // averaged. A moment behind the field reseeds and runs, exactly as a
-    // backward frame does. A terrain is phase 5's and draws its frame.
+    // backward frame does.
     #[cfg(feature = "terrain")]
     let terrain_on = job.config.sim.terrain_active();
     #[cfg(not(feature = "terrain"))]
     let terrain_on = false;
-    let moments: Vec<&FractalConfig> = if job.moments.is_empty() || terrain_on {
+    // A terrain whose moments share its ground -- they differ in the
+    // terrain's own settings alone, its camera, its relief -- is drawn
+    // once, its passes or samples going round their views. One whose
+    // field differs is drawn at each moment, each its share of the
+    // samples, and the stills averaged.
+    let shared_ground = job.moments.iter().all(|m| {
+        let mut sim_cfg = m.sim.clone();
+        sim_cfg.terrain = job.config.sim.terrain.clone();
+        sim_cfg == job.config.sim
+    });
+    #[cfg(feature = "terrain")]
+    let terrain_moments = terrain_on && !job.moments.is_empty() && !shared_ground;
+    let moments: Vec<&FractalConfig> = if job.moments.is_empty() || (terrain_on && shared_ground) {
         vec![job.config]
     } else {
         job.moments.iter().collect()
     };
     let blurred = moments.len() > 1;
-    if blurred {
+    if blurred && !terrain_on {
         sim.begin_moments(device, queue, moments.len() as u32);
     }
-    for moment in &moments {
+    // The terrain: its ground made from the field, then the still --
+    // path traced at its samples unless its tier is Lit.
+    #[cfg(feature = "terrain")]
+    let mut terrain: Option<&mut crate::sim::terrain::SimTerrain> = if terrain_on {
+        // The still sizes the renderer itself: to the frame, or to its
+        // tiles.
+        let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(job.width, job.height);
+        let make = || crate::sim::terrain::SimTerrain::new(device, tile_w, tile_h);
+        let t = match terrain_slot {
+            Some(slot) => slot.get_or_insert_with(make),
+            None => terrain_owned.insert(make()),
+        };
+        if terrain_moments {
+            t.begin_moments(device, queue, job.width, job.height, moments.len() as u32);
+        }
+        Some(t)
+    } else {
+        None
+    };
+    for (k, moment) in moments.iter().enumerate() {
+        let span = |f: f64| ((k as f64 + f) / moments.len() as f64 * 1000.0) as u64;
         if blurred && moment.sim.use_transforms {
             sim.set_layer_transforms(device, queue, &moment.flame);
         }
@@ -1026,7 +1058,7 @@ async fn render_sim(
                 sim.advance_steps(device, queue, &moment.sim, total, Some(PROGRESS_BATCH));
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             let steps = sim.step_index() as f64 / total.max(1) as f64;
-            progress.on_progress(((1.0 - still_share) * steps.min(1.0) * 1000.0) as u64, 1000);
+            progress.on_progress(span((1.0 - still_share) * steps.min(1.0)), 1000);
             if reached {
                 break;
             }
@@ -1038,42 +1070,43 @@ async fn render_sim(
             }
         }
         sim.color(device, queue, &moment.sim, renderer.palette_view());
-        if blurred {
+        if blurred && !terrain_on {
             sim.add_moment(device, queue);
         }
-    }
-
-    // The terrain: its ground made from the field as it now is, then the
-    // still -- path traced at its samples unless its tier is Lit.
-    #[cfg(feature = "terrain")]
-    let terrain: Option<&mut crate::sim::terrain::SimTerrain> = if job.config.sim.terrain_active() {
-        // The still sizes the renderer itself: to the frame, or to its
-        // tiles.
-        let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(job.width, job.height);
-        let make = || crate::sim::terrain::SimTerrain::new(device, tile_w, tile_h);
-        let t = match terrain_slot {
-            Some(slot) => slot.get_or_insert_with(make),
-            None => terrain_owned.insert(make()),
-        };
-        t.update(device, queue, sim, job.config, renderer.palette_view());
-        t.render_still(device, queue, job.config, (job.width, job.height), |f| {
-            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-            progress.on_progress((((1.0 - still_share) + still_share * f as f64) * 1000.0) as u64, 1000);
-            !progress.is_cancelled()
-        });
-        if progress.is_cancelled() {
-            if let Some(t) = terrain_owned.as_ref() {
-                t.destroy();
+        #[cfg(feature = "terrain")]
+        if let Some(t) = terrain.as_deref_mut() {
+            // A moment on its own ground takes its share of the samples;
+            // a shared ground's still goes round the moments' views.
+            let share;
+            let (still, views): (&FractalConfig, &[FractalConfig]) = if terrain_moments {
+                let mut c = (*moment).clone();
+                let path = &mut c.sim.terrain.path;
+                path.samples = path.samples.div_ceil(moments.len() as u32).max(1);
+                share = c;
+                (&share, &[])
+            } else {
+                (moment, job.moments)
+            };
+            t.update(device, queue, sim, moment, renderer.palette_view());
+            t.render_still_moments(device, queue, still, views, (job.width, job.height), |f| {
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                progress.on_progress(span((1.0 - still_share) + still_share * f as f64), 1000);
+                !progress.is_cancelled()
+            });
+            if progress.is_cancelled() {
+                if let Some(t) = terrain_owned.as_ref() {
+                    t.destroy();
+                }
+                if !caller_owned {
+                    sim.destroy();
+                }
+                return Err(RenderError::Cancelled);
             }
-            if !caller_owned {
-                sim.destroy();
+            if terrain_moments {
+                t.add_moment(device, queue);
             }
-            return Err(RenderError::Cancelled);
         }
-        Some(t)
-    } else {
-        None
-    };
+    }
 
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Sim Tail"),
@@ -1097,6 +1130,7 @@ async fn render_sim(
     };
     #[cfg(feature = "terrain")]
     let sim_view = match terrain.as_ref() {
+        Some(t) if terrain_moments => t.moments_view().unwrap_or(t.output_view()),
         Some(t) => t.output_view(),
         None => picture,
     };
@@ -1313,25 +1347,43 @@ async fn render_escape(
     #[cfg(target_arch = "wasm32")]
     escape_renderer.set_fixed_chunk(true);
     prepare_escape(escape_renderer, device, queue, job.config).await;
+    // A solid path traced, motion-blurred (docs/projects/motion-blur.md):
+    // each moment traced with its share of the samples, averaged.
+    let solid_blurred = solid_path && !job.moments.is_empty();
     if solid_path {
-        escape_renderer.render_solid_still(
-            device,
-            queue,
-            job.config,
-            renderer.escape_palette_view(job.config.escape.palette_map.stepped),
-            job.config.escape.path.samples,
-            || {
-                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-                !progress.is_cancelled()
-            },
-        );
-        if progress.is_cancelled() {
-            if !caller_owned {
-                escape_renderer.destroy();
-            }
-            return Err(RenderError::Cancelled);
+        let moments: Vec<&FractalConfig> = if solid_blurred { job.moments.iter().collect() } else { vec![job.config] };
+        let samples = job.config.escape.path.samples.div_ceil(moments.len() as u32).max(1);
+        if solid_blurred {
+            escape_renderer.begin_accumulation_of(device, queue, moments.len() as u32);
         }
-        log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
+        for moment in &moments {
+            if solid_blurred {
+                prepare_escape(escape_renderer, device, queue, moment).await;
+            }
+            escape_renderer.render_solid_still(
+                device,
+                queue,
+                moment,
+                renderer.escape_palette_view(job.config.escape.palette_map.stepped),
+                samples,
+                || {
+                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                    !progress.is_cancelled()
+                },
+            );
+            if progress.is_cancelled() {
+                if !caller_owned {
+                    escape_renderer.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+            if solid_blurred {
+                let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Escape Solid Moment") });
+                escape_renderer.accumulate_sample(device, queue, &mut encoder);
+                queue.submit(std::iter::once(encoder.finish()));
+            }
+        }
+        log::info!("Render: escape solid path traced at {samples} samples x {} moments", moments.len());
     }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
@@ -1436,7 +1488,7 @@ async fn render_escape(
         }
     }
     let escape_view = match escape_renderer.accumulated_view() {
-        Some(v) if renders > 1 && !solid_path => v,
+        Some(v) if (renders > 1 && !solid_path) || solid_blurred => v,
         _ => escape_renderer.output_view(),
     };
     let pixels = escape_tail(renderer, device, queue, config, (width, height, transparent), escape_view, oom_scope).await;
@@ -1630,6 +1682,20 @@ async fn prepare_escape(
 /// tile, then the terrain drawn in the lit tier. Antialiasing is the
 /// config's supersample as accumulation: `supersample²` renders, each
 /// jittered within the pixel. Then the escape tail, unchanged.
+
+/// A motion-blur moment drawn on its own ground, for its still: its share
+/// of the frame's antialiasing -- the lit grid's passes, the path
+/// tracer's samples -- so the moments together cost about what the frame
+/// does. The ground is drawn from the moment itself: the supersampling
+/// is also the sections' detail (`wanted_sections`).
+#[cfg(feature = "terrain")]
+fn moment_share(moment: &FractalConfig, moments: usize) -> FractalConfig {
+    let k = moments.max(1) as f64;
+    let mut c = moment.clone();
+    c.escape.supersample = ((c.escape.supersample.max(1) as f64 / k.sqrt()).round() as u32).max(1);
+    c.escape.path.samples = ((c.escape.path.samples as f64 / k).ceil() as u32).max(1);
+    c
+}
 #[cfg(feature = "terrain")]
 async fn render_escape_terrain(
     renderer: &mut FlameRenderer,
@@ -1664,43 +1730,78 @@ async fn render_escape_terrain(
     // As many sections as the card holds beside the rest of the export:
     // past the viewport's 64, an export's nearest ground was magnified.
     terrain.fit_sections_for_export(device, config, job_w, job_h).await;
-    let before = terrain.footprint_renders;
     // The bar's shares: the sections, then the still, which takes most
     // of a path traced export.
     let fill_share = if config.escape.terrain.tier == crate::config::escape::RenderTier::Lit { 0.9 } else { 0.25 };
-    let mut guard = 0u32;
-    while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    // Motion blur (docs/projects/motion-blur.md). Moments that draw the
+    // frame's picture differ only in the camera: one ground, and the
+    // still's passes or samples go round their views, at the frame's own
+    // cost. Moments whose pictures differ each need their own ground:
+    // each its sections and a still with its share of the antialiasing,
+    // averaged.
+    let moments = job.moments;
+    let separate = !moments.iter().all(|m| EscapeTerrain::same_picture(m, config));
+    let grounds: Vec<&FractalConfig> = if separate { moments.iter().collect() } else { vec![config] };
+    if separate {
+        terrain.begin_moments(device, queue, job_w, job_h, grounds.len() as u32);
+    }
+    let mut n = 0;
+    for (g, ground) in grounds.iter().enumerate() {
+        let span = |f: f64| ((g as f64 + f) / grounds.len() as f64 * 1000.0) as u64;
+        if separate {
+            // A moment's flame (mode D) or texture is its own.
+            prepare_escape(terrain.footprint_renderer(), device, queue, ground).await;
+        }
+        let before = terrain.footprint_renders;
+        let mut guard = 0u32;
+        while terrain.update(device, queue, ground, job.width, job.height, palette, generation, 1) {
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            if progress.is_cancelled() {
+                if !caller_owned {
+                    terrain.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+            let done = (terrain.footprint_renders - before) as f64;
+            let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
+            progress.on_progress(span(fill_share * fill), 1000);
+            guard += 1;
+            if guard > 4_000_000 {
+                log::error!("terrain sections failed to settle; using what we have");
+                break;
+            }
+        }
+        n += terrain.footprint_renders - before;
+        // The picture: path traced at `samples`, or the lit tier's grid
+        // -- a moment on its own ground, its share of either.
+        let share;
+        let (still, views): (&FractalConfig, &[FractalConfig]) = if separate {
+            share = moment_share(ground, grounds.len());
+            (&share, &[])
+        } else {
+            (config, moments)
+        };
+        terrain.render_still_moments(device, queue, still, views, (job_w, job_h), |f| {
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            progress.on_progress(span(fill_share + (1.0 - fill_share) * f as f64), 1000);
+            !progress.is_cancelled()
+        });
         if progress.is_cancelled() {
             if !caller_owned {
                 terrain.destroy();
             }
             return Err(RenderError::Cancelled);
         }
-        let done = (terrain.footprint_renders - before) as f64;
-        let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
-        progress.on_progress((fill_share * fill * 1000.0) as u64, 1000);
-        guard += 1;
-        if guard > 4_000_000 {
-            log::error!("terrain sections failed to settle; using what we have");
-            break;
+        if separate {
+            terrain.add_moment(device, queue);
         }
     }
-    let n = terrain.footprint_renders - before;
-    // The picture: path traced at `samples`, or the lit tier's grid.
     let ss = config.escape.supersample.max(1);
-    terrain.render_still(device, queue, config, (job_w, job_h), |f| {
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        progress.on_progress(((fill_share + (1.0 - fill_share) * f as f64) * 1000.0) as u64, 1000);
-        !progress.is_cancelled()
-    });
-    if progress.is_cancelled() {
-        if !caller_owned {
-            terrain.destroy();
-        }
-        return Err(RenderError::Cancelled);
-    }
-    let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
+    let picture = match terrain.moments_view() {
+        Some(v) if separate => v,
+        _ => terrain.output_view(),
+    };
+    let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), picture, oom_scope).await;
     if !caller_owned {
         terrain.destroy();
     }
@@ -1937,6 +2038,64 @@ mod motion_tests {
         assert!(far * 1000 <= blurred.len(), "{far} of {} channels off the moments' mean", blurred.len());
         let moved = sharp.iter().zip(&blurred).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / sharp.len() as f64;
         assert!(moved > 1.0, "the blur changed the frame by only {moved:.3} a channel");
+    }
+
+    /// A simulation's terrain blurs too: moments that are all the frame
+    /// are the frame; a camera's move, drawn on one ground, and the field
+    /// moving, a ground a moment, each change it.
+    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+    #[test]
+    fn a_simulation_terrain_blurs_over_its_moments() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut frame = grid(300);
+        frame.sim.terrain.enabled = true;
+        frame.sim.terrain.tier = crate::config::escape::RenderTier::Lit;
+        let sharp = draw(&device, &queue, &frame, &[]);
+        assert_eq!(draw(&device, &queue, &frame, &vec![frame.clone(); 4]), sharp, "a still frame blurred is the frame");
+        let moved = |picture: &[u8]| sharp.iter().zip(picture).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / sharp.len() as f64;
+        let camera: Vec<FractalConfig> = [-0.06f32, -0.02, 0.02, 0.06]
+            .iter()
+            .map(|d| {
+                let mut m = frame.clone();
+                m.sim.terrain.cam_yaw += d;
+                m
+            })
+            .collect();
+        let turned = moved(&draw(&device, &queue, &frame, &camera));
+        let steps: Vec<FractalConfig> = [200u32, 266, 333, 400]
+            .iter()
+            .map(|n| {
+                let mut m = frame.clone();
+                m.sim.steps = *n;
+                m
+            })
+            .collect();
+        let stepped = moved(&draw(&device, &queue, &frame, &steps));
+        println!("a turn moved the frame {turned:.3} a channel, the steps {stepped:.3}");
+        assert!(turned > 0.2 && stepped > 0.2, "the blur did not reach the terrain: {turned:.3}, {stepped:.3}");
+    }
+
+    /// A solid path traced, blurred, traces each moment with its share of
+    /// the samples: moments that are all the frame keep its light.
+    #[test]
+    fn a_traced_solid_keeps_its_light_blurred() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut frame = view("0.0");
+        frame.escape.formula = "mandelbulb_solid".into();
+        frame.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
+        frame.escape.path.samples = 16;
+        let light = |p: &[u8]| p.chunks(4).map(|c| c[..3].iter().map(|v| (*v as f64 / 255.0).powf(2.2)).sum::<f64>()).sum::<f64>();
+        let sharp = light(&draw(&device, &queue, &frame, &[]));
+        let blurred = light(&draw(&device, &queue, &frame, &vec![frame.clone(); 4]));
+        println!("traced solid: {blurred:.1} blurred against {sharp:.1} sharp");
+        assert!(sharp > 1.0, "the solid drew nothing");
+        assert!((blurred / sharp - 1.0).abs() < 0.05, "light {blurred:.1} blurred against {sharp:.1} sharp");
     }
 
     /// A Sierpinski gasket filling the view, its first map's offset `e`.
