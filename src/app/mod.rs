@@ -3121,10 +3121,62 @@ impl App {
                     self.clear_paths_next_frame = false;  // Reset flag after use
                 }
 
-                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
-                    effective_ipt, self.config_manager.system_settings().burn_in,
-                    final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
+                // Motion blur (motion_blur.rs): the frame's batch shared
+                // among its moments -- each moment's flame and view uploaded
+                // in turn and drawn into the one histogram, folded once
+                // below -- so a blurred frame costs what a sharp one does.
+                // Not under Focused Rendering, whose plans are one view's,
+                // nor for a subflame viewed in isolation, which the moments
+                // (the main flame's) are not.
+                let isolated = self.view_subflame_in_isolation
+                    && matches!(self.config_manager.editing_target(), crate::config::manager::EditingTarget::Subflame { .. });
+                let moments = if motion_blur::blurring(&self.animation_controller) && !final_config.cylinder_targeting && !isolated {
+                    crate::animation::export::moment_configs(
+                        final_config,
+                        &self.animation_controller,
+                        self.animation_controller.current_time,
+                        Some(&self.signal_manager),
+                    )
+                } else {
+                    Vec::new()
+                };
+                let samples_this_frame = if moments.is_empty() {
+                    renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                        effective_ipt, self.config_manager.system_settings().burn_in,
+                        final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
+                        final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths)
+                } else {
+                    // Each moment its own submission, after what this frame
+                    // recorded before it: an upload lands at its submission,
+                    // so the moment's dispatch sees its own flame.
+                    let recorded = std::mem::replace(
+                        &mut render_encoder,
+                        self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") }),
+                    );
+                    self.gpu.queue.submit(std::iter::once(recorded.finish()));
+                    let (setting_ipt, burn_in) = {
+                        let settings = self.config_manager.system_settings();
+                        (settings.iterations_per_thread, settings.burn_in)
+                    };
+                    let moment_ipt = effective_ipt.div_ceil(moments.len() as u32).max(1);
+                    let mut plotted = 0;
+                    for (k, m) in moments.iter().enumerate() {
+                        renderer.set_moment(&self.gpu.device, &self.gpu.queue, m, setting_ipt, burn_in);
+                        renderer.set_continuing_frame(k > 0);
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Motion Blur Moment") });
+                        plotted += renderer.compute_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                            moment_ipt, burn_in,
+                            m.zoom, m.pan_x as f32, m.pan_y as f32, m.rotation,
+                            m.camera_rotation_x, m.camera_rotation_y, m.camera_bank, m.camera_x, m.camera_y, m.camera_z, m.speed_factor,
+                            clear_histogram && k == 0, clear_paths && k == 0);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
+                    renderer.set_continuing_frame(false);
+                    // The frame's own flame back on the GPU, where the next
+                    // frame's edits -- and a stop -- expect it.
+                    renderer.set_moment(&self.gpu.device, &self.gpu.queue, final_config, setting_ipt, burn_in);
+                    plotted
+                };
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
                 // The histogram holds every frame of the batch: count them
