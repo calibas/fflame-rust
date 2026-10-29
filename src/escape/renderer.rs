@@ -1047,6 +1047,10 @@ pub struct EscapeRenderer {
     accum_front: usize,
     accum_pipeline: Option<(wgpu::ComputePipeline, BindGroupLayout)>,
     accum_params: Option<Buffer>,
+    /// The viewport's last finished motion-blurred frame
+    /// ([`Self::present_accumulation`]), shown while the next builds in
+    /// the accumulation, which is complete only after its last moment.
+    presented: Option<(wgpu::Texture, TextureView)>,
     /// Which pipeline the last render() call ran ("direct",
     /// "perturbed f32", "perturbed floatexp", "recolor"). The global
     /// diag snapshot carries the same string for the panel, but that
@@ -1986,6 +1990,7 @@ impl EscapeRenderer {
             sample_offset: [0.0, 0.0],
             accum_cleared: false,
             accum: None,
+            presented: None,
             accum_front: 0,
             accum_pipeline: None,
             accum_params: None,
@@ -3245,6 +3250,13 @@ impl EscapeRenderer {
     /// [`Self::sample_grid`], then read [`Self::accumulated_view`].
     pub fn begin_accumulation(&mut self, device: &Device, queue: &Queue, samples: u32) {
         let n = samples.max(1);
+        self.begin_accumulation_of(device, queue, n * n);
+    }
+
+    /// [`Self::begin_accumulation`] for `renders` renders in all: a
+    /// motion-blurred frame folds every displacement at every moment.
+    pub fn begin_accumulation_of(&mut self, device: &Device, queue: &Queue, renders: u32) {
+        let renders = renders.max(1);
         let (w, h) = (self.out_width.max(1), self.out_height.max(1));
         let stale = match &self.accum {
             Some((t, _, _, _)) => t.width() != w || t.height() != h,
@@ -3268,10 +3280,10 @@ impl EscapeRenderer {
                 mapped_at_creation: false,
             }));
         }
-        // Each sample is added pre-scaled by 1/n², so the target holds
-        // the MEAN throughout and can be shown after any number of
+        // Each render is added pre-scaled by 1/renders, so the target
+        // holds the MEAN throughout and can be shown after any number of
         // samples rather than only the last.
-        let inv = 1.0f32 / (n * n) as f32;
+        let inv = 1.0f32 / renders as f32;
         let mut raw = [0u8; 16];
         raw[0..4].copy_from_slice(&inv.to_le_bytes());
         raw[4..8].copy_from_slice(&1u32.to_le_bytes()); // clear on first add
@@ -3464,6 +3476,64 @@ fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         self.accum.as_ref().map(
             |(_, va, _, vb)| if self.accum_front == 0 { va } else { vb },
         )
+    }
+
+    /// Keep the finished accumulation as the picture the viewport shows
+    /// ([`Self::presented_view`]) while the next motion-blurred frame
+    /// builds in the accumulation (docs/projects/motion-blur.md).
+    pub fn present_accumulation(&mut self, device: &Device, encoder: &mut CommandEncoder) {
+        let Some((ta, _, tb, _)) = self.accum.as_ref() else {
+            return;
+        };
+        let src = if self.accum_front == 0 { ta } else { tb };
+        let size = Extent3d { width: src.width(), height: src.height(), depth_or_array_layers: 1 };
+        let stale = self.presented.as_ref().is_none_or(|(t, _)| t.width() != size.width || t.height() != size.height);
+        if stale {
+            if let Some((t, _)) = self.presented.take() {
+                t.destroy();
+            }
+            let texture = device.create_texture(&TextureDescriptor {
+                label: Some("Escape Presented Frame"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba32Float,
+                // COPY_SRC so a test can read it back.
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            self.presented = Some((texture, view));
+        }
+        let (dst, _) = self.presented.as_ref().expect("made above");
+        encoder.copy_texture_to_texture(src.as_image_copy(), dst.as_image_copy(), size);
+    }
+
+    /// The last finished motion-blurred frame, while the viewport keeps one.
+    pub fn presented_view(&self) -> Option<&TextureView> {
+        self.presented.as_ref().map(|(_, v)| v)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn presented_texture(&self) -> Option<&wgpu::Texture> {
+        self.presented.as_ref().map(|(t, _)| t)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accumulated_texture(&self) -> Option<&wgpu::Texture> {
+        self.accum.as_ref().map(|(ta, _, tb, _)| if self.accum_front == 0 { ta } else { tb })
+    }
+
+    /// Stop showing a motion-blurred frame; true if one was shown.
+    pub fn drop_presented(&mut self) -> bool {
+        match self.presented.take() {
+            Some((t, _)) => {
+                t.destroy();
+                true
+            }
+            None => false,
+        }
     }
 
     /// The sampling offset in the view's own frame.
@@ -6885,6 +6955,10 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         self.out_width = width;
         self.out_height = height;
         self.supersample = ss;
+        // A finished motion-blurred frame of the old size no longer fits.
+        if self.presented.as_ref().is_some_and(|(t, _)| t.width() != width || t.height() != height) {
+            self.drop_presented();
+        }
         let (rw, rh) = (width.saturating_mul(ss).max(1), height.saturating_mul(ss).max(1));
         self.output_texture.destroy();
         // The records describe pixels of the OLD grid.
@@ -9201,6 +9275,9 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some((a, _, b, _)) = &self.accum {
             a.destroy();
             b.destroy();
+        }
+        if let Some((t, _)) = &self.presented {
+            t.destroy();
         }
         if let Some((a, _, b, _)) = &self.height_blur {
             a.destroy();

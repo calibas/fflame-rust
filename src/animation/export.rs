@@ -2147,6 +2147,14 @@ pub async fn export_animation(
         };
         let mut frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
+        // Motion blur: the frame's moments, taken after the frame itself
+        // so its signal smoothing has advanced once (`evaluate_moment`).
+        let moments = moment_configs(
+            &export_config.config,
+            &controller,
+            time,
+            if has_signals { Some(&signal_manager) } else { None },
+        );
 
         let render_start = Instant::now();
         let output = {
@@ -2165,7 +2173,8 @@ pub async fn export_animation(
                 export_config.height,
             )
             .with_iterations_per_thread(export_config.iterations_per_thread)
-            .with_engines(&mut engines);
+            .with_engines(&mut engines)
+            .with_moments(&moments);
             crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await
         };
         let output = match output {
