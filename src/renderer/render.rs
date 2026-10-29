@@ -2142,6 +2142,46 @@ mod motion_tests {
         out
     }
 
+    /// The transform and parameter tables write only the slots a flame
+    /// uses (`write_regions`): a flame drawn after a larger one, the
+    /// larger one's slots left behind, is the flame drawn fresh -- none of
+    /// the stale slots is read. (The larger one's extra maps throw points
+    /// far across the view, so a read would show.)
+    #[test]
+    fn a_smaller_flame_after_a_larger_reads_none_of_its_slots() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let small = gasket(0.0);
+        let mut large = small.clone();
+        for (i, e) in [0.6f32, 0.7, 0.8].into_iter().enumerate() {
+            let mut t = large.flame.transforms[i].clone();
+            (t.a, t.d, t.e, t.f) = (0.3, 0.3, e, 0.6);
+            t.set_variation("spherical", 0.5);
+            large.flame.transforms.push(t);
+        }
+        let samples = 8_000_000u64;
+        let mut renderer = FlameRenderer::for_job(&device, &queue, TextureFormat::Rgba8Unorm, N, N, &large);
+        renderer.set_sticky_enabled(false);
+        let job = RenderJob::new(&large, N, N).with_iterations(samples);
+        pollster::block_on(render_with(&mut renderer, &device, &queue, job, &mut NoProgress)).expect("render");
+        let job = RenderJob::new(&small, N, N).with_iterations(samples);
+        pollster::block_on(render_with(&mut renderer, &device, &queue, job, &mut NoProgress)).expect("render");
+        let after = blocks(&renderer.read_density_blocking(&device, &queue));
+        let fresh = blocks(&flame_density(&device, &queue, &small, &[], samples).0);
+        let total: f64 = fresh.iter().sum();
+        let worst = fresh
+            .iter()
+            .zip(&after)
+            .filter(|(f, _)| **f > total / fresh.len() as f64 * 0.25)
+            .map(|(f, a)| (a - f).abs() / f)
+            .fold(0.0, f64::max);
+        assert!(worst < 0.02, "a block {:.1}% off the flame drawn fresh", worst * 100.0);
+        let stray: f64 = fresh.iter().zip(&after).filter(|(f, _)| **f == 0.0).map(|(_, a)| a).sum();
+        assert!(stray == 0.0, "density {stray} where the flame draws none: a stale slot was read");
+    }
+
     /// A flame whose moments are all the frame keeps its density blurred:
     /// the moments share the samples, and the tone map's count is theirs.
     #[test]

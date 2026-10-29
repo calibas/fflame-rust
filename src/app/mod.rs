@@ -2756,21 +2756,32 @@ impl App {
                     // moment colours it, folded into the frame. One behind
                     // the field is held where the field is, as playback
                     // holds a backward step count (an export runs back).
-                    let m = motion.current();
-                    let index = if sim.will_reseed(&m.sim) { 0 } else { sim.step_index() };
-                    let target = if motion.rewind && motion.next == 0 { m.sim.steps } else { m.sim.steps.max(index) };
-                    let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
-                    let reached = sim.advance_to(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &m.sim,
-                        renderer.palette_view(),
-                        target,
-                        Some(budget),
-                    );
-                    if reached {
+                    // As many moments a display frame as its budget of
+                    // steps reaches, each colouring counted as a step: one
+                    // a display frame held a blurred frame to the display's
+                    // rate over the moments -- 120 fps to 15 at eight --
+                    // however little each cost.
+                    let mut budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS).max(1);
+                    while motion.next < motion.moments.len() && budget > 0 {
+                        let m = motion.current();
+                        let index = if sim.will_reseed(&m.sim) { 0 } else { sim.step_index() };
+                        let target = if motion.rewind && motion.next == 0 { m.sim.steps } else { m.sim.steps.max(index) };
+                        // Running back reseeds and walks from 0.
+                        let walk = if target < index { target } else { target - index };
+                        let reached = sim.advance_to(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &m.sim,
+                            renderer.palette_view(),
+                            target,
+                            Some(budget),
+                        );
+                        if !reached {
+                            break;
+                        }
                         sim.add_moment(&self.gpu.device, &self.gpu.queue);
                         motion.next += 1;
+                        budget = budget.saturating_sub(walk + 1);
                     }
                     if motion.next == motion.moments.len() {
                         sim.present_moments(&self.gpu.device, &self.gpu.queue);
@@ -3255,6 +3266,13 @@ impl App {
                     Vec::new()
                 };
                 let samples_this_frame = if moments.is_empty() {
+                    // After blurred frames the GPU holds the last moment's
+                    // flame: the frame's own goes back first.
+                    if renderer.holds_moment() {
+                        let settings = self.config_manager.system_settings();
+                        let (ipt, burn_in) = (settings.iterations_per_thread, settings.burn_in);
+                        renderer.restore_frame(&self.gpu.device, &self.gpu.queue, final_config, ipt, burn_in);
+                    }
                     renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
                         effective_ipt, self.config_manager.system_settings().burn_in,
                         final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
@@ -3286,9 +3304,6 @@ impl App {
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
                     renderer.set_continuing_frame(false);
-                    // The frame's own flame back on the GPU, where the next
-                    // frame's edits -- and a stop -- expect it.
-                    renderer.set_moment(&self.gpu.device, &self.gpu.queue, final_config, setting_ipt, burn_in);
                     plotted
                 };
 
