@@ -12,7 +12,7 @@ which rewrites the references in code comments too).
 
 | Doc | Status |
 |---|---|
-| [motion-blur.md](motion-blur.md) | Planned 2026-10-29 (branch `motion-blur`): motion blur as an animation setting -- a shutter in animation seconds, centred, sampled at stratified moments -- played in the app (web too) and rendered in the video export; each engine averages the moments before the tail. Phases 1-5 built (model, shutter, panel; escape-time, flames, simulation, terrains and solids, export and viewport); phase 6 (governor, docs) next. |
+| [motion-blur.md](motion-blur.md) | Planned 2026-10-29 (branch `motion-blur`): motion blur as an animation setting -- a shutter in animation seconds, centred, sampled at stratified moments -- played in the app (web too) and rendered in the video export; each engine averages the moments before the tail. Phases 1-6 built: every engine, export and viewport; documented in ANIMATION.md. Open: the web app's playback untried in a browser, the API's field, per-thread time for flames. |
 | [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
 | [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |

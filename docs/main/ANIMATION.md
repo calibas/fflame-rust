@@ -35,6 +35,9 @@ fractals and simulations, where a `Sim.Steps` track is the run itself.
   loop, and the exporter's own apply path (`apply_animation_values`)
 - [src/app/animation_update.rs](../../src/app/animation_update.rs) —
   playback in the app: pacing, silent apply, the simulation hand-off
+- [src/app/motion_blur.rs](../../src/app/motion_blur.rs),
+  [src/renderer/average.rs](../../src/renderer/average.rs) — motion
+  blur in the viewport, and the average of a frame's moments
 - [src/config/delta.rs](../../src/config/delta.rs) —
   `ConfigPath::to_string_key` / `from_string_key`,
   `json_to_config_value`
@@ -122,9 +125,14 @@ superseded design's `.ffanim` was never built.)
   "generators": [
     { "name": "gen_1", "waveform": "Sine", "frequency": 0.5, "phase": 0.0 }
   ],
-  "loop_mode": "Loop"
+  "loop_mode": "Loop",
+  "motion_blur": { "enabled": true, "shutter": 0.016667, "samples": 8 }
 }
 ```
+
+`motion_blur` is written only once it differs from its default (off,
+1/60 s, 8 samples), so a file that never touched it reads as before; a
+missing field takes its default (see [Motion blur](#motion-blur)).
 
 **Configs do not embed animations; animations embed configs.** Saving
 from the Animation panel always writes the active config into
@@ -396,6 +404,53 @@ the transport and a target to the timeline; [EXPORT.md](EXPORT.md)
 
 ---
 
+## Motion blur
+
+A setting of the animation (`Animation::motion_blur`; the Animation
+panel's third row), so the same blur plays in the app -- the web app
+too -- and renders in the video export. The plan and its record are
+[motion-blur.md](../projects/motion-blur.md).
+
+- **The shutter** is a duration in seconds of animation time (default
+  1/60 s, 180 degrees at 30 fps), not an angle: in-app playback has no
+  frame rate, and a duration looks the same in the app, at any export
+  frame rate, and at any playback speed.
+- **The moments:** `samples` of them (default 8, 2-64), stratified and
+  centred on the frame's time (`Animation::moments`). Past an end,
+  `Once` clamps, `Loop` wraps -- except a simulation's, which clamps: its
+  run starts again at the seam -- and `PingPong` reflects. Each moment is
+  the base config with the tracks applied at its time
+  (`animation::export::moment_configs`, the export's apply path, in the
+  app as in the export). A smoothed signal track holds the frame's
+  smoothed value across the shutter (`AnimationController::evaluate_moment`
+  leaves the smoothing as it was).
+- **The average** is taken before the tail: the frame's own tone
+  mapping, effects and background finish it. What moves blurs; what
+  holds still stays sharp. Too few samples show distinct copies of
+  whatever moves fast.
+- **In the app, only while playing.** Paused or scrubbing, the picture
+  is the sharp frame at the playhead.
+- **Online:** the API stores no such field, so an animation saved
+  online loses it.
+
+How each engine averages its moments:
+
+| Engine | Export | Viewport | Cost |
+| --- | --- | --- | --- |
+| Escape-time (2D, lit solids) | every antialiasing displacement at every moment, one accumulation | the moments rendered in turn, each to settlement; the last finished frame shown meanwhile; playback holds until the last | `samples` renders a frame |
+| Flames | the dispatches go round the moments into one accumulation, ending on a whole round | the governed dispatch shared among the moments, one histogram, one fold | the frame's own |
+| Simulation | the field walked to each moment's step count, coloured as that moment colours it | the same, over display frames; a grid the timeline does not step is recoloured at each moment | the colourings, and the steps it walks anyway |
+| Terrains | moments sharing the frame's picture on one ground, the lit passes or traced samples going round their views; moments whose picture differs, a ground each | the moments' views over the frame's ground (a picture changing within the shutter is not blurred) | the frame's own; a ground a moment where the picture changes |
+| Path-traced solids | each moment traced with its share of the samples | not blurred | the frame's own |
+
+A flame's moments take over the orbits from the moment before rather
+than restarting them, so a frame pays one burn-in
+(`FlameRenderer::set_continuing_frame`). A blurred video turns the
+CLI's inlined constants off: each moment uploads its flame. Focused
+Rendering, and a subflame viewed in isolation, are not blurred.
+
+---
+
 ## The panels
 
 ### Animation panel
@@ -408,6 +463,8 @@ layout docks it under the viewport.
   duration, loop mode, and **Sync audio** (play, pause, stop and seek
   the Signals panel's audio player with the timeline; it resyncs on
   drift over 100 ms).
+- **Motion Blur**, **Shutter** (ms, the angle at 30 fps beside it) and
+  **Samples**: the animation's motion blur ([Motion blur](#motion-blur)).
 - **Timeline:** time, duration and percentage, and a full-width
   scrubber whose geometry (`TimelineLayout`) the track rows align to.
 - **Tracks:** one row per track — a label (flame prefix and path), a bar
