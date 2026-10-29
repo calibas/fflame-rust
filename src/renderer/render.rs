@@ -587,10 +587,18 @@ pub async fn render_with(
     // what the renderer says plotted, as the app counts -- a thread's
     // burn-in is paid once, not every dispatch.
     let mut batch_samples = 0u64;
+    // Motion blur (docs/projects/motion-blur.md): the dispatches go round
+    // the frame's moments, each drawing its moment's flame and view into
+    // the one accumulation, and the loop ends on a whole round so every
+    // moment has the same share. The orbits go on from moment to moment.
+    // Not under Focused Rendering, whose plans are one view's.
+    let moments: &[FractalConfig] = if job.config.cylinder_targeting { &[] } else { job.moments };
+    let mut dispatches = 0usize;
 
-    while total_rendered < target {
+    while total_rendered < target || (!moments.is_empty() && dispatches % moments.len() != 0) {
         // Check for cancellation
         if progress.is_cancelled() {
+            renderer.set_continuing_frame(false);
             return Err(RenderError::Cancelled);
         }
 
@@ -601,6 +609,15 @@ pub async fn render_with(
         let clear_histogram = batch_frame_count == 0;
         let clear_paths = total_rendered == 0 && clear_histogram;
 
+        let view = if moments.is_empty() {
+            job.config
+        } else {
+            let moment = &moments[dispatches % moments.len()];
+            renderer.set_moment(device, queue, moment, job.iterations_per_thread, job.burn_in);
+            renderer.set_continuing_frame(dispatches > 0);
+            moment
+        };
+        dispatches += 1;
         let plotted = renderer.compute_pass(
             &mut encoder,
             queue,
@@ -608,17 +625,17 @@ pub async fn render_with(
             NUM_WORKGROUPS,
             job.iterations_per_thread,
             job.burn_in,
-            job.config.zoom,
-            job.config.pan_x as f32,
-            job.config.pan_y as f32,
-            job.config.rotation,
-            job.config.camera_rotation_x,
-            job.config.camera_rotation_y,
-            job.config.camera_bank,
-            job.config.camera_x,
-            job.config.camera_y,
-            job.config.camera_z,
-            job.config.speed_factor,
+            view.zoom,
+            view.pan_x as f32,
+            view.pan_y as f32,
+            view.rotation,
+            view.camera_rotation_x,
+            view.camera_rotation_y,
+            view.camera_bank,
+            view.camera_x,
+            view.camera_y,
+            view.camera_z,
+            view.speed_factor,
             clear_histogram,
             clear_paths,
         );
@@ -649,8 +666,9 @@ pub async fn render_with(
         // Report progress
         progress.on_progress(total_rendered, target);
 
-        // Check if we've reached target
-        if total_rendered >= target || stalled {
+        // Check if we've reached target (on a whole round of the moments)
+        let round_done = moments.is_empty() || dispatches % moments.len() == 0;
+        if (total_rendered >= target && round_done) || stalled {
             // Final accumulation for partial batch
             if batch_frame_count > 0 {
                 let mut final_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
@@ -661,6 +679,10 @@ pub async fn render_with(
             }
             break;
         }
+    }
+    renderer.set_continuing_frame(false);
+    if !moments.is_empty() {
+        log::info!("Render: motion blur over {} moments, {dispatches} dispatches", moments.len());
     }
 
     log::info!("Render: Render loop complete, total_rendered={}", total_rendered);
@@ -1842,5 +1864,98 @@ mod motion_tests {
         assert!(still == shown, "the frame shown changed while the next built");
         assert!(building != finished, "the next frame did not build");
         escape.destroy();
+    }
+
+    /// A Sierpinski gasket filling the view, its first map's offset `e`.
+    fn gasket(e: f32) -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.flame.transforms.clear();
+        for (i, (x, y)) in [(e, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = crate::scene::transforms::Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, x, y);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.levels_enabled = false;
+        cfg
+    }
+
+    const N: u32 = 64;
+
+    /// A flame's density per iteration, and how many times its orbits
+    /// restarted, rendered as the video export renders a frame.
+    fn flame_density(device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig], iterations: u64) -> (Vec<f64>, u32) {
+        let mut renderer = FlameRenderer::for_job(device, queue, TextureFormat::Rgba8Unorm, N, N, config);
+        renderer.set_sticky_enabled(false);
+        let before = renderer.orbit_generation();
+        let job = RenderJob::new(config, N, N).with_iterations(iterations).with_moments(moments);
+        pollster::block_on(render_with(&mut renderer, device, queue, job, &mut NoProgress)).expect("render");
+        (renderer.read_density_blocking(device, queue), renderer.orbit_generation().wrapping_sub(before))
+    }
+
+    /// 8x8-pixel block sums of a density.
+    fn blocks(d: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; ((N / 8) * (N / 8)) as usize];
+        for (i, v) in d.iter().enumerate() {
+            let (x, y) = (i as u32 % N, i as u32 / N);
+            out[((y / 8) * (N / 8) + x / 8) as usize] += v;
+        }
+        out
+    }
+
+    /// A flame whose moments are all the frame keeps its density blurred:
+    /// the moments share the samples, and the tone map's count is theirs.
+    #[test]
+    fn a_still_flame_blurs_into_itself() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = gasket(0.0);
+        let (sharp, _) = flame_density(&device, &queue, &frame, &[], 2_000_000);
+        let (blurred, _) = flame_density(&device, &queue, &frame, &vec![frame.clone(); 4], 2_000_000);
+        let (s, b) = (sharp.iter().sum::<f64>(), blurred.iter().sum::<f64>());
+        assert!((b / s - 1.0).abs() < 0.01, "density {b:.4} blurred against {s:.4} sharp");
+    }
+
+    /// A flame moving across the shutter, blurred, has the mean density of
+    /// its moments -- each drawn sharp on its own -- and its orbits go on
+    /// from moment to moment: one restart a frame, not one a moment.
+    #[test]
+    fn a_blurred_flame_is_the_mean_of_its_moments() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = gasket(0.0);
+        let moments: Vec<FractalConfig> = [-0.03, -0.01, 0.01, 0.03].iter().map(|e| gasket(*e)).collect();
+        // Enough samples that the blocks' noise is well under the bound:
+        // measured 3% at 2M a moment, 0.6% at 8M, 0.15% at 32M -- no bias
+        // from the orbits going on across the moments at that level.
+        let per_moment = 8_000_000u64;
+        let (blurred, restarts) = flame_density(&device, &queue, &frame, &moments, per_moment * moments.len() as u64);
+        assert_eq!(restarts, 1, "the moments restarted the orbits");
+        let sharp: Vec<Vec<f64>> = moments.iter().map(|m| blocks(&flame_density(&device, &queue, m, &[], per_moment).0)).collect();
+        let mean: Vec<f64> = (0..sharp[0].len()).map(|i| sharp.iter().map(|s| s[i]).sum::<f64>() / sharp.len() as f64).collect();
+        let got = blocks(&blurred);
+        let total: f64 = mean.iter().sum();
+        let mut worst = 0.0f64;
+        for (m, g) in mean.iter().zip(&got) {
+            // Blocks holding a fair share of the light.
+            if *m > total / mean.len() as f64 * 0.25 {
+                worst = worst.max((g - m).abs() / m);
+            }
+        }
+        assert!(worst < 0.02, "a block {:.1}% off the moments' mean", worst * 100.0);
+        // And the blur is real: the moments differ from each other.
+        let apart = sharp[0].iter().zip(&sharp[3]).map(|(a, b)| (a - b).abs()).sum::<f64>() / total;
+        assert!(apart > 0.05, "the moments barely differ ({apart:.3})");
     }
 }

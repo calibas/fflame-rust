@@ -3,8 +3,9 @@
 **Status:** planned 2026-10-29, branch `motion-blur`. Built 2026-10-29:
 phase 1 (the model, the shutter, the panel) and phase 2 (escape-time
 2D, export and viewport; checked in the CLI and, with a startup hook
-and a window capture, in the app). Phase 3 (flames) next; until phase 5
-a terrain or a path-traced solid ignores the setting.
+and a window capture, in the app) and phase 3 (flames, likewise
+checked). Phase 4 (simulation) next; until phase 5 a terrain or a
+path-traced solid ignores the setting.
 
 Motion blur for animations: each frame is the average of the picture
 over a short **shutter** around its time, as a camera's exposure is. It
@@ -140,7 +141,22 @@ its moment's flame, blurs the frame for the same work.
 - Later, if the dispatch per moment costs too much: each thread draws
   its own moment and uses parameters interpolated between the shutter's
   ends (the proposal's time dithering) -- one dispatch, a shader change,
-  linear within the shutter.
+  linear within the shutter. It would also end the stepping that a fast
+  motion shows with few samples (distinct copies of a spinning flame's
+  outer rings at 8), at no cost in samples.
+- **Built:** `FlameRenderer::set_moment` uploads a moment's flame and
+  view; `set_continuing_frame` marks a frame's later moments, whose
+  samples add to the frame's (overwrite mode too) and whose flame takes
+  over the orbits without a restart (`compute_pass`). The export's
+  dispatches go round the moments and end on a whole round; the
+  viewport shares the governed dispatch among the moments (each a K-th
+  of its iterations, its own submission after what the frame recorded)
+  and puts the frame's own flame back after. A blurred video turns the
+  CLI's inlined constants off. Not under Focused Rendering (its plans
+  are one view's), nor for a subflame viewed in isolation. Measured: a
+  640x360 spin, 0.4 s a frame blurred and sharp alike; the orbits going
+  on across moments leave no bias at 0.15% of a block's density (32M
+  samples a moment), one restart a frame.
 
 ### Simulation: phase 4
 

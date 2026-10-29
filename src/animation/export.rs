@@ -2089,6 +2089,16 @@ pub async fn export_animation(
         Ok(())
     });
 
+    // A blurred flame uploads each moment's flame (`set_moment`); compiled
+    // into the shader (the CLI's inlined constants) that would be a
+    // compile per moment, so a blurred video reads the buffers.
+    if export_config.animation.motion_blur.active()
+        && crate::shader_builder_v2::should_use_inlined_constants()
+    {
+        crate::shader_builder_v2::disable_inlined_constants();
+        log::info!("Video export: motion blur reads the flame from buffers (no inlined constants)");
+    }
+
     // One renderer for the whole export. `load_config` is a full reset
     // point, so it does not need to have been built for any particular
     // frame's config -- but it does need to be the right SIZE, which is
