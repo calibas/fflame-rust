@@ -1716,6 +1716,15 @@ animation_panel:
   sync_audio: "Sync Audio"
   sync_audio_tooltip: "Play loaded audio in sync with animation timeline"
 
+  # Motion blur
+  motion_blur: "Motion Blur"
+  motion_blur_tooltip: "Each frame averages the picture over a moment around its time, as a camera's shutter does: what moves blurs, what holds still stays sharp. Plays in the app and renders in the video export."
+  shutter: "Shutter:"
+  shutter_tooltip: "How long the shutter stays open, in animation time. Longer blurs motion more."
+  shutter_angle: "(%{angle}° at 30 fps)"
+  blur_samples: "Samples:"
+  blur_samples_tooltip: "Moments taken within the shutter. More look smoother on fast motion and cost more to render; too few show separate copies of whatever moves fast."
+
   # Quality mode
   quality: "Quality:"
   quality_responsive: "Responsive (Fast)"

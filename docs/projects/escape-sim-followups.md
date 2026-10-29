@@ -263,6 +263,8 @@ else in that record is built. These are not:
   wavelength-correlated fringing on a zoom. Planned, never scheduled;
   it is an export-loop feature, not a shader one, and wants its own
   plan. Full costing in the archived new-families research (§7).
+  Motion blur now has its plan, for every engine and in the app too:
+  [motion-blur.md](motion-blur.md); the spectral part is not in it.
 - **GPU reference-orbit computation (the NTT direction)** —
   measurement-gated go/no-go, never run. See
   [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md).
