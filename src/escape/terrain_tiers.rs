@@ -14,6 +14,10 @@ use wgpu::{Device, Queue, Texture, TextureView};
 /// The time a viewport frame gives the path tracer, in ms.
 const PATH_FRAME_MS: f32 = 12.0;
 
+/// The time a viewport frame gives the lit tier's passes, in ms, once a
+/// view has had its first.
+const LIT_FRAME_MS: f32 = 12.0;
+
 /// The largest still drawn whole, as the side of a square of its pixels.
 /// A larger one is drawn in tiles of about this side, each copied into
 /// the picture as it finishes (plan T5's output tiling), so what a
@@ -102,6 +106,9 @@ pub struct TerrainTiers {
     /// completion of a batch, and its average.
     path_done: Arc<Mutex<Option<f32>>>,
     path_ms: Option<f32>,
+    /// A lit pass's time, in ms, measured the same way, and its average.
+    lit_done: Arc<Mutex<Option<f32>>>,
+    lit_ms: Option<f32>,
     /// A still drawn in tiles, put together, and whether it is the
     /// output.
     picture: Option<(Texture, TextureView)>,
@@ -135,7 +142,8 @@ impl TerrainTiers {
         // The tier too: from Auto's traced picture to Lit, the lit
         // accumulation had finished and the traced picture stayed up.
         let key = format!("{:?}|{}|{}|{:?}", (i.view)([0.0, 0.0], 0), terrain.tile_version(), i.settings.restart_key(), i.tier);
-        if self.key.as_deref() != Some(key.as_str()) {
+        let fresh = self.key.as_deref() != Some(key.as_str());
+        if fresh {
             self.key = Some(key);
             self.lit_samples = 0;
             terrain.reset_accumulation();
@@ -144,10 +152,36 @@ impl TerrainTiers {
         }
         if i.tier != RenderTier::PathTraced {
             let grid = EscapeRenderer::sample_grid(lit_grid(i));
-            if let Some(&jitter) = grid.get(self.lit_samples as usize) {
-                terrain.render(device, queue, &(i.view)(jitter, pass_moment(i, self.lit_samples as usize)));
-                terrain.accumulate(device, queue);
-                self.lit_samples += 1;
+            if (self.lit_samples as usize) < grid.len() {
+                // A new view's first pass alone, so a drag stays as quick
+                // as it was; then as many as fit the frame at the measured
+                // cost. One a frame held a playing frame, which waits for
+                // its grid, to the display's rate over the passes.
+                let passes = if fresh {
+                    1
+                } else {
+                    self.lit_ms().map_or(1, |ms| (LIT_FRAME_MS / ms.max(0.05)).floor().clamp(1.0, 64.0) as usize)
+                };
+                let t0 = web_time::Instant::now();
+                let start = self.lit_samples as usize;
+                for (pass, &jitter) in grid.iter().enumerate().skip(start).take(passes) {
+                    terrain.render(device, queue, &(i.view)(jitter, pass_moment(i, pass)));
+                    terrain.accumulate(device, queue);
+                    self.lit_samples += 1;
+                }
+                // Timed only while no ground is arriving: the measure is to
+                // the GPU's completion of everything submitted, and a
+                // section's render beside the passes read as their cost and
+                // held the passes to one a frame.
+                if !i.filling {
+                    let drawn = self.lit_samples as usize - start;
+                    let slot = Arc::clone(&self.lit_done);
+                    queue.on_submitted_work_done(move || {
+                        if let Ok(mut g) = slot.lock() {
+                            *g = Some(t0.elapsed().as_secs_f32() * 1000.0 / drawn.max(1) as f32);
+                        }
+                    });
+                }
                 self.showing_path = false;
                 return true;
             }
@@ -348,6 +382,17 @@ impl TerrainTiers {
                 *g = Some(t0.elapsed().as_secs_f32() * 1000.0 / samples.max(1) as f32);
             }
         });
+    }
+
+    /// A lit pass's average time, in ms, once measured.
+    fn lit_ms(&mut self) -> Option<f32> {
+        if let Some(ms) = self.lit_done.lock().ok().and_then(|mut g| g.take()) {
+            self.lit_ms = Some(match self.lit_ms {
+                Some(avg) => avg + (ms - avg) * 0.3,
+                None => ms,
+            });
+        }
+        self.lit_ms
     }
 
     /// A path-traced sample's average time, in ms, once measured.

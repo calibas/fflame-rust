@@ -130,10 +130,13 @@ not.
 the view, the ground's version, the path settings and the tier. Any
 change restarts both accumulations, so "moving" means the key changed
 this frame. Then:
-1. **The lit tier first.** One jittered render a frame from the
-   antialiasing grid (`EscapeRenderer::sample_grid`, `supersample²`
-   positions), folded into a running mean. Lit stops when the grid is
-   done.
+1. **The lit tier first.** Jittered renders from the antialiasing grid
+   (`EscapeRenderer::sample_grid`, `supersample²` positions), folded into
+   a running mean: a new view's first alone, then as many a frame as fit
+   `LIT_FRAME_MS` (12 ms) at the measured cost of a pass -- measured only
+   while no ground is arriving, to the GPU's completion of what was
+   queued, so under load it reads high and the passes stay one a frame.
+   Lit stops when the grid is done.
 2. **While an escape terrain's sections are still arriving**, Auto stays
    lit and Path traced takes one sample a ground. Each section that lands
    restarts the accumulation, so samples taken meanwhile would be thrown

@@ -438,9 +438,9 @@ How each engine averages its moments:
 | Engine | Export | Viewport | Cost |
 | --- | --- | --- | --- |
 | Escape-time (2D, lit solids) | every antialiasing displacement at every moment, one accumulation | the moments rendered in turn, each to settlement; the last finished frame shown meanwhile; playback holds until the last | `samples` renders a frame |
-| Flames | the dispatches go round the moments into one accumulation, ending on a whole round | the governed dispatch shared among the moments, one histogram, one fold | the frame's own |
-| Simulation | the field walked to each moment's step count, coloured as that moment colours it | the same, over display frames; a grid the timeline does not step is recoloured at each moment | the colourings, and the steps it walks anyway |
-| Terrains | moments sharing the frame's picture on one ground, the lit passes or traced samples going round their views; moments whose picture differs, a ground each | the moments' views over the frame's ground (a picture changing within the shutter is not blurred) | the frame's own; a ground a moment where the picture changes |
+| Flames | the dispatches go round the moments into one accumulation, ending on a whole round | the governed dispatch shared among the moments, one histogram, one fold | the frame's samples, and an upload of each moment's flame (about 0.5 ms) |
+| Simulation | the field walked to each moment's step count, coloured as that moment colours it | the same, as many moments a display frame as its budget of steps reaches; a grid the timeline does not step is recoloured at each moment | the colourings, and the steps it walks anyway |
+| Terrains | moments sharing the frame's picture on one ground, the lit passes or traced samples going round their views; moments whose picture differs, a ground each | the moments' views over the frame's ground (a picture changing within the shutter is not blurred) | a lit pass a moment at least, else the frame's own; a ground a moment where the picture changes |
 | Path-traced solids | each moment traced with its share of the samples | not blurred | the frame's own |
 
 A flame's moments take over the orbits from the moment before rather

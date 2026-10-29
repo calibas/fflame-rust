@@ -582,6 +582,10 @@ pub struct FlameRenderer {
     /// its samples add to the frame's, overwrite mode or not, and its flame
     /// takes over the orbits rather than restarting them.
     continuing_frame: bool,
+    /// The flame on the GPU is a motion-blur moment's (`set_moment`), not
+    /// the one an edit or a load last put there: a sharp frame puts its
+    /// own back first (`restore_frame`).
+    holds_moment: bool,
     /// A hash of the whole flame, taken where flame edits land
     /// (`load_config`, `update_flame`) -- the whole of it, because a field
     /// left out would leave orbits on an old attractor, and a restart too
@@ -900,6 +904,7 @@ impl FlameRenderer {
             orbit_key: None,
             accumulation_restarted: false,
             continuing_frame: false,
+            holds_moment: false,
             flame_hash: 0,
             orbit_fuses: OrbitFuses::default(),
             orbit_refresh_period: 0,
@@ -2645,6 +2650,7 @@ impl FlameRenderer {
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
     pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32, burn_in: u32) {
+        self.holds_moment = false;
         self.flame_hash = Self::orbit_flame_hash(&config.flame);
         self.orbit_refresh_period = orbit_refresh_period_of(&config.flame);
         // Sticky superset (Layer B): adopt this flame's variations and
@@ -2966,6 +2972,24 @@ impl FlameRenderer {
     /// view uploaded, for the frame's next dispatch to draw. The dispatch
     /// takes the moment's camera itself (`compute_pass`).
     pub fn set_moment(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, iterations_per_thread: u32, burn_in: u32) {
+        self.upload_config(device, queue, config, iterations_per_thread, burn_in);
+        self.holds_moment = true;
+    }
+
+    /// Whether the flame on the GPU is a motion-blur moment's.
+    pub fn holds_moment(&self) -> bool {
+        self.holds_moment
+    }
+
+    /// Put the frame's own flame back after a blurred frame's moments:
+    /// once, when a sharp frame follows, rather than after every blurred
+    /// frame, whose next one uploads its own moments over it.
+    pub fn restore_frame(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, iterations_per_thread: u32, burn_in: u32) {
+        self.upload_config(device, queue, config, iterations_per_thread, burn_in);
+    }
+
+    /// `update_flame` from a config's flame and view.
+    fn upload_config(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, iterations_per_thread: u32, burn_in: u32) {
         let c = config;
         self.update_flame(
             device, queue, &c.flame, iterations_per_thread, burn_in,
@@ -2990,6 +3014,7 @@ impl FlameRenderer {
 
     /// Update the flame being rendered
     pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
+        self.holds_moment = false;
         self.flame_hash = Self::orbit_flame_hash(flame);
         self.orbit_refresh_period = orbit_refresh_period_of(flame);
         // The variations the user wrote, as `load_config` registers them.

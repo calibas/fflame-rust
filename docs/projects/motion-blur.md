@@ -253,6 +253,48 @@ the engines' docs where they changed; the API note.
 
 ---
 
+## Performance in the app (2026-10-29)
+
+Measured playing, sharp against 8 samples blurred, animation frames a
+second (a startup hook, removed):
+
+| Engine | Sharp | Blurred, first | Blurred, after |
+|---|---|---|---|
+| Flame (a spin) | ~95 | ~59 | ~80 |
+| Simulation (a cellular automaton, stepped) | 120 | 15 | ~115 |
+| Terrain (a turn) | 5.5 | 2.5 | 2.5 |
+| Escape-time (a spin, mode D) | 3.5 | 0.5 | 0.5 |
+
+What was wrong, and what is the work itself:
+
+- **Flames: an upload.** Each moment's `update_flame` sent the whole
+  variation-parameter table -- 384 slots of 6.4 KB, 2.5 MB, nearly all
+  zeros -- for a flame of four transforms: 1.1 ms of its 1.5, nine times
+  a frame, and the governor cut each moment's dispatch to 8 iterations a
+  thread to pay for it. Now the tables write the slots used
+  (`write_regions`; every edit pays less too), and the frame's own flame
+  is put back once, when a sharp frame follows (`restore_frame`), not
+  after every blurred one. Left: about 0.5 ms a moment of `update_flame`
+  -- the shader check, the transform and parameter packing. A lighter
+  path for a frame's later moments could skip the check, but proving a
+  moment has its first's shape costs half of what it saves.
+- **Simulation: one moment a display frame.** 120 to 15 was 120 / 8,
+  each moment cheap. Now a display frame walks as many moments as its
+  budget of steps reaches.
+- **Terrains: the passes.** A blurred frame draws a pass a moment at
+  least (9 at a 2x2 grid, against 4), each about 10 ms at this size; and
+  a turning camera's new sections, one a display frame, which a sharp
+  frame waits for too (the slower the frame, the further the turn, the
+  more sections). The viewport now draws as many passes a frame as fit
+  12 ms at the measured cost, a new view's first alone; the measure is
+  to the GPU's completion of everything queued, so under load it reads
+  high (38 ms) and the passes stay one a frame. GPU timestamps around
+  the lit pass would tell; not done.
+- **Escape-time: the work.** Every moment is a whole render. Not
+  changed: rendering each moment at `supersample / sqrt(samples)`, so a
+  blurred frame costs about a sharp one, trades each moment's
+  antialiasing for the frame's cost -- a decision, not a fix.
+
 ## Order of work
 
 1. **The model, the shutter, the panel** -- no picture changes yet.
