@@ -658,8 +658,11 @@ pub fn moment_configs(
     let Some(animation) = controller.animation.as_ref() else {
         return Vec::new();
     };
+    // A simulation's run starts again at a loop's seam: its moments stay
+    // on this side of it.
+    let wrap = base.render_mode != crate::scene::transforms::RenderMode::Simulation;
     animation
-        .moments(time)
+        .moments(time, wrap)
         .into_iter()
         .map(|t| {
             let mut config = base.clone();
