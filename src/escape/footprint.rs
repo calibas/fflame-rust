@@ -649,8 +649,8 @@ fn eye_in_anchor(escape: &EscapeConfig, a: &Anchor) -> ([f64; 2], f64) {
 /// at least `far` wide covering the disc of `far` about the eye, each
 /// split while its texels are coarser than `supersample × detail` a
 /// screen pixel at its nearest point, inside the view (widened by a
-/// margin) and within `far`. Past `capacity`, the texels coarsen until
-/// it fits.
+/// margin) and within `far`. Past `capacity`, the texels coarsen by the
+/// least factor that fits.
 ///
 /// No ground the view shows is nearer than `near_floor` (`next_near_floor`,
 /// from the probe; 0 unknown), so a section is split for no nearer than
@@ -742,8 +742,7 @@ pub fn wanted_sections(
     let hi = [((eye[0] + far_a) / rs).floor() as i64, ((eye[1] + far_a) / rs).floor() as i64];
     let root_dims = [(hi[0] - lo[0] + 1) as u32, (hi[1] - lo[1] + 1) as u32];
     let finest = ((FINEST_REL / z).log2().floor() as i32).min(root_level);
-    let mut coarsen = 1.0f64;
-    loop {
+    let walk = |coarsen: f64| {
         let mut out: Vec<(SectionKey, f64, bool)> = Vec::new();
         let mut hidden_roots = std::collections::HashSet::new();
         let mut stack: Vec<(i32, i64, i64)> = Vec::new();
@@ -775,13 +774,38 @@ pub fn wanted_sections(
                 out.push(((level, i, j), near, false));
             }
         }
-        if out.len() <= capacity || coarsen > 1.0e6 {
-            // Roots first, then nearest first.
-            out.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.total_cmp(&b.1)));
-            return Wanted { root_level, root_first: lo, root_dims, sections: out, hidden_roots };
-        }
+        (out, hidden_roots)
+    };
+    // Coarser by half again until it fits, then the least factor between
+    // that fits. Stopping at the first factor of 1.5 that fit made the
+    // whole ground change level at once whenever a moving view crossed
+    // one: a video of a slow zoom went from 78 sections to the cap in a
+    // frame, its finest detail visibly brighter before than after. The
+    // least factor keeps every frame at the cap, and a moving view
+    // changes the sections at its margin a few at a time.
+    let mut coarsen = 1.0f64;
+    let (mut out, mut hidden_roots) = walk(coarsen);
+    let mut too_fine = coarsen;
+    while out.len() > capacity && coarsen <= 1.0e6 {
+        too_fine = coarsen;
         coarsen *= 1.5;
+        (out, hidden_roots) = walk(coarsen);
     }
+    if coarsen > 1.0 && out.len() <= capacity {
+        // Eight halvings of the ratio: within 0.16%.
+        for _ in 0..8 {
+            let mid = (too_fine * coarsen).sqrt();
+            let (o, h) = walk(mid);
+            if o.len() <= capacity {
+                (coarsen, out, hidden_roots) = (mid, o, h);
+            } else {
+                too_fine = mid;
+            }
+        }
+    }
+    // Roots first, then nearest first.
+    out.sort_by(|a, b| b.2.cmp(&a.2).then(a.1.total_cmp(&b.1)));
+    Wanted { root_level, root_first: lo, root_dims, sections: out, hidden_roots }
 }
 
 /// The sections' floor on distance (`wanted_sections`) from the nearest
@@ -1810,6 +1834,43 @@ mod tests {
         esc.supersample = 4;
         let w4 = wanted_sections(&esc, 1920, 1080, MAX_SECTIONS as usize, a.zoom, eye, 0.0);
         assert!(w4.sections.len() <= MAX_SECTIONS as usize, "{}", w4.sections.len());
+    }
+
+    /// A slow zoom changes the sections a few at a time, and a view
+    /// coarsened to fit spends the whole cap. Coarsening stopped at the
+    /// first factor of 1.5 that fit, so the ground changed level all at
+    /// once wherever a moving view crossed one: this view -- a video's
+    /// slow zoom at 8x antialiasing, the export's cap of 128, the floor
+    /// the probe measured -- went from 78 sections to 128 between two
+    /// frames, its finest detail visibly brighter before than after.
+    #[test]
+    fn a_slow_zoom_changes_the_sections_a_few_at_a_time() {
+        let mut esc = EscapeConfig::default();
+        esc.terrain.enabled = true;
+        esc.terrain.height = 0.002;
+        esc.terrain.invert = true;
+        esc.supersample = 8;
+        esc.center_re = "1.0".into();
+        esc.center_im = "1.0".into();
+        esc.cam_pitch = 0.5168;
+        esc.cam_yaw = -0.2134;
+        let cap = 128;
+        let mut last: Option<std::collections::HashSet<SectionKey>> = None;
+        // 1.6 s at 30 frames a second, zooming 1/60 a second.
+        for frame in 0..48 {
+            esc.zoom_log2 = 1.5 + frame as f64 / 1800.0;
+            let a = canonical_anchor(&esc);
+            let (eye, _) = eye_in_anchor(&esc, &a);
+            let w = wanted_sections(&esc, 1920, 1080, cap, a.zoom, eye, 0.25);
+            let n = w.sections.len();
+            assert!(n <= cap && n + 8 >= cap, "frame {frame}: {n} sections of {cap}");
+            let now: std::collections::HashSet<SectionKey> = w.sections.iter().map(|s| s.0).collect();
+            if let Some(before) = &last {
+                let changed = now.symmetric_difference(before).count();
+                assert!(changed <= 16, "frame {frame}: {changed} sections changed");
+            }
+            last = Some(now);
+        }
     }
 
     /// A low camera: the target lifted below the relief's top, as a user

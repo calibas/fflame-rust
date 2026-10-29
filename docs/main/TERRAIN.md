@@ -1237,8 +1237,15 @@ camera, light or path-tracer edit re-renders no section.
    from the eye. The split is limited to sections inside the view
    (widened by a fifth) and nearer than `far` in view depth, and goes no
    finer than `FINEST_REL` (2^−14 of the view width).
-3. **Past the cap**, coarsen: the texel target is multiplied by 1.5 until
-   the set fits.
+3. **Past the cap**, coarsen: the texel target is multiplied by the
+   least factor that fits, bracketed in steps of 1.5 and then halved
+   eight times (to within 0.16%). A view that needs coarsening spends
+   the whole cap, and a moving view changes the sections at its margin a
+   few at a time. Stopping at the first step of 1.5 that fit changed the
+   whole ground's level at once wherever a moving view crossed a step: a
+   video of a slow zoom went from 78 sections to the export's cap of 128
+   between two frames, its finest detail visibly brighter before than
+   after.
 
 **The nearest ground in view** floors every distance in step 2. A box
 knows only the relief's slab. With the eye inside the slab (a low
