@@ -989,7 +989,6 @@ async fn render_sim(
     // however large `steps` is; polling between batches is also what
     // keeps the queue from growing without bound.
     const PROGRESS_BATCH: u32 = 512;
-    let total = job.config.sim.steps;
     // A terrain's still follows the steps, and takes most of a path
     // traced export: the bar's share of each, in thousandths.
     #[cfg(feature = "terrain")]
@@ -1000,23 +999,49 @@ async fn render_sim(
     };
     #[cfg(not(feature = "terrain"))]
     let still_share = 0.0;
-    loop {
-        let reached =
-            sim.advance_steps(device, queue, &job.config.sim, total, Some(PROGRESS_BATCH));
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        let steps = sim.step_index() as f64 / total.max(1) as f64;
-        progress.on_progress(((1.0 - still_share) * steps.min(1.0) * 1000.0) as u64, 1000);
-        if reached {
-            break;
+    // Motion blur (docs/projects/motion-blur.md): the field at each
+    // moment's step count, in turn, coloured as that moment colours it,
+    // averaged. A moment behind the field reseeds and runs, exactly as a
+    // backward frame does. A terrain is phase 5's and draws its frame.
+    #[cfg(feature = "terrain")]
+    let terrain_on = job.config.sim.terrain_active();
+    #[cfg(not(feature = "terrain"))]
+    let terrain_on = false;
+    let moments: Vec<&FractalConfig> = if job.moments.is_empty() || terrain_on {
+        vec![job.config]
+    } else {
+        job.moments.iter().collect()
+    };
+    let blurred = moments.len() > 1;
+    if blurred {
+        sim.begin_moments(device, queue, moments.len() as u32);
+    }
+    for moment in &moments {
+        if blurred && moment.sim.use_transforms {
+            sim.set_layer_transforms(device, queue, &moment.flame);
         }
-        if progress.is_cancelled() {
-            if !caller_owned {
-                sim.destroy();
+        let total = moment.sim.steps;
+        loop {
+            let reached =
+                sim.advance_steps(device, queue, &moment.sim, total, Some(PROGRESS_BATCH));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let steps = sim.step_index() as f64 / total.max(1) as f64;
+            progress.on_progress(((1.0 - still_share) * steps.min(1.0) * 1000.0) as u64, 1000);
+            if reached {
+                break;
             }
-            return Err(RenderError::Cancelled);
+            if progress.is_cancelled() {
+                if !caller_owned {
+                    sim.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+        }
+        sim.color(device, queue, &moment.sim, renderer.palette_view());
+        if blurred {
+            sim.add_moment(device, queue);
         }
     }
-    sim.color(device, queue, &job.config.sim, renderer.palette_view());
 
     // The terrain: its ground made from the field as it now is, then the
     // still -- path traced at its samples unless its tier is Lit.
@@ -1066,13 +1091,17 @@ async fn render_sim(
         chain.reset_slots();
     }
 
+    let picture = match sim.moments_view() {
+        Some(v) if blurred => v,
+        _ => sim.output_view(),
+    };
     #[cfg(feature = "terrain")]
     let sim_view = match terrain.as_ref() {
         Some(t) => t.output_view(),
-        None => sim.output_view(),
+        None => picture,
     };
     #[cfg(not(feature = "terrain"))]
-    let sim_view = sim.output_view();
+    let sim_view = picture;
     if has_density_effects {
         let chain = effect_chain.as_mut().expect("built above: has_density_effects");
         let density_ran = chain.run_density_effects(
@@ -1864,6 +1893,50 @@ mod motion_tests {
         assert!(still == shown, "the frame shown changed while the next built");
         assert!(building != finished, "the next frame did not build");
         escape.destroy();
+    }
+
+    /// Gray-Scott at `steps`, linear tone mapping (as `view`).
+    #[cfg(feature = "engine-sim")]
+    fn grid(steps: u32) -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.exposure = 1.0;
+        c.gamma = 1.0;
+        c.sim.steps = steps;
+        c
+    }
+
+    /// A simulation's moments are its field at their step counts: a
+    /// blurred frame is the mean of their light, each drawn on its own,
+    /// and one whose moments are all the frame is the frame.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_blurred_simulation_is_the_mean_of_its_step_counts() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = grid(550);
+        let sharp = draw(&device, &queue, &frame, &[]);
+        let still = draw(&device, &queue, &frame, &vec![frame.clone(); 4]);
+        let worst = sharp.iter().zip(&still).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "a still frame changed by {worst} blurred");
+
+        let moments: Vec<FractalConfig> = [400, 500, 600, 700].into_iter().map(grid).collect();
+        let blurred = draw(&device, &queue, &frame, &moments);
+        let pictures: Vec<Vec<u8>> = moments.iter().map(|m| draw(&device, &queue, m, &[])).collect();
+        let far = blurred
+            .iter()
+            .enumerate()
+            .filter(|(i, b)| {
+                let light = pictures.iter().map(|p| (p[*i] as f64 / 255.0).powf(2.2)).sum::<f64>() / pictures.len() as f64;
+                (**b as f64 - 255.0 * light.powf(1.0 / 2.2)).abs() > 2.0
+            })
+            .count();
+        assert!(far * 1000 <= blurred.len(), "{far} of {} channels off the moments' mean", blurred.len());
+        let moved = sharp.iter().zip(&blurred).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / sharp.len() as f64;
+        assert!(moved > 1.0, "the blur changed the frame by only {moved:.3} a channel");
     }
 
     /// A Sierpinski gasket filling the view, its first map's offset `e`.

@@ -1,3 +1,5 @@
+#[cfg(any(feature = "engine-escape", feature = "engine-sim"))]
+pub mod average;
 pub mod coat;
 pub mod compute_kernel;
 pub mod effect_chain;

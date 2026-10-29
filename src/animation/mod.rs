@@ -384,22 +384,25 @@ impl Animation {
     /// The times of a frame's motion-blur moments, `t` its own time; empty
     /// when motion blur is off. A shutter reaching past an end clamps for
     /// `Once`, wraps for `Loop` (the seam blurs like any other moment) and
-    /// reflects for `PingPong`.
-    pub fn moments(&self, t: f64) -> Vec<f64> {
+    /// reflects for `PingPong`. `wrap` false clamps a loop too: a
+    /// simulation's run starts again at the seam, and a moment from the
+    /// end would carry its field ahead of the timeline.
+    pub fn moments(&self, t: f64, wrap: bool) -> Vec<f64> {
         if !self.motion_blur.active() {
             return Vec::new();
         }
-        self.motion_blur.offsets().into_iter().map(|o| self.moment_time(t + o)).collect()
+        self.motion_blur.offsets().into_iter().map(|o| self.moment_time(t + o, wrap)).collect()
     }
 
     /// A moment's time brought back into the animation by its loop mode.
-    fn moment_time(&self, t: f64) -> f64 {
+    fn moment_time(&self, t: f64, wrap: bool) -> f64 {
         let d = self.duration;
         if !(d > 0.0) {
             return 0.0;
         }
         match self.loop_mode {
             LoopMode::Once => t.clamp(0.0, d),
+            LoopMode::Loop if !wrap => t.clamp(0.0, d),
             LoopMode::Loop => t.rem_euclid(d),
             LoopMode::PingPong => {
                 let p = t.rem_euclid(2.0 * d);
@@ -1097,9 +1100,9 @@ mod tests {
         }
         assert!(offsets.iter().sum::<f64>().abs() < 1e-12, "centred: {offsets:?}");
         let mut anim = Animation::new("Blur".into(), 1.0);
-        assert!(anim.moments(0.5).is_empty(), "off by default");
+        assert!(anim.moments(0.5, true).is_empty(), "off by default");
         anim.motion_blur = blur;
-        assert_eq!(anim.moments(0.5).len(), 4);
+        assert_eq!(anim.moments(0.5, true).len(), 4);
     }
 
     /// A shutter reaching past an end clamps for Once, wraps for Loop and
@@ -1109,13 +1112,15 @@ mod tests {
         let mut anim = Animation::new("Ends".into(), 2.0);
         anim.motion_blur = MotionBlur { enabled: true, shutter: 0.4, samples: 2 };
         // At t = 0 the moments are -0.1 and +0.1; at t = 2, 1.9 and 2.1.
-        let at = |anim: &Animation, t: f64| -> Vec<f64> { anim.moments(t).iter().map(|m| (m * 1e9).round() / 1e9).collect() };
+        let at = |anim: &Animation, t: f64| -> Vec<f64> { anim.moments(t, true).iter().map(|m| (m * 1e9).round() / 1e9).collect() };
         anim.loop_mode = LoopMode::Once;
         assert_eq!(at(&anim, 0.0), vec![0.0, 0.1]);
         assert_eq!(at(&anim, 2.0), vec![1.9, 2.0]);
         anim.loop_mode = LoopMode::Loop;
         assert_eq!(at(&anim, 0.0), vec![1.9, 0.1]);
         assert_eq!(at(&anim, 2.0), vec![1.9, 0.1]);
+        // Unwrapped (a simulation's), a loop clamps.
+        assert_eq!(anim.moments(0.0, false)[0], 0.0);
         anim.loop_mode = LoopMode::PingPong;
         assert_eq!(at(&anim, 0.0), vec![0.1, 0.1]);
         assert_eq!(at(&anim, 2.0), vec![1.9, 1.9]);

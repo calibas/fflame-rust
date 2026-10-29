@@ -3,9 +3,9 @@
 **Status:** planned 2026-10-29, branch `motion-blur`. Built 2026-10-29:
 phase 1 (the model, the shutter, the panel) and phase 2 (escape-time
 2D, export and viewport; checked in the CLI and, with a startup hook
-and a window capture, in the app) and phase 3 (flames, likewise
-checked). Phase 4 (simulation) next; until phase 5 a terrain or a
-path-traced solid ignores the setting.
+and a window capture, in the app), phase 3 (flames) and phase 4
+(simulation), each likewise checked. Phase 5 (terrains and solids)
+next; until then a terrain or a path-traced solid ignores the setting.
 
 Motion blur for animations: each frame is the average of the picture
 over a short **shutter** around its time, as a camera's exposure is. It
@@ -166,6 +166,31 @@ those steps, which the grid passes through anyway walking forward. A
 held backward leg (`timeline_target_applies`) is not blurred: the
 picture is held. A colouring parameter's track takes its value at each
 moment.
+
+- **Built:** the averaging is shared now
+  (`renderer::average::ImageAverage`, the escape engine's accumulation
+  moved out, with a first add's params and every other's made at
+  `begin`, so several adds can share a submission); the simulation
+  renderer keeps one (`begin_moments`, `add_moment`, `present_moments`).
+  The export walks the field to each moment's step count in turn,
+  colours it as that moment colours it, and folds it in; one behind the
+  field reseeds and runs, as a backward frame does. The viewport walks a
+  committed step count's moments the same way, over display frames,
+  holding playback until the last (`sim_motion`); one behind the field
+  is held where the field is, except a frame the timeline committed
+  backward (a loop's wrap, a turnaround), whose first moment runs back.
+  A grid the timeline does not step (no step track, a held leg) is
+  recoloured at each moment where they differ in more than their step
+  count.
+- **A loop's seam:** a simulation's moments clamp there instead of
+  wrapping (`Animation::moments(t, wrap)`, from `moment_configs`): the
+  run starts again at the seam, and a moment from the end carried the
+  field ahead of the timeline, which then held it there -- found in the
+  app, where playback stuck at the last step.
+- Checked: a Cyclic Cellular Automaton stepped 0 to 600 in 2 s, blurred
+  over 1/30 s, in the CLI and in the app (startup hook, removed):
+  the moving waves wash toward their average colour, the steps following
+  the timeline.
 
 ### Terrains and solids: phase 5
 

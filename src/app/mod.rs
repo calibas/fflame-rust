@@ -428,7 +428,8 @@ fn sim_view<'a>(
         }
     }
     let _ = config;
-    sim.as_ref().map(|s| s.output_view())
+    // A motion-blurred frame, finished, while the next builds.
+    sim.as_ref().map(|s| s.presented_view().unwrap_or_else(|| s.output_view()))
 }
 
 const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
@@ -477,7 +478,10 @@ pub struct App {
     pub(super) escape_aa_settled_at: Option<web_time::Instant>,
     /// The escape frame being built from its motion-blur moments
     /// (motion_blur.rs), while one is.
-    pub(super) escape_motion: Option<motion_blur::EscapeMotion>,
+    pub(super) escape_motion: Option<motion_blur::Moments>,
+    /// The simulation frame being walked through its moments' step
+    /// counts (motion_blur.rs), while one is.
+    pub(super) sim_motion: Option<motion_blur::Moments>,
     /// When the user last EDITED something the escape pass renders.
     /// For the interaction window: within it a mode-D render is a
     /// quarter-resolution preview, after it a full one. See
@@ -907,6 +911,7 @@ impl App {
             escape_aa: Default::default(),
             escape_aa_settled_at: None,
             escape_motion: None,
+            sim_motion: None,
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
@@ -2486,7 +2491,7 @@ impl App {
                             Some(&self.signal_manager),
                         );
                         escape.begin_accumulation_of(&self.gpu.device, &self.gpu.queue, moments.len() as u32);
-                        self.escape_motion = Some(motion_blur::EscapeMotion { moments, next: 0 });
+                        self.escape_motion = Some(motion_blur::Moments { moments, next: 0, rewind: false });
                     }
                 } else if self.escape_motion.take().is_some() | escape.drop_presented() {
                     self.escape_dirty = true;
@@ -2677,6 +2682,11 @@ impl App {
             #[cfg(feature = "engine-sim")]
             if is_sim {
                 let (w, h) = (renderer.width, renderer.height);
+                // A frame part-way through its moments went with the
+                // renderer that held their average.
+                if self.sim_renderer.is_none() {
+                    self.sim_motion = None;
+                }
                 let sim = self.sim_renderer.get_or_insert_with(|| {
                     crate::sim::SimRenderer::new(&self.gpu.device, &final_config.sim, w, h)
                 });
@@ -2693,7 +2703,68 @@ impl App {
                     sim.request_seed();
                     self.sim_reseed = false;
                 }
-                if let Some(target) = self.sim_timeline_target {
+                // Budgeted walks of the grid, so a jump it cannot make in
+                // one display frame is walked over the next few instead of
+                // freezing the UI.
+                const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
+                // Motion blur (motion_blur.rs): a frame's moments, where
+                // they differ from the frame -- a run the timeline does not
+                // step, with no colouring track, is the same at every
+                // moment. A terrain is phase 5's.
+                let blur_moments = if motion_blur::blurring(&self.animation_controller) && !final_config.sim.terrain_active() {
+                    let moments = crate::animation::export::moment_configs(
+                        final_config,
+                        &self.animation_controller,
+                        self.animation_controller.current_time,
+                        Some(&self.signal_manager),
+                    );
+                    if moments.iter().any(|m| m.sim != final_config.sim) { moments } else { Vec::new() }
+                } else {
+                    Vec::new()
+                };
+                if blur_moments.is_empty() {
+                    self.sim_motion = None;
+                    sim.drop_presented();
+                }
+                // A step count the timeline committed starts a blurred
+                // frame's walk through its moments' step counts instead.
+                if !blur_moments.is_empty() && self.sim_motion.is_none() {
+                    if let Some(target) = self.sim_timeline_target.take() {
+                        let index = if sim.will_reseed(&final_config.sim) { 0 } else { sim.step_index() };
+                        sim.begin_moments(&self.gpu.device, &self.gpu.queue, blur_moments.len() as u32);
+                        self.sim_motion = Some(motion_blur::Moments { moments: blur_moments.clone(), next: 0, rewind: target < index });
+                    }
+                }
+                let walking = self.sim_motion.is_some();
+                if let Some(motion) = self.sim_motion.as_mut() {
+                    // Each moment's step count in turn, coloured as that
+                    // moment colours it, folded into the frame. One behind
+                    // the field is held where the field is, as playback
+                    // holds a backward step count (an export runs back).
+                    let m = motion.current();
+                    let index = if sim.will_reseed(&m.sim) { 0 } else { sim.step_index() };
+                    let target = if motion.rewind && motion.next == 0 { m.sim.steps } else { m.sim.steps.max(index) };
+                    let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
+                    let reached = sim.advance_to(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &m.sim,
+                        renderer.palette_view(),
+                        target,
+                        Some(budget),
+                    );
+                    if reached {
+                        sim.add_moment(&self.gpu.device, &self.gpu.queue);
+                        motion.next += 1;
+                    }
+                    if motion.next == motion.moments.len() {
+                        sim.present_moments(&self.gpu.device, &self.gpu.queue);
+                        self.sim_motion = None;
+                    } else {
+                        self.window.request_redraw();
+                    }
+                    self.sim_step_once = false;
+                } else if let Some(target) = self.sim_timeline_target {
                     // THE TIMELINE OWNS THE STEP COUNT. The picture at
                     // a given time is the state at that step count, so
                     // the transport is inert here: a picture that
@@ -2707,7 +2778,6 @@ impl App {
                     // ask for a two-thousand-step jump on every slider
                     // event. `steps_in` sizes it from the measured
                     // cost of a step.
-                    const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
                     let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
                     let reached = sim.advance_to(
                         &self.gpu.device,
@@ -2785,6 +2855,23 @@ impl App {
                     if self.sim_running {
                         self.window.request_redraw();
                     }
+                }
+                // A grid the timeline did not step this frame -- no step
+                // track, or a held backward leg: the field as it now is,
+                // recoloured at each moment and averaged, where the moments
+                // differ in more than their step count.
+                let recoloured = blur_moments.iter().any(|m| {
+                    let mut c = m.sim.clone();
+                    c.steps = final_config.sim.steps;
+                    c != final_config.sim
+                });
+                if !walking && recoloured {
+                    sim.begin_moments(&self.gpu.device, &self.gpu.queue, blur_moments.len() as u32);
+                    for m in &blur_moments {
+                        sim.color(&self.gpu.device, &self.gpu.queue, &m.sim, renderer.palette_view());
+                        sim.add_moment(&self.gpu.device, &self.gpu.queue);
+                    }
+                    sim.present_moments(&self.gpu.device, &self.gpu.queue);
                 }
                 // The 3D terrain (heightfield plan T4): its ground made
                 // from the field as this frame left it -- every step of a

@@ -468,6 +468,11 @@ pub struct SimRenderer {
     /// Output image, in pixels.
     out_w: u32,
     out_h: u32,
+    /// Motion blur's average of a frame's moments, each the field at its
+    /// step count coloured as it is coloured then
+    /// (docs/projects/motion-blur.md), and the viewport's last finished
+    /// one kept aside.
+    moments: crate::renderer::average::ImageAverage,
 
     field: [Texture; 2],
     field_view: [TextureView; 2],
@@ -641,6 +646,7 @@ impl SimRenderer {
     /// render's throwaway renderer, kept the whole grid until garbage
     /// collection.
     pub fn destroy(&self) {
+        self.moments.destroy();
         for t in &self.field {
             t.destroy();
         }
@@ -745,6 +751,7 @@ impl SimRenderer {
             grid_h,
             out_w,
             out_h,
+            moments: Default::default(),
             field,
             field_view,
             current: 0,
@@ -1476,6 +1483,41 @@ impl SimRenderer {
         &self.output_texture
     }
 
+    /// Start averaging a frame's `count` motion-blur moments.
+    pub fn begin_moments(&mut self, device: &Device, queue: &Queue, count: u32) {
+        self.moments.begin(device, queue, self.out_w, self.out_h, count);
+    }
+
+    /// Fold the picture as last coloured into the moments' average.
+    pub fn add_moment(&mut self, device: &Device, queue: &Queue) {
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Sim Moment") });
+        self.moments.add(device, &mut enc, &self.output_view);
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// The moments' average; complete once every moment is added.
+    pub fn moments_view(&self) -> Option<&TextureView> {
+        self.moments.view()
+    }
+
+    /// Keep the finished average aside for the viewport
+    /// (`presented_view`) while the next frame's builds.
+    pub fn present_moments(&mut self, device: &Device, queue: &Queue) {
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Sim Present") });
+        self.moments.present(device, &mut enc);
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// The last finished blurred frame, while the viewport keeps one.
+    pub fn presented_view(&self) -> Option<&TextureView> {
+        self.moments.presented_view()
+    }
+
+    /// Stop showing a blurred frame; true if one was shown.
+    pub fn drop_presented(&mut self) -> bool {
+        self.moments.drop_presented()
+    }
+
     /// The texture currently holding live state. Test-only: reading the
     /// field back is how the CPU-mirror and determinism tests check the
     /// rule rather than the picture.
@@ -1575,6 +1617,8 @@ impl SimRenderer {
         if !out_changed && !grid_changed {
             return false;
         }
+        // A finished blurred frame of the old size no longer fits.
+        self.moments.fit_presented(out_w, out_h);
         if out_changed {
             let (t, v) = Self::create_output(device, out_w, out_h);
             self.output_texture = t;
