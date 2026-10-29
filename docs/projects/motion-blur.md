@@ -1,8 +1,10 @@
 # Motion blur
 
-**Status:** planned 2026-10-29, branch `motion-blur`. Phase 1 (the
-model, the shutter, the panel) built 2026-10-29; the panel's setting
-changes no picture until phase 2. Phase 2 (escape-time) next.
+**Status:** planned 2026-10-29, branch `motion-blur`. Built 2026-10-29:
+phase 1 (the model, the shutter, the panel) and phase 2 (escape-time
+2D, export and viewport; checked in the CLI and, with a startup hook
+and a window capture, in the app). Phase 3 (flames) next; until phase 5
+a terrain or a path-traced solid ignores the setting.
 
 Motion blur for animations: each frame is the average of the picture
 over a short **shutter** around its time, as a camera's exposure is. It
@@ -107,6 +109,16 @@ warning applies to per-pixel time, which this is not).
 - **Deep zoom:** the moments of a camera move are a small displacement
   of one view; they should share the reference orbit (§7). To verify,
   not assume.
+- **Built:** `render_escape` renders every displacement at every
+  moment, each prepared for its own config (a mode-D flame, a texture),
+  into `begin_accumulation_of(renders)`. In the viewport
+  (`app/motion_blur.rs`) a dirty frame while playing starts its moments;
+  each settled moment folds in; the last presents the accumulation
+  (`present_accumulation`), which `escape_view` shows until the next
+  frame's is done. Stopped or paused, the presented frame is dropped
+  and the sharp frame drawn. A mode-D flame takes each moment's flame in
+  the viewport too. Measured: a 640x360 spin, 8 moments, 0.4 s a frame
+  against 0.1 s sharp.
 
 ### Flames: phase 3
 

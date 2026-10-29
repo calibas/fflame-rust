@@ -9,6 +9,7 @@ mod effect_fetch;
 mod variation_fetch;
 mod texture_sync;
 mod aa_governor;
+mod motion_blur;
 mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
@@ -408,7 +409,8 @@ fn escape_view<'a>(
         return terrain.as_ref().map(|t| t.output_view());
     }
     let _ = config;
-    escape.as_ref().map(|e| e.output_view())
+    // A motion-blurred frame, finished, while the next builds.
+    escape.as_ref().map(|e| e.presented_view().unwrap_or_else(|| e.output_view()))
 }
 
 /// The simulation's image for the tail: its terrain's while the config
@@ -473,6 +475,9 @@ pub struct App {
     /// (aa_governor.rs), and when the last settled frame landed.
     pub(super) escape_aa: aa_governor::AaGovernor,
     pub(super) escape_aa_settled_at: Option<web_time::Instant>,
+    /// The escape frame being built from its motion-blur moments
+    /// (motion_blur.rs), while one is.
+    pub(super) escape_motion: Option<motion_blur::EscapeMotion>,
     /// When the user last EDITED something the escape pass renders.
     /// For the interaction window: within it a mode-D render is a
     /// quarter-resolution preview, after it a full one. See
@@ -901,6 +906,7 @@ impl App {
             escape_texture: Default::default(),
             escape_aa: Default::default(),
             escape_aa_settled_at: None,
+            escape_motion: None,
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
@@ -2408,6 +2414,11 @@ impl App {
                 }
             }
             if is_escape && !terrain_on {
+                // A frame part-way through its motion-blur moments went
+                // with the renderer that held its accumulation.
+                if self.escape_renderer.is_none() {
+                    self.escape_motion = None;
+                }
                 let escape = self.escape_renderer.get_or_insert_with(|| {
                     let mut esc = crate::escape::EscapeRenderer::new(
                         &self.gpu.device,
@@ -2458,6 +2469,30 @@ impl App {
                     aa_governed,
                     aa_ceiling,
                 )));
+                // Motion blur (motion_blur.rs): a new frame while it plays
+                // starts its moments in the accumulation. Stopped or
+                // paused, the sharp frame at the playhead is drawn again.
+                // A path-traced solid renders display pixels of its own,
+                // and is not blurred here (docs/projects/motion-blur.md,
+                // phase 5).
+                let solid_traced = crate::escape::ifs::formula_is_solid(&final_config.escape.formula)
+                    && final_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
+                if motion_blur::blurring(&self.animation_controller) && !solid_traced {
+                    if self.escape_dirty && self.escape_motion.is_none() {
+                        let moments = crate::animation::export::moment_configs(
+                            final_config,
+                            &self.animation_controller,
+                            self.animation_controller.current_time,
+                            Some(&self.signal_manager),
+                        );
+                        escape.begin_accumulation_of(&self.gpu.device, &self.gpu.queue, moments.len() as u32);
+                        self.escape_motion = Some(motion_blur::EscapeMotion { moments, next: 0 });
+                    }
+                } else if self.escape_motion.take().is_some() | escape.drop_presented() {
+                    self.escape_dirty = true;
+                }
+                // What the escape pass renders: the moment, or the frame.
+                let target = self.escape_motion.as_ref().map_or(final_config, |m| m.current());
                 // Mode D renders the FLAME as a distance field, so a
                 // flame edit has to reach the escape image — and
                 // nothing else marks it dirty, because every other
@@ -2467,7 +2502,7 @@ impl App {
                 // the packing changed, which is the cue.
                 if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
                     let registry = crate::variations::global_registry();
-                    let packed = self.ifs_pack_cache.pack_for(def, &final_config, &registry);
+                    let packed = self.ifs_pack_cache.pack_for(def, target, &registry);
                     if escape.set_ifs(packed) {
                         self.escape_dirty = true;
                     }
@@ -2478,8 +2513,8 @@ impl App {
                     escape.ensure_coarse(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        &final_config.escape,
-                        &final_config.flame,
+                        &target.escape,
+                        &target.flame,
                     );
                     if escape.set_solid_lighting(
                         &final_config.solid_shading,
@@ -2561,20 +2596,35 @@ impl App {
                         &self.gpu.device,
                         &self.gpu.queue,
                         &mut render_encoder,
-                        &final_config.escape,
+                        &target.escape,
                         renderer.escape_palette_view(final_config.escape.palette_map.stepped),
                         renderer.palette_generation(),
                     );
+                    // A motion-blur moment folds in as it settles, and the
+                    // frame is done after its last; the finished frame is
+                    // what the viewport shows until the next is.
+                    let done = match self.escape_motion.as_mut() {
+                        Some(motion) if settled => {
+                            escape.accumulate_sample(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+                            motion.next += 1;
+                            motion.next == motion.moments.len()
+                        }
+                        Some(_) => false,
+                        None => settled,
+                    };
+                    if done && self.escape_motion.take().is_some() {
+                        escape.present_accumulation(&self.gpu.device, &mut render_encoder);
+                    }
                     // Progressive deep zoom: an unsettled frame keeps
                     // the dirty flag so the next frame re-renders with
                     // the longer orbit prefix.
-                    self.escape_dirty = !settled;
-                    if !settled {
+                    self.escape_dirty = !done;
+                    if !done {
                         self.window.request_redraw();
                     }
                     // A settled playback frame: how long since the last one,
                     // against the governor's budget.
-                    if settled && self.escape_aa.active() {
+                    if done && self.escape_aa.active() {
                         let now = Instant::now();
                         if let Some(prev) = self.escape_aa_settled_at.replace(now) {
                             let settings = self.config_manager.system_settings();
