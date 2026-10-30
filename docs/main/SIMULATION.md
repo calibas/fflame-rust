@@ -616,8 +616,18 @@ each layer's memory slice count. Change any of those and the run
 restarts. A change of grid size reseeds too (`SimReseed`). A bound
 grid's scale is meant to resample the live field instead (`SimResample`),
 but until the resampler is built it reseeds as well: `SimRenderer::resize`
-reseeds whenever the grid's size changes, whether from the scale or from
-a resize of the window.
+reseeds whenever the grid's size changes.
+
+**A resize does not restart an active run** (`src/app/sim_lock.rs`).
+While the transport runs or the timeline drives the steps, a bound grid
+is held at the run's cells: the renderer is resized with that grid fixed,
+and once the viewport is not the size the run began at it letterboxes to
+the grid's shape (`ui::SimLock`, `view_controls::letterbox_shape`), so
+full screen shows the same field larger, at its step. Pausing or stopping
+lets go: the viewport fills its panel and the grid follows it at the
+config's scale, from the seed. Not with the letterbox setting on, whose
+shape is the picture's already, nor for a fixed grid. A scale edit while
+running lets go for a frame, so the edit takes effect.
 
 Model and colouring **parameters are deliberately excluded** — turning
 Gray–Scott's feed rate while it runs is what the slider is for, and

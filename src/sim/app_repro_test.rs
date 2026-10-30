@@ -180,6 +180,37 @@ fn small_config() -> SimConfig {
     cfg
 }
 
+/// An active run's grid held through a resize (app/sim_lock.rs, D7):
+/// resized with its cells fixed, the field and its step survive a new
+/// picture size, shown larger; resized as the bound grid it is, the cells
+/// follow the picture and the run starts over from the seed.
+#[test]
+fn a_held_grid_keeps_its_run_through_a_resize() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut cfg = small_config();
+    cfg.grid = SimGrid::Viewport { scale: 1.0 };
+    let mut r = SimRenderer::new(&device, &cfg, 64, 48);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 20);
+    let at = r.step_index();
+    assert!(at > 0 && !r.will_reseed(&cfg), "a run under way");
+
+    let mut held = cfg.clone();
+    held.grid = SimGrid::Fixed { width: 64, height: 48 };
+    r.resize(&device, &held, 128, 96);
+    assert_eq!(r.grid_size(), (64, 48), "the cells are kept");
+    assert_eq!(r.output_size(), (128, 96), "the picture is the new size");
+    assert!(!r.will_reseed(&cfg), "the run goes on");
+    assert_eq!(r.step_index(), at, "at its step");
+
+    r.resize(&device, &cfg, 128, 96);
+    assert_eq!(r.grid_size(), (128, 96), "let go, the bound grid follows the picture");
+    assert!(r.will_reseed(&cfg), "and the run starts over from the seed");
+}
+
 /// The field after a real run is a Gray–Scott field: finite, inside
 /// [0, 1], and actually patterned rather than uniform.
 #[test]
