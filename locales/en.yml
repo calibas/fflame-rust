@@ -93,10 +93,11 @@ menu:
   render_scale: "Render Scale"
   tooltip_render_scale: "Render the viewport's picture at this share of its size each side, and draw it up to the display with the upscaler below: 50% renders a quarter of the pixels.\nFaster, and softer. Export with Background and Export Transparent render at the picture's own size whatever this is; Export Current Image saves the viewport's picture as rendered, at this scale."
   upscaler: "Upscaler"
-  tooltip_upscaler: "How a picture rendered below the display's size is drawn up to it.\nCatmull-Rom is sharper; bilinear is softer, and is what the viewport drew before; nearest shows each rendered pixel as a block, crisp and blocky."
+  tooltip_upscaler: "How a picture rendered below the display's size is drawn up to it.\nCatmull-Rom is sharper; bilinear is softer, and is what the viewport drew before; nearest shows each rendered pixel as a block, crisp and blocky; FSR 1 (AMD FidelityFX Super Resolution) follows edges as it upscales, then sharpens."
   upscaler_nearest: "Nearest"
   upscaler_bilinear: "Bilinear"
   upscaler_catmull_rom: "Catmull-Rom"
+  upscaler_fsr: "FSR 1"
   render_physical_pixels: "Render at Physical Pixels"
   tooltip_render_physical_pixels: "On a high-DPI screen, render at the screen's own pixels rather than the interface's points: sharper, and that many more pixels to render.\nOff, the picture renders at the points and is drawn up to the screen. No effect on a 100% screen."
 

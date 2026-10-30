@@ -231,3 +231,103 @@ fn governor_calibration() {
         }
     }
 }
+
+/// **The upscalers compared** (docs/projects/quality-governor.md, order of
+/// work item 4): every rung the calibration rendered below full size,
+/// drawn up to its reference's size by the viewport's own pass
+/// (`renderer::upscale`) with each filter, as the viewport would show it,
+/// for `scripts/frame_metrics.py upscalers` to measure against the
+/// reference. Reads `calibration.csv` and its pictures from `CALIBRATE_OUT`
+/// (default `output/governor`), so run `governor_calibration` first; renders
+/// nothing and times nothing.
+///
+/// ```text
+/// cargo test --release --lib -- --ignored upscaler_comparison --nocapture
+/// ```
+#[test]
+#[ignore = "measurement; needs a GPU and governor_calibration's output"]
+fn upscaler_comparison() {
+    use crate::renderer::upscale::{Upscale, UpscaleFilter};
+    let (device, queue) = pollster::block_on(crate::app::export::headless_device()).expect("gpu");
+    let out = std::path::PathBuf::from(std::env::var("CALIBRATE_OUT").unwrap_or_else(|_| "output/governor".into()));
+    let rows = std::fs::read_to_string(out.join("calibration.csv")).expect("calibration.csv: run governor_calibration first");
+    let mut lines = rows.lines();
+    let head: Vec<&str> = lines.next().expect("a header").split(',').collect();
+    let col = |name: &str| head.iter().position(|h| *h == name).expect(name);
+    let (c_scene, c_kind, c_rung, c_scale, c_file) = (col("scene"), col("kind"), col("rung"), col("scale"), col("file"));
+    let mut csv = std::fs::File::create(out.join("upscalers.csv")).expect("upscalers.csv");
+    use std::io::Write;
+    writeln!(csv, "scene,rung,filter,file,ref").expect("csv");
+    let rows: Vec<Vec<String>> = lines.map(|l| l.split(',').map(str::to_string).collect()).collect();
+    for r in &rows {
+        let scale: f32 = r[c_scale].parse().unwrap_or(1.0);
+        if r[c_kind] == "sim" || r[c_rung] == "ref" || scale >= 1.0 {
+            continue;
+        }
+        let Some(reference) = rows.iter().find(|x| x[c_scene] == r[c_scene] && x[c_rung] == "ref") else { continue };
+        let ref_img = image::open(out.join(&reference[c_file])).expect("the reference").to_rgba8();
+        let img = image::open(out.join(&r[c_file])).expect("the rung").to_rgba8();
+        let (w, h) = img.dimensions();
+        let src = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("upscaler comparison source"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            src.as_image_copy(),
+            img.as_raw(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let view = src.create_view(&Default::default());
+        let dst = ref_img.dimensions();
+        for filter in UpscaleFilter::ALL {
+            let mut up = Upscale::default();
+            let mut enc = device.create_command_encoder(&Default::default());
+            up.run(&device, &queue, &mut enc, &view, (w, h), dst, filter);
+            queue.submit(std::iter::once(enc.finish()));
+            let pixels = read_rgba8(&device, &queue, up.texture().expect("drawn"));
+            up.release();
+            let name = format!("{}-{}", r[c_rung], serde_json::to_string(&filter).unwrap().trim_matches('"'));
+            let file = format!("{}/up/{name}.png", r[c_scene]);
+            let path = out.join(&file);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("mkdir");
+            image::save_buffer(&path, &pixels, dst.0, dst.1, image::ColorType::Rgba8).expect("write");
+            writeln!(csv, "{},{},{},{file},{}", r[c_scene], r[c_rung], name.rsplit('-').next().unwrap(), reference[c_file]).expect("csv");
+            println!("{} {}", r[c_scene], name);
+        }
+        src.destroy();
+    }
+}
+
+/// An `Rgba8Unorm` texture's pixels, rows unpadded.
+fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture) -> Vec<u8> {
+    let (w, h) = (tex.width(), tex.height());
+    let row = (w * 4).div_ceil(256) * 256;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (row * h) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        tex.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit(std::iter::once(enc.finish()));
+    staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let bytes = staging.slice(..).get_mapped_range().to_vec();
+    staging.unmap();
+    (0..h).flat_map(|y| bytes[(y * row) as usize..(y * row + w * 4) as usize].to_vec()).collect()
+}

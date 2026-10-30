@@ -376,6 +376,43 @@ grow with a lower render height; custom formulas' `#screenpixel` and the
 like are the user's. An export at a size other than the viewport's has
 the same mismatch for most of these, as it always had.
 
+### FSR 1, as built (2026-10-30)
+
+`UpscaleFilter::Fsr`: AMD's FidelityFX Super Resolution 1.0, EASU then
+RCAS, ported line for line from the 32-bit paths of ffx_fsr1.h
+v1.20210629 and the ffx_a.h helpers they call (`shaders/upscale_fsr.wgsl`,
+both MIT notices kept), two passes through an intermediate picture
+(`renderer::upscale`). Where it differs from the source: taps by
+`textureLoad`, clamped, rather than gathers through a clamping sampler;
+the alpha bilinear and passed through; `FSR_RCAS_DENOISE` on, for flames'
+grain; RCAS's two limiters, which divide by zero on a ring of pure black
+or white, take HLSL's answer there explicitly (`rcas_lobe`), since WGSL
+leaves a NaN's `max()` to the platform and Metal's fast-math keeps none: a
+plain guard would have turned the sharpening off for saturated colours on
+black. RCAS sharpness 0.2 stops. Catmull-Rom stays the default.
+
+Judged with the loss metric (`upscaler_comparison`, then `frame_metrics.py
+upscalers`: each calibration rung below full size drawn up to 1080p by
+the viewport's own pass). The viewport's bilinear matches PIL's to the
+hundredth (seahorse, 2x at 75%: 4.40 both), so the pass is the filter it
+claims. Against the 6x-supersampled references, mae:
+
+| scene, rung | nearest | bilinear | Catmull-Rom | FSR |
+|---|---|---|---|---|
+| seahorse, 2x at 50% | 5.73 | 4.79 | 5.04 | 5.06 |
+| newton, 2x at 50% | 0.60 | 0.67 | 0.61 | 0.59 |
+| solid, 2x at 50% | 1.27 | 1.41 | 1.34 | 1.30 |
+| 2D flame, 64 samples at 75% | 7.57 | 7.63 | 6.91 | 6.74 |
+| 2D flame, 16 samples at 50% | 9.84 | 10.87 | 9.99 | 9.77 |
+| 3D flame, 16 samples at 50% | 8.09 | 7.02 | 7.31 | 7.48 |
+
+FSR and Catmull-Rom are within a few percent of each other everywhere.
+FSR is the best of the four on the sharp 2D flame, a little behind
+Catmull-Rom on the soft 3D one and on the aliased escape pictures, where
+bilinear's blur scores best, as phase 1 found: the measure rewards blur,
+so sharpness is the eye's to judge. Not timed: each is one or two passes
+at display size.
+
 ## The governor
 
 **One governor** (`app/governor.rs`): the target, the context, the
@@ -621,7 +658,8 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    2026-10-30: `ModelDef::state`, `SimRenderer::carry_field`; agent models
    reseed, as the plan allowed, rather than carrying their population).
 4. **FSR 1** as a second upscaler, judged against bicubic with the loss
-   metric, and offered to simulations as a `SimUpscale` choice.
+   metric, and offered to simulations as a `SimUpscale` choice. The
+   viewport's built 2026-10-30 (*FSR 1, as built*); the simulation's next.
 5. **The governor**: GPU frame timing, the contexts, the target setting,
    the ladders. Escape first (it gains the most), then flames, terrains,
    simulations. The mode-D stride preview is replaced by the 50% rung,
