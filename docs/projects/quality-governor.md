@@ -3,7 +3,7 @@
 **Status:** phase 1 measured 2026-10-29 (*Results*), but for allocation
 cost; the faults it found are next (order of work, item 2). All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
-field must go far lower than 50%); D7 the user's own (an active
+field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
 
 The user's words: "I want features to improve framerate, while preserving
@@ -78,7 +78,7 @@ candidates:
 | Engine | Rungs, roughly in order |
 |---|---|
 | Escape 2D | supersampling down to 2x, then render scale 75%, 50%, then 1x (measured: *Results*) |
-| Escape solid (mode D) | 1x, then 75%, 50%; the stride-2 preview becomes the 50% rung. 2x and above render the same picture as 2x, so 2x is the ceiling that matters |
+| Escape solid (mode D) | 1x, then 75%, 50%, 25%; the stride-2 preview becomes the 50% rung. 2x and above render the same picture as 2x, so 2x is the ceiling that matters |
 | Flames | render scale below about 2 samples a display pixel a frame in 2D, 16 in 3D (*Results*) |
 | Terrain | render scale for the lit passes; section detail while moving |
 | Simulation | a bound grid's field scale, down to 12.5%, chosen when playback starts and held (below); never a fixed grid |
@@ -89,7 +89,12 @@ supersampling, or above full resolution (D1 says which full).
 **The floors (D5).** Render scale stops at 50% for escape, flames and
 terrains: below that, no upscaler hides the loss. A simulation's field
 goes down to its grid's own clamp, 12.5% (`SimGrid::cells_for`), because
-real-time animation sometimes needs it that low.
+real-time animation sometimes needs it that low. A mode-D solid goes
+down to 25%: no rung reaches 60 fps at 1080p (*Results*), and a blocky
+solid that moves beats a sharp one at 7 pictures a second. Solids are a
+low priority throughout: the user doubts live solid animation will be
+good on any rung, so they get the shared machinery and no work of their
+own beyond it.
 
 ### Flames are different
 
@@ -539,7 +544,7 @@ scene but the solid holds 60 fps at this size. Two faults:
 | D2 | What in-app playback targets: the display's refresh, the setting, or the animation's own fps | Decided: the *Target frame rate* setting, defaulting to the display's refresh; the animation's fps offered as a choice |
 | D3 | An export's rung: chosen by the user, or picked automatically from a time per frame and locked | Decided: chosen by the user first; automatic later if wanted |
 | D4 | Whether the governor may change the look (effects, DoF, the render tier) or only fidelity | Decided: fidelity only (but see D6) |
-| D5 | The lowest render scale | Revised: 50% for escape, flames and terrains; 12.5% for a bound simulation grid's field, its clamp. The user: "Simulation field resolution sometimes needs to be very low for real-time animation." |
+| D5 | The lowest render scale | Revised: 50% for escape, flames and terrains; 12.5% for a bound simulation grid's field, its clamp. The user: "Simulation field resolution sometimes needs to be very low for real-time animation." Then 25% for mode-D solids, after phase 1 (2026-10-29). The user: "I'm not entirely sure we'll be able to do good live animations with solid flame attractors period, so we don't need to spend too much time on them." |
 | D6 | Whether the governor may lower a bound simulation grid's scale (a different run, not a softer one: the one exception to D4), or only offer *Fit to target* for the user to apply | Decided: the governor, as a cell budget held for the session (re-fitted to a resize), restored on stop; *Fit to target* as well |
 | D7 | How a live field crosses a resize that changes its shape: resampled (stretched), extended (new margins from the init), or neither | Decided: neither. The user: "I don't really want to warp the image in any way ... reuse the existing letterbox system when an active simulation's aspect ratio changes." An active run is letterboxed to its grid and keeps its cells; a stopped one follows the window |
 
