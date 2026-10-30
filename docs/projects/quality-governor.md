@@ -5,7 +5,8 @@ cost. Of the faults it found, escape playback's part-drawn pictures are
 fixed (2026-10-30); the flame's uneven pacing goes to the governor
 (order of work, item 5). Item 3 is built (2026-10-30): render scale and
 the Catmull-Rom upscale, sizes in pixels, an active simulation's
-letterbox and the field resampler; FSR (item 4) is next. All seven decisions taken
+letterbox and the field resampler; so is item 4, FSR, in the viewport
+and for simulations. The governor (item 5) is next. All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -658,8 +659,10 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    2026-10-30: `ModelDef::state`, `SimRenderer::carry_field`; agent models
    reseed, as the plan allowed, rather than carrying their population).
 4. **FSR 1** as a second upscaler, judged against bicubic with the loss
-   metric, and offered to simulations as a `SimUpscale` choice. The
-   viewport's built 2026-10-30 (*FSR 1, as built*); the simulation's next.
+   metric, and offered to simulations as a `SimUpscale` choice. Built
+   2026-10-30: the viewport's (*FSR 1, as built*) and the simulation's
+   (`SimUpscale::Fsr`: the cells coloured at about a cell a pixel, then
+   FSR on the linear picture, encoded around its passes; SIMULATION.md).
 5. **The governor**: GPU frame timing, the contexts, the target setting,
    the ladders. Escape first (it gains the most), then flames, terrains,
    simulations. The mode-D stride preview is replaced by the 50% rung,

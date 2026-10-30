@@ -617,6 +617,10 @@ pub struct SimRenderer {
     carry_from: Option<(Texture, TextureView, crate::sim::StateKind)>,
     /// The resampler's pipeline, made the first time a field is carried.
     carry_pipeline: Option<(ComputePipeline, BindGroupLayout)>,
+    /// `SimUpscale::Fsr`'s picture at about a cell a pixel (`fsr_size`),
+    /// and the passes that draw it up to the output.
+    fsr_small: Option<(Texture, TextureView)>,
+    fsr: Option<crate::renderer::upscale::Fsr>,
     /// What the live field was seeded from, or `None` before the
     /// first seed. Compared against the config every frame, so a
     /// config that arrives by any route at all cannot inherit the
@@ -813,6 +817,8 @@ impl SimRenderer {
             resample_requested: false,
             carry_from: None,
             carry_pipeline: None,
+            fsr_small: None,
+            fsr: None,
             seeded_as: None,
             run_identity: None,
         }
@@ -1722,7 +1728,8 @@ impl SimRenderer {
             upscale: cfg.upscale,
             downscale: cfg.downscale,
             init_kind: cfg.init.kind_name(),
-            magnifying: self.magnifying(cfg),
+            // FSR magnifies after the colour pass, not in it (`fsr_size`).
+            magnifying: self.magnifying(cfg) && cfg.upscale != crate::config::sim::SimUpscale::Fsr,
         }
     }
 
@@ -1733,6 +1740,33 @@ impl SimRenderer {
     fn magnifying(&self, cfg: &SimConfig) -> bool {
         let z = cfg.view.zoom.max(1.0e-6) as f64;
         self.out_w as f64 * z >= self.grid_w as f64 && self.out_h as f64 * z >= self.grid_h as f64
+    }
+
+    /// With `SimUpscale::Fsr`, while the picture magnifies the grid: the
+    /// size the colour pass runs at instead of the output's, about one
+    /// pixel a cell through the same view (the output over its
+    /// magnification, the fit's times the view's zoom), for FSR to draw up
+    /// to the output after (`renderer::upscale::Fsr`). None otherwise, and
+    /// when that is the output's size anyway.
+    pub fn fsr_size(&self, cfg: &SimConfig) -> Option<(u32, u32)> {
+        if cfg.upscale != crate::config::sim::SimUpscale::Fsr || !self.magnifying(cfg) {
+            return None;
+        }
+        let (rx, ry) = (
+            self.out_w as f64 / self.grid_w.max(1) as f64,
+            self.out_h as f64 / self.grid_h.max(1) as f64,
+        );
+        let fit = match cfg.fit {
+            crate::config::sim::SimFit::Letterbox => rx.min(ry),
+            crate::config::sim::SimFit::Cover => rx.max(ry),
+        };
+        let m = fit * cfg.view.zoom.max(1.0e-6) as f64;
+        if m <= 1.0 {
+            return None;
+        }
+        let side = |n: u32| ((n as f64 / m).round() as u32).clamp(1, n);
+        let size = (side(self.out_w), side(self.out_h));
+        (size != (self.out_w, self.out_h)).then_some(size)
     }
 
     fn ensure_pipelines(&mut self, device: &Device, cfg: &SimConfig) {
@@ -3441,7 +3475,31 @@ impl SimRenderer {
     ) {
         self.carry_field(device, queue);
         self.ensure_pipelines(device, cfg);
-        self.write_params_slot0(queue, cfg);
+        // With FSR, the colour pass runs at about a cell a pixel and FSR
+        // draws that up to the output (`fsr_size`).
+        let fsr_size = self.fsr_size(cfg);
+        match fsr_size {
+            Some(small) => {
+                if self.fsr_small.as_ref().is_none_or(|(t, _)| (t.width(), t.height()) != small) {
+                    if let Some((t, _)) = self.fsr_small.take() {
+                        t.destroy();
+                    }
+                    self.fsr_small = Some(Self::create_output(device, small.0, small.1));
+                }
+                let mut p = self.params_for(cfg, self.step_index);
+                p.out_size = [small.0, small.1];
+                queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
+            }
+            None => {
+                if let Some((t, _)) = self.fsr_small.take() {
+                    t.destroy();
+                }
+                if let Some(fsr) = self.fsr.as_mut() {
+                    fsr.release();
+                }
+                self.write_params_slot0(queue, cfg);
+            }
+        }
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
@@ -3480,7 +3538,9 @@ impl SimRenderer {
                 BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(&self.output_view),
+                    resource: BindingResource::TextureView(
+                        self.fsr_small.as_ref().filter(|_| fsr_size.is_some()).map_or(&self.output_view, |(_, v)| v),
+                    ),
                 },
                 BindGroupEntry {
                     binding: 4,
@@ -3499,8 +3559,14 @@ impl SimRenderer {
             });
             pass.set_pipeline(&p.color);
             pass.set_bind_group(0, &bg, &[0]);
-            let (gx, gy) = Self::dispatch_size(self.out_w, self.out_h);
+            let (w, h) = fsr_size.unwrap_or((self.out_w, self.out_h));
+            let (gx, gy) = Self::dispatch_size(w, h);
             pass.dispatch_workgroups(gx, gy, 1);
+        }
+        if let (Some(small), Some((_, small_view))) = (fsr_size, self.fsr_small.as_ref()) {
+            self.fsr
+                .get_or_insert_with(|| crate::renderer::upscale::Fsr::new(crate::renderer::upscale::FsrTarget::Linear))
+                .encode(device, queue, &mut enc, small_view, small, &self.output_view, (self.out_w, self.out_h));
         }
         queue.submit(std::iter::once(enc.finish()));
     }

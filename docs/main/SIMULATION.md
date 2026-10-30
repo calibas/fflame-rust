@@ -320,7 +320,7 @@ batch freely while a still stays reproducible.
 | --- | --- |
 | the run | `model`, `model_params`, `seed`, `init` (`Noise`, `Blob`, `Blobs`, `Ring`, `Line`, `Center`, `BrokenWave`), `steps`, `steps_per_frame`, `dt`, `boundary` |
 | the grid | `grid` (`Fixed { width, height }` or `Viewport { scale }`) |
-| the resolve | `upscale` (`Nearest`/`Bilinear`/`Bicubic`), `downscale` (`Box`/`Nearest`), `fit` (`Letterbox`/`Cover`) |
+| the resolve | `upscale` (`Nearest`/`Bilinear`/`Bicubic`/`Fsr`), `downscale` (`Box`/`Nearest`), `fit` (`Letterbox`/`Cover`) |
 | the view | `view`: `center_x`, `center_y` (fractions of the grid), `zoom` (over the fit), `rotation`, `tile` |
 | the picture | `coloring`, `coloring_params`, `matte` (`channel`, `cutoff`, `softness`, `invert`, `edge`) |
 | motion | `warp`: `zoom`, `rotation`, `pan_x`, `pan_y`, `flow`, `filter` (`Bilinear`/`Nearest`/`Bicubic`), `mode` (`Continuous`/`Octaves`), `cull`, `layers` (channel mask) |
@@ -488,6 +488,17 @@ zoom on the coral preset came out a single dot). Nearest is exact for
 integer pans and for integer state, which bilinear would smear into
 values a sandpile has no meaning for. Bicubic (Catmull-Rom) is sharper
 than bilinear under magnification.
+
+**FSR** (`SimUpscale::Fsr`) is the resolve's one upscale of COLOURS rather
+than state. While the picture magnifies the grid, the colour pass runs at
+about a cell a pixel through the same view (`SimRenderer::fsr_size`: the
+output over the fit's magnification times the view's zoom), compiled as
+not magnifying, and FSR 1 (`renderer::upscale::Fsr`, `FsrTarget::Linear`:
+AMD's EASU and RCAS, `shaders/upscale_fsr.wgsl`) draws that up to the
+output, the linear colours encoded into [0, 1) around its passes so its
+limiters hold. An edge stays crisp where interpolating the state rounds
+it, and a colour between two palette entries can appear where an edge
+passes, as in any upscale of a picture.
 
 The warp has two **modes**. `Continuous` resamples the whole affine into
 the field every step. `Octaves` applies the zoom alone: the per-step

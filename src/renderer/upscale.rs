@@ -153,26 +153,24 @@ fn upscale_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #[derive(Default)]
 pub struct Upscale {
     output: Option<(Texture, TextureView)>,
-    /// EASU's picture, which RCAS sharpens into the output (FSR only).
-    mid: Option<(Texture, TextureView)>,
     params: Option<Buffer>,
     layout: Option<BindGroupLayout>,
     /// The one-pass filters' pipeline.
     pipeline: Option<ComputePipeline>,
-    /// FSR's EASU and RCAS, made the first time it is chosen.
-    fsr: Option<(ComputePipeline, ComputePipeline)>,
+    /// FSR's two passes, made the first time it is chosen.
+    fsr: Option<Fsr>,
 }
 
-/// A display-sized `Rgba8Unorm` picture: written by a pass, read by the
-/// next or shown by egui; COPY_SRC so a test can read it back.
-fn picture(device: &Device, label: &str, w: u32, h: u32) -> (Texture, TextureView) {
+/// A picture of `format`: written by a pass, read by the next or shown by
+/// egui; COPY_SRC so a test can read it back.
+fn picture(device: &Device, label: &str, format: TextureFormat, w: u32, h: u32) -> (Texture, TextureView) {
     let texture = device.create_texture(&TextureDescriptor {
         label: Some(label),
         size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
+        format,
         usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
         view_formats: &[],
     });
@@ -180,14 +178,54 @@ fn picture(device: &Device, label: &str, w: u32, h: u32) -> (Texture, TextureVie
     (texture, view)
 }
 
-/// Keep `slot` a `w` x `h` picture.
-fn fit(slot: &mut Option<(Texture, TextureView)>, device: &Device, label: &str, w: u32, h: u32) {
+/// Keep `slot` a `w` x `h` picture of `format`.
+fn fit(slot: &mut Option<(Texture, TextureView)>, device: &Device, label: &str, format: TextureFormat, w: u32, h: u32) {
     if slot.as_ref().is_none_or(|(t, _)| t.width() != w || t.height() != h) {
         if let Some((t, _)) = slot.take() {
             t.destroy();
         }
-        *slot = Some(picture(device, label, w, h));
+        *slot = Some(picture(device, label, format, w, h));
     }
+}
+
+/// The layout every pass here binds: the source, the target (`format`),
+/// the parameters.
+fn layout(device: &Device, label: &str, format: TextureFormat) -> BindGroupLayout {
+    device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Float { filterable: false },
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::StorageTexture {
+                    access: StorageTextureAccess::WriteOnly,
+                    format,
+                    view_dimension: TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 2,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
 }
 
 fn pipeline(device: &Device, layout: &BindGroupLayout, source: &str, label: &str, entry: &str) -> ComputePipeline {
@@ -210,6 +248,160 @@ fn pipeline(device: &Device, layout: &BindGroupLayout, source: &str, label: &str
     })
 }
 
+/// The 16 bytes every pass here reads: source pixels per target pixel,
+/// the one-pass filter's kind, RCAS's sharpness.
+fn params_bytes(src: (u32, u32), dst: (u32, u32), kind: u32) -> [u8; 16] {
+    let mut raw = [0u8; 16];
+    raw[0..4].copy_from_slice(&(src.0.max(1) as f32 / dst.0.max(1) as f32).to_le_bytes());
+    raw[4..8].copy_from_slice(&(src.1.max(1) as f32 / dst.1.max(1) as f32).to_le_bytes());
+    raw[8..12].copy_from_slice(&kind.to_le_bytes());
+    // RCAS's sharpness, linear (`FsrRcasCon`); padding to the rest.
+    raw[12..16].copy_from_slice(&(-RCAS_STOPS).exp2().to_le_bytes());
+    raw
+}
+
+/// One pass of `pipeline` from `from` into `to`, over `size`.
+#[allow(clippy::too_many_arguments)]
+fn dispatch(
+    device: &Device,
+    encoder: &mut CommandEncoder,
+    layout: &BindGroupLayout,
+    pipeline: &ComputePipeline,
+    params: &Buffer,
+    from: &TextureView,
+    to: &TextureView,
+    size: (u32, u32),
+    label: &str,
+) {
+    let bg = device.create_bind_group(&BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            BindGroupEntry { binding: 0, resource: BindingResource::TextureView(from) },
+            BindGroupEntry { binding: 1, resource: BindingResource::TextureView(to) },
+            BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
+        ],
+    });
+    let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor { label: Some(label), timestamp_writes: None });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, &bg, &[]);
+    pass.dispatch_workgroups(size.0.div_ceil(8), size.1.div_ceil(8), 1);
+}
+
+/// What an FSR pass draws, and in what encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsrTarget {
+    /// The viewport's tone-mapped `Rgba8Unorm` picture: in perceptual
+    /// space already, as FSR expects.
+    Display,
+    /// A linear `Rgba32Float` picture that may pass 1 (a simulation's,
+    /// before the tone map): encoded into [0, 1) around the two passes,
+    /// `sqrt(c / (1 + c))`, so EASU and RCAS see perceptual values in the
+    /// range their limiters assume, and decoded after.
+    Linear,
+}
+
+impl FsrTarget {
+    fn format(self) -> TextureFormat {
+        match self {
+            FsrTarget::Display => TextureFormat::Rgba8Unorm,
+            FsrTarget::Linear => TextureFormat::Rgba32Float,
+        }
+    }
+
+    /// The shader, with this target's format and encoding spliced in.
+    fn source(self) -> String {
+        match self {
+            FsrTarget::Display => FSR_SHADER.to_string(),
+            FsrTarget::Linear => {
+                let splice = |s: String, from: &str, to: &str| {
+                    assert_eq!(s.matches(from).count(), 1, "upscale_fsr.wgsl: `{from}` once");
+                    s.replace(from, to)
+                };
+                let s = splice(
+                    FSR_SHADER.to_string(),
+                    "texture_storage_2d<rgba8unorm, write>",
+                    "texture_storage_2d<rgba32float, write>",
+                );
+                let s = splice(
+                    s,
+                    "fn fsr_in(c: vec4<f32>) -> vec4<f32> { return c; }",
+                    "fn fsr_in(c: vec4<f32>) -> vec4<f32> {\n    let x = max(c.rgb, vec3<f32>(0.0));\n    return vec4<f32>(sqrt(x / (vec3<f32>(1.0) + x)), c.a);\n}",
+                );
+                splice(
+                    s,
+                    "fn fsr_out(c: vec4<f32>) -> vec4<f32> { return c; }",
+                    "fn fsr_out(c: vec4<f32>) -> vec4<f32> {\n    let y = min(c.rgb * c.rgb, vec3<f32>(0.999));\n    return vec4<f32>(y / (vec3<f32>(1.0) - y), c.a);\n}",
+                )
+            }
+        }
+    }
+}
+
+/// FSR 1's two passes (`shaders/upscale_fsr.wgsl`), EASU through an
+/// intermediate picture, then RCAS into the caller's target.
+pub struct Fsr {
+    target: FsrTarget,
+    layout: Option<BindGroupLayout>,
+    /// EASU's and RCAS's pipelines, made on first use.
+    passes: Option<(ComputePipeline, ComputePipeline)>,
+    /// EASU's picture, which RCAS sharpens.
+    mid: Option<(Texture, TextureView)>,
+    params: Option<Buffer>,
+}
+
+impl Fsr {
+    pub fn new(target: FsrTarget) -> Self {
+        Fsr { target, layout: None, passes: None, mid: None, params: None }
+    }
+
+    /// Draw `src` (`src_size`) at `dst_size` into `dst`, both in the
+    /// target's format.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        src: &TextureView,
+        src_size: (u32, u32),
+        dst: &TextureView,
+        dst_size: (u32, u32),
+    ) {
+        let (w, h) = (dst_size.0.max(1), dst_size.1.max(1));
+        let format = self.target.format();
+        fit(&mut self.mid, device, "FSR EASU", format, w, h);
+        let params = self.params.get_or_insert_with(|| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some("FSR Params"),
+                size: 16,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        queue.write_buffer(params, 0, &params_bytes(src_size, (w, h), 0));
+        let layout = self.layout.get_or_insert_with(|| self::layout(device, "FSR Layout", format));
+        let target = self.target;
+        let (easu, rcas) = self.passes.get_or_insert_with(|| {
+            let source = target.source();
+            (
+                pipeline(device, layout, &source, "FSR EASU", "easu_main"),
+                pipeline(device, layout, &source, "FSR RCAS", "rcas_main"),
+            )
+        });
+        let (_, mid) = self.mid.as_ref().expect("fitted above");
+        dispatch(device, encoder, layout, easu, params, src, mid, (w, h), "FSR EASU");
+        dispatch(device, encoder, layout, rcas, params, mid, dst, (w, h), "FSR RCAS");
+    }
+
+    /// Free the intermediate picture (the next `encode` makes it again).
+    pub fn release(&mut self) {
+        if let Some((t, _)) = self.mid.take() {
+            t.destroy();
+        }
+    }
+}
+
 impl Upscale {
     /// Draw `src` (`src_size`, `Rgba8Unorm`) at `dst_size` into the
     /// output, with `filter`.
@@ -224,7 +416,22 @@ impl Upscale {
         filter: UpscaleFilter,
     ) {
         let (w, h) = (dst_size.0.max(1), dst_size.1.max(1));
-        fit(&mut self.output, device, "Viewport Upscale", w, h);
+        fit(&mut self.output, device, "Viewport Upscale", TextureFormat::Rgba8Unorm, w, h);
+        let (_, dst) = self.output.as_ref().expect("fitted above");
+        if filter == UpscaleFilter::Fsr {
+            self.fsr
+                .get_or_insert_with(|| Fsr::new(FsrTarget::Display))
+                .encode(device, queue, encoder, src, src_size, dst, (w, h));
+            return;
+        }
+        if let Some(fsr) = self.fsr.as_mut() {
+            fsr.release();
+        }
+        let kind: u32 = match filter {
+            UpscaleFilter::Bilinear | UpscaleFilter::Fsr => 0,
+            UpscaleFilter::CatmullRom => 1,
+            UpscaleFilter::Nearest => 2,
+        };
         let params = self.params.get_or_insert_with(|| {
             device.create_buffer(&BufferDescriptor {
                 label: Some("Viewport Upscale Params"),
@@ -233,91 +440,14 @@ impl Upscale {
                 mapped_at_creation: false,
             })
         });
-        let mut raw = [0u8; 16];
-        raw[0..4].copy_from_slice(&(src_size.0.max(1) as f32 / w as f32).to_le_bytes());
-        raw[4..8].copy_from_slice(&(src_size.1.max(1) as f32 / h as f32).to_le_bytes());
-        let kind: u32 = match filter {
-            UpscaleFilter::Bilinear | UpscaleFilter::Fsr => 0,
-            UpscaleFilter::CatmullRom => 1,
-            UpscaleFilter::Nearest => 2,
-        };
-        raw[8..12].copy_from_slice(&kind.to_le_bytes());
-        // RCAS's sharpness, linear (`FsrRcasCon`); padding to the rest.
-        raw[12..16].copy_from_slice(&(-RCAS_STOPS).exp2().to_le_bytes());
-        queue.write_buffer(params, 0, &raw);
-        let layout = self.layout.get_or_insert_with(|| {
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Viewport Upscale Layout"),
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: false },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::StorageTexture {
-                            access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::Rgba8Unorm,
-                            view_dimension: TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            })
-        });
-        let dispatch = |encoder: &mut CommandEncoder, pipeline: &ComputePipeline, from: &TextureView, to: &TextureView, label: &str| {
-            let bg = device.create_bind_group(&BindGroupDescriptor {
-                label: Some(label),
-                layout,
-                entries: &[
-                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(from) },
-                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(to) },
-                    BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
-                ],
-            });
-            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor { label: Some(label), timestamp_writes: None });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
-        };
-        let (_, dst) = self.output.as_ref().expect("fitted above");
-        if filter == UpscaleFilter::Fsr {
-            fit(&mut self.mid, device, "Viewport Upscale EASU", w, h);
-            let (easu, rcas) = self.fsr.get_or_insert_with(|| {
-                (
-                    pipeline(device, layout, FSR_SHADER, "Viewport Upscale EASU", "easu_main"),
-                    pipeline(device, layout, FSR_SHADER, "Viewport Upscale RCAS", "rcas_main"),
-                )
-            });
-            let (_, mid) = self.mid.as_ref().expect("fitted above");
-            dispatch(encoder, easu, src, mid, "Viewport Upscale EASU");
-            dispatch(encoder, rcas, mid, dst, "Viewport Upscale RCAS");
-        } else {
-            if let Some((t, _)) = self.mid.take() {
-                t.destroy();
-            }
-            let simple = self
-                .pipeline
-                .get_or_insert_with(|| pipeline(device, layout, SHADER, "Viewport Upscale", "upscale_main"));
-            dispatch(encoder, simple, src, dst, "Viewport Upscale");
-        }
+        queue.write_buffer(params, 0, &params_bytes(src_size, (w, h), kind));
+        let layout = self
+            .layout
+            .get_or_insert_with(|| self::layout(device, "Viewport Upscale Layout", TextureFormat::Rgba8Unorm));
+        let simple = self
+            .pipeline
+            .get_or_insert_with(|| pipeline(device, layout, SHADER, "Viewport Upscale", "upscale_main"));
+        dispatch(device, encoder, layout, simple, params, src, dst, (w, h), "Viewport Upscale");
     }
 
     /// The last picture drawn, and its size.
@@ -332,10 +462,11 @@ impl Upscale {
 
     /// Free the pictures (the next `run` makes them again).
     pub fn release(&mut self) {
-        for slot in [&mut self.output, &mut self.mid] {
-            if let Some((t, _)) = slot.take() {
-                t.destroy();
-            }
+        if let Some((t, _)) = self.output.take() {
+            t.destroy();
+        }
+        if let Some(fsr) = self.fsr.as_mut() {
+            fsr.release();
         }
     }
 }
