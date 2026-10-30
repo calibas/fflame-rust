@@ -1,7 +1,9 @@
 # The quality governor: a target frame rate, render scale, upscaling
 
 **Status:** phase 1 measured 2026-10-29 (*Results*), but for allocation
-cost; the faults it found are next (order of work, item 2). All seven decisions taken
+cost. Of the faults it found, escape playback's part-drawn pictures are
+fixed (2026-10-30); the flame's uneven pacing is open (order of work,
+item 2). All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -454,11 +456,10 @@ GPU time. Two faults showed in playback:
   half-drawn frames in between". The pattern repeats every 7 frames:
   one with ~65 ms of CPU time and no GPU work, two nearly idle, four
   chunks of 15-33 ms. About 7 pictures a second.
-- **The 65 ms frame.** Probably the next frame waiting for a surface
-  image while the GPU works through the chunks queued before it. Not
-  measured yet: the log now times the acquire and the present
-  (`acquire_ms`, `present_ms`) and marks part-drawn frames
-  (`escape_partial`), for the next run.
+- **The 65 ms frame.** The next frame waiting for a surface image
+  while the GPU works through the chunks queued before it: in the second
+  run (below) the long frames were 63-86 ms of `acquire_ms`, with 1-5 ms
+  of the frame's own work. Backpressure, not CPU work.
 
 **Flames: the scale wins only below about 2 samples a display pixel.**
 At the same sample count, 2D (plastic-sierpinski) at 1080p:
@@ -511,17 +512,43 @@ scene but the solid holds 60 fps at this size. Two faults:
   budget's edge. The dispatch length flips between 3600 and 3130 almost
   every frame, and frame intervals alternate between ~1 ms and ~32 ms
   (44% over 25 ms). The median interval reads 60 fps; what the display
-  shows is uneven.
+  shows is uneven, and the animation's clock, which advances by each
+  frame's interval (`AnimationController::update`), jumps as unevenly.
+  The governor's median of three ratios flips with the intervals: shed,
+  grow, shed.
+
+**The second run** (2026-10-30, after order of work item 2's first
+fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
+- **The solid holds its pictures.** 1% of frames showed a part-drawn
+  picture (the first, before any was held). The user: "Flame attractor
+  was slow, but not partially-drawn frames anymore."
+- **The antialiasing governor still switches.** The user: "The escape
+  time switched between AA settings." At 120 Hz it dropped from 3x to
+  1x, then probed 2x twice (8-11 frames at ~20 ms against 1x's 5.3 ms
+  and an 8.3 ms budget) before staying at 1x. By the calibration, 2x at
+  50% would cost about what 1x at 100% does and lose half as much.
+- **A cap on the dispatch did not fix the flame's alternation.** Tried:
+  the batch may not grow past where the measured trajectory dispatch
+  fills 80% of the budget. The batch settled at about a third (engine
+  ~7 ms of an 8.3 ms frame) and frames still alternated (~1 ms and
+  ~15 ms; an acquire wait of ~13 ms every other frame), so it was taken
+  out. Pacing broke between ~65% (the escape zoom at 5.4 ms paced evenly)
+  and ~84% of the budget in GPU time. The dispatch alone is the wrong
+  measure: the tail, the UI and the compositor's share vary with the
+  size, the effects and the display. The whole frame's GPU span
+  (`gpu::timer::FrameTimer`, the frame log's) is the measure.
 
 ## Order of work
 
-1. **Measurement** (phase 1). Done but for allocation (its item 5) and
-   the solid's acquire wait; *Results*.
-2. **The faults phase 1 found**, each on its own: playback shows only
-   settled escape pictures (the last finished one stays up while the
-   next renders in chunks); the flame batch governor's alternation at
-   the budget's edge. The antialiasing governor's hunting is left to the
-   governor (item 5), which replaces it.
+1. **Measurement** (phase 1). Done but for allocation (its item 5);
+   *Results*.
+2. **The faults phase 1 found**, each on its own. Done: playback shows
+   only settled escape pictures (`EscapeRenderer::present_output`: the
+   last finished one stays up while the next renders in chunks). Open:
+   the flame batch governor's alternation at the budget's edge, which
+   needs the frame's GPU span (*The second run*). The antialiasing
+   governor's hunting is left to the governor (item 5), which replaces
+   it.
 3. **Render scale + Catmull-Rom upscale**, manual, in every engine; the
    effects' pixel scaling; the readout. For simulations: **the active
    run's letterbox**, which on its own stops a resize or full screen from

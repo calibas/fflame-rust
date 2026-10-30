@@ -1996,6 +1996,44 @@ mod motion_tests {
         escape.destroy();
     }
 
+    /// Playback's settled picture (`present_output`) stays as it settled
+    /// while the next renders, so the viewport shows it and not the next
+    /// one's chunks (docs/projects/quality-governor.md, phase 1).
+    #[test]
+    fn a_settled_picture_stays_while_the_next_renders() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let at = |d: f64| view(&format!("{:.16}", -0.7436438870371587 + d));
+        let flame = FlameRenderer::for_job(&device, &queue, TextureFormat::Rgba8Unorm, W, H, &at(0.0));
+        let mut escape = crate::escape::EscapeRenderer::new(&device, W, H);
+        let settle = |escape: &mut crate::escape::EscapeRenderer, c: &FractalConfig, hold: bool| {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            while !escape.render(&device, &queue, &mut enc, &c.escape, flame.escape_palette_view(false), flame.palette_generation()) {
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            }
+            if hold {
+                escape.present_output(&device, &mut enc);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        };
+        settle(&mut escape, &at(0.0), true);
+        let shown = read(&device, &queue, escape.presented_texture().expect("presented"));
+        let first = read(&device, &queue, escape.output_texture_for_test());
+        assert!(shown == first, "the picture held is the one that settled");
+
+        settle(&mut escape, &at(0.02), false);
+        let still = read(&device, &queue, escape.presented_texture().expect("presented"));
+        let next = read(&device, &queue, escape.output_texture_for_test());
+        assert!(still == shown, "the picture held changed while the next rendered");
+        assert!(next != first, "the next picture did not render");
+        escape.destroy();
+    }
+
     /// Gray-Scott at `steps`, linear tone mapping (as `view`).
     #[cfg(feature = "engine-sim")]
     fn grid(steps: u32) -> FractalConfig {
