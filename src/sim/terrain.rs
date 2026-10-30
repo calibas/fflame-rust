@@ -165,7 +165,7 @@ pub struct SimTerrain {
     made: Option<String>,
     grid: (u32, u32),
     /// A blurred export's moments drawn each on its own ground, averaged
-    /// (docs/projects/motion-blur.md).
+    /// (docs/archive/projects/motion-blur.md).
     moments: crate::renderer::average::ImageAverage,
 }
 
@@ -235,7 +235,7 @@ impl SimTerrain {
     }
 
     /// [`Self::render_viewport`] blurred over a frame's motion-blur
-    /// moments (docs/projects/motion-blur.md): each pass or sample at a
+    /// moments (docs/archive/projects/motion-blur.md): each pass or sample at a
     /// moment's view, over the ground as the field made it.
     pub fn render_viewport_moments(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig]) -> bool {
         let (gw, gh) = self.grid;

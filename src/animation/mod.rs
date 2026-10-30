@@ -58,7 +58,7 @@ pub struct Animation {
     pub motion_blur: MotionBlur,
 }
 
-/// Motion blur (docs/projects/motion-blur.md): a frame is the average of
+/// Motion blur (docs/archive/projects/motion-blur.md): a frame is the average of
 /// the picture at `samples` moments within a shutter `shutter` seconds
 /// long, centred on the frame's time. In animation seconds, not a share
 /// of a frame: in-app playback has no frame rate, and a duration looks

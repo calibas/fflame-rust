@@ -2968,7 +2968,7 @@ impl FlameRenderer {
         self.reset_iteration_counter();
     }
 
-    /// A motion-blur moment (docs/projects/motion-blur.md): its flame and
+    /// A motion-blur moment (docs/archive/projects/motion-blur.md): its flame and
     /// view uploaded, for the frame's next dispatch to draw. The dispatch
     /// takes the moment's camera itself (`compute_pass`).
     pub fn set_moment(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, iterations_per_thread: u32, burn_in: u32) {

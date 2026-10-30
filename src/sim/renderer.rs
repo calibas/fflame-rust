@@ -470,7 +470,7 @@ pub struct SimRenderer {
     out_h: u32,
     /// Motion blur's average of a frame's moments, each the field at its
     /// step count coloured as it is coloured then
-    /// (docs/projects/motion-blur.md), and the viewport's last finished
+    /// (docs/archive/projects/motion-blur.md), and the viewport's last finished
     /// one kept aside.
     moments: crate::renderer::average::ImageAverage,
 

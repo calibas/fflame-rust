@@ -1,7 +1,7 @@
 //! **The average of several renders of one image**, in the accumulator's
 //! `Rgba32Float` layout: the escape engine's antialiasing by accumulation
 //! (several renders, each displaced within the pixel) and motion blur's
-//! moments (docs/projects/motion-blur.md), for every engine that renders
+//! moments (docs/archive/projects/motion-blur.md), for every engine that renders
 //! whole images.
 //!
 //! Each render is added pre-scaled by 1/n and weighted by its coverage

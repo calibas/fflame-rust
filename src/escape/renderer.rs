@@ -3282,7 +3282,7 @@ impl EscapeRenderer {
 
     /// Keep the finished accumulation as the picture the viewport shows
     /// ([`Self::presented_view`]) while the next motion-blurred frame
-    /// builds in the accumulation (docs/projects/motion-blur.md).
+    /// builds in the accumulation (docs/archive/projects/motion-blur.md).
     pub fn present_accumulation(&mut self, device: &Device, encoder: &mut CommandEncoder) {
         self.average.present(device, encoder);
     }

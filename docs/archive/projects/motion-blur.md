@@ -1,13 +1,16 @@
 # Motion blur
 
+> **Archived 2026-10-29** -- finished: every engine blurred in the export and the viewport, the web app's playback tried by the user, the playback speed fixed where it was ours to fix. What is left -- the API's field, the viewport's path-traced solid, per-thread time for flames, a terrain's lit-pass timing -- is in [escape-sim-followups.md](../../projects/escape-sim-followups.md) (*Temporal antialiasing*) and, for the API, [v0.6.0-release.md](../../projects/v0.6.0-release.md). Read [ANIMATION.md](../../main/ANIMATION.md) (*Motion blur*) for how it works now; this is the record of what was planned, decided and measured.
+
 **Status:** planned 2026-10-29, branch `motion-blur`. Built 2026-10-29:
 phase 1 (the model, the shutter, the panel) and phase 2 (escape-time
 2D, export and viewport; checked in the CLI and, with a startup hook
 and a window capture, in the app), phase 3 (flames), phase 4
 (simulation), phase 5 (terrains and solids; the viewport's path-traced
 solid is not blurred), each likewise checked, and phase 6 (the
-governor, which needed no change, and the docs). Open: the web app's
-playback is untried in a browser; the API does not store the setting;
+governor, which needed no change, and the docs); then the playback's
+speed (*Performance in the app*). The user tried the web app's
+playback the same day. Open: the API does not store the setting;
 per-thread time for flames (no copies at few samples) is not built.
 
 Motion blur for animations: each frame is the average of the picture
@@ -23,10 +26,10 @@ stays sharp, and only what moves blurs, by an amount the shutter sets.
 It is also a look users of a camera expect.
 
 Prior thinking this builds on:
-[PROPOSAL-artistic-effects.md](../archive/experimental/PROPOSAL-artistic-effects.md)
+[PROPOSAL-artistic-effects.md](../experimental/PROPOSAL-artistic-effects.md)
 (*2. Motion Blur*: per-sample time dithering in the chaos game, deferred
 for want of an animation system) and
-[escape-new-families.md](../archive/escape-time/escape-new-families.md)
+[escape-new-families.md](../escape-time/escape-new-families.md)
 §7 (escape renders are deterministic, so time sampling is pure
 supersampling; a frame's sub-frames share the deep-zoom reference orbit
 and BLA table; per-pixel jitter breaks finite-difference shading).
@@ -154,7 +157,8 @@ its moment's flame, blurs the frame for the same work.
   dispatches go round the moments and end on a whole round; the
   viewport shares the governed dispatch among the moments (each a K-th
   of its iterations, its own submission after what the frame recorded)
-  and puts the frame's own flame back after. A blurred video turns the
+  and puts the frame's own flame back after (since the performance work,
+  only when a sharp frame follows: `restore_frame`). A blurred video turns the
   CLI's inlined constants off. Not under Focused Rendering (its plans
   are one view's), nor for a subflame viewed in isolation. Measured: a
   640x360 spin, 0.4 s a frame blurred and sharp alike; the orbits going
@@ -249,7 +253,7 @@ the engines' docs where they changed; the API note.
   row), EXPORT.md (the video frame), ESCAPE.md (the shared average),
   RENDERER.md (the moments' orbits), TERRAIN.md (the tiers' moments),
   and the API note and a browser check in
-  [v0.6.0-release.md](v0.6.0-release.md).
+  [v0.6.0-release.md](../../projects/v0.6.0-release.md).
 
 ---
 
@@ -293,7 +297,8 @@ What was wrong, and what is the work itself:
 - **Escape-time: the work.** Every moment is a whole render. Not
   changed: rendering each moment at `supersample / sqrt(samples)`, so a
   blurred frame costs about a sharp one, trades each moment's
-  antialiasing for the frame's cost -- a decision, not a fix.
+  antialiasing for the frame's cost -- a decision, not a fix, and the
+  user kept the full supersampling (D7).
 
 ## Order of work
 
@@ -319,6 +324,7 @@ What was wrong, and what is the work itself:
 | D4 | Blur when paused | No: playing and exports only |
 | D5 | Terrain picture blur in the app | Revised: the viewport blurs the camera alone, over the frame's ground; the export draws a ground a moment |
 | D6 | Online animations | Lost until the API stores it; tell the API repo |
+| D7 | An escape-time moment's supersampling | Full at every moment (the user, 2026-10-29: "escape-time is fine the way it is"); sharing it among the moments was the alternative |
 
 ## Tests to write
 

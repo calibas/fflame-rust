@@ -680,7 +680,7 @@ pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::anima
         tracks,
         generators,
         loop_mode: resp.loop_mode.into(),
-        // The API does not store it (docs/projects/motion-blur.md, D6).
+        // The API does not store it (docs/archive/projects/motion-blur.md, D6).
         motion_blur: Default::default(),
     }
 }

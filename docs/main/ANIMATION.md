@@ -409,7 +409,7 @@ the transport and a target to the timeline; [EXPORT.md](EXPORT.md)
 A setting of the animation (`Animation::motion_blur`; the Animation
 panel's third row), so the same blur plays in the app -- the web app
 too -- and renders in the video export. The plan and its record are
-[motion-blur.md](../projects/motion-blur.md).
+[motion-blur.md](../archive/projects/motion-blur.md).
 
 - **The shutter** is a duration in seconds of animation time (default
   1/60 s, 180 degrees at 30 fps), not an angle: in-app playback has no

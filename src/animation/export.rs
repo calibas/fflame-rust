@@ -644,7 +644,7 @@ fn frame_progress_detail(frame_done: u32, total: u32, secs_per_frame: f64) -> St
     }
 }
 
-/// A frame's motion-blur moments as configs (docs/projects/motion-blur.md):
+/// A frame's motion-blur moments as configs (docs/archive/projects/motion-blur.md):
 /// `base` with the tracks applied at each moment of the shutter about
 /// `time`; empty when the animation has no motion blur. The app's
 /// viewport and the video export both make them here, through the

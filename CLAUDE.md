@@ -210,6 +210,6 @@ See @Cargo.toml. Key: **wgpu 29.0** (desktop vulkan/metal/gles -- dx12 deliberat
 
 ## Optional/Future Features
 - **Async export** for a custom-size 2D escape or simulation export (flame high-res and terrain exports already run in the background).
-- **EXR/HDR export**; **layered compositing**; **motion blur**; **denoising for flames** (the path tracer has one).
+- **EXR/HDR export**; **layered compositing**; **denoising for flames** (the path tracer has one).
 - **Orbital camera** from JWF `cam_*focus` (a 3D turn already orbits the target) and camera-path tours.
 - The camera lens in every mode: planned in `docs/projects/camera-lens-everywhere.md`.
