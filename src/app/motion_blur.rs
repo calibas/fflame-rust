@@ -1,4 +1,4 @@
-//! Motion blur in the viewport (docs/projects/motion-blur.md): while an
+//! Motion blur in the viewport (docs/archive/projects/motion-blur.md): while an
 //! animation plays with it on, a frame is the average of its moments
 //! (`animation::export::moment_configs`, the export's own, so a moment
 //! in the app is the export's).

@@ -350,7 +350,7 @@ fn render_playback_controls(
             .on_hover_text(t!("animation_panel.sync_audio_tooltip"));
     });
 
-    // Row 3: Motion blur (docs/projects/motion-blur.md). The animation's,
+    // Row 3: Motion blur (docs/archive/projects/motion-blur.md). The animation's,
     // so it plays in the app and renders in the video export alike.
     if let Some(ref mut animation) = controller.animation {
         let blur = &mut animation.motion_blur;

@@ -2493,7 +2493,7 @@ impl App {
                 // starts its moments in the accumulation. Stopped or
                 // paused, the sharp frame at the playhead is drawn again.
                 // A path-traced solid renders display pixels of its own,
-                // and is not blurred here (docs/projects/motion-blur.md,
+                // and is not blurred here (docs/archive/projects/motion-blur.md,
                 // phase 5).
                 let solid_traced = crate::escape::ifs::formula_is_solid(&final_config.escape.formula)
                     && final_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;

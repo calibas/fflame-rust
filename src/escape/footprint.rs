@@ -888,7 +888,7 @@ pub struct EscapeTerrain {
     /// probe has seen ground.
     near_floor: Option<f64>,
     /// A blurred export's moments drawn each on its own ground, averaged
-    /// (docs/projects/motion-blur.md).
+    /// (docs/archive/projects/motion-blur.md).
     moments: crate::renderer::average::ImageAverage,
 }
 
@@ -1361,7 +1361,7 @@ impl EscapeTerrain {
     }
 
     /// [`Self::render_viewport`] blurred over a frame's motion-blur
-    /// moments (docs/projects/motion-blur.md): each pass or sample at a
+    /// moments (docs/archive/projects/motion-blur.md): each pass or sample at a
     /// moment's view, over the ground `config` made.
     pub fn render_viewport_moments(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig]) -> bool {
         let view = |jitter, m: usize| terrain_view(moments.get(m).unwrap_or(config), jitter);
@@ -2403,7 +2403,7 @@ mod tests {
     }
 
     /// A terrain blurred over its motion-blur moments
-    /// (docs/projects/motion-blur.md). Moments that are all the frame blur
+    /// (docs/archive/projects/motion-blur.md). Moments that are all the frame blur
     /// it into itself. A camera moving across the shutter is drawn on one
     /// ground, the passes going round the moments' views; a picture
     /// changing across it, a ground a moment, averaged. Either is the mean

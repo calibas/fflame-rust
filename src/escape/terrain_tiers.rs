@@ -44,7 +44,7 @@ pub fn still_tile(w: u32, h: u32) -> (u32, u32) {
 /// What a terrain is drawn as, this frame.
 pub struct TierInputs<'a> {
     /// The view, its rays offset by a jitter within their pixels, at a
-    /// motion-blur moment (0 to `moments`; docs/projects/motion-blur.md).
+    /// motion-blur moment (0 to `moments`; docs/archive/projects/motion-blur.md).
     pub view: &'a dyn Fn([f32; 2], usize) -> TerrainView,
     /// The frame's motion-blur moments, 1 for a sharp frame: the lit
     /// tier's passes go round them, and the path tracer's samples are

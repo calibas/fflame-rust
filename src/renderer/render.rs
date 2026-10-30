@@ -71,7 +71,7 @@ pub struct RenderJob<'a> {
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
 
-    /// The frame's motion-blur moments (docs/projects/motion-blur.md):
+    /// The frame's motion-blur moments (docs/archive/projects/motion-blur.md):
     /// the config at each moment of the shutter, averaged before the
     /// tail. Empty -- the default -- renders `config` alone; `config` is
     /// the frame's own either way, and its tone mapping, effects and
@@ -587,7 +587,7 @@ pub async fn render_with(
     // what the renderer says plotted, as the app counts -- a thread's
     // burn-in is paid once, not every dispatch.
     let mut batch_samples = 0u64;
-    // Motion blur (docs/projects/motion-blur.md): the dispatches go round
+    // Motion blur (docs/archive/projects/motion-blur.md): the dispatches go round
     // the frame's moments, each drawing its moment's flame and view into
     // the one accumulation, and the loop ends on a whole round so every
     // moment has the same share. The orbits go on from moment to moment.
@@ -999,7 +999,7 @@ async fn render_sim(
     };
     #[cfg(not(feature = "terrain"))]
     let still_share = 0.0;
-    // Motion blur (docs/projects/motion-blur.md): the field at each
+    // Motion blur (docs/archive/projects/motion-blur.md): the field at each
     // moment's step count, in turn, coloured as that moment colours it,
     // averaged. A moment behind the field reseeds and runs, exactly as a
     // backward frame does.
@@ -1347,7 +1347,7 @@ async fn render_escape(
     #[cfg(target_arch = "wasm32")]
     escape_renderer.set_fixed_chunk(true);
     prepare_escape(escape_renderer, device, queue, job.config).await;
-    // A solid path traced, motion-blurred (docs/projects/motion-blur.md):
+    // A solid path traced, motion-blurred (docs/archive/projects/motion-blur.md):
     // each moment traced with its share of the samples, averaged.
     let solid_blurred = solid_path && !job.moments.is_empty();
     if solid_path {
@@ -1416,7 +1416,7 @@ async fn render_escape(
     } else {
         vec![[0.0f32, 0.0]]
     };
-    // Motion blur (docs/projects/motion-blur.md): every displacement at
+    // Motion blur (docs/archive/projects/motion-blur.md): every displacement at
     // every moment, each a whole render -- neighbouring pixels stay at
     // neighbouring positions, so finite-difference shading holds -- all
     // in the one accumulation. Without it the frame is its one moment.
@@ -1733,7 +1733,7 @@ async fn render_escape_terrain(
     // The bar's shares: the sections, then the still, which takes most
     // of a path traced export.
     let fill_share = if config.escape.terrain.tier == crate::config::escape::RenderTier::Lit { 0.9 } else { 0.25 };
-    // Motion blur (docs/projects/motion-blur.md). Moments that draw the
+    // Motion blur (docs/archive/projects/motion-blur.md). Moments that draw the
     // frame's picture differ only in the camera: one ground, and the
     // still's passes or samples go round their views, at the frame's own
     // cost. Moments whose pictures differ each need their own ground:
@@ -1828,7 +1828,7 @@ async fn render_escape_terrain(
     })
 }
 
-/// Motion blur through `render` (docs/projects/motion-blur.md).
+/// Motion blur through `render` (docs/archive/projects/motion-blur.md).
 #[cfg(all(test, feature = "engine-escape"))]
 mod motion_tests {
     use super::*;
