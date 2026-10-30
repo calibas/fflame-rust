@@ -203,7 +203,7 @@ struct EffectParams {
     width: u32,
     height: u32,
     density_mean: f32,              // density effects: the frame's mean density
-    _padding: f32,
+    pixel_scale: f32,               // render pixels per logical viewport point
 }
 ```
 
@@ -218,6 +218,16 @@ count. It is 1 for an escape or simulation image, whose `a` is not a
 hit count, and 0 for colour effects. It occupies what was an 8-byte
 padding, so a shader that declares `_padding: vec2<f32>` there binds
 the same layout and ignores it.
+
+`pixel_scale` is the viewport's render scale
+(`EffectChainRunner::set_pixel_scale`; [UI.md](UI.md), the Rendering
+menu): render pixels per logical viewport point, 1 for every export. A
+size in pixels is in points, so an effect multiplies it by this to keep
+its size on the screen at 50%. The density blur's radius, sharpen's
+radius, the bilateral blur's radius and spatial sigma, chromatic
+aberration's amount and the kaleidoscope's edge offset do; the rest
+declare the slot as padding. Film grain's per-pixel hash and the Sobel
+stencil are per render pixel by nature and turn coarser at a lower scale.
 
 **The 48-parameter cap is physical.** 48 floats plus the dimensions is
 208 bytes, inside the 256-byte slot stride; a compile-time assertion

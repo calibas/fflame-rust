@@ -2367,6 +2367,12 @@ impl App {
         // Run flame compute shader with progressive refinement
         if let (false, Some(renderer)) = (frozen, self.flame_renderer.as_mut()) {
             renderer.set_overwrite_mode(use_overwrite);
+            // Render pixels per logical point (render_scale.rs): the unit of
+            // every parameter measured in pixels, so a render scale keeps
+            // their size on the screen. Exactly 1 at full size.
+            let pixel_scale = renderer.height as f32 / self.fractal_viewport_size.1.max(1) as f32;
+            renderer.set_pixel_scale(pixel_scale);
+            self.effect_chain.set_pixel_scale(pixel_scale);
 
             // Escape-time mode: the generator is one compute dispatch,
             // not a progressive chaos game — render it only when an
@@ -2524,6 +2530,12 @@ impl App {
                     final_config.escape.supersample
                 };
                 if escape.resize(&self.gpu.device, renderer.width, renderer.height, aa_factor) {
+                    self.escape_dirty = true;
+                }
+                // The relief and the distance-estimate colourings measure in
+                // output pixels; at a render scale one is a fraction of a
+                // render pixel (render_scale.rs).
+                if escape.set_pixel_scale(pixel_scale) {
                     self.escape_dirty = true;
                 }
                 crate::escape::set_viewport_render_lines(

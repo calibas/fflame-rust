@@ -161,6 +161,14 @@ pub fn effective_camera_rows(camera_rotation_x: f32, camera_rotation_y: f32, cam
     ]
 }
 
+/// The gap fill's radius (`SolidShadingSettings::gap_fill`, 0-3 in
+/// logical points) in render pixels at `pixel_scale`, so a render scale
+/// keeps the pinholes it closes the same size on the screen. Whole pixels:
+/// at 50%, 1 rounds to 1 (0.5 rounds away from zero) and 3 to 2.
+fn gap_in_pixels(points: u32, pixel_scale: f32) -> u32 {
+    ((points.min(3) as f32 * pixel_scale).round() as u32).min(3)
+}
+
 pub struct ShadePass {
     pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
@@ -195,6 +203,9 @@ pub struct ShadePass {
     output_has_history: bool,
     width: u32,
     height: u32,
+    /// Render pixels per logical viewport point (`set_pixel_scale`): the
+    /// gap fill's radius is in points. 1 for the exporters.
+    pixel_scale: f32,
 }
 
 impl ShadePass {
@@ -485,7 +496,15 @@ impl ShadePass {
             output_has_history: false,
             width,
             height,
+            pixel_scale: 1.0,
         }
+    }
+
+    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// render pixels per logical point, which the gap fill's radius is
+    /// measured in.
+    pub fn set_pixel_scale(&mut self, s: f32) {
+        self.pixel_scale = if s.is_finite() && s > 0.0 { s } else { 1.0 };
     }
 
     fn create_atrous_params(device: &Device, idx: u32) -> Buffer {
@@ -754,7 +773,7 @@ impl ShadePass {
             // and it closes the pinholes a sparse CHAOS GAME leaves.
             // A marcher's surface has none, so a supplied normal
             // buffer turns it off rather than inheriting it.
-            gap_fill: if build_normals { shading.gap_fill.min(3) } else { 0 },
+            gap_fill: if build_normals { gap_in_pixels(shading.gap_fill, self.pixel_scale) } else { 0 },
             cam_row0: [cam_rows[0][0], cam_rows[0][1], cam_rows[0][2], 0.0],
             cam_row1: [cam_rows[1][0], cam_rows[1][1], cam_rows[1][2], 0.0],
             cam_row2: [cam_rows[2][0], cam_rows[2][1], cam_rows[2][2], 0.0],
@@ -1075,6 +1094,19 @@ mod tests {
     /// repurposed slots are where that would break first: a padding
     /// word that became a real field is invisible to the compiler on
     /// both sides.
+    #[test]
+    fn the_gap_fill_is_measured_in_points() {
+        for g in 0..=3 {
+            assert_eq!(gap_in_pixels(g, 1.0), g, "full size is the setting");
+        }
+        assert_eq!(gap_in_pixels(1, 0.5), 1);
+        assert_eq!(gap_in_pixels(2, 0.5), 1);
+        assert_eq!(gap_in_pixels(3, 0.5), 2);
+        assert_eq!(gap_in_pixels(3, 0.75), 2);
+        assert_eq!(gap_in_pixels(2, 2.0), 3, "never past the shader's 3");
+        assert_eq!(gap_in_pixels(9, 1.0), 3);
+    }
+
     #[test]
     fn the_shade_params_layout_matches_the_shader() {
         let src = include_str!("../../shaders/shade.wgsl");

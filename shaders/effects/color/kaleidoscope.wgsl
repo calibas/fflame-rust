@@ -16,7 +16,11 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    // Render pixels per logical viewport point (the viewport's render
+    // scale; 1 everywhere else): this effect's sizes in pixels are in
+    // points, so they are multiplied by it.
+    _density_mean: f32,
+    pixel_scale: f32,
 }
 
 fn get_param(index: u32) -> f32 {
@@ -90,7 +94,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(3u);
     let blend_mode = i32(get_param(4u));
     let square_mode = get_param(5u) > 0.5;
-    let edge_offset = get_param(6u);
+    let edge_offset = get_param(6u) * effect_params.pixel_scale;
 
     // Calculate aspect ratio for square mode correction
     let aspect = f32(effect_params.width) / f32(effect_params.height);

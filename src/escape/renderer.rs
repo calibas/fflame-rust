@@ -596,7 +596,7 @@ const CHUNK_SEED_HEADROOM: u32 = 64;
 
 /// Uniform block — must match `EscapeParams` in the WGSL template
 /// (std140: vec2 pairs pack the head, the vec4s start at a 16-byte
-/// boundary, total 1328 bytes).
+/// boundary, total 1728 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EscapeParamsGpu {
@@ -644,6 +644,12 @@ struct EscapeParamsGpu {
     fdata: [[f32; 4]; FDATA_VEC4S],
     /// A folding formula's crease settings (`CreaseSettings::to_gpu`).
     crease: [f32; 4],
+    /// Render pixels per output pixel (`EscapeRenderer::display_factor`):
+    /// what `esc_supersample` returns. The supersample factor at full
+    /// size; a fraction of it at a render scale, which the 4-bit factor in
+    /// `flags` (still read by mode D's march) cannot hold.
+    px_scale: f32,
+    _px_pad: [f32; 3],
 }
 
 /// 64 vec4s = 256 floats — Origami's 64 fold lines exactly.
@@ -1199,6 +1205,10 @@ pub struct EscapeRenderer {
     out_width: u32,
     out_height: u32,
     supersample: u32,
+    /// Render pixels per logical viewport point before supersampling (the
+    /// viewport's render scale, `set_pixel_scale`); 1 for every other
+    /// render.
+    pixel_scale: f32,
     /// Display-size target of the box downsample (None at 1×:
     /// `output_view` then serves the render texture directly).
     final_texture: Option<Texture>,
@@ -2055,6 +2065,7 @@ impl EscapeRenderer {
             out_width: width,
             out_height: height,
             supersample: 1,
+            pixel_scale: 1.0,
             final_texture: None,
             final_view: None,
             downsample: None,
@@ -7048,6 +7059,9 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let shading = &escape.shading;
         let mode = escape.downsample;
         let factor = self.supersample;
+        // Render pixels per output pixel: the factor at full size, a
+        // fraction of it at a render scale (`set_pixel_scale`).
+        let display = self.display_factor();
         // A terrain's footprint is lit in 3D, not by the 2D relief.
         let shade_on = shading.enabled && !escape.terrain_active();
         let overlay_on = self.overlay_on(escape);
@@ -7074,7 +7088,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // spans `factor` times as many samples and would read
             // `factor` times shallower. Without this, turning on 3x AA
             // quietly flattens the relief.
-            height: shading.height * factor as f32,
+            height: shading.height * display,
             enabled: u32::from(shade_on),
             shadow_color: shading.shadow_color,
             shadow_strength: shading.shadow_strength,
@@ -7085,7 +7099,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Display pixels to render pixels, for the same reason the
             // height is scaled: a radius fixed in render pixels would
             // shrink as antialiasing raised the resolution.
-            softness: shading.softness * factor as f32,
+            softness: shading.softness * display,
             // The bump reads the texture; without one there is none.
             texture_kind: if shading.texture_kind == crate::config::escape::ShadingTexture::Simulation
                 && !(escape.texture.is_some() && self.texture_image.is_some())
@@ -7098,7 +7112,7 @@ fn blur_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Feature size in DISPLAY pixels, like the softness radius
             // and for the same reason: antialiasing must not change
             // how coarse the grain looks.
-            texture_scale: (shading.texture_scale * factor as f32).max(0.25),
+            texture_scale: (shading.texture_scale * display).max(0.25),
             downsample: mode.to_gpu(),
             model: shading.model.to_gpu(),
             elevation: shading.elevation.clamp(0.0, 90.0).to_radians(),
@@ -8270,7 +8284,28 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             crease: escape.shading.creases.to_gpu(
                 escape.terrain_active() && escape.terrain.source == crate::config::escape::TerrainSource::Creases,
             ),
+            px_scale: self.display_factor(),
+            _px_pad: [0.0; 3],
         }
+    }
+
+    /// Render pixels per output pixel: the supersample factor, times the
+    /// viewport's render scale (`set_pixel_scale`). What the relief, the
+    /// distance-estimate colourings and the relief's slope cancellations
+    /// measure an output pixel in (`esc_supersample`).
+    fn display_factor(&self) -> f32 {
+        self.supersample as f32 * self.pixel_scale
+    }
+
+    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// render pixels per logical viewport point, before supersampling. 1
+    /// for every other render. True when it changed, and the picture with
+    /// it.
+    pub fn set_pixel_scale(&mut self, s: f32) -> bool {
+        let s = if s.is_finite() && s > 0.0 { s } else { 1.0 };
+        let changed = s != self.pixel_scale;
+        self.pixel_scale = s;
+        changed
     }
 
     /// One full-image escape pass into the output texture.
@@ -9490,14 +9525,48 @@ mod tests {
         assert!(EscapeRenderer::wants_perturbation(&kaliset, 720), "kaliset has no floor of its own");
     }
 
+    /// What the shader measures an output pixel in (`esc_supersample`):
+    /// the supersample factor at full size, and a fraction of it at a
+    /// render scale. The 4-bit factor in `flags` stays the integer, for
+    /// mode D's march.
+    #[test]
+    fn an_output_pixel_is_the_factor_times_the_render_scale() {
+        let Some((device, _queue)) = pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+            adapter.request_device(&wgpu::DeviceDescriptor::default()).await.ok()
+        }) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let escape = EscapeConfig::default();
+        let mut r = EscapeRenderer::new(&device, 64, 48);
+        r.resize(&device, 64, 48, 3);
+        let full = r.params_for(&escape);
+        assert_eq!(full.px_scale, 3.0);
+        assert!(r.set_pixel_scale(0.5), "a new scale is a new picture");
+        assert!(!r.set_pixel_scale(0.5), "the same one is not");
+        let half = r.params_for(&escape);
+        assert_eq!(half.px_scale, 1.5);
+        assert_eq!((half.flags >> 4) & 15, 3, "the march's integer factor");
+        r.set_pixel_scale(f32::NAN);
+        assert_eq!(r.params_for(&escape).px_scale, 3.0, "a scale that is not one is 1");
+        r.destroy();
+    }
+
     #[test]
     fn params_struct_matches_wgsl_layout() {
         // 4 vec2 (32) + 4 u32 (16) + bailout, tile row, damping (16) +
         // shading flags, stride, degree, palette-map flags (16) + the
         // palette map's vec4 (16) + 3 param arrays (192) + the
-        // derived-data table (1024) + the crease row (16) = 1328, and
-        // every vec4 must start 16-byte aligned.
-        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1712);
+        // derived-data table (1024) + the crease row (16) + the output
+        // pixel's scale and its padding (16) = 1728, and every vec4 must
+        // start 16-byte aligned.
+        assert_eq!(std::mem::size_of::<EscapeParamsGpu>(), 1728);
+        assert_eq!(std::mem::offset_of!(EscapeParamsGpu, px_scale), 1712);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, shade_flags), 64);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap_flags), 76);
         assert_eq!(std::mem::offset_of!(EscapeParamsGpu, pmap), 80);

@@ -337,6 +337,40 @@ Background and Transparent render at `image_size` as before; Export
 Current Image saves the picture as rendered, so at 50% it is half the
 size. The path query's pixel is mapped into the renderer's pixels.
 
+**Sizes in pixels, as built (2026-10-30).** A parameter in pixels has
+always meant a logical point, so the unit is the *pixel scale*: render
+pixels per point (render height over the viewport's height in points,
+exactly 1 at full size and for every export). The app sets it each frame
+on the flame renderer, the effect chain and the escape renderer, and it
+is applied where each parameter is packed for the GPU, never to a config
+copy. Scaled:
+- the flame's spatial filter radius (`FlameRenderer::set_pixel_scale`),
+  the solid shade pass's gap fill (whole pixels, `gap_in_pixels`) and the
+  DoF pass's 32-pixel cap;
+- the density blur's radius, sharpen's radius, the bilateral blur's
+  radius and spatial sigma, chromatic aberration's amount and the
+  kaleidoscope's edge offset (`EffectParams::pixel_scale`, the struct's
+  last slot, read in the shader);
+- escape-time's output pixel (`EscapeParams.px_scale`, a new float that
+  `esc_supersample` returns: the supersample factor times the pixel
+  scale), which the relief's height, softness and texture scale, the
+  distance-estimate colourings and the relief's slope cancellations all
+  measure in, so they move together.
+
+Not scaled, deliberately: the colour effects stay before the upscale
+(their order is the user's, so only all of them could move after it, and
+on a high-DPI screen that would change today's look at 100%), so film
+grain's per-pixel hash and the Sobel stencil turn coarser at a lower
+scale; the noise-fighting kernels (the 9x9 normal fit, the a-trous
+strides, the path tracer's denoiser, the DoF's depth prepass) stay in
+render pixels, since at a lower scale each pixel carries more samples;
+mode D's march keeps stepping by the integer factor in `flags` (solids
+are a low priority); KF's texture-overlay step is baked into the WGSL in
+whole render pixels; a terrain's section softness is in texels, which
+grow with a lower render height; custom formulas' `#screenpixel` and the
+like are the user's. An export at a size other than the viewport's has
+the same mismatch for most of these, as it always had.
+
 ## The governor
 
 **One governor** (`app/governor.rs`): the target, the context, the
@@ -570,7 +604,7 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    thread, a heavy flame), not at the default 256. The antialiasing
    governor's hunting is left to the governor too, which replaces it.
 3. **Render scale + Catmull-Rom upscale**, manual, in every engine
-   (built 2026-10-30: *As built*); the effects' pixel scaling (next);
+   (built 2026-10-30: *As built*); the effects' pixel scaling (built 2026-10-30: *Sizes in pixels*);
    the readout (the menu shows the setting; a governed frame's readout
    is the governor's). For simulations: **the active
    run's letterbox**, which on its own stops a resize or full screen from

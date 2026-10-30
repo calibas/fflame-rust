@@ -1788,6 +1788,15 @@ when several recent settled frames came more than 1.5 budgets late,
 probed back up after a clean run, and a failed probe waits twice as long
 next time. Stills, exports and video render at the config's factor.
 
+**An output pixel** is what the relief (its height, softness and texture
+scale), the distance-estimate colourings and the relief's slope
+cancellations measure in: `esc_supersample()`, which reads
+`EscapeParams.px_scale`, render pixels per output pixel. That is the
+supersample factor, times the viewport's render scale
+(`EscapeRenderer::set_pixel_scale`, 1 for every export), so neither
+antialiasing nor a lower render scale moves the colours or the relief.
+Mode D's march steps by the integer factor in `flags` bits 4-7.
+
 ### The recolour cache
 
 Each iterate template writes a terminal record per pixel on its
