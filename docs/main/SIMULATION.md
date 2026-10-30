@@ -337,9 +337,12 @@ filter and mode, the fit and the matte's channel and edge are not.
 
 What an edit costs the run is its `UpdateType`: `SimRerender` (colour,
 resolve, view, matte, warp, model and colouring parameters, steps, `dt`,
-the terrain: the run continues), `SimResample` (a bound grid's scale: the live
-field is interpolated into the new grid), or `SimReseed` (model, seed,
-init, boundary, grid mode or size: the run restarts).
+the terrain: the run continues), `SimResample` (a bound grid's scale: meant
+to interpolate the live field into the new grid; nothing reads its
+`resample_sim` yet, so the new grid reseeds, as a resize does, until the
+resampler is built: [quality-governor.md](../projects/quality-governor.md)),
+or `SimReseed` (model, seed, init, boundary, grid mode or size: the run
+restarts).
 
 A bound grid is `round(output × scale)` cells with the scale clamped to
 0.125–4 (`SimGrid::cells_for`), so it re-simulates whenever the output
@@ -610,8 +613,11 @@ renderer restarts when the config no longer describes it. `SeedIdentity`
 ([src/sim/renderer.rs](../../src/sim/renderer.rs)) is the part that
 matters: the model of every layer, the boundary, the init, the seed, and
 each layer's memory slice count. Change any of those and the run
-restarts. A change of grid size reseeds too (`SimReseed`), except a
-bound grid's scale, which resamples the live field (`SimResample`).
+restarts. A change of grid size reseeds too (`SimReseed`). A bound
+grid's scale is meant to resample the live field instead (`SimResample`),
+but until the resampler is built it reseeds as well: `SimRenderer::resize`
+reseeds whenever the grid's size changes, whether from the scale or from
+a resize of the window.
 
 Model and colouring **parameters are deliberately excluded** — turning
 Gray–Scott's feed rate while it runs is what the slider is for, and
