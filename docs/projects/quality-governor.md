@@ -525,10 +525,42 @@ these held one rung each from the first second. Getting there took three
 fixes the runs found: the fixed part of the cost (a model of pixels alone
 cannot tell a cost that does not move); the check by the frames (the
 governor shed to its lowest rung chasing a 120 fps the window could not
-have); and the budget taken from frames held back elsewhere. Open: at a
-real 120 Hz, in the foreground, the same scenes want running again; and
-after the cap is taken, a GPU that then becomes the limit is not noticed
-until frames come faster.
+have); and the budget taken from frames held back elsewhere.
+
+Again at a real 120 Hz (8.3 ms; frames over 1.5 refreshes apart in the
+last column):
+
+| scene | rung held | GPU a picture | fps | slow |
+|---|---|---|---|---|
+| escape zoom | 1x at 50% | 2.8 ms | 119.9 | 1.2% |
+| escape sweep | 2x at 50% | 2.9 ms | 120.1 | 1.6% |
+| mode-D solid | 1x at 25% (the floor) | 12.5 ms | 69.8 | 41% |
+
+The zoom's 2x at 50% took 7.3 ms, past the 6.7 at which 120 Hz frames
+still come evenly, so it went on to 1x at 50%. The solid cannot make
+120 Hz on any rung. Open: after a cap from elsewhere is taken, a GPU that
+then becomes the limit is not noticed until frames come faster.
+
+### The governor, flames, as built (2026-10-30)
+
+The render scale half (the plan's *Flames are different*):
+`governor::flame_scale`. While a 2D or 3D flame plays or is being edited
+(the overwrite window), with the frame governor on and Focused Rendering
+off, its render scale comes from the samples its frames plot per display
+pixel, smoothed: 2D full size at 2 and more, 75% down to 0.5, 50% below;
+3D full size at 32 and more, 75% down to 16, 50% below (phase 1's
+break-evens; the 3D steps between its measured points). A new scale
+holds 30 frames before it is taken. The batch governor stays the inner
+loop that decides the samples; the live preview's brightness boost
+follows the preview state, and the tone map's sample density is per
+render pixel, so neither moves with the scale. In the app at 120 Hz with
+the user's 1,000 iterations a thread (8.2 million samples a frame, 7.2 a
+display pixel): the 2D flame stayed at full size, the 3D flame went to 50%
+after 30 frames, both at 120 fps.
+
+Not yet: the batch governor's alternation at the budget's edge
+(*The second run*), which wants the frame's GPU span as the batch's cap;
+terrains; simulations' field scale and *Fit to target*.
 
 ## Exports
 
