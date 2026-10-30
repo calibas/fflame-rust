@@ -143,6 +143,32 @@ pub(crate) fn escape_ladder(ceiling: u32, solid: bool) -> Vec<Rung> {
     v
 }
 
+/// A flame's render scale while governed, from the samples a frame per
+/// DISPLAY pixel (phase 1, *Results*): a flame meets its frame rate by
+/// shedding samples (the batch governor), and what it loses is grain, so the
+/// question is which loses less at a given sample count -- the full size,
+/// grainy, or a smaller render with more samples a pixel, softer. Measured,
+/// 2D: the smaller won below about 2 samples a display pixel (1: 13.1 at
+/// 75% against 15.7 full; 4: 10.0 full against 10.1), and 50% only below
+/// about a half. 3D, softer, holds on longer: 50% won at 16 (7.0 against
+/// 8.5 full and 7.2 at 75%) and full size at 64 (5.4 against 6.4), so the
+/// steps sit between, at 32 and 16.
+pub(crate) fn flame_scale(samples_per_display_px: f64, three_d: bool) -> f32 {
+    let (full, three_quarters) = if three_d { (32.0, 16.0) } else { (2.0, 0.5) };
+    if samples_per_display_px >= full {
+        1.0
+    } else if samples_per_display_px >= three_quarters {
+        0.75
+    } else {
+        0.5
+    }
+}
+
+/// Frames a flame's new scale must hold before it is taken: a scale
+/// change restarts the accumulation and reallocates, so not on a flicker of
+/// the batch.
+const FLAME_HOLD: u32 = 30;
+
 /// One engine's governor: its ladder, the rung in use, and what it has
 /// learned of the cost.
 #[derive(Debug, Clone)]
@@ -593,6 +619,18 @@ mod tests {
         assert_eq!(light.effective_budget(refresh), refresh, "frames came faster: the cap lifted");
     }
 
+    /// A flame's scale follows phase 1's break-evens: 2D gives way below 2
+    /// samples a display pixel, 3D below 32.
+    #[test]
+    fn a_flames_scale_follows_its_samples() {
+        assert_eq!(flame_scale(7.2, false), 1.0);
+        assert_eq!(flame_scale(1.0, false), 0.75);
+        assert_eq!(flame_scale(0.25, false), 0.5);
+        assert_eq!(flame_scale(64.0, true), 1.0);
+        assert_eq!(flame_scale(20.0, true), 0.75);
+        assert_eq!(flame_scale(7.2, true), 0.5);
+    }
+
     /// Stopped, the best rung again, the cost remembered.
     #[test]
     fn release_returns_to_the_top_and_keeps_the_cost() {
@@ -691,6 +729,13 @@ pub(crate) struct GovernorState {
     /// Frames held back by something other than this app's work: the
     /// budget they allow, ms (`effective_budget`).
     pub capped: Option<f64>,
+    /// A flame's render scale while governed (`flame_scale`), 1 otherwise;
+    /// the samples its last frame plotted; their smoothed share a display
+    /// pixel; and the frames a different scale has been wanted.
+    pub flame_scale: f32,
+    pub flame_samples: Option<u64>,
+    pub flame_spp: f64,
+    pub flame_hold: u32,
 }
 
 impl Default for GovernorState {
@@ -708,6 +753,10 @@ impl Default for GovernorState {
             intervals: Default::default(),
             spans: Default::default(),
             capped: None,
+            flame_scale: 1.0,
+            flame_samples: None,
+            flame_spp: 0.0,
+            flame_hold: 0,
         }
     }
 }
@@ -811,6 +860,47 @@ impl GovernorState {
 }
 
 impl super::App {
+    /// A flame's render scale for the next frame (`flame_scale`): while it
+    /// plays or is being edited (the overwrite window), with the frame
+    /// governor on and Focused Rendering off, from the samples the last
+    /// frame plotted; full size otherwise, and in every other mode.
+    pub(super) fn govern_flame(&mut self) {
+        use crate::scene::transforms::RenderMode;
+        let c = self.config_manager.active_config();
+        let three_d = c.render_mode == RenderMode::ThreeD;
+        let on = matches!(c.render_mode, RenderMode::TwoD | RenderMode::ThreeD)
+            && !c.cylinder_targeting
+            && self.config_manager.system_settings().frame_governor
+            && (self.animation_controller.is_playing() || self.use_overwrite_next_frame);
+        let display_px = self.fractal_viewport_size.0.max(1) as f64 * self.fractal_viewport_size.1.max(1) as f64;
+        let ceiling = self.user_render_scale();
+        let g = &mut self.governor;
+        let samples = g.flame_samples.take();
+        if !on {
+            g.flame_scale = 1.0;
+            g.flame_spp = 0.0;
+            g.flame_hold = 0;
+            return;
+        }
+        if let Some(n) = samples {
+            let spp = n as f64 / display_px;
+            g.flame_spp = if g.flame_spp > 0.0 { g.flame_spp + 0.1 * (spp - g.flame_spp) } else { spp };
+        }
+        if g.flame_spp <= 0.0 {
+            return;
+        }
+        let want = flame_scale(g.flame_spp, three_d).min(ceiling);
+        if (want - g.flame_scale).abs() < 1e-6 {
+            g.flame_hold = 0;
+        } else {
+            g.flame_hold += 1;
+            if g.flame_hold >= FLAME_HOLD {
+                g.flame_scale = want;
+                g.flame_hold = 0;
+            }
+        }
+    }
+
     /// Nothing governed this frame (another mode, a terrain, a traced
     /// solid): escape-time lets go.
     pub(super) fn govern_escape_off(&mut self) {
