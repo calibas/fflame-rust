@@ -43,7 +43,7 @@ pub(crate) struct FrameState {
     /// own frames too, so not while it plays), or a mode-D preview.
     pub interacting: bool,
     /// The escape image shown is part-drawn: a chunk of a picture that
-    /// is not settled yet.
+    /// is not settled yet, with no finished one held up in its place.
     pub escape_partial: bool,
     /// The escape renderer's supersampling in use, 0 without one.
     pub escape_ss: u32,
@@ -122,7 +122,8 @@ impl super::App {
             view: self.fractal_viewport_size,
             playing: self.animation_controller.is_playing(),
             interacting: (self.use_overwrite_next_frame && !self.animation_controller.is_playing()) || preview,
-            escape_partial: self.escape_renderer.is_some() && self.escape_dirty,
+            escape_partial: self.escape_dirty
+                && self.escape_renderer.as_ref().is_some_and(|e| e.presented_view().is_none()),
             escape_ss: self.escape_renderer.as_ref().map_or(0, |e| e.effective_supersample()),
             iter_scale: self.iter_scale,
             sim_grid,

@@ -2512,6 +2512,12 @@ impl App {
                 // phase 5).
                 let solid_traced = crate::escape::ifs::formula_is_solid(&final_config.escape.formula)
                     && final_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
+                // Playing, a picture that takes several frames to settle
+                // (a deep zoom, a solid) keeps the last settled one up
+                // until it does, as a motion-blurred frame does: shown
+                // chunk by chunk, playback was a part-drawn picture every
+                // frame (docs/projects/quality-governor.md, phase 1).
+                let hold = self.animation_controller.is_playing() && !solid_traced;
                 if motion_blur::blurring(&self.animation_controller) && !solid_traced {
                     if self.escape_dirty && self.escape_motion.is_none() {
                         let moments = crate::animation::export::moment_configs(
@@ -2523,7 +2529,7 @@ impl App {
                         escape.begin_accumulation_of(&self.gpu.device, &self.gpu.queue, moments.len() as u32);
                         self.escape_motion = Some(motion_blur::Moments { moments, next: 0, rewind: false });
                     }
-                } else if self.escape_motion.take().is_some() | escape.drop_presented() {
+                } else if self.escape_motion.take().is_some() | (!hold && escape.drop_presented()) {
                     self.escape_dirty = true;
                 }
                 // What the escape pass renders: the moment, or the frame.
@@ -2649,6 +2655,8 @@ impl App {
                     };
                     if done && self.escape_motion.take().is_some() {
                         escape.present_accumulation(&self.gpu.device, &mut render_encoder);
+                    } else if done && hold {
+                        escape.present_output(&self.gpu.device, &mut render_encoder);
                     }
                     // Progressive deep zoom: an unsettled frame keeps
                     // the dirty flag so the next frame re-renders with

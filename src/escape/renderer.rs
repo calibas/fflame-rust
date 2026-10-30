@@ -3287,6 +3287,16 @@ impl EscapeRenderer {
         self.average.present(device, encoder);
     }
 
+    /// Keep the settled picture as the one the viewport shows
+    /// ([`Self::presented_view`]) while the next renders in chunks over
+    /// several frames: in playback, the chunks were each shown, a
+    /// part-drawn picture every frame (docs/projects/quality-governor.md,
+    /// phase 1). Not a path-traced solid's, which is its own picture.
+    pub fn present_output(&mut self, device: &Device, encoder: &mut CommandEncoder) {
+        let src = self.final_texture.as_ref().unwrap_or(&self.output_texture);
+        self.average.present_texture(device, encoder, src);
+    }
+
     /// The last finished motion-blurred frame, while the viewport keeps one.
     pub fn presented_view(&self) -> Option<&TextureView> {
         self.average.presented_view()

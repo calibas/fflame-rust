@@ -19,6 +19,7 @@ open, the release binary is locked and its copy in target/release/deps
 is run instead.
 """
 import argparse
+import csv
 import os
 import subprocess
 import sys
@@ -77,8 +78,8 @@ def main():
             continue
         frame_metrics.summary(log)
         want = next((m for k, m in EXPECTED_MODE.items() if name.startswith(k)), None)
-        with open(log) as fh:
-            modes = {line.split(',')[7] for line in fh.readlines()[1:] if line.count(',') > 7}
+        with open(log, newline='') as fh:
+            modes = {r['mode'] for r in csv.DictReader(fh)}
         if want and not any(m.startswith(want) for m in modes):
             print(f'  WARNING: expected a {want} mode, logged {sorted(modes)}: the scene did not open')
 
