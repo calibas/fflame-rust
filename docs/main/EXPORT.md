@@ -591,6 +591,16 @@ rather than a call in a `for`:
   CPU-starved encoder never stalls the GPU and memory cannot grow
   without bound.
 
+**Motion blur.** With the animation's motion blur on, the frame's
+moments are made after the frame itself (`moment_configs`, so signal
+smoothing advances once a frame) and passed with it
+(`RenderJob::with_moments`); each engine averages them before the tail,
+the frame's own config finishing the average. What each engine does,
+and what it costs, is in [ANIMATION.md](ANIMATION.md) (*Motion blur*).
+A blurred video turns the CLI's inlined constants off
+(`disable_inlined_constants`): every moment uploads its flame, and
+inlined that would be a shader compile a moment.
+
 **A deep-zoom video is checked frame by frame before it starts**
 (`deep_zoom_misfit`). A perturbed frame keeps per-pixel state, and past
 the device's buffer limits that allocation is a validation error that

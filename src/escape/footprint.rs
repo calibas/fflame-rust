@@ -461,10 +461,12 @@ pub fn surface_texture(escape: &EscapeConfig) -> super::surface::SurfaceTexture 
     }
 }
 
-/// What the tiers draw an escape terrain as.
-fn tier_inputs<'a>(config: &FractalConfig, view: &'a dyn Fn([f32; 2]) -> TerrainView) -> TierInputs<'a> {
+/// What the tiers draw an escape terrain as, over `moments` motion-blur
+/// moments (1 for a sharp frame).
+fn tier_inputs<'a>(config: &FractalConfig, view: &'a dyn Fn([f32; 2], usize) -> TerrainView, moments: usize) -> TierInputs<'a> {
     TierInputs {
         view,
+        moments,
         settings: path_settings(config),
         tier: config.escape.terrain.tier,
         samples: config.escape.path.samples,
@@ -885,6 +887,9 @@ pub struct EscapeTerrain {
     /// The sections' floor on distance (`next_near_floor`), once the
     /// probe has seen ground.
     near_floor: Option<f64>,
+    /// A blurred export's moments drawn each on its own ground, averaged
+    /// (docs/archive/projects/motion-blur.md).
+    moments: crate::renderer::average::ImageAverage,
 }
 
 pub use super::path_core::PATH_SHOW_SAMPLES;
@@ -923,6 +928,7 @@ impl EscapeTerrain {
             mips_smooth: false,
             mips_inverted: false,
             near_floor: None,
+            moments: Default::default(),
         }
     }
 
@@ -1351,9 +1357,23 @@ impl EscapeTerrain {
     /// showing it from [`PATH_SHOW_SAMPLES`]. Any change to the view or
     /// the ground restarts both. True while there is more to do.
     pub fn render_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
-        let view = |jitter| terrain_view(config, jitter);
-        let inputs = TierInputs { filling: self.sections_missing() > 0, ..tier_inputs(config, &view) };
+        self.render_viewport_moments(device, queue, config, &[])
+    }
+
+    /// [`Self::render_viewport`] blurred over a frame's motion-blur
+    /// moments (docs/archive/projects/motion-blur.md): each pass or sample at a
+    /// moment's view, over the ground `config` made.
+    pub fn render_viewport_moments(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig]) -> bool {
+        let view = |jitter, m: usize| terrain_view(moments.get(m).unwrap_or(config), jitter);
+        let inputs = TierInputs { filling: self.sections_missing() > 0, ..tier_inputs(config, &view, moments.len().max(1)) };
         self.tiers.viewport(&mut self.terrain, device, queue, &inputs)
+    }
+
+    /// Whether two configs draw the same picture -- the same sections --
+    /// whatever their views: motion-blur moments that differ only in the
+    /// camera share a ground.
+    pub fn same_picture(a: &FractalConfig, b: &FractalConfig) -> bool {
+        picture_key(&a.escape) == picture_key(&b.escape) && palette_key(a) == palette_key(b)
     }
 
     /// The most sections the view may want.
@@ -1389,8 +1409,15 @@ impl EscapeTerrain {
     /// dispatches of a few samples each, `wait` called between them (a
     /// blocking poll on the desktop). Submits its own work.
     pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32) -> bool) {
-        let view = |jitter| terrain_view(config, jitter);
-        self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view), frame, wait);
+        self.render_still_moments(device, queue, config, &[], frame, wait);
+    }
+
+    /// [`Self::render_still`] blurred over moments that share `config`'s
+    /// ground ([`Self::same_picture`]): each pass or share of the samples
+    /// at a moment's view.
+    pub fn render_still_moments(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig], frame: (u32, u32), wait: impl FnMut(f32) -> bool) {
+        let view = |jitter, m: usize| terrain_view(moments.get(m).unwrap_or(config), jitter);
+        self.tiers.still(&mut self.terrain, device, queue, &tier_inputs(config, &view, moments.len().max(1)), frame, wait);
     }
 
     /// Draw the terrain once, its rays offset by `jitter` within their
@@ -1416,6 +1443,30 @@ impl EscapeTerrain {
     /// render.
     pub fn output_view(&self) -> &TextureView {
         self.tiers.output_view(&self.terrain)
+    }
+
+    /// Start averaging `count` motion-blur moments' stills of `w` x `h`.
+    pub fn begin_moments(&mut self, device: &Device, queue: &Queue, w: u32, h: u32, count: u32) {
+        self.moments.begin(device, queue, w, h, count);
+    }
+
+    /// Fold the still just drawn into the moments' average.
+    pub fn add_moment(&mut self, device: &Device, queue: &Queue) {
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Terrain Moment") });
+        let still = self.output_view().clone();
+        self.moments.add(device, &mut enc, &still);
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// The moments' average; complete once every moment is added.
+    pub fn moments_view(&self) -> Option<&TextureView> {
+        self.moments.view()
+    }
+
+    /// The texture behind [`Self::output_view`], for a test to read.
+    #[cfg(test)]
+    pub(crate) fn output_texture(&self) -> &wgpu::Texture {
+        self.tiers.output_texture(&self.terrain)
     }
 
     /// Path-traced samples so far, and whether the picture is theirs.
@@ -1471,6 +1522,7 @@ impl EscapeTerrain {
         self.footprint.destroy();
         self.terrain.destroy();
         self.tiers.destroy();
+        self.moments.destroy();
     }
 }
 
@@ -2348,6 +2400,124 @@ mod tests {
         ))
         .expect("render")
         .rgba_data
+    }
+
+    /// A terrain blurred over its motion-blur moments
+    /// (docs/archive/projects/motion-blur.md). Moments that are all the frame blur
+    /// it into itself. A camera moving across the shutter is drawn on one
+    /// ground, the passes going round the moments' views; a picture
+    /// changing across it, a ground a moment, averaged. Either is the mean
+    /// of the moments' pictures -- each drawn on its own, so with all the
+    /// frame's antialiasing where the blur gives each its share -- far
+    /// nearer it than the frame drawn sharp.
+    #[test]
+    fn a_terrain_blurs_over_its_moments() {
+        let Some((_one_at_a_time, device, queue)) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (96u32, 72u32);
+        let mut c = terrain_config();
+        // The lit tier: its passes are deterministic, where an export's
+        // Auto path traces, and its noise would hide what is measured.
+        c.escape.terrain.tier = crate::config::escape::RenderTier::Lit;
+        c.escape.supersample = 4;
+        let blurred = |moments: &[FractalConfig]| {
+            pollster::block_on(crate::renderer::render(
+                &device,
+                &queue,
+                crate::renderer::RenderJob::new(&c, w, h).with_moments(moments),
+                &mut crate::renderer::NoProgress,
+            ))
+            .expect("render")
+            .rgba_data
+        };
+        let sharp = render(&device, &queue, &c, w, h);
+        let still = blurred(&vec![c.clone(); 4]);
+        assert_eq!(still, sharp, "a still frame blurred is the frame");
+        // The mean of the moments' light (the tail encodes pow(1/2.2)), and
+        // how far a picture is from it, a channel.
+        let apart = |moments: &[FractalConfig], picture: &[u8]| {
+            let each: Vec<Vec<u8>> = moments.iter().map(|m| render(&device, &queue, m, w, h)).collect();
+            picture
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let light = each.iter().map(|e| (e[i] as f64 / 255.0).powf(2.2)).sum::<f64>() / each.len() as f64;
+                    (*p as f64 - 255.0 * light.powf(1.0 / 2.2)).abs()
+                })
+                .sum::<f64>()
+                / picture.len() as f64
+        };
+        // A camera's move, drawn on the frame's ground: against each
+        // moment's own still on that same ground (a moment rendered alone
+        // would choose its own sections), in light, before the tail.
+        let camera: Vec<FractalConfig> = [-0.06f32, -0.02, 0.02, 0.06]
+            .iter()
+            .map(|d| {
+                let mut m = c.clone();
+                m.escape.cam_yaw += d;
+                m
+            })
+            .collect();
+        assert!(camera.iter().all(|m| EscapeTerrain::same_picture(m, &c)), "a camera's move shares the ground");
+        let flame = crate::renderer::FlameRenderer::for_job(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, w, h, &c);
+        let mut t = EscapeTerrain::new(&device, w, h);
+        let wait = |_: f32| {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            true
+        };
+        while t.update(&device, &queue, &c, w, h, flame.escape_palette_view(false), flame.palette_generation(), 1) {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        }
+        let light = |t: &EscapeTerrain| -> Vec<f32> {
+            let tex = t.output_texture();
+            let bytes = crate::escape::terrain::gpu_tests::read_texture(&device, &queue, tex, 0, tex.width(), tex.height(), 16);
+            bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()
+        };
+        t.render_still_moments(&device, &queue, &c, &camera, (w, h), wait);
+        let blurred_light = light(&t);
+        t.render_still(&device, &queue, &c, (w, h), wait);
+        let sharp_light = light(&t);
+        let mut mean = vec![0.0f32; sharp_light.len()];
+        for m in &camera {
+            t.render_still(&device, &queue, m, (w, h), wait);
+            for (a, v) in mean.iter_mut().zip(light(&t)) {
+                *a += v / camera.len() as f32;
+            }
+        }
+        // Colour channels only: alpha is coverage, the same throughout.
+        let off = |p: &[f32]| p.iter().zip(&mean).enumerate().filter(|(i, _)| i % 4 != 3).map(|(_, (a, b))| (a - b).abs() as f64).sum::<f64>();
+        let (moved, frame) = (off(&blurred_light), off(&sharp_light));
+        println!("camera: {moved:.3} from the moments' mean, the sharp frame {frame:.3}");
+        assert!(moved < 0.3 * frame, "the camera's blur is {moved:.3} from the moments' mean, the sharp frame {frame:.3}");
+        t.destroy();
+        flame.destroy();
+        // A Julia set's constant moving: a new picture at every moment.
+        let picture: Vec<FractalConfig> = [-0.82f32, -0.78, -0.74, -0.70]
+            .iter()
+            .map(|re| {
+                let mut m = c.clone();
+                m.escape.julia = true;
+                m.escape.julia_re = *re;
+                m.escape.julia_im = 0.156;
+                m
+            })
+            .collect();
+        assert!(!picture.iter().all(|m| EscapeTerrain::same_picture(m, &c)), "a picture's change does not");
+        let mut julia = c.clone();
+        (julia.escape.julia, julia.escape.julia_re, julia.escape.julia_im) = (true, -0.76, 0.156);
+        let julia_blurred = pollster::block_on(crate::renderer::render(
+            &device,
+            &queue,
+            crate::renderer::RenderJob::new(&julia, w, h).with_moments(&picture),
+            &mut crate::renderer::NoProgress,
+        ))
+        .expect("render")
+        .rgba_data;
+        let (changed, frame) = (apart(&picture, &julia_blurred), apart(&picture, &render(&device, &queue, &julia, w, h)));
+        println!("picture: {changed:.3} a channel from the moments' mean, the sharp frame {frame:.3}");
+        assert!(changed < 0.3 * frame, "the picture's blur is {changed:.3} from the moments' mean, the sharp frame {frame:.3}");
     }
 
     /// A terrain renders through `render_with`, so the CLI, thumbnails

@@ -71,6 +71,13 @@ pub struct RenderJob<'a> {
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
 
+    /// The frame's motion-blur moments (docs/archive/projects/motion-blur.md):
+    /// the config at each moment of the shutter, averaged before the
+    /// tail. Empty -- the default -- renders `config` alone; `config` is
+    /// the frame's own either way, and its tone mapping, effects and
+    /// background are what the average is finished with.
+    pub moments: &'a [FractalConfig],
+
     /// The renderer is `render`'s own and dies with this job, so its
     /// iteration buffers can go once the tone map has run. Set by
     /// `render`, never by a caller of `render_with`, whose renderer
@@ -96,6 +103,7 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
+            moments: &[],
             throwaway_renderer: false,
             #[cfg(test)]
             restarted_orbits: false,
@@ -129,6 +137,12 @@ impl<'a> RenderJob<'a> {
     /// Use premultiplied alpha (vs straight-alpha reconstruction) for transparent export
     pub fn with_premultiplied(mut self, premultiplied: bool) -> Self {
         self.premultiplied = premultiplied;
+        self
+    }
+
+    /// Blur the frame over these moments (`animation::export::moment_configs`).
+    pub fn with_moments(mut self, moments: &'a [FractalConfig]) -> Self {
+        self.moments = moments;
         self
     }
 
@@ -573,10 +587,18 @@ pub async fn render_with(
     // what the renderer says plotted, as the app counts -- a thread's
     // burn-in is paid once, not every dispatch.
     let mut batch_samples = 0u64;
+    // Motion blur (docs/archive/projects/motion-blur.md): the dispatches go round
+    // the frame's moments, each drawing its moment's flame and view into
+    // the one accumulation, and the loop ends on a whole round so every
+    // moment has the same share. The orbits go on from moment to moment.
+    // Not under Focused Rendering, whose plans are one view's.
+    let moments: &[FractalConfig] = if job.config.cylinder_targeting { &[] } else { job.moments };
+    let mut dispatches = 0usize;
 
-    while total_rendered < target {
+    while total_rendered < target || (!moments.is_empty() && dispatches % moments.len() != 0) {
         // Check for cancellation
         if progress.is_cancelled() {
+            renderer.set_continuing_frame(false);
             return Err(RenderError::Cancelled);
         }
 
@@ -587,6 +609,15 @@ pub async fn render_with(
         let clear_histogram = batch_frame_count == 0;
         let clear_paths = total_rendered == 0 && clear_histogram;
 
+        let view = if moments.is_empty() {
+            job.config
+        } else {
+            let moment = &moments[dispatches % moments.len()];
+            renderer.set_moment(device, queue, moment, job.iterations_per_thread, job.burn_in);
+            renderer.set_continuing_frame(dispatches > 0);
+            moment
+        };
+        dispatches += 1;
         let plotted = renderer.compute_pass(
             &mut encoder,
             queue,
@@ -594,17 +625,17 @@ pub async fn render_with(
             NUM_WORKGROUPS,
             job.iterations_per_thread,
             job.burn_in,
-            job.config.zoom,
-            job.config.pan_x as f32,
-            job.config.pan_y as f32,
-            job.config.rotation,
-            job.config.camera_rotation_x,
-            job.config.camera_rotation_y,
-            job.config.camera_bank,
-            job.config.camera_x,
-            job.config.camera_y,
-            job.config.camera_z,
-            job.config.speed_factor,
+            view.zoom,
+            view.pan_x as f32,
+            view.pan_y as f32,
+            view.rotation,
+            view.camera_rotation_x,
+            view.camera_rotation_y,
+            view.camera_bank,
+            view.camera_x,
+            view.camera_y,
+            view.camera_z,
+            view.speed_factor,
             clear_histogram,
             clear_paths,
         );
@@ -635,8 +666,9 @@ pub async fn render_with(
         // Report progress
         progress.on_progress(total_rendered, target);
 
-        // Check if we've reached target
-        if total_rendered >= target || stalled {
+        // Check if we've reached target (on a whole round of the moments)
+        let round_done = moments.is_empty() || dispatches % moments.len() == 0;
+        if (total_rendered >= target && round_done) || stalled {
             // Final accumulation for partial batch
             if batch_frame_count > 0 {
                 let mut final_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
@@ -647,6 +679,10 @@ pub async fn render_with(
             }
             break;
         }
+    }
+    renderer.set_continuing_frame(false);
+    if !moments.is_empty() {
+        log::info!("Render: motion blur over {} moments, {dispatches} dispatches", moments.len());
     }
 
     log::info!("Render: Render loop complete, total_rendered={}", total_rendered);
@@ -953,7 +989,6 @@ async fn render_sim(
     // however large `steps` is; polling between batches is also what
     // keeps the queue from growing without bound.
     const PROGRESS_BATCH: u32 = 512;
-    let total = job.config.sim.steps;
     // A terrain's still follows the steps, and takes most of a path
     // traced export: the bar's share of each, in thousandths.
     #[cfg(feature = "terrain")]
@@ -964,28 +999,39 @@ async fn render_sim(
     };
     #[cfg(not(feature = "terrain"))]
     let still_share = 0.0;
-    loop {
-        let reached =
-            sim.advance_steps(device, queue, &job.config.sim, total, Some(PROGRESS_BATCH));
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        let steps = sim.step_index() as f64 / total.max(1) as f64;
-        progress.on_progress(((1.0 - still_share) * steps.min(1.0) * 1000.0) as u64, 1000);
-        if reached {
-            break;
-        }
-        if progress.is_cancelled() {
-            if !caller_owned {
-                sim.destroy();
-            }
-            return Err(RenderError::Cancelled);
-        }
-    }
-    sim.color(device, queue, &job.config.sim, renderer.palette_view());
-
-    // The terrain: its ground made from the field as it now is, then the
-    // still -- path traced at its samples unless its tier is Lit.
+    // Motion blur (docs/archive/projects/motion-blur.md): the field at each
+    // moment's step count, in turn, coloured as that moment colours it,
+    // averaged. A moment behind the field reseeds and runs, exactly as a
+    // backward frame does.
     #[cfg(feature = "terrain")]
-    let terrain: Option<&mut crate::sim::terrain::SimTerrain> = if job.config.sim.terrain_active() {
+    let terrain_on = job.config.sim.terrain_active();
+    #[cfg(not(feature = "terrain"))]
+    let terrain_on = false;
+    // A terrain whose moments share its ground -- they differ in the
+    // terrain's own settings alone, its camera, its relief -- is drawn
+    // once, its passes or samples going round their views. One whose
+    // field differs is drawn at each moment, each its share of the
+    // samples, and the stills averaged.
+    let shared_ground = job.moments.iter().all(|m| {
+        let mut sim_cfg = m.sim.clone();
+        sim_cfg.terrain = job.config.sim.terrain.clone();
+        sim_cfg == job.config.sim
+    });
+    #[cfg(feature = "terrain")]
+    let terrain_moments = terrain_on && !job.moments.is_empty() && !shared_ground;
+    let moments: Vec<&FractalConfig> = if job.moments.is_empty() || (terrain_on && shared_ground) {
+        vec![job.config]
+    } else {
+        job.moments.iter().collect()
+    };
+    let blurred = moments.len() > 1;
+    if blurred && !terrain_on {
+        sim.begin_moments(device, queue, moments.len() as u32);
+    }
+    // The terrain: its ground made from the field, then the still --
+    // path traced at its samples unless its tier is Lit.
+    #[cfg(feature = "terrain")]
+    let mut terrain: Option<&mut crate::sim::terrain::SimTerrain> = if terrain_on {
         // The still sizes the renderer itself: to the frame, or to its
         // tiles.
         let (tile_w, tile_h) = crate::escape::terrain_tiers::still_tile(job.width, job.height);
@@ -994,25 +1040,73 @@ async fn render_sim(
             Some(slot) => slot.get_or_insert_with(make),
             None => terrain_owned.insert(make()),
         };
-        t.update(device, queue, sim, job.config, renderer.palette_view());
-        t.render_still(device, queue, job.config, (job.width, job.height), |f| {
-            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-            progress.on_progress((((1.0 - still_share) + still_share * f as f64) * 1000.0) as u64, 1000);
-            !progress.is_cancelled()
-        });
-        if progress.is_cancelled() {
-            if let Some(t) = terrain_owned.as_ref() {
-                t.destroy();
-            }
-            if !caller_owned {
-                sim.destroy();
-            }
-            return Err(RenderError::Cancelled);
+        if terrain_moments {
+            t.begin_moments(device, queue, job.width, job.height, moments.len() as u32);
         }
         Some(t)
     } else {
         None
     };
+    for (k, moment) in moments.iter().enumerate() {
+        let span = |f: f64| ((k as f64 + f) / moments.len() as f64 * 1000.0) as u64;
+        if blurred && moment.sim.use_transforms {
+            sim.set_layer_transforms(device, queue, &moment.flame);
+        }
+        let total = moment.sim.steps;
+        loop {
+            let reached =
+                sim.advance_steps(device, queue, &moment.sim, total, Some(PROGRESS_BATCH));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            let steps = sim.step_index() as f64 / total.max(1) as f64;
+            progress.on_progress(span((1.0 - still_share) * steps.min(1.0)), 1000);
+            if reached {
+                break;
+            }
+            if progress.is_cancelled() {
+                if !caller_owned {
+                    sim.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+        }
+        sim.color(device, queue, &moment.sim, renderer.palette_view());
+        if blurred && !terrain_on {
+            sim.add_moment(device, queue);
+        }
+        #[cfg(feature = "terrain")]
+        if let Some(t) = terrain.as_deref_mut() {
+            // A moment on its own ground takes its share of the samples;
+            // a shared ground's still goes round the moments' views.
+            let share;
+            let (still, views): (&FractalConfig, &[FractalConfig]) = if terrain_moments {
+                let mut c = (*moment).clone();
+                let path = &mut c.sim.terrain.path;
+                path.samples = path.samples.div_ceil(moments.len() as u32).max(1);
+                share = c;
+                (&share, &[])
+            } else {
+                (moment, job.moments)
+            };
+            t.update(device, queue, sim, moment, renderer.palette_view());
+            t.render_still_moments(device, queue, still, views, (job.width, job.height), |f| {
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                progress.on_progress(span((1.0 - still_share) + still_share * f as f64), 1000);
+                !progress.is_cancelled()
+            });
+            if progress.is_cancelled() {
+                if let Some(t) = terrain_owned.as_ref() {
+                    t.destroy();
+                }
+                if !caller_owned {
+                    sim.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+            if terrain_moments {
+                t.add_moment(device, queue);
+            }
+        }
+    }
 
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Sim Tail"),
@@ -1030,13 +1124,18 @@ async fn render_sim(
         chain.reset_slots();
     }
 
+    let picture = match sim.moments_view() {
+        Some(v) if blurred => v,
+        _ => sim.output_view(),
+    };
     #[cfg(feature = "terrain")]
     let sim_view = match terrain.as_ref() {
+        Some(t) if terrain_moments => t.moments_view().unwrap_or(t.output_view()),
         Some(t) => t.output_view(),
-        None => sim.output_view(),
+        None => picture,
     };
     #[cfg(not(feature = "terrain"))]
-    let sim_view = sim.output_view();
+    let sim_view = picture;
     if has_density_effects {
         let chain = effect_chain.as_mut().expect("built above: has_density_effects");
         let density_ran = chain.run_density_effects(
@@ -1248,25 +1347,43 @@ async fn render_escape(
     #[cfg(target_arch = "wasm32")]
     escape_renderer.set_fixed_chunk(true);
     prepare_escape(escape_renderer, device, queue, job.config).await;
+    // A solid path traced, motion-blurred (docs/archive/projects/motion-blur.md):
+    // each moment traced with its share of the samples, averaged.
+    let solid_blurred = solid_path && !job.moments.is_empty();
     if solid_path {
-        escape_renderer.render_solid_still(
-            device,
-            queue,
-            job.config,
-            renderer.escape_palette_view(job.config.escape.palette_map.stepped),
-            job.config.escape.path.samples,
-            || {
-                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-                !progress.is_cancelled()
-            },
-        );
-        if progress.is_cancelled() {
-            if !caller_owned {
-                escape_renderer.destroy();
-            }
-            return Err(RenderError::Cancelled);
+        let moments: Vec<&FractalConfig> = if solid_blurred { job.moments.iter().collect() } else { vec![job.config] };
+        let samples = job.config.escape.path.samples.div_ceil(moments.len() as u32).max(1);
+        if solid_blurred {
+            escape_renderer.begin_accumulation_of(device, queue, moments.len() as u32);
         }
-        log::info!("Render: escape solid path traced at {} samples", job.config.escape.path.samples);
+        for moment in &moments {
+            if solid_blurred {
+                prepare_escape(escape_renderer, device, queue, moment).await;
+            }
+            escape_renderer.render_solid_still(
+                device,
+                queue,
+                moment,
+                renderer.escape_palette_view(job.config.escape.palette_map.stepped),
+                samples,
+                || {
+                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                    !progress.is_cancelled()
+                },
+            );
+            if progress.is_cancelled() {
+                if !caller_owned {
+                    escape_renderer.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+            if solid_blurred {
+                let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Escape Solid Moment") });
+                escape_renderer.accumulate_sample(device, queue, &mut encoder);
+                queue.submit(std::iter::once(encoder.finish()));
+            }
+        }
+        log::info!("Render: escape solid path traced at {samples} samples x {} moments", moments.len());
     }
     // No UI to keep responsive here, and every chunk pays a downsample
     // pass over the supersampled image — so chunk for throughput.
@@ -1299,60 +1416,79 @@ async fn render_escape(
     } else {
         vec![[0.0f32, 0.0]]
     };
-    if extra > 1 && !solid_path {
-        escape_renderer.begin_accumulation(device, queue, extra);
+    // Motion blur (docs/archive/projects/motion-blur.md): every displacement at
+    // every moment, each a whole render -- neighbouring pixels stay at
+    // neighbouring positions, so finite-difference shading holds -- all
+    // in the one accumulation. Without it the frame is its one moment.
+    let moments: Vec<&FractalConfig> = if job.moments.is_empty() || solid_path {
+        vec![job.config]
+    } else {
+        job.moments.iter().collect()
+    };
+    let renders = (moments.len() * offsets.len()) as u32;
+    if moments.len() > 1 {
+        log::info!("Escape: motion blur over {} moments ({renders} renders)", moments.len());
     }
-    for off in &offsets {
-        escape_renderer.set_sample_offset(*off);
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Escape Render"),
-        });
-        let mut settled = escape_renderer.render(
-            device,
-            queue,
-            &mut encoder,
-            &job.config.escape,
-            renderer.escape_palette_view(job.config.escape.palette_map.stepped),
-            renderer.palette_generation(),
-        );
-        let mut guard = 0u32;
-        while !settled {
-            queue.submit(std::iter::once(encoder.finish()));
-            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-            encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Escape Render Chunk"),
+    if renders > 1 {
+        escape_renderer.begin_accumulation_of(device, queue, renders);
+    }
+    for (m, moment) in moments.iter().enumerate() {
+        // A moment's flame (mode D) or texture is its own.
+        if m > 0 {
+            prepare_escape(escape_renderer, device, queue, moment).await;
+        }
+        for off in &offsets {
+            escape_renderer.set_sample_offset(*off);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Escape Render"),
             });
-            settled = escape_renderer.render(
+            let mut settled = escape_renderer.render(
                 device,
                 queue,
                 &mut encoder,
-                &job.config.escape,
+                &moment.escape,
                 renderer.escape_palette_view(job.config.escape.palette_map.stepped),
-            renderer.palette_generation(),
+                renderer.palette_generation(),
             );
-            if progress.is_cancelled() {
-                if !caller_owned {
-                    escape_renderer.destroy();
+            let mut guard = 0u32;
+            while !settled {
+                queue.submit(std::iter::once(encoder.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("Escape Render Chunk"),
+                });
+                settled = escape_renderer.render(
+                    device,
+                    queue,
+                    &mut encoder,
+                    &moment.escape,
+                    renderer.escape_palette_view(job.config.escape.palette_map.stepped),
+                    renderer.palette_generation(),
+                );
+                if progress.is_cancelled() {
+                    if !caller_owned {
+                        escape_renderer.destroy();
+                    }
+                    return Err(RenderError::Cancelled);
                 }
-                return Err(RenderError::Cancelled);
+                guard += 1;
+                if guard > 4_000_000 {
+                    log::error!("escape chunk loop failed to settle; rendering what we have");
+                    break;
+                }
             }
-            guard += 1;
-            if guard > 4_000_000 {
-                log::error!("escape chunk loop failed to settle; rendering what we have");
-                break;
+            // Fold this render into the running average. The encoder
+            // still holds the settling chunk's resolve, so the fold is
+            // ordered after it.
+            if renders > 1 {
+                escape_renderer.accumulate_sample(device, queue, &mut encoder);
             }
+            queue.submit(std::iter::once(encoder.finish()));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         }
-        // Fold this displaced render into the running average. The
-        // encoder still holds the settling chunk's resolve, so the
-        // fold is ordered after it.
-        if extra > 1 {
-            escape_renderer.accumulate_sample(device, queue, &mut encoder);
-        }
-        queue.submit(std::iter::once(encoder.finish()));
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
     }
     let escape_view = match escape_renderer.accumulated_view() {
-        Some(v) if extra > 1 && !solid_path => v,
+        Some(v) if (renders > 1 && !solid_path) || solid_blurred => v,
         _ => escape_renderer.output_view(),
     };
     let pixels = escape_tail(renderer, device, queue, config, (width, height, transparent), escape_view, oom_scope).await;
@@ -1546,6 +1682,20 @@ async fn prepare_escape(
 /// tile, then the terrain drawn in the lit tier. Antialiasing is the
 /// config's supersample as accumulation: `supersample²` renders, each
 /// jittered within the pixel. Then the escape tail, unchanged.
+
+/// A motion-blur moment drawn on its own ground, for its still: its share
+/// of the frame's antialiasing -- the lit grid's passes, the path
+/// tracer's samples -- so the moments together cost about what the frame
+/// does. The ground is drawn from the moment itself: the supersampling
+/// is also the sections' detail (`wanted_sections`).
+#[cfg(feature = "terrain")]
+fn moment_share(moment: &FractalConfig, moments: usize) -> FractalConfig {
+    let k = moments.max(1) as f64;
+    let mut c = moment.clone();
+    c.escape.supersample = ((c.escape.supersample.max(1) as f64 / k.sqrt()).round() as u32).max(1);
+    c.escape.path.samples = ((c.escape.path.samples as f64 / k).ceil() as u32).max(1);
+    c
+}
 #[cfg(feature = "terrain")]
 async fn render_escape_terrain(
     renderer: &mut FlameRenderer,
@@ -1580,43 +1730,78 @@ async fn render_escape_terrain(
     // As many sections as the card holds beside the rest of the export:
     // past the viewport's 64, an export's nearest ground was magnified.
     terrain.fit_sections_for_export(device, config, job_w, job_h).await;
-    let before = terrain.footprint_renders;
     // The bar's shares: the sections, then the still, which takes most
     // of a path traced export.
     let fill_share = if config.escape.terrain.tier == crate::config::escape::RenderTier::Lit { 0.9 } else { 0.25 };
-    let mut guard = 0u32;
-    while terrain.update(device, queue, config, job.width, job.height, palette, generation, 1) {
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    // Motion blur (docs/archive/projects/motion-blur.md). Moments that draw the
+    // frame's picture differ only in the camera: one ground, and the
+    // still's passes or samples go round their views, at the frame's own
+    // cost. Moments whose pictures differ each need their own ground:
+    // each its sections and a still with its share of the antialiasing,
+    // averaged.
+    let moments = job.moments;
+    let separate = !moments.iter().all(|m| EscapeTerrain::same_picture(m, config));
+    let grounds: Vec<&FractalConfig> = if separate { moments.iter().collect() } else { vec![config] };
+    if separate {
+        terrain.begin_moments(device, queue, job_w, job_h, grounds.len() as u32);
+    }
+    let mut n = 0;
+    for (g, ground) in grounds.iter().enumerate() {
+        let span = |f: f64| ((g as f64 + f) / grounds.len() as f64 * 1000.0) as u64;
+        if separate {
+            // A moment's flame (mode D) or texture is its own.
+            prepare_escape(terrain.footprint_renderer(), device, queue, ground).await;
+        }
+        let before = terrain.footprint_renders;
+        let mut guard = 0u32;
+        while terrain.update(device, queue, ground, job.width, job.height, palette, generation, 1) {
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            if progress.is_cancelled() {
+                if !caller_owned {
+                    terrain.destroy();
+                }
+                return Err(RenderError::Cancelled);
+            }
+            let done = (terrain.footprint_renders - before) as f64;
+            let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
+            progress.on_progress(span(fill_share * fill), 1000);
+            guard += 1;
+            if guard > 4_000_000 {
+                log::error!("terrain sections failed to settle; using what we have");
+                break;
+            }
+        }
+        n += terrain.footprint_renders - before;
+        // The picture: path traced at `samples`, or the lit tier's grid
+        // -- a moment on its own ground, its share of either.
+        let share;
+        let (still, views): (&FractalConfig, &[FractalConfig]) = if separate {
+            share = moment_share(ground, grounds.len());
+            (&share, &[])
+        } else {
+            (config, moments)
+        };
+        terrain.render_still_moments(device, queue, still, views, (job_w, job_h), |f| {
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            progress.on_progress(span(fill_share + (1.0 - fill_share) * f as f64), 1000);
+            !progress.is_cancelled()
+        });
         if progress.is_cancelled() {
             if !caller_owned {
                 terrain.destroy();
             }
             return Err(RenderError::Cancelled);
         }
-        let done = (terrain.footprint_renders - before) as f64;
-        let fill = done / (done + terrain.sections_missing() as f64).max(1.0);
-        progress.on_progress((fill_share * fill * 1000.0) as u64, 1000);
-        guard += 1;
-        if guard > 4_000_000 {
-            log::error!("terrain sections failed to settle; using what we have");
-            break;
+        if separate {
+            terrain.add_moment(device, queue);
         }
     }
-    let n = terrain.footprint_renders - before;
-    // The picture: path traced at `samples`, or the lit tier's grid.
     let ss = config.escape.supersample.max(1);
-    terrain.render_still(device, queue, config, (job_w, job_h), |f| {
-        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
-        progress.on_progress(((fill_share + (1.0 - fill_share) * f as f64) * 1000.0) as u64, 1000);
-        !progress.is_cancelled()
-    });
-    if progress.is_cancelled() {
-        if !caller_owned {
-            terrain.destroy();
-        }
-        return Err(RenderError::Cancelled);
-    }
-    let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), terrain.output_view(), oom_scope).await;
+    let picture = match terrain.moments_view() {
+        Some(v) if separate => v,
+        _ => terrain.output_view(),
+    };
+    let pixels = escape_tail(renderer, device, queue, config, (job_w, job_h, transparent), picture, oom_scope).await;
     if !caller_owned {
         terrain.destroy();
     }
@@ -1641,4 +1826,408 @@ async fn render_escape_terrain(
         render_time_ms,
         frame_coverage: 1.0,
     })
+}
+
+/// Motion blur through `render` (docs/archive/projects/motion-blur.md).
+#[cfg(all(test, feature = "engine-escape"))]
+mod motion_tests {
+    use super::*;
+
+    fn device() -> Option<(Device, Queue)> {
+        pollster::block_on(async {
+            let instance = egui_wgpu::wgpu::Instance::new(egui_wgpu::wgpu::InstanceDescriptor {
+                backends: egui_wgpu::wgpu::Backends::all(),
+                ..egui_wgpu::wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            let adapter = instance.request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions::default()).await.ok()?;
+            adapter
+                .request_device(&egui_wgpu::wgpu::DeviceDescriptor {
+                    label: Some("motion blur tests"),
+                    required_features: adapter.features() & egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
+                    required_limits: adapter.limits(),
+                    memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: Default::default(),
+                })
+                .await
+                .ok()
+        })
+    }
+
+    /// A Mandelbrot view, linear tone mapping at exposure and gamma 1, so
+    /// the tail is the identity on the averaged colour and an average of
+    /// finished frames stands for the average before the tail.
+    fn view(center_re: &str) -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Escape;
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.exposure = 1.0;
+        c.gamma = 1.0;
+        c.escape.formula = "mandelbrot".into();
+        c.escape.coloring = "smooth".into();
+        c.escape.center_re = center_re.into();
+        c.escape.center_im = "0.1318259042053119".into();
+        c.escape.zoom_log2 = 5.0;
+        c.escape.max_iter = 300;
+        c.escape.supersample = 1;
+        c
+    }
+
+    const W: u32 = 96;
+    const H: u32 = 72;
+
+    fn draw(device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig]) -> Vec<u8> {
+        let job = RenderJob::new(config, W, H).with_moments(moments);
+        pollster::block_on(render(device, queue, job, &mut NoProgress)).expect("render").rgba_data
+    }
+
+    /// Moments that are all the frame blur it into itself.
+    #[test]
+    fn a_still_frame_blurs_into_itself() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = view("-0.7436438870371587");
+        let sharp = draw(&device, &queue, &frame, &[]);
+        let blurred = draw(&device, &queue, &frame, &vec![frame.clone(); 4]);
+        let worst = sharp.iter().zip(&blurred).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "a still frame changed by {worst} blurred");
+    }
+
+    /// A pan, blurred, is the mean of its moments' pictures -- and not the
+    /// frame's own. The mean of the LIGHT: the tail encodes for display
+    /// (`pow(1/2.2)`), and the moments are averaged before it, so the
+    /// pictures are decoded, averaged and encoded again to compare.
+    #[test]
+    fn a_blurred_pan_is_the_mean_of_its_moments() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = view("-0.7436438870371587");
+        // About a pixel and a half to four and a half pixels either side.
+        let moments: Vec<FractalConfig> = [-0.006, -0.002, 0.002, 0.006]
+            .iter()
+            .map(|d| view(&format!("{:.16}", -0.7436438870371587 + d)))
+            .collect();
+        let blurred = draw(&device, &queue, &frame, &moments);
+        let pictures: Vec<Vec<u8>> = moments.iter().map(|m| draw(&device, &queue, m, &[])).collect();
+        let mut far = 0usize;
+        for (i, b) in blurred.iter().enumerate() {
+            let light = pictures.iter().map(|p| (p[i] as f64 / 255.0).powf(2.2)).sum::<f64>() / pictures.len() as f64;
+            let mean = 255.0 * light.powf(1.0 / 2.2);
+            if (*b as f64 - mean).abs() > 2.0 {
+                far += 1;
+            }
+        }
+        assert!(far * 1000 <= blurred.len(), "{far} of {} channels off the moments' mean", blurred.len());
+        let sharp = draw(&device, &queue, &frame, &[]);
+        let moved = sharp.iter().zip(&blurred).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / sharp.len() as f64;
+        assert!(moved > 1.0, "the blur changed the frame by only {moved:.3} a channel");
+    }
+
+    fn read(device: &Device, queue: &Queue, tex: &egui_wgpu::wgpu::Texture) -> Vec<f32> {
+        use egui_wgpu::wgpu::*;
+        let (w, h) = (tex.width(), tex.height());
+        let row = (w * 16).div_ceil(256) * 256;
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: (row * h) as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+        enc.copy_texture_to_buffer(
+            tex.as_image_copy(),
+            TexelCopyBufferInfo { buffer: &staging, layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(std::iter::once(enc.finish()));
+        staging.slice(..).map_async(MapMode::Read, |_| {});
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let bytes = staging.slice(..).get_mapped_range().to_vec();
+        staging.unmap();
+        (0..h).flat_map(|y| bytemuck::cast_slice::<u8, f32>(&bytes[(y * row) as usize..(y * row + w * 16) as usize]).to_vec()).collect()
+    }
+
+    /// The viewport's finished blurred frame (`present_accumulation`)
+    /// stays as it finished while the next frame builds in the same
+    /// accumulation: the viewport shows it, not a part-folded frame.
+    #[test]
+    fn a_finished_frame_stays_while_the_next_builds() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let at = |d: f64| view(&format!("{:.16}", -0.7436438870371587 + d));
+        let flame = FlameRenderer::for_job(&device, &queue, TextureFormat::Rgba8Unorm, W, H, &at(0.0));
+        let mut escape = crate::escape::EscapeRenderer::new(&device, W, H);
+        // Fold `fold` of a frame's moments, presenting the frame once all are in.
+        let build = |escape: &mut crate::escape::EscapeRenderer, moments: &[FractalConfig], fold: usize| {
+            escape.begin_accumulation_of(&device, &queue, moments.len() as u32);
+            for (i, m) in moments[..fold].iter().enumerate() {
+                let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                while !escape.render(&device, &queue, &mut enc, &m.escape, flame.escape_palette_view(false), flame.palette_generation()) {
+                    queue.submit(std::iter::once(enc.finish()));
+                    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                    enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+                }
+                escape.accumulate_sample(&device, &queue, &mut enc);
+                if i + 1 == moments.len() {
+                    escape.present_accumulation(&device, &mut enc);
+                }
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+            }
+        };
+        let a: Vec<FractalConfig> = [-0.004, 0.0, 0.004].iter().map(|d| at(*d)).collect();
+        build(&mut escape, &a, a.len());
+        let shown = read(&device, &queue, escape.presented_texture().expect("presented"));
+        let finished = read(&device, &queue, escape.accumulated_texture().expect("accumulated"));
+        assert!(shown == finished, "the frame shown is the accumulation as it finished");
+
+        let b: Vec<FractalConfig> = [0.02, 0.024, 0.028].iter().map(|d| at(*d)).collect();
+        build(&mut escape, &b, 1);
+        let still = read(&device, &queue, escape.presented_texture().expect("presented"));
+        let building = read(&device, &queue, escape.accumulated_texture().expect("accumulated"));
+        assert!(still == shown, "the frame shown changed while the next built");
+        assert!(building != finished, "the next frame did not build");
+        escape.destroy();
+    }
+
+    /// Gray-Scott at `steps`, linear tone mapping (as `view`).
+    #[cfg(feature = "engine-sim")]
+    fn grid(steps: u32) -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = crate::scene::transforms::RenderMode::Simulation;
+        c.tonemap_mode = crate::scene::tonemap::ToneMapMode::Linear;
+        c.exposure = 1.0;
+        c.gamma = 1.0;
+        c.sim.steps = steps;
+        c
+    }
+
+    /// A simulation's moments are its field at their step counts: a
+    /// blurred frame is the mean of their light, each drawn on its own,
+    /// and one whose moments are all the frame is the frame.
+    #[cfg(feature = "engine-sim")]
+    #[test]
+    fn a_blurred_simulation_is_the_mean_of_its_step_counts() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = grid(550);
+        let sharp = draw(&device, &queue, &frame, &[]);
+        let still = draw(&device, &queue, &frame, &vec![frame.clone(); 4]);
+        let worst = sharp.iter().zip(&still).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "a still frame changed by {worst} blurred");
+
+        let moments: Vec<FractalConfig> = [400, 500, 600, 700].into_iter().map(grid).collect();
+        let blurred = draw(&device, &queue, &frame, &moments);
+        let pictures: Vec<Vec<u8>> = moments.iter().map(|m| draw(&device, &queue, m, &[])).collect();
+        let far = blurred
+            .iter()
+            .enumerate()
+            .filter(|(i, b)| {
+                let light = pictures.iter().map(|p| (p[*i] as f64 / 255.0).powf(2.2)).sum::<f64>() / pictures.len() as f64;
+                (**b as f64 - 255.0 * light.powf(1.0 / 2.2)).abs() > 2.0
+            })
+            .count();
+        assert!(far * 1000 <= blurred.len(), "{far} of {} channels off the moments' mean", blurred.len());
+        let moved = sharp.iter().zip(&blurred).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / sharp.len() as f64;
+        assert!(moved > 1.0, "the blur changed the frame by only {moved:.3} a channel");
+    }
+
+    /// A simulation's terrain blurs too: moments that are all the frame
+    /// are the frame; a camera's move, drawn on one ground, and the field
+    /// moving, a ground a moment, each change it.
+    #[cfg(all(feature = "engine-sim", feature = "terrain"))]
+    #[test]
+    fn a_simulation_terrain_blurs_over_its_moments() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut frame = grid(300);
+        frame.sim.terrain.enabled = true;
+        frame.sim.terrain.tier = crate::config::escape::RenderTier::Lit;
+        let sharp = draw(&device, &queue, &frame, &[]);
+        assert_eq!(draw(&device, &queue, &frame, &vec![frame.clone(); 4]), sharp, "a still frame blurred is the frame");
+        let moved = |picture: &[u8]| sharp.iter().zip(picture).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / sharp.len() as f64;
+        let camera: Vec<FractalConfig> = [-0.06f32, -0.02, 0.02, 0.06]
+            .iter()
+            .map(|d| {
+                let mut m = frame.clone();
+                m.sim.terrain.cam_yaw += d;
+                m
+            })
+            .collect();
+        let turned = moved(&draw(&device, &queue, &frame, &camera));
+        let steps: Vec<FractalConfig> = [200u32, 266, 333, 400]
+            .iter()
+            .map(|n| {
+                let mut m = frame.clone();
+                m.sim.steps = *n;
+                m
+            })
+            .collect();
+        let stepped = moved(&draw(&device, &queue, &frame, &steps));
+        println!("a turn moved the frame {turned:.3} a channel, the steps {stepped:.3}");
+        assert!(turned > 0.2 && stepped > 0.2, "the blur did not reach the terrain: {turned:.3}, {stepped:.3}");
+    }
+
+    /// A solid path traced, blurred, traces each moment with its share of
+    /// the samples: moments that are all the frame keep its light.
+    #[test]
+    fn a_traced_solid_keeps_its_light_blurred() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let mut frame = view("0.0");
+        frame.escape.formula = "mandelbulb_solid".into();
+        frame.escape.solid_tier = crate::config::escape::RenderTier::PathTraced;
+        frame.escape.path.samples = 16;
+        let light = |p: &[u8]| p.chunks(4).map(|c| c[..3].iter().map(|v| (*v as f64 / 255.0).powf(2.2)).sum::<f64>()).sum::<f64>();
+        let sharp = light(&draw(&device, &queue, &frame, &[]));
+        let blurred = light(&draw(&device, &queue, &frame, &vec![frame.clone(); 4]));
+        println!("traced solid: {blurred:.1} blurred against {sharp:.1} sharp");
+        assert!(sharp > 1.0, "the solid drew nothing");
+        assert!((blurred / sharp - 1.0).abs() < 0.05, "light {blurred:.1} blurred against {sharp:.1} sharp");
+    }
+
+    /// A Sierpinski gasket filling the view, its first map's offset `e`.
+    fn gasket(e: f32) -> FractalConfig {
+        let mut cfg = FractalConfig::default();
+        cfg.render_mode = crate::scene::transforms::RenderMode::TwoD;
+        cfg.flame.transforms.clear();
+        for (i, (x, y)) in [(e, 0.0f32), (0.5, 0.0), (0.25, 0.5)].into_iter().enumerate() {
+            let mut t = crate::scene::transforms::Transform::default();
+            (t.a, t.b, t.c, t.d, t.e, t.f) = (0.5, 0.0, 0.0, 0.5, x, y);
+            t.weight = 1.0;
+            t.color = i as f32 / 2.0;
+            t.variations.clear();
+            t.variation_order.clear();
+            t.set_variation("linear", 1.0);
+            cfg.flame.transforms.push(t);
+        }
+        cfg.zoom = 1.6;
+        (cfg.pan_x, cfg.pan_y) = (-0.25, -0.25);
+        cfg.levels_enabled = false;
+        cfg
+    }
+
+    const N: u32 = 64;
+
+    /// A flame's density per iteration, and how many times its orbits
+    /// restarted, rendered as the video export renders a frame.
+    fn flame_density(device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig], iterations: u64) -> (Vec<f64>, u32) {
+        let mut renderer = FlameRenderer::for_job(device, queue, TextureFormat::Rgba8Unorm, N, N, config);
+        renderer.set_sticky_enabled(false);
+        let before = renderer.orbit_generation();
+        let job = RenderJob::new(config, N, N).with_iterations(iterations).with_moments(moments);
+        pollster::block_on(render_with(&mut renderer, device, queue, job, &mut NoProgress)).expect("render");
+        (renderer.read_density_blocking(device, queue), renderer.orbit_generation().wrapping_sub(before))
+    }
+
+    /// 8x8-pixel block sums of a density.
+    fn blocks(d: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; ((N / 8) * (N / 8)) as usize];
+        for (i, v) in d.iter().enumerate() {
+            let (x, y) = (i as u32 % N, i as u32 / N);
+            out[((y / 8) * (N / 8) + x / 8) as usize] += v;
+        }
+        out
+    }
+
+    /// The transform and parameter tables write only the slots a flame
+    /// uses (`write_regions`): a flame drawn after a larger one, the
+    /// larger one's slots left behind, is the flame drawn fresh -- none of
+    /// the stale slots is read. (The larger one's extra maps throw points
+    /// far across the view, so a read would show.)
+    #[test]
+    fn a_smaller_flame_after_a_larger_reads_none_of_its_slots() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let small = gasket(0.0);
+        let mut large = small.clone();
+        for (i, e) in [0.6f32, 0.7, 0.8].into_iter().enumerate() {
+            let mut t = large.flame.transforms[i].clone();
+            (t.a, t.d, t.e, t.f) = (0.3, 0.3, e, 0.6);
+            t.set_variation("spherical", 0.5);
+            large.flame.transforms.push(t);
+        }
+        let samples = 8_000_000u64;
+        let mut renderer = FlameRenderer::for_job(&device, &queue, TextureFormat::Rgba8Unorm, N, N, &large);
+        renderer.set_sticky_enabled(false);
+        let job = RenderJob::new(&large, N, N).with_iterations(samples);
+        pollster::block_on(render_with(&mut renderer, &device, &queue, job, &mut NoProgress)).expect("render");
+        let job = RenderJob::new(&small, N, N).with_iterations(samples);
+        pollster::block_on(render_with(&mut renderer, &device, &queue, job, &mut NoProgress)).expect("render");
+        let after = blocks(&renderer.read_density_blocking(&device, &queue));
+        let fresh = blocks(&flame_density(&device, &queue, &small, &[], samples).0);
+        let total: f64 = fresh.iter().sum();
+        let worst = fresh
+            .iter()
+            .zip(&after)
+            .filter(|(f, _)| **f > total / fresh.len() as f64 * 0.25)
+            .map(|(f, a)| (a - f).abs() / f)
+            .fold(0.0, f64::max);
+        assert!(worst < 0.02, "a block {:.1}% off the flame drawn fresh", worst * 100.0);
+        let stray: f64 = fresh.iter().zip(&after).filter(|(f, _)| **f == 0.0).map(|(_, a)| a).sum();
+        assert!(stray == 0.0, "density {stray} where the flame draws none: a stale slot was read");
+    }
+
+    /// A flame whose moments are all the frame keeps its density blurred:
+    /// the moments share the samples, and the tone map's count is theirs.
+    #[test]
+    fn a_still_flame_blurs_into_itself() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = gasket(0.0);
+        let (sharp, _) = flame_density(&device, &queue, &frame, &[], 2_000_000);
+        let (blurred, _) = flame_density(&device, &queue, &frame, &vec![frame.clone(); 4], 2_000_000);
+        let (s, b) = (sharp.iter().sum::<f64>(), blurred.iter().sum::<f64>());
+        assert!((b / s - 1.0).abs() < 0.01, "density {b:.4} blurred against {s:.4} sharp");
+    }
+
+    /// A flame moving across the shutter, blurred, has the mean density of
+    /// its moments -- each drawn sharp on its own -- and its orbits go on
+    /// from moment to moment: one restart a frame, not one a moment.
+    #[test]
+    fn a_blurred_flame_is_the_mean_of_its_moments() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let frame = gasket(0.0);
+        let moments: Vec<FractalConfig> = [-0.03, -0.01, 0.01, 0.03].iter().map(|e| gasket(*e)).collect();
+        // Enough samples that the blocks' noise is well under the bound:
+        // measured 3% at 2M a moment, 0.6% at 8M, 0.15% at 32M -- no bias
+        // from the orbits going on across the moments at that level.
+        let per_moment = 8_000_000u64;
+        let (blurred, restarts) = flame_density(&device, &queue, &frame, &moments, per_moment * moments.len() as u64);
+        assert_eq!(restarts, 1, "the moments restarted the orbits");
+        let sharp: Vec<Vec<f64>> = moments.iter().map(|m| blocks(&flame_density(&device, &queue, m, &[], per_moment).0)).collect();
+        let mean: Vec<f64> = (0..sharp[0].len()).map(|i| sharp.iter().map(|s| s[i]).sum::<f64>() / sharp.len() as f64).collect();
+        let got = blocks(&blurred);
+        let total: f64 = mean.iter().sum();
+        let mut worst = 0.0f64;
+        for (m, g) in mean.iter().zip(&got) {
+            // Blocks holding a fair share of the light.
+            if *m > total / mean.len() as f64 * 0.25 {
+                worst = worst.max((g - m).abs() / m);
+            }
+        }
+        assert!(worst < 0.02, "a block {:.1}% off the moments' mean", worst * 100.0);
+        // And the blur is real: the moments differ from each other.
+        let apart = sharp[0].iter().zip(&sharp[3]).map(|(a, b)| (a - b).abs()).sum::<f64>() / total;
+        assert!(apart > 0.05, "the moments barely differ ({apart:.3})");
+    }
 }

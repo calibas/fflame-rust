@@ -1031,22 +1031,10 @@ pub struct EscapeRenderer {
     /// through its centre and the perturbed path through
     /// `ref_offset`.
     sample_offset: [f32; 2],
-    /// Whether the accumulation target has had its first fold (the
-    /// clear happens on that one rather than as a separate pass).
-    accum_cleared: bool,
-    /// Accumulation targets for that averaging, ping-ponged.
-    ///
-    /// A pair rather than one read-write texture because read-write
-    /// storage access is not supported for `rgba32float` (rejected at
-    /// bind-group-layout creation), and a storage BUFFER would not do
-    /// either: at export sizes it exceeds the 128 MB binding limit a
-    /// 4K frame of `vec4<f32>` needs. Write-only textures have
-    /// neither restriction.
-    accum: Option<(wgpu::Texture, TextureView, wgpu::Texture, TextureView)>,
-    /// Which of the pair currently holds the running mean.
-    accum_front: usize,
-    accum_pipeline: Option<(wgpu::ComputePipeline, BindGroupLayout)>,
-    accum_params: Option<Buffer>,
+    /// That averaging, and motion blur's: the renders' mean, and the
+    /// viewport's last finished motion-blurred frame kept aside
+    /// ([`Self::present_accumulation`]) while the next builds.
+    average: crate::renderer::average::ImageAverage,
     /// Which pipeline the last render() call ran ("direct",
     /// "perturbed f32", "perturbed floatexp", "recolor"). The global
     /// diag snapshot carries the same string for the panel, but that
@@ -1984,11 +1972,7 @@ impl EscapeRenderer {
             results_dummy: None,
             recolor_bind_group_layout,
             sample_offset: [0.0, 0.0],
-            accum_cleared: false,
-            accum: None,
-            accum_front: 0,
-            accum_pipeline: None,
-            accum_params: None,
+            average: Default::default(),
             last_path: "",
             last_orbit_stale: false,
             stale_serves: 0,
@@ -3245,38 +3229,13 @@ impl EscapeRenderer {
     /// [`Self::sample_grid`], then read [`Self::accumulated_view`].
     pub fn begin_accumulation(&mut self, device: &Device, queue: &Queue, samples: u32) {
         let n = samples.max(1);
-        let (w, h) = (self.out_width.max(1), self.out_height.max(1));
-        let stale = match &self.accum {
-            Some((t, _, _, _)) => t.width() != w || t.height() != h,
-            None => true,
-        };
-        if stale {
-            if let Some((a, _, b, _)) = self.accum.take() {
-                a.destroy();
-                b.destroy();
-            }
-            let (ta, va) = Self::create_output(device, w, h);
-            let (tb, vb) = Self::create_output(device, w, h);
-            self.accum = Some((ta, va, tb, vb));
-        }
-        self.accum_front = 0;
-        if self.accum_params.is_none() {
-            self.accum_params = Some(device.create_buffer(&BufferDescriptor {
-                label: Some("Escape Accum Params"),
-                size: 16,
-                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-        }
-        // Each sample is added pre-scaled by 1/n², so the target holds
-        // the MEAN throughout and can be shown after any number of
-        // samples rather than only the last.
-        let inv = 1.0f32 / (n * n) as f32;
-        let mut raw = [0u8; 16];
-        raw[0..4].copy_from_slice(&inv.to_le_bytes());
-        raw[4..8].copy_from_slice(&1u32.to_le_bytes()); // clear on first add
-        queue.write_buffer(self.accum_params.as_ref().unwrap(), 0, &raw);
-        self.accum_cleared = false;
+        self.begin_accumulation_of(device, queue, n * n);
+    }
+
+    /// [`Self::begin_accumulation`] for `renders` renders in all: a
+    /// motion-blurred frame folds every displacement at every moment.
+    pub fn begin_accumulation_of(&mut self, device: &Device, queue: &Queue, renders: u32) {
+        self.average.begin(device, queue, self.out_width, self.out_height, renders);
     }
 
     /// The jittered sample offsets for an `n`-per-axis pattern, in
@@ -3309,161 +3268,43 @@ impl EscapeRenderer {
     pub fn accumulate_sample(
         &mut self,
         device: &Device,
-        queue: &Queue,
+        _queue: &Queue,
         encoder: &mut CommandEncoder,
     ) {
-        let Some((_, va, _, vb)) = self.accum.as_ref() else {
-            return;
-        };
-        // Read what we have, write the sum to the other one.
-        let (prev_view, next_view) = if self.accum_front == 0 {
-            (va.clone(), vb.clone())
-        } else {
-            (vb.clone(), va.clone())
-        };
-        if self.accum_pipeline.is_none() {
-            let src = r#"
-struct AccumParams {
-    inv_n: f32,
-    clear: u32,
-}
-
-@group(0) @binding(0) var src_tex: texture_2d<f32>;
-@group(0) @binding(1) var dst_tex: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(2) var<uniform> p: AccumParams;
-@group(0) @binding(3) var prev_tex: texture_2d<f32>;
-
-@compute @workgroup_size(8, 8, 1)
-fn accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let dims = vec2<i32>(textureDimensions(dst_tex));
-    let q = vec2<i32>(i32(gid.x), i32(gid.y));
-    if (q.x >= dims.x || q.y >= dims.y) {
-        return;
-    }
-    let s = textureLoad(src_tex, q, 0);
-    let prev = select(textureLoad(prev_tex, q, 0), vec4<f32>(0.0), p.clear != 0u);
-    // Straight alpha in and out, as the downsample writes it: each
-    // render's colour counts by its coverage, so a pixel one render did
-    // not draw keeps the colour of those that did, at their share of
-    // the alpha. Averaging the colours directly darkened every edge.
-    let a = prev.a + s.a * p.inv_n;
-    let c = prev.rgb * prev.a + s.rgb * (s.a * p.inv_n);
-    textureStore(dst_tex, q, vec4<f32>(select(vec3<f32>(0.0), c / a, a > 0.0), a));
-}
-"#;
-            let module = device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("Escape Accumulate"),
-                source: ShaderSource::Wgsl(src.into()),
-            });
-            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Escape Accumulate Layout"),
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: false },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::StorageTexture {
-                            access: StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::Rgba32Float,
-                            view_dimension: TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: false },
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Escape Accumulate Pipeline Layout"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("Escape Accumulate"),
-                layout: Some(&pl),
-                module: &module,
-                entry_point: Some("accum_main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-            self.accum_pipeline = Some((pipeline, layout));
-        }
-        // After the first fold, stop clearing.
-        if !self.accum_cleared {
-            self.accum_cleared = true;
-        } else if let Some(buf) = self.accum_params.as_ref() {
-            let mut raw = [0u8; 8];
-            raw[4..8].copy_from_slice(&0u32.to_le_bytes());
-            queue.write_buffer(buf, 4, &raw[4..8]);
-        }
         let src = self.output_view().clone();
-        let (pipeline, layout) = self.accum_pipeline.as_ref().unwrap();
-        let bg = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Escape Accumulate Bind Group"),
-            layout,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&src) },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::TextureView(&next_view),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: self.accum_params.as_ref().unwrap().as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::TextureView(&prev_view),
-                },
-            ],
-        });
-        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("Escape Accumulate Pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.dispatch_workgroups(
-            self.out_width.max(1).div_ceil(8),
-            self.out_height.max(1).div_ceil(8),
-            1,
-        );
-        drop(pass);
-        self.accum_front ^= 1;
+        self.average.add(device, encoder, &src);
     }
 
     /// The averaged image, once samples have been folded in.
     pub fn accumulated_view(&self) -> Option<&TextureView> {
-        self.accum.as_ref().map(
-            |(_, va, _, vb)| if self.accum_front == 0 { va } else { vb },
-        )
+        self.average.view()
+    }
+
+    /// Keep the finished accumulation as the picture the viewport shows
+    /// ([`Self::presented_view`]) while the next motion-blurred frame
+    /// builds in the accumulation (docs/archive/projects/motion-blur.md).
+    pub fn present_accumulation(&mut self, device: &Device, encoder: &mut CommandEncoder) {
+        self.average.present(device, encoder);
+    }
+
+    /// The last finished motion-blurred frame, while the viewport keeps one.
+    pub fn presented_view(&self) -> Option<&TextureView> {
+        self.average.presented_view()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn presented_texture(&self) -> Option<&wgpu::Texture> {
+        self.average.presented_texture()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accumulated_texture(&self) -> Option<&wgpu::Texture> {
+        self.average.texture()
+    }
+
+    /// Stop showing a motion-blurred frame; true if one was shown.
+    pub fn drop_presented(&mut self) -> bool {
+        self.average.drop_presented()
     }
 
     /// The sampling offset in the view's own frame.
@@ -6853,17 +6694,14 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         }
         self.results_px = 0;
         self.results_key = None;
-        if let Some((a, _, b, _)) = self.accum.take() {
-            a.destroy();
-            b.destroy();
-        }
+        self.average.release();
         self.ensure_height(device, false);
         self.resize(device, 1, 1, 1);
     }
 
     /// Whether the per-pixel memory is held: anything past a 1x1 output.
     pub fn holds_pixels(&self) -> bool {
-        self.width * self.height > 1 || self.iter_state_buffer.is_some() || self.results_buffer.is_some() || self.accum.is_some()
+        self.width * self.height > 1 || self.iter_state_buffer.is_some() || self.results_buffer.is_some() || self.average.holds()
     }
 
     pub fn resize(&mut self, device: &Device, width: u32, height: u32, supersample: u32) -> bool {
@@ -6885,6 +6723,8 @@ fn probe_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         self.out_width = width;
         self.out_height = height;
         self.supersample = ss;
+        // A finished motion-blurred frame of the old size no longer fits.
+        self.average.fit_presented(width, height);
         let (rw, rh) = (width.saturating_mul(ss).max(1), height.saturating_mul(ss).max(1));
         self.output_texture.destroy();
         // The records describe pixels of the OLD grid.
@@ -9136,7 +8976,6 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             &self.bla_dummy,
             &self.results_buffer,
             &self.results_dummy,
-            &self.accum_params,
         ] {
             if let Some(b) = b {
                 n += b.size();
@@ -9145,7 +8984,8 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(t) = &self.final_texture {
             n += tex(t);
         }
-        for pair in [&self.accum, &self.height_blur] {
+        n += self.average.bytes();
+        for pair in [&self.height_blur] {
             if let Some((a, _, b, _)) = pair {
                 n += tex(a) + tex(b);
             }
@@ -9198,10 +9038,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         if let Some(t) = &self.final_texture {
             t.destroy();
         }
-        if let Some((a, _, b, _)) = &self.accum {
-            a.destroy();
-            b.destroy();
-        }
+        self.average.destroy();
         if let Some((a, _, b, _)) = &self.height_blur {
             a.destroy();
             b.destroy();

@@ -9,6 +9,7 @@ mod effect_fetch;
 mod variation_fetch;
 mod texture_sync;
 mod aa_governor;
+mod motion_blur;
 mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
@@ -408,7 +409,8 @@ fn escape_view<'a>(
         return terrain.as_ref().map(|t| t.output_view());
     }
     let _ = config;
-    escape.as_ref().map(|e| e.output_view())
+    // A motion-blurred frame, finished, while the next builds.
+    escape.as_ref().map(|e| e.presented_view().unwrap_or_else(|| e.output_view()))
 }
 
 /// The simulation's image for the tail: its terrain's while the config
@@ -426,7 +428,8 @@ fn sim_view<'a>(
         }
     }
     let _ = config;
-    sim.as_ref().map(|s| s.output_view())
+    // A motion-blurred frame, finished, while the next builds.
+    sim.as_ref().map(|s| s.presented_view().unwrap_or_else(|| s.output_view()))
 }
 
 const ESCAPE_INTERACTION_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
@@ -473,6 +476,12 @@ pub struct App {
     /// (aa_governor.rs), and when the last settled frame landed.
     pub(super) escape_aa: aa_governor::AaGovernor,
     pub(super) escape_aa_settled_at: Option<web_time::Instant>,
+    /// The escape frame being built from its motion-blur moments
+    /// (motion_blur.rs), while one is.
+    pub(super) escape_motion: Option<motion_blur::Moments>,
+    /// The simulation frame being walked through its moments' step
+    /// counts (motion_blur.rs), while one is.
+    pub(super) sim_motion: Option<motion_blur::Moments>,
     /// When the user last EDITED something the escape pass renders.
     /// For the interaction window: within it a mode-D render is a
     /// quarter-resolution preview, after it a full one. See
@@ -901,6 +910,8 @@ impl App {
             escape_texture: Default::default(),
             escape_aa: Default::default(),
             escape_aa_settled_at: None,
+            escape_motion: None,
+            sim_motion: None,
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
@@ -2392,7 +2403,22 @@ impl App {
                 ) {
                     busy = true;
                 }
-                if !exporting && terrain.render_viewport(device, queue, &final_config) {
+                // Motion blur (motion_blur.rs): the passes go round the
+                // frame's moments' views, over the frame's ground -- a
+                // camera's move blurred at the frame's own cost. A picture
+                // changing within the shutter would want a ground a moment,
+                // which the export draws and the viewport cannot afford.
+                let moments = if motion_blur::blurring(&self.animation_controller) {
+                    crate::animation::export::moment_configs(
+                        final_config,
+                        &self.animation_controller,
+                        self.animation_controller.current_time,
+                        Some(&self.signal_manager),
+                    )
+                } else {
+                    Vec::new()
+                };
+                if !exporting && terrain.render_viewport_moments(device, queue, &final_config, &moments) {
                     busy = true;
                 }
                 // Not settled while paused; the export's cadence redraws.
@@ -2408,6 +2434,11 @@ impl App {
                 }
             }
             if is_escape && !terrain_on {
+                // A frame part-way through its motion-blur moments went
+                // with the renderer that held its accumulation.
+                if self.escape_renderer.is_none() {
+                    self.escape_motion = None;
+                }
                 let escape = self.escape_renderer.get_or_insert_with(|| {
                     let mut esc = crate::escape::EscapeRenderer::new(
                         &self.gpu.device,
@@ -2458,6 +2489,30 @@ impl App {
                     aa_governed,
                     aa_ceiling,
                 )));
+                // Motion blur (motion_blur.rs): a new frame while it plays
+                // starts its moments in the accumulation. Stopped or
+                // paused, the sharp frame at the playhead is drawn again.
+                // A path-traced solid renders display pixels of its own,
+                // and is not blurred here (docs/archive/projects/motion-blur.md,
+                // phase 5).
+                let solid_traced = crate::escape::ifs::formula_is_solid(&final_config.escape.formula)
+                    && final_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
+                if motion_blur::blurring(&self.animation_controller) && !solid_traced {
+                    if self.escape_dirty && self.escape_motion.is_none() {
+                        let moments = crate::animation::export::moment_configs(
+                            final_config,
+                            &self.animation_controller,
+                            self.animation_controller.current_time,
+                            Some(&self.signal_manager),
+                        );
+                        escape.begin_accumulation_of(&self.gpu.device, &self.gpu.queue, moments.len() as u32);
+                        self.escape_motion = Some(motion_blur::Moments { moments, next: 0, rewind: false });
+                    }
+                } else if self.escape_motion.take().is_some() | escape.drop_presented() {
+                    self.escape_dirty = true;
+                }
+                // What the escape pass renders: the moment, or the frame.
+                let target = self.escape_motion.as_ref().map_or(final_config, |m| m.current());
                 // Mode D renders the FLAME as a distance field, so a
                 // flame edit has to reach the escape image — and
                 // nothing else marks it dirty, because every other
@@ -2467,7 +2522,7 @@ impl App {
                 // the packing changed, which is the cue.
                 if let Some(def) = crate::escape::ifs::get_ifs(&final_config.escape.formula) {
                     let registry = crate::variations::global_registry();
-                    let packed = self.ifs_pack_cache.pack_for(def, &final_config, &registry);
+                    let packed = self.ifs_pack_cache.pack_for(def, target, &registry);
                     if escape.set_ifs(packed) {
                         self.escape_dirty = true;
                     }
@@ -2478,8 +2533,8 @@ impl App {
                     escape.ensure_coarse(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        &final_config.escape,
-                        &final_config.flame,
+                        &target.escape,
+                        &target.flame,
                     );
                     if escape.set_solid_lighting(
                         &final_config.solid_shading,
@@ -2561,20 +2616,35 @@ impl App {
                         &self.gpu.device,
                         &self.gpu.queue,
                         &mut render_encoder,
-                        &final_config.escape,
+                        &target.escape,
                         renderer.escape_palette_view(final_config.escape.palette_map.stepped),
                         renderer.palette_generation(),
                     );
+                    // A motion-blur moment folds in as it settles, and the
+                    // frame is done after its last; the finished frame is
+                    // what the viewport shows until the next is.
+                    let done = match self.escape_motion.as_mut() {
+                        Some(motion) if settled => {
+                            escape.accumulate_sample(&self.gpu.device, &self.gpu.queue, &mut render_encoder);
+                            motion.next += 1;
+                            motion.next == motion.moments.len()
+                        }
+                        Some(_) => false,
+                        None => settled,
+                    };
+                    if done && self.escape_motion.take().is_some() {
+                        escape.present_accumulation(&self.gpu.device, &mut render_encoder);
+                    }
                     // Progressive deep zoom: an unsettled frame keeps
                     // the dirty flag so the next frame re-renders with
                     // the longer orbit prefix.
-                    self.escape_dirty = !settled;
-                    if !settled {
+                    self.escape_dirty = !done;
+                    if !done {
                         self.window.request_redraw();
                     }
                     // A settled playback frame: how long since the last one,
                     // against the governor's budget.
-                    if settled && self.escape_aa.active() {
+                    if done && self.escape_aa.active() {
                         let now = Instant::now();
                         if let Some(prev) = self.escape_aa_settled_at.replace(now) {
                             let settings = self.config_manager.system_settings();
@@ -2627,6 +2697,11 @@ impl App {
             #[cfg(feature = "engine-sim")]
             if is_sim {
                 let (w, h) = (renderer.width, renderer.height);
+                // A frame part-way through its moments went with the
+                // renderer that held their average.
+                if self.sim_renderer.is_none() {
+                    self.sim_motion = None;
+                }
                 let sim = self.sim_renderer.get_or_insert_with(|| {
                     crate::sim::SimRenderer::new(&self.gpu.device, &final_config.sim, w, h)
                 });
@@ -2643,7 +2718,79 @@ impl App {
                     sim.request_seed();
                     self.sim_reseed = false;
                 }
-                if let Some(target) = self.sim_timeline_target {
+                // Budgeted walks of the grid, so a jump it cannot make in
+                // one display frame is walked over the next few instead of
+                // freezing the UI.
+                const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
+                // Motion blur (motion_blur.rs): a frame's moments, where
+                // they differ from the frame -- a run the timeline does not
+                // step, with no colouring track, is the same at every
+                // moment. A terrain is phase 5's.
+                let blur_moments = if motion_blur::blurring(&self.animation_controller) && !final_config.sim.terrain_active() {
+                    let moments = crate::animation::export::moment_configs(
+                        final_config,
+                        &self.animation_controller,
+                        self.animation_controller.current_time,
+                        Some(&self.signal_manager),
+                    );
+                    if moments.iter().any(|m| m.sim != final_config.sim) { moments } else { Vec::new() }
+                } else {
+                    Vec::new()
+                };
+                if blur_moments.is_empty() {
+                    self.sim_motion = None;
+                    sim.drop_presented();
+                }
+                // A step count the timeline committed starts a blurred
+                // frame's walk through its moments' step counts instead.
+                if !blur_moments.is_empty() && self.sim_motion.is_none() {
+                    if let Some(target) = self.sim_timeline_target.take() {
+                        let index = if sim.will_reseed(&final_config.sim) { 0 } else { sim.step_index() };
+                        sim.begin_moments(&self.gpu.device, &self.gpu.queue, blur_moments.len() as u32);
+                        self.sim_motion = Some(motion_blur::Moments { moments: blur_moments.clone(), next: 0, rewind: target < index });
+                    }
+                }
+                let walking = self.sim_motion.is_some();
+                if let Some(motion) = self.sim_motion.as_mut() {
+                    // Each moment's step count in turn, coloured as that
+                    // moment colours it, folded into the frame. One behind
+                    // the field is held where the field is, as playback
+                    // holds a backward step count (an export runs back).
+                    // As many moments a display frame as its budget of
+                    // steps reaches, each colouring counted as a step: one
+                    // a display frame held a blurred frame to the display's
+                    // rate over the moments -- 120 fps to 15 at eight --
+                    // however little each cost.
+                    let mut budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS).max(1);
+                    while motion.next < motion.moments.len() && budget > 0 {
+                        let m = motion.current();
+                        let index = if sim.will_reseed(&m.sim) { 0 } else { sim.step_index() };
+                        let target = if motion.rewind && motion.next == 0 { m.sim.steps } else { m.sim.steps.max(index) };
+                        // Running back reseeds and walks from 0.
+                        let walk = if target < index { target } else { target - index };
+                        let reached = sim.advance_to(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &m.sim,
+                            renderer.palette_view(),
+                            target,
+                            Some(budget),
+                        );
+                        if !reached {
+                            break;
+                        }
+                        sim.add_moment(&self.gpu.device, &self.gpu.queue);
+                        motion.next += 1;
+                        budget = budget.saturating_sub(walk + 1);
+                    }
+                    if motion.next == motion.moments.len() {
+                        sim.present_moments(&self.gpu.device, &self.gpu.queue);
+                        self.sim_motion = None;
+                    } else {
+                        self.window.request_redraw();
+                    }
+                    self.sim_step_once = false;
+                } else if let Some(target) = self.sim_timeline_target {
                     // THE TIMELINE OWNS THE STEP COUNT. The picture at
                     // a given time is the state at that step count, so
                     // the transport is inert here: a picture that
@@ -2657,7 +2804,6 @@ impl App {
                     // ask for a two-thousand-step jump on every slider
                     // event. `steps_in` sizes it from the measured
                     // cost of a step.
-                    const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
                     let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
                     let reached = sim.advance_to(
                         &self.gpu.device,
@@ -2736,6 +2882,23 @@ impl App {
                         self.window.request_redraw();
                     }
                 }
+                // A grid the timeline did not step this frame -- no step
+                // track, or a held backward leg: the field as it now is,
+                // recoloured at each moment and averaged, where the moments
+                // differ in more than their step count.
+                let recoloured = blur_moments.iter().any(|m| {
+                    let mut c = m.sim.clone();
+                    c.steps = final_config.sim.steps;
+                    c != final_config.sim
+                });
+                if !walking && recoloured {
+                    sim.begin_moments(&self.gpu.device, &self.gpu.queue, blur_moments.len() as u32);
+                    for m in &blur_moments {
+                        sim.color(&self.gpu.device, &self.gpu.queue, &m.sim, renderer.palette_view());
+                        sim.add_moment(&self.gpu.device, &self.gpu.queue);
+                    }
+                    sim.present_moments(&self.gpu.device, &self.gpu.queue);
+                }
                 // The 3D terrain (heightfield plan T4): its ground made
                 // from the field as this frame left it -- every step of a
                 // run, so a run shows the lit tier -- then a frame of its
@@ -2760,7 +2923,19 @@ impl App {
                     if !exporting && fly_ground {
                         terrain.probe_ground(device, queue, &final_config);
                     }
-                    if !exporting && terrain.render_viewport(device, queue, &final_config) {
+                    // Motion blur: the moments' views over the field as this
+                    // frame left it (motion_blur.rs; as the escape terrain).
+                    let moments = if motion_blur::blurring(&self.animation_controller) {
+                        crate::animation::export::moment_configs(
+                            final_config,
+                            &self.animation_controller,
+                            self.animation_controller.current_time,
+                            Some(&self.signal_manager),
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    if !exporting && terrain.render_viewport_moments(device, queue, &final_config, &moments) {
                         self.window.request_redraw();
                     }
                 } else if let Some(t) = self.sim_terrain.take() {
@@ -3071,10 +3246,66 @@ impl App {
                     self.clear_paths_next_frame = false;  // Reset flag after use
                 }
 
-                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
-                    effective_ipt, self.config_manager.system_settings().burn_in,
-                    final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
+                // Motion blur (motion_blur.rs): the frame's batch shared
+                // among its moments -- each moment's flame and view uploaded
+                // in turn and drawn into the one histogram, folded once
+                // below -- so a blurred frame costs what a sharp one does.
+                // Not under Focused Rendering, whose plans are one view's,
+                // nor for a subflame viewed in isolation, which the moments
+                // (the main flame's) are not.
+                let isolated = self.view_subflame_in_isolation
+                    && matches!(self.config_manager.editing_target(), crate::config::manager::EditingTarget::Subflame { .. });
+                let moments = if motion_blur::blurring(&self.animation_controller) && !final_config.cylinder_targeting && !isolated {
+                    crate::animation::export::moment_configs(
+                        final_config,
+                        &self.animation_controller,
+                        self.animation_controller.current_time,
+                        Some(&self.signal_manager),
+                    )
+                } else {
+                    Vec::new()
+                };
+                let samples_this_frame = if moments.is_empty() {
+                    // After blurred frames the GPU holds the last moment's
+                    // flame: the frame's own goes back first.
+                    if renderer.holds_moment() {
+                        let settings = self.config_manager.system_settings();
+                        let (ipt, burn_in) = (settings.iterations_per_thread, settings.burn_in);
+                        renderer.restore_frame(&self.gpu.device, &self.gpu.queue, final_config, ipt, burn_in);
+                    }
+                    renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                        effective_ipt, self.config_manager.system_settings().burn_in,
+                        final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
+                        final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths)
+                } else {
+                    // Each moment its own submission, after what this frame
+                    // recorded before it: an upload lands at its submission,
+                    // so the moment's dispatch sees its own flame.
+                    let recorded = std::mem::replace(
+                        &mut render_encoder,
+                        self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") }),
+                    );
+                    self.gpu.queue.submit(std::iter::once(recorded.finish()));
+                    let (setting_ipt, burn_in) = {
+                        let settings = self.config_manager.system_settings();
+                        (settings.iterations_per_thread, settings.burn_in)
+                    };
+                    let moment_ipt = effective_ipt.div_ceil(moments.len() as u32).max(1);
+                    let mut plotted = 0;
+                    for (k, m) in moments.iter().enumerate() {
+                        renderer.set_moment(&self.gpu.device, &self.gpu.queue, m, setting_ipt, burn_in);
+                        renderer.set_continuing_frame(k > 0);
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Motion Blur Moment") });
+                        plotted += renderer.compute_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                            moment_ipt, burn_in,
+                            m.zoom, m.pan_x as f32, m.pan_y as f32, m.rotation,
+                            m.camera_rotation_x, m.camera_rotation_y, m.camera_bank, m.camera_x, m.camera_y, m.camera_z, m.speed_factor,
+                            clear_histogram && k == 0, clear_paths && k == 0);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
+                    renderer.set_continuing_frame(false);
+                    plotted
+                };
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
                 // The histogram holds every frame of the batch: count them

@@ -26,9 +26,6 @@ it goes to [docs/archive/](../archive/) with a banner saying so.
 
 ## Ideas without a document
 
-- **Motion blur** for animation and video: depth of field shipped from
-  [the artistic-effects proposal](../archive/experimental/PROPOSAL-artistic-effects.md);
-  motion blur did not.
 - **Skill levels in the UI** (progressive disclosure): phase 2 of the
   archived [UX plan](../archive/projects/ux-improvements.md), never built.
 - **Temporal antialiasing and spectral rendering** for the escape

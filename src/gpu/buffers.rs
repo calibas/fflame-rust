@@ -221,39 +221,36 @@ pub(crate) fn pixel_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 
 /// subflames) identically. The subflame local index map matches
 /// `pack_gpu_variation_params`.
 pub fn pack_gpu_transforms(flame: &Flame, render_mode: crate::scene::transforms::RenderMode) -> Vec<GpuTransform> {
-    let registry = crate::variations::global_registry();
-    let mut gpu_transforms = GpuTransform::from_flame(flame, &registry, render_mode);
-
+    let (mut gpu_transforms, subflames) = gpu_transform_regions(flame, render_mode);
     // Pad parent slack to MAX_TRANSFORMS so subflame slots start at the
     // synthetic-id base (matches variation_params layout).
-    while gpu_transforms.len() < MAX_TRANSFORMS {
-        gpu_transforms.push(bytemuck::Zeroable::zeroed());
-    }
+    gpu_transforms.resize(MAX_TRANSFORMS, bytemuck::Zeroable::zeroed());
+    gpu_transforms.extend(subflames);
+    gpu_transforms.resize(MAX_TRANSFORMS_UNIFIED, bytemuck::Zeroable::zeroed());
+    gpu_transforms
+}
 
+/// [`pack_gpu_transforms`]' two regions, unpadded: the parent's
+/// transforms (from slot 0) and the subflames' (from `MAX_TRANSFORMS`).
+fn gpu_transform_regions(flame: &Flame, render_mode: crate::scene::transforms::RenderMode) -> (Vec<GpuTransform>, Vec<GpuTransform>) {
+    let registry = crate::variations::global_registry();
+    let gpu_transforms = GpuTransform::from_flame(flame, &registry, render_mode);
     let local_map = crate::scene::transforms::compute_local_index_map(
         flame.active_variation_names_ordered(&registry),
     );
-    let mut subflame_xforms_packed = 0usize;
+    let mut subflames = Vec::new();
     for sf in &flame.subflames {
-        for xform in &sf.transforms {
-            gpu_transforms.push(GpuTransform::from_transform(xform, &local_map));
-            subflame_xforms_packed += 1;
-        }
-        for xform in &sf.final_transforms {
-            gpu_transforms.push(GpuTransform::from_transform(xform, &local_map));
-            subflame_xforms_packed += 1;
+        for xform in sf.transforms.iter().chain(&sf.final_transforms) {
+            subflames.push(GpuTransform::from_transform(xform, &local_map));
         }
     }
-    if subflame_xforms_packed > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+    if subflames.len() > MAX_SUBFLAME_TRANSFORMS_TOTAL {
         panic!(
             "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
-            subflame_xforms_packed, MAX_SUBFLAME_TRANSFORMS_TOTAL,
+            subflames.len(), MAX_SUBFLAME_TRANSFORMS_TOTAL,
         );
     }
-    while gpu_transforms.len() < MAX_TRANSFORMS_UNIFIED {
-        gpu_transforms.push(bytemuck::Zeroable::zeroed());
-    }
-    gpu_transforms
+    (gpu_transforms, subflames)
 }
 
 /// Pack a flame's per-transform variation parameters into the unified GPU
@@ -261,46 +258,57 @@ pub fn pack_gpu_transforms(flame: &Flame, render_mode: crate::scene::transforms:
 /// → pad ordering, same shared local index map). Shared by
 /// `Buffers::update_variation_params` and `HighResExporter`.
 pub fn pack_gpu_variation_params(flame: &Flame) -> Vec<GpuVariationParams> {
+    let (mut gpu_params, subflames) = gpu_variation_param_regions(flame);
+    gpu_params.resize(MAX_TRANSFORMS, bytemuck::Zeroable::zeroed());
+    gpu_params.extend(subflames);
+    gpu_params.resize(MAX_TRANSFORMS_UNIFIED, bytemuck::Zeroable::zeroed());
+    gpu_params
+}
+
+/// [`pack_gpu_variation_params`]' two regions, unpadded: the parent's
+/// transforms (normals, linkeds, finals; from slot 0) and the subflames'
+/// (from `MAX_TRANSFORMS`).
+fn gpu_variation_param_regions(flame: &Flame) -> (Vec<GpuVariationParams>, Vec<GpuVariationParams>) {
     let registry = crate::variations::global_registry();
     let local_map = crate::scene::transforms::compute_local_index_map(
         flame.active_variation_names_ordered(&registry),
     );
-
-    let mut gpu_params: Vec<GpuVariationParams> = Vec::with_capacity(MAX_TRANSFORMS_UNIFIED);
-    for xform in &flame.transforms {
-        gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
-    }
-    for xform in &flame.linked_transforms {
-        gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
-    }
-    for xform in &flame.final_transforms {
-        gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
-    }
-    while gpu_params.len() < MAX_TRANSFORMS {
-        gpu_params.push(bytemuck::Zeroable::zeroed());
-    }
-
-    let mut subflame_xforms_packed = 0usize;
+    let parent: Vec<GpuVariationParams> = flame
+        .transforms
+        .iter()
+        .chain(&flame.linked_transforms)
+        .chain(&flame.final_transforms)
+        .map(|xform| GpuVariationParams::from_transform(xform, &local_map, &registry))
+        .collect();
+    let mut subflames = Vec::new();
     for sf in &flame.subflames {
-        for xform in &sf.transforms {
-            gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
-            subflame_xforms_packed += 1;
-        }
-        for xform in &sf.final_transforms {
-            gpu_params.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
-            subflame_xforms_packed += 1;
+        for xform in sf.transforms.iter().chain(&sf.final_transforms) {
+            subflames.push(GpuVariationParams::from_transform(xform, &local_map, &registry));
         }
     }
-    if subflame_xforms_packed > MAX_SUBFLAME_TRANSFORMS_TOTAL {
+    if subflames.len() > MAX_SUBFLAME_TRANSFORMS_TOTAL {
         panic!(
             "Subflames have {} total transforms but MAX_SUBFLAME_TRANSFORMS_TOTAL is {}",
-            subflame_xforms_packed, MAX_SUBFLAME_TRANSFORMS_TOTAL,
+            subflames.len(), MAX_SUBFLAME_TRANSFORMS_TOTAL,
         );
     }
-    while gpu_params.len() < MAX_TRANSFORMS_UNIFIED {
-        gpu_params.push(bytemuck::Zeroable::zeroed());
+    (parent, subflames)
+}
+
+/// Write a table's two regions -- the parent's from slot 0, the
+/// subflames' from `MAX_TRANSFORMS` -- and nothing else. The slots past
+/// either are read by no shader (the counts and the subflame metas bound
+/// every index), so the padding the full tables carry need not be sent:
+/// for variation parameters it is 6.4 KB a slot, 2.5 MB a table, which a
+/// flame edit -- and each motion-blur moment -- paid to upload a few slots.
+fn write_regions<T: bytemuck::Pod>(queue: &Queue, buffer: &Buffer, parent: &[T], subflames: &[T]) {
+    let size = std::mem::size_of::<T>() as u64;
+    if !parent.is_empty() {
+        queue.write_buffer(buffer, 0, bytemuck::cast_slice(parent));
     }
-    gpu_params
+    if !subflames.is_empty() {
+        queue.write_buffer(buffer, MAX_TRANSFORMS as u64 * size, bytemuck::cast_slice(subflames));
+    }
 }
 
 /// Build the per-subflame metadata array (offsets/counts into the unified
@@ -2307,9 +2315,10 @@ impl FlameBuffers {
         }
 
         // Pack parent + subflame transforms into the unified layout (shared
-        // with HighResExporter for cross-engine parity).
-        let gpu_transforms = pack_gpu_transforms(flame, render_mode);
-        queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
+        // with HighResExporter for cross-engine parity), writing the slots
+        // used (`write_regions`).
+        let (parent, subflames) = gpu_transform_regions(flame, render_mode);
+        write_regions(queue, &self.transform_buffer, &parent, &subflames);
     }
 
     /// Write the per-subflame metadata uniform (offsets / counts /
@@ -2425,9 +2434,10 @@ impl FlameBuffers {
         }
 
         // Pack parent + subflame variation params into the unified layout
-        // (shared with HighResExporter for cross-engine parity).
-        let gpu_params = pack_gpu_variation_params(flame);
-        queue.write_buffer(&self.variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
+        // (shared with HighResExporter for cross-engine parity), writing
+        // the slots used (`write_regions`).
+        let (parent, subflames) = gpu_variation_param_regions(flame);
+        write_regions(queue, &self.variation_params_buffer, &parent, &subflames);
     }
 
     /// Update palette texture.

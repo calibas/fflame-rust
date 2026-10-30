@@ -263,6 +263,17 @@ else in that record is built. These are not:
   wavelength-correlated fringing on a zoom. Planned, never scheduled;
   it is an export-loop feature, not a shader one, and wants its own
   plan. Full costing in the archived new-families research (§7).
+  Motion blur is built (2026-10-29), for every engine and in the app
+  too: [ANIMATION.md](../main/ANIMATION.md) (*Motion blur*), the record
+  in [motion-blur.md](../archive/projects/motion-blur.md); the spectral part is not in it.
+  Left of motion blur: the viewport's path-traced solid is not blurred
+  (the export's is); per-thread time for flames -- each thread drawing
+  its own moment, parameters interpolated across the shutter -- would
+  end the distinct copies a fast motion shows at few samples; a
+  terrain's lit passes are timed to the queue's completion, which reads
+  high under load, so the viewport fits one a frame where GPU
+  timestamps might show room for more; and the API's field
+  ([v0.6.0-release.md](v0.6.0-release.md)).
 - **GPU reference-orbit computation (the NTT direction)** —
   measurement-gated go/no-go, never run. See
   [escape-ntt-reference.md](../archive/escape-time/escape-ntt-reference.md).

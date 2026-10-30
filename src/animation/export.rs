@@ -644,6 +644,34 @@ fn frame_progress_detail(frame_done: u32, total: u32, secs_per_frame: f64) -> St
     }
 }
 
+/// A frame's motion-blur moments as configs (docs/archive/projects/motion-blur.md):
+/// `base` with the tracks applied at each moment of the shutter about
+/// `time`; empty when the animation has no motion blur. The app's
+/// viewport and the video export both make them here, through the
+/// export's apply path, so a moment in the app is the export's.
+pub fn moment_configs(
+    base: &FractalConfig,
+    controller: &AnimationController,
+    time: f64,
+    signals: Option<&SignalManager>,
+) -> Vec<FractalConfig> {
+    let Some(animation) = controller.animation.as_ref() else {
+        return Vec::new();
+    };
+    // A simulation's run starts again at a loop's seam: its moments stay
+    // on this side of it.
+    let wrap = base.render_mode != crate::scene::transforms::RenderMode::Simulation;
+    animation
+        .moments(time, wrap)
+        .into_iter()
+        .map(|t| {
+            let mut config = base.clone();
+            apply_animation_values(&mut config, &controller.evaluate_moment(t, signals));
+            config
+        })
+        .collect()
+}
+
 /// Apply animation values to a FractalConfig.
 ///
 /// Takes the evaluated animation values and applies them to the config.
@@ -2064,6 +2092,16 @@ pub async fn export_animation(
         Ok(())
     });
 
+    // A blurred flame uploads each moment's flame (`set_moment`); compiled
+    // into the shader (the CLI's inlined constants) that would be a
+    // compile per moment, so a blurred video reads the buffers.
+    if export_config.animation.motion_blur.active()
+        && crate::shader_builder_v2::should_use_inlined_constants()
+    {
+        crate::shader_builder_v2::disable_inlined_constants();
+        log::info!("Video export: motion blur reads the flame from buffers (no inlined constants)");
+    }
+
     // One renderer for the whole export. `load_config` is a full reset
     // point, so it does not need to have been built for any particular
     // frame's config -- but it does need to be the right SIZE, which is
@@ -2122,6 +2160,14 @@ pub async fn export_animation(
         };
         let mut frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
+        // Motion blur: the frame's moments, taken after the frame itself
+        // so its signal smoothing has advanced once (`evaluate_moment`).
+        let moments = moment_configs(
+            &export_config.config,
+            &controller,
+            time,
+            if has_signals { Some(&signal_manager) } else { None },
+        );
 
         let render_start = Instant::now();
         let output = {
@@ -2140,7 +2186,8 @@ pub async fn export_animation(
                 export_config.height,
             )
             .with_iterations_per_thread(export_config.iterations_per_thread)
-            .with_engines(&mut engines);
+            .with_engines(&mut engines)
+            .with_moments(&moments);
             crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await
         };
         let output = match output {
@@ -2564,6 +2611,27 @@ mod tests {
     use super::*;
     use crate::config::{ConfigPath, ConfigValue};
     use crate::scene::transforms::{Flame, Transform};
+
+    /// A frame's motion-blur moments are its base config with the tracks
+    /// applied at each moment of the shutter; none while blur is off.
+    #[test]
+    fn a_frames_moments_apply_the_tracks_at_each_moment() {
+        let mut anim = Animation::new("Zoom".into(), 1.0);
+        anim.add_track(crate::animation::Track::linear(
+            "Escape.ZoomLog2".into(),
+            serde_json::json!(0.0),
+            serde_json::json!(1.0),
+            1.0,
+        ));
+        let mut controller = AnimationController::new();
+        controller.load(anim.clone());
+        let base = FractalConfig::default();
+        assert!(moment_configs(&base, &controller, 0.5, None).is_empty(), "no blur, no moments");
+        anim.motion_blur = crate::animation::MotionBlur { enabled: true, shutter: 0.5, samples: 2 };
+        controller.load(anim);
+        let zooms: Vec<f64> = moment_configs(&base, &controller, 0.5, None).iter().map(|c| c.escape.zoom_log2).collect();
+        assert_eq!(zooms, vec![0.375, 0.625]);
+    }
 
     /// The CLI's names resolve, case-insensitively, and an unknown one
     /// is `None` so the caller can fall back to the DEFAULT and say so.

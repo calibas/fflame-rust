@@ -51,6 +51,57 @@ pub struct Animation {
 
     /// Looping behavior
     pub loop_mode: LoopMode,
+
+    /// Motion blur: each frame the average over a shutter about its time.
+    /// Written only when changed, so older files load with it off.
+    #[serde(default, skip_serializing_if = "MotionBlur::is_default")]
+    pub motion_blur: MotionBlur,
+}
+
+/// Motion blur (docs/archive/projects/motion-blur.md): a frame is the average of
+/// the picture at `samples` moments within a shutter `shutter` seconds
+/// long, centred on the frame's time. In animation seconds, not a share
+/// of a frame: in-app playback has no frame rate, and a duration looks
+/// the same in the app, at any export frame rate and at any playback
+/// speed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MotionBlur {
+    pub enabled: bool,
+    /// How long the shutter is open, in seconds of animation time.
+    pub shutter: f64,
+    /// Moments sampled within the shutter.
+    pub samples: u32,
+}
+
+impl Default for MotionBlur {
+    fn default() -> Self {
+        Self { enabled: false, shutter: 1.0 / 60.0, samples: 8 }
+    }
+}
+
+impl MotionBlur {
+    pub const MIN_SAMPLES: u32 = 2;
+    pub const MAX_SAMPLES: u32 = 64;
+    /// The longest shutter the panel offers: a whole second.
+    pub const MAX_SHUTTER: f64 = 1.0;
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether frames are blurred: on, with a shutter to sample.
+    pub fn active(&self) -> bool {
+        self.enabled && self.shutter > 0.0
+    }
+
+    /// The moments' offsets from the frame's time: stratified, each in the
+    /// middle of its share of the shutter, so the frame's own time is the
+    /// centre and the same frame always takes the same moments.
+    pub fn offsets(&self) -> Vec<f64> {
+        let k = self.samples.clamp(Self::MIN_SAMPLES, Self::MAX_SAMPLES);
+        (0..k).map(|i| ((i as f64 + 0.5) / k as f64 - 0.5) * self.shutter).collect()
+    }
 }
 
 /// Serialize an embedded `base_config` through the canonical config serializer
@@ -313,6 +364,7 @@ impl Animation {
             tracks: Vec::new(),
             generators: Vec::new(),
             loop_mode: LoopMode::Once,
+            motion_blur: MotionBlur::default(),
         }
     }
 
@@ -325,6 +377,37 @@ impl Animation {
             tracks: Vec::new(),
             generators: Vec::new(),
             loop_mode: LoopMode::Once,
+            motion_blur: MotionBlur::default(),
+        }
+    }
+
+    /// The times of a frame's motion-blur moments, `t` its own time; empty
+    /// when motion blur is off. A shutter reaching past an end clamps for
+    /// `Once`, wraps for `Loop` (the seam blurs like any other moment) and
+    /// reflects for `PingPong`. `wrap` false clamps a loop too: a
+    /// simulation's run starts again at the seam, and a moment from the
+    /// end would carry its field ahead of the timeline.
+    pub fn moments(&self, t: f64, wrap: bool) -> Vec<f64> {
+        if !self.motion_blur.active() {
+            return Vec::new();
+        }
+        self.motion_blur.offsets().into_iter().map(|o| self.moment_time(t + o, wrap)).collect()
+    }
+
+    /// A moment's time brought back into the animation by its loop mode.
+    fn moment_time(&self, t: f64, wrap: bool) -> f64 {
+        let d = self.duration;
+        if !(d > 0.0) {
+            return 0.0;
+        }
+        match self.loop_mode {
+            LoopMode::Once => t.clamp(0.0, d),
+            LoopMode::Loop if !wrap => t.clamp(0.0, d),
+            LoopMode::Loop => t.rem_euclid(d),
+            LoopMode::PingPong => {
+                let p = t.rem_euclid(2.0 * d);
+                if p > d { 2.0 * d - p } else { p }
+            }
         }
     }
 
@@ -1004,5 +1087,62 @@ mod tests {
         assert_eq!(loaded.duration, 10.0);
         assert_eq!(loaded.loop_mode, LoopMode::PingPong);
         assert_eq!(loaded.tracks.len(), 2);
+    }
+
+    /// The moments are stratified across the shutter and centred on the
+    /// frame's time: each in the middle of its share.
+    #[test]
+    fn the_moments_are_stratified_and_centred() {
+        let blur = MotionBlur { enabled: true, shutter: 0.04, samples: 4 };
+        let offsets = blur.offsets();
+        for (got, want) in offsets.iter().zip([-0.015, -0.005, 0.005, 0.015]) {
+            assert!((got - want).abs() < 1e-12, "{offsets:?}");
+        }
+        assert!(offsets.iter().sum::<f64>().abs() < 1e-12, "centred: {offsets:?}");
+        let mut anim = Animation::new("Blur".into(), 1.0);
+        assert!(anim.moments(0.5, true).is_empty(), "off by default");
+        anim.motion_blur = blur;
+        assert_eq!(anim.moments(0.5, true).len(), 4);
+    }
+
+    /// A shutter reaching past an end clamps for Once, wraps for Loop and
+    /// reflects for PingPong.
+    #[test]
+    fn the_moments_past_an_end_follow_the_loop_mode() {
+        let mut anim = Animation::new("Ends".into(), 2.0);
+        anim.motion_blur = MotionBlur { enabled: true, shutter: 0.4, samples: 2 };
+        // At t = 0 the moments are -0.1 and +0.1; at t = 2, 1.9 and 2.1.
+        let at = |anim: &Animation, t: f64| -> Vec<f64> { anim.moments(t, true).iter().map(|m| (m * 1e9).round() / 1e9).collect() };
+        anim.loop_mode = LoopMode::Once;
+        assert_eq!(at(&anim, 0.0), vec![0.0, 0.1]);
+        assert_eq!(at(&anim, 2.0), vec![1.9, 2.0]);
+        anim.loop_mode = LoopMode::Loop;
+        assert_eq!(at(&anim, 0.0), vec![1.9, 0.1]);
+        assert_eq!(at(&anim, 2.0), vec![1.9, 0.1]);
+        // Unwrapped (a simulation's), a loop clamps.
+        assert_eq!(anim.moments(0.0, false)[0], 0.0);
+        anim.loop_mode = LoopMode::PingPong;
+        assert_eq!(at(&anim, 0.0), vec![0.1, 0.1]);
+        assert_eq!(at(&anim, 2.0), vec![1.9, 1.9]);
+    }
+
+    /// Motion blur is written only once changed, so an older file -- and
+    /// any animation that never touched it -- reads the same; a changed
+    /// one round-trips.
+    #[test]
+    fn motion_blur_is_written_only_once_changed() {
+        let anim = Animation::new("Plain".into(), 3.0);
+        let json = serde_json::to_string(&anim).unwrap();
+        assert!(!json.contains("motion_blur"), "{json}");
+        let loaded: Animation = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.motion_blur, MotionBlur::default());
+
+        let mut blurred = anim.clone();
+        blurred.motion_blur = MotionBlur { enabled: true, shutter: 0.02, samples: 12 };
+        let loaded: Animation = serde_json::from_str(&serde_json::to_string(&blurred).unwrap()).unwrap();
+        assert_eq!(loaded.motion_blur, blurred.motion_blur);
+        // A field left out takes its default.
+        let partial: MotionBlur = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert_eq!(partial, MotionBlur { enabled: true, ..MotionBlur::default() });
     }
 }
