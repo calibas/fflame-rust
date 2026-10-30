@@ -1770,7 +1770,12 @@ averaged into a write-only ping-pong pair (`begin_accumulation`,
 `accumulate_sample`). A sub-pixel shift is a shift of the view, which the
 direct path expresses through its centre and the perturbed path through
 `ref_offset`, so no template changes. Where only a 1× grid fits, 8× is
-8 × 8 = 64 accumulated renders.
+8 × 8 = 64 accumulated renders. The pair is `renderer::average::ImageAverage`,
+shared with the simulation and the terrains; `begin_accumulation_of`
+counts renders, for motion blur, which renders every displacement at
+every moment of the shutter ([ANIMATION.md](ANIMATION.md), *Motion
+blur*). The viewport's blurred playback keeps the finished average aside
+(`present_accumulation`) while the next frame's builds.
 
 `downsample` combines the grid: `Box` (the linear average, default),
 `Perceptual` (averaged in gamma space, which keeps mixed hues apart) and

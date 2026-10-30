@@ -24,6 +24,15 @@ pub fn enable_inlined_constants() {
     INLINED_CONSTANTS_ENABLED.store(true, Ordering::Relaxed);
 }
 
+/// Read the flame from the buffers again: a motion-blurred video uploads
+/// each moment's flame (`FlameRenderer::set_moment`), which inlined would
+/// be a compile per moment. (The web build has no video export to call
+/// it, and this file must not fork by platform: `codegen_has_no_platform_forks`.)
+#[allow(dead_code)]
+pub fn disable_inlined_constants() {
+    INLINED_CONSTANTS_ENABLED.store(false, Ordering::Relaxed);
+}
+
 /// Check if shader dumping is enabled
 pub fn should_dump_shader() -> bool {
     DUMP_SHADER_ENABLED.load(Ordering::Relaxed)

@@ -164,11 +164,20 @@ pub struct SimTerrain {
     tiers: TerrainTiers,
     made: Option<String>,
     grid: (u32, u32),
+    /// A blurred export's moments drawn each on its own ground, averaged
+    /// (docs/archive/projects/motion-blur.md).
+    moments: crate::renderer::average::ImageAverage,
 }
 
 impl SimTerrain {
     pub fn new(device: &Device, out_w: u32, out_h: u32) -> Self {
-        SimTerrain { terrain: TerrainRenderer::new(device, out_w, out_h), tiers: TerrainTiers::default(), made: None, grid: (0, 0) }
+        SimTerrain {
+            terrain: TerrainRenderer::new(device, out_w, out_h),
+            tiers: TerrainTiers::default(),
+            made: None,
+            grid: (0, 0),
+            moments: Default::default(),
+        }
     }
 
     /// The output's size.
@@ -206,10 +215,11 @@ impl SimTerrain {
         true
     }
 
-    fn inputs<'a>(&self, config: &FractalConfig, view: &'a dyn Fn([f32; 2]) -> TerrainView) -> TierInputs<'a> {
+    fn inputs<'a>(&self, config: &FractalConfig, view: &'a dyn Fn([f32; 2], usize) -> TerrainView, moments: usize) -> TierInputs<'a> {
         let t = &config.sim.terrain;
         TierInputs {
             view,
+            moments,
             settings: sim_path_settings(config, self.grid.0),
             tier: t.tier,
             samples: t.path.samples,
@@ -221,18 +231,31 @@ impl SimTerrain {
     /// One frame of the viewport, in the terrain's tier. True while there
     /// is more to do.
     pub fn render_viewport(&mut self, device: &Device, queue: &Queue, config: &FractalConfig) -> bool {
+        self.render_viewport_moments(device, queue, config, &[])
+    }
+
+    /// [`Self::render_viewport`] blurred over a frame's motion-blur
+    /// moments (docs/archive/projects/motion-blur.md): each pass or sample at a
+    /// moment's view, over the ground as the field made it.
+    pub fn render_viewport_moments(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig]) -> bool {
         let (gw, gh) = self.grid;
-        let view = |jitter| sim_terrain_view(config, gw, gh, jitter);
-        let inputs = self.inputs(config, &view);
+        let view = |jitter, m: usize| sim_terrain_view(moments.get(m).unwrap_or(config), gw, gh, jitter);
+        let inputs = self.inputs(config, &view, moments.len().max(1));
         self.tiers.viewport(&mut self.terrain, device, queue, &inputs)
     }
 
     /// The export's picture: path traced at `samples` unless the tier is
     /// Lit. `wait` between batches, with the share of the still done.
     pub fn render_still(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, frame: (u32, u32), wait: impl FnMut(f32) -> bool) {
+        self.render_still_moments(device, queue, config, &[], frame, wait);
+    }
+
+    /// [`Self::render_still`] blurred over moments that share the ground:
+    /// each pass or share of the samples at a moment's view.
+    pub fn render_still_moments(&mut self, device: &Device, queue: &Queue, config: &FractalConfig, moments: &[FractalConfig], frame: (u32, u32), wait: impl FnMut(f32) -> bool) {
         let (gw, gh) = self.grid;
-        let view = |jitter| sim_terrain_view(config, gw, gh, jitter);
-        let inputs = self.inputs(config, &view);
+        let view = |jitter, m: usize| sim_terrain_view(moments.get(m).unwrap_or(config), gw, gh, jitter);
+        let inputs = self.inputs(config, &view, moments.len().max(1));
         self.tiers.still(&mut self.terrain, device, queue, &inputs, frame, wait);
     }
 
@@ -273,6 +296,25 @@ impl SimTerrain {
     pub fn destroy(&self) {
         self.terrain.destroy();
         self.tiers.destroy();
+        self.moments.destroy();
+    }
+
+    /// Start averaging `count` motion-blur moments' stills of `w` x `h`.
+    pub fn begin_moments(&mut self, device: &Device, queue: &Queue, w: u32, h: u32, count: u32) {
+        self.moments.begin(device, queue, w, h, count);
+    }
+
+    /// Fold the still just drawn into the moments' average.
+    pub fn add_moment(&mut self, device: &Device, queue: &Queue) {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Sim Terrain Moment") });
+        let still = self.output_view().clone();
+        self.moments.add(device, &mut enc, &still);
+        queue.submit(std::iter::once(enc.finish()));
+    }
+
+    /// The moments' average; complete once every moment is added.
+    pub fn moments_view(&self) -> Option<&TextureView> {
+        self.moments.view()
     }
 }
 

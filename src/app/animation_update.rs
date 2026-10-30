@@ -57,10 +57,11 @@ impl App {
                 // flag: it is cleared only when render() reports final.
                 crate::scene::transforms::RenderMode::Escape => !self.escape_dirty,
                 // A committed target that has not been cleared means
-                // the grid is still walking toward it.
+                // the grid is still walking toward it -- or, blurred,
+                // through the frame's moments (motion_blur.rs).
                 #[cfg(feature = "engine-sim")]
                 crate::scene::transforms::RenderMode::Simulation => {
-                    self.sim_timeline_target.is_none()
+                    self.sim_timeline_target.is_none() && self.sim_motion.is_none()
                 }
                 _ => true,
             };
