@@ -10,6 +10,7 @@ mod variation_fetch;
 mod texture_sync;
 mod aa_governor;
 mod motion_blur;
+mod frame_log;
 mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
@@ -623,6 +624,8 @@ pub struct App {
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
+    /// The frame log (`FFLAME_FRAME_LOG`; frame_log.rs), when asked for.
+    pub(super) frame_log: Option<frame_log::FrameLog>,
     // Debounce viewport resize (WASM only - prevents rapid resize loops)
     #[cfg(target_arch = "wasm32")]
     pub(super) last_viewport_resize_time: Option<web_time::Instant>,
@@ -959,6 +962,7 @@ impl App {
             progress_drawn: crate::ui::RenderProgress::Idle,
             viewport_resize_pending: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
+            frame_log: None,
             #[cfg(target_arch = "wasm32")]
             last_viewport_resize_time: None,
             png_export_premultiplied: false,
@@ -1025,6 +1029,8 @@ impl App {
             health_policy: crate::api::health::HealthPolicy::default(),
             last_health_check: None,
         };
+
+        app.frame_log = frame_log::FrameLog::from_env(&app.gpu.device, &app.gpu.queue);
 
         // Register live audio capture as a signal producer so live_* signals
         // appear in the animation track signal dropdown
@@ -1693,6 +1699,9 @@ impl App {
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+        if let Some(log) = self.frame_log.as_mut() {
+            log.begin(&mut encoder);
+        }
 
         // ============================================================================
         // PHASE 1: Render UI First
@@ -1936,7 +1945,8 @@ impl App {
             self.toggle_fly_mode();
         }
 
-        self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
+        let ui_cpu_ms = t_ui_start.elapsed().as_secs_f64() * 1000.0;
+        self.metrics.record_ui_time(ui_cpu_ms);
 
         // Track UI repaint requests for frame rate optimization
         self.ui_needs_repaint = ui_response.needs_repaint;
@@ -2069,6 +2079,9 @@ impl App {
         // Submit UI rendering (must happen before we start processing responses)
         let t_submit = Instant::now();
 
+        if let Some(log) = self.frame_log.as_mut() {
+            log.ui_done(&mut encoder);
+        }
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
         // The paint just submitted was the last user of an output texture
@@ -3306,6 +3319,9 @@ impl App {
                     renderer.set_continuing_frame(false);
                     plotted
                 };
+                if let Some(log) = self.frame_log.as_mut() {
+                    log.flame(effective_workgroups, effective_ipt, samples_this_frame);
+                }
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
                 // The histogram holds every frame of the batch: count them
@@ -3502,6 +3518,9 @@ impl App {
         // Submit rendering commands
         let t_submit = Instant::now();
 
+        if let Some(log) = self.frame_log.as_mut() {
+            log.end(&mut render_encoder);
+        }
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
@@ -3713,6 +3732,13 @@ impl App {
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
+        if self.frame_log.is_some() {
+            let state = self.frame_state(delta_time * 1000.0, render_start.elapsed().as_secs_f64() * 1000.0, ui_cpu_ms);
+            if let Some(log) = self.frame_log.as_mut() {
+                log.finish(state);
+            }
+            self.frame_log_drive();
+        }
 
         // Save current low-density state for next frame's brightness decision
         // (matches ping-pong buffer timing - tonemap reads previous frame's buffer)
