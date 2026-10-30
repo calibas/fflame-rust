@@ -1480,7 +1480,10 @@ impl<'a> PanelViewer<'a> {
             };
             if is_path_map_mode {
                 if let Some(pointer_pos) = held_at {
-                    // Convert from panel coordinates to texture coordinates
+                    // Convert from panel coordinates to the renderer's
+                    // pixels: fewer than the panel's points at a render
+                    // scale (app/render_scale.rs).
+                    let (width, height) = self.context.flame_renderer.map_or((width, height), |r| (r.width, r.height));
                     let local_x = pointer_pos.x - response.rect.min.x;
                     let local_y = pointer_pos.y - response.rect.min.y;
                     let pixel_x = (local_x / available_size.x * width as f32) as u32;

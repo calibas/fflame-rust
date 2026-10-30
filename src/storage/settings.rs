@@ -180,6 +180,25 @@ pub struct SystemSettings {
     #[serde(default)]
     pub viewport_letterbox: bool,
 
+    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// the picture renders at this share of the display's size each side,
+    /// and `upscaler` draws it up to the display. 1 is full size. Not in
+    /// Simulation mode, where the grid's scale is the render scale. The
+    /// exports render at the picture's size whatever this is; Export
+    /// Current Image saves the viewport's picture as rendered.
+    #[serde(default = "default_render_scale")]
+    pub render_scale: f32,
+
+    /// How a picture rendered below the display's size is drawn up to it.
+    #[serde(default)]
+    pub upscaler: crate::renderer::upscale::UpscaleFilter,
+
+    /// Render at the screen's physical pixels rather than egui's logical
+    /// points (D1): sharper on a high-DPI screen, at the cost of its
+    /// pixel count. Off: the logical size, upscaled to the physical.
+    #[serde(default)]
+    pub render_physical_pixels: bool,
+
     /// Omit metadata from exported PNGs.
     ///
     /// Off by default, because the embedded config is what makes an
@@ -226,6 +245,10 @@ fn default_burn_in() -> u32 {
 
 fn default_frame_governor() -> bool {
     true
+}
+
+fn default_render_scale() -> f32 {
+    1.0
 }
 
 fn default_manual_workgroups() -> u32 {
@@ -317,6 +340,9 @@ impl Default for SystemSettings {
             fly_proximity: false,
             video_encoding: default_video_encoding(),
             viewport_letterbox: false,
+            render_scale: default_render_scale(),
+            upscaler: Default::default(),
+            render_physical_pixels: false,
             png_export_strip_metadata: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_opened_file: None,
@@ -423,6 +449,15 @@ impl SystemSettings {
         }
         if current.viewport_letterbox == defaults.viewport_letterbox {
             obj.remove("viewport_letterbox");
+        }
+        if current.render_scale == defaults.render_scale {
+            obj.remove("render_scale");
+        }
+        if current.upscaler == defaults.upscaler {
+            obj.remove("upscaler");
+        }
+        if current.render_physical_pixels == defaults.render_physical_pixels {
+            obj.remove("render_physical_pixels");
         }
 
         // File Paths (Desktop only) - already use skip_serializing_if
@@ -593,6 +628,9 @@ mod tests {
         assert_eq!(settings.show_help_on_startup, true);
         assert_eq!(settings.video_encoding, default_video_encoding());
         assert!(!settings.viewport_letterbox);
+        assert_eq!(settings.render_scale, 1.0);
+        assert_eq!(settings.upscaler, crate::renderer::upscale::UpscaleFilter::CatmullRom);
+        assert!(!settings.render_physical_pixels);
     }
 
     #[test]
@@ -614,6 +652,9 @@ mod tests {
         assert!(!json.contains("\"show_help_on_startup\""), "default show_help_on_startup should be omitted");
         assert!(!json.contains("\"video_encoding\""), "default video_encoding should be omitted");
         assert!(!json.contains("\"viewport_letterbox\""), "default viewport_letterbox should be omitted");
+        assert!(!json.contains("\"render_scale\""), "default render_scale should be omitted");
+        assert!(!json.contains("\"upscaler\""), "default upscaler should be omitted");
+        assert!(!json.contains("\"render_physical_pixels\""), "default render_physical_pixels should be omitted");
     }
 
     #[test]
@@ -718,6 +759,9 @@ mod tests {
             tune: crate::animation::export::EncodingTune::Grain,
         };
         original.viewport_letterbox = true;
+        original.render_scale = 0.5;
+        original.upscaler = crate::renderer::upscale::UpscaleFilter::Bilinear;
+        original.render_physical_pixels = true;
 
         // Serialize and deserialize
         let json = original.to_json().unwrap();
@@ -730,6 +774,9 @@ mod tests {
         assert_eq!(restored.language, original.language);
         assert_eq!(restored.video_encoding, original.video_encoding);
         assert_eq!(restored.viewport_letterbox, original.viewport_letterbox);
+        assert_eq!(restored.render_scale, original.render_scale);
+        assert_eq!(restored.upscaler, original.upscaler);
+        assert_eq!(restored.render_physical_pixels, original.render_physical_pixels);
     }
 
     /// An encoder this build cannot read -- a codec a later build renamed

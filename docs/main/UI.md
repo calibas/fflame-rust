@@ -108,7 +108,7 @@ actions by folding them into the frame's `UiResponse`.
 | File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online features (the `online_mode` switch; [ONLINE.md](ONLINE.md)), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
-| Rendering | Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), Frame-Time Governor, and the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Every item configures the chaos game, so outside the flame modes the menu says so and its rows are disabled; it is always there, so nothing after it moves with the mode |
+| Rendering | First the viewport's **Render Scale** (100/75/50%), its **Upscaler** (Catmull-Rom, the default, or bilinear) and **Render at Physical Pixels** (`SystemSettings::render_scale`, `upscaler`, `render_physical_pixels`, saved at once; `app/render_scale.rs`, `renderer::upscale`): the picture renders at that share of the viewport each side and is drawn up to the screen's pixels; disabled in Simulation, whose grid scale is its render scale (`Control::RenderScale`). Then Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), Frame-Time Governor, and the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Those configure the chaos game, so outside the flame modes the menu says so and their rows are disabled; it is always there, so nothing after it moves with the mode |
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout |
 | Help | Help, Keyboard Shortcuts, Report Bug, About |
 
@@ -317,6 +317,7 @@ widget:
 | `FocusedRendering` | Focused Rendering and PathMap | Show | Grey | Hide | Hide |
 | `OrbitCache` | escape's deep-zoom reference orbit cache | Hide | Hide | Show | Hide |
 | `ViewNavigation` | drag, wheel, pinch, arrow keys, the View menu | Show | Show | Show | Show |
+| `RenderScale` | the Rendering menu's render scale, upscaler and physical pixels | Show | Show | Show | Grey |
 | `TonemapMode` | the tone-map mode selector | Show | Show | Grey | Grey |
 | `LogOnlyTone` | gamma threshold, brightness, vibrancy, highlights | Show | Show | Grey | Grey |
 | `AlphaBlendCurve` | alpha blend low/high | Show (Grey under Linear) | Show (Grey under Linear) | Grey | Grey |

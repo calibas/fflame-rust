@@ -11,6 +11,7 @@ mod texture_sync;
 mod aa_governor;
 mod motion_blur;
 mod frame_log;
+mod render_scale;
 mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
@@ -626,6 +627,9 @@ pub struct App {
     pub(super) fractal_viewport_size: (u32, u32),
     /// The frame log (`FFLAME_FRAME_LOG`; frame_log.rs), when asked for.
     pub(super) frame_log: Option<frame_log::FrameLog>,
+    /// The picture drawn up to the display's size when it renders below
+    /// it (render_scale.rs, `renderer::upscale`).
+    pub(super) upscale: crate::renderer::upscale::Upscale,
     // Debounce viewport resize (WASM only - prevents rapid resize loops)
     #[cfg(target_arch = "wasm32")]
     pub(super) last_viewport_resize_time: Option<web_time::Instant>,
@@ -963,6 +967,7 @@ impl App {
             viewport_resize_pending: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             frame_log: None,
+            upscale: Default::default(),
             #[cfg(target_arch = "wasm32")]
             last_viewport_resize_time: None,
             png_export_premultiplied: false,
@@ -1716,6 +1721,9 @@ impl App {
         // Register the appropriate texture with egui for display:
         // - If effects ran on previous frame, use the effect output texture
         // - Otherwise, use the renderer's fractal texture
+        // - Either drawn up to the display, when it renders below it
+        //   (render_scale.rs): the upscale pass's picture of it
+        let display_size = self.display_size();
         if let Some(ref renderer) = self.flame_renderer {
             // Check if we have enabled color effects
             let config = self.config_manager.active_config();
@@ -1736,12 +1744,20 @@ impl App {
 
             let texture_view = texture_view.unwrap_or_else(|| renderer.get_fractal_texture_view());
 
-            self.egui_layer.register_fractal_texture(
-                &self.gpu.device,
-                texture_view,
-                self.fractal_viewport_size.0,
-                self.fractal_viewport_size.1,
-            );
+            let upscaled = self
+                .upscale
+                .output()
+                .filter(|_| render_scale::upscales((renderer.width, renderer.height), display_size));
+            if let Some((view, (w, h))) = upscaled {
+                self.egui_layer.register_fractal_texture(&self.gpu.device, view, w, h);
+            } else {
+                self.egui_layer.register_fractal_texture(
+                    &self.gpu.device,
+                    texture_view,
+                    self.fractal_viewport_size.0,
+                    self.fractal_viewport_size.1,
+                );
+            }
         }
 
         // Snapshot the unified export status for the progress bar, and drain
@@ -1978,7 +1994,13 @@ impl App {
             // hit max_iterations can leave the UI sleeping mid-resize
             // (browser stops firing winit events for a beat, ui_active
             // times out, and the post-resize compute frame never runs).
-            self.viewport_resize_pending = viewport_size != self.fractal_viewport_size;
+            // A new size to render at, too: the render scale's setting, the
+            // physical-pixel one, or a mode that renders at another
+            // (render_scale.rs).
+            let render_size = self.render_size_for(viewport_size);
+            let rendered = self.flame_renderer.as_ref().map(|r| (r.width, r.height));
+            self.viewport_resize_pending =
+                viewport_size != self.fractal_viewport_size || rendered.is_some_and(|r| r != render_size);
 
             #[cfg(target_arch = "wasm32")]
             let should_resize = {
@@ -1994,8 +2016,15 @@ impl App {
             let should_resize = self.viewport_resize_pending;
 
             if should_resize {
-                log::info!("Fractal viewport resize: {:?} → {:?}", self.fractal_viewport_size, viewport_size);
+                log::info!(
+                    "Fractal viewport resize: {:?} → {:?}, rendered at {:?}",
+                    self.fractal_viewport_size,
+                    viewport_size,
+                    render_size
+                );
                 self.fractal_viewport_size = viewport_size;
+                // From here on, the size is the render's.
+                let viewport_size = render_size;
 
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -2326,6 +2355,10 @@ impl App {
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
         let use_overwrite = self.should_use_overwrite();
+        // What the picture is shown at, and how it is drawn up to it
+        // (render_scale.rs): read before the renderer is borrowed too.
+        let display_size = self.display_size();
+        let upscaler = self.config_manager.system_settings().upscaler;
         // Read before the renderer is borrowed: the simulation driver
         // below needs it and the method takes `&self`.
         #[cfg(feature = "engine-sim")]
@@ -3522,6 +3555,27 @@ impl App {
             } else if color_effect_count > 0 {
                 // Effects are enabled in config but didn't run - log why
                 log::warn!("Config has {} enabled color effects but run_color_effects returned false", color_effect_count);
+            }
+
+            // Rendered below the display's size (render_scale.rs): drawn up
+            // to it, for egui to show 1:1.
+            if render_scale::upscales((renderer.width, renderer.height), display_size) {
+                let shown = if effects_ran { self.effect_chain.get_color_output() } else { None }
+                    .unwrap_or_else(|| renderer.get_fractal_texture_view());
+                self.upscale.run(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut render_encoder,
+                    shown,
+                    (renderer.width, renderer.height),
+                    display_size,
+                    upscaler,
+                );
+                if let Some((view, (w, h))) = self.upscale.output() {
+                    self.egui_layer.register_fractal_texture(&self.gpu.device, view, w, h);
+                }
+            } else {
+                self.upscale.release();
             }
         }
 

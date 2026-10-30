@@ -10,6 +10,7 @@ pub mod sticky;
 pub mod dof_pass;
 pub mod density_stats;
 pub mod thumbnail;
+pub mod upscale;
 #[cfg(test)]
 pub(crate) mod density_gates;
 #[cfg(test)]

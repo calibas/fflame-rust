@@ -1601,6 +1601,9 @@ impl EguiLayer {
             is_paused: *paused,
             frame_governor: config_manager.system_settings().frame_governor,
             manual_workgroups: config_manager.system_settings().manual_workgroups,
+            render_scale: config_manager.system_settings().render_scale,
+            upscaler: config_manager.system_settings().upscaler,
+            render_physical_pixels: config_manager.system_settings().render_physical_pixels,
             render_mode: config_manager.config().render_mode,
             fly_available: crate::ui::visibility::fly_mode(crate::camera::gesture::view_kind(config_manager.config())).is_show(),
             tonemap_mode: config_manager.config().tonemap_mode,
@@ -2503,6 +2506,23 @@ impl EguiLayer {
 
         if let Some(w) = menu_actions.rendering.set_manual_workgroups {
             let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemManualWorkgroups, w.into());
+        }
+
+        // The viewport's render scale: read by the app each frame, which
+        // resizes the renderer when the size it asks for changes.
+        let rendering = &menu_actions.rendering;
+        if rendering.set_render_scale.is_some() || rendering.set_upscaler.is_some() || rendering.set_render_physical_pixels.is_some() {
+            let settings = config_manager.system_settings_mut();
+            if let Some(scale) = rendering.set_render_scale {
+                settings.render_scale = scale;
+            }
+            if let Some(filter) = rendering.set_upscaler {
+                settings.upscaler = filter;
+            }
+            if let Some(on) = rendering.set_render_physical_pixels {
+                settings.render_physical_pixels = on;
+            }
+            let _ = settings.save();
         }
 
         if menu_actions.rendering.reset_to_defaults {

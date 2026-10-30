@@ -319,6 +319,24 @@ engine's passes, so not before it is needed.
 and *Upscaler*, so each rung can be judged by eye before anything
 automatic uses it.
 
+**As built (2026-10-30).** `SystemSettings::render_scale`, `upscaler`
+(Catmull-Rom by default) and `render_physical_pixels` (D1's setting),
+above the Rendering menu's chaos-game rows so they act in escape-time
+too. `app/render_scale.rs` turns the viewport's points into two sizes:
+the display's (points times `pixels_per_point`) and the render's (points,
+or the display's with physical pixels on, times the scale). The renderer,
+the effect chain and every engine drawn through it render at the second;
+`renderer::upscale` draws the tail's last picture (the colour effects'
+output or the fractal texture) up to the first, and egui shows it 1:1.
+When the two sizes are one, as at 100% on a 1x screen, the pass does not
+run. A simulation renders at the viewport's points whatever the setting
+(`Control::RenderScale` greys the rows there): a bound grid's cells
+follow that size, and its grid scale is its render scale. The upscale is
+on the 8-bit tone-mapped picture, as egui's own filter was. Export with
+Background and Transparent render at `image_size` as before; Export
+Current Image saves the picture as rendered, so at 50% it is half the
+size. The path query's pixel is mapped into the renderer's pixels.
+
 ## The governor
 
 **One governor** (`app/governor.rs`): the target, the context, the
@@ -551,8 +569,10 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    batch is nearly a frame's work (the user's 3,600 iterations a
    thread, a heavy flame), not at the default 256. The antialiasing
    governor's hunting is left to the governor too, which replaces it.
-3. **Render scale + Catmull-Rom upscale**, manual, in every engine; the
-   effects' pixel scaling; the readout. For simulations: **the active
+3. **Render scale + Catmull-Rom upscale**, manual, in every engine
+   (built 2026-10-30: *As built*); the effects' pixel scaling (next);
+   the readout (the menu shows the setting; a governed frame's readout
+   is the governor's). For simulations: **the active
    run's letterbox**, which on its own stops a resize or full screen from
    restarting a live run; then **the field resampler**, which makes the
    scale slider do what its docs say, before the governor uses it.
