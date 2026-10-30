@@ -165,7 +165,7 @@ pub(crate) fn readout(in_use: u32, requested: u32, governed: bool, ceiling: u32)
     } else {
         crate::ui::AaReason::Size
     });
-    crate::ui::EscapeAa { in_use, requested, reason }
+    crate::ui::EscapeAa { in_use, requested, reason, scale: 1.0 }
 }
 
 #[cfg(test)]

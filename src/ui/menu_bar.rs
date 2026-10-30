@@ -232,6 +232,32 @@ pub fn render_menu_bar(
                 if let super::visibility::Vis::Grey(why) = scaling {
                     ui.weak(t!(why));
                 }
+                // The frame rate the quality governor holds while the
+                // picture moves (`TargetRate`).
+                {
+                    use crate::storage::settings::TargetRate;
+                    let label = |r: TargetRate| match r {
+                        TargetRate::Display => t!("menu.target_rate_display").to_string(),
+                        TargetRate::Animation => t!("menu.target_rate_animation", fps = menu_state.export_fps).to_string(),
+                        TargetRate::Fixed(f) => format!("{f:.0}"),
+                    };
+                    ui.menu_button(
+                        format!("{}: {} ({:.0} fps)", t!("menu.target_rate"), label(menu_state.target_rate), menu_state.target_fps_now),
+                        |ui| {
+                            rows_do_not_wrap(ui);
+                            let rates = [TargetRate::Display, TargetRate::Animation]
+                                .into_iter()
+                                .chain(TargetRate::FIXED.iter().map(|f| TargetRate::Fixed(*f)));
+                            for r in rates {
+                                if ui.radio(menu_state.target_rate == r, label(r)).clicked() {
+                                    menu_actions.rendering.set_target_rate = Some(r);
+                                }
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_text(t!("menu.tooltip_target_rate"));
+                }
                 ui.separator();
                 if !chaos_game {
                     ui.weak(t!(super::visibility::CHAOS_GAME));

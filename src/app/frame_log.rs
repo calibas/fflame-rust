@@ -13,12 +13,14 @@
 //! For a scripted run (`scripts/governor_playback.py`), two more:
 //! `FFLAME_FRAME_LOG_OPEN` opens an `.anim` (and plays it) or an
 //! `.fflame` on the first frame, and `FFLAME_FRAME_LOG_SECONDS` quits that
-//! many seconds after it.
+//! many seconds after it. `FFLAME_FRAME_LOG_RENDER_SCALE` renders at that
+//! scale for the run, in place of the saved setting, which it does not
+//! touch: a measurement needs a known ceiling.
 
 use std::collections::VecDeque;
 use std::io::Write;
 
-use crate::gpu::timer::{FrameTiming, FrameTimer};
+use crate::gpu::timer::FrameTiming;
 
 /// Frames a row waits for its GPU times.
 const GPU_WAIT: u64 = 16;
@@ -48,6 +50,18 @@ pub(crate) struct FrameState {
     /// The escape image shown is part-drawn: a chunk of a picture that
     /// is not settled yet, with no finished one held up in its place.
     pub escape_partial: bool,
+    /// An escape picture settled this frame.
+    pub escape_done: bool,
+    /// The quality governor (app/governor.rs): escape-time's rung (its
+    /// place on the ladder, 0 the best), the last picture it observed (GPU
+    /// ms, frames), and the fixed part of the cost it has learned.
+    pub gov_rung: usize,
+    pub gov_picture: Option<(f64, u64)>,
+    pub gov_fixed: f64,
+    /// The frame budget the governor holds to, ms, and the display's
+    /// refresh as the platform reports it, Hz.
+    pub gov_budget_ms: f64,
+    pub refresh_hz: f64,
     /// The escape renderer's supersampling in use, 0 without one.
     pub escape_ss: u32,
     /// The governor's batch scale.
@@ -58,6 +72,15 @@ pub(crate) struct FrameState {
 }
 
 impl super::App {
+    /// The render scale chosen in the Rendering menu, or a scripted run's
+    /// (`FFLAME_FRAME_LOG_RENDER_SCALE`).
+    pub(super) fn user_render_scale(&self) -> f32 {
+        self.frame_log
+            .as_ref()
+            .and_then(|l| l.render_scale)
+            .unwrap_or(self.config_manager.system_settings().render_scale)
+    }
+
     /// The scripted run's part of a frame, after the frame's row: on the
     /// first frame the settings' sidecar and the file opened (an
     /// animation played from its start); then the quit.
@@ -74,7 +97,7 @@ impl super::App {
                 "manual_workgroups": s.manual_workgroups,
                 "iterations_per_thread": s.iterations_per_thread,
                 "burn_in": s.burn_in,
-                "gpu_times": log.timer.is_some(),
+                "gpu_times": log.timed,
             });
             let _ = std::fs::write(format!("{}.json", log.path), serde_json::to_string_pretty(&sidecar).unwrap_or_default());
             let Some(path) = log.open.clone() else { return };
@@ -128,6 +151,12 @@ impl super::App {
             interacting: (self.use_overwrite_next_frame && !self.animation_controller.is_playing()) || preview,
             escape_partial: self.escape_dirty
                 && self.escape_renderer.as_ref().is_some_and(|e| e.presented_view().is_none()),
+            escape_done: self.governor.pictures.iter().any(|p| p.last == self.frame_index),
+            gov_rung: self.governor.escape.rung_index(),
+            gov_picture: self.governor.last_picture,
+            gov_fixed: self.governor.escape.fixed(),
+            gov_budget_ms: self.governor.capped.unwrap_or(self.governor_budget_ms()),
+            refresh_hz: self.display_refresh_mhz.map_or(0.0, |m| m as f64 / 1000.0),
             escape_ss: self.escape_renderer.as_ref().map_or(0, |e| e.effective_supersample()),
             iter_scale: self.iter_scale,
             sim_grid,
@@ -150,7 +179,9 @@ pub(crate) struct FrameLog {
     out: std::io::BufWriter<std::fs::File>,
     start: web_time::Instant,
     frame: u64,
-    timer: Option<FrameTimer>,
+    /// Whether the app's frame timer runs: rows wait for their GPU times
+    /// only then.
+    timed: bool,
     pending: VecDeque<Row>,
     /// This frame's flame dispatch, until the frame's row is made.
     flame: Option<(u32, u32, u64)>,
@@ -158,11 +189,13 @@ pub(crate) struct FrameLog {
     open: Option<String>,
     seconds: Option<f64>,
     opened_at: Option<web_time::Instant>,
+    /// The run's render scale, in place of the setting's.
+    render_scale: Option<f32>,
 }
 
 impl FrameLog {
     /// The log `FFLAME_FRAME_LOG` asks for, if it does and the file opens.
-    pub(super) fn from_env(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+    pub(super) fn from_env(timed: bool) -> Option<Self> {
         let path = std::env::var("FFLAME_FRAME_LOG").ok().filter(|p| !p.is_empty())?;
         let file = match std::fs::File::create(&path) {
             Ok(f) => f,
@@ -175,39 +208,29 @@ impl FrameLog {
         let _ = writeln!(
             out,
             "frame,t_ms,interval_ms,cpu_ms,ui_cpu_ms,acquire_ms,present_ms,gpu_ui_ms,gpu_engine_ms,mode,view_w,view_h,\
-             render_w,render_h,playing,interacting,escape_ss,escape_partial,iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
+             render_w,render_h,playing,interacting,escape_ss,escape_partial,escape_done,gov_rung,gov_picture_ms,gov_picture_frames,gov_fixed,gov_budget_ms,refresh_hz,\
+             iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
         );
-        let timer = FrameTimer::new(device, queue);
         log::info!(
             "Frame log: {path}{}",
-            if timer.is_some() { "" } else { " (no GPU times: the device cannot time passes)" }
+            if timed { "" } else { " (no GPU times: the device cannot time passes)" }
         );
         Some(Self {
             path,
             out,
             start: web_time::Instant::now(),
             frame: 0,
-            timer,
+            timed,
             pending: VecDeque::new(),
             flame: None,
             open: std::env::var("FFLAME_FRAME_LOG_OPEN").ok().filter(|p| !p.is_empty()),
             seconds: std::env::var("FFLAME_FRAME_LOG_SECONDS").ok().and_then(|s| s.parse().ok()),
             opened_at: None,
+            render_scale: std::env::var("FFLAME_FRAME_LOG_RENDER_SCALE")
+                .ok()
+                .and_then(|s| s.parse::<f32>().ok())
+                .filter(|s| s.is_finite() && *s > 0.0),
         })
-    }
-
-    /// The frame's first encoder is made.
-    pub(super) fn begin(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(t) = self.timer.as_mut() {
-            t.begin(encoder, self.frame);
-        }
-    }
-
-    /// The UI's paint is recorded, before its encoder is submitted.
-    pub(super) fn ui_done(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(t) = self.timer.as_mut() {
-            t.ui_done(encoder);
-        }
     }
 
     /// The flame dispatched this frame.
@@ -215,33 +238,24 @@ impl FrameLog {
         self.flame = Some((workgroups, ipt, samples));
     }
 
-    /// The engine's last encoder is recorded, before it is submitted.
-    pub(super) fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(t) = self.timer.as_mut() {
-            t.end(encoder);
-        }
-    }
-
-    /// The frame is submitted and presented: its row, and every row whose
-    /// GPU times are in (or will not come).
-    pub(super) fn finish(&mut self, state: FrameState) {
+    /// The frame (the app's `frame`) is submitted and presented: its row,
+    /// and every row whose GPU times are in (`timings`, the frames the
+    /// frame timer has heard back from) or will not come.
+    pub(super) fn finish(&mut self, state: FrameState, frame: u64, timings: &[FrameTiming]) {
         self.pending.push_back(Row {
-            frame: self.frame,
+            frame,
             t_ms: self.start.elapsed().as_secs_f64() * 1000.0,
             state,
             flame: self.flame.take(),
             gpu: None,
         });
-        if let Some(t) = self.timer.as_mut() {
-            for timing in t.collect() {
-                if let Some(row) = self.pending.iter_mut().find(|r| r.frame == timing.frame) {
-                    row.gpu = Some(timing);
-                }
+        for timing in timings {
+            if let Some(row) = self.pending.iter_mut().find(|r| r.frame == timing.frame) {
+                row.gpu = Some(*timing);
             }
         }
-        let timed = self.timer.is_some();
         while let Some(row) = self.pending.front() {
-            if timed && row.gpu.is_none() && self.frame - row.frame < GPU_WAIT {
+            if self.timed && row.gpu.is_none() && frame - row.frame < GPU_WAIT {
                 break;
             }
             let row = self.pending.pop_front().unwrap();
@@ -259,7 +273,7 @@ impl FrameLog {
         });
         let _ = writeln!(
             self.out,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.2},{:.4},{},{},{},{},{},{}",
             r.frame,
             r.t_ms,
             s.interval_ms,
@@ -278,6 +292,13 @@ impl FrameLog {
             u8::from(s.interacting),
             s.escape_ss,
             u8::from(s.escape_partial),
+            u8::from(s.escape_done),
+            s.gov_rung,
+            opt(s.gov_picture.map(|p| p.0)),
+            s.gov_picture.map_or(String::new(), |p| p.1.to_string()),
+            s.gov_fixed,
+            s.gov_budget_ms,
+            s.refresh_hz,
             s.iter_scale,
             wg,
             ipt,

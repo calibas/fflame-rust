@@ -11,6 +11,7 @@ mod texture_sync;
 mod aa_governor;
 mod motion_blur;
 mod frame_log;
+mod governor;
 mod render_scale;
 #[cfg(feature = "engine-sim")]
 mod sim_lock;
@@ -638,6 +639,14 @@ pub struct App {
     pub(super) fractal_viewport_size: (u32, u32),
     /// The frame log (`FFLAME_FRAME_LOG`; frame_log.rs), when asked for.
     pub(super) frame_log: Option<frame_log::FrameLog>,
+    /// Each frame's GPU time for the UI and for the engine
+    /// (`gpu::timer::FrameTimer`), while the device can time passes: what
+    /// the quality governor measures (governor.rs), and the frame log logs.
+    pub(super) frame_timer: Option<crate::gpu::timer::FrameTimer>,
+    /// The frames rendered: the frame timer's index for each.
+    pub(super) frame_index: u64,
+    /// The quality governor's rungs, costs and pictures (governor.rs).
+    pub(super) governor: governor::GovernorState,
     /// The picture drawn up to the display's size when it renders below
     /// it (render_scale.rs, `renderer::upscale`).
     pub(super) upscale: crate::renderer::upscale::Upscale,
@@ -981,6 +990,9 @@ impl App {
             viewport_resize_pending: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             frame_log: None,
+            frame_timer: None,
+            frame_index: 0,
+            governor: Default::default(),
             upscale: Default::default(),
             #[cfg(target_arch = "wasm32")]
             last_viewport_resize_time: None,
@@ -1049,7 +1061,8 @@ impl App {
             last_health_check: None,
         };
 
-        app.frame_log = frame_log::FrameLog::from_env(&app.gpu.device, &app.gpu.queue);
+        app.frame_timer = crate::gpu::timer::FrameTimer::new(&app.gpu.device, &app.gpu.queue);
+        app.frame_log = frame_log::FrameLog::from_env(app.frame_timer.is_some());
 
         // Register live audio capture as a signal producer so live_* signals
         // appear in the animation track signal dropdown
@@ -1720,8 +1733,8 @@ impl App {
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
-        if let Some(log) = self.frame_log.as_mut() {
-            log.begin(&mut encoder);
+        if let Some(timer) = self.frame_timer.as_mut() {
+            timer.begin(&mut encoder, self.frame_index);
         }
 
         // ============================================================================
@@ -2128,8 +2141,8 @@ impl App {
         // Submit UI rendering (must happen before we start processing responses)
         let t_submit = Instant::now();
 
-        if let Some(log) = self.frame_log.as_mut() {
-            log.ui_done(&mut encoder);
+        if let Some(timer) = self.frame_timer.as_mut() {
+            timer.ui_done(&mut encoder);
         }
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
@@ -2362,6 +2375,26 @@ impl App {
         // renders, and the picture it last drew stays on screen.
         let frozen = self.freeze_viewport();
 
+        // The quality governor's rung for escape-time this frame (governor.rs):
+        // None in a still, a terrain, a path-traced solid, another mode.
+        let escape_rung = {
+            let c = self.config_manager.active_config();
+            let solid = crate::escape::ifs::formula_is_solid(&c.escape.formula);
+            let governable = c.render_mode == crate::scene::transforms::RenderMode::Escape
+                && !c.escape.terrain_active()
+                && !(solid && c.escape.solid_tier != crate::config::escape::RenderTier::Lit);
+            let (ss, user_scale) = (c.escape.supersample, self.user_render_scale());
+            if governable {
+                // The budget is the display's refresh (`governor_budget_ms`):
+                // asked of the platform every so often.
+                refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
+                self.govern_escape(ss, solid, user_scale)
+            } else {
+                self.govern_escape_off();
+                None
+            }
+        };
+
         // Single config read after all updates are complete
         let final_config = self.config_manager.active_config();
 
@@ -2537,9 +2570,18 @@ impl App {
                     renderer.height,
                     final_config.escape.supersample,
                 );
-                let aa_governed = self.animation_controller.is_playing()
-                    && self.config_manager.system_settings().frame_governor;
-                let aa_factor = if aa_governed {
+                // The quality governor's rung (governor.rs). Without a GPU
+                // timer, playback falls back to the antialiasing governor
+                // (aa_governor.rs), which reads dropped frames.
+                let aa_governed = escape_rung.is_some()
+                    || (self.frame_timer.is_none()
+                        && self.animation_controller.is_playing()
+                        && self.config_manager.system_settings().frame_governor);
+                let aa_factor = if let Some(rung) = escape_rung {
+                    self.escape_aa.release();
+                    self.escape_aa_settled_at = None;
+                    rung.supersample.min(aa_ceiling)
+                } else if aa_governed {
                     refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
                     self.escape_aa.factor(aa_ceiling)
                 } else {
@@ -2561,12 +2603,17 @@ impl App {
                 );
                 // The viewport's corner says what it is drawn at, and why
                 // that is below the setting when it is.
-                self.egui_layer.update_escape_aa(Some(aa_governor::readout(
+                let mut readout = aa_governor::readout(
                     escape.effective_supersample(),
                     final_config.escape.supersample,
                     aa_governed,
                     aa_ceiling,
-                )));
+                );
+                if let Some(rung) = escape_rung.filter(|r| r.scale < 1.0) {
+                    readout.scale = rung.scale;
+                    readout.reason = Some(crate::ui::AaReason::Governor);
+                }
+                self.egui_layer.update_escape_aa(Some(readout));
                 // Motion blur (motion_blur.rs): a new frame while it plays
                 // starts its moments in the accumulation. Stopped or
                 // paused, the sharp frame at the playhead is drawn again.
@@ -2696,6 +2743,11 @@ impl App {
                     self.escape_dirty = false;
                 }
                 if self.escape_dirty {
+                    // The frames a picture takes, for the governor's measure
+                    // of its GPU cost (governor.rs).
+                    if self.governor.picture_from.is_none() {
+                        self.governor.picture_from = Some(self.frame_index);
+                    }
                     let settled = escape.render(
                         &self.gpu.device,
                         &self.gpu.queue,
@@ -2720,6 +2772,15 @@ impl App {
                         escape.present_accumulation(&self.gpu.device, &mut render_encoder);
                     } else if done && hold {
                         escape.present_output(&self.gpu.device, &mut render_encoder);
+                    }
+                    if done {
+                        if let Some(first) = self.governor.picture_from.take() {
+                            self.governor.pictures.push_back(governor::Picture {
+                                first,
+                                last: self.frame_index,
+                                governed: escape_rung.is_some(),
+                            });
+                        }
                     }
                     // Progressive deep zoom: an unsettled frame keeps
                     // the dirty flag so the next frame re-renders with
@@ -3626,8 +3687,8 @@ impl App {
         // Submit rendering commands
         let t_submit = Instant::now();
 
-        if let Some(log) = self.frame_log.as_mut() {
-            log.end(&mut render_encoder);
+        if let Some(timer) = self.frame_timer.as_mut() {
+            timer.end(&mut render_encoder);
         }
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
@@ -3840,15 +3901,32 @@ impl App {
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
+        // The GPU's times of the frames a few back (`FrameTimer`): the
+        // governor's measure and the frame log's.
+        let timings = self.frame_timer.as_mut().map(|t| t.collect()).unwrap_or_default();
+        {
+            // The frame's own CPU time, without its waits for the surface:
+            // a frame the CPU holds up is not shed for.
+            let own = render_start.elapsed().as_secs_f64() * 1000.0 - acquire_ms - t5.elapsed().as_secs_f64() * 1000.0;
+            let g = &mut self.governor;
+            g.cpu_ms += 0.2 * (own.max(0.0) - g.cpu_ms);
+            g.frame_interval(delta_time * 1000.0);
+        }
+        let budget_ms = self.governor_budget_ms();
+        if self.governor.take_timings(&timings, self.frame_index, budget_ms) {
+            self.window.request_redraw();
+        }
+        self.egui_layer.set_governor_fps((1000.0 / self.governor.capped.unwrap_or(budget_ms)) as f32);
         if self.frame_log.is_some() {
             let mut state = self.frame_state(delta_time * 1000.0, render_start.elapsed().as_secs_f64() * 1000.0, ui_cpu_ms);
             state.acquire_ms = acquire_ms;
             state.present_ms = t5.elapsed().as_secs_f64() * 1000.0;
             if let Some(log) = self.frame_log.as_mut() {
-                log.finish(state);
+                log.finish(state, self.frame_index, &timings);
             }
             self.frame_log_drive();
         }
+        self.frame_index += 1;
 
         // Save current low-density state for next frame's brightness decision
         // (matches ping-pong buffer timing - tonemap reads previous frame's buffer)
