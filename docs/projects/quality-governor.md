@@ -1,6 +1,7 @@
 # The quality governor: a target frame rate, render scale, upscaling
 
-**Status:** planned 2026-10-29, not started. All seven decisions taken
+**Status:** phase 1 measured 2026-10-29 (*Results*), but for allocation
+cost; the faults it found are next (order of work, item 2). All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -76,9 +77,9 @@ candidates:
 
 | Engine | Rungs, roughly in order |
 |---|---|
-| Escape 2D | supersampling down to 1x, then render scale 75%, 50% |
-| Escape solid (mode D) | as 2D; the stride-2 preview becomes the 50% rung |
-| Flames | render scale, chosen by samples a pixel (below) |
+| Escape 2D | supersampling down to 2x, then render scale 75%, 50%, then 1x (measured: *Results*) |
+| Escape solid (mode D) | 1x, then 75%, 50%; the stride-2 preview becomes the 50% rung. 2x and above render the same picture as 2x, so 2x is the ceiling that matters |
+| Flames | render scale below about 2 samples a display pixel a frame in 2D, 16 in 3D (*Results*) |
 | Terrain | render scale for the lit passes; section detail while moving |
 | Simulation | a bound grid's field scale, down to 12.5%, chosen when playback starts and held (below); never a fixed grid |
 
@@ -400,22 +401,135 @@ measured on its first frames and then locked, is D3.
    cells is the assumption; spectral models (`sim::spectral`) and
    multi-layer couplings may not follow it.
 
+The tools (TESTING-GUIDE.md §5, *Frame cost in the app*): the frame log
+(`src/app/frame_log.rs`, `FFLAME_FRAME_LOG`), the calibration
+(`renderer::calibration::governor_calibration`), the scenes
+(`scripts/governor_scenes.py`), the playback runner
+(`scripts/governor_playback.py`) and the metrics.
+
+### Results (2026-10-29, GTX 1660 SUPER)
+
+Items 1-4 and 6 are measured. Item 5, allocation, is not yet. The tables
+are in `output/governor/` (`calibration.csv`, `loss.csv`, `table.md`) and
+the logs in `output/governor/playback/`; both are gitignored, and the
+tools make them again. Loss is in levels of 255 against each scene's
+reference (6x supersampling; 1024 samples a pixel for flames): the mean
+(mae) and the 95th percentile of 16x16 blocks (p95), after a bilinear
+upscale.
+
+**The measure's bias.** Against a supersampled reference, a blurred
+picture scores better than an aliased one of the same detail. The numbers
+order rungs within an engine. They do not settle sharpness, or which
+upscaler looks best: the manual setting (order of work, item 3) is for
+judging that by eye.
+
+**Escape-time 2D: drop the scale before the supersampling.** At 1080p:
+
+| scene | ss2 100% | ss1 100% | ss2 75% | ss2 50% | ss1 50% |
+|---|---|---|---|---|---|
+| seahorse | 91 ms, 4.6 | 52 ms, 9.6 | 62 ms, 4.4 | 36 ms, 4.8 | 20 ms, 8.6 |
+| deep zoom (perturbed) | 357 ms, 12.9 | 137 ms, 27.2 | 232 ms, 12.8 | 116 ms, 14.2 | 59 ms, 25.1 |
+| newton (smooth) | 50 ms, 0.27 | 34 ms, 0.62 | 32 ms, 0.44 | 23 ms, 0.66 | 18 ms, 0.78 |
+
+2x at 50% costs less than 1x at 100% and loses half as much: aliasing
+loses more than resolution does. So the 2D ladder is supersampling down
+to 2x, then 75%, then 50%, and 1x last. Above 2x, the size cap decides:
+at 1080p the grid stops at 2x, and an export makes the rest up by
+accumulation. The calibration's 3x and 4x are the same picture (2x grid,
+2x2 accumulated), and the viewport, which does not accumulate, cannot
+have them at 1080p at all.
+
+**Mode D solids do not reach 60 fps on any rung.** At 1080p, lit: 1x
+225 ms, 1x at 50% 89 ms; 2x and above are one picture (loss 0.0 against
+the reference). In the app at 754x786, a picture took about 110 ms of
+GPU time. Two faults showed in playback:
+- **Half-drawn frames.** A picture renders in about four chunks over
+  frames (`escape_dirty` stays set until it settles), and the viewport
+  shows each one. The user saw "extremely choppy, with what looked like
+  half-drawn frames in between". The pattern repeats every 7 frames:
+  one with ~65 ms of CPU time and no GPU work, two nearly idle, four
+  chunks of 15-33 ms. About 7 pictures a second.
+- **The 65 ms frame.** Probably the next frame waiting for a surface
+  image while the GPU works through the chunks queued before it. Not
+  measured yet: the log now times the acquire and the present
+  (`acquire_ms`, `present_ms`) and marks part-drawn frames
+  (`escape_partial`), for the next run.
+
+**Flames: the scale wins only below about 2 samples a display pixel.**
+At the same sample count, 2D (plastic-sierpinski) at 1080p:
+
+| samples a display pixel | 100% | 75% | 50% |
+|---|---|---|---|
+| 0.25 | 26.1 | 22.0 | 21.9 |
+| 1 | 15.7 | 13.1 | 13.5 |
+| 4 | 10.0 | 10.1 | 11.8 |
+| 16 | 5.4 | 8.3 | 10.9 |
+| 64 | 2.7 | 7.6 | 10.6 |
+
+The 3D flame (bubble-3d) is softer, so its break-even is higher: 50% wins
+up to 16 samples a display pixel (7.0 against 8.5) and loses at 64 (6.4
+against 5.4). Below 1 sample, most of the loss is brightness: the
+export's Log tone map darkens a sparse picture. The app's live-preview
+boost corrects some of that, so the in-app break-even may be lower. At
+the same samples, a smaller scale is also faster (64 samples: 144, 120
+and 74 ms), as the histogram's atomics hit a smaller buffer. The
+harness's times include building the renderer and reading the picture
+back (about 25 ms of every 1080p flame row), so the per-sample cost is
+the difference between rows: about 0.77 ms per million samples at
+1080p.
+
+**Upscalers: small differences.** For escape-time, bilinear scores best
+by about 5% (blur, as above). For flames at 16 samples and more, bicubic
+and Lanczos beat bilinear by 5-10%. Neither result makes the case for
+Catmull-Rom as the default; judging it by eye does.
+
+**Simulations: cost goes with cells, as predicted.** ms a step at 1080p:
+Lenia 27, McCabe 4.3, SmoothLife 3.5, Physarum 1.1, Cahn-Hilliard 0.61,
+DLA 0.54, sandpile 0.39, Gray-Scott 0.31, cyclic CA 0.20. Per million
+cell-steps, Lenia holds 13.0-13.6 ms from 100% down to 18.75%, McCabe
+2.1-2.4 ms down to 37.5%, SmoothLife 1.6-1.7 ms down to 25%. Below that,
+a fixed per-step overhead takes over (~0.1 ms). The cheap models sit at
+the measurement's noise floor (one read negative), and need no
+governing at these sizes.
+
+**In the app today** (the user's layout: a 754x786 viewport in a
+1440x810 window; 60 Hz, vsync, `iterations_per_thread` 3600). Every
+scene but the solid holds 60 fps at this size. Two faults:
+- **Escape's antialiasing governor hunts.** In the zoom it probes 3x
+  about every 4 s and holds it for 8-11 frames at 23-36 ms (dropped
+  frames, a visible change of antialiasing), then steps back to 2x.
+  The user saw it ("Looked like AA changed in the middle"). 3x costs
+  about 2.2x what 2x does, so a governor that predicts from cost would
+  never try it.
+- **The flame's batch governor alternates.** At 3600 iterations a
+  thread the batch is ~29 million samples, ~16 ms of GPU time: the
+  budget's edge. The dispatch length flips between 3600 and 3130 almost
+  every frame, and frame intervals alternate between ~1 ms and ~32 ms
+  (44% over 25 ms). The median interval reads 60 fps; what the display
+  shows is uneven.
+
 ## Order of work
 
-1. **Measurement** (phase 1).
-2. **Render scale + Catmull-Rom upscale**, manual, in every engine; the
+1. **Measurement** (phase 1). Done but for allocation (its item 5) and
+   the solid's acquire wait; *Results*.
+2. **The faults phase 1 found**, each on its own: playback shows only
+   settled escape pictures (the last finished one stays up while the
+   next renders in chunks); the flame batch governor's alternation at
+   the budget's edge. The antialiasing governor's hunting is left to the
+   governor (item 5), which replaces it.
+3. **Render scale + Catmull-Rom upscale**, manual, in every engine; the
    effects' pixel scaling; the readout. For simulations: **the active
    run's letterbox**, which on its own stops a resize or full screen from
    restarting a live run; then **the field resampler**, which makes the
    scale slider do what its docs say, before the governor uses it.
-3. **FSR 1** as a second upscaler, judged against bicubic with the loss
+4. **FSR 1** as a second upscaler, judged against bicubic with the loss
    metric, and offered to simulations as a `SimUpscale` choice.
-4. **The governor**: GPU frame timing, the contexts, the target setting,
+5. **The governor**: GPU frame timing, the contexts, the target setting,
    the ladders. Escape first (it gains the most), then flames, terrains,
    simulations. The mode-D stride preview is replaced by the 50% rung,
    once that is shown to look as good or better.
-5. **Exports**: the fixed rungs in the video export and the CLI.
-6. **The web**: the fallback signal; tried in a browser.
+6. **Exports**: the fixed rungs in the video export and the CLI.
+7. **The web**: the fallback signal; tried in a browser.
 
 ## Decisions
 

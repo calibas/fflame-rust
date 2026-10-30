@@ -146,18 +146,30 @@ def summary(path):
         groups.setdefault(key, []).append(r)
 
     def col(rs, name):
-        return np.array([float(r[name]) for r in rs if r[name] != ''])
+        return np.array([float(r[name]) for r in rs if r.get(name, '') != ''])
 
-    print(f'{"mode":<15}{"view":<11}{"state":<20}{"frames":>7}{"fps":>7}'
-          f'{"cpu ms":>9}{"gpu ui":>8}{"gpu eng":>9}{"eng p95":>9}')
+    # fps is frames over the time they took: a median interval hides
+    # frames that alternate long and short. cpu is the frame's own work,
+    # its waits for the surface (acquire, present) taken out; `part` is
+    # the share of frames that showed a part-drawn escape picture.
+    print(f'{"mode":<15}{"view":<11}{"state":<20}{"frames":>7}{"fps":>7}{"int p95":>9}'
+          f'{"cpu ms":>8}{"acquire":>9}{"gpu ui":>8}{"gpu eng":>9}{"eng p95":>9}{"part":>6}')
     for key, rs in groups.items():
         interval = col(rs, 'interval_ms')
-        cpu, ui, eng = col(rs, 'cpu_ms'), col(rs, 'gpu_ui_ms'), col(rs, 'gpu_engine_ms')
-        fps = 1000.0 / np.median(interval) if len(interval) else 0.0
+        ui, eng = col(rs, 'gpu_ui_ms'), col(rs, 'gpu_engine_ms')
+        acquire = col(rs, 'acquire_ms')
+        cpu = col(rs, 'cpu_ms')
+        if len(acquire) == len(cpu):
+            cpu = cpu - acquire - col(rs, 'present_ms')
+        span = (float(rs[-1]['t_ms']) - float(rs[0]['t_ms'])) if len(rs) > 1 else 0.0
+        fps = 1000.0 * (len(rs) - 1) / span if span > 0 else 0.0
         med = lambda a: f'{np.median(a):.2f}' if len(a) else '-'
         p95 = lambda a: f'{np.percentile(a, 95):.2f}' if len(a) else '-'
+        part = col(rs, 'escape_partial')
+        part = f'{100 * part.mean():.0f}%' if len(part) else '-'
         state = ' '.join(k for k in key[2:] if k)
-        print(f'{key[0]:<15}{key[1]:<11}{state:<20}{len(rs):>7}{fps:>7.1f}{med(cpu):>9}{med(ui):>8}{med(eng):>9}{p95(eng):>9}')
+        print(f'{key[0]:<15}{key[1]:<11}{state:<20}{len(rs):>7}{fps:>7.1f}{p95(interval):>9}'
+              f'{med(cpu):>8}{med(acquire):>9}{med(ui):>8}{med(eng):>9}{p95(eng):>9}{part:>6}')
 
 
 def main():

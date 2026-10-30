@@ -1686,6 +1686,7 @@ impl App {
         // other non-success states bubble up as `RenderError` for
         // the event loop to handle.
         use egui_wgpu::wgpu::CurrentSurfaceTexture;
+        let t_acquire = Instant::now();
         let frame = match self.gpu.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(f) => f,
             CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -1695,6 +1696,7 @@ impl App {
             CurrentSurfaceTexture::Timeout => return Err(RenderError::Timeout),
             CurrentSurfaceTexture::Validation => return Err(RenderError::Validation),
         };
+        let acquire_ms = t_acquire.elapsed().as_secs_f64() * 1000.0;
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -3733,7 +3735,9 @@ impl App {
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
         if self.frame_log.is_some() {
-            let state = self.frame_state(delta_time * 1000.0, render_start.elapsed().as_secs_f64() * 1000.0, ui_cpu_ms);
+            let mut state = self.frame_state(delta_time * 1000.0, render_start.elapsed().as_secs_f64() * 1000.0, ui_cpu_ms);
+            state.acquire_ms = acquire_ms;
+            state.present_ms = t5.elapsed().as_secs_f64() * 1000.0;
             if let Some(log) = self.frame_log.as_mut() {
                 log.finish(state);
             }
