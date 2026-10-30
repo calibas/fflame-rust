@@ -299,6 +299,49 @@ fn a_resize_or_an_agent_model_starts_over() {
     assert!(r.will_reseed(&physarum), "agents are not carried");
 }
 
+/// `SimUpscale::Fsr`: the field coloured at a cell a pixel, then drawn up
+/// to the output by FSR (`fsr_size`). Finite and in range; the same
+/// picture as nearest on average (an upscale does not move its
+/// brightness), but not nearest's blocks; and a letterbox's bars still
+/// empty.
+#[test]
+fn fsr_draws_a_simulation_up_from_its_cells() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let shown = |upscale: crate::config::sim::SimUpscale, out: (u32, u32)| {
+        let mut cfg = small_config();
+        cfg.upscale = upscale;
+        let mut r = SimRenderer::new(&device, &cfg, out.0, out.1);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 400);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (r.fsr_size(&cfg), read_rgba32f(&device, &queue, r.output_texture(), out.0, out.1))
+    };
+    let (small, fsr) = shown(crate::config::sim::SimUpscale::Fsr, (256, 256));
+    assert_eq!(small, Some((64, 64)), "coloured at the grid's size");
+    let (_, nearest) = shown(crate::config::sim::SimUpscale::Nearest, (256, 256));
+    for (i, px) in fsr.iter().enumerate() {
+        assert!(px.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.5), "pixel {i}: {px:?}");
+    }
+    let mean = |f: &[[f32; 4]]| f.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / f.len() as f32;
+    let (a, b) = (mean(&fsr), mean(&nearest));
+    assert!((a - b).abs() <= 0.03 * b.max(1e-3), "FSR's mean {a} against nearest's {b}");
+    let differs = fsr.iter().zip(&nearest).filter(|(x, y)| (x[1] - y[1]).abs() > 0.01).count();
+    assert!(differs > fsr.len() / 20, "only {differs} pixels differ from nearest's blocks");
+
+    // A square grid in a wide picture: bars beside it, empty.
+    let (small, wide) = shown(crate::config::sim::SimUpscale::Fsr, (256, 128));
+    assert_eq!(small, Some((128, 64)));
+    for y in [0u32, 64, 127] {
+        let px = wide[(y * 256 + 4) as usize];
+        assert_eq!(px[3], 0.0, "a bar is empty at row {y}: {px:?}");
+    }
+}
+
 /// The field after a real run is a Gray–Scott field: finite, inside
 /// [0, 1], and actually patterned rather than uniform.
 #[test]

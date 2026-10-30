@@ -20,8 +20,12 @@
 //     HLSL's result there explicitly.
 //   - `FSR_RCAS_DENOISE` is on: flames are grainy, and sharpening grain
 //     makes more of it.
-//   - The input is the tone-mapped 8-bit picture, already in perceptual
-//     space as FSR expects, so `FsrRcasInputF` is the identity.
+//   - The viewport's input is the tone-mapped 8-bit picture, already in
+//     perceptual space as FSR expects, so its encodings (`fsr_in`,
+//     `fsr_out`) are the identity and `FsrRcasInputF` is too. A
+//     simulation's picture is linear and may pass 1: renderer/upscale.rs
+//     (`FsrTarget::Linear`) splices in an encoding into [0, 1) around the
+//     two passes, and an `rgba32float` target.
 //
 // Reference: https://github.com/GPUOpen-Effects/FidelityFX-FSR
 // (ffx-fsr/ffx_fsr1.h, ffx-fsr/ffx_a.h). License headers preserved below.
@@ -77,6 +81,11 @@ struct UpscaleParams {
 @group(0) @binding(1) var dst_tex: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> p: UpscaleParams;
 
+// The picture's encoding into EASU, and out of RCAS (identity here; see
+// the header).
+fn fsr_in(c: vec4<f32>) -> vec4<f32> { return c; }
+fn fsr_out(c: vec4<f32>) -> vec4<f32> { return c; }
+
 // ---- ffx_a.h --------------------------------------------------------------
 
 fn AMin3F1(x: f32, y: f32, z: f32) -> f32 { return min(x, min(y, z)); }
@@ -95,6 +104,11 @@ fn APrxLoRsqF1(a: f32) -> f32 { return bitcast<f32>(0x5f347d74u - (bitcast<u32>(
 
 fn fsr_tap(q: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
     return textureLoad(src_tex, clamp(q, vec2<i32>(0), size - vec2<i32>(1)), 0);
+}
+
+// EASU's taps, in its encoding.
+fn fsr_easu_tap(q: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+    return fsr_in(fsr_tap(q, size));
 }
 
 // Filtering for a given tap for the scalar.
@@ -203,18 +217,18 @@ fn easu_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     //  e f g h
     //  i j k l
     //    n o
-    let b = fsr_tap(f0 + vec2<i32>(0, -1), size);
-    let c = fsr_tap(f0 + vec2<i32>(1, -1), size);
-    let e = fsr_tap(f0 + vec2<i32>(-1, 0), size);
-    let f = fsr_tap(f0, size);
-    let g = fsr_tap(f0 + vec2<i32>(1, 0), size);
-    let h = fsr_tap(f0 + vec2<i32>(2, 0), size);
-    let i = fsr_tap(f0 + vec2<i32>(-1, 1), size);
-    let j = fsr_tap(f0 + vec2<i32>(0, 1), size);
-    let k = fsr_tap(f0 + vec2<i32>(1, 1), size);
-    let l = fsr_tap(f0 + vec2<i32>(2, 1), size);
-    let n = fsr_tap(f0 + vec2<i32>(0, 2), size);
-    let o = fsr_tap(f0 + vec2<i32>(1, 2), size);
+    let b = fsr_easu_tap(f0 + vec2<i32>(0, -1), size);
+    let c = fsr_easu_tap(f0 + vec2<i32>(1, -1), size);
+    let e = fsr_easu_tap(f0 + vec2<i32>(-1, 0), size);
+    let f = fsr_easu_tap(f0, size);
+    let g = fsr_easu_tap(f0 + vec2<i32>(1, 0), size);
+    let h = fsr_easu_tap(f0 + vec2<i32>(2, 0), size);
+    let i = fsr_easu_tap(f0 + vec2<i32>(-1, 1), size);
+    let j = fsr_easu_tap(f0 + vec2<i32>(0, 1), size);
+    let k = fsr_easu_tap(f0 + vec2<i32>(1, 1), size);
+    let l = fsr_easu_tap(f0 + vec2<i32>(2, 1), size);
+    let n = fsr_easu_tap(f0 + vec2<i32>(0, 2), size);
+    let o = fsr_easu_tap(f0 + vec2<i32>(1, 2), size);
     let bL = fsr_luma2(b.rgb);
     let cL = fsr_luma2(c.rgb);
     let iL = fsr_luma2(i.rgb);
@@ -348,5 +362,5 @@ fn rcas_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Resolve, which needs the medium precision rcp approximation to avoid visible tonality changes.
     let rcpL = APrxMedRcpF1(4.0 * lobe + 1.0);
     let pix = (lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL;
-    textureStore(dst_tex, sp, vec4<f32>(clamp(pix, vec3<f32>(0.0), vec3<f32>(1.0)), ee.a));
+    textureStore(dst_tex, sp, fsr_out(vec4<f32>(clamp(pix, vec3<f32>(0.0), vec3<f32>(1.0)), ee.a)));
 }
