@@ -2,8 +2,8 @@
 
 **Status:** phase 1 measured 2026-10-29 (*Results*), but for allocation
 cost. Of the faults it found, escape playback's part-drawn pictures are
-fixed (2026-10-30); the flame's uneven pacing is open (order of work,
-item 2). All seven decisions taken
+fixed (2026-10-30); the flame's uneven pacing goes to the governor
+(order of work, item 5). Render scale (item 3) is next. All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -544,11 +544,13 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    *Results*.
 2. **The faults phase 1 found**, each on its own. Done: playback shows
    only settled escape pictures (`EscapeRenderer::present_output`: the
-   last finished one stays up while the next renders in chunks). Open:
-   the flame batch governor's alternation at the budget's edge, which
-   needs the frame's GPU span (*The second run*). The antialiasing
-   governor's hunting is left to the governor (item 5), which replaces
-   it.
+   last finished one stays up while the next renders in chunks). The
+   flame batch governor's alternation at the budget's edge goes to the
+   governor (item 5), which measures the frame's GPU span anyway
+   (*The second run*); decided 2026-10-30. It shows only where a full
+   batch is nearly a frame's work (the user's 3,600 iterations a
+   thread, a heavy flame), not at the default 256. The antialiasing
+   governor's hunting is left to the governor too, which replaces it.
 3. **Render scale + Catmull-Rom upscale**, manual, in every engine; the
    effects' pixel scaling; the readout. For simulations: **the active
    run's letterbox**, which on its own stops a resize or full screen from
