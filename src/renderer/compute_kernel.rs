@@ -671,6 +671,11 @@ pub struct FlameRenderer {
     /// carries the counters and whether the fraction is read back.
     auto_exposure: bool,
     filter_radius: f32, // Spatial filter (Apo's `filter`): Gaussian sigma in pixels on histogram, 0 = off
+    /// Render pixels per logical viewport point (`set_pixel_scale`): the
+    /// viewport's render scale. Parameters in pixels (the spatial filter,
+    /// the shade pass's gap fill, the DoF cap) are in points, so they are
+    /// scaled by it as they are packed. 1 for every other renderer.
+    pixel_scale: f32,
     filter_blur_edges: f32, // Bilateral edge-handling [0..1]: 0 = preserve edges (default), 1 = uniform Gaussian
     background_r: f32, // Background color R (for depth fog)
     background_g: f32, // Background color G (for depth fog)
@@ -932,6 +937,7 @@ impl FlameRenderer {
             plan_in_task: cfg!(target_arch = "wasm32"),
             auto_exposure: false,
             filter_radius: 0.0,
+            pixel_scale: 1.0,
             filter_blur_edges: 0.0,
             background_r: 0.0,
             background_g: 0.0,
@@ -1623,7 +1629,13 @@ impl FlameRenderer {
             let standing_for = samples_this_frame as f64 * self.cylinder_iteration_scale();
             let mean_density_scaled = (standing_for as f32 / pixel_count) * HISTOGRAM_COLOR_SCALE;
             let density_sigma = mean_density_scaled * 100.0_f32.powf(2.0 * self.filter_blur_edges - 1.0);
-            self.buffers.update_histogram_blur_params(queue, self.width, self.height, self.filter_radius, density_sigma);
+            self.buffers.update_histogram_blur_params(
+                queue,
+                self.width,
+                self.height,
+                self.filter_radius * self.pixel_scale,
+                density_sigma,
+            );
 
             let workgroups_x = (self.width + 7) / 8;
             let workgroups_y = (self.height + 7) / 8;
@@ -1899,6 +1911,19 @@ impl FlameRenderer {
 
     pub fn get_accumulation_view(&self) -> &TextureView {
         self.buffers.current_accumulation_view()
+    }
+
+    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// render pixels per logical point, for the parameters measured in
+    /// pixels. A change re-runs the DoF on the next frame.
+    pub fn set_pixel_scale(&mut self, s: f32) {
+        let s = if s.is_finite() && s > 0.0 { s } else { 1.0 };
+        if s != self.pixel_scale {
+            self.pixel_scale = s;
+            self.dof_dirty = true;
+        }
+        self.shade_pass.set_pixel_scale(s);
+        self.dof_pass.set_pixel_scale(s);
     }
 
     /// Solid-rendering shade pass (Phase 1). Dispatches when lighting is

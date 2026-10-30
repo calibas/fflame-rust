@@ -45,6 +45,9 @@ pub struct DofPass {
     /// Lazily (re)created full-image textures [CoC field, max scratch,
     /// max-reach field, output]; sized (w, h) when present.
     texs: Option<(u32, u32, [(Texture, TextureView); 4])>,
+    /// Render pixels per logical viewport point (`set_pixel_scale`): the
+    /// blur's cap, `MAX_RADIUS`, is in points. 1 for the exporters.
+    pixel_scale: f32,
 }
 
 impl DofPass {
@@ -183,7 +186,15 @@ impl DofPass {
             params_v: mk_params("DoF Params V"),
             params_coc: mk_params("DoF Params CoC"),
             texs: None,
+            pixel_scale: 1.0,
         }
+    }
+
+    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// render pixels per logical point. The circle of confusion is
+    /// relative to the picture already; only its cap is in pixels.
+    pub fn set_pixel_scale(&mut self, s: f32) {
+        self.pixel_scale = if s.is_finite() && s > 0.0 { s } else { 1.0 };
     }
 
     fn ensure_texs(&mut self, device: &Device, width: u32, height: u32) {
@@ -241,7 +252,7 @@ impl DofPass {
             width,
             height,
             depth_word_offset,
-            radius: MAX_RADIUS,
+            radius: ((MAX_RADIUS as f32 * self.pixel_scale).round() as u32).max(1),
             focus,
             coc_scale,
             surface_thickness,

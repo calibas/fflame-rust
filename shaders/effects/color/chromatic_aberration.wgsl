@@ -11,7 +11,11 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    // Render pixels per logical viewport point (the viewport's render
+    // scale; 1 everywhere else): this effect's sizes in pixels are in
+    // points, so they are multiplied by it.
+    _density_mean: f32,
+    pixel_scale: f32,
 }
 
 fn get_param(index: u32) -> f32 {
@@ -41,7 +45,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let amount = get_param(0u);
+    let amount = get_param(0u) * effect_params.pixel_scale;
     let radial = get_param(1u);
     let intensity = get_param(2u);
     let blend_mode = i32(get_param(3u));

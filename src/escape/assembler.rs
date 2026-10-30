@@ -74,6 +74,9 @@ struct EscapeParams {
     // A folding formula's crease settings (CreaseSettings::to_gpu): the
     // decay, the pattern, the flip as a sign, the terrain's reach.
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -433,13 +436,14 @@ fn esc_palette(t: f32) -> vec3<f32> {
     return pow(max(esc_palette_srgb(t), vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 
-// The supersample factor (EscapeParams.flags bits 4-7). A "pixel" to a
+// Render pixels per output pixel (EscapeParams.px_scale): the
+// supersample factor, times the viewport's render scale. A "pixel" to a
 // colouring or the relief is an OUTPUT pixel, as Fraktaler 3 measures
 // its distance estimate: `params.height` counts render pixels, each
 // 1/supersample of one, and measuring in those would move the colours
-// when antialiasing is turned on.
+// when antialiasing is turned on, or the render scale lowered.
 fn esc_supersample() -> f32 {
-    return f32(max((params.flags >> 4u) & 15u, 1u));
+    return params.px_scale;
 }
 
 // Output pixels per unit of the plane.
@@ -1781,6 +1785,9 @@ struct EscapeParams {
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 struct PerturbParams {
@@ -2328,6 +2335,9 @@ struct EscapeParams {
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 struct PerturbParams {
@@ -6087,6 +6097,9 @@ struct EscapeParams {
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 struct IterResult {
@@ -6413,6 +6426,9 @@ struct EscapeParams {
     // CPU-derived formula data — see the direct template's header.
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -6571,6 +6587,9 @@ struct EscapeParams {
     // `escape::ifs::pack_globals` for the layout.
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;
@@ -7386,6 +7405,9 @@ struct EscapeParams {
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 struct IfsRecord {
@@ -7569,6 +7591,9 @@ struct EscapeParams {
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 struct IfsRecord {
@@ -7792,6 +7817,9 @@ struct EscapeParams {
     lparams: array<vec4<f32>, 4>,
     fdata: array<vec4<f32>, 64>,
     crease: vec4<f32>,
+    // Render pixels per output pixel: the supersample factor times the
+    // viewport's render scale (`esc_supersample`).
+    px_scale: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: EscapeParams;

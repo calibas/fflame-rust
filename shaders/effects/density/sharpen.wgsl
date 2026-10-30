@@ -11,7 +11,11 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    // Render pixels per logical viewport point (the viewport's render
+    // scale; 1 everywhere else): this effect's sizes in pixels are in
+    // points, so they are multiplied by it.
+    _density_mean: f32,
+    pixel_scale: f32,
 }
 // Helper to get parameter by index
 fn get_param(index: u32) -> f32 {
@@ -52,7 +56,7 @@ fn gaussian(x: f32, sigma: f32) -> f32 {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Get parameters
     let amount = get_param(0u);
-    let radius = get_param(1u);
+    let radius = get_param(1u) * effect_params.pixel_scale;
 
     let pixel_size = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
 
