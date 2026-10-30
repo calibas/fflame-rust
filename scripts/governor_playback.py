@@ -34,7 +34,7 @@ def binary():
     for p in ('target/release/FractalArtEditor.exe', 'target/release/FractalArtEditor',
               'target/release/deps/FractalArtEditor.exe'):
         if os.path.exists(p):
-            return p
+            return os.path.abspath(p)  # Windows' CreateProcess does not take a relative path
     sys.exit('no release binary: cargo build --release')
 
 

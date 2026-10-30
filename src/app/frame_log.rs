@@ -32,11 +32,19 @@ pub(crate) struct FrameState {
     pub cpu_ms: f64,
     /// The UI's share of it, ms.
     pub ui_cpu_ms: f64,
+    /// Its waits for the surface: acquiring the frame's image (what a
+    /// GPU still busy with earlier frames shows up as) and presenting it.
+    pub acquire_ms: f64,
+    pub present_ms: f64,
     pub mode: &'static str,
     pub view: (u32, u32),
     pub playing: bool,
-    /// Rapid edits (the overwrite window), or a mode-D preview.
+    /// Rapid edits (the overwrite window, which playback uses for its
+    /// own frames too, so not while it plays), or a mode-D preview.
     pub interacting: bool,
+    /// The escape image shown is part-drawn: a chunk of a picture that
+    /// is not settled yet.
+    pub escape_partial: bool,
     /// The escape renderer's supersampling in use, 0 without one.
     pub escape_ss: u32,
     /// The governor's batch scale.
@@ -48,8 +56,8 @@ pub(crate) struct FrameState {
 
 impl super::App {
     /// The scripted run's part of a frame, after the frame's row: on the
-    /// first frame the settings' sidecar and the file to open; then the
-    /// opened animation played once it has loaded; then the quit.
+    /// first frame the settings' sidecar and the file opened (an
+    /// animation played from its start); then the quit.
     pub(super) fn frame_log_drive(&mut self) {
         let Some(log) = self.frame_log.as_mut() else { return };
         if log.frame == 1 {
@@ -66,30 +74,20 @@ impl super::App {
                 "gpu_times": log.timer.is_some(),
             });
             let _ = std::fs::write(format!("{}.json", log.path), serde_json::to_string_pretty(&sidecar).unwrap_or_default());
-            if let Some(path) = log.open.clone() {
-                log.opened_at = Some(web_time::Instant::now());
-                // Where the file pickers leave a file's text: the animation
-                // panel's, and File > Open's (.fflame or .flame).
-                match std::fs::read_to_string(&path) {
-                    Ok(text) => {
-                        let slot = if path.ends_with(".anim") {
-                            log.autoplay = true;
-                            "pending_animation_load_raw"
-                        } else {
-                            "pending_config_load_raw"
-                        };
-                        self.egui_layer.ctx.data_mut(|d| d.insert_temp(egui_dock::egui::Id::new(slot), text));
+            let Some(path) = log.open.clone() else { return };
+            log.opened_at = Some(web_time::Instant::now());
+            // Opened as the web build opens a picked file's text.
+            match std::fs::read_to_string(&path) {
+                Ok(text) if path.ends_with(".anim") => {
+                    self.open_animation_text(&text);
+                    if self.animation_controller.animation.is_some() {
+                        self.animation_controller.play();
                     }
-                    Err(e) => log::error!("FFLAME_FRAME_LOG_OPEN: {path}: {e}"),
                 }
+                Ok(text) => self.open_config_text(&text),
+                Err(e) => log::error!("FFLAME_FRAME_LOG_OPEN: {path}: {e}"),
             }
             return;
-        }
-        if log.autoplay && self.animation_controller.animation.is_some() {
-            log.autoplay = false;
-            if !self.animation_controller.is_playing() {
-                self.animation_controller.play();
-            }
         }
         let start = log.opened_at.unwrap_or(log.start);
         if log.seconds.is_some_and(|s| start.elapsed().as_secs_f64() >= s) {
@@ -118,10 +116,13 @@ impl super::App {
             interval_ms,
             cpu_ms,
             ui_cpu_ms,
+            acquire_ms: 0.0,
+            present_ms: 0.0,
             mode,
             view: self.fractal_viewport_size,
             playing: self.animation_controller.is_playing(),
-            interacting: self.use_overwrite_next_frame || preview,
+            interacting: (self.use_overwrite_next_frame && !self.animation_controller.is_playing()) || preview,
+            escape_partial: self.escape_renderer.is_some() && self.escape_dirty,
             escape_ss: self.escape_renderer.as_ref().map_or(0, |e| e.effective_supersample()),
             iter_scale: self.iter_scale,
             sim_grid,
@@ -148,12 +149,10 @@ pub(crate) struct FrameLog {
     pending: VecDeque<Row>,
     /// This frame's flame dispatch, until the frame's row is made.
     flame: Option<(u32, u32, u64)>,
-    /// The scripted run: the file to open, the seconds to run after it,
-    /// and whether an animation it opened still waits to be played.
+    /// The scripted run: the file to open, and the seconds to run after it.
     open: Option<String>,
     seconds: Option<f64>,
     opened_at: Option<web_time::Instant>,
-    autoplay: bool,
 }
 
 impl FrameLog {
@@ -170,8 +169,8 @@ impl FrameLog {
         let mut out = std::io::BufWriter::new(file);
         let _ = writeln!(
             out,
-            "frame,t_ms,interval_ms,cpu_ms,ui_cpu_ms,gpu_ui_ms,gpu_engine_ms,mode,view_w,view_h,playing,interacting,\
-             escape_ss,iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
+            "frame,t_ms,interval_ms,cpu_ms,ui_cpu_ms,acquire_ms,present_ms,gpu_ui_ms,gpu_engine_ms,mode,view_w,view_h,\
+             playing,interacting,escape_ss,escape_partial,iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
         );
         let timer = FrameTimer::new(device, queue);
         log::info!(
@@ -189,7 +188,6 @@ impl FrameLog {
             open: std::env::var("FFLAME_FRAME_LOG_OPEN").ok().filter(|p| !p.is_empty()),
             seconds: std::env::var("FFLAME_FRAME_LOG_SECONDS").ok().and_then(|s| s.parse().ok()),
             opened_at: None,
-            autoplay: false,
         })
     }
 
@@ -256,12 +254,14 @@ impl FrameLog {
         });
         let _ = writeln!(
             self.out,
-            "{},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{}",
             r.frame,
             r.t_ms,
             s.interval_ms,
             s.cpu_ms,
             s.ui_cpu_ms,
+            s.acquire_ms,
+            s.present_ms,
             opt(r.gpu.map(|g| g.ui_ms)),
             opt(r.gpu.map(|g| g.engine_ms)),
             s.mode,
@@ -270,6 +270,7 @@ impl FrameLog {
             u8::from(s.playing),
             u8::from(s.interacting),
             s.escape_ss,
+            u8::from(s.escape_partial),
             s.iter_scale,
             wg,
             ipt,
