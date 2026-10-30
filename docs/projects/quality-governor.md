@@ -3,7 +3,9 @@
 **Status:** phase 1 measured 2026-10-29 (*Results*), but for allocation
 cost. Of the faults it found, escape playback's part-drawn pictures are
 fixed (2026-10-30); the flame's uneven pacing goes to the governor
-(order of work, item 5). Render scale (item 3) is next. All seven decisions taken
+(order of work, item 5). Item 3 is built (2026-10-30): render scale and
+the Catmull-Rom upscale, sizes in pixels, an active simulation's
+letterbox and the field resampler; FSR (item 4) is next. All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -267,7 +269,8 @@ kind of state:
 - **an agent population**: positions scaled into the new grid, with the
   count kept for the session. `ensure_agents` reseeds on a change of
   count, and the population parameter is a share of the grid's cells, so
-  this needs care;
+  this needs care. As built, an agent model reseeds instead (Physarum,
+  DLA); carrying the population is left for when it is wanted;
 - **anything it cannot carry** (layer memory slices, if they turn out
   not to resample cleanly) reseeds, as every model does today.
 
@@ -612,7 +615,9 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    viewport is not the size the run began at, so starting a run moves
    nothing, and a scale edit while running lets go for a frame so the
    edit takes effect); then **the field resampler**, which makes the
-   scale slider do what its docs say, before the governor uses it.
+   scale slider do what its docs say, before the governor uses it (built
+   2026-10-30: `ModelDef::state`, `SimRenderer::carry_field`; agent models
+   reseed, as the plan allowed, rather than carrying their population).
 4. **FSR 1** as a second upscaler, judged against bicubic with the loss
    metric, and offered to simulations as a `SimUpscale` choice.
 5. **The governor**: GPU frame timing, the contexts, the target setting,

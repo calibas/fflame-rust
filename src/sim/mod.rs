@@ -672,9 +672,44 @@ pub const MAX_KERNEL_RADIUS: u32 = 32;
 /// provides and which applies the configured boundary — a model never
 /// writes boundary handling itself, because getting it wrong is
 /// invisible in the middle of the grid and wrong only at the edges.
+/// What a cell's state is: how a live field is carried into a grid of
+/// another size when a bound grid's scale changes (the field resampler,
+/// `SimRenderer::request_resample`; docs/projects/quality-governor.md).
+/// Every model declares one; a config with several layers takes the most
+/// careful of theirs (`StateKind::of_config`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StateKind {
+    /// Continuous values throughout (the reaction-diffusion and other PDE
+    /// models, Lenia, SmoothLife): interpolated, Catmull-Rom, held within
+    /// each neighbourhood's range so nothing overshoots into values the
+    /// rule cannot hold.
+    Continuous,
+    /// A discrete channel (states, spins, grains, occupancy, a front),
+    /// with whatever continuous channels ride beside it: the nearest cell,
+    /// which is exact and never invents a state ("integer state rides in
+    /// an f32 channel").
+    Discrete,
+    /// A population of agents with the field. Not carried: the run
+    /// reseeds, as every change of grid did before.
+    Agents,
+}
+
+impl StateKind {
+    /// The kind a config's field is carried as: the most careful of its
+    /// layers' (agents, then discrete, then continuous).
+    pub fn of_config(cfg: &crate::config::sim::SimConfig) -> StateKind {
+        (0..cfg.layer_count())
+            .map(|l| model_or_default(cfg.layer_model_name(l)).state)
+            .max()
+            .unwrap_or(StateKind::Continuous)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ModelDef {
     pub name: &'static str,
+    /// How a live field is carried into a grid of another size.
+    pub state: StateKind,
     pub display_name: &'static str,
     /// One-line description for the panel's dropdown tooltip.
     pub description: &'static str,
@@ -1784,6 +1819,13 @@ mod tests {
                 m.has(ModelFeature::NeedsAgents),
                 m.agents.is_some(),
                 "{}: the NeedsAgents feature and the AgentDef must agree",
+                m.name
+            );
+            // The field resampler does not carry a population.
+            assert_eq!(
+                m.state == StateKind::Agents,
+                m.agents.is_some(),
+                "{}: a model with agents, and only one, has StateKind::Agents",
                 m.name
             );
             let Some(a) = m.agents else { continue };
