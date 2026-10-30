@@ -377,6 +377,19 @@ previous-run columns show "—" until two runs with the new names exist.
 | `cargo run --release --bin shader_bench` | shader-compilation measurements behind sticky compilation ([record](archive/projects/sticky-shader-compilation.md)) |
 | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png [--output diff.png] [--threshold N]` | pixel diff of two PNGs, with their metadata |
 
+### Frame cost in the app, and the governor's calibration
+
+For the quality governor ([quality-governor.md](projects/quality-governor.md)).
+All of these write to `output/governor/`; run them with the machine
+otherwise idle, since the times are real.
+
+| what | how |
+|---|---|
+| **The frame log**: a CSV row a frame from the running app (CPU time, the GPU's time for the UI and for the engine, the view, playback, the flame's dispatch, escape supersampling, the simulation's grid) | `FFLAME_FRAME_LOG=out.csv` when starting the release app; `FFLAME_FRAME_LOG_OPEN=x.anim` (played) or `x.fflame`, and `FFLAME_FRAME_LOG_SECONDS=N` to quit, for a scripted run. Settings beside it in `out.csv.json` |
+| **Reference playback**: eight looped scenes made from visual-suite configs, each played in the app with the frame log on | `python scripts/governor_scenes.py`, then `python scripts/governor_playback.py [--warm] [--seconds N] [--only a,b]`. Opens a window per scene |
+| **The calibration**: each scene at each rung of the governor's ladder (escape supersampling and size, flame samples and size, a simulation step's cost at each field scale), timed | `cargo test --release --lib -- --ignored governor_calibration --nocapture`; `CALIBRATE_SIZE`, `CALIBRATE_ONLY`, `CALIBRATE_REPEATS`, `CALIBRATE_OUT` |
+| **Loss, flicker, summaries** | `python scripts/frame_metrics.py loss` (each rung against its reference, upscaled by bilinear, bicubic and Lanczos; writes `table.md`), `flicker DIR` (a folder of frames), `summary LOG.csv` |
+
 ---
 
 ## 6. Variation math probe and reachability census

@@ -16,6 +16,8 @@ pub(crate) mod density_gates;
 mod orbit_gates;
 #[cfg(test)]
 mod param_cost;
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "web-app", feature = "engine-flame", feature = "engine-escape", feature = "engine-sim"))]
+mod calibration;
 
 pub use compute_kernel::{FlameRenderer, TargetingState};
 pub use histogram::{compute_histogram_async, DensityHistogram, HISTOGRAM_BINS};
