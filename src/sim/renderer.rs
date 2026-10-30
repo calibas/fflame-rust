@@ -1591,6 +1591,11 @@ impl SimRenderer {
         (self.grid_w, self.grid_h)
     }
 
+    /// The picture's size: what the field is resolved to.
+    pub fn output_size(&self) -> (u32, u32) {
+        (self.out_w, self.out_h)
+    }
+
     /// Move a shifted pyramid lattice every `steps` steps instead of
     /// every one. For measurements; a run should keep one period.
     pub fn set_lattice_shift_every(&mut self, steps: u32) {

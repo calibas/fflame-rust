@@ -12,6 +12,8 @@ mod aa_governor;
 mod motion_blur;
 mod frame_log;
 mod render_scale;
+#[cfg(feature = "engine-sim")]
+mod sim_lock;
 mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
@@ -494,6 +496,10 @@ pub struct App {
     /// use so a flame session never allocates it.
     #[cfg(feature = "engine-sim")]
     pub(super) sim_renderer: Option<crate::sim::SimRenderer>,
+    /// An active run's hold on its grid, and the scale it was taken at
+    /// (sim_lock.rs): a resize letterboxes instead of restarting it.
+    #[cfg(feature = "engine-sim")]
+    pub(super) sim_lock: Option<(crate::ui::SimLock, f32)>,
     /// The simulation's 3D terrain (heightfield plan T4), while the config
     /// draws one.
     #[cfg(all(feature = "terrain", feature = "engine-sim"))]
@@ -922,6 +928,8 @@ impl App {
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
+            #[cfg(feature = "engine-sim")]
+            sim_lock: None,
             #[cfg(all(feature = "terrain", feature = "engine-sim"))]
             sim_terrain: None,
             // Runs on entry: a simulation that sits still looks broken,
@@ -1714,6 +1722,10 @@ impl App {
         // PHASE 1: Render UI First
         // ============================================================================
         // UI displays PREVIOUS frame's fractal while we prepare CURRENT frame
+        // An active simulation's grid, which the viewport letterboxes to
+        // after a resize (sim_lock.rs): decided before the UI draws it.
+        #[cfg(feature = "engine-sim")]
+        self.update_sim_lock();
         let t_ui_start = Instant::now();
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
@@ -2770,13 +2782,21 @@ impl App {
                 if self.sim_renderer.is_none() {
                     self.sim_motion = None;
                 }
+                // An active run's grid is held (sim_lock.rs): resized with
+                // its cells fixed, the viewport letterboxed to their shape.
+                let held_grid = self.sim_lock.map(|(lock, _)| {
+                    let mut c = final_config.sim.clone();
+                    c.grid = crate::config::sim::SimGrid::Fixed { width: lock.grid.0, height: lock.grid.1 };
+                    c
+                });
+                let grid_cfg = held_grid.as_ref().unwrap_or(&final_config.sim);
                 let sim = self.sim_renderer.get_or_insert_with(|| {
-                    crate::sim::SimRenderer::new(&self.gpu.device, &final_config.sim, w, h)
+                    crate::sim::SimRenderer::new(&self.gpu.device, grid_cfg, w, h)
                 });
                 // A resize may change the grid (bound) or only the
                 // resolve ratio (fixed); the renderer decides which and
                 // reports whether the field survived.
-                sim.resize(&self.gpu.device, &final_config.sim, w, h);
+                sim.resize(&self.gpu.device, grid_cfg, w, h);
                 // The flame's transforms are the layers' maps when the
                 // config asks (simulation-layers plan, section 4).
                 if final_config.sim.use_transforms {

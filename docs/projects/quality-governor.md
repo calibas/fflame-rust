@@ -606,9 +606,12 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
 3. **Render scale + Catmull-Rom upscale**, manual, in every engine
    (built 2026-10-30: *As built*); the effects' pixel scaling (built 2026-10-30: *Sizes in pixels*);
    the readout (the menu shows the setting; a governed frame's readout
-   is the governor's). For simulations: **the active
-   run's letterbox**, which on its own stops a resize or full screen from
-   restarting a live run; then **the field resampler**, which makes the
+   is the governor's). For simulations: **the active run's letterbox**,
+   which on its own stops a resize or full screen from restarting a live
+   run (built 2026-10-30: `app/sim_lock.rs`; it letterboxes only once the
+   viewport is not the size the run began at, so starting a run moves
+   nothing, and a scale edit while running lets go for a frame so the
+   edit takes effect); then **the field resampler**, which makes the
    scale slider do what its docs say, before the governor uses it.
 4. **FSR 1** as a second upscaler, judged against bicubic with the loss
    metric, and offered to simulations as a `SimUpscale` choice.
