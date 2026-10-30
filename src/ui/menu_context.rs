@@ -45,6 +45,11 @@ pub struct RenderingMenuActions {
     pub set_frame_governor: Option<bool>,
     /// The workgroups a frame dispatches while the governor is off.
     pub set_manual_workgroups: Option<u32>,
+    /// The viewport's render scale, its upscaler, and whether it renders
+    /// at physical pixels (`renderer::upscale`).
+    pub set_render_scale: Option<f32>,
+    pub set_upscaler: Option<crate::renderer::upscale::UpscaleFilter>,
+    pub set_render_physical_pixels: Option<bool>,
     pub reset_to_defaults: bool,
 }
 
@@ -87,6 +92,10 @@ pub struct MenuState {
     /// workgroups a frame dispatches when it does not.
     pub frame_governor: bool,
     pub manual_workgroups: u32,
+    /// The viewport's render scale, upscaler and physical-pixel setting.
+    pub render_scale: f32,
+    pub upscaler: crate::renderer::upscale::UpscaleFilter,
+    pub render_physical_pixels: bool,
     /// The active mode. It was a `render_mode_2d: bool`, which could
     /// not tell Escape and Simulation from 3D -- so the View menu drew
     /// "3D Mode" as selected in both, and Fly Mode stayed enabled.

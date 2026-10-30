@@ -67,6 +67,8 @@ const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 /// Focused Rendering plans in the plane.
 const TWO_D_ONLY: &str = "visibility.two_d_only";
 const LIGHT_FLAME: &str = "visibility.light_flame";
+/// A simulation's grid scale is its render scale.
+const SIM_GRID_SCALE: &str = "visibility.sim_grid_scale";
 const POINT_LIGHT_TERRAIN: &str = "visibility.point_light_terrain";
 /// A 3D flame's lights turn with its camera, always.
 const LIGHT_FRAME_FLAME: &str = "visibility.light_frame_flame";
@@ -374,6 +376,11 @@ pub enum Control {
     /// its planners enumerate discs in the PLANE, so a 3D flame gets
     /// neither (the renderer reports `TargetingState::NotPlanar`).
     FocusedRendering,
+    /// The viewport's render scale and upscaler (`renderer::upscale`).
+    /// Not a simulation's: its grid is the content, a bound grid's cells
+    /// follow the viewport's size, and its grid scale is the render scale
+    /// (docs/projects/quality-governor.md).
+    RenderScale,
 }
 
 /// Is this control meaningful in this mode?
@@ -404,6 +411,13 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
             RenderMode::Escape | RenderMode::Simulation => Vis::Hide,
         },
         C::ViewNavigation => Vis::Show,
+        C::RenderScale => {
+            if matches!(m, RenderMode::Simulation) {
+                Vis::Grey(SIM_GRID_SCALE)
+            } else {
+                Vis::Show
+            }
+        }
         C::OrbitCache => {
             if matches!(m, RenderMode::Escape) {
                 Vis::Show
@@ -699,6 +713,7 @@ mod tests {
         Control::ColorMode,
         Control::ViewNavigation,
         Control::FocusedRendering,
+        Control::RenderScale,
     ];
 
     /// Every reason a panel or control is greyed names a string that

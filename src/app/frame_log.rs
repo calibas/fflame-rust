@@ -37,7 +37,10 @@ pub(crate) struct FrameState {
     pub acquire_ms: f64,
     pub present_ms: f64,
     pub mode: &'static str,
+    /// The viewport's size in points, and the size its picture renders
+    /// at (the render scale's; app/render_scale.rs).
     pub view: (u32, u32),
+    pub render: (u32, u32),
     pub playing: bool,
     /// Rapid edits (the overwrite window, which playback uses for its
     /// own frames too, so not while it plays), or a mode-D preview.
@@ -120,6 +123,7 @@ impl super::App {
             present_ms: 0.0,
             mode,
             view: self.fractal_viewport_size,
+            render: self.flame_renderer.as_ref().map_or((0, 0), |r| (r.width, r.height)),
             playing: self.animation_controller.is_playing(),
             interacting: (self.use_overwrite_next_frame && !self.animation_controller.is_playing()) || preview,
             escape_partial: self.escape_dirty
@@ -171,7 +175,7 @@ impl FrameLog {
         let _ = writeln!(
             out,
             "frame,t_ms,interval_ms,cpu_ms,ui_cpu_ms,acquire_ms,present_ms,gpu_ui_ms,gpu_engine_ms,mode,view_w,view_h,\
-             playing,interacting,escape_ss,escape_partial,iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
+             render_w,render_h,playing,interacting,escape_ss,escape_partial,iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
         );
         let timer = FrameTimer::new(device, queue);
         log::info!(
@@ -255,7 +259,7 @@ impl FrameLog {
         });
         let _ = writeln!(
             self.out,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{}",
             r.frame,
             r.t_ms,
             s.interval_ms,
@@ -268,6 +272,8 @@ impl FrameLog {
             s.mode,
             s.view.0,
             s.view.1,
+            s.render.0,
+            s.render.1,
             u8::from(s.playing),
             u8::from(s.interacting),
             s.escape_ss,

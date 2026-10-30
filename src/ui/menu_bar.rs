@@ -190,6 +190,49 @@ pub fn render_menu_bar(
             ) == super::visibility::Vis::Show;
             ui.menu_button(t!("menu.rendering"), |ui| {
                 rows_do_not_wrap(ui);
+                // The viewport's render scale and upscaler
+                // (`renderer::upscale`): every mode's but a simulation's,
+                // so above the chaos game's rows.
+                let scaling = super::visibility::control(
+                    super::visibility::Control::RenderScale,
+                    menu_state.render_mode,
+                    menu_state.tonemap_mode,
+                );
+                ui.add_enabled_ui(scaling.is_show(), |ui| {
+                    let percent = |s: f32| format!("{}%", (s * 100.0).round());
+                    ui.menu_button(format!("{}: {}", t!("menu.render_scale"), percent(menu_state.render_scale)), |ui| {
+                        rows_do_not_wrap(ui);
+                        for &s in &crate::renderer::upscale::RENDER_SCALES {
+                            if ui.radio((menu_state.render_scale - s).abs() < 1e-3, percent(s)).clicked() {
+                                menu_actions.rendering.set_render_scale = Some(s);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("menu.tooltip_render_scale"));
+                    ui.menu_button(format!("{}: {}", t!("menu.upscaler"), t!(menu_state.upscaler.label_key())), |ui| {
+                        rows_do_not_wrap(ui);
+                        for f in crate::renderer::upscale::UpscaleFilter::ALL {
+                            if ui.radio(menu_state.upscaler == f, t!(f.label_key())).clicked() {
+                                menu_actions.rendering.set_upscaler = Some(f);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("menu.tooltip_upscaler"));
+                    let mut physical = menu_state.render_physical_pixels;
+                    if ui
+                        .checkbox(&mut physical, t!("menu.render_physical_pixels"))
+                        .on_hover_text(t!("menu.tooltip_render_physical_pixels"))
+                        .changed()
+                    {
+                        menu_actions.rendering.set_render_physical_pixels = Some(physical);
+                    }
+                });
+                if let super::visibility::Vis::Grey(why) = scaling {
+                    ui.weak(t!(why));
+                }
+                ui.separator();
                 if !chaos_game {
                     ui.weak(t!(super::visibility::CHAOS_GAME));
                     ui.separator();
