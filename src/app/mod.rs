@@ -514,6 +514,11 @@ pub struct App {
     /// Restart from the seed before the next frame (a reseed-class
     /// edit, a device loss, or a grid the field cannot be carried into).
     pub(super) sim_reseed: bool,
+    /// A bound grid's scale was edited (`SimResample`): the resize that
+    /// changes the grid carries the field across (`request_resample`).
+    /// Held while an active run's grid is (sim_lock.rs), whose resize
+    /// does not change it; passed on the frame the lock lets go.
+    pub(super) sim_resample: bool,
     /// The step count the TIMELINE has committed the grid to.
     ///
     /// `Some` means the timeline owns the step count: the driver walks
@@ -937,6 +942,7 @@ impl App {
             sim_running: true,
             sim_step_once: false,
             sim_reseed: true,
+            sim_resample: false,
             #[cfg(feature = "engine-sim")]
             sim_timeline_target: None,
             paced_anim_pending: 0.0,
@@ -2793,6 +2799,12 @@ impl App {
                 let sim = self.sim_renderer.get_or_insert_with(|| {
                     crate::sim::SimRenderer::new(&self.gpu.device, grid_cfg, w, h)
                 });
+                // A scale edit carries the field into its new grid (the
+                // field resampler), once the resize uses the config's grid.
+                if self.sim_resample && held_grid.is_none() {
+                    sim.request_resample();
+                    self.sim_resample = false;
+                }
                 // A resize may change the grid (bound) or only the
                 // resolve ratio (fixed); the renderer decides which and
                 // reports whether the field survived.

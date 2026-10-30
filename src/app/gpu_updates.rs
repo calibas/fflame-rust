@@ -417,6 +417,8 @@ impl App {
         // because it subsumes it.
         if actions.reseed_sim {
             self.sim_reseed = true;
+        } else if actions.resample_sim {
+            self.sim_resample = true;
         }
 
         // Clear pending actions after executing them

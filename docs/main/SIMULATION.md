@@ -104,6 +104,7 @@ body, and:
 | `diffusion` | which parameters are diffusion rates, for the dt ceiling. |
 | `dt_bound` | a bound the model derives itself, overriding the diffusion one (the fourth-order PDEs). |
 | `agents` | an `AgentDef` for the models with a moving population (physarum). |
+| `state` | a `StateKind`: how a live field is carried into a grid of another size when a bound grid's scale changes (the field resampler). `Continuous` is interpolated (Catmull-Rom, held to each neighbourhood's range); `Discrete`, for any model with a discrete channel (states, spins, grains, occupancy), takes the nearest cell, which is exact; `Agents` is not carried and reseeds. A test holds `Agents` to the models with agents. |
 | `kernel` | a function building a `SimKernel` lookup table, for the large-radius convolution models (Lenia, SmoothLife, McCabe). |
 | `wgsl_seed` | `fn sim_seed(inside, noise, p)`: the initial state of a cell, given the init shape's mask. |
 | `default_steps`, `default_dt` | what selecting the model sets `steps` and `dt` to (its parameters are cleared to their defaults too). |
@@ -337,10 +338,9 @@ filter and mode, the fit and the matte's channel and edge are not.
 
 What an edit costs the run is its `UpdateType`: `SimRerender` (colour,
 resolve, view, matte, warp, model and colouring parameters, steps, `dt`,
-the terrain: the run continues), `SimResample` (a bound grid's scale: meant
-to interpolate the live field into the new grid; nothing reads its
-`resample_sim` yet, so the new grid reseeds, as a resize does, until the
-resampler is built: [quality-governor.md](../projects/quality-governor.md)),
+the terrain: the run continues), `SimResample` (a bound grid's scale: the
+live field is carried into the new grid as the model's `state` allows, and
+the run continues at its step; see below),
 or `SimReseed` (model, seed, init, boundary, grid mode or size: the run
 restarts).
 
@@ -613,10 +613,22 @@ renderer restarts when the config no longer describes it. `SeedIdentity`
 ([src/sim/renderer.rs](../../src/sim/renderer.rs)) is the part that
 matters: the model of every layer, the boundary, the init, the seed, and
 each layer's memory slice count. Change any of those and the run
-restarts. A change of grid size reseeds too (`SimReseed`). A bound
-grid's scale is meant to resample the live field instead (`SimResample`),
-but until the resampler is built it reseeds as well: `SimRenderer::resize`
-reseeds whenever the grid's size changes.
+restarts. A change of grid size reseeds too (`SimReseed`), and so does a
+resize that changes a bound grid's cells while nothing holds them.
+
+**A bound grid's scale carries the field** (`SimResample`;
+`SimRenderer::request_resample`, `carry_field`). The resize that changes
+the grid keeps the old field, and before the next step or colour reads
+it, every slice is resampled into the new grid, each cell from where its
+centre falls in the old one: Catmull-Rom for a `Continuous` model, held
+within its 2x2 neighbourhood's range so nothing overshoots, the nearest
+cell for a `Discrete` one. A config with several layers takes the most
+careful of their kinds (`StateKind::of_config`). The run goes on at its
+step: a feature keeps its size in cells, so the picture is the same one,
+finer or blockier, and the pattern then re-forms at its own size. An
+agent model, or a run not yet seeded, reseeds as before. A scale edit
+while an active run's grid is held (below) is passed on the next frame,
+when the hold lets go.
 
 **A resize does not restart an active run** (`src/app/sim_lock.rs`).
 While the transport runs or the timeline drives the steps, a bound grid
