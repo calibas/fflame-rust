@@ -1,7 +1,7 @@
 # The quality governor: a target frame rate, render scale, upscaling
 
-**Status:** phase 1 measured 2026-10-29 (*Results*), but for allocation
-cost. Of the faults it found, escape playback's part-drawn pictures are
+**Status:** phase 1 measured 2026-10-29 (*Results*), allocation cost
+2026-10-30. Of the faults it found, escape playback's part-drawn pictures are
 fixed (2026-10-30); the flame's uneven pacing goes to the governor
 (order of work, item 5). Item 3 is built (2026-10-30): render scale and
 the Catmull-Rom upscale, sizes in pixels, an active simulation's
@@ -660,6 +660,14 @@ a fixed per-step overhead takes over (~0.1 ms). The cheap models sit at
 the measurement's noise floor (one read negative), and need no
 governing at these sizes.
 
+**Allocation (item 5, measured 2026-10-30;** `allocation_cost`, wall clock
+to the GPU's finish). The flame renderer's resize: 3.1 ms up to 1920x1080,
+1.4 ms down to 960x540. Escape-time at 2x, a resize and the picture after
+it against the picture alone: 55 against 40 ms at 1080p, 16.6 against 10.9
+at 540p. A rung change costs about one frame's work more, once, and the
+governor changes rungs rarely, so allocating at full size and rendering
+into a region is not needed.
+
 **In the app today** (the user's layout: a 754x786 viewport in a
 1440x810 window; 60 Hz, vsync, `iterations_per_thread` 3600). Every
 scene but the solid holds 60 fps at this size. Two faults:
@@ -702,7 +710,7 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
 
 ## Order of work
 
-1. **Measurement** (phase 1). Done but for allocation (its item 5);
+1. **Measurement** (phase 1). Done, allocation too (2026-10-30);
    *Results*.
 2. **The faults phase 1 found**, each on its own. Done: playback shows
    only settled escape pictures (`EscapeRenderer::present_output`: the
@@ -761,7 +769,8 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
 - **Motion vectors** (item 3 before): re-projection of the last frame,
   temporal blending, temporal upscaling. The upscale pass and the
   measurement here are what they would build on.
-- **Region rendering**, if phase 1 shows reallocation costs.
+- **Region rendering**, if reallocation ever shows (phase 1 measured it
+  at about a frame's work, once a rung change: not needed).
 
 ## Tests to write
 

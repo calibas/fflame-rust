@@ -331,3 +331,101 @@ fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture) -
     staging.unmap();
     (0..h).flat_map(|y| bytes[(y * row) as usize..(y * row + w * 4) as usize].to_vec()).collect()
 }
+
+/// **A scale change's cost** (docs/projects/quality-governor.md, phase 1
+/// item 5): the governor changes the render size on a rung change, which
+/// reallocates each engine's per-pixel buffers as a resize does. Timed here
+/// between 1920x1080 and 960x540, wall clock to the GPU's finish: the
+/// flame renderer's resize, and escape-time's resize with the picture it
+/// then has to render against the same picture without one. Writes
+/// `allocation.csv` in `CALIBRATE_OUT`.
+///
+/// ```text
+/// cargo test --release --lib -- --ignored allocation_cost --nocapture
+/// ```
+#[test]
+#[ignore = "measurement; needs a GPU and an idle machine"]
+fn allocation_cost() {
+    use std::io::Write;
+    let (device, queue) = pollster::block_on(crate::app::export::headless_device()).expect("gpu");
+    let out = std::path::PathBuf::from(std::env::var("CALIBRATE_OUT").unwrap_or_else(|_| "output/governor".into()));
+    std::fs::create_dir_all(&out).expect("mkdir");
+    let mut csv = std::fs::File::create(out.join("allocation.csv")).expect("allocation.csv");
+    writeln!(csv, "engine,what,from,to,ms").expect("csv");
+    let wait = || {
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    };
+    let sizes = [(1920u32, 1080u32), (960, 540)];
+    const N: usize = 8;
+
+    // The flame renderer.
+    let flame = FractalConfig::from_json(&std::fs::read_to_string("tests/visual/configs/2d/plastic-sierpinski.fflame").expect("scene"))
+        .expect("parse");
+    let mut r = crate::renderer::FlameRenderer::for_job(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 1920, 1080, &flame);
+    let mut times: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+    for i in 0..2 * N {
+        let (w, h) = sizes[(i + 1) % 2];
+        let t = std::time::Instant::now();
+        let mut enc = device.create_command_encoder(&Default::default());
+        r.resize(&device, &mut enc, &queue, w, h, &flame.flame, 256, flame.zoom, flame.pan_x as f32, flame.pan_y as f32, flame.rotation,
+            flame.camera_rotation_x, flame.camera_rotation_y, flame.camera_bank, flame.camera_x, flame.camera_y, flame.camera_z, flame.speed_factor);
+        queue.submit(std::iter::once(enc.finish()));
+        wait();
+        times[(i + 1) % 2].push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    for (k, v) in times.into_iter().enumerate() {
+        let (from, to) = (sizes[k ^ 1], sizes[k]);
+        let ms = median(v);
+        writeln!(csv, "flame,resize,{}x{},{}x{},{ms:.3}", from.0, from.1, to.0, to.1).expect("csv");
+        println!("flame resize {}x{} -> {}x{}: {ms:.2} ms", from.0, from.1, to.0, to.1);
+    }
+
+    // Escape-time: a resize and the picture after it, against the picture alone.
+    let config = FractalConfig::from_json(&std::fs::read_to_string("tests/visual/configs/escape/mandelbrot-seahorse-zoom.fflame").expect("scene"))
+        .expect("parse");
+    let flame_for_palette = crate::renderer::FlameRenderer::for_job(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &config);
+    let mut e = crate::escape::EscapeRenderer::new(&device, 1920, 1080);
+    // Each picture a hair further in, so it iterates rather than recolouring
+    // the last one's cached results.
+    let mut picture = 0u32;
+    let mut settle = |e: &mut crate::escape::EscapeRenderer| {
+        picture += 1;
+        let mut escape = config.escape.clone();
+        escape.zoom_log2 += 1e-4 * picture as f64;
+        let mut enc = device.create_command_encoder(&Default::default());
+        while !e.render(&device, &queue, &mut enc, &escape, flame_for_palette.escape_palette_view(false), flame_for_palette.palette_generation()) {
+            queue.submit(std::iter::once(enc.finish()));
+            wait();
+            enc = device.create_command_encoder(&Default::default());
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        wait();
+    };
+    e.resize(&device, 1920, 1080, 2);
+    settle(&mut e);
+    for (w, h) in sizes {
+        let mut plain = Vec::new();
+        let mut resized = Vec::new();
+        for _ in 0..N {
+            // Another picture at this size: no reallocation.
+            e.resize(&device, w, h, 2);
+            settle(&mut e);
+            let t = std::time::Instant::now();
+            settle(&mut e);
+            plain.push(t.elapsed().as_secs_f64() * 1000.0);
+            // The other size and back to this one: a reallocation, then the picture.
+            let other = if (w, h) == sizes[0] { sizes[1] } else { sizes[0] };
+            e.resize(&device, other.0, other.1, 2);
+            settle(&mut e);
+            let t = std::time::Instant::now();
+            e.resize(&device, w, h, 2);
+            settle(&mut e);
+            resized.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        let (p, q) = (median(plain), median(resized));
+        writeln!(csv, "escape,render,{w}x{h},{w}x{h},{p:.3}").expect("csv");
+        writeln!(csv, "escape,resize+render,-,{w}x{h},{q:.3}").expect("csv");
+        println!("escape at {w}x{h}, 2x: render {p:.2} ms, resize + render {q:.2} ms");
+    }
+    e.destroy();
+}
