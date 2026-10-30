@@ -64,7 +64,8 @@ impl super::App {
         render_size(
             viewport,
             self.egui_layer.ctx.pixels_per_point(),
-            settings.render_scale,
+            // The governor's rung, under the setting (governor.rs).
+            self.user_render_scale().min(self.governor.scale),
             settings.render_physical_pixels,
             self.config_manager.active_config().render_mode == crate::scene::transforms::RenderMode::Simulation,
             self.gpu.device.limits().max_texture_dimension_2d,

@@ -3,7 +3,7 @@
 (docs/projects/quality-governor.md, phase 1).
 
     python scripts/governor_scenes.py                   # once: write the scenes
-    python scripts/governor_playback.py [--seconds N] [--only a,b] [--warm] [--tag T]
+    python scripts/governor_playback.py [--seconds N] [--only a,b] [--warm] [--tag T] [--render-scale S]
 
 Each scene in output/governor/scenes/ is opened in the release app with
 the frame log on (FFLAME_FRAME_LOG, FFLAME_FRAME_LOG_OPEN,
@@ -39,9 +39,12 @@ def binary():
     sys.exit('no release binary: cargo build --release')
 
 
-def run(exe, scene, log, seconds):
+def run(exe, scene, log, seconds, render_scale=None):
     env = dict(os.environ, FFLAME_FRAME_LOG=log, FFLAME_FRAME_LOG_OPEN=scene,
                FFLAME_FRAME_LOG_SECONDS=str(seconds))
+    if render_scale is not None:
+        # The run's render scale, in place of the saved setting (untouched).
+        env['FFLAME_FRAME_LOG_RENDER_SCALE'] = str(render_scale)
     try:
         subprocess.run([exe], env=env, timeout=seconds + 120, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -55,6 +58,8 @@ def main():
     ap.add_argument('--only', default='')
     ap.add_argument('--warm', action='store_true')
     ap.add_argument('--tag', default='')
+    ap.add_argument('--render-scale', type=float, default=None,
+                    help='render at this scale for the run (the saved setting is not touched)')
     args = ap.parse_args()
     if not os.path.isdir(SCENES):
         sys.exit(f'{SCENES}: run scripts/governor_scenes.py first')
@@ -72,7 +77,7 @@ def main():
         name = f[:-5]
         log = os.path.join(out, f'{name}.csv')
         print(f'\n== {name}')
-        run(exe, os.path.join(SCENES, f), log, args.seconds)
+        run(exe, os.path.join(SCENES, f), log, args.seconds, args.render_scale)
         if not os.path.exists(log):
             print('  no log written')
             continue

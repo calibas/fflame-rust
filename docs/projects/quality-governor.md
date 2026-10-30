@@ -6,7 +6,9 @@ fixed (2026-10-30); the flame's uneven pacing goes to the governor
 (order of work, item 5). Item 3 is built (2026-10-30): render scale and
 the Catmull-Rom upscale, sizes in pixels, an active simulation's
 letterbox and the field resampler; so is item 4, FSR, in the viewport
-and for simulations. The governor (item 5) is next. All seven decisions taken
+and for simulations. The governor (item 5) is built for escape-time
+(2026-10-30, *The governor, escape-time, as built*); flames, terrains and
+simulations are next. All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
@@ -463,6 +465,71 @@ exists; the hold covers settings with none (an iteration count, a
 compile). The hold plan's note that "governed engines hide the cost"
 covers more engines once this is built.
 
+### The governor, escape-time, as built (2026-10-30)
+
+`src/app/governor.rs`. The frame timer (`gpu::timer::FrameTimer`) now runs
+in every frame where the device can time passes, and the frame log reads
+its timings rather than owning one. *Target Frame Rate*
+(`SystemSettings::target_rate`, Rendering menu): the display's refresh,
+the video export's frame rate (D2), or 24/30/60/120, never faster than the
+display.
+
+- **When.** Escape-time is governed while an animation plays, or while a
+  2D picture is being edited (the 250 ms interaction window; a solid keeps
+  its stride-2 preview then), with the frame governor on and a frame
+  timer. Not a terrain or a path-traced solid yet. Leaving, the next
+  picture is full quality; entering, the rung is predicted at once from
+  the cost remembered.
+- **The ladder** (phase 1's): supersampling from the setting down to 2x,
+  then 75% and 50%, then 1x; a solid 2x, 1x, 75%, 50%, 25% (D5). The
+  setting's render scale and supersampling are the ceiling.
+- **The measure.** A picture's GPU time: the frame timer's engine span,
+  summed over the frames the picture took to settle (a solid at full size
+  took 13).
+- **The model.** A picture's cost is `b (units + fixed)`: units are the
+  render pixels per display pixel (scale squared times supersampling
+  squared), `fixed` a part that does not follow them, learned from any two
+  rungs measured within 120 pictures and kept. One fresh measurement
+  predicts every rung.
+- **The choice.** The best rung predicted under 70% of the budget; else
+  under 80% (frames still come evenly there); else, with nothing making
+  the frame rate, the best within 20% of the cheapest. Shed after two
+  pictures over the share (at once past twice the budget); probe up a rung
+  after 30 pictures with 20% room; a failed probe waits twice as long, to
+  480.
+- **Checked by the frames.** A shed is judged 30 pictures later: kept if
+  the frame rate rose 10% or an alternation of long and short frames
+  ended (their 75th percentile from 1.5 refreshes to under 1.25), undone
+  otherwise and not tried again while the frame rate stays. A CPU-bound
+  frame is never shed for.
+- **Held back elsewhere.** Frames two or more refreshes apart while the
+  GPU's span and the CPU's own time are under 35% of the interval: the
+  budget is then that interval, in whole refreshes, until frames come
+  faster (`GovernorState::effective_budget`).
+- **The readout.** The View panel's antialiasing line says "Drawn at 2x,
+  50% scale (frame governor)".
+
+**In the app** (1079x1056 viewport; the scenes of phase 1, rendered with
+`--render-scale 1.0`). During these runs the window was held to 60 fps on
+the 120 Hz display whatever it drew, while the user was away; this morning
+the same window ran at 120. Each scene held ~60 fps:
+
+| scene | rung held | GPU a picture |
+|---|---|---|
+| escape zoom (4x set) | 2x at 50% | 6.3 ms |
+| escape sweep (2x set) | 2x at 75% | 6.0 ms |
+| mode-D solid | 1x at 25% | 12.6 ms (full size: ~200 ms over 13 frames) |
+
+Before, the antialiasing governor probed 3x every 4 s and dropped frames;
+these held one rung each from the first second. Getting there took three
+fixes the runs found: the fixed part of the cost (a model of pixels alone
+cannot tell a cost that does not move); the check by the frames (the
+governor shed to its lowest rung chasing a 120 fps the window could not
+have); and the budget taken from frames held back elsewhere. Open: at a
+real 120 Hz, in the foreground, the same scenes want running again; and
+after the cap is taken, a GPU that then becomes the limit is not noticed
+until frames come faster.
+
 ## Exports
 
 An export renders at fixed rungs, chosen by the user, and every frame the
@@ -666,7 +733,9 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
 5. **The governor**: GPU frame timing, the contexts, the target setting,
    the ladders. Escape first (it gains the most), then flames, terrains,
    simulations. The mode-D stride preview is replaced by the 50% rung,
-   once that is shown to look as good or better.
+   once that is shown to look as good or better. Escape-time built
+   2026-10-30 (*The governor, escape-time, as built*); flames, terrains and
+   simulations next.
 6. **Exports**: the fixed rungs in the video export and the CLI.
 7. **The web**: the fallback signal; tried in a browser.
 

@@ -829,7 +829,7 @@ pub struct SimLock {
 /// The antialiasing the escape viewport is drawn at this frame, and why
 /// it is below the setting when it is (shown under the Escape panel's
 /// Antialiasing control).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EscapeAa {
     /// The factor in use.
     pub in_use: u32,
@@ -837,6 +837,9 @@ pub struct EscapeAa {
     pub requested: u32,
     /// Why `in_use` is lower, if it is.
     pub reason: Option<AaReason>,
+    /// The quality governor's render scale, 1 when it is not lowering it
+    /// (app/governor.rs).
+    pub scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -972,6 +975,8 @@ pub struct EguiLayer {
     escape_aa: Option<EscapeAa>,
     /// An active simulation's hold on its grid, while there is one.
     sim_lock: Option<SimLock>,
+    /// The frame rate the governor holds now, for the Rendering menu.
+    governor_fps: f32,
     /// What the menu bar's progress bar shows. Set by App each frame.
     render_progress: RenderProgress,
 
@@ -1129,6 +1134,7 @@ impl EguiLayer {
             deep_zoom: DeepZoom::default(),
             escape_aa: None,
             sim_lock: None,
+            governor_fps: 60.0,
             render_progress: RenderProgress::Idle,
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
@@ -1624,6 +1630,9 @@ impl EguiLayer {
             render_scale: config_manager.system_settings().render_scale,
             upscaler: config_manager.system_settings().upscaler,
             render_physical_pixels: config_manager.system_settings().render_physical_pixels,
+            target_rate: config_manager.system_settings().target_rate,
+            target_fps_now: self.governor_fps,
+            export_fps: self.animation_export_settings.fps,
             render_mode: config_manager.config().render_mode,
             fly_available: crate::ui::visibility::fly_mode(crate::camera::gesture::view_kind(config_manager.config())).is_show(),
             tonemap_mode: config_manager.config().tonemap_mode,
@@ -2539,7 +2548,11 @@ impl EguiLayer {
         // The viewport's render scale: read by the app each frame, which
         // resizes the renderer when the size it asks for changes.
         let rendering = &menu_actions.rendering;
-        if rendering.set_render_scale.is_some() || rendering.set_upscaler.is_some() || rendering.set_render_physical_pixels.is_some() {
+        if rendering.set_render_scale.is_some()
+            || rendering.set_upscaler.is_some()
+            || rendering.set_render_physical_pixels.is_some()
+            || rendering.set_target_rate.is_some()
+        {
             let settings = config_manager.system_settings_mut();
             if let Some(scale) = rendering.set_render_scale {
                 settings.render_scale = scale;
@@ -2549,6 +2562,9 @@ impl EguiLayer {
             }
             if let Some(on) = rendering.set_render_physical_pixels {
                 settings.render_physical_pixels = on;
+            }
+            if let Some(rate) = rendering.set_target_rate {
+                settings.target_rate = rate;
             }
             let _ = settings.save();
         }
@@ -2803,6 +2819,16 @@ impl EguiLayer {
     /// letterbox (`SimLock`).
     pub fn set_sim_lock(&mut self, lock: Option<SimLock>) {
         self.sim_lock = lock;
+    }
+
+    /// The frame rate the governor holds now (the Rendering menu shows it).
+    pub fn set_governor_fps(&mut self, fps: f32) {
+        self.governor_fps = fps;
+    }
+
+    /// The animation export's frame rate (`TargetRate::Animation`).
+    pub fn export_fps(&self) -> u32 {
+        self.animation_export_settings.fps
     }
 
     pub fn update_escape_aa(&mut self, aa: Option<EscapeAa>) {

@@ -281,8 +281,16 @@ pub fn escape_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager, viewp
     });
     // What the view is actually drawn at, when that is not the setting:
     // the frame governor during playback, or the view's size.
-    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested) {
+    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested || aa.scale < 1.0) {
         let (text, tip) = match aa.reason {
+            Some(super::AaReason::Governor) if aa.scale < 1.0 => (
+                t!(
+                    "escape_panel.aa_in_use_governor_scaled",
+                    used = aa.in_use,
+                    scale = (aa.scale * 100.0).round()
+                ),
+                t!("escape_panel.aa_in_use_governor_tip"),
+            ),
             Some(super::AaReason::Governor) => (
                 t!("escape_panel.aa_in_use_governor", used = aa.in_use),
                 t!("escape_panel.aa_in_use_governor_tip"),

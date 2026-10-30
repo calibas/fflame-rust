@@ -199,6 +199,11 @@ pub struct SystemSettings {
     #[serde(default)]
     pub render_physical_pixels: bool,
 
+    /// The frame rate the quality governor holds while the user interacts
+    /// or an animation plays (docs/projects/quality-governor.md, D2).
+    #[serde(default)]
+    pub target_rate: TargetRate,
+
     /// Omit metadata from exported PNGs.
     ///
     /// Off by default, because the embedded config is what makes an
@@ -245,6 +250,25 @@ fn default_burn_in() -> u32 {
 
 fn default_frame_governor() -> bool {
     true
+}
+
+/// The frame rate the quality governor holds (`SystemSettings::target_rate`).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetRate {
+    /// The display's refresh under vsync, the FPS cap without it.
+    #[default]
+    Display,
+    /// The animation export's frame rate, so playback shows what the video
+    /// will.
+    Animation,
+    /// So many frames a second (never faster than the display).
+    Fixed(f32),
+}
+
+impl TargetRate {
+    /// The fixed rates the Rendering menu offers.
+    pub const FIXED: [f32; 4] = [24.0, 30.0, 60.0, 120.0];
 }
 
 fn default_render_scale() -> f32 {
@@ -343,6 +367,7 @@ impl Default for SystemSettings {
             render_scale: default_render_scale(),
             upscaler: Default::default(),
             render_physical_pixels: false,
+            target_rate: TargetRate::default(),
             png_export_strip_metadata: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_opened_file: None,
@@ -458,6 +483,9 @@ impl SystemSettings {
         }
         if current.render_physical_pixels == defaults.render_physical_pixels {
             obj.remove("render_physical_pixels");
+        }
+        if current.target_rate == defaults.target_rate {
+            obj.remove("target_rate");
         }
 
         // File Paths (Desktop only) - already use skip_serializing_if
@@ -631,6 +659,7 @@ mod tests {
         assert_eq!(settings.render_scale, 1.0);
         assert_eq!(settings.upscaler, crate::renderer::upscale::UpscaleFilter::CatmullRom);
         assert!(!settings.render_physical_pixels);
+        assert_eq!(settings.target_rate, TargetRate::Display);
     }
 
     #[test]
@@ -762,6 +791,7 @@ mod tests {
         original.render_scale = 0.5;
         original.upscaler = crate::renderer::upscale::UpscaleFilter::Bilinear;
         original.render_physical_pixels = true;
+        original.target_rate = TargetRate::Fixed(30.0);
 
         // Serialize and deserialize
         let json = original.to_json().unwrap();
@@ -777,6 +807,7 @@ mod tests {
         assert_eq!(restored.render_scale, original.render_scale);
         assert_eq!(restored.upscaler, original.upscaler);
         assert_eq!(restored.render_physical_pixels, original.render_physical_pixels);
+        assert_eq!(restored.target_rate, original.target_rate);
     }
 
     /// An encoder this build cannot read -- a codec a later build renamed

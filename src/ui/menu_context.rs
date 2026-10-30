@@ -50,6 +50,8 @@ pub struct RenderingMenuActions {
     pub set_render_scale: Option<f32>,
     pub set_upscaler: Option<crate::renderer::upscale::UpscaleFilter>,
     pub set_render_physical_pixels: Option<bool>,
+    /// The frame rate the quality governor holds.
+    pub set_target_rate: Option<crate::storage::settings::TargetRate>,
     pub reset_to_defaults: bool,
 }
 
@@ -96,6 +98,10 @@ pub struct MenuState {
     pub render_scale: f32,
     pub upscaler: crate::renderer::upscale::UpscaleFilter,
     pub render_physical_pixels: bool,
+    /// The governor's target, and what it is in frames a second now.
+    pub target_rate: crate::storage::settings::TargetRate,
+    pub target_fps_now: f32,
+    pub export_fps: u32,
     /// The active mode. It was a `render_mode_2d: bool`, which could
     /// not tell Escape and Simulation from 3D -- so the View menu drew
     /// "3D Mode" as selected in both, and Fly Mode stayed enabled.
