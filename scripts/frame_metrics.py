@@ -2,6 +2,7 @@
 """Measurements for the quality governor (docs/projects/quality-governor.md, phase 1).
 
     python scripts/frame_metrics.py loss [DIR]       # default output/governor
+    python scripts/frame_metrics.py upscalers [DIR]  # the viewport's upscalers
     python scripts/frame_metrics.py flicker FRAMES_DIR
     python scripts/frame_metrics.py summary FRAME_LOG.csv
 
@@ -10,6 +11,10 @@ loss     reads DIR/calibration.csv (the `governor_calibration` test's) and
          rendered smaller is upscaled to the reference's size first, by each
          of bilinear (what egui does today), bicubic and Lanczos. Writes
          DIR/loss.csv and DIR/table.md.
+upscalers reads DIR/upscalers.csv (the `upscaler_comparison` test's: each
+         rung below full size drawn up by the viewport's own pass, every
+         filter, FSR included) and measures each against the reference.
+         Writes DIR/upscalers.md.
 flicker  compares each frame of a folder of PNGs with the one before it:
          how much a still-looking picture moves from frame to frame.
 summary  reads a frame log (FFLAME_FRAME_LOG) and summarises it by mode,
@@ -109,6 +114,35 @@ def loss(root):
     print(f'{len(out_rows)} measures -> {os.path.join(root, "loss.csv")}, {os.path.join(root, "table.md")}')
 
 
+def upscalers(root):
+    """The viewport's own upscalers against each reference: the pictures
+    `upscaler_comparison` drew (renderer/calibration.rs), one per rung below
+    full size and filter. Writes DIR/upscalers.md."""
+    with open(os.path.join(root, 'upscalers.csv'), newline='') as f:
+        rows = list(csv.DictReader(f))
+    refs = {}
+    table = {}
+    filters = []
+    for r in rows:
+        ref = refs.get(r['ref']) or refs.setdefault(r['ref'], load_rgb(os.path.join(root, r['ref'])))
+        mae, p95, _ = measures(load_rgb(os.path.join(root, r['file'])), ref)
+        table.setdefault(r['scene'], {}).setdefault(r['rung'], {})[r['filter']] = (mae, p95)
+        if r['filter'] not in filters:
+            filters.append(r['filter'])
+    md = ['# The viewport\'s upscalers', '',
+          'Each rung below full size drawn up to its reference\'s size by the viewport\'s pass',
+          '(renderer/upscale.rs), against the reference: mae, p95 of 16x16 blocks, in levels of 255.', '']
+    for scene, rungs in table.items():
+        md += [f'## {scene}', '', '| rung |' + ''.join(f' {f} mae | {f} p95 |' for f in filters),
+               '|' + '---|' * (1 + 2 * len(filters))]
+        for rung, by in rungs.items():
+            md.append(f'| {rung} |' + ''.join(f' {by[f][0]:.2f} | {by[f][1]:.2f} |' if f in by else ' - | - |' for f in filters))
+        md.append('')
+    with open(os.path.join(root, 'upscalers.md'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(md) + '\n')
+    print('\n'.join(md))
+
+
 def sim_table(scene, rs):
     """A step's cost by field scale, and its cost a million cells: flat if
     cost goes with cells, as the governor's prediction assumes."""
@@ -173,11 +207,13 @@ def summary(path):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ('loss', 'flicker', 'summary'):
+    if len(sys.argv) < 2 or sys.argv[1] not in ('loss', 'upscalers', 'flicker', 'summary'):
         sys.exit(__doc__)
     cmd = sys.argv[1]
     if cmd == 'loss':
         loss(sys.argv[2] if len(sys.argv) > 2 else 'output/governor')
+    elif cmd == 'upscalers':
+        upscalers(sys.argv[2] if len(sys.argv) > 2 else 'output/governor')
     elif len(sys.argv) < 3:
         sys.exit(__doc__)
     elif cmd == 'flicker':

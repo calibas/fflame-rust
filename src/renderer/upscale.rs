@@ -7,7 +7,9 @@
 //! effects' output), which is what egui's own linear filter sampled
 //! before. Bilinear is that filter. Catmull-Rom is the bicubic that
 //! passes through the samples, sharper, from sixteen taps. Nearest copies
-//! each source pixel into a block, crisp and blocky. All read with
+//! each source pixel into a block, crisp and blocky. FSR 1 is AMD's
+//! edge-adaptive upsampling and sharpening, two passes ported to WGSL
+//! (`shaders/upscale_fsr.wgsl`, MIT). All read with
 //! `textureLoad`, clamped at the edges, so no sampler and no uniform
 //! control flow are needed (the WebGPU rule in SHADERS.md).
 //!
@@ -38,10 +40,14 @@ pub enum UpscaleFilter {
     /// overshoot at hard edges (clamped).
     #[default]
     CatmullRom,
+    /// AMD FidelityFX Super Resolution 1: an edge-adaptive Lanczos-like
+    /// upsampling (EASU), then contrast-adaptive sharpening (RCAS).
+    Fsr,
 }
 
 impl UpscaleFilter {
-    pub const ALL: [UpscaleFilter; 3] = [UpscaleFilter::Nearest, UpscaleFilter::Bilinear, UpscaleFilter::CatmullRom];
+    pub const ALL: [UpscaleFilter; 4] =
+        [UpscaleFilter::Nearest, UpscaleFilter::Bilinear, UpscaleFilter::CatmullRom, UpscaleFilter::Fsr];
 
     /// The i18n key of its name.
     pub fn label_key(self) -> &'static str {
@@ -49,9 +55,18 @@ impl UpscaleFilter {
             UpscaleFilter::Nearest => "menu.upscaler_nearest",
             UpscaleFilter::Bilinear => "menu.upscaler_bilinear",
             UpscaleFilter::CatmullRom => "menu.upscaler_catmull_rom",
+            UpscaleFilter::Fsr => "menu.upscaler_fsr",
         }
     }
 }
+
+/// RCAS's sharpness, in stops below its strongest (`FsrRcasCon`: 0 is the
+/// most, each stop halves it).
+const RCAS_STOPS: f32 = 0.2;
+
+/// The FSR passes (EASU, RCAS), from the shader file that keeps AMD's
+/// licence with the port.
+const FSR_SHADER: &str = include_str!("../../shaders/upscale_fsr.wgsl");
 
 /// The render scales offered (the Rendering menu). The governor will use
 /// its own steps (the plan's ladder); these are the manual setting's.
@@ -138,8 +153,61 @@ fn upscale_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #[derive(Default)]
 pub struct Upscale {
     output: Option<(Texture, TextureView)>,
+    /// EASU's picture, which RCAS sharpens into the output (FSR only).
+    mid: Option<(Texture, TextureView)>,
     params: Option<Buffer>,
-    pipeline: Option<(ComputePipeline, BindGroupLayout)>,
+    layout: Option<BindGroupLayout>,
+    /// The one-pass filters' pipeline.
+    pipeline: Option<ComputePipeline>,
+    /// FSR's EASU and RCAS, made the first time it is chosen.
+    fsr: Option<(ComputePipeline, ComputePipeline)>,
+}
+
+/// A display-sized `Rgba8Unorm` picture: written by a pass, read by the
+/// next or shown by egui; COPY_SRC so a test can read it back.
+fn picture(device: &Device, label: &str, w: u32, h: u32) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some(label),
+        size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
+}
+
+/// Keep `slot` a `w` x `h` picture.
+fn fit(slot: &mut Option<(Texture, TextureView)>, device: &Device, label: &str, w: u32, h: u32) {
+    if slot.as_ref().is_none_or(|(t, _)| t.width() != w || t.height() != h) {
+        if let Some((t, _)) = slot.take() {
+            t.destroy();
+        }
+        *slot = Some(picture(device, label, w, h));
+    }
+}
+
+fn pipeline(device: &Device, layout: &BindGroupLayout, source: &str, label: &str, entry: &str) -> ComputePipeline {
+    let module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some(label),
+        source: ShaderSource::Wgsl(source.into()),
+    });
+    let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&ComputePipelineDescriptor {
+        label: Some(label),
+        layout: Some(&pl),
+        module: &module,
+        entry_point: Some(entry),
+        compilation_options: Default::default(),
+        cache: None,
+    })
 }
 
 impl Upscale {
@@ -156,25 +224,7 @@ impl Upscale {
         filter: UpscaleFilter,
     ) {
         let (w, h) = (dst_size.0.max(1), dst_size.1.max(1));
-        if self.output.as_ref().is_none_or(|(t, _)| t.width() != w || t.height() != h) {
-            if let Some((t, _)) = self.output.take() {
-                t.destroy();
-            }
-            let texture = device.create_texture(&TextureDescriptor {
-                label: Some("Viewport Upscale"),
-                size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                // Written by the pass, shown by egui; COPY_SRC so a test
-                // can read it back.
-                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&TextureViewDescriptor::default());
-            self.output = Some((texture, view));
-        }
+        fit(&mut self.output, device, "Viewport Upscale", w, h);
         let params = self.params.get_or_insert_with(|| {
             device.create_buffer(&BufferDescriptor {
                 label: Some("Viewport Upscale Params"),
@@ -187,18 +237,16 @@ impl Upscale {
         raw[0..4].copy_from_slice(&(src_size.0.max(1) as f32 / w as f32).to_le_bytes());
         raw[4..8].copy_from_slice(&(src_size.1.max(1) as f32 / h as f32).to_le_bytes());
         let kind: u32 = match filter {
-            UpscaleFilter::Bilinear => 0,
+            UpscaleFilter::Bilinear | UpscaleFilter::Fsr => 0,
             UpscaleFilter::CatmullRom => 1,
             UpscaleFilter::Nearest => 2,
         };
         raw[8..12].copy_from_slice(&kind.to_le_bytes());
+        // RCAS's sharpness, linear (`FsrRcasCon`); padding to the rest.
+        raw[12..16].copy_from_slice(&(-RCAS_STOPS).exp2().to_le_bytes());
         queue.write_buffer(params, 0, &raw);
-        let (pipeline, layout) = self.pipeline.get_or_insert_with(|| {
-            let module = device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("Viewport Upscale"),
-                source: ShaderSource::Wgsl(SHADER.into()),
-            });
-            let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        let layout = self.layout.get_or_insert_with(|| {
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Viewport Upscale Layout"),
                 entries: &[
                     BindGroupLayoutEntry {
@@ -232,39 +280,44 @@ impl Upscale {
                         count: None,
                     },
                 ],
-            });
-            let pl = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Viewport Upscale Pipeline Layout"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("Viewport Upscale"),
-                layout: Some(&pl),
-                module: &module,
-                entry_point: Some("upscale_main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-            (pipeline, layout)
+            })
         });
-        let (_, dst) = self.output.as_ref().expect("made above");
-        let bg = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Viewport Upscale Bind Group"),
-            layout,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(src) },
-                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(dst) },
-                BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
-            ],
-        });
-        let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("Viewport Upscale Pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+        let dispatch = |encoder: &mut CommandEncoder, pipeline: &ComputePipeline, from: &TextureView, to: &TextureView, label: &str| {
+            let bg = device.create_bind_group(&BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(from) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::TextureView(to) },
+                    BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
+                ],
+            });
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor { label: Some(label), timestamp_writes: None });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+        };
+        let (_, dst) = self.output.as_ref().expect("fitted above");
+        if filter == UpscaleFilter::Fsr {
+            fit(&mut self.mid, device, "Viewport Upscale EASU", w, h);
+            let (easu, rcas) = self.fsr.get_or_insert_with(|| {
+                (
+                    pipeline(device, layout, FSR_SHADER, "Viewport Upscale EASU", "easu_main"),
+                    pipeline(device, layout, FSR_SHADER, "Viewport Upscale RCAS", "rcas_main"),
+                )
+            });
+            let (_, mid) = self.mid.as_ref().expect("fitted above");
+            dispatch(encoder, easu, src, mid, "Viewport Upscale EASU");
+            dispatch(encoder, rcas, mid, dst, "Viewport Upscale RCAS");
+        } else {
+            if let Some((t, _)) = self.mid.take() {
+                t.destroy();
+            }
+            let simple = self
+                .pipeline
+                .get_or_insert_with(|| pipeline(device, layout, SHADER, "Viewport Upscale", "upscale_main"));
+            dispatch(encoder, simple, src, dst, "Viewport Upscale");
+        }
     }
 
     /// The last picture drawn, and its size.
@@ -273,14 +326,16 @@ impl Upscale {
     }
 
     #[cfg(test)]
-    fn texture(&self) -> Option<&Texture> {
+    pub(crate) fn texture(&self) -> Option<&Texture> {
         self.output.as_ref().map(|(t, _)| t)
     }
 
-    /// Free the picture (the next `run` makes it again).
+    /// Free the pictures (the next `run` makes them again).
     pub fn release(&mut self) {
-        if let Some((t, _)) = self.output.take() {
-            t.destroy();
+        for slot in [&mut self.output, &mut self.mid] {
+            if let Some((t, _)) = slot.take() {
+                t.destroy();
+            }
         }
     }
 }
@@ -453,6 +508,50 @@ mod tests {
         // The edge falls between source 3 and 4: destination 14..17.
         let spread = |o: &[u8]| (13..=18).map(|x| (o[x * 4] as i32 - 128).abs()).sum::<i32>();
         assert!(spread(&cub) > spread(&lin), "Catmull-Rom {} against bilinear {}", spread(&cub), spread(&lin));
+    }
+
+    /// FSR keeps an edge sharper than bilinear does.
+    #[test]
+    fn fsr_keeps_an_edge_sharper_than_bilinear() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (16u32, 4u32);
+        let src: Vec<u8> = (0..w * h).flat_map(|i| {
+            let v = if i % w < 8 { 40u8 } else { 215 };
+            [v, v, v, 255]
+        }).collect();
+        let lin = upscale(&device, &queue, (w, h), &src, (w * 2, h * 2), UpscaleFilter::Bilinear);
+        let fsr = upscale(&device, &queue, (w, h), &src, (w * 2, h * 2), UpscaleFilter::Fsr);
+        // The edge falls between source 7 and 8: destination 14..17, row 3.
+        let row = (3 * w * 2 * 4) as usize;
+        let spread = |o: &[u8]| (12..=19).map(|x| (o[row + x * 4] as i32 - 128).abs()).sum::<i32>();
+        assert!(spread(&fsr) > spread(&lin), "FSR {} against bilinear {}", spread(&fsr), spread(&lin));
+    }
+
+    /// A saturated colour on black: RCAS's limiters divide by zero on every
+    /// channel the ring holds none of, and the port takes HLSL's answer
+    /// there (`rcas_lobe`), so the empty channels stay empty and the black
+    /// stays black -- no NaN's garbage, on any platform.
+    #[test]
+    fn fsr_keeps_a_saturated_colour_on_black_clean() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (16u32, 16u32);
+        let src: Vec<u8> = (0..w * h).flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            if (6..10).contains(&x) && (6..10).contains(&y) { [255, 0, 0, 255] } else { [0, 0, 0, 255] }
+        }).collect();
+        let out = upscale(&device, &queue, (w, h), &src, (w * 2, h * 2), UpscaleFilter::Fsr);
+        for (i, px) in out.chunks_exact(4).enumerate() {
+            assert_eq!((px[1], px[2]), (0, 0), "pixel {i}: green and blue came from nowhere: {px:?}");
+        }
+        assert_eq!(&out[0..4], &[0, 0, 0, 255], "the corner is black");
+        let centre = ((16 * w * 2 + 16) * 4) as usize;
+        assert!(out[centre] > 200, "the square is red: {:?}", &out[centre..centre + 4]);
     }
 
     #[test]
