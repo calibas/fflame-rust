@@ -579,7 +579,7 @@ no undo, saved on every change, the same for every picture.
 | | `png_export_strip_metadata` | false |
 | viewport | `viewport_letterbox` — the viewport in the picture's shape, black bars around it | false |
 | | `render_scale` — the viewport's picture renders at this share of its size each side, drawn up to the screen (`app/render_scale.rs`); not in Simulation; exports render at `image_size`, Export Current Image saves the picture as rendered | 1.0 |
-| | `upscaler` (`Bilinear` or `CatmullRom`; `renderer::upscale`) | `CatmullRom` |
+| | `upscaler` (`Nearest`, `Bilinear` or `CatmullRom`; `renderer::upscale`) | `CatmullRom` |
 | | `render_physical_pixels` — render at the screen's pixels rather than egui's points | false |
 | UI | `language` | `"en"` |
 | | `show_help_on_startup` | true |

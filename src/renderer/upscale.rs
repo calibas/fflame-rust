@@ -6,7 +6,8 @@
 //! On the tone-mapped 8-bit picture (the fractal texture, or the colour
 //! effects' output), which is what egui's own linear filter sampled
 //! before. Bilinear is that filter. Catmull-Rom is the bicubic that
-//! passes through the samples, sharper, from sixteen taps. Both read with
+//! passes through the samples, sharper, from sixteen taps. Nearest copies
+//! each source pixel into a block, crisp and blocky. All read with
 //! `textureLoad`, clamped at the edges, so no sampler and no uniform
 //! control flow are needed (the WebGPU rule in SHADERS.md).
 //!
@@ -29,6 +30,8 @@ use wgpu::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpscaleFilter {
+    /// The nearest pixel: each source pixel a block, no blending.
+    Nearest,
     /// Linear between the four nearest pixels: what egui did.
     Bilinear,
     /// Catmull-Rom bicubic: sharper, through the samples, a slight
@@ -38,11 +41,12 @@ pub enum UpscaleFilter {
 }
 
 impl UpscaleFilter {
-    pub const ALL: [UpscaleFilter; 2] = [UpscaleFilter::Bilinear, UpscaleFilter::CatmullRom];
+    pub const ALL: [UpscaleFilter; 3] = [UpscaleFilter::Nearest, UpscaleFilter::Bilinear, UpscaleFilter::CatmullRom];
 
     /// The i18n key of its name.
     pub fn label_key(self) -> &'static str {
         match self {
+            UpscaleFilter::Nearest => "menu.upscaler_nearest",
             UpscaleFilter::Bilinear => "menu.upscaler_bilinear",
             UpscaleFilter::CatmullRom => "menu.upscaler_catmull_rom",
         }
@@ -65,7 +69,8 @@ const SHADER: &str = r#"
 struct UpscaleParams {
     // Source pixels per destination pixel, each axis.
     ratio: vec2<f32>,
-    // 0 bilinear, 1 Catmull-Rom. (`filter` is reserved in WGSL.)
+    // 0 bilinear, 1 Catmull-Rom, 2 nearest. (`filter` is reserved in
+    // WGSL.)
     kind: u32,
     _pad: u32,
 }
@@ -98,6 +103,12 @@ fn upscale_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let size = vec2<i32>(textureDimensions(src_tex));
+    if (p.kind == 2u) {
+        // The source pixel the destination pixel's centre falls in.
+        let src = vec2<i32>(floor((vec2<f32>(q) + vec2<f32>(0.5)) * p.ratio));
+        textureStore(dst_tex, q, upscale_tap(src, size));
+        return;
+    }
     // The destination pixel's centre in source pixels, less half a pixel:
     // the integer part is the tap left of and above it.
     let at = (vec2<f32>(q) + vec2<f32>(0.5)) * p.ratio - vec2<f32>(0.5);
@@ -175,7 +186,12 @@ impl Upscale {
         let mut raw = [0u8; 16];
         raw[0..4].copy_from_slice(&(src_size.0.max(1) as f32 / w as f32).to_le_bytes());
         raw[4..8].copy_from_slice(&(src_size.1.max(1) as f32 / h as f32).to_le_bytes());
-        raw[8..12].copy_from_slice(&u32::from(filter == UpscaleFilter::CatmullRom).to_le_bytes());
+        let kind: u32 = match filter {
+            UpscaleFilter::Bilinear => 0,
+            UpscaleFilter::CatmullRom => 1,
+            UpscaleFilter::Nearest => 2,
+        };
+        raw[8..12].copy_from_slice(&kind.to_le_bytes());
         queue.write_buffer(params, 0, &raw);
         let (pipeline, layout) = self.pipeline.get_or_insert_with(|| {
             let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -386,7 +402,7 @@ mod tests {
         let (w, h) = (8u32, 2u32);
         let value = |x: u32| (x * 32) as u8;
         let src: Vec<u8> = (0..h).flat_map(|_| (0..w).flat_map(move |x| [value(x), 0, 0, 255])).collect();
-        for filter in UpscaleFilter::ALL {
+        for filter in [UpscaleFilter::Bilinear, UpscaleFilter::CatmullRom] {
             let out = upscale(&device, &queue, (w, h), &src, (w * 2, h * 2), filter);
             // Destination x = 2i + 1 sits a quarter past source i: 32i + 8.
             // Keep away from the clamped edges.
@@ -395,6 +411,26 @@ mod tests {
                 let got = out[(x * 4) as usize];
                 let want = 32 * i + 8;
                 assert!(got.abs_diff(want as u8) <= 1, "{filter:?} at x {x}: {got} against {want}");
+            }
+        }
+    }
+
+    /// Nearest copies each source pixel into a block: doubled, every 2x2
+    /// block is its source pixel exactly.
+    #[test]
+    fn nearest_makes_each_pixel_a_block() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (5u32, 3u32);
+        let src: Vec<u8> = (0..w * h).flat_map(|i| [(i * 17) as u8, (i * 5) as u8, 255 - i as u8, 255]).collect();
+        let out = upscale(&device, &queue, (w, h), &src, (w * 2, h * 2), UpscaleFilter::Nearest);
+        for y in 0..h * 2 {
+            for x in 0..w * 2 {
+                let d = ((y * w * 2 + x) * 4) as usize;
+                let s = (((y / 2) * w + x / 2) * 4) as usize;
+                assert_eq!(&out[d..d + 4], &src[s..s + 4], "pixel ({x}, {y})");
             }
         }
     }

@@ -323,7 +323,9 @@ and *Upscaler*, so each rung can be judged by eye before anything
 automatic uses it.
 
 **As built (2026-10-30).** `SystemSettings::render_scale`, `upscaler`
-(Catmull-Rom by default) and `render_physical_pixels` (D1's setting),
+(Catmull-Rom by default; bilinear; nearest, which the user asked for after
+trying the first two: "Catmull-Rom looks a little better than Bilinear,
+they both look a bit blurry at 50% upscaling") and `render_physical_pixels` (D1's setting),
 above the Rendering menu's chaos-game rows so they act in escape-time
 too. `app/render_scale.rs` turns the viewport's points into two sizes:
 the display's (points times `pixels_per_point`) and the render's (points,
