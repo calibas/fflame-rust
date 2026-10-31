@@ -2178,7 +2178,7 @@ impl EguiLayer {
                 ctx,
                 animation_controller,
                 &mut self.animation_export_settings,
-                config_manager.active_config().image_size,
+                config_manager.active_config(),
                 export_status.active,
                 &mut self.export_panel_state,
                 #[cfg(not(target_arch = "wasm32"))]

@@ -469,6 +469,64 @@ impl AudioExportConfig {
     }
 }
 
+/// **An export's speed-ups** (docs/projects/quality-governor.md, *Exports*;
+/// D3: the user's choice, not the machine's): the same for every frame, so
+/// a video's frames never depend on the load. The default renders as
+/// before. A flame's samples are the export's own setting already (its
+/// Max Iterations a frame).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExportRung {
+    /// Each side at this share. A flame or escape-time frame renders at it
+    /// and is drawn up to the video's size by `upscaler`, its sizes in
+    /// pixels scaled to match. A simulation's bound grid scales by it
+    /// instead, and the frame renders at the video's size: its grid is the
+    /// content, so this is a different run from the still. A fixed grid is
+    /// unchanged.
+    pub render_scale: f32,
+    pub upscaler: crate::renderer::upscale::UpscaleFilter,
+    /// Escape-time's supersampling, at most this; never above the config's.
+    pub escape_supersample: Option<u32>,
+}
+
+impl Default for ExportRung {
+    fn default() -> Self {
+        ExportRung {
+            render_scale: 1.0,
+            upscaler: crate::renderer::upscale::UpscaleFilter::default(),
+            escape_supersample: None,
+        }
+    }
+}
+
+impl ExportRung {
+    /// The render scale, within the governor's range (to a quarter).
+    fn scale(&self) -> f32 {
+        if self.render_scale.is_finite() { self.render_scale.clamp(0.25, 1.0) } else { 1.0 }
+    }
+
+    /// The size a frame of `config` renders at, for a video of `size`.
+    pub fn render_size(&self, config: &FractalConfig, size: (u32, u32)) -> (u32, u32) {
+        if self.scale() >= 1.0 || config.render_mode == crate::scene::transforms::RenderMode::Simulation {
+            size
+        } else {
+            crate::renderer::upscale::scaled_size(size, self.scale())
+        }
+    }
+
+    /// A frame's config (or a moment's) at this rung: escape-time's
+    /// supersampling capped, a simulation's bound grid scaled.
+    pub fn apply(&self, config: &mut FractalConfig) {
+        if let Some(n) = self.escape_supersample {
+            config.escape.supersample = config.escape.supersample.min(n.max(1));
+        }
+        if config.render_mode == crate::scene::transforms::RenderMode::Simulation && self.scale() < 1.0 {
+            if let crate::config::sim::SimGrid::Viewport { scale } = &mut config.sim.grid {
+                *scale *= self.scale();
+            }
+        }
+    }
+}
+
 /// Animation export configuration
 #[derive(Clone)]
 pub struct AnimationExportConfig {
@@ -494,6 +552,8 @@ pub struct AnimationExportConfig {
     /// animation's generators are added to these at export start
     /// (`export_signals`), so the CLI may leave it empty.
     pub signals: std::collections::HashMap<String, Signal>,
+    /// The speed-ups this export renders with (`ExportRung`).
+    pub rung: ExportRung,
 }
 
 impl AnimationExportConfig {
@@ -2026,9 +2086,11 @@ pub async fn export_animation(
             };
             let mut c = export_config.config.clone();
             apply_animation_values(&mut c, &values);
+            export_config.rung.apply(&mut c);
             (frame, c.escape)
         });
-        if let Some((frame, (rw, rh))) = deep_zoom_misfit(&device, export_config.width, export_config.height, frames) {
+        let (pw, ph) = export_config.rung.render_size(&export_config.config, (export_config.width, export_config.height));
+        if let Some((frame, (rw, rh))) = deep_zoom_misfit(&device, pw, ph, frames) {
             return Err(AnimationExportError::InvalidConfig(format!(
                 "this GPU cannot hold the deep-zoom state for a {rw}x{rh} frame \
                  (frame {} is the first that needs it). Export at a smaller size \
@@ -2121,16 +2183,29 @@ pub async fn export_animation(
     apply_animation_values(&mut first_config, &first_values);
 
     // The render mode is not a track target, so the first frame's holds
-    // for the whole video.
+    // for the whole video; so does the size the rung renders at.
+    let (width, height) = (export_config.width, export_config.height);
+    let rung = export_config.rung;
+    let (render_w, render_h) = rung.render_size(&first_config, (width, height));
+    let drawn_up = (render_w, render_h) != (width, height);
+    if rung != ExportRung::default() {
+        log::info!(
+            "Video export: rendered at {render_w}x{render_h}{} for {width}x{height}, escape supersampling at most {:?}",
+            if drawn_up { format!(", drawn up by {:?},", rung.upscaler) } else { String::new() },
+            rung.escape_supersample,
+        );
+    }
+    rung.apply(&mut first_config);
     let mut renderer = FlameRenderer::for_job(
         &device,
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
-        export_config.width,
-        export_config.height,
+        render_w,
+        render_h,
         &first_config,
     );
     renderer.set_sticky_enabled(false);
+    let mut upscale = crate::renderer::upscale::Upscale::default();
 
     // The state that OUTLIVES the frame, and the reason a video is not
     // just a sequence of stills: the simulation's field continues its
@@ -2160,14 +2235,18 @@ pub async fn export_animation(
         };
         let mut frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
+        rung.apply(&mut frame_config);
         // Motion blur: the frame's moments, taken after the frame itself
         // so its signal smoothing has advanced once (`evaluate_moment`).
-        let moments = moment_configs(
+        let mut moments = moment_configs(
             &export_config.config,
             &controller,
             time,
             if has_signals { Some(&signal_manager) } else { None },
         );
+        for m in &mut moments {
+            rung.apply(m);
+        }
 
         let render_start = Instant::now();
         let output = {
@@ -2180,15 +2259,24 @@ pub async fn export_animation(
                 // printed, and the next one is wanted 100 ms on.
                 last_report: Instant::now(),
             };
-            let job = crate::renderer::RenderJob::new(
-                &frame_config,
-                export_config.width,
-                export_config.height,
-            )
-            .with_iterations_per_thread(export_config.iterations_per_thread)
-            .with_engines(&mut engines)
-            .with_moments(&moments);
-            crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await
+            let job = crate::renderer::RenderJob::new(&frame_config, render_w, render_h)
+                .with_iterations_per_thread(export_config.iterations_per_thread)
+                .with_engines(&mut engines)
+                .with_moments(&moments)
+                .with_pixel_scale(render_h as f32 / height.max(1) as f32);
+            match crate::renderer::render_with(&mut renderer, &device, &queue, job, &mut progress).await {
+                // Drawn up to the video's size (`ExportRung`).
+                Ok(mut o) if drawn_up => {
+                    match upscale.upscale_rgba(&device, &queue, &o.rgba_data, (render_w, render_h), (width, height), rung.upscaler).await {
+                        Ok(px) => {
+                            (o.width, o.height, o.rgba_data) = (width, height, px);
+                            Ok(o)
+                        }
+                        Err(e) => Err(crate::renderer::RenderError::PixelReadFailed(e)),
+                    }
+                }
+                other => other,
+            }
         };
         let output = match output {
             Ok(o) => o,
@@ -2231,6 +2319,7 @@ pub async fn export_animation(
         );
     }
 
+    upscale.release();
     // Closing the channel is what tells FFmpeg the stream ended, so it
     // must happen before the join -- on the cancel path too, where the
     // partial video is still finalized rather than left truncated.
@@ -2992,6 +3081,67 @@ mod tests {
         assert_eq!(cli_base_config(None, Some(&embedded)).unwrap().flame.name, "embedded");
         assert_eq!(cli_base_config(Some(flag), None).unwrap().flame.name, "flag");
         assert!(cli_base_config(None, None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod rung_tests {
+    use super::ExportRung;
+    use crate::config::sim::SimGrid;
+    use crate::config::FractalConfig;
+    use crate::scene::transforms::RenderMode;
+
+    fn config(mode: RenderMode) -> FractalConfig {
+        let mut c = FractalConfig::default();
+        c.render_mode = mode;
+        c.escape.supersample = 4;
+        c.sim.grid = SimGrid::Viewport { scale: 0.5 };
+        c
+    }
+
+    /// The default rung renders every mode as before.
+    #[test]
+    fn the_default_rung_changes_nothing() {
+        let rung = ExportRung::default();
+        for mode in RenderMode::ALL {
+            let before = config(*mode);
+            let mut after = before.clone();
+            rung.apply(&mut after);
+            assert_eq!(serde_json::to_value(&after).unwrap(), serde_json::to_value(&before).unwrap(), "{mode:?}");
+            assert_eq!(rung.render_size(&before, (1920, 1080)), (1920, 1080));
+        }
+    }
+
+    /// A flame or escape-time frame renders smaller; a simulation's frame
+    /// renders at the video's size, its bound grid scaled instead, and a
+    /// fixed grid is left alone. Escape-time's supersampling is capped,
+    /// never raised.
+    #[test]
+    fn a_rung_renders_smaller_or_scales_the_grid() {
+        let rung = ExportRung { render_scale: 0.5, escape_supersample: Some(2), ..ExportRung::default() };
+        for mode in [RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Escape] {
+            assert_eq!(rung.render_size(&config(mode), (1920, 1080)), (960, 540), "{mode:?}");
+        }
+        let mut escape = config(RenderMode::Escape);
+        rung.apply(&mut escape);
+        assert_eq!(escape.escape.supersample, 2);
+        let mut low = config(RenderMode::Escape);
+        low.escape.supersample = 1;
+        rung.apply(&mut low);
+        assert_eq!(low.escape.supersample, 1, "never raised");
+
+        let mut sim = config(RenderMode::Simulation);
+        assert_eq!(rung.render_size(&sim, (1920, 1080)), (1920, 1080));
+        rung.apply(&mut sim);
+        assert_eq!(sim.sim.grid, SimGrid::Viewport { scale: 0.25 });
+        let mut fixed = config(RenderMode::Simulation);
+        fixed.sim.grid = SimGrid::Fixed { width: 300, height: 200 };
+        rung.apply(&mut fixed);
+        assert_eq!(fixed.sim.grid, SimGrid::Fixed { width: 300, height: 200 });
+
+        // Within a quarter to full size.
+        let tiny = ExportRung { render_scale: 0.01, ..ExportRung::default() };
+        assert_eq!(tiny.render_size(&config(RenderMode::TwoD), (1920, 1080)), (480, 270));
     }
 }
 

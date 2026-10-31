@@ -2293,6 +2293,7 @@ impl App {
                             bitrate_kbps: export_settings.audio_bitrate,
                         }
                     }),
+                    rung: export_settings.rung,
                     signals: {
                         let mut signals = self.signal_manager.clone_signals();
                         // The offset moves the muxed audio; the
