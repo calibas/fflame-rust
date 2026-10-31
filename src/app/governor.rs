@@ -268,6 +268,16 @@ impl BatchCap {
     }
 }
 
+/// **Without a GPU timer** (a browser without `timestamp-query`): the rung
+/// at the dropped-frame walker's `position` on escape-time's ladder
+/// (`aa_governor::AaGovernor`, which counts 1 to the ladder's length, the
+/// length the best rung).
+pub(crate) fn fallback_rung(ladder: &[Rung], position: u32) -> Rung {
+    let n = ladder.len().max(1);
+    let p = (position as usize).clamp(1, n);
+    ladder.get(n - p).copied().unwrap_or(Rung { supersample: 1, scale: 1.0 })
+}
+
 /// The batch scale under the pacing cap (`BatchCap`, as a share of the
 /// full batch): never above it, and coming down to it from `before`, the
 /// last frame's, at the batch governor's slew (`adjust_iter_scale`), since
@@ -1007,6 +1017,20 @@ mod tests {
         assert!(seen[100..].iter().all(|s| (s - want).abs() < 1e-9), "{want}: {:?}", &seen[95..105]);
     }
 
+    /// Without a GPU timer the walker's position counts up from the
+    /// cheapest rung: its ceiling, the ladder's length, is the best.
+    #[test]
+    fn the_fallback_walks_the_ladder_best_at_the_top() {
+        let ladder = escape_ladder(4, false);
+        let n = ladder.len() as u32;
+        assert_eq!(fallback_rung(&ladder, n), ladder[0], "the top is the best");
+        assert_eq!(fallback_rung(&ladder, 1), *ladder.last().unwrap(), "1 is the cheapest");
+        assert_eq!(fallback_rung(&ladder, n + 3), ladder[0], "clamped");
+        assert_eq!(fallback_rung(&ladder, 0), *ladder.last().unwrap(), "clamped");
+        let rungs: Vec<Rung> = (1..=n).rev().map(|p| fallback_rung(&ladder, p)).collect();
+        assert_eq!(rungs, ladder, "every rung, in order");
+    }
+
     /// Over the cap the batch comes down at the governor's slew, not at once.
     #[test]
     fn a_batch_over_its_cap_comes_down_at_the_slew() {
@@ -1261,6 +1285,10 @@ pub(crate) struct GovernorState {
     pub flame_cap: Option<f64>,
     /// A simulation's grid scale (`SimGovernor`).
     pub sim: SimGovernor,
+    /// While escape-time is governed without a GPU timer
+    /// (`fallback_rung`): the ladder's length, the walker's ceiling, and
+    /// the budget its settled frames are judged against, ms.
+    pub fallback: Option<(u32, f64)>,
 }
 
 impl Default for GovernorState {
@@ -1288,6 +1316,7 @@ impl Default for GovernorState {
             batch_cap: BatchCap::default(),
             flame_cap: None,
             sim: SimGovernor::default(),
+            fallback: None,
         }
     }
 }
@@ -1589,14 +1618,15 @@ impl super::App {
     /// Escape-time's rung this frame (supersampling, render scale), or None
     /// when it is not governed: while an animation plays, or a 2D picture
     /// is being edited (a solid has its own preview then), with the frame
-    /// governor on and a GPU that can time its frames. Updates the ladder,
-    /// predicts at once on entering, and lets go on leaving.
+    /// governor on. Updates the ladder, predicts at once on entering, and
+    /// lets go on leaving. Without a GPU timer the ladder is walked by
+    /// dropped frames instead (`fallback_rung`), in playback alone: the
+    /// walker reads settled playback frames.
     pub(super) fn govern_escape(&mut self, config_ss: u32, solid: bool, user_scale: f32) -> Option<Rung> {
         let playing = self.animation_controller.is_playing();
         let editing = !solid && self.escape_last_edit.is_some_and(|t| t.elapsed() < super::ESCAPE_INTERACTION_WINDOW);
-        let on = (playing || editing)
-            && self.config_manager.system_settings().frame_governor
-            && self.frame_timer.is_some();
+        let timed = self.frame_timer.is_some();
+        let on = (playing || (editing && timed)) && self.config_manager.system_settings().frame_governor;
         let refresh = self.governor_budget_ms();
         let g = &mut self.governor;
         let budget = g.capped.unwrap_or(refresh);
@@ -1606,6 +1636,7 @@ impl super::App {
             }
             g.escape_on = false;
             g.scale = 1.0;
+            g.fallback = None;
             return None;
         }
         // The ceiling is the settings': the config's supersampling, and the
@@ -1615,6 +1646,18 @@ impl super::App {
             .map(|r| Rung { supersample: r.supersample, scale: r.scale.min(user_scale) })
             .collect();
         ladder.dedup();
+        if !timed {
+            // Judged against the target's budget, never the one frames
+            // held back elsewhere allow (`effective_budget`): with no GPU
+            // span to tell the two apart, a GPU too slow for the target
+            // would read as frames held back, and nothing would shed.
+            let steps = ladder.len() as u32;
+            let rung = fallback_rung(&ladder, self.escape_aa.factor(steps));
+            g.scale = rung.scale;
+            g.fallback = Some((steps, refresh));
+            return Some(rung);
+        }
+        g.fallback = None;
         g.escape.set_ladder(ladder);
         let display = self.fractal_viewport_size;
         if g.display != (0, 0) && display != g.display {

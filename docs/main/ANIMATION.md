@@ -353,11 +353,12 @@ applies the tracks there; **Pause** leaves the picture at the playhead.
   once playback stops.
 - *Escape:* the controller is held until the frame **settles**, then
   advanced by all the wall time that passed (`paced_playback_tick`).
-  Playback slows rather than showing partial renders. With the frame
-  governor on, the viewport's supersampling is shed and restored to
-  keep settled frames on time
-  ([aa_governor.rs](../../src/app/aa_governor.rs)); stills and exports
-  use the config's factor.
+  Playback slows rather than showing partial renders. With the quality
+  governor on, the viewport's supersampling and render scale are shed
+  and restored to keep settled frames at the Target Frame Rate
+  ([governor.rs](../../src/app/governor.rs); without a GPU timer, by
+  dropped frames, [aa_governor.rs](../../src/app/aa_governor.rs));
+  stills and exports use the config's factor.
 - *Simulation:* paced the same way when the animation has a
   `Sim.Steps` track — see below.
 

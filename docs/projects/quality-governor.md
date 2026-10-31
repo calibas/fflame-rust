@@ -702,6 +702,44 @@ Open: a deep terrain's section renders (one step can take 360 ms) want
 splitting, or a budget the governor sets ("section detail while moving",
 *The ladder*); the render scale cannot reach them.
 
+## The web, as built (2026-10-30)
+
+A browser that offers `timestamp-query` (Chrome) runs the governor as on
+the desktop: the device asks for it wherever the adapter has it. Without
+it (`FrameTimer::new` returns None):
+- **Escape-time** walks the same ladder by dropped frames
+  (`governor::fallback_rung`, `aa_governor::AaGovernor`, whose factor is
+  now a position on the ladder): a step down when 4 of the last 30
+  settled playback frames came over 1.5 budgets apart, a step up after
+  120 clean frames, a failed step up (3 drops in its first 60) undone
+  and the next try waiting twice as long, to 64 s. Against the Target
+  Frame Rate's budget, never `effective_budget`'s, which with no GPU span
+  would read a GPU too slow as frames held back elsewhere. Playback
+  only: an edit has no settled-frame cadence to read.
+- **Terrains** are not governed (as before): the walker reads settled
+  pictures, and a terrain's frame is a pass of a progressive render.
+- **Simulations** are not governed: a browser's `poll(Wait)` does not
+  block, so a batch's time is its submit's, near nothing, and every model
+  read as free (the governor kept the full grid, silently). The renderer
+  now reports no timed batches there, and *Fit to Target* says it has
+  nothing measured.
+- **Flames**: the batch governor reads frame intervals and the render
+  scale the samples a frame, neither needing a timer; the pacing cap
+  needs one and is off.
+
+Tried on the desktop with `FFLAME_FRAME_LOG_NO_GPU_TIMER` (no frame log
+GPU times), 60 Hz, 754x786:
+
+| scene | held | fps | frames over 25 ms | rung changes |
+|---|---|---|---|---|
+| escape zoom (4x set) | 2x (4x, 3x, 2x in the first 21 frames) | 58.3 | 2.3% | 8 (probes to 3x at 143, 393, 884 frames, each undone in ~8) |
+| escape sweep (2x set) | 2x | 60.1 | 0.2% | 0 |
+| mode-D solid | 1x at 25% (100, 75, 50, 25% by frame 74) | 59.3 | 3.2% | 9 (probes to 50%, likewise) |
+
+The timed governor held the same rungs (*Hiccups*, above), without the
+probes: those are the price of a signal that shows overload but never
+room.
+
 ## Exports
 
 **As built (2026-10-30):** `animation::export::ExportRung`, the video
@@ -929,7 +967,8 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    pacing cap the same day (*The flame batch's pacing cap, as built*).
 6. **Exports**: the fixed rungs in the video export and the CLI. Built
    2026-10-30 (*Exports*, as built).
-7. **The web**: the fallback signal; tried in a browser.
+7. **The web**: the fallback signal; tried in a browser. The fallback
+   built 2026-10-30 (*The web, as built*); the browser still to try.
 
 ## Decisions
 

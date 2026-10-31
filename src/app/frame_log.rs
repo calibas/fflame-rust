@@ -18,6 +18,9 @@
 //! touch: a measurement needs a known ceiling. `FFLAME_FRAME_LOG_TARGET_FPS`
 //! does the same for the Target Frame Rate (`display`, or frames a second),
 //! and `FFLAME_FRAME_LOG_VSYNC` (`on` or `off`) for VSync.
+//! `FFLAME_FRAME_LOG_NO_GPU_TIMER` starts the app without its frame timer,
+//! as a browser without `timestamp-query` runs: the quality governor's
+//! fallback (`governor::fallback_rung`).
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -78,6 +81,13 @@ pub(crate) struct FrameState {
     /// governor holds (governor.rs), if it holds one.
     pub sim_step_ms: f64,
     pub sim_scale: Option<f32>,
+}
+
+/// A scripted run without the frame timer (`FFLAME_FRAME_LOG_NO_GPU_TIMER`,
+/// with the frame log on).
+pub(super) fn without_gpu_timer() -> bool {
+    std::env::var("FFLAME_FRAME_LOG").is_ok_and(|p| !p.is_empty())
+        && std::env::var("FFLAME_FRAME_LOG_NO_GPU_TIMER").is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
 impl super::App {
