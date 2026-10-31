@@ -812,6 +812,17 @@ use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
 use winit::{event::WindowEvent, window::Window};
 
+/// The quality governor's part in a simulation (app/governor.rs), for the
+/// Simulation panel. Set by the app each frame.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SimGovernorUi {
+    /// The grid scale a governed run holds, while it is not the config's.
+    pub held: Option<f32>,
+    /// *Fit to target*'s scale: the best at which Steps per Frame fit the
+    /// Target Frame Rate, as measured; None before a step has been.
+    pub fit: Option<f32>,
+}
+
 /// An active simulation's hold on its grid (docs/projects/quality-governor.md,
 /// D7): while a run is active, a resize never changes its field, so the
 /// viewport letterboxes to the grid's shape instead, once its size is no
@@ -975,6 +986,8 @@ pub struct EguiLayer {
     escape_aa: Option<EscapeAa>,
     /// An active simulation's hold on its grid, while there is one.
     sim_lock: Option<SimLock>,
+    /// The governor's part in a simulation (`SimGovernorUi`).
+    sim_governor: SimGovernorUi,
     /// The frame rate the governor holds now, for the Rendering menu.
     governor_fps: f32,
     /// What the menu bar's progress bar shows. Set by App each frame.
@@ -1134,6 +1147,7 @@ impl EguiLayer {
             deep_zoom: DeepZoom::default(),
             escape_aa: None,
             sim_lock: None,
+            sim_governor: SimGovernorUi::default(),
             governor_fps: 60.0,
             render_progress: RenderProgress::Idle,
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
@@ -1863,6 +1877,7 @@ impl EguiLayer {
                         fractal_viewport_size: &mut fractal_viewport_size,
                         viewport_letterboxed: &mut viewport_letterboxed,
                         sim_lock: self.sim_lock,
+                        sim_governor: self.sim_governor,
                         fly_mouse_drag: &mut fly_mouse_drag,
                         fly_mode_toggle_requested: &mut fly_mode_toggle_requested,
                         fly_mode_active,
@@ -2819,6 +2834,11 @@ impl EguiLayer {
     /// letterbox (`SimLock`).
     pub fn set_sim_lock(&mut self, lock: Option<SimLock>) {
         self.sim_lock = lock;
+    }
+
+    /// The governor's part in a simulation, for the Simulation panel.
+    pub fn set_sim_governor(&mut self, g: SimGovernorUi) {
+        self.sim_governor = g;
     }
 
     /// The frame rate the governor holds now (the Rendering menu shows it).

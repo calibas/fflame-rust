@@ -515,11 +515,17 @@ pub struct App {
     /// Restart from the seed before the next frame (a reseed-class
     /// edit, a device loss, or a grid the field cannot be carried into).
     pub(super) sim_reseed: bool,
-    /// A bound grid's scale was edited (`SimResample`): the resize that
-    /// changes the grid carries the field across (`request_resample`).
-    /// Held while an active run's grid is (sim_lock.rs), whose resize
-    /// does not change it; passed on the frame the lock lets go.
+    /// A bound grid's scale was edited (`SimResample`), or the quality
+    /// governor picked or let go of one: the resize that changes the grid
+    /// carries the field across (`request_resample`), when its shape is
+    /// the same.
     pub(super) sim_resample: bool,
+    /// When a simulation's settings were last edited (not by playback): a
+    /// governed run is not picked again meanwhile (governor.rs).
+    pub(super) sim_last_edit: Option<web_time::Instant>,
+    /// The bound grid scale the simulation's grid was last sized at (the
+    /// governor's or the config's); None for a fixed grid.
+    pub(super) sim_grid_at: Option<f32>,
     /// The step count the TIMELINE has committed the grid to.
     ///
     /// `Some` means the timeline owns the step count: the driver walks
@@ -952,6 +958,8 @@ impl App {
             sim_step_once: false,
             sim_reseed: true,
             sim_resample: false,
+            sim_last_edit: None,
+            sim_grid_at: None,
             #[cfg(feature = "engine-sim")]
             sim_timeline_target: None,
             paced_anim_pending: 0.0,
@@ -1744,7 +1752,11 @@ impl App {
         // An active simulation's grid, which the viewport letterboxes to
         // after a resize (sim_lock.rs): decided before the UI draws it.
         #[cfg(feature = "engine-sim")]
-        self.update_sim_lock();
+        {
+            // The governor's grid scale first: the lock holds the run's.
+            self.govern_sim();
+            self.update_sim_lock();
+        }
         let t_ui_start = Instant::now();
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
@@ -2376,22 +2388,34 @@ impl App {
         let frozen = self.freeze_viewport();
 
         // The quality governor's rung for escape-time this frame (governor.rs):
-        // None in a still, a terrain, a path-traced solid, another mode.
-        let escape_rung = {
+        // None in a still, a terrain, a path-traced solid, another mode. An
+        // escape terrain's render scale instead, in its lit tiers.
+        let (escape_rung, terrain_scale) = {
             let c = self.config_manager.active_config();
+            let is_escape = c.render_mode == crate::scene::transforms::RenderMode::Escape;
             let solid = crate::escape::ifs::formula_is_solid(&c.escape.formula);
-            let governable = c.render_mode == crate::scene::transforms::RenderMode::Escape
+            let governable = is_escape
                 && !c.escape.terrain_active()
                 && !(solid && c.escape.solid_tier != crate::config::escape::RenderTier::Lit);
+            let terrain = is_escape
+                && c.escape.terrain_active()
+                && c.escape.terrain.tier != crate::config::escape::RenderTier::PathTraced;
             let (ss, user_scale) = (c.escape.supersample, self.user_render_scale());
-            if governable {
-                // The budget is the display's refresh (`governor_budget_ms`):
-                // asked of the platform every so often.
+            // The budget is the display's refresh (`governor_budget_ms`):
+            // asked of the platform every so often.
+            if governable || terrain {
                 refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
-                self.govern_escape(ss, solid, user_scale)
+            }
+            if governable {
+                self.govern_terrain_off();
+                (self.govern_escape(ss, solid, user_scale), None)
+            } else if terrain {
+                self.govern_escape_off();
+                (None, self.govern_terrain(user_scale))
             } else {
                 self.govern_escape_off();
-                None
+                self.govern_terrain_off();
+                (None, None)
             }
         };
 
@@ -2448,7 +2472,14 @@ impl App {
             let terrain_on = false;
             #[cfg(feature = "terrain")]
             if terrain_on {
-                self.egui_layer.update_escape_aa(None);
+                // The governor's render scale, under the antialiasing
+                // control as escape-time's is; nothing when it is full.
+                self.egui_layer.update_escape_aa(terrain_scale.filter(|s| *s < 1.0).map(|scale| crate::ui::EscapeAa {
+                    in_use: final_config.escape.supersample,
+                    requested: final_config.escape.supersample,
+                    reason: Some(crate::ui::AaReason::Governor),
+                    scale,
+                }));
                 // One engine at a time: the footprint is a full escape
                 // render of its own.
                 if let Some(esc) = self.escape_renderer.take() {
@@ -2525,6 +2556,19 @@ impl App {
                 };
                 if !exporting && terrain.render_viewport_moments(device, queue, &final_config, &moments) {
                     busy = true;
+                }
+                // A frame of a moving view: the governor's sample of the
+                // lit tier's cost (governor.rs). Not while sections arrive,
+                // as the tiers time their passes: a section's render is no
+                // cost the render scale moves, and a deep terrain's took
+                // 200 ms a step and shed for nothing (2026-10-30).
+                if !exporting && terrain.drew_fresh_lit() && terrain.sections_missing() == 0 {
+                    self.governor.pictures.push_back(governor::Picture {
+                        first: self.frame_index,
+                        last: self.frame_index,
+                        governed: terrain_scale.is_some(),
+                        terrain: true,
+                    });
                 }
                 // Not settled while paused; the export's cadence redraws.
                 self.escape_dirty = busy || exporting;
@@ -2779,6 +2823,7 @@ impl App {
                                 first,
                                 last: self.frame_index,
                                 governed: escape_rung.is_some(),
+                                terrain: false,
                             });
                         }
                     }
@@ -2850,19 +2895,34 @@ impl App {
                     self.sim_motion = None;
                 }
                 // An active run's grid is held (sim_lock.rs): resized with
-                // its cells fixed, the viewport letterboxed to their shape.
-                let held_grid = self.sim_lock.map(|(lock, _)| {
+                // its cells fixed, the viewport letterboxed to their shape,
+                // at the run's scale. Unheld, a governed run's grid is the
+                // config's at the governor's scale (governor.rs).
+                let run_scale = match final_config.sim.grid {
+                    crate::config::sim::SimGrid::Viewport { scale } => Some(self.governor.sim.scale.unwrap_or(scale)),
+                    crate::config::sim::SimGrid::Fixed { .. } => None,
+                };
+                let held_grid = self.sim_lock.map(|(lock, at)| {
+                    let (width, height) = sim_lock::held_grid(lock, at, run_scale.unwrap_or(at));
                     let mut c = final_config.sim.clone();
-                    c.grid = crate::config::sim::SimGrid::Fixed { width: lock.grid.0, height: lock.grid.1 };
+                    c.grid = crate::config::sim::SimGrid::Fixed { width, height };
                     c
                 });
-                let grid_cfg = held_grid.as_ref().unwrap_or(&final_config.sim);
+                let governed_grid = self.governor.sim.scale.filter(|_| held_grid.is_none() && run_scale.is_some()).map(|scale| {
+                    let mut c = final_config.sim.clone();
+                    c.grid = crate::config::sim::SimGrid::Viewport { scale };
+                    c
+                });
+                let grid_cfg = held_grid.as_ref().or(governed_grid.as_ref()).unwrap_or(&final_config.sim);
+                // The scale the grid is at from here on: the lock is taken
+                // only of a grid at the run's scale (sim_lock.rs).
+                self.sim_grid_at = run_scale;
                 let sim = self.sim_renderer.get_or_insert_with(|| {
                     crate::sim::SimRenderer::new(&self.gpu.device, grid_cfg, w, h)
                 });
-                // A scale edit carries the field into its new grid (the
-                // field resampler), once the resize uses the config's grid.
-                if self.sim_resample && held_grid.is_none() {
+                // A scale edit or the governor's pick carries the field into
+                // its new grid (the field resampler), held or not.
+                if self.sim_resample {
                     sim.request_resample();
                     self.sim_resample = false;
                 }
@@ -2882,7 +2942,10 @@ impl App {
                 // Budgeted walks of the grid, so a jump it cannot make in
                 // one display frame is walked over the next few instead of
                 // freezing the UI.
+                // Governed, the share of the frame the governor allows
+                // (governor.rs).
                 const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
+                let walk_ms = self.governor.sim.walk_ms.unwrap_or(SIM_CATCHUP_BUDGET_MS);
                 // Motion blur (motion_blur.rs): a frame's moments, where
                 // they differ from the frame -- a run the timeline does not
                 // step, with no colouring track, is the same at every
@@ -2922,7 +2985,7 @@ impl App {
                     // a display frame held a blurred frame to the display's
                     // rate over the moments -- 120 fps to 15 at eight --
                     // however little each cost.
-                    let mut budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS).max(1);
+                    let mut budget = sim.steps_in(walk_ms).max(1);
                     while motion.next < motion.moments.len() && budget > 0 {
                         let m = motion.current();
                         let index = if sim.will_reseed(&m.sim) { 0 } else { sim.step_index() };
@@ -2965,7 +3028,7 @@ impl App {
                     // ask for a two-thousand-step jump on every slider
                     // event. `steps_in` sizes it from the measured
                     // cost of a step.
-                    let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
+                    let budget = sim.steps_in(walk_ms);
                     let reached = sim.advance_to(
                         &self.gpu.device,
                         &self.gpu.queue,

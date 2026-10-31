@@ -53,7 +53,8 @@ pub(crate) struct FrameState {
     pub escape_partial: bool,
     /// An escape picture settled this frame.
     pub escape_done: bool,
-    /// The quality governor (app/governor.rs): escape-time's rung (its
+    /// The quality governor (app/governor.rs): the governed rung, an
+    /// escape terrain's or escape-time's (its
     /// place on the ladder, 0 the best), the last picture it observed (GPU
     /// ms, frames), and the fixed part of the cost it has learned.
     pub gov_rung: usize,
@@ -70,6 +71,10 @@ pub(crate) struct FrameState {
     /// The simulation's grid and its step, zeros without one.
     pub sim_grid: (u32, u32),
     pub sim_step: u32,
+    /// The last timed batch's ms a step, raw, and the grid scale the
+    /// governor holds (governor.rs), if it holds one.
+    pub sim_step_ms: f64,
+    pub sim_scale: Option<f32>,
 }
 
 impl super::App {
@@ -148,9 +153,10 @@ impl super::App {
         };
         let preview = self.escape_last_edit.is_some_and(|t| t.elapsed() < super::ESCAPE_INTERACTION_WINDOW);
         #[cfg(feature = "engine-sim")]
-        let (sim_grid, sim_step) = self.sim_renderer.as_ref().map_or(((0, 0), 0), |s| (s.grid_size(), s.step_index()));
+        let (sim_grid, sim_step, sim_step_ms) =
+            self.sim_renderer.as_ref().map_or(((0, 0), 0, 0.0), |s| (s.grid_size(), s.step_index(), s.last_step().1));
         #[cfg(not(feature = "engine-sim"))]
-        let (sim_grid, sim_step) = ((0, 0), 0);
+        let (sim_grid, sim_step, sim_step_ms) = ((0, 0), 0, 0.0);
         FrameState {
             interval_ms,
             cpu_ms,
@@ -165,15 +171,18 @@ impl super::App {
             escape_partial: self.escape_dirty
                 && self.escape_renderer.as_ref().is_some_and(|e| e.presented_view().is_none()),
             escape_done: self.governor.pictures.iter().any(|p| p.last == self.frame_index),
-            gov_rung: self.governor.escape.rung_index(),
+            // Whichever is governed: an escape terrain's, else escape-time's.
+            gov_rung: if self.governor.terrain_on { self.governor.terrain.rung_index() } else { self.governor.escape.rung_index() },
             gov_picture: self.governor.last_picture,
-            gov_fixed: self.governor.escape.fixed(),
+            gov_fixed: if self.governor.terrain_on { self.governor.terrain.fixed() } else { self.governor.escape.fixed() },
             gov_budget_ms: self.governor.capped.unwrap_or(self.governor_budget_ms()),
             refresh_hz: self.display_refresh_mhz.map_or(0.0, |m| m as f64 / 1000.0),
             escape_ss: self.escape_renderer.as_ref().map_or(0, |e| e.effective_supersample()),
             iter_scale: self.iter_scale,
             sim_grid,
             sim_step,
+            sim_step_ms,
+            sim_scale: self.governor.sim.scale,
         }
     }
 }
@@ -224,7 +233,7 @@ impl FrameLog {
             out,
             "frame,t_ms,interval_ms,cpu_ms,ui_cpu_ms,acquire_ms,present_ms,gpu_ui_ms,gpu_engine_ms,mode,view_w,view_h,\
              render_w,render_h,playing,interacting,escape_ss,escape_partial,escape_done,gov_rung,gov_picture_ms,gov_picture_frames,gov_fixed,gov_budget_ms,refresh_hz,\
-             iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step"
+             iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step,sim_step_ms,sim_scale"
         );
         log::info!(
             "Frame log: {path}{}",
@@ -295,7 +304,7 @@ impl FrameLog {
         });
         let _ = writeln!(
             self.out,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.2},{:.4},{},{},{},{},{},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.2},{:.4},{},{},{},{},{},{},{:.3},{}",
             r.frame,
             r.t_ms,
             s.interval_ms,
@@ -328,6 +337,8 @@ impl FrameLog {
             s.sim_grid.0,
             s.sim_grid.1,
             s.sim_step,
+            s.sim_step_ms,
+            s.sim_scale.map_or(String::new(), |v| format!("{v:.4}")),
         );
     }
 }

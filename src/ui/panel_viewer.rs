@@ -357,6 +357,8 @@ pub struct PanelContext<'a> {
     /// An active simulation's hold on its grid (`SimLock`), which the
     /// viewport letterboxes to once its size is not the run's.
     pub sim_lock: Option<super::SimLock>,
+    /// The governor's part in a simulation (`SimGovernorUi`).
+    pub sim_governor: super::SimGovernorUi,
     /// Tab bar height from previous frame, used to inflate fractal texture size
     pub viewport_tab_bar_height: f32,
 
@@ -835,6 +837,7 @@ impl<'a> PanelViewer<'a> {
                         timeline_target: self.context.sim_timeline_target,
                         timeline_holding: self.context.sim_timeline_holding,
                         timeline_driven: self.context.sim_timeline_driven,
+                        governor: self.context.sim_governor,
                     },
                 );
             }

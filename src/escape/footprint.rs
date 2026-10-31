@@ -1399,6 +1399,12 @@ impl EscapeTerrain {
         self.terrain.measured_range()
     }
 
+    /// Whether the last viewport frame drew a new view's first lit pass
+    /// (`TerrainTiers::drew_fresh_lit`): the quality governor's sample.
+    pub fn drew_fresh_lit(&self) -> bool {
+        self.tiers.drew_fresh_lit()
+    }
+
     /// A path-traced sample's average time, in ms, once measured.
     pub fn path_ms(&mut self) -> Option<f32> {
         self.tiers.path_ms()

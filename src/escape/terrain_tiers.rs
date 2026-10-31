@@ -118,6 +118,10 @@ pub struct TerrainTiers {
     /// the pixels still sampling comes back as none), its picture is
     /// resolved once more, current.
     tracing: bool,
+    /// The last frame drew a new view's first lit pass: a frame of a
+    /// moving view, whose GPU time the quality governor reads as the lit
+    /// tier's cost (app/governor.rs).
+    drew_fresh_lit: bool,
 }
 
 impl TerrainTiers {
@@ -136,6 +140,7 @@ impl TerrainTiers {
     /// there is more to do.
     pub fn viewport(&mut self, terrain: &mut TerrainRenderer, device: &Device, queue: &Queue, i: &TierInputs) -> bool {
         self.showing_picture = false;
+        self.drew_fresh_lit = false;
         if terrain.tile_version() == 0 {
             return false;
         }
@@ -183,6 +188,7 @@ impl TerrainTiers {
                     });
                 }
                 self.showing_path = false;
+                self.drew_fresh_lit = fresh;
                 return true;
             }
             if i.tier == RenderTier::Lit {
@@ -222,6 +228,11 @@ impl TerrainTiers {
         }
         self.showing_path = i.tier == RenderTier::PathTraced || terrain.path_samples() >= PATH_SHOW_SAMPLES;
         !terrain.path_done(device, target, i.settings.noise_threshold)
+    }
+
+    /// Whether the last frame drew a new view's first lit pass.
+    pub fn drew_fresh_lit(&self) -> bool {
+        self.drew_fresh_lit
     }
 
     /// The export's picture, `frame` in pixels: path traced at `samples`

@@ -6,9 +6,12 @@
 //! letterboxes to the grid's shape once its size is no longer the one the
 //! run began at (`ui::SimLock`, `view_controls::letterbox_shape`), and the
 //! renderer is resized with the grid fixed at the run's cells, so the field
-//! goes on at its step, shown larger or smaller. Pausing or stopping lets
-//! go: the viewport fills its panel again and the grid follows it at the
-//! config's scale, re-run from the seed, as a resize always did.
+//! goes on at its step, shown larger or smaller. A change of the run's scale
+//! (an edit, or the quality governor's pick) keeps the lock: the held grid
+//! is the run's at the new scale, the same shape, and the field is carried
+//! into it (`held_grid`). Pausing or stopping lets go: the viewport fills
+//! its panel again and the grid follows it at the config's scale, re-run
+//! from the seed if its shape changed, as a resize always did.
 //!
 //! Not with the letterbox setting on (the viewport has `image_size`'s
 //! shape already and a resize never changes the grid's), and not for a
@@ -16,14 +19,11 @@
 
 use crate::ui::SimLock;
 
-/// The lock this frame, from last frame's: `eligible` is the config's grid
+/// The lock this frame, from last frame's: `eligible` is the run's grid
 /// scale while a bound grid's run is active (None otherwise), `grid` the
 /// run's grid when it matches the viewport now, `viewport` the viewport's
-/// size as it reports it unletterboxed.
-///
-/// Held while the scale stays the one it was taken at. An edit of the scale
-/// lets go for a frame, so the edit takes effect (it reseeds, until the
-/// field resampler exists), and the next frame takes the new grid.
+/// size as it reports it unletterboxed. Held while the run is, with the
+/// scale it was taken at.
 pub(super) fn next_lock(
     held: Option<(SimLock, f32)>,
     eligible: Option<f32>,
@@ -32,10 +32,17 @@ pub(super) fn next_lock(
 ) -> Option<(SimLock, f32)> {
     let scale = eligible?;
     match held {
-        Some((lock, at)) if at == scale => Some((lock, at)),
-        Some(_) => None,
+        Some(held) => Some(held),
         None => grid.map(|grid| (SimLock { grid, viewport }, scale)),
     }
+}
+
+/// The grid a lock holds at the run's scale `now`: its grid, taken at
+/// `at`, scaled the same in both axes.
+pub(super) fn held_grid(lock: SimLock, at: f32, now: f32) -> (u32, u32) {
+    let r = if at > 0.0 && now > 0.0 { now / at } else { 1.0 };
+    let side = |n: u32| ((n as f32 * r).round() as u32).max(1);
+    (side(lock.grid.0), side(lock.grid.1))
 }
 
 impl super::App {
@@ -50,17 +57,20 @@ impl super::App {
                     && !self.config_manager.system_settings().viewport_letterbox
                     && active =>
             {
-                Some(scale)
+                // The governor's pick, when it holds one (governor.rs).
+                Some(self.governor.sim.scale.unwrap_or(scale))
             }
             _ => None,
         };
         // The run's grid, while it is the viewport's: one renderer resize
-        // behind a window being dragged, it would be the old shape.
+        // behind a window being dragged, it would be the old shape; and at
+        // the run's scale, which the governor may have just picked.
         let rendered = self.flame_renderer.as_ref().map(|r| (r.width, r.height));
+        let at_scale = eligible.zip(self.sim_grid_at).is_some_and(|(want, at)| (want - at).abs() < 1e-6);
         let grid = self
             .sim_renderer
             .as_ref()
-            .filter(|s| Some(s.output_size()) == rendered)
+            .filter(|s| Some(s.output_size()) == rendered && at_scale)
             .map(|s| s.grid_size());
         self.sim_lock = next_lock(self.sim_lock, eligible, grid, self.fractal_viewport_size);
         self.egui_layer.set_sim_lock(self.sim_lock.map(|(lock, _)| lock));
@@ -89,12 +99,15 @@ mod tests {
     }
 
     #[test]
-    fn an_edit_of_the_scale_takes_effect_and_the_new_grid_is_held_after() {
+    fn a_change_of_scale_keeps_the_lock_and_scales_its_grid() {
         let lock = next_lock(None, Some(1.0), Some((1079, 1056)), VIEW);
-        let released = next_lock(lock, Some(0.5), Some((1079, 1056)), VIEW);
-        assert_eq!(released, None, "the edit's own frame resizes with the real config");
-        let retaken = next_lock(released, Some(0.5), Some((540, 528)), VIEW).expect("retaken");
-        assert_eq!(retaken.0.grid, (540, 528));
+        // Letterboxed to the run's shape in a wider window, the scale is
+        // edited (or the governor picks): the lock holds, and its grid is
+        // the run's at the new scale, the same shape.
+        let (held, at) = next_lock(lock, Some(0.5), Some((1079, 1056)), (1920, 1080)).expect("held");
+        assert_eq!(held, lock.unwrap().0);
+        assert_eq!(held_grid(held, at, 0.5), (540, 528));
+        assert_eq!(held_grid(held, at, 1.0), (1079, 1056));
     }
 
     #[test]

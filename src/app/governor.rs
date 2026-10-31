@@ -150,6 +150,16 @@ pub(crate) fn escape_ladder(ceiling: u32, solid: bool) -> Vec<Rung> {
     v
 }
 
+/// An escape terrain's ladder: the render scale of its lit tier, 100%,
+/// 75% and 50% (D5's floor). While it moves a frame draws one lit pass of
+/// the new view (`TerrainTiers::viewport`), whose cost goes with the
+/// render pixels; its antialiasing grid is drawn over frames at rest and
+/// costs a moving frame nothing, so it is not a rung. The sections it
+/// builds as the view moves are the cost's fixed part.
+pub(crate) fn terrain_ladder() -> Vec<Rung> {
+    [1.0, 0.75, 0.5].into_iter().map(|scale| Rung { supersample: 1, scale }).collect()
+}
+
 /// A flame's render scale while governed, from the samples a frame per
 /// DISPLAY pixel (phase 1, *Results*): a flame meets its frame rate by
 /// shedding samples (the batch governor), and what it loses is grain, so the
@@ -622,6 +632,87 @@ mod tests {
         assert_eq!(g.rung, 0, "back to the top: {after:?}");
     }
 
+    /// A simulation picks the best grid its steps fit at, from the
+    /// plan's scales, and never above the config's.
+    #[test]
+    fn a_simulation_picks_the_grid_its_steps_fit() {
+        // Lenia at 1080p: 27 ms a step. Two steps a frame in the 11.7 ms
+        // share of 60 Hz fit at 37.5% (7.6 ms), not 50% (13.5).
+        assert_eq!(sim_pick(1.0, 1.0, 27.0, 2.0, 11.7), 0.375);
+        // Cheap: the config's own scale.
+        assert_eq!(sim_pick(1.0, 1.0, 0.3, 4.0, 11.7), 1.0);
+        // A config at 60% picks from 60% and below.
+        assert_eq!(sim_pick(0.6, 0.6, 1.0, 4.0, 11.7), 0.6);
+        assert_eq!(sim_pick(0.6, 0.6, 5.0, 4.0, 11.7), 0.375);
+        // Measured on a smaller grid, predicted up: 1.7 ms at 25% is
+        // 27 at full size.
+        assert_eq!(sim_pick(1.0, 0.25, 1.7, 2.0, 11.7), 0.375);
+        // Nothing fits: below the step's floor a smaller grid saves
+        // nothing, so it stops where the cost stops falling.
+        let s = sim_pick(1.0, 1.0, 400.0, 200.0, 11.7);
+        assert!(s <= 0.1875, "{s}");
+    }
+
+    /// Held through a run: picked on its first measured frame, kept
+    /// while it is not far wrong, picked again after a while far wrong,
+    /// never while edits come; the config's scale on stop.
+    #[test]
+    fn a_simulation_holds_its_pick_for_the_run() {
+        let id = 7;
+        let full = 1920.0 * 1080.0;
+        let mut g = SimGovernor::default();
+        assert_eq!(g.frame(id, 1.0, full, 11.7, 16.7, false), None, "nothing measured");
+        g.steps = Some(2.0);
+        // The first batch reads high; the cost is the median of four.
+        let mut batch = 0;
+        let mut time = |g: &mut SimGovernor, ms: f64, cells: f64| {
+            batch += 1;
+            g.measured(id, batch, ms, cells);
+        };
+        for ms in [60.0, 27.0, 27.0] {
+            time(&mut g, ms, full);
+            assert_eq!(g.frame(id, 1.0, full, 11.7, 16.7, false), None, "not yet");
+        }
+        time(&mut g, 27.0, full);
+        assert_eq!(g.frame(id, 1.0, full, 11.7, 16.7, false), Some((0.375, true)));
+        let held = full * 0.375 * 0.375;
+        // The same cost at the held grid: held.
+        for _ in 0..500 {
+            time(&mut g, 27.0 * 0.375 * 0.375, held);
+            assert_eq!(g.frame(id, 1.0, held, 11.7, 16.7, false), Some((0.375, false)));
+        }
+        // The content gets six times dearer (46 ms of steps a frame, under
+        // half the target rate): too slow, but an edit holds
+        // the pick until it stops.
+        let mut changed = None;
+        for i in 0..400 {
+            time(&mut g, 6.0 * 27.0 * 0.375 * 0.375, held);
+            let editing = i < 200;
+            if let Some((s, true)) = g.frame(id, 1.0, held, 11.7, 16.7, editing) {
+                changed = Some((i, s));
+                break;
+            }
+        }
+        let (at, s) = changed.expect("picked again");
+        assert!(at >= 200 + SIM_FAR_FRAMES as usize - 1, "not while editing: {at}");
+        assert!(s < 0.375, "{s}");
+        assert!(g.release(1.0), "let go: the field is carried back");
+        assert!(g.step_ms(id, full).is_some(), "the cost is kept");
+        assert!(!g.release(1.0));
+    }
+
+    /// The timeline's steps a frame come from its step rate, at the
+    /// budget's frame, whatever the frames come at now.
+    #[test]
+    fn a_timelines_steps_a_frame_follow_its_rate() {
+        let mut g = SimGovernor::default();
+        // 600 steps a second, the frames coming at 20 fps.
+        for i in 0..40 {
+            g.timeline(i as f64 * 0.05, i * 30, 1000.0 / 60.0);
+        }
+        assert!((g.steps.unwrap() - 10.0).abs() < 1e-6, "{:?}", g.steps);
+    }
+
     /// A CPU-bound frame is not shed for.
     #[test]
     fn a_cpu_bound_frame_is_not_shed_for() {
@@ -759,13 +850,197 @@ mod tests {
     }
 }
 
+/// The grid scales a governed simulation picks from, best first (the
+/// plan's *Simulations are different too*); a run's ceiling is its
+/// config's scale, and 12.5% is the grid's own clamp (D5).
+pub(crate) const SIM_SCALES: [f32; 7] = [1.0, 0.75, 0.5, 0.375, 0.25, 0.1875, 0.125];
+/// A step's cost below which a smaller grid saves nothing: phase 1
+/// measured a fixed overhead of about 0.1 ms a step taking over below
+/// 18.75-37.5% of 1080p.
+const SIM_STEP_FLOOR_MS: f64 = 0.1;
+/// A held pick is far wrong when the steps take over this many frame
+/// budgets (frames under half the target rate) ...
+const SIM_TOO_SLOW: f64 = 2.0;
+/// ... or under this share of the GPU share with a better scale left.
+const SIM_ROOM: f64 = 0.25;
+/// Frames a pick must be far wrong in a row, with no edit, before it is
+/// picked again: each pick resamples the field, a visible change.
+const SIM_FAR_FRAMES: u32 = 120;
+/// Timed batches on a grid before its cost is taken: their median. The
+/// first after a new grid or kernel reads high (the pipeline's creation
+/// and the seed in flight), and picked from it a run held 50% where 75%
+/// fit (2026-10-30).
+const SIM_SAMPLES: usize = 4;
+/// The batches a grid's median is of, at most.
+const SIM_SAMPLES_KEPT: usize = 16;
+
+/// The bound grid scale at which `steps` steps a frame fit `allowance_ms`,
+/// from a step's cost `ms_now` on the grid at `scale_now`: the best of
+/// `ceiling` and the [`SIM_SCALES`] below it predicted to fit, cells going
+/// with the scale squared down to [`SIM_STEP_FLOOR_MS`] a step. When none
+/// fits, the best within `NO_FIT_SLACK` of the cheapest: playback then
+/// paces itself, as it always has (the step rate is the content's speed,
+/// and is not cut).
+pub(crate) fn sim_pick(ceiling: f32, scale_now: f32, ms_now: f64, steps: f64, allowance_ms: f64) -> f32 {
+    let mut options = vec![ceiling];
+    options.extend(SIM_SCALES.iter().copied().filter(|&s| s < ceiling - 1e-4));
+    let cost = |s: f32| {
+        let r = s as f64 / scale_now.max(1e-3) as f64;
+        steps.max(0.0) * (ms_now * r * r).max(SIM_STEP_FLOOR_MS)
+    };
+    if let Some(&s) = options.iter().find(|&&s| cost(s) <= allowance_ms) {
+        return s;
+    }
+    let cheapest = options.iter().map(|&s| cost(s)).fold(f64::INFINITY, f64::min);
+    options.into_iter().find(|&s| cost(s) <= NO_FIT_SLACK * cheapest).unwrap_or(ceiling)
+}
+
+/// What a simulation's step cost is of: the model, its layers and
+/// parameters, not the seed, the init, the colouring or the grid.
+pub(crate) fn sim_cost_identity(cfg: &crate::config::sim::SimConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut v = serde_json::to_value(cfg).unwrap_or_default();
+    if let Some(o) = v.as_object_mut() {
+        for k in [
+            "seed", "init", "steps", "steps_per_frame", "coloring", "coloring_params", "color_layers", "view", "matte",
+            "upscale", "downscale", "fit", "terrain", "grid",
+        ] {
+            o.remove(k);
+        }
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.to_string().hash(&mut h);
+    h.finish()
+}
+
+/// A simulation's governor (D6): a bound grid's scale, picked when a run
+/// starts from the measured cost of a step and held for the run, picked
+/// again only when far wrong; let go on stop. The cost a cell-step is
+/// remembered for the model, so the next run starts on its pick.
+#[derive(Debug, Default)]
+pub(crate) struct SimGovernor {
+    /// The grid scale the run holds, once picked.
+    pub scale: Option<f32>,
+    /// The config's scale it was picked under.
+    ceiling: f32,
+    /// ms a cell-step, for the model it was measured on.
+    cost: Option<(u64, f64)>,
+    /// The batches timed on the current grid (ms a step, raw), the grid's
+    /// cells and model, and the renderer's count of batches last seen.
+    samples: std::collections::VecDeque<f64>,
+    sampled: (u64, f64),
+    batches: u64,
+    /// The steps a frame the run asks for, once known.
+    pub steps: Option<f64>,
+    /// The timeline's step rate (steps a second, smoothed) and its last
+    /// playhead and step count.
+    rate: Option<f64>,
+    last: Option<(f64, u32)>,
+    far: u32,
+    /// The timeline walk's budget a frame while governed, ms.
+    pub walk_ms: Option<f64>,
+}
+
+impl SimGovernor {
+    /// The renderer's last timed batch: its count of batches, the batch's
+    /// ms a step, on a grid of `cells`, for `identity`. A new count is a
+    /// sample; once `SIM_SAMPLES` are in on a grid, their median is the
+    /// cost a cell-step, kept across grids and runs.
+    pub fn measured(&mut self, identity: u64, batches: u64, ms: f64, cells: f64) {
+        if batches == self.batches || !(ms > 0.0) || !(cells > 0.0) {
+            return;
+        }
+        self.batches = batches;
+        if self.sampled != (identity, cells) {
+            self.sampled = (identity, cells);
+            self.samples.clear();
+        }
+        self.samples.push_back(ms);
+        while self.samples.len() > SIM_SAMPLES_KEPT {
+            self.samples.pop_front();
+        }
+        if self.samples.len() >= SIM_SAMPLES {
+            let mut v: Vec<f64> = self.samples.iter().copied().collect();
+            v.sort_by(f64::total_cmp);
+            self.cost = Some((identity, v[v.len() / 2] / cells));
+        }
+    }
+
+    /// A step's cost on a grid of `cells`, for `identity`, if measured.
+    pub fn step_ms(&self, identity: u64, cells: f64) -> Option<f64> {
+        self.cost.filter(|(id, _)| *id == identity).map(|(_, c)| (c * cells).max(SIM_STEP_FLOOR_MS))
+    }
+
+    /// The timeline's playhead `t` (s) and step count this frame: the
+    /// steps a frame it asks for at `budget_ms` a frame.
+    pub fn timeline(&mut self, t: f64, steps: u32, budget_ms: f64) {
+        if let Some((t0, s0)) = self.last {
+            if t > t0 && steps >= s0 {
+                let r = (steps - s0) as f64 / (t - t0);
+                self.rate = Some(self.rate.map_or(r, |old| old + 0.1 * (r - old)));
+            }
+        }
+        self.last = Some((t, steps));
+        self.steps = self.rate.map(|r| r * budget_ms / 1000.0);
+    }
+
+    /// One frame of an active run, on a grid of `cells_now` cells at the
+    /// scale it holds (or the config's, `ceiling`, before a pick): the
+    /// scale to hold, and whether it changed. Nothing before a step has
+    /// been measured or the steps a frame are known.
+    pub fn frame(&mut self, identity: u64, ceiling: f32, cells_now: f64, allowance_ms: f64, budget_ms: f64, editing: bool) -> Option<(f32, bool)> {
+        let scale_now = self.scale.unwrap_or(ceiling);
+        let ms_now = self.step_ms(identity, cells_now)?;
+        let steps = self.steps?;
+        // A run's first frame, or the config's scale edited: picked at once.
+        if self.scale.is_none() || (ceiling - self.ceiling).abs() > 1e-6 {
+            let pick = sim_pick(ceiling, scale_now, ms_now, steps, allowance_ms);
+            self.ceiling = ceiling;
+            self.far = 0;
+            let changed = (pick - scale_now).abs() > 1e-6;
+            self.scale = Some(pick);
+            return Some((pick, changed));
+        }
+        // Held, unless far wrong for a while with nothing being edited.
+        let now = steps * ms_now;
+        let lowest = SIM_SCALES[SIM_SCALES.len() - 1].min(ceiling);
+        let slow = now > SIM_TOO_SLOW * budget_ms && scale_now > lowest + 1e-6;
+        let roomy = now < SIM_ROOM * allowance_ms && scale_now < ceiling - 1e-6;
+        self.far = if (slow || roomy) && !editing { self.far + 1 } else { 0 };
+        if self.far >= SIM_FAR_FRAMES {
+            self.far = 0;
+            let pick = sim_pick(ceiling, scale_now, ms_now, steps, allowance_ms);
+            if (pick - scale_now).abs() > 1e-6 {
+                self.scale = Some(pick);
+                return Some((pick, true));
+            }
+        }
+        Some((scale_now, false))
+    }
+
+    /// The run stopped: the config's scale again. True if the held one
+    /// was another, so the field is carried back. The cost is kept.
+    pub fn release(&mut self, ceiling: f32) -> bool {
+        let held = self.scale.take();
+        self.steps = None;
+        self.rate = None;
+        self.last = None;
+        self.far = 0;
+        self.walk_ms = None;
+        held.is_some_and(|s| (s - ceiling).abs() > 1e-6)
+    }
+}
+
 /// A settled escape picture, waiting for its frames' GPU times: the frames
-/// it took, first and last, and whether it was governed.
+/// it took, first and last, whether it was governed, and whether it is an
+/// escape terrain's (a frame that drew a moving view's lit pass) rather
+/// than escape-time's.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Picture {
     pub first: u64,
     pub last: u64,
     pub governed: bool,
+    pub terrain: bool,
 }
 
 /// Frames a picture waits for its GPU times before it is dropped.
@@ -779,6 +1054,11 @@ pub(crate) struct GovernorState {
     pub escape: Governor,
     /// Whether escape-time was governed last frame.
     pub escape_on: bool,
+    /// An escape terrain's ladder and rung, whether it was governed last
+    /// frame, and the display size its cost was learned at.
+    pub terrain: Governor,
+    pub terrain_on: bool,
+    pub terrain_display: (u32, u32),
     /// The render scale the governor asks for (app/render_scale.rs), 1
     /// when nothing is governed.
     pub scale: f32,
@@ -808,6 +1088,8 @@ pub(crate) struct GovernorState {
     pub flame_samples: Option<u64>,
     pub flame_spp: f64,
     pub flame_hold: u32,
+    /// A simulation's grid scale (`SimGovernor`).
+    pub sim: SimGovernor,
 }
 
 impl Default for GovernorState {
@@ -815,6 +1097,9 @@ impl Default for GovernorState {
         GovernorState {
             escape: Governor::new(escape_ladder(1, false)),
             escape_on: false,
+            terrain: Governor::new(terrain_ladder()),
+            terrain_on: false,
+            terrain_display: (0, 0),
             scale: 1.0,
             picture_from: None,
             pictures: Default::default(),
@@ -829,6 +1114,7 @@ impl Default for GovernorState {
             flame_samples: None,
             flame_spp: 0.0,
             flame_hold: 0,
+            sim: SimGovernor::default(),
         }
     }
 }
@@ -920,8 +1206,10 @@ impl GovernorState {
                 Some(ms) => {
                     self.pictures.pop_front();
                     self.last_picture = Some((ms, p.last - p.first + 1));
-                    if p.governed && self.escape_on {
-                        let pace = self.pace();
+                    let pace = self.pace();
+                    if p.governed && p.terrain && self.terrain_on {
+                        changed |= self.terrain.observe(ms, budget_ms, self.cpu_ms, pace);
+                    } else if p.governed && !p.terrain && self.escape_on {
                         changed |= self.escape.observe(ms, budget_ms, self.cpu_ms, pace);
                     }
                 }
@@ -975,6 +1263,127 @@ impl super::App {
                 g.flame_hold = 0;
             }
         }
+    }
+
+    /// A simulation's grid scale this frame (`SimGovernor`, D6): while a
+    /// bound grid's run is active (the transport running, or the timeline
+    /// driving its steps), with the governor on, picked as the run starts
+    /// from the measured cost of a step, held, and picked again only when
+    /// far wrong; the config's scale again when it stops, the field carried
+    /// back. Never during a background export, which has the GPU. Also
+    /// *Fit to target*'s scale, for the Simulation panel.
+    #[cfg(feature = "engine-sim")]
+    pub(super) fn govern_sim(&mut self) {
+        use crate::config::sim::SimGrid;
+        if self.export_status.lock().map(|s| s.active).unwrap_or(false) {
+            return;
+        }
+        let c = self.config_manager.active_config();
+        let identity = sim_cost_identity(&c.sim);
+        let bound = match c.sim.grid {
+            SimGrid::Viewport { scale } => Some(scale),
+            SimGrid::Fixed { .. } => None,
+        };
+        let timeline = self.timeline_owns_sim();
+        let on = c.render_mode == crate::scene::transforms::RenderMode::Simulation
+            && (self.sim_running || timeline)
+            && self.config_manager.system_settings().frame_governor;
+        let editing = self.sim_last_edit.is_some_and(|t| t.elapsed() < super::ESCAPE_INTERACTION_WINDOW);
+        let (steps_per_frame, steps_now) = (c.sim.steps_per_frame, c.sim.steps);
+        let t = self.animation_controller.current_time;
+        let refresh = self.governor_budget_ms();
+        let budget = self.governor.capped.unwrap_or(refresh);
+        let allowance = GPU_SHARE * budget;
+        let grid = self.sim_renderer.as_ref().map(|s| {
+            let (w, h) = s.grid_size();
+            (w as f64 * h as f64, s.last_step())
+        });
+        let g = &mut self.governor.sim;
+        if let Some((cells, (batches, ms))) = grid {
+            g.measured(identity, batches, ms, cells);
+        }
+        match bound.filter(|_| on) {
+            None => {
+                if g.release(bound.unwrap_or(1.0)) {
+                    self.sim_resample = true;
+                }
+            }
+            Some(ceiling) => {
+                if timeline {
+                    g.timeline(t, steps_now, budget);
+                } else {
+                    g.steps = Some(steps_per_frame as f64);
+                }
+                g.walk_ms = Some(allowance);
+                if let Some((cells, _)) = grid {
+                    if let Some((_, true)) = g.frame(identity, ceiling, cells, allowance, budget, editing) {
+                        self.sim_resample = true;
+                    }
+                }
+            }
+        }
+        // Fit to target: the best scale for Steps per Frame at the target,
+        // from 100% (or the config's, when above) down, as measured.
+        let g = &self.governor.sim;
+        let fit = bound.zip(grid).and_then(|(config, (cells, _))| {
+            let ms = g.step_ms(identity, cells)?;
+            let steps = g.steps.unwrap_or(steps_per_frame as f64);
+            Some(sim_pick(config.max(1.0), g.scale.unwrap_or(config), ms, steps, allowance))
+        });
+        let held = g.scale.filter(|s| bound.is_some_and(|b| (s - b).abs() > 1e-6));
+        self.egui_layer.set_sim_governor(crate::ui::SimGovernorUi { held, fit });
+    }
+
+    /// An escape terrain's render scale this frame (`terrain_ladder`), or
+    /// None when it is not governed: while an animation plays or the view
+    /// is being edited (a camera gesture or fly mode, as any escape edit),
+    /// in the Lit or Auto tier, with the governor on and a GPU that can
+    /// time its frames. Path traced is not: the tier is the look, and the
+    /// path tracer fills its frame's time at any size. The ceiling is the
+    /// Rendering menu's render scale.
+    pub(super) fn govern_terrain(&mut self, user_scale: f32) -> Option<f32> {
+        let playing = self.animation_controller.is_playing();
+        let editing = self.escape_last_edit.is_some_and(|t| t.elapsed() < super::ESCAPE_INTERACTION_WINDOW);
+        let on = (playing || editing)
+            && self.config_manager.system_settings().frame_governor
+            && self.frame_timer.is_some();
+        let refresh = self.governor_budget_ms();
+        let g = &mut self.governor;
+        let budget = g.capped.unwrap_or(refresh);
+        if !on {
+            self.govern_terrain_off();
+            self.governor.scale = 1.0;
+            return None;
+        }
+        let mut ladder: Vec<Rung> = terrain_ladder()
+            .into_iter()
+            .map(|r| Rung { scale: r.scale.min(user_scale), ..r })
+            .collect();
+        ladder.dedup();
+        g.terrain.set_ladder(ladder);
+        let display = self.fractal_viewport_size;
+        if g.terrain_display != (0, 0) && display != g.terrain_display {
+            let px = |s: (u32, u32)| s.0.max(1) as f64 * s.1.max(1) as f64;
+            g.terrain.scale_cost(px(display) / px(g.terrain_display));
+            g.terrain.resized(budget);
+        }
+        g.terrain_display = display;
+        if !g.terrain_on {
+            g.terrain.resized(budget);
+            g.terrain_on = true;
+        }
+        g.scale = g.terrain.rung().scale;
+        Some(g.scale)
+    }
+
+    /// No terrain governed this frame: it lets go (the render scale is
+    /// whoever else's is governed, or 1).
+    pub(super) fn govern_terrain_off(&mut self) {
+        let g = &mut self.governor;
+        if g.terrain_on {
+            g.terrain.release();
+        }
+        g.terrain_on = false;
     }
 
     /// Nothing governed this frame (another mode, a terrain, a traced

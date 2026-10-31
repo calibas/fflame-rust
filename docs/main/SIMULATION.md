@@ -637,9 +637,9 @@ cell for a `Discrete` one. A config with several layers takes the most
 careful of their kinds (`StateKind::of_config`). The run goes on at its
 step: a feature keeps its size in cells, so the picture is the same one,
 finer or blockier, and the pattern then re-forms at its own size. An
-agent model, or a run not yet seeded, reseeds as before. A scale edit
-while an active run's grid is held (below) is passed on the next frame,
-when the hold lets go.
+agent model, a run not yet seeded, or a grid of another shape (the carry
+maps each axis by its own ratio, and a field is never stretched) reseeds
+as before.
 
 **A resize does not restart an active run** (`src/app/sim_lock.rs`).
 While the transport runs or the timeline drives the steps, a bound grid
@@ -649,8 +649,23 @@ the grid's shape (`ui::SimLock`, `view_controls::letterbox_shape`), so
 full screen shows the same field larger, at its step. Pausing or stopping
 lets go: the viewport fills its panel and the grid follows it at the
 config's scale, from the seed. Not with the letterbox setting on, whose
-shape is the picture's already, nor for a fixed grid. A scale edit while
-running lets go for a frame, so the edit takes effect.
+shape is the picture's already, nor for a fixed grid. A change of the
+run's scale while it is held (an edit, or the quality governor's pick)
+keeps the hold: the grid is the run's at the new scale, the same shape,
+and the field is carried into it.
+
+**The quality governor** (`src/app/governor.rs`, `SimGovernor`;
+[quality-governor.md](../projects/quality-governor.md)). While a bound
+grid's run is active and the Rendering menu's Quality Governor is on, the
+run's scale is picked when it starts, from the measured cost of a step,
+as the best of the config's and 75, 50, 37.5, 25, 18.75 or 12.5% at which
+its steps a frame fit the Target Frame Rate. It is held for the run,
+picked again only when far wrong for two seconds with no edit, and the
+field is carried back to the config's scale on stop. A governed run is a
+different run from the still: a still and an export re-run at the
+config's grid. The panel says "Playing at 50% (quality governor)" under
+the grid scale, and **Fit to Target** writes the scale that plays in real
+time to the config (an undoable edit), for a still or an export at it.
 
 Model and colouring **parameters are deliberately excluded** — turning
 Gray–Scott's feed rate while it runs is what the slider is for, and
