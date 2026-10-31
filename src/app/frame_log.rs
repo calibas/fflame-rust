@@ -15,7 +15,8 @@
 //! `.fflame` on the first frame, and `FFLAME_FRAME_LOG_SECONDS` quits that
 //! many seconds after it. `FFLAME_FRAME_LOG_RENDER_SCALE` renders at that
 //! scale for the run, in place of the saved setting, which it does not
-//! touch: a measurement needs a known ceiling.
+//! touch: a measurement needs a known ceiling. `FFLAME_FRAME_LOG_TARGET_FPS`
+//! does the same for the Target Frame Rate (`display`, or frames a second).
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -81,10 +82,20 @@ impl super::App {
             .unwrap_or(self.config_manager.system_settings().render_scale)
     }
 
+    /// The Target Frame Rate the governor holds: the setting's, or the
+    /// scripted run's (`FFLAME_FRAME_LOG_TARGET_FPS`).
+    pub(super) fn target_rate(&self) -> crate::storage::settings::TargetRate {
+        self.frame_log
+            .as_ref()
+            .and_then(|l| l.target_rate)
+            .unwrap_or(self.config_manager.system_settings().target_rate)
+    }
+
     /// The scripted run's part of a frame, after the frame's row: on the
     /// first frame the settings' sidecar and the file opened (an
     /// animation played from its start); then the quit.
     pub(super) fn frame_log_drive(&mut self) {
+        let (target_rate, render_scale) = (self.target_rate(), self.user_render_scale());
         let Some(log) = self.frame_log.as_mut() else { return };
         if log.frame == 1 {
             let s = self.config_manager.system_settings();
@@ -93,6 +104,8 @@ impl super::App {
                 "window": [self.gpu.size.width, self.gpu.size.height],
                 "vsync_enabled": s.vsync_enabled,
                 "target_fps": s.target_fps,
+                "target_rate": format!("{target_rate:?}"),
+                "render_scale": render_scale,
                 "frame_governor": s.frame_governor,
                 "manual_workgroups": s.manual_workgroups,
                 "iterations_per_thread": s.iterations_per_thread,
@@ -189,8 +202,10 @@ pub(crate) struct FrameLog {
     open: Option<String>,
     seconds: Option<f64>,
     opened_at: Option<web_time::Instant>,
-    /// The run's render scale, in place of the setting's.
+    /// The run's render scale and target frame rate, in place of the
+    /// settings'.
     render_scale: Option<f32>,
+    target_rate: Option<crate::storage::settings::TargetRate>,
 }
 
 impl FrameLog {
@@ -230,6 +245,13 @@ impl FrameLog {
                 .ok()
                 .and_then(|s| s.parse::<f32>().ok())
                 .filter(|s| s.is_finite() && *s > 0.0),
+            target_rate: std::env::var("FFLAME_FRAME_LOG_TARGET_FPS").ok().and_then(|s| {
+                use crate::storage::settings::TargetRate;
+                if s.eq_ignore_ascii_case("display") {
+                    return Some(TargetRate::Display);
+                }
+                s.parse::<f32>().ok().filter(|f| f.is_finite() && *f > 0.0).map(TargetRate::Fixed)
+            }),
         })
     }
 

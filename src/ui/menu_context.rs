@@ -41,7 +41,7 @@ pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
     pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
-    /// Turn the frame-time governor on or off.
+    /// Turn the quality governor on or off (every mode's).
     pub set_frame_governor: Option<bool>,
     /// The workgroups a frame dispatches while the governor is off.
     pub set_manual_workgroups: Option<u32>,
@@ -90,8 +90,8 @@ pub struct MenuState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_paused: bool,
-    /// Whether the frame-time governor sizes each frame's dispatch, and the
-    /// workgroups a frame dispatches when it does not.
+    /// Whether the quality governor is on (every mode's), and the
+    /// workgroups a flame's frame dispatches when it is not.
     pub frame_governor: bool,
     pub manual_workgroups: u32,
     /// The viewport's render scale, upscaler and physical-pixel setting.
