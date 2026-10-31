@@ -1,0 +1,37 @@
+// Chip, one of the Hopalong family:
+//   x' = y - sign(x) cos(sqr(ln|b x - c|)) atan(sqr(ln|c x - b|)),
+//   y' = a - x,
+// where sign(0) is 0. Ported from Iterated Dynamics (the GPL Fractint
+// successor; libid/fractals/lorenz.cpp `chip2d_orbit`, its defaults and
+// view from fractalp.cpp).
+//
+// Use it alone, at weight 1, on one transform whose triangle is the
+// identity: the chaos game iterates it, every thread's orbit from where
+// the flame's starts, in [-1, 1]. Fractint draws one orbit from the
+// origin, for many more points; here the picture is thousands of
+// shorter orbits, so it differs at the same parameters. At the defaults
+// they span about 220 units, centred near the origin (Fractint's view
+// of its one orbit spans 1,520). To see it whole, scale what is plotted, not the view:
+// a final transform whose triangle shrinks it by about 4 / 220 (a final
+// plots and does not feed the orbit), at a zoom near 1. Zooming the
+// view out that far instead darkens it, as the log tone map divides by
+// the view's area (Apophysis's too).
+
+const PARAMS = #{
+    a: #{ value: -15.0, caption: "a", hint: "The constant y hops to, less x" },
+    b: #{ value: -19.0, caption: "b", hint: "The first logarithm's slope, and the second's offset" },
+    c: #{ value: 1.0, caption: "c", hint: "The first logarithm's offset, and the second's slope" },
+};
+
+const INFO = #{ title: "Chip", name: "chip" };
+
+fn chip_sign(x) {
+    if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 }
+}
+
+fn variation(z, p) {
+    let x = z.re;
+    let u = ln((p.b * x - p.c).abs());
+    let v = ln((p.c * x - p.b).abs());
+    complex(z.im - chip_sign(x) * cos(u * u) * atan(v * v), p.a - x)
+}

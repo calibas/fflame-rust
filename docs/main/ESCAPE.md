@@ -523,7 +523,12 @@ fn escaped(s, p) {
   part as `Predef::PixelZ` beside `#pixel`.
 
   Examples: `assets/formulas/variation-whorl.rhai`, and
-  `variation-scatter.rhai` for `rand()` and a colour; the hooks' twins
+  `variation-scatter.rhai` for `rand()` and a colour; Iterated Dynamics'
+  orbit maps as variations (`variation-hopalong.rhai`, `-martin`,
+  `-chip`, `-quadruptwo`, `-threeply`, `-gingerbreadman`,
+  `-latoocarfian`, `-kamtorus`, `-pickover-popcorn`, `-dynamic-system`,
+  and in 3D `-pickover-attractor`, `-rossler-attractor`), each stepping
+  as the program's code does (`src/escape/iterated_dynamics.rs`); the hooks' twins
   of `blur` and `macmillan`, and the 3D twins of `spherical3D`,
   `hemisphere` and `zcone`, are in `variations::custom`'s tests.
 - **`rand()`** anywhere else -- a formula, a colouring, a variation
