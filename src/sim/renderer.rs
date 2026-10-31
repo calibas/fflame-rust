@@ -604,6 +604,10 @@ pub struct SimRenderer {
     /// run. Used by the interactive driver to size a per-display-frame
     /// budget so catching up to a timeline target never blocks the UI.
     ms_per_step: f64,
+    /// The batches timed since the renderer was made, and the last one's
+    /// ms a step, raw: the quality governor takes a median of these.
+    batches_timed: u64,
+    last_step_ms: f64,
     /// Set when the field has not been seeded yet, or the config
     /// changed in a way that invalidates it.
     needs_seed: bool,
@@ -813,6 +817,8 @@ impl SimRenderer {
             color_layers_buffer,
             steps_per_submit: FIRST_SUBMIT,
             ms_per_step: 0.0,
+            batches_timed: 0,
+            last_step_ms: 0.0,
             needs_seed: true,
             resample_requested: false,
             carry_from: None,
@@ -1610,6 +1616,12 @@ impl SimRenderer {
         (self.grid_w, self.grid_h)
     }
 
+    /// The batches timed so far and the last one's ms a step, unsmoothed
+    /// (the quality governor's measure: a new count is a new sample).
+    pub fn last_step(&self) -> (u64, f64) {
+        (self.batches_timed, self.last_step_ms)
+    }
+
     /// The picture's size: what the field is resolved to.
     pub fn output_size(&self) -> (u32, u32) {
         (self.out_w, self.out_h)
@@ -1667,8 +1679,14 @@ impl SimRenderer {
             // or a new run starts from the seed, as it always did. A carry
             // still pending keeps its field: the one just replaced was
             // never written.
+            // Only into a grid of the same shape, within a cell's rounding:
+            // the carry maps each axis by its own ratio, and a field is
+            // never stretched (D7) -- a letterboxed run's grid, let go
+            // into a viewport of another shape, starts from the seed.
             let kind = crate::sim::StateKind::of_config(cfg);
-            if resample && !self.needs_seed && kind != crate::sim::StateKind::Agents {
+            let same_shape = (gw as f64 * self.grid_h as f64 - gh as f64 * self.grid_w as f64).abs()
+                <= 0.5 * (self.grid_w + self.grid_h) as f64 + 1.0;
+            if resample && same_shape && !self.needs_seed && kind != crate::sim::StateKind::Agents {
                 if self.carry_from.is_none() {
                     let [a, b] = old_field;
                     let [va, vb] = old_view;
@@ -3430,14 +3448,16 @@ impl SimRenderer {
                     self.step_index += 1;
                 }
             }
+            // What is still in flight first (a previous frame's tail, the
+            // seed pass): timed with it, a frame the GPU is behind on read
+            // the steps as dearer than they are, and the quality governor
+            // picked a smaller grid than fitted (2026-10-30). The GPU idles
+            // for the submit's latency only.
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             queue.submit(std::iter::once(enc.finish()));
             done += batch;
 
-            // Time this submission and size the next one from it. The
-            // measurement can include unrelated work still in flight
-            // (the seed pass, a previous frame's tonemap), which only
-            // overestimates the cost and shrinks the next batch: the
-            // safe direction.
+            // Time this submission and size the next one from it.
             let started = web_time::Instant::now();
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             let ms = started.elapsed().as_secs_f64() * 1e3;
@@ -3447,6 +3467,8 @@ impl SimRenderer {
             // still in flight; an exponential average settles on the
             // real cost within a few batches without a spike moving it
             // far.
+            self.batches_timed += 1;
+            self.last_step_ms = per_step;
             self.ms_per_step = if self.ms_per_step > 0.0 {
                 self.ms_per_step * 0.7 + per_step * 0.3
             } else {

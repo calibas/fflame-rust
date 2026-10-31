@@ -591,9 +591,79 @@ the user's 1,000 iterations a thread (8.2 million samples a frame, 7.2 a
 display pixel): the 2D flame stayed at full size, the 3D flame went to 50%
 after 30 frames, both at 120 fps.
 
+### The governor, terrains and simulations, as built (2026-10-30)
+
+**An escape terrain** (`governor::terrain_ladder`, `App::govern_terrain`):
+the render scale of its lit tier, 100%, 75% and 50%, by the same
+`Governor` as escape-time's (its median windows, its model, its shed
+check), under the Rendering menu's render scale. Governed while an
+animation plays or within 250 ms of an edit (a camera gesture or fly mode
+is an escape edit), in the Lit and Auto tiers; not Path traced, whose
+tier is the look and which fills its frame's time at any size. Its sample
+is a frame that drew a moving view's lit pass
+(`TerrainTiers::drew_fresh_lit`) while no sections were arriving: the
+tiers time their own passes under the same rule, and a deep terrain's
+section renders, 100-360 ms a step, are no cost the render scale moves.
+The readout is escape-time's, under the antialiasing control. A
+simulation terrain renders at the viewport, as every simulation does
+(its field scale is its render scale), and follows the simulation's rule.
+
+**A simulation** (`governor::SimGovernor`, `App::govern_sim`; D6): a
+bound grid's scale, while the transport runs or the timeline drives the
+steps, with the governor on.
+- **The pick.** From a step's cost, the median of the renderer's last
+  timed batches on the grid (`SimRenderer::last_step`; four before the
+  first pick, since the first after a new grid reads high), the best of
+  the config's scale and the plan's below it (75, 50, 37.5, 25, 18.75,
+  12.5%) at which the steps a frame fit 70% of the budget, cells going
+  with the scale squared down to a floor of 0.1 ms a step. The steps a
+  frame are Steps per Frame on the transport, and the timeline's step
+  rate at the target frame rate when it drives. When none fits, the best
+  within 20% of the cheapest. The cost a cell-step is kept for the model
+  (`sim_cost_identity`: the model, its layers and parameters), so the next
+  run starts on its pick.
+- **Held.** Picked again only after 120 frames far wrong with no edit:
+  the steps taking over two budgets (frames under half the target rate)
+  with a smaller scale left, or under a quarter of the share with a
+  larger one. An edit of the config's scale picks at once, under it.
+- **Carried.** Each pick carries the field into its grid (the field
+  resampler), and stopping carries it back to the config's scale. The
+  lock (`app/sim_lock.rs`) now holds through a change of scale, an edit's
+  or the governor's: its grid is the run's at the new scale, the same
+  shape. The resampler carries only into a grid of the same shape, within
+  a cell's rounding (`SimRenderer::resize`), so a letterboxed run let go
+  into a viewport of another shape starts from the seed, as D7 says;
+  before, an edit while letterboxed let go for a frame and stretched it.
+- **The timeline's walk** takes the governor's share of the frame while
+  governed, in place of 8 ms.
+- **The Simulation panel** says "Playing at 50% (quality governor)" under
+  the grid scale while a run holds one, and offers **Fit to Target**: the
+  scale Steps per Frame fit the target at, from 100% (or the config's,
+  when above) down, as measured, written as an undoable edit.
+- **Measured honestly.** A batch was timed from its submit to the GPU's
+  finish, so on a frame the GPU was behind on it was timed with the
+  previous frame's tail. The renderer now drains the queue before each
+  batch's submit.
+
+In the app at 60 Hz on a 754x424 viewport (the display's target):
+
+| scene | held | fps | GPU a frame |
+|---|---|---|---|
+| escape terrain (seahorse, lit) | 100% | 60.0 | 6.4 ms |
+| deep terrain (terrain-deep-60) | 100%, then 75% where the lit pass took 11-14 ms | 34 | 3.9 ms median, sections to 360 ms |
+| Lenia, a step track (250 steps a second) | 50% from the 4th frame | 60.1 | 6.2 ms |
+| Lenia, the transport (4 steps a frame) | 50% from the 4th frame | 60.1 | 6.4 ms |
+| Gray-Scott (bound) | 100% | 59.4 | 2.9 ms |
+
+Lenia's step cost 5.5 ms at full size and 1.13 ms at 50%, 4.9 times for
+four times the cells; 75% is predicted at 12.4 ms of steps against an
+11.7 ms share, so 50% is the pick.
+
 Not yet: the batch governor's alternation at the budget's edge
-(*The second run*), which wants the frame's GPU span as the batch's cap;
-terrains; simulations' field scale and *Fit to target*.
+(*The second run*), which wants the frame's GPU span as the batch's cap.
+Open: a deep terrain's section renders (one step can take 360 ms) want
+splitting, or a budget the governor sets ("section detail while moving",
+*The ladder*); the render scale cannot reach them.
 
 ## Exports
 
@@ -793,8 +863,8 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    which on its own stops a resize or full screen from restarting a live
    run (built 2026-10-30: `app/sim_lock.rs`; it letterboxes only once the
    viewport is not the size the run began at, so starting a run moves
-   nothing, and a scale edit while running lets go for a frame so the
-   edit takes effect); then **the field resampler**, which makes the
+   nothing; a scale edit while running first let go for a frame, and
+   since the governor the hold scales its grid instead); then **the field resampler**, which makes the
    scale slider do what its docs say, before the governor uses it (built
    2026-10-30: `ModelDef::state`, `SimRenderer::carry_field`; agent models
    reseed, as the plan allowed, rather than carrying their population).
@@ -807,8 +877,10 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    the ladders. Escape first (it gains the most), then flames, terrains,
    simulations. The mode-D stride preview is replaced by the 50% rung,
    once that is shown to look as good or better. Escape-time built
-   2026-10-30 (*The governor, escape-time, as built*); flames, terrains and
-   simulations next.
+   2026-10-30 (*The governor, escape-time, as built*), flames, terrains and
+   simulations the same day (*The governor, flames, as built*; *The
+   governor, terrains and simulations, as built*); the flame batch's
+   pacing cap still open.
 6. **Exports**: the fixed rungs in the video export and the CLI.
 7. **The web**: the fallback signal; tried in a browser.
 

@@ -66,6 +66,21 @@ def scenes():
     bound['sim']['grid'] = {'viewport': {'scale': 1.0}}
     yield 'sim-bound', bound, [track('Sim.Steps', 0.0, 4000.0)]
 
+    # Heavy enough to need the governor at a docked viewport: Lenia, about
+    # 13 ms a million cell-steps (phase 1), on a bound grid. Driven by a
+    # step track (250 steps a second), and by the transport (4 steps a
+    # frame; a track that is not the step count keeps Run engaged).
+    lenia = load(f'{VIS}/sim/lenia-soup.fflame')
+    lenia['sim']['grid'] = {'viewport': {'scale': 1.0}}
+    lenia['sim']['steps'] = 0
+    yield 'sim-lenia', lenia, [track('Sim.Steps', 0.0, 3000.0)]
+    lenia_run = json.loads(json.dumps(lenia))
+    lenia_run['sim']['steps_per_frame'] = 4
+    yield 'sim-lenia-run', lenia_run, [track('Exposure', 1.0, 1.0)]
+
+    deep = load(f'{VIS}/escape/terrain-deep-60.fflame')
+    yield 'escape-terrain-deep', deep, [track('Escape.CamYaw', 0.0, 0.6)]
+
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else 'output/governor/scenes'
