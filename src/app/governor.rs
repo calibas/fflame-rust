@@ -186,6 +186,100 @@ pub(crate) fn flame_scale(samples_per_display_px: f64, three_d: bool) -> f32 {
 /// the batch.
 const FLAME_HOLD: u32 = 30;
 
+/// Frames the batch's cap is learned over (the median of their GPU time
+/// besides the dispatch), and the fewest it is given from.
+const CAP_FRAMES: usize = 16;
+const CAP_MIN_FRAMES: usize = 4;
+/// How fast a dispatch's cost a thread-iteration follows a new measure.
+const CAP_EMA: f64 = 0.3;
+
+/// **The flame batch's pacing cap** (the plan's *The second run*): the most
+/// thread-iterations a frame may dispatch for the frame's whole GPU span
+/// to fit `GPU_SHARE` of the budget. The batch governor reads frame
+/// intervals, and under vsync a frame on time reads the refresh however
+/// full the GPU is, so it grows the batch until frames miss; at the
+/// budget's edge they then alternate long and short (about 1 and 32 ms at
+/// 60 Hz, measured 2026-10-29 at 3,600 iterations a thread), the median on
+/// time and the animation's clock jumping. A cap on the dispatch alone did
+/// not end it: the batch sat at a third and frames still alternated at ~84%
+/// of the budget in GPU time, since the tail, the UI and the effects take
+/// their share, and it varies. So a frame's span is split by a linear
+/// model into its dispatch (the dispatch's own timed cost a
+/// thread-iteration, times what the frame dispatched) and the rest, and the
+/// cap is the room the rest leaves. The rest does not follow the batch, so
+/// neither does the cap: there is no loop through the few frames the GPU's
+/// times lag by. When the rest alone overruns the share, the dispatch keeps
+/// `NO_FIT_SLACK` of it: the frame rate is out of the batch's reach, and
+/// samples given away for nothing are a bad trade.
+#[derive(Debug, Default)]
+pub(crate) struct BatchCap {
+    /// Thread-iterations recent frames dispatched, by frame.
+    dispatched: std::collections::VecDeque<(u64, f64)>,
+    /// The dispatch's GPU ms a thread-iteration, smoothed.
+    per_iteration: Option<f64>,
+    /// Recent frames' GPU ms besides their dispatch.
+    rest: std::collections::VecDeque<f64>,
+}
+
+impl BatchCap {
+    /// The frame `frame` dispatched `iterations` thread-iterations.
+    pub fn dispatched(&mut self, frame: u64, iterations: f64) {
+        self.dispatched.push_back((frame, iterations));
+        while self.dispatched.len() > FRAMES_KEPT {
+            self.dispatched.pop_front();
+        }
+    }
+
+    /// A dispatch timed on the GPU: `ms` for `iterations` thread-iterations.
+    pub fn dispatch_timed(&mut self, ms: f64, iterations: f64) {
+        if !(ms > 0.0) || !(iterations > 0.0) {
+            return;
+        }
+        let b = ms / iterations;
+        self.per_iteration = Some(self.per_iteration.map_or(b, |p| p + CAP_EMA * (b - p)));
+    }
+
+    /// Frames' GPU times heard back: each one that dispatched, its span
+    /// less its dispatch.
+    pub fn frames_timed(&mut self, timings: &[crate::gpu::timer::FrameTiming]) {
+        let Some(b) = self.per_iteration else { return };
+        for t in timings {
+            if let Some(&(_, n)) = self.dispatched.iter().find(|(f, _)| *f == t.frame) {
+                self.rest.push_back((t.ui_ms + t.engine_ms - b * n).max(0.0));
+            }
+        }
+        while self.rest.len() > CAP_FRAMES {
+            self.rest.pop_front();
+        }
+    }
+
+    /// The most thread-iterations a frame may dispatch against `budget_ms`;
+    /// None until enough frames are timed.
+    pub fn cap(&self, budget_ms: f64) -> Option<f64> {
+        let b = self.per_iteration?;
+        if self.rest.len() < CAP_MIN_FRAMES || !(budget_ms > 0.0) {
+            return None;
+        }
+        let mut v: Vec<f64> = self.rest.iter().copied().collect();
+        v.sort_by(f64::total_cmp);
+        let rest = v[v.len() / 2];
+        let room = (GPU_SHARE * budget_ms - rest).max((NO_FIT_SLACK - 1.0) * rest);
+        Some(room / b)
+    }
+}
+
+/// The batch scale under the pacing cap (`BatchCap`, as a share of the
+/// full batch): never above it, and coming down to it from `before`, the
+/// last frame's, at the batch governor's slew (`adjust_iter_scale`), since
+/// in playback a jump in the samples a frame is a jump in the grain.
+pub(crate) fn capped_scale(scale: f64, before: f64, cap: f64) -> f64 {
+    if scale > cap {
+        cap.max(before / 1.15).min(scale)
+    } else {
+        scale
+    }
+}
+
 /// One engine's governor: its ladder, the rung in use, and what it has
 /// learned of the cost.
 #[derive(Debug, Clone)]
@@ -848,6 +942,79 @@ mod tests {
         assert!(seen[100..].iter().all(|r| *r == last), "settled");
         assert!(g.fixed() > 2.0, "the fixed part was learned: {}", g.fixed());
     }
+
+    /// The flame batch's cap is the room the rest of the frame leaves in
+    /// the share, whatever the frames dispatched; when the rest alone
+    /// overruns the share, the dispatch keeps a fifth of it.
+    #[test]
+    fn a_batch_cap_is_the_room_the_rest_of_the_frame_leaves() {
+        use crate::gpu::timer::FrameTiming;
+        let budget = 1000.0 / 60.0;
+        let mut c = BatchCap::default();
+        assert_eq!(c.cap(budget), None, "nothing timed");
+        c.dispatch_timed(8.0, 8e6); // 1 ms a million thread-iterations
+        for (f, n) in [(0, 8e6), (1, 4e6), (2, 8e6), (3, 2e6)] {
+            c.dispatched(f, n);
+            // 4 ms of the UI and the tail besides the dispatch.
+            c.frames_timed(&[FrameTiming { frame: f, ui_ms: 1.0, engine_ms: 3.0 + n * 1e-6 }]);
+        }
+        let cap = c.cap(budget).unwrap();
+        assert!((cap - (GPU_SHARE * budget - 4.0) * 1e6).abs() < 1.0, "{cap}");
+
+        let mut c = BatchCap::default();
+        c.dispatch_timed(1.0, 1e6);
+        for f in 0..4 {
+            c.dispatched(f, 1e6);
+            c.frames_timed(&[FrameTiming { frame: f, ui_ms: 1.0, engine_ms: 14.0 }]);
+        }
+        let cap = c.cap(budget).unwrap();
+        assert!((cap - 0.2 * 14.0 * 1e6).abs() < 1.0, "{cap}");
+    }
+
+    /// Under vsync every frame on time reads as on budget, so the batch
+    /// governor grows the batch until the GPU is full. The cap holds it
+    /// where the frame's span fits the share, with the GPU's times three
+    /// frames late, and holds it there without hunting.
+    #[test]
+    fn the_batch_settles_at_its_cap_with_late_timings() {
+        use crate::gpu::timer::FrameTiming;
+        let budget = 1000.0 / 60.0;
+        let full = 128.0 * 64.0 * 3600.0;
+        let b = 0.55e-6; // ms a thread-iteration: the full batch ~16 ms
+        let rest = 3.0;
+        let mut c = BatchCap::default();
+        let (mut scale, mut seen) = (0.1_f64, Vec::new());
+        for f in 0..300u64 {
+            let before = scale;
+            scale = (scale * 1.15).min(1.0);
+            if let Some(cap) = c.cap(budget) {
+                scale = capped_scale(scale, before, (cap / full).max(1.0 / 256.0));
+            }
+            let n = scale * full;
+            c.dispatched(f, n);
+            if f % 3 == 0 {
+                c.dispatch_timed(b * n, n);
+            }
+            if f >= 3 {
+                let g = f - 3;
+                let span = rest + b * seen[g as usize] * full;
+                c.frames_timed(&[FrameTiming { frame: g, ui_ms: 0.5, engine_ms: span - 0.5 }]);
+            }
+            seen.push(scale);
+        }
+        let want = (GPU_SHARE * budget - rest) / b / full;
+        assert!(want < 1.0);
+        assert!(seen[100..].iter().all(|s| (s - want).abs() < 1e-9), "{want}: {:?}", &seen[95..105]);
+    }
+
+    /// Over the cap the batch comes down at the governor's slew, not at once.
+    #[test]
+    fn a_batch_over_its_cap_comes_down_at_the_slew() {
+        assert_eq!(capped_scale(0.5, 0.5, 0.8), 0.5, "under the cap: untouched");
+        assert_eq!(capped_scale(0.92, 0.8, 0.85), 0.85, "a growth stops at the cap");
+        assert!((capped_scale(1.0, 1.0, 0.2) - 1.0 / 1.15).abs() < 1e-12, "a fall at the slew");
+        assert_eq!(capped_scale(0.1, 1.0, 0.2), 0.1, "a shed below the cap stands");
+    }
 }
 
 /// The grid scales a governed simulation picks from, best first (the
@@ -1088,6 +1255,10 @@ pub(crate) struct GovernorState {
     pub flame_samples: Option<u64>,
     pub flame_spp: f64,
     pub flame_hold: u32,
+    /// The flame batch's pacing cap, and the batch scale it held the last
+    /// governed frame to (the frame log's), if it did.
+    pub batch_cap: BatchCap,
+    pub flame_cap: Option<f64>,
     /// A simulation's grid scale (`SimGovernor`).
     pub sim: SimGovernor,
 }
@@ -1114,6 +1285,8 @@ impl Default for GovernorState {
             flame_samples: None,
             flame_spp: 0.0,
             flame_hold: 0,
+            batch_cap: BatchCap::default(),
+            flame_cap: None,
             sim: SimGovernor::default(),
         }
     }
@@ -1193,6 +1366,7 @@ impl GovernorState {
         while self.spans.len() > 32 {
             self.spans.pop_front();
         }
+        self.batch_cap.frames_timed(timings);
         let budget_ms = self.effective_budget(budget_ms);
         while self.frames.len() > FRAMES_KEPT {
             self.frames.pop_front();
@@ -1403,7 +1577,7 @@ impl super::App {
     pub(super) fn governor_budget_ms(&self) -> f64 {
         use crate::storage::settings::TargetRate;
         let s = self.config_manager.system_settings();
-        let display = super::frame_budget(s.vsync_enabled, s.target_fps, self.display_refresh_mhz) * 1000.0;
+        let display = super::frame_budget(self.vsync_enabled(), s.target_fps, self.display_refresh_mhz) * 1000.0;
         let fps = match self.target_rate() {
             TargetRate::Display => return display,
             TargetRate::Animation => self.egui_layer.export_fps() as f64,

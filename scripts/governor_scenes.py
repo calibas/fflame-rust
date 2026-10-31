@@ -56,6 +56,17 @@ def scenes():
     flame2d = load(f'{VIS}/2d/plastic-sierpinski.fflame')
     yield 'flame-2d', flame2d, [track('Rotation', 0.0, 1.0)]
 
+    # The batch governor's pacing at the budget's edge (the plan's *The
+    # second run*): the same flame with order-3 point symmetry, which plots
+    # each sample three times, so that a full batch (2,000 iterations a
+    # thread) is about two 60 Hz frames' work. Not more: at order 32 the
+    # first frames, before the governor shed, took 100-330 ms of GPU time,
+    # and the driver reset (2026-10-30).
+    heavy = json.loads(json.dumps(flame2d))
+    heavy['flame']['post_symmetry'] = {'ty': 'point', 'order': 3, 'center_x': 0.0, 'center_y': 0.0,
+                                       'distance': 0.0, 'rotation_deg': 0.0}
+    yield 'flame-2d-heavy', heavy, [track('Rotation', 0.0, 1.0)]
+
     flame3d = load(f'{VIS}/3d/bubble-3d.fflame')
     yield 'flame-3d', flame3d, [track('CameraRotationY', 0.0, 1.0)]
 

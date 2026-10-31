@@ -16,7 +16,8 @@
 //! many seconds after it. `FFLAME_FRAME_LOG_RENDER_SCALE` renders at that
 //! scale for the run, in place of the saved setting, which it does not
 //! touch: a measurement needs a known ceiling. `FFLAME_FRAME_LOG_TARGET_FPS`
-//! does the same for the Target Frame Rate (`display`, or frames a second).
+//! does the same for the Target Frame Rate (`display`, or frames a second),
+//! and `FFLAME_FRAME_LOG_VSYNC` (`on` or `off`) for VSync.
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -66,8 +67,10 @@ pub(crate) struct FrameState {
     pub refresh_hz: f64,
     /// The escape renderer's supersampling in use, 0 without one.
     pub escape_ss: u32,
-    /// The governor's batch scale.
+    /// The governor's batch scale, and the pacing cap it was held to, in
+    /// the same units (governor.rs, `BatchCap`), when it was.
     pub iter_scale: f64,
+    pub flame_cap: Option<f64>,
     /// The simulation's grid and its step, zeros without one.
     pub sim_grid: (u32, u32),
     pub sim_step: u32,
@@ -96,18 +99,26 @@ impl super::App {
             .unwrap_or(self.config_manager.system_settings().target_rate)
     }
 
+    /// VSync: the setting's, or the scripted run's (`FFLAME_FRAME_LOG_VSYNC`).
+    pub(super) fn vsync_enabled(&self) -> bool {
+        self.frame_log
+            .as_ref()
+            .and_then(|l| l.vsync)
+            .unwrap_or(self.config_manager.system_settings().vsync_enabled)
+    }
+
     /// The scripted run's part of a frame, after the frame's row: on the
     /// first frame the settings' sidecar and the file opened (an
     /// animation played from its start); then the quit.
     pub(super) fn frame_log_drive(&mut self) {
-        let (target_rate, render_scale) = (self.target_rate(), self.user_render_scale());
+        let (target_rate, render_scale, vsync) = (self.target_rate(), self.user_render_scale(), self.vsync_enabled());
         let Some(log) = self.frame_log.as_mut() else { return };
         if log.frame == 1 {
             let s = self.config_manager.system_settings();
             let sidecar = serde_json::json!({
                 "open": log.open,
                 "window": [self.gpu.size.width, self.gpu.size.height],
-                "vsync_enabled": s.vsync_enabled,
+                "vsync_enabled": vsync,
                 "target_fps": s.target_fps,
                 "target_rate": format!("{target_rate:?}"),
                 "render_scale": render_scale,
@@ -179,6 +190,7 @@ impl super::App {
             refresh_hz: self.display_refresh_mhz.map_or(0.0, |m| m as f64 / 1000.0),
             escape_ss: self.escape_renderer.as_ref().map_or(0, |e| e.effective_supersample()),
             iter_scale: self.iter_scale,
+            flame_cap: self.governor.flame_cap,
             sim_grid,
             sim_step,
             sim_step_ms,
@@ -215,6 +227,7 @@ pub(crate) struct FrameLog {
     /// settings'.
     render_scale: Option<f32>,
     target_rate: Option<crate::storage::settings::TargetRate>,
+    vsync: Option<bool>,
 }
 
 impl FrameLog {
@@ -233,7 +246,7 @@ impl FrameLog {
             out,
             "frame,t_ms,interval_ms,cpu_ms,ui_cpu_ms,acquire_ms,present_ms,gpu_ui_ms,gpu_engine_ms,mode,view_w,view_h,\
              render_w,render_h,playing,interacting,escape_ss,escape_partial,escape_done,gov_rung,gov_picture_ms,gov_picture_frames,gov_fixed,gov_budget_ms,refresh_hz,\
-             iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step,sim_step_ms,sim_scale"
+             iter_scale,flame_workgroups,flame_ipt,flame_samples,sim_grid_w,sim_grid_h,sim_step,sim_step_ms,sim_scale,flame_cap"
         );
         log::info!(
             "Frame log: {path}{}",
@@ -260,6 +273,11 @@ impl FrameLog {
                     return Some(TargetRate::Display);
                 }
                 s.parse::<f32>().ok().filter(|f| f.is_finite() && *f > 0.0).map(TargetRate::Fixed)
+            }),
+            vsync: std::env::var("FFLAME_FRAME_LOG_VSYNC").ok().and_then(|s| match s.to_ascii_lowercase().as_str() {
+                "on" | "1" | "true" => Some(true),
+                "off" | "0" | "false" => Some(false),
+                _ => None,
             }),
         })
     }
@@ -304,7 +322,7 @@ impl FrameLog {
         });
         let _ = writeln!(
             self.out,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.2},{:.4},{},{},{},{},{},{},{:.3},{}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.2},{:.4},{},{},{},{},{},{},{:.3},{},{}",
             r.frame,
             r.t_ms,
             s.interval_ms,
@@ -339,6 +357,7 @@ impl FrameLog {
             s.sim_step,
             s.sim_step_ms,
             s.sim_scale.map_or(String::new(), |v| format!("{v:.4}")),
+            s.flame_cap.map_or(String::new(), |v| format!("{v:.4}")),
         );
     }
 }
