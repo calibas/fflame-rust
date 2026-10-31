@@ -130,6 +130,7 @@ The API's corpora come from `cargo run --release --bin export_variations_json` /
 ### GPU Code
 - All shaders are **WGSL**; follow std140/std430 layout rules.
 - **WASM**: `textureSample()` only from uniform control flow; use `textureLoad()` inside conditionals (browsers fail silently with black output where desktop drivers are lenient).
+- **Parenthesize bitwise operators**: WGSL forbids `a * b ^ c`, `x & 1u == 1u`, a shift beside arithmetic and `&&` beside `||`. naga accepts them; Chrome's Tint refuses the whole shader. The `mixed_operators` lint (`shader_lint`) scans every `.wgsl`, every Rust raw string of WGSL and the assemblers' output.
 - **The flame compute layout holds only the bindings its shader uses** (`gpu::pipelines::used_bindings`; `a_layout_holds_every_binding_its_shader_uses`). Browsers count a layout's storage buffers against `max_storage_buffers_per_shader_stage` whether the shader reads them or not -- a fixed layout of 11 broke every flame on a Chrome that allows 10. A new binding goes in `compute_layout_entries` / `compute_entries`; `a_flame_renders_within_a_browsers_storage_limit` renders at 8 and 10.
 - **Metal runs shaders with fast-math ON** (wgpu never clears `fastMathEnabled`), so IEEE NaN/Inf rules do not hold there -- measured on an M2, `x != x` is false for a real NaN and `Inf/Inf` is 1.0:
   - Never detect non-finite values with a self-compare; use `!(abs(x) <= 1e32)`, the idiom bad-value recovery uses.

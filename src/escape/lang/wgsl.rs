@@ -3443,6 +3443,10 @@ pub(crate) mod tests {
         if !sub.is_empty() {
             return Err(format!("subnormal literals: {sub:?}"));
         }
+        let mixes = crate::variations::shader_lint::mixed_operators(src);
+        if !mixes.is_empty() {
+            return Err(format!("operator mixes Tint refuses: {mixes:?}"));
+        }
         Ok(())
     }
 

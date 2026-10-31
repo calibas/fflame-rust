@@ -9633,6 +9633,8 @@ mod tests {
                     f.name,
                     c.name
                 );
+                let mixes = shader_lint::mixed_operators(&src);
+                assert!(mixes.is_empty(), "{}x{}: operator mixes Tint refuses: {mixes:?}", f.name, c.name);
             }
         }
     }
@@ -10046,6 +10048,8 @@ mod tests {
                     c.name,
                     subnormals
                 );
+                let mixes = shader_lint::mixed_operators(&src);
+                assert!(mixes.is_empty(), "{}x{}: operator mixes Tint refuses: {mixes:?}", f.name, c.name);
             }
         }
     }
@@ -10709,6 +10713,7 @@ mod tests {
                 use crate::variations::shader_lint;
                 assert!(shader_lint::self_operations(&src).is_empty(), "v{v}");
                 assert!(shader_lint::subnormal_literals(&src).is_empty(), "v{v}");
+                assert!(shader_lint::mixed_operators(&src).is_empty(), "v{v}: {:?}", shader_lint::mixed_operators(&src));
             }
         }
     }
@@ -10752,6 +10757,7 @@ mod tests {
             use crate::variations::shader_lint;
             assert!(shader_lint::self_operations(&src).is_empty(), "{}", c.name);
             assert!(shader_lint::subnormal_literals(&src).is_empty(), "{}", c.name);
+            assert!(shader_lint::mixed_operators(&src).is_empty(), "{}: {:?}", c.name, shader_lint::mixed_operators(&src));
         }
       }
     }

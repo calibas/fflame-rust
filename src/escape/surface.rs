@@ -117,7 +117,7 @@ pub fn octave_weight(j: f64, window: (f64, f64)) -> f64 {
 pub const SURFACE_NOISE_WGSL: &str = r#"
 fn surf_grad(c: vec2<i32>) -> vec2<f32> {
     let q = vec2<u32>(vec2<i32>(c.x & 1023, c.y & 1023));
-    var h = q.x * 1597334677u ^ q.y * 3812015801u;
+    var h = (q.x * 1597334677u) ^ (q.y * 3812015801u);
     h = h ^ (h >> 16u);
     h = h * 0x7feb352du;
     h = h ^ (h >> 15u);
