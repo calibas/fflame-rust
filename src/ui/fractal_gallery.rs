@@ -699,7 +699,8 @@ mod tests {
             "{summary}"
         );
         let details = list_details(&config).join("\n");
-        assert!(details.contains("2^10.50"), "{details}");
+        // Base 10, as the View panel shows it: 2^10.5 is 10^3.16.
+        assert!(details.contains("10^3.16"), "{details}");
         assert!(details.contains("777"), "{details}");
         assert!(!details.contains("Color Mode"), "{details}");
     }
