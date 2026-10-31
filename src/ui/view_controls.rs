@@ -345,6 +345,9 @@ pub fn sim_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
             })
             .response
             .on_hover_text(t!("sim_panel.upscale_tip"));
+    });
+    // One choice a line (the user's layout, 2026-10-31).
+    ui.horizontal(|ui| {
         ui.label(t!("sim_panel.fit").as_ref());
         egui::ComboBox::from_id_salt("sim_fit")
             .selected_text(sim.fit.name())
@@ -357,6 +360,8 @@ pub fn sim_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
             })
             .response
             .on_hover_text(t!("sim_panel.fit_tip"));
+    });
+    ui.horizontal(|ui| {
         ui.label(t!("sim_panel.downscale").as_ref());
         egui::ComboBox::from_id_salt("sim_downscale")
             .selected_text(sim.downscale.name())
