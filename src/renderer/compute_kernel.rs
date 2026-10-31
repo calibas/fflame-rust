@@ -1926,6 +1926,12 @@ impl FlameRenderer {
         self.dof_pass.set_pixel_scale(s);
     }
 
+    /// Render pixels per logical point (`set_pixel_scale`): what the tail's
+    /// effects measure their sizes in pixels by.
+    pub fn pixel_scale(&self) -> f32 {
+        self.pixel_scale
+    }
+
     /// Solid-rendering shade pass (Phase 1). Dispatches when lighting is
     /// active and the depth region exists; returns whether it ran (the
     /// caller then feeds `shade_output_view()` to density effects /

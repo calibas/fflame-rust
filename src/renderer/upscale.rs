@@ -16,13 +16,17 @@
 //! When the render is the display's size the pass does not run and the
 //! picture is shown as it is: 100% on a 1x screen is the path it always
 //! was.
+//!
+//! An export at a render scale draws its frames up by the same pass
+//! (`Upscale::upscale_rgba`, on the picture read back).
 
 use serde::{Deserialize, Serialize};
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
-    BufferDescriptor, BufferUsages, CommandEncoder, ComputePassDescriptor, ComputePipeline,
-    ComputePipelineDescriptor, Device, Extent3d, PipelineLayoutDescriptor, Queue,
+    BufferDescriptor, BufferUsages, CommandEncoder, CommandEncoderDescriptor, ComputePassDescriptor,
+    ComputePipeline, ComputePipelineDescriptor, Device, Extent3d, MapMode, PipelineLayoutDescriptor, PollType, Queue,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, COPY_BYTES_PER_ROW_ALIGNMENT,
     ShaderModuleDescriptor, ShaderSource, ShaderStages, StorageTextureAccess, Texture,
     TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     TextureView, TextureViewDescriptor, TextureViewDimension,
@@ -48,6 +52,18 @@ pub enum UpscaleFilter {
 impl UpscaleFilter {
     pub const ALL: [UpscaleFilter; 4] =
         [UpscaleFilter::Nearest, UpscaleFilter::Bilinear, UpscaleFilter::CatmullRom, UpscaleFilter::Fsr];
+
+    /// The filter a CLI's `--upscaler` names (case-insensitive), or `None`
+    /// for a name it does not know.
+    pub fn from_cli_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().replace(['_', ' '], "-").as_str() {
+            "nearest" => Some(UpscaleFilter::Nearest),
+            "bilinear" | "linear" => Some(UpscaleFilter::Bilinear),
+            "catmull-rom" | "catmullrom" | "bicubic" => Some(UpscaleFilter::CatmullRom),
+            "fsr" | "fsr1" => Some(UpscaleFilter::Fsr),
+            _ => None,
+        }
+    }
 
     /// The i18n key of its name.
     pub fn label_key(self) -> &'static str {
@@ -159,6 +175,10 @@ pub struct Upscale {
     pipeline: Option<ComputePipeline>,
     /// FSR's two passes, made the first time it is chosen.
     fsr: Option<Fsr>,
+    /// An export frame's picture, uploaded, and the buffer its drawn-up
+    /// picture is read back through (`upscale_rgba`).
+    source: Option<(Texture, TextureView)>,
+    readback: Option<Buffer>,
 }
 
 /// A picture of `format`: written by a pass, read by the next or shown by
@@ -450,6 +470,99 @@ impl Upscale {
         dispatch(device, encoder, layout, simple, params, src, dst, (w, h), "Viewport Upscale");
     }
 
+    /// **An export frame drawn up** (docs/projects/quality-governor.md,
+    /// *Exports*): `rgba`, a picture read back at `src_size` -- an export
+    /// rendered at a render scale -- drawn at `dst_size` by `filter`, the
+    /// viewport's pass, and read back. The same pass for every frame, so a
+    /// video's frames are drawn up alike.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upscale_rgba(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        rgba: &[u8],
+        src_size: (u32, u32),
+        dst_size: (u32, u32),
+        filter: UpscaleFilter,
+    ) -> Result<Vec<u8>, String> {
+        let (sw, sh) = (src_size.0.max(1), src_size.1.max(1));
+        let (w, h) = (dst_size.0.max(1), dst_size.1.max(1));
+        if rgba.len() != (sw * sh * 4) as usize {
+            return Err(format!("upscale: {} bytes for a {sw}x{sh} picture", rgba.len()));
+        }
+        let size = Extent3d { width: sw, height: sh, depth_or_array_layers: 1 };
+        if self.source.as_ref().is_none_or(|(t, _)| t.width() != sw || t.height() != sh) {
+            if let Some((t, _)) = self.source.take() {
+                t.destroy();
+            }
+            let texture = device.create_texture(&TextureDescriptor {
+                label: Some("Export Upscale Source"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            self.source = Some((texture, view));
+        }
+        let (texture, view) = self.source.take().expect("made above");
+        queue.write_texture(
+            texture.as_image_copy(),
+            rgba,
+            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(sw * 4), rows_per_image: Some(sh) },
+            size,
+        );
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Export Upscale") });
+        self.run(device, queue, &mut encoder, &view, (sw, sh), (w, h), filter);
+        self.source = Some((texture, view));
+
+        let row = (w * 4).div_ceil(COPY_BYTES_PER_ROW_ALIGNMENT) * COPY_BYTES_PER_ROW_ALIGNMENT;
+        let bytes = (row * h) as u64;
+        if self.readback.as_ref().is_none_or(|b| b.size() != bytes) {
+            if let Some(b) = self.readback.take() {
+                b.destroy();
+            }
+            self.readback = Some(device.create_buffer(&BufferDescriptor {
+                label: Some("Export Upscale Readback"),
+                size: bytes,
+                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        let buffer = self.readback.as_ref().expect("made above");
+        let (out, _) = self.output.as_ref().expect("drawn above");
+        encoder.copy_texture_to_buffer(
+            out.as_image_copy(),
+            TexelCopyBufferInfo {
+                buffer,
+                layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
+            },
+            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        slice.map_async(MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "upscale: the readback was dropped".to_string())?
+            .map_err(|e| format!("upscale: {e:?}"))?;
+        let data = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            let start = (y * row) as usize;
+            pixels.extend_from_slice(&data[start..start + (w * 4) as usize]);
+        }
+        drop(data);
+        buffer.unmap();
+        Ok(pixels)
+    }
+
     /// The last picture drawn, and its size.
     pub fn output(&self) -> Option<(&TextureView, (u32, u32))> {
         self.output.as_ref().map(|(t, v)| (v, (t.width(), t.height())))
@@ -467,6 +580,12 @@ impl Upscale {
         }
         if let Some(fsr) = self.fsr.as_mut() {
             fsr.release();
+        }
+        if let Some((t, _)) = self.source.take() {
+            t.destroy();
+        }
+        if let Some(b) = self.readback.take() {
+            b.destroy();
         }
     }
 }
@@ -703,5 +822,42 @@ mod tests {
             assert_eq!(serde_json::from_str::<UpscaleFilter>(&json).unwrap(), f);
         }
         assert_eq!(serde_json::to_string(&UpscaleFilter::CatmullRom).unwrap(), "\"catmull_rom\"");
+    }
+
+    /// An export frame drawn up (`upscale_rgba`) is the viewport's pass,
+    /// read back: the same bytes, for every filter, and again at another
+    /// size through the same pass.
+    #[test]
+    fn an_export_frame_is_drawn_up_by_the_viewports_pass() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let (w, h) = (7u32, 5u32);
+        let src: Vec<u8> = (0..w * h).flat_map(|i| [(i * 37) as u8, (i * 11) as u8, 255 - (i * 3) as u8, 255]).collect();
+        let mut up = Upscale::default();
+        for filter in UpscaleFilter::ALL {
+            for dst in [(w * 2, h * 2), (13, 9)] {
+                let frame = pollster::block_on(up.upscale_rgba(&device, &queue, &src, (w, h), dst, filter)).expect("drawn up");
+                assert_eq!(frame, upscale(&device, &queue, (w, h), &src, dst, filter), "{filter:?} to {dst:?}");
+            }
+        }
+        assert!(pollster::block_on(up.upscale_rgba(&device, &queue, &src[4..], (w, h), (w, h), UpscaleFilter::Nearest)).is_err());
+        up.release();
+    }
+
+    #[test]
+    fn a_cli_names_each_upscaler() {
+        for (name, f) in [
+            ("nearest", UpscaleFilter::Nearest),
+            ("Bilinear", UpscaleFilter::Bilinear),
+            ("catmull-rom", UpscaleFilter::CatmullRom),
+            ("catmull_rom", UpscaleFilter::CatmullRom),
+            ("bicubic", UpscaleFilter::CatmullRom),
+            ("FSR", UpscaleFilter::Fsr),
+        ] {
+            assert_eq!(UpscaleFilter::from_cli_name(name), Some(f), "{name}");
+        }
+        assert_eq!(UpscaleFilter::from_cli_name("lanczos"), None);
     }
 }

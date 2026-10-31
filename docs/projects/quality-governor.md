@@ -704,6 +704,15 @@ splitting, or a budget the governor sets ("section detail while moving",
 
 ## Exports
 
+**As built (2026-10-30):** `animation::export::ExportRung`, the video
+export's Speed section and the CLI's `--render-scale`, `--upscaler` and
+`--escape-supersample` ([EXPORT.md](../main/EXPORT.md), *Speed*). A
+flame or escape-time frame renders at the scale and is drawn up by the
+viewport's pass, its sizes in pixels scaled (`RenderJob::pixel_scale`);
+a simulation's bound grid scales instead, the frame at full size; escape
+supersampling is capped; a flame's samples were the dialog's Max
+Iterations already. Below: the plan.
+
 An export renders at fixed rungs, chosen by the user, and every frame the
 same, so the output never depends on load. Options in the video export
 (and the CLI: `--render-scale`, `--upscaler`):
@@ -918,7 +927,8 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    simulations the same day (*The governor, flames, as built*; *The
    governor, terrains and simulations, as built*); the flame batch's
    pacing cap the same day (*The flame batch's pacing cap, as built*).
-6. **Exports**: the fixed rungs in the video export and the CLI.
+6. **Exports**: the fixed rungs in the video export and the CLI. Built
+   2026-10-30 (*Exports*, as built).
 7. **The web**: the fallback signal; tried in a browser.
 
 ## Decisions
