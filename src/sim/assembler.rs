@@ -2630,6 +2630,11 @@ mod tests {
             "{what}: subnormal literal -- {:?}",
             shader_lint::subnormal_literals(src)
         );
+        assert!(
+            shader_lint::mixed_operators(src).is_empty(),
+            "{what}: operator mixes Tint refuses -- {:?}",
+            shader_lint::mixed_operators(src)
+        );
     }
 
     /// Every model x colouring x boundary x resolve combination has to

@@ -752,14 +752,17 @@ forks; `codegen_has_no_platform_forks` fails if
 | --- | --- | --- |
 | `subnormal_literals` | a nonzero float literal below `f32::MIN_POSITIVE`, such as `1e-40` | GPUs flush subnormals to zero, so a guard built on one is `max(x, 0.0)`; it arrives by copying an f64 epsilon from JWildfire (see `defs/exp_log.rs`) |
 | `self_operations` | `x != x`, `x == x`, `x / x`, `x /= x` on one bare operand | they only work under IEEE rules Metal's fast-math does not keep |
+| `mixed_operators` | a bitwise operator (`&`, `\|`, `^`) beside any other operator, a shift beside arithmetic, `&&` beside `\|\|`, all without parentheses | WGSL forbids them; naga accepts them and Chrome's Tint refuses the shader (*Operator mixes on the web*, below) |
 
-They run over every registered variation's 2D, 3D, init and state-init
-source and every `.wgsl` under `shaders/`. The escape assembler
+The first two run over every registered variation's 2D, 3D, init and
+state-init source and every `.wgsl` under `shaders/`; the third over
+every `.wgsl` there and the WGSL in every Rust raw string under `src/`
+(`no_operator_mixes_tint_refuses`). The escape assembler
 ([src/escape/assembler.rs](../../src/escape/assembler.rs)), its terrain
-shaders, the simulation assembler
+shaders, the formula language's WGSL, the simulation assembler
 ([src/sim/assembler.rs](../../src/sim/assembler.rs)) and the effects
-([src/effects/mod.rs](../../src/effects/mod.rs)) call the same two
-functions on their assembled output.
+([src/effects/mod.rs](../../src/effects/mod.rs)) call all three on
+their assembled output.
 
 ### Cross-platform rules
 
@@ -796,6 +799,19 @@ number.
 
 A fix belongs in the shader, and should be bit-identical under IEEE so
 platforms that never needed it are unaffected.
+
+#### Operator mixes on the web
+
+WGSL gives a bitwise operator unary operands only: `a * b ^ c` is not
+WGSL, and neither is `x & 1u == 1u`, `a << b + 1u` or `p && q || r`.
+naga, the desktop's compiler, parses them with the usual precedence;
+Chrome's Tint refuses the shader, and every pipeline built from it fails
+there alone (Firefox accepted them too). Parenthesize:
+`(a * b) ^ c`, `(x & 1u) == 1u`. A hash in the terrain's surface noise
+broke escape-time's resolve and both terrain passes on Chrome from
+2026-10-12 to 2026-10-31; the Voronoi core and `mondrianomies` had the
+same shape. `mixed_operators` holds every source to it; the formula
+language's emitter parenthesizes every bitwise operation.
 
 #### Texture sampling on the web
 

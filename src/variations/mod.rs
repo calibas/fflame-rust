@@ -1561,6 +1561,285 @@ pub(crate) mod shader_lint {
         // popcorn's fix EXPLAINS the banned idiom in a WGSL comment.
         assert!(self_operations("// NOT `dx != dx`: folded on Metal\nlet a = 1.0;").is_empty());
     }
+
+    /// **Operator mixes WGSL forbids and naga accepts**, as the
+    /// expressions they occur in. WGSL's grammar gives a bitwise operator
+    /// (`&`, `|`, `^`) unary operands only, so it mixes with no other
+    /// operator without parentheses; a shift takes unary operands too (no
+    /// arithmetic beside it); `&&` and `||` do not mix. naga, the
+    /// desktop's compiler, takes all three; Chrome's Tint refuses the
+    /// shader. A hash in the terrain's surface noise
+    /// (`q.x * 1597334677u ^ q.y * 3812015801u`) broke escape-time's
+    /// resolve and both terrain passes on Chrome alone, from 2026-10-12 to
+    /// 2026-10-31.
+    ///
+    /// An expression is what lies between delimiters at one depth of
+    /// brackets: a statement's, an argument's, a bracket's contents. A
+    /// `<` right after an identifier opens a type's generic list, and a
+    /// `*`, `-` or `&` with no operand before it (or after `return`) is
+    /// unary.
+    pub(crate) fn mixed_operators(wgsl: &str) -> Vec<String> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum K {
+            Arith,
+            Shift,
+            Rel,
+            And,
+            Or,
+            BitAnd,
+            BitOr,
+            BitXor,
+        }
+        fn close(s: &[u8], group: &mut (Vec<K>, usize), at: usize, out: &mut Vec<String>) {
+            let has = |k: K| group.0.contains(&k);
+            let bitwise = has(K::BitAnd) || has(K::BitOr) || has(K::BitXor);
+            if (bitwise && group.0.len() > 1) || (has(K::Shift) && has(K::Arith)) || (has(K::And) && has(K::Or)) {
+                let text = String::from_utf8_lossy(&s[group.1.min(at)..at]);
+                out.push(text.split_whitespace().collect::<Vec<_>>().join(" "));
+            }
+            *group = (Vec::new(), at + 1);
+        }
+        fn add(group: &mut (Vec<K>, usize), k: K) {
+            if !group.0.contains(&k) {
+                group.0.push(k);
+            }
+        }
+        let text = strip_wgsl_comments(wgsl);
+        let s = text.as_bytes();
+        let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        // The text before `i` ends an operand: so a `*`, `-` or `&` at `i`
+        // is binary. Not a keyword: `return *p`.
+        let ends_operand = |i: usize, prev: u8| {
+            if !(is_word(prev) || matches!(prev, b')' | b']' | b'.')) {
+                return false;
+            }
+            let mut j = i;
+            while j > 0 && s[j - 1].is_ascii_whitespace() {
+                j -= 1;
+            }
+            let mut k = j;
+            while k > 0 && is_word(s[k - 1]) {
+                k -= 1;
+            }
+            !matches!(&s[k..j], b"return" | b"case")
+        };
+        let mut out = Vec::new();
+        let mut stack: Vec<(Vec<K>, usize)> = vec![(Vec::new(), 0)];
+        let mut generic = 0u32;
+        let mut prev = b' ';
+        let mut i = 0;
+        while i < s.len() {
+            let c = s[i];
+            let two = &s[i..(i + 2).min(s.len())];
+            let top = stack.len() - 1;
+            let (step, kind): (usize, Option<K>) = if c.is_ascii_whitespace() {
+                i += 1;
+                continue;
+            } else if matches!(c, b'(' | b'[') {
+                stack.push((Vec::new(), i + 1));
+                (1, None)
+            } else if matches!(c, b')' | b']') {
+                close(s, &mut stack[top], i, &mut out);
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+                (1, None)
+            } else if matches!(c, b',' | b';' | b'{' | b'}' | b':') {
+                close(s, &mut stack[top], i, &mut out);
+                if c != b',' && c != b':' {
+                    generic = 0;
+                }
+                (1, None)
+            } else if s[i..].starts_with(b"<<=") || s[i..].starts_with(b">>=") {
+                close(s, &mut stack[top], i, &mut out);
+                (3, None)
+            } else if matches!(two, b"+=" | b"-=" | b"*=" | b"/=" | b"%=" | b"&=" | b"|=" | b"^=" | b"->") {
+                close(s, &mut stack[top], i, &mut out);
+                (2, None)
+            } else if matches!(two, b"==" | b"!=" | b"<=" | b">=") {
+                (2, Some(K::Rel))
+            } else if two == b"&&" {
+                (2, Some(K::And))
+            } else if two == b"||" {
+                (2, Some(K::Or))
+            } else if matches!(two, b"++" | b"--") {
+                (2, None)
+            } else if two == b"<<" {
+                (2, Some(K::Shift))
+            } else if two == b">>" {
+                // The end of two generic lists (`array<vec2<f32>>`), or a
+                // shift.
+                if generic >= 2 {
+                    generic -= 2;
+                    (2, None)
+                } else {
+                    (2, ends_operand(i, prev).then_some(K::Shift))
+                }
+            } else if c == b'<' {
+                if i > 0 && is_word(s[i - 1]) {
+                    generic += 1;
+                    (1, None)
+                } else {
+                    (1, Some(K::Rel))
+                }
+            } else if c == b'>' {
+                if generic > 0 {
+                    generic -= 1;
+                    (1, None)
+                } else {
+                    (1, Some(K::Rel))
+                }
+            } else if c == b'=' {
+                close(s, &mut stack[top], i, &mut out);
+                (1, None)
+            } else if c == b'&' {
+                (1, ends_operand(i, prev).then_some(K::BitAnd))
+            } else if c == b'|' {
+                (1, Some(K::BitOr))
+            } else if c == b'^' {
+                (1, Some(K::BitXor))
+            } else if matches!(c, b'*' | b'-') {
+                (1, ends_operand(i, prev).then_some(K::Arith))
+            } else if matches!(c, b'+' | b'/' | b'%') {
+                (1, Some(K::Arith))
+            } else {
+                (1, None)
+            };
+            if let Some(k) = kind {
+                add(&mut stack[top], k);
+            }
+            prev = s[i + step - 1];
+            i += step;
+        }
+        let end = s.len();
+        let top = stack.len() - 1;
+        close(s, &mut stack[top], end, &mut out);
+        out
+    }
+
+    /// The WGSL in Rust raw strings (`r#"..."#`): a string that declares a
+    /// function and names a scalar type.
+    pub(crate) fn raw_wgsl_strings(rust: &str) -> Vec<&str> {
+        let b = rust.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i + 1 < b.len() {
+            let starts = b[i] == b'r' && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'));
+            if !starts {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < b.len() && b[j] == b'#' {
+                j += 1;
+            }
+            if j >= b.len() || b[j] != b'"' {
+                i += 1;
+                continue;
+            }
+            let close = format!("\"{}", "#".repeat(j - i - 1));
+            let Some(len) = rust[j + 1..].find(&close) else { break };
+            let body = &rust[j + 1..j + 1 + len];
+            if body.contains("fn ") && ["f32", "u32", "i32"].iter().any(|t| body.contains(t)) {
+                out.push(body);
+            }
+            i = j + 1 + len + close.len();
+        }
+        out
+    }
+
+    /// Every `.wgsl` file, and the WGSL in every Rust source's raw strings
+    /// (variations, escape formulas and colourings, simulation models,
+    /// the passes written inline), is valid for Tint as well as naga.
+    #[test]
+    fn no_operator_mixes_tint_refuses() {
+        fn visit(dir: &std::path::Path, f: &mut impl FnMut(&std::path::Path)) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, f);
+                } else {
+                    f(&path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut violations = Vec::new();
+        let (mut files, mut strings) = (0usize, 0usize);
+        for dir in ["shaders", "src"] {
+            visit(&root.join(dir), &mut |path| {
+                let ext = path.extension().and_then(|e| e.to_str());
+                let Ok(text) = std::fs::read_to_string(path) else { return };
+                let sources = match ext {
+                    Some("wgsl") => {
+                        files += 1;
+                        vec![text.as_str()]
+                    }
+                    Some("rs") => raw_wgsl_strings(&text),
+                    _ => return,
+                };
+                strings += sources.len();
+                for src in sources {
+                    for e in mixed_operators(src) {
+                        violations.push(format!("{}: `{e}`", path.strip_prefix(root).unwrap_or(path).display()));
+                    }
+                }
+            });
+        }
+        assert!(files > 10 && strings > 500, "scanned {files} files and {strings} strings: the walk is broken");
+        assert!(
+            violations.is_empty(),
+            "WGSL operator mixes that Chrome (Tint) refuses and the desktop (naga) accepts; \
+             parenthesize the operands of `&`, `|`, `^`, of a shift beside arithmetic, and \
+             `&&` beside `||`:\n  {}",
+            violations.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_mixes_tint_refuses_are_caught() {
+        for bad in [
+            "var h = q.x * 1597334677u ^ q.y * 3812015801u;",
+            "if (x & 1u == 1u) { }",
+            "let b = a << 2u + 1u;",
+            "let c = p && q || r;",
+            "let d = a & b | c;",
+            "let e = select(0u, 1u, m | 4u != 0u);",
+            "let m = a * b + c >> 2u;",
+        ] {
+            assert_eq!(mixed_operators(bad).len(), 1, "`{bad}` not caught");
+        }
+    }
+
+    #[test]
+    fn parenthesized_and_unary_forms_are_not_flagged() {
+        for ok in [
+            "var h = (q.x * 1597334677u) ^ (q.y * 3812015801u);",
+            "let a = select(0.0, 1.0, (x & 1u) == 1u);",
+            "let b = (a << 2u) == 4u;",
+            "let e = f(&v, x * 2.0);",
+            "var t: array<vec2<u32>, 4>; let g = t[0].x ^ t[1].y;",
+            "let h = -x ^ y;",
+            "let k = *ptr ^ 3u;",
+            "fn f(p: ptr<function, u32>) -> u32 { return *p ^ 1u; }",
+            "h = h ^ (h >> 16u);",
+            "let s = (a << 2u) + 1u;",
+            "// x * a ^ y in a comment\nlet z = 1u;",
+        ] {
+            let hits = mixed_operators(ok);
+            assert!(hits.is_empty(), "`{ok}` wrongly flagged: {hits:?}");
+        }
+    }
+
+    #[test]
+    fn wgsl_is_read_from_raw_strings_only() {
+        let rust = "let a = \"fn x() -> f32 { }\";\nconst W: &str = r#\"fn w() -> f32 { return 1.0; }\"#;\nlet r = r\"fn r(a: u32) {}\";\nlet rhai = r#\"fn v(z) { z * 2 }\"#;";
+        assert_eq!(
+            raw_wgsl_strings(rust),
+            vec!["fn w() -> f32 { return 1.0; }", "fn r(a: u32) {}"]
+        );
+    }
 }
 
 #[cfg(all(test, feature = "engine-flame"))]
