@@ -58,7 +58,8 @@ pub struct SystemSettings {
     #[serde(default = "default_target_fps")]
     pub target_fps: f32,
 
-    /// Iterations per thread (GPU workgroup performance tuning, default: 256)
+    /// Iterations per thread (GPU workgroup performance tuning; default
+    /// `DEFAULT_ITERATIONS_PER_THREAD`, 1024)
     #[serde(default = "default_iterations_per_thread")]
     pub iterations_per_thread: u32,
 
@@ -245,7 +246,7 @@ fn default_target_fps() -> f32 {
 }
 
 fn default_iterations_per_thread() -> u32 {
-    256
+    crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD
 }
 
 fn default_burn_in() -> u32 {
@@ -653,7 +654,7 @@ mod tests {
         let settings = SystemSettings::default();
         assert_eq!(settings.vsync_enabled, true);
         assert_eq!(settings.target_fps, 60.0);
-        assert_eq!(settings.iterations_per_thread, 256);
+        assert_eq!(settings.iterations_per_thread, crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD);
         assert!(settings.frame_governor);
         assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
@@ -743,7 +744,7 @@ mod tests {
         let settings = SystemSettings::from_json(json).unwrap();
         assert_eq!(settings.vsync_enabled, true);
         assert_eq!(settings.target_fps, 60.0);
-        assert_eq!(settings.iterations_per_thread, 256);
+        assert_eq!(settings.iterations_per_thread, crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD);
         assert!(settings.frame_governor);
         assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
@@ -770,7 +771,7 @@ mod tests {
         assert_eq!(settings.vsync_enabled, false);
         assert_eq!(settings.target_fps, 90.0);
         // Other fields should use defaults
-        assert_eq!(settings.iterations_per_thread, 256);
+        assert_eq!(settings.iterations_per_thread, crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD);
         assert!(settings.frame_governor);
         assert_eq!(settings.manual_workgroups, 128);
         assert_eq!(settings.language, "en");
