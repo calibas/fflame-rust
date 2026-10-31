@@ -1,14 +1,15 @@
 # The quality governor: a target frame rate, render scale, upscaling
 
-**Status:** phase 1 measured 2026-10-29 (*Results*), allocation cost
-2026-10-30. Of the faults it found, escape playback's part-drawn pictures are
-fixed (2026-10-30); the flame's uneven pacing goes to the governor
-(order of work, item 5). Item 3 is built (2026-10-30): render scale and
-the Catmull-Rom upscale, sizes in pixels, an active simulation's
-letterbox and the field resampler; so is item 4, FSR, in the viewport
-and for simulations. The governor (item 5) is built for escape-time
-(2026-10-30, *The governor, escape-time, as built*); flames, terrains and
-simulations are next. All seven decisions taken
+**Status:** every item of the order of work is built (2026-10-30) but one
+check: the web's fallback tried in a browser. Phase 1 measured
+2026-10-29 (*Results*), allocation cost 2026-10-30; escape playback's
+part-drawn pictures fixed; item 3 (render scale and the Catmull-Rom
+upscale, sizes in pixels, an active simulation's letterbox and the field
+resampler) and item 4 (FSR, in the viewport and for simulations); the
+governor (item 5) for escape-time, flames, terrains and simulations, and
+the flame batch's pacing cap; exports' fixed rungs (item 6); the
+fallback without a GPU timer (item 7). Open: a deep terrain's section
+renders, which the render scale cannot reach. All seven decisions taken
 2026-10-29: D1-D4 and D6 as recommended; D5 revised (a simulation's
 field must go far lower than 50%, a solid to 25%); D7 the user's own (an active
 simulation is letterboxed to its grid, never warped).
