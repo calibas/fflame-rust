@@ -1238,14 +1238,14 @@ impl Display for ConfigPath {
             ConfigPath::SimDownscale => write!(f, "Simulation Downscale"),
             ConfigPath::SimFit => write!(f, "Simulation Fit"),
             ConfigPath::SimModelParam { param } => write!(f, "Simulation {param}"),
-            ConfigPath::SimLayerModel { layer } => write!(f, "Simulation Layer {layer} Model"),
-            ConfigPath::SimLayerEnabled { layer } => write!(f, "Simulation Layer {layer} Enabled"),
-            ConfigPath::SimLayerParam { layer, param } => write!(f, "Simulation Layer {layer} {param}"),
-            ConfigPath::SimCouplingFrom { index } => write!(f, "Simulation Coupling {index} From"),
-            ConfigPath::SimCouplingTo { index } => write!(f, "Simulation Coupling {index} To"),
-            ConfigPath::SimCouplingForm { index } => write!(f, "Simulation Coupling {index} Form"),
-            ConfigPath::SimCouplingStrength { index } => write!(f, "Simulation Coupling {index} Strength"),
-            ConfigPath::SimCouplingChannels { index } => write!(f, "Simulation Coupling {index} Channels"),
+            ConfigPath::SimLayerModel { layer } => write!(f, "Simulation Layer {} Model", layer + 1),
+            ConfigPath::SimLayerEnabled { layer } => write!(f, "Simulation Layer {} Enabled", layer + 1),
+            ConfigPath::SimLayerParam { layer, param } => write!(f, "Simulation Layer {} {param}", layer + 1),
+            ConfigPath::SimCouplingFrom { index } => write!(f, "Simulation Coupling {} From", index + 1),
+            ConfigPath::SimCouplingTo { index } => write!(f, "Simulation Coupling {} To", index + 1),
+            ConfigPath::SimCouplingForm { index } => write!(f, "Simulation Coupling {} Form", index + 1),
+            ConfigPath::SimCouplingStrength { index } => write!(f, "Simulation Coupling {} Strength", index + 1),
+            ConfigPath::SimCouplingChannels { index } => write!(f, "Simulation Coupling {} Channels", index + 1),
             ConfigPath::SimUseTransforms => write!(f, "Simulation Use Transforms"),
             ConfigPath::SimTerrainEnabled => write!(f, "Simulation Terrain"),
             ConfigPath::SimTerrainLayer => write!(f, "Simulation Terrain Layer"),
@@ -1285,10 +1285,10 @@ impl Display for ConfigPath {
             ConfigPath::SimPathSky => write!(f, "Simulation Gradient Sky"),
             ConfigPath::SimPathStudio => write!(f, "Simulation Studio"),
             ConfigPath::SimPathZenith => write!(f, "Simulation Zenith"),
-            ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {index} {param}"),
-            ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {index} Opacity"),
-            ConfigPath::SimColorLayerMatteCutoff { index } => write!(f, "Simulation Colour Layer {index} Matte Cutoff"),
-            ConfigPath::SimColorLayerMatteSoftness { index } => write!(f, "Simulation Colour Layer {index} Matte Softness"),
+            ConfigPath::SimColorLayerParam { index, param } => write!(f, "Simulation Colour Layer {} {param}", index + 1),
+            ConfigPath::SimColorLayerOpacity { index } => write!(f, "Simulation Colour Layer {} Opacity", index + 1),
+            ConfigPath::SimColorLayerMatteCutoff { index } => write!(f, "Simulation Colour Layer {} Matte Cutoff", index + 1),
+            ConfigPath::SimColorLayerMatteSoftness { index } => write!(f, "Simulation Colour Layer {} Matte Softness", index + 1),
             ConfigPath::SimColoringParam { param } => write!(f, "Simulation Color {param}"),
             ConfigPath::EscapeSupersample => write!(f, "Escape Antialiasing"),
             ConfigPath::EscapeDownsample => write!(f, "Escape Downsample"),
@@ -1685,21 +1685,21 @@ impl ConfigPath {
                 vec![("param", param.clone())],
             ),
             ConfigPath::SimLayerModel { layer } => {
-                I18nKey::with_params("history.param.sim_layer_model", vec![("layer", layer.to_string())])
+                I18nKey::with_params("history.param.sim_layer_model", vec![("layer", (layer + 1).to_string())])
             }
             ConfigPath::SimLayerEnabled { layer } => {
-                I18nKey::with_params("history.param.sim_layer_enabled", vec![("layer", layer.to_string())])
+                I18nKey::with_params("history.param.sim_layer_enabled", vec![("layer", (layer + 1).to_string())])
             }
             ConfigPath::SimLayerParam { layer, param } => I18nKey::with_params(
                 "history.param.sim_layer_param",
-                vec![("layer", layer.to_string()), ("param", param.clone())],
+                vec![("layer", (layer + 1).to_string()), ("param", param.clone())],
             ),
             ConfigPath::SimCouplingFrom { index }
             | ConfigPath::SimCouplingTo { index }
             | ConfigPath::SimCouplingForm { index }
             | ConfigPath::SimCouplingStrength { index }
             | ConfigPath::SimCouplingChannels { index } => {
-                I18nKey::with_params("history.param.sim_coupling", vec![("index", index.to_string())])
+                I18nKey::with_params("history.param.sim_coupling", vec![("index", (index + 1).to_string())])
             }
             ConfigPath::SimUseTransforms => I18nKey::simple("history.param.sim_use_transforms"),
             ConfigPath::SimTerrainEnabled => I18nKey::simple("history.param.sim_terrain_enabled"),
@@ -1742,13 +1742,13 @@ impl ConfigPath {
             ConfigPath::SimPathZenith => I18nKey::simple("history.param.sim_path_zenith"),
             ConfigPath::SimColorLayerParam { index, param } => I18nKey::with_params(
                 "history.param.sim_color_layer_param",
-                vec![("index", index.to_string()), ("param", param.clone())],
+                vec![("index", (index + 1).to_string()), ("param", param.clone())],
             ),
             ConfigPath::SimColorLayerOpacity { index }
             | ConfigPath::SimColorLayerMatteCutoff { index }
             | ConfigPath::SimColorLayerMatteSoftness { index } => I18nKey::with_params(
                 "history.param.sim_color_layer",
-                vec![("index", index.to_string())],
+                vec![("index", (index + 1).to_string())],
             ),
             ConfigPath::SimColoringParam { param } => I18nKey::with_params(
                 "history.param.sim_coloring_param",
