@@ -493,10 +493,15 @@ display.
   predicts every rung.
 - **The choice.** The best rung predicted under 70% of the budget; else
   under 80% (frames still come evenly there); else, with nothing making
-  the frame rate, the best within 20% of the cheapest. Shed after two
-  pictures over the share (at once past twice the budget); probe up a rung
-  after 30 pictures with 20% room; a failed probe waits twice as long, to
-  480.
+  the frame rate, the best within 20% of the cheapest.
+- **Over a window, not a picture** (*Hiccups*, below). A rung's cost is
+  the median of its last 20 pictures, and it sheds when that median is
+  over the share. The one quicker shed is on a rung just entered whose
+  first 4 pictures have their median past three budgets: one that cannot
+  be afforded at all. It probes up a rung once the window fits and the
+  rung above has been predicted to fit for 30 pictures; the probe is
+  judged over its own full window, and a failed one waits twice as long,
+  to 480.
 - **Checked by the frames.** A shed is judged 30 pictures later: kept if
   the frame rate rose 10% or an alternation of long and short frames
   ended (their 75th percentile from 1.5 refreshes to under 1.25), undone
@@ -540,6 +545,34 @@ The zoom's 2x at 50% took 7.3 ms, past the 6.7 at which 120 Hz frames
 still come evenly, so it went on to 1x at 50%. The solid cannot make
 120 Hz on any rung. Open: after a cap from elsewhere is taken, a GPU that
 then becomes the limit is not noticed until frames come faster.
+
+**Hiccups** (2026-10-30). The user, testing escape-time: "It seems like
+there's little hiccups in performance, not necessarily caused by this
+program. Afterwards, it can get stuck at lower resolutions ... I'd rather
+it just drop a frame now and then, unless it's consistently struggling."
+The rules then shed on two pictures over the share, or one past twice the
+budget, so one held-up picture shed. And it could stick there, in two
+ways. The smoothed cost carried the hiccup, and a fixed part learned from
+it could predict the rung above too dear ever to probe. And a probe went
+back on its first slow picture, waiting twice as long each time. Now
+every decision is a window's median (above). The frames' rate leaves out
+the slowest and fastest tenth of the last 32 intervals, so a hiccup
+before a shed cannot make the shed look like it helped. A probe needs
+only the rung above predicted under the share, not 20% under. In the app,
+at the display's 60 Hz on a 754x786 viewport (the run's target the
+display's, `FFLAME_FRAME_LOG_TARGET_FPS=display`):
+
+| scene | rung held | GPU a frame | fps | rung changes |
+|---|---|---|---|---|
+| escape zoom (4x set) | 2x at full size | 10.7 ms | 60.1 | 2 (the climb from 2x at 50%) |
+| escape sweep (2x set) | 2x at full size (the top) | 5.8 ms | 60.2 | 2 (the climb) |
+| mode-D solid | 1x at 25% (the floor) | 7.3 ms | 58.3 | 1 |
+
+**One switch** (the same day): the Rendering menu's Frame-Time Governor
+became the **Quality Governor**, moved out of the chaos game's rows so it
+acts in every mode. Off, nothing is governed: the flame's batch and render
+scale, escape-time's rungs, the old antialiasing governor
+(`SystemSettings::frame_governor`, as before).
 
 ### The governor, flames, as built (2026-10-30)
 

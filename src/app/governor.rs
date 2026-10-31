@@ -18,7 +18,11 @@
 //! best that still fits `PACE_SHARE` (frames still come evenly there, if
 //! tightly), and when none does, the best within `NO_FIT_SLACK` of the
 //! cheapest: the target is out of reach, and quality given away for little
-//! is a bad trade. It probes UP a
+//! is a bad trade. Every decision is made over a window of pictures
+//! (`WINDOW`), on their median, so a hiccup -- a picture something else on
+//! the machine held up -- moves nothing (the user, 2026-10-30: "I'd rather
+//! it just drop a frame now and then, unless it's consistently
+//! struggling"). It probes UP a
 //! step at a time, after a run of pictures with room,
 //! because predictions are wrong at the edges (an interior that iterates
 //! to the cap, a fill), and a failed probe waits twice as long next time,
@@ -60,19 +64,22 @@ pub(crate) const GPU_SHARE: f64 = 0.7;
 /// The share past which frames stop coming evenly (phase 1: even at ~65%,
 /// alternating at ~84%): the rung to take when none fits `GPU_SHARE`.
 const PACE_SHARE: f64 = 0.8;
-/// Room a higher rung must have, predicted, before it is probed.
-const PROBE_ROOM: f64 = 0.8;
-/// Pictures with that room before a probe, at first; doubled after each
-/// failed one, up to `PROBE_WAIT_MAX`.
+/// Pictures a rung is judged over: the median of these is its cost, and
+/// the decisions are made on that.
+const WINDOW: usize = 20;
+/// The one quicker shed: on a rung just entered, its first this many
+/// pictures with their median past `QUICK_OVER` budgets -- a rung that
+/// cannot be afforded at all, entered before its cost was known.
+const QUICK: usize = 4;
+const QUICK_OVER: f64 = 3.0;
+/// Pictures with the rung above predicted to fit before it is probed, at
+/// first; doubled after each failed probe, up to `PROBE_WAIT_MAX`.
 const PROBE_WAIT: u32 = 30;
 const PROBE_WAIT_MAX: u32 = 480;
-/// Pictures over the share, in a row, before shedding; one far over (twice
-/// the budget) sheds at once.
-const OVER_RUN: u32 = 2;
 /// Pictures after a change that are not its cost: the resize, the new
 /// pipelines, the first chunk sizes.
 pub(crate) const SETTLE: u32 = 2;
-/// How fast a rung's measured cost follows a new picture's.
+/// How fast the learned fixed part follows a new estimate.
 const COST_EMA: f64 = 0.3;
 /// Pictures a rung's measurement stays fresh for: the content changes as a
 /// view moves, so two measurements further apart do not describe one
@@ -175,8 +182,8 @@ const FLAME_HOLD: u32 = 30;
 pub(crate) struct Governor {
     ladder: Vec<Rung>,
     rung: usize,
-    /// Each rung's measured GPU ms, smoothed, and the picture it was last
-    /// measured at.
+    /// Each rung's measured GPU ms (the median of its window), and the
+    /// picture it was last measured at.
     measured: Vec<Option<(f64, u64)>>,
     /// Pictures observed.
     pictures: u64,
@@ -187,7 +194,8 @@ pub(crate) struct Governor {
     /// taken whole, later ones smoothed in.
     fixed_known: bool,
     settle: u32,
-    over: u32,
+    /// The current rung's last pictures, ms (up to `WINDOW`).
+    window: std::collections::VecDeque<f64>,
     room: u32,
     probe_wait: u32,
     /// The rung a probe left, to go back to if it fails.
@@ -214,7 +222,7 @@ impl Governor {
             fixed: 0.0,
             fixed_known: false,
             settle: SETTLE,
-            over: 0,
+            window: Default::default(),
             room: 0,
             probe_wait: PROBE_WAIT,
             probing_from: None,
@@ -288,7 +296,7 @@ impl Governor {
         if let Some((floor, _)) = self.no_shed_below {
             best = best.min(floor.max(self.rung));
         }
-        self.over = 0;
+        self.window.clear();
         self.room = 0;
         if best != self.rung {
             // A prediction downward is judged like any shed.
@@ -305,8 +313,15 @@ impl Governor {
 
     fn changed(&mut self) {
         self.settle = SETTLE;
-        self.over = 0;
+        self.window.clear();
         self.room = 0;
+    }
+
+    /// The median of the window's pictures.
+    fn median(&self) -> f64 {
+        let mut v: Vec<f64> = self.window.iter().copied().collect();
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
     }
 
     /// Rung `i`'s measurement, if it is fresh.
@@ -396,57 +411,64 @@ impl Governor {
                 }
             }
         }
-        let ms = match self.fresh(self.rung) {
-            Some(c) => c + COST_EMA * (picture_ms - c),
-            None => picture_ms,
-        };
-        self.measured[self.rung] = Some((ms, self.pictures));
-        self.learn_fixed();
+        // The rung's cost is its window's median, once a few are in: a
+        // hiccup does not move it.
+        self.window.push_back(picture_ms);
+        while self.window.len() > WINDOW {
+            self.window.pop_front();
+        }
+        let median = self.median();
+        if self.window.len() >= QUICK {
+            self.measured[self.rung] = Some((median, self.pictures));
+            self.learn_fixed();
+        }
         let target = GPU_SHARE * budget_ms;
         // A frame the CPU holds up gains nothing from a cheaper picture.
         if cpu_ms >= target {
-            self.over = 0;
             self.room = 0;
             return false;
         }
-
-        if picture_ms > target {
+        // Struggling: the window full and over the share; or, on a rung just
+        // entered, its first few far past the budget (one that cannot be
+        // afforded at all).
+        let full = self.window.len() >= WINDOW;
+        let over = if full { median > target } else { self.window.len() >= QUICK && median > QUICK_OVER * budget_ms };
+        if over {
             self.room = 0;
-            // A probe that does not fit goes back at once, and waits
-            // longer before the next.
+            // A probe that does not fit goes back, and waits longer before
+            // the next.
             if let Some(from) = self.probing_from.take() {
                 self.rung = from;
                 self.probe_wait = (self.probe_wait * 2).min(PROBE_WAIT_MAX);
                 self.changed();
                 return true;
             }
-            self.over += 1;
-            if self.over >= OVER_RUN || picture_ms > 2.0 * budget_ms {
-                // The rung the model now asks for: lower if one fits, or
-                // higher if none does and a better one costs about as
-                // little as the cheapest.
-                let mut next = self.choose(target).unwrap_or(self.rung);
-                if let Some((floor, _)) = self.no_shed_below {
-                    next = next.min(floor.max(self.rung));
+            // The rung the model now asks for: lower if one fits, or
+            // higher if none does and a better one costs about as little
+            // as the cheapest.
+            let mut next = self.choose(target).unwrap_or(self.rung);
+            if let Some((floor, _)) = self.no_shed_below {
+                next = next.min(floor.max(self.rung));
+            }
+            if next != self.rung {
+                if next > self.rung {
+                    // A shed during another's check is judged with it,
+                    // against where the first began.
+                    self.shed_from = Some(match self.shed_from {
+                        Some((from, before, _)) => (from, before, SHED_CHECK),
+                        None => (self.rung, self.pace, SHED_CHECK),
+                    });
                 }
-                if next != self.rung {
-                    if next > self.rung {
-                        // A shed during another's check is judged with it,
-                        // against where the first began.
-                        self.shed_from = Some(match self.shed_from {
-                            Some((from, before, _)) => (from, before, SHED_CHECK),
-                            None => (self.rung, self.pace, SHED_CHECK),
-                        });
-                    }
-                    self.rung = next;
-                    self.changed();
-                    return true;
-                }
+                self.rung = next;
+                self.changed();
+                return true;
             }
             return false;
         }
-        self.over = 0;
-        // Fits: a probe that held is the new rung.
+        if !full {
+            return false;
+        }
+        // A window that fits: a probe that held is the new rung.
         if self.probing_from.take().is_some() {
             self.probe_wait = PROBE_WAIT;
         }
@@ -454,7 +476,7 @@ impl Governor {
             return false;
         }
         let up = self.rung - 1;
-        if self.predict(up).is_some_and(|c| c <= PROBE_ROOM * target) {
+        if self.predict(up).is_some_and(|c| c <= target) {
             self.room += 1;
             if self.room >= self.probe_wait {
                 self.probing_from = Some(self.rung);
@@ -548,7 +570,7 @@ mod tests {
         // Just over the edge for the rung above: a probe, a failure, a longer wait.
         let mut g = Governor::new(escape_ladder(2, false));
         // 2x at 75% = 2.25 units fits 11.67 ms at 4 ms/unit? 9 ms: yes; 2x full = 4 units, 16 ms: no.
-        run(&mut g, 4.0, budget, 10);
+        run(&mut g, 4.0, budget, 30);
         assert_eq!(g.rung().scale, 0.75);
         let before = g.probe_wait;
         // A model where the prediction is optimistic: below the top the
@@ -565,6 +587,39 @@ mod tests {
         assert!((2..=8).contains(&probes), "{probes} probes in 2000 pictures");
         assert!(g.probe_wait > before, "the wait grew");
         assert_eq!(g.rung().scale, 0.75, "it ends where the top does not fit");
+    }
+
+    /// Hiccups -- a picture or two something else held up, now and then --
+    /// move nothing: a rung's cost is its window's median, and the frame
+    /// rate a trimmed mean (so the frames' pace here is the picture's
+    /// without them). A real load sheds, and once it lifts the governor
+    /// climbs back through the same hiccups instead of sticking low.
+    #[test]
+    fn hiccups_neither_shed_nor_hold_it_down() {
+        let budget = 1000.0 / 120.0;
+        let mut g = Governor::new(escape_ladder(2, false));
+        let feed = |g: &mut Governor, per_unit: f64, pictures: usize| {
+            (0..pictures)
+                .map(|i| {
+                    let ms = per_unit * g.rung().units();
+                    let seen = match i % 40 {
+                        17 => 60.0,
+                        18 => 30.0,
+                        _ => ms,
+                    };
+                    g.observe(seen, budget, 1.0, pace(ms, budget));
+                    g.rung
+                })
+                .collect::<Vec<_>>()
+        };
+        // 2x at full size, 4 units at 1.2 ms: 4.8 ms, inside the 5.8 share.
+        let calm = feed(&mut g, 1.2, 2000);
+        assert!(calm.iter().all(|&r| r == 0), "it shed for a hiccup");
+        // 12 ms at the top: over, consistently.
+        feed(&mut g, 3.0, 100);
+        assert!(g.rung > 0, "a real load sheds");
+        let after = feed(&mut g, 1.2, 1000);
+        assert_eq!(g.rung, 0, "back to the top: {after:?}");
     }
 
     /// A CPU-bound frame is not shed for.
@@ -617,6 +672,23 @@ mod tests {
             light.frame_interval(refresh);
         }
         assert_eq!(light.effective_budget(refresh), refresh, "frames came faster: the cap lifted");
+    }
+
+    /// The frame rate leaves out a hiccup: one frame of 100 ms among 120 Hz
+    /// ones is still 120 fps; frames alternating one and two refreshes are
+    /// still 80.
+    #[test]
+    fn a_hiccup_does_not_move_the_frame_rate() {
+        let refresh = 1000.0 / 120.0;
+        let mut g = GovernorState::default();
+        for i in 0..32 {
+            g.frame_interval(if i == 20 { 100.0 } else { refresh });
+        }
+        assert!((g.pace().rate - 120.0).abs() < 0.5, "{}", g.pace().rate);
+        for i in 0..32 {
+            g.frame_interval(if i % 2 == 0 { refresh } else { 2.0 * refresh });
+        }
+        assert!((g.pace().rate - 80.0).abs() < 0.5, "{}", g.pace().rate);
     }
 
     /// A flame's scale follows phase 1's break-evens: 2D gives way below 2
@@ -806,15 +878,19 @@ impl GovernorState {
         self.capped.unwrap_or(refresh_ms)
     }
 
-    /// How the last frames came: their rate and the 75th percentile of
-    /// their intervals.
+    /// How the last frames came: their rate (from the mean interval with
+    /// the slowest and fastest tenth left out, so a hiccup does not move it
+    /// and frames alternating long and short still average right) and the
+    /// 75th percentile of their intervals.
     pub fn pace(&self) -> Pace {
         let mut v: Vec<f64> = self.intervals.iter().copied().collect();
         if v.is_empty() {
             return Pace { rate: 0.0, p75_ms: 0.0 };
         }
-        let mean = v.iter().sum::<f64>() / v.len() as f64;
         v.sort_by(f64::total_cmp);
+        let cut = v.len() / 10;
+        let kept = &v[cut..v.len() - cut];
+        let mean = kept.iter().sum::<f64>() / kept.len().max(1) as f64;
         Pace { rate: 1000.0 / mean.max(1e-3), p75_ms: v[((v.len() - 1) as f64 * 0.75).round() as usize] }
     }
 
@@ -919,7 +995,7 @@ impl super::App {
         use crate::storage::settings::TargetRate;
         let s = self.config_manager.system_settings();
         let display = super::frame_budget(s.vsync_enabled, s.target_fps, self.display_refresh_mhz) * 1000.0;
-        let fps = match s.target_rate {
+        let fps = match self.target_rate() {
             TargetRate::Display => return display,
             TargetRate::Animation => self.egui_layer.export_fps() as f64,
             TargetRate::Fixed(f) => f as f64,

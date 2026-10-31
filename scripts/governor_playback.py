@@ -39,12 +39,15 @@ def binary():
     sys.exit('no release binary: cargo build --release')
 
 
-def run(exe, scene, log, seconds, render_scale=None):
+def run(exe, scene, log, seconds, render_scale=None, target_fps=None):
     env = dict(os.environ, FFLAME_FRAME_LOG=log, FFLAME_FRAME_LOG_OPEN=scene,
                FFLAME_FRAME_LOG_SECONDS=str(seconds))
     if render_scale is not None:
         # The run's render scale, in place of the saved setting (untouched).
         env['FFLAME_FRAME_LOG_RENDER_SCALE'] = str(render_scale)
+    if target_fps is not None:
+        # The run's Target Frame Rate ('display' or fps), likewise.
+        env['FFLAME_FRAME_LOG_TARGET_FPS'] = str(target_fps)
     try:
         subprocess.run([exe], env=env, timeout=seconds + 120, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -60,6 +63,11 @@ def main():
     ap.add_argument('--tag', default='')
     ap.add_argument('--render-scale', type=float, default=None,
                     help='render at this scale for the run (the saved setting is not touched)')
+    ap.add_argument('--target-fps', default=None,
+                    help="hold this frame rate for the run, 'display' or fps (the saved setting is not touched)")
+    ap.add_argument('--exe', default=None,
+                    help='the binary to run (e.g. target/release/deps/FractalArtEditor.exe, built while a '
+                         'running app locks target/release/)')
     args = ap.parse_args()
     if not os.path.isdir(SCENES):
         sys.exit(f'{SCENES}: run scripts/governor_scenes.py first')
@@ -68,7 +76,7 @@ def main():
                     and (not only or f[:-5] in only))
     out = 'output/governor/playback' + (f'-{args.tag}' if args.tag else '')
     os.makedirs(out, exist_ok=True)
-    exe = binary()
+    exe = os.path.abspath(args.exe) if args.exe else binary()
     print(f'{exe}, {len(scenes)} scenes, {args.seconds:.0f} s each -> {out}/')
     if args.warm:
         for f in scenes:
@@ -77,7 +85,7 @@ def main():
         name = f[:-5]
         log = os.path.join(out, f'{name}.csv')
         print(f'\n== {name}')
-        run(exe, os.path.join(SCENES, f), log, args.seconds, args.render_scale)
+        run(exe, os.path.join(SCENES, f), log, args.seconds, args.render_scale, args.target_fps)
         if not os.path.exists(log):
             print('  no log written')
             continue

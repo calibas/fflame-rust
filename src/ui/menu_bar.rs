@@ -177,12 +177,13 @@ pub fn render_menu_bar(
                 });
             }
 
-            // Rendering Menu -- every item configures the chaos game
-            // (pause, reset accumulation, iterations per thread), and
+            // Rendering Menu -- the viewport's render scale, the quality
+            // governor (every mode's), then the chaos game's rows (pause,
+            // reset accumulation, iterations per thread, workgroups), and
             // "Reset to Defaults" resets exactly those parameters. Always
             // there: a menu that came and went with the mode moved the
-            // mode button after it. Outside the flame modes it says why its
-            // rows are disabled.
+            // mode button after it. Outside the flame modes it says why the
+            // chaos game's rows are disabled.
             let chaos_game = super::visibility::control(
                 super::visibility::Control::ChaosGame,
                 menu_state.render_mode,
@@ -232,9 +233,18 @@ pub fn render_menu_bar(
                 if let super::visibility::Vis::Grey(why) = scaling {
                     ui.weak(t!(why));
                 }
-                // The frame rate the quality governor holds while the
-                // picture moves (`TargetRate`).
+                // The quality governor, on or off in every mode
+                // (app/governor.rs and the flame's batch governor), and the
+                // frame rate it holds while the picture moves (`TargetRate`).
+                let mut governor = menu_state.frame_governor;
+                if ui
+                    .checkbox(&mut governor, t!("menu.frame_governor"))
+                    .on_hover_text(t!("menu.tooltip_frame_governor"))
+                    .changed()
                 {
+                    menu_actions.rendering.set_frame_governor = Some(governor);
+                }
+                ui.add_enabled_ui(menu_state.frame_governor, |ui| {
                     use crate::storage::settings::TargetRate;
                     let label = |r: TargetRate| match r {
                         TargetRate::Display => t!("menu.target_rate_display").to_string(),
@@ -257,7 +267,7 @@ pub fn render_menu_bar(
                     )
                     .response
                     .on_hover_text(t!("menu.tooltip_target_rate"));
-                }
+                });
                 ui.separator();
                 if !chaos_game {
                     ui.weak(t!(super::visibility::CHAOS_GAME));
@@ -291,15 +301,7 @@ pub fn render_menu_bar(
                         }
                     });
 
-                    // The frame-time governor, and the dispatch when it is off
-                    let mut governor = menu_state.frame_governor;
-                    if ui
-                        .checkbox(&mut governor, t!("menu.frame_governor"))
-                        .on_hover_text(t!("menu.tooltip_frame_governor"))
-                        .changed()
-                    {
-                        menu_actions.rendering.set_frame_governor = Some(governor);
-                    }
+                    // The dispatch while the governor is off
                     ui.add_enabled_ui(!menu_state.frame_governor, |ui| {
                         ui.menu_button(format!("{}: {}", t!("menu.workgroups"), menu_state.manual_workgroups), |ui| {
                             rows_do_not_wrap(ui);

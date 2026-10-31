@@ -66,9 +66,13 @@ pub struct SystemSettings {
     #[serde(default = "default_burn_in")]
     pub burn_in: u32,
 
-    /// The frame-time governor (`app::Batch`, `app::Knee`): sizes each
-    /// frame's dispatch to the frame budget. Off, every frame dispatches
-    /// `manual_workgroups` workgroups of `iterations_per_thread`.
+    /// The quality governor, every mode's (the Rendering menu's Quality
+    /// Governor): the flame's batch governor (`app::Batch`, `app::Knee`),
+    /// which sizes each frame's dispatch to the frame budget, and
+    /// `app/governor.rs` (escape-time's rungs, a flame's render scale).
+    /// Off, nothing is governed: every frame dispatches `manual_workgroups`
+    /// workgroups of `iterations_per_thread`, and escape-time renders at
+    /// its full settings.
     #[serde(default = "default_frame_governor")]
     pub frame_governor: bool,
 
