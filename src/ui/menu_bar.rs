@@ -177,12 +177,13 @@ pub fn render_menu_bar(
                 });
             }
 
-            // Rendering Menu -- every item configures the chaos game
-            // (pause, reset accumulation, iterations per thread), and
+            // Rendering Menu -- the viewport's render scale, the quality
+            // governor (every mode's), then the chaos game's rows (pause,
+            // reset accumulation, iterations per thread, workgroups), and
             // "Reset to Defaults" resets exactly those parameters. Always
             // there: a menu that came and went with the mode moved the
-            // mode button after it. Outside the flame modes it says why its
-            // rows are disabled.
+            // mode button after it. Outside the flame modes it says why the
+            // chaos game's rows are disabled.
             let chaos_game = super::visibility::control(
                 super::visibility::Control::ChaosGame,
                 menu_state.render_mode,
@@ -190,6 +191,84 @@ pub fn render_menu_bar(
             ) == super::visibility::Vis::Show;
             ui.menu_button(t!("menu.rendering"), |ui| {
                 rows_do_not_wrap(ui);
+                // The viewport's render scale and upscaler
+                // (`renderer::upscale`): every mode's but a simulation's,
+                // so above the chaos game's rows.
+                let scaling = super::visibility::control(
+                    super::visibility::Control::RenderScale,
+                    menu_state.render_mode,
+                    menu_state.tonemap_mode,
+                );
+                ui.add_enabled_ui(scaling.is_show(), |ui| {
+                    let percent = |s: f32| format!("{}%", (s * 100.0).round());
+                    ui.menu_button(format!("{}: {}", t!("menu.render_scale"), percent(menu_state.render_scale)), |ui| {
+                        rows_do_not_wrap(ui);
+                        for &s in &crate::renderer::upscale::RENDER_SCALES {
+                            if ui.radio((menu_state.render_scale - s).abs() < 1e-3, percent(s)).clicked() {
+                                menu_actions.rendering.set_render_scale = Some(s);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("menu.tooltip_render_scale"));
+                    ui.menu_button(format!("{}: {}", t!("menu.upscaler"), t!(menu_state.upscaler.label_key())), |ui| {
+                        rows_do_not_wrap(ui);
+                        for f in crate::renderer::upscale::UpscaleFilter::ALL {
+                            if ui.radio(menu_state.upscaler == f, t!(f.label_key())).clicked() {
+                                menu_actions.rendering.set_upscaler = Some(f);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(t!("menu.tooltip_upscaler"));
+                    let mut physical = menu_state.render_physical_pixels;
+                    if ui
+                        .checkbox(&mut physical, t!("menu.render_physical_pixels"))
+                        .on_hover_text(t!("menu.tooltip_render_physical_pixels"))
+                        .changed()
+                    {
+                        menu_actions.rendering.set_render_physical_pixels = Some(physical);
+                    }
+                });
+                if let super::visibility::Vis::Grey(why) = scaling {
+                    ui.weak(t!(why));
+                }
+                // The quality governor, on or off in every mode
+                // (app/governor.rs and the flame's batch governor), and the
+                // frame rate it holds while the picture moves (`TargetRate`).
+                let mut governor = menu_state.frame_governor;
+                if ui
+                    .checkbox(&mut governor, t!("menu.frame_governor"))
+                    .on_hover_text(t!("menu.tooltip_frame_governor"))
+                    .changed()
+                {
+                    menu_actions.rendering.set_frame_governor = Some(governor);
+                }
+                ui.add_enabled_ui(menu_state.frame_governor, |ui| {
+                    use crate::storage::settings::TargetRate;
+                    let label = |r: TargetRate| match r {
+                        TargetRate::Display => t!("menu.target_rate_display").to_string(),
+                        TargetRate::Animation => t!("menu.target_rate_animation", fps = menu_state.export_fps).to_string(),
+                        TargetRate::Fixed(f) => format!("{f:.0}"),
+                    };
+                    ui.menu_button(
+                        format!("{}: {} ({:.0} fps)", t!("menu.target_rate"), label(menu_state.target_rate), menu_state.target_fps_now),
+                        |ui| {
+                            rows_do_not_wrap(ui);
+                            let rates = [TargetRate::Display, TargetRate::Animation]
+                                .into_iter()
+                                .chain(TargetRate::FIXED.iter().map(|f| TargetRate::Fixed(*f)));
+                            for r in rates {
+                                if ui.radio(menu_state.target_rate == r, label(r)).clicked() {
+                                    menu_actions.rendering.set_target_rate = Some(r);
+                                }
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_text(t!("menu.tooltip_target_rate"));
+                });
+                ui.separator();
                 if !chaos_game {
                     ui.weak(t!(super::visibility::CHAOS_GAME));
                     ui.separator();
@@ -222,15 +301,7 @@ pub fn render_menu_bar(
                         }
                     });
 
-                    // The frame-time governor, and the dispatch when it is off
-                    let mut governor = menu_state.frame_governor;
-                    if ui
-                        .checkbox(&mut governor, t!("menu.frame_governor"))
-                        .on_hover_text(t!("menu.tooltip_frame_governor"))
-                        .changed()
-                    {
-                        menu_actions.rendering.set_frame_governor = Some(governor);
-                    }
+                    // The dispatch while the governor is off
                     ui.add_enabled_ui(!menu_state.frame_governor, |ui| {
                         ui.menu_button(format!("{}: {}", t!("menu.workgroups"), menu_state.manual_workgroups), |ui| {
                             rows_do_not_wrap(ui);

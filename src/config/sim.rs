@@ -607,16 +607,27 @@ pub enum SimUpscale {
     /// overshoot a sharp step by a few percent, which the colourings'
     /// clamps absorb and a matte cutoff does not mind.
     Bicubic,
+    /// FSR 1 (AMD FidelityFX Super Resolution, `shaders/upscale_fsr.wgsl`):
+    /// the field coloured at about a cell a pixel, through the view, then
+    /// drawn up to the output by FSR's edge-adaptive pass and sharpened
+    /// (`SimRenderer::fsr_size`). Unlike the three above it interpolates
+    /// COLOURS, not state, as any upscale of a picture does: an edge
+    /// stays crisp where interpolating the state rounds it, and a colour
+    /// between two palette entries can appear where the state never
+    /// held it.
+    Fsr,
 }
 
 impl SimUpscale {
-    pub const NAMES: &'static [&'static str] = &["nearest", "bilinear", "bicubic"];
+    /// Append-only: a new name goes on the end.
+    pub const NAMES: &'static [&'static str] = &["nearest", "bilinear", "bicubic", "fsr"];
 
     pub fn name(&self) -> &'static str {
         match self {
             SimUpscale::Nearest => "nearest",
             SimUpscale::Bilinear => "bilinear",
             SimUpscale::Bicubic => "bicubic",
+            SimUpscale::Fsr => "fsr",
         }
     }
 
@@ -625,6 +636,7 @@ impl SimUpscale {
             "nearest" => SimUpscale::Nearest,
             "bilinear" => SimUpscale::Bilinear,
             "bicubic" => SimUpscale::Bicubic,
+            "fsr" => SimUpscale::Fsr,
             _ => return None,
         })
     }

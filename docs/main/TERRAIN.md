@@ -146,6 +146,15 @@ this frame. Then:
    picture from `PATH_SHOW_SAMPLES` (8). Below that its noise reads worse
    than the lit picture.
 
+**The quality governor** (`src/app/governor.rs`, `govern_terrain`;
+[quality-governor.md](../archive/projects/quality-governor.md)) lowers an escape
+terrain's render scale to 75% or 50% while an animation plays or the view
+is being moved, in the Lit and Auto tiers, when a moving frame's lit pass
+does not fit the Target Frame Rate. It reads the frames that drew a new
+view's first pass while no sections were arriving: a section's render is
+no cost the render scale moves. A simulation terrain follows the
+simulation's grid scale instead.
+
 **Mode D's viewport** follows the same rule in
 `EscapeRenderer::trace_solid_viewport`. Auto path traces once the walk has
 settled, and a change of anything restarts it.
@@ -1562,6 +1571,10 @@ the peaks.
 
 ## Open items
 
+- **A deep terrain is slow to play and to fill.** Its section renders,
+  single steps of up to 360 ms, are no cost the quality governor's
+  render scale reaches; an outline is in
+  [terrain-speed.md](../projects/terrain-speed.md).
 - **The solid path tracer is slow.** Measurements and candidates are in
   [escape-sim-followups.md](../projects/escape-sim-followups.md).
 - **Scripts cannot reach the terrain or the path tracer.** There are no

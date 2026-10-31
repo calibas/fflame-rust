@@ -50,6 +50,9 @@ pub struct SimUiState<'a> {
     pub timeline_driven: bool,
     /// Grid actually in use, which a bound grid makes non-obvious.
     pub grid: (u32, u32),
+    /// The quality governor's grid scale while it holds one, and *Fit to
+    /// target*'s (app/governor.rs).
+    pub governor: super::SimGovernorUi,
 }
 
 /// "Save as texture" (`docs/archive/projects/sim-textures.md`): this simulation,
@@ -302,6 +305,30 @@ pub fn render_sim_content(
                         });
                         if changed {
                             let _ = config_manager.update_param(ConfigPath::SimGridScale, v.into());
+                        }
+                        // The governor's grid while a run plays, and the
+                        // scale that would play at the target, to keep.
+                        if let Some(held) = state.governor.held {
+                            ui.label(
+                                egui::RichText::new(t!("sim_panel.governed_scale", scale = (held * 100.0).round()).as_ref())
+                                    .small()
+                                    .weak(),
+                            )
+                            .on_hover_text(t!("sim_panel.governed_scale_tip"));
+                        }
+                        let fit = state.governor.fit;
+                        let label = match fit {
+                            Some(f) => t!("sim_panel.fit_to_target_at", scale = (f * 100.0).round()),
+                            None => t!("sim_panel.fit_to_target"),
+                        };
+                        let button = ui.add_enabled(fit.is_some_and(|f| (f - scale).abs() > 1e-4), egui::Button::new(label.as_ref()).small());
+                        let button = if fit.is_some() {
+                            button.on_hover_text(t!("sim_panel.fit_to_target_tip"))
+                        } else {
+                            button.on_disabled_hover_text(t!("sim_panel.fit_to_target_unmeasured"))
+                        };
+                        if let (true, Some(f)) = (button.clicked(), fit) {
+                            let _ = config_manager.update_param(ConfigPath::SimGridScale, f.into());
                         }
                     }
                     SimGrid::Fixed { width, height } => {

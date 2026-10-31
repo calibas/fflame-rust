@@ -80,6 +80,7 @@ engine, `HighResExporter`.
 | `burn_in` | 20 | (`with_burn_in`) |
 | `transparent`, `premultiplied` | false | see *Transparency* |
 | `engines` | `None` | engine state to continue (`with_engines`) |
+| `pixel_scale` | 1 | render pixels per output pixel, for sizes in pixels (filter and effect radii, escape-time's relief): an export rendered below its size and drawn up after (`with_pixel_scale`; *Speed*, below) |
 
 **`RenderEngines`** is engine state a caller keeps alive across renders:
 the simulation's field and step counter, the escape renderer (its
@@ -474,6 +475,9 @@ FractalArtEditor export-animation -c config.fflame -a animation.anim -o out.mp4 
 | `--audio` | none: an MP3, WAV, FLAC or OGG file to mux in |
 | `--audio-offset`, `--audio-fade-in`, `--audio-fade-out` | 0 seconds |
 | `--audio-bitrate` | 192 kbps |
+| `--render-scale` | 1: each side's share a frame renders at, 0.25-1 (*Speed*, below) |
+| `--upscaler` | `catmull-rom`; also `nearest`, `bilinear`, `fsr`. An unknown name falls back to the default, with a message |
+| `--escape-supersample` | none: escape-time's supersampling at most this, never above the config's |
 
 ### list-encoders
 
@@ -614,6 +618,31 @@ threshold Phoenix's state grows. Until 2026-10-19 only the base config
 was checked: a video that deepened later passed and then failed, and a
 large one that never went deep was refused
 (`the_deep_zoom_check_reads_every_frame`).
+
+### Speed: render scale, upscaler, antialiasing
+
+An export's speed-ups (`ExportRung`; the quality governor's
+[*Exports*](../archive/projects/quality-governor.md), D3): chosen by the user in
+the dialog's Speed section or by the CLI's flags, and the same for every
+frame, so a video's frames never depend on the machine's load. The
+default renders as before.
+- **Render scale** (100, 75, 67, 50 or 25% in the dialog). A flame or
+  escape-time frame renders at that share of each side and is drawn up
+  to the video's size by the **upscaler**, the viewport's pass
+  (`Upscale::upscale_rgba`, on the picture read back): nearest,
+  bilinear, Catmull-Rom (the default) or FSR 1. Sizes in pixels scale
+  with it (`RenderJob::pixel_scale`), as the viewport's do, so a blur
+  covers the same share of the picture. A simulation's frame renders at
+  the video's size and its **bound grid** scales instead: fewer cells,
+  and a different run from the still, as the dialog says; a fixed grid is
+  unchanged.
+- **Antialiasing** (escape-time): the supersampling at most this.
+- **A flame's samples** are the dialog's Max Iterations a frame, as
+  before.
+
+Measured on a GTX 1660 SUPER, 120 frames at 640x360: the escape zoom
+(4x supersampling) 3.0 s at full size, 1.2 s at 50% with FSR; a 2D flame
+16.3 s and 13.0 s, its cost being its samples, not its pixels.
 
 ### Device features
 

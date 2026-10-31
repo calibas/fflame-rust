@@ -73,6 +73,23 @@ pub fn output_size(ui: &mut egui::Ui, config_manager: &mut ConfigManager) {
     }
 }
 
+/// The shape the viewport letterboxes to this frame, if any: the
+/// picture's (`image_size`) with the letterbox setting on; an active
+/// simulation's grid (`SimLock`) while the viewport is not the size the
+/// run began at (D7). `natural` is the size the viewport reports when it
+/// is not letterboxed.
+pub fn letterbox_shape(
+    setting: bool,
+    image_size: (u32, u32),
+    lock: Option<super::SimLock>,
+    natural: (u32, u32),
+) -> Option<(u32, u32)> {
+    if setting {
+        return Some(image_size);
+    }
+    lock.filter(|l| l.viewport != natural).map(|l| l.grid)
+}
+
 /// The largest rect of the picture's shape (`image_size`) inside `panel`,
 /// centred: where a letterboxed viewport draws, black bars around it.
 pub fn letterbox_rect(panel: egui::Rect, image_size: (u32, u32)) -> egui::Rect {
@@ -264,8 +281,16 @@ pub fn escape_image(ui: &mut egui::Ui, config_manager: &mut ConfigManager, viewp
     });
     // What the view is actually drawn at, when that is not the setting:
     // the frame governor during playback, or the view's size.
-    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested) {
+    if let Some(aa) = viewport_aa.filter(|aa| aa.in_use != aa.requested || aa.scale < 1.0) {
         let (text, tip) = match aa.reason {
+            Some(super::AaReason::Governor) if aa.scale < 1.0 => (
+                t!(
+                    "escape_panel.aa_in_use_governor_scaled",
+                    used = aa.in_use,
+                    scale = (aa.scale * 100.0).round()
+                ),
+                t!("escape_panel.aa_in_use_governor_tip"),
+            ),
             Some(super::AaReason::Governor) => (
                 t!("escape_panel.aa_in_use_governor", used = aa.in_use),
                 t!("escape_panel.aa_in_use_governor_tip"),

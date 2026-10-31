@@ -578,6 +578,10 @@ no undo, saved on every change, the same for every picture.
 | export | `video_encoding` — the Export Animation panel's codec, encoder, quality (CRF), preset and tune, loaded when the panel opens and saved when one changes (on the pointer's release); read leniently, so an encoder a later build renamed costs only itself | H.265, software, CRF 12, Medium, Animation |
 | | `png_export_strip_metadata` | false |
 | viewport | `viewport_letterbox` — the viewport in the picture's shape, black bars around it | false |
+| | `render_scale` — the viewport's picture renders at this share of its size each side, drawn up to the screen (`app/render_scale.rs`); not in Simulation; exports render at `image_size`, Export Current Image saves the picture as rendered | 1.0 |
+| | `upscaler` (`Nearest`, `Bilinear`, `CatmullRom` or `Fsr`; `renderer::upscale`) | `CatmullRom` |
+| | `render_physical_pixels` — render at the screen's pixels rather than egui's points | false |
+| | `target_rate` — the frame rate the quality governor holds while the user interacts or an animation plays (`Display`, `Animation`: the video export's, or `Fixed(fps)`; never faster than the display; `app/governor.rs`) | `Display` |
 | UI | `language` | `"en"` |
 | | `show_help_on_startup` | true |
 | | `compact_mode` | detected on first run |

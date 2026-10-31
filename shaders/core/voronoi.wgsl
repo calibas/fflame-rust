@@ -89,9 +89,9 @@ fn voronoi_inside(points: array<vec2<f32>, 9>, n: u32, q: u32, u: vec2<f32>) -> 
 fn crackle_cell_hash2(x: i32, y: i32, zi: i32) -> vec2<f32> {
     // Integer mix (Wang/PCG-flavoured). bitcast, not conversion: the
     // lattice coords go negative and we want their bits, wrapped.
-    var h: u32 = bitcast<u32>(x) * 0x8da6b343u
-        ^ bitcast<u32>(y) * 0xd8163841u
-        ^ bitcast<u32>(zi) * 0xcb1ab31fu;
+    var h: u32 = (bitcast<u32>(x) * 0x8da6b343u)
+        ^ (bitcast<u32>(y) * 0xd8163841u)
+        ^ (bitcast<u32>(zi) * 0xcb1ab31fu);
     h = h ^ (h >> 13u);
     h = h * 0x9e3779b1u;
     h = h ^ (h >> 16u);

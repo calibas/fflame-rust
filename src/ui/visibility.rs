@@ -67,6 +67,8 @@ const ALPHA_BLEND_INERT: &str = "visibility.alpha_blend_inert";
 /// Focused Rendering plans in the plane.
 const TWO_D_ONLY: &str = "visibility.two_d_only";
 const LIGHT_FLAME: &str = "visibility.light_flame";
+/// A simulation's grid scale is its render scale.
+const SIM_GRID_SCALE: &str = "visibility.sim_grid_scale";
 const POINT_LIGHT_TERRAIN: &str = "visibility.point_light_terrain";
 /// A 3D flame's lights turn with its camera, always.
 const LIGHT_FRAME_FLAME: &str = "visibility.light_frame_flame";
@@ -374,6 +376,24 @@ pub enum Control {
     /// its planners enumerate discs in the PLANE, so a 3D flame gets
     /// neither (the renderer reports `TargetingState::NotPlanar`).
     FocusedRendering,
+    /// The viewport's render scale and upscaler (`renderer::upscale`).
+    /// Not a simulation's: its grid is the content, a bound grid's cells
+    /// follow the viewport's size, and its grid scale is the render scale
+    /// (docs/archive/projects/quality-governor.md).
+    RenderScale,
+    /// The video export's upscaler (`ExportRung`): a flame or escape-time
+    /// frame rendered below the video's size is drawn up by it. A
+    /// simulation's frame is not: its bound grid scales instead, and its
+    /// own resolve draws the cells.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    ExportUpscaler,
+    /// The video export's cap on escape-time supersampling.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    ExportEscapeAntialiasing,
+    /// The video export's note on what its render scale does to a
+    /// simulation's grid.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    ExportSimGrid,
 }
 
 /// Is this control meaningful in this mode?
@@ -404,6 +424,34 @@ pub fn control(c: Control, m: RenderMode, tone: ToneMapMode) -> Vis {
             RenderMode::Escape | RenderMode::Simulation => Vis::Hide,
         },
         C::ViewNavigation => Vis::Show,
+        C::ExportUpscaler => {
+            if matches!(m, RenderMode::Simulation) {
+                Vis::Hide
+            } else {
+                Vis::Show
+            }
+        }
+        C::ExportEscapeAntialiasing => {
+            if matches!(m, RenderMode::Escape) {
+                Vis::Show
+            } else {
+                Vis::Hide
+            }
+        }
+        C::ExportSimGrid => {
+            if matches!(m, RenderMode::Simulation) {
+                Vis::Show
+            } else {
+                Vis::Hide
+            }
+        }
+        C::RenderScale => {
+            if matches!(m, RenderMode::Simulation) {
+                Vis::Grey(SIM_GRID_SCALE)
+            } else {
+                Vis::Show
+            }
+        }
         C::OrbitCache => {
             if matches!(m, RenderMode::Escape) {
                 Vis::Show
@@ -699,6 +747,10 @@ mod tests {
         Control::ColorMode,
         Control::ViewNavigation,
         Control::FocusedRendering,
+        Control::RenderScale,
+        Control::ExportUpscaler,
+        Control::ExportEscapeAntialiasing,
+        Control::ExportSimGrid,
     ];
 
     /// Every reason a panel or control is greyed names a string that
@@ -741,14 +793,16 @@ mod tests {
     }
 
     /// Every control is available in both flame modes under the
-    /// logarithmic mapping, except the orbit cache, which is escape's
-    /// alone and does nothing in a flame, and Focused Rendering in 3D,
-    /// whose planners work in the plane.
+    /// logarithmic mapping, except the orbit cache and the video export's
+    /// antialiasing cap, which are escape's alone and do nothing in a
+    /// flame, the export's note on a simulation's grid, and Focused
+    /// Rendering in 3D, whose planners work in the plane.
     #[test]
     fn the_flame_modes_offer_every_control_but_the_orbit_cache() {
+        let elsewhere = [Control::OrbitCache, Control::ExportEscapeAntialiasing, Control::ExportSimGrid];
         for m in [RenderMode::TwoD, RenderMode::ThreeD] {
             for c in ALL_CONTROLS {
-                let want = *c != Control::OrbitCache && !(*c == Control::FocusedRendering && m == RenderMode::ThreeD);
+                let want = !elsewhere.contains(c) && !(*c == Control::FocusedRendering && m == RenderMode::ThreeD);
                 assert_eq!(
                     control(*c, m, ToneMapMode::Logarithmic).is_show(),
                     want,
@@ -823,12 +877,18 @@ mod tests {
             assert!(greyed(Control::LogOnlyTone), "{m:?} log-only tone");
             assert!(greyed(Control::AlphaBlendCurve), "{m:?} alpha blend");
         }
-        // The orbit cache is the one control a non-flame mode gains.
-        assert!(control(Control::OrbitCache, RenderMode::Escape, ToneMapMode::Linear).is_show());
-        assert_eq!(
-            control(Control::OrbitCache, RenderMode::Simulation, ToneMapMode::Linear),
-            Vis::Hide
-        );
+        // The controls a non-flame mode gains: escape-time's orbit cache
+        // and the video export's antialiasing cap, a simulation's note on
+        // its grid. A simulation's export frame is not drawn up.
+        let shown = |c: Control, m: RenderMode| control(c, m, ToneMapMode::Linear).is_show();
+        assert!(shown(Control::OrbitCache, RenderMode::Escape));
+        assert!(!shown(Control::OrbitCache, RenderMode::Simulation));
+        assert!(shown(Control::ExportEscapeAntialiasing, RenderMode::Escape));
+        assert!(!shown(Control::ExportEscapeAntialiasing, RenderMode::Simulation));
+        assert!(shown(Control::ExportSimGrid, RenderMode::Simulation));
+        assert!(!shown(Control::ExportSimGrid, RenderMode::Escape));
+        assert!(shown(Control::ExportUpscaler, RenderMode::Escape));
+        assert!(!shown(Control::ExportUpscaler, RenderMode::Simulation));
     }
 
     /// The panels each mode does not use, pinned: a panel quietly

@@ -12,6 +12,7 @@ which rewrites the references in code comments too).
 
 | Doc | Status |
 |---|---|
+| [terrain-speed.md](terrain-speed.md) | A rough outline (2026-10-31), not started: a deep escape terrain's section renders (single steps of 100-360 ms), which the quality governor's render scale cannot reach; the lit tier's antialiasing redrawn and thrown away while sections arrive (suspected); candidates from one lit picture a ground to a section budget the governor sets. |
 | [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
 | [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |

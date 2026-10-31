@@ -1460,7 +1460,7 @@ impl Display for ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
-            ConfigPath::SystemFrameGovernor => write!(f, "System: Frame-Time Governor"),
+            ConfigPath::SystemFrameGovernor => write!(f, "System: Quality Governor"),
             ConfigPath::SystemManualWorkgroups => write!(f, "System: Workgroups"),
             ConfigPath::SystemOrbitCacheMb => write!(f, "System: Orbit Cache Size (MB)"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),

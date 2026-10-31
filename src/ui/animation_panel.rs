@@ -100,6 +100,10 @@ pub struct AnimationExportSettings {
     pub audio_fade_out: f64,
     /// Audio bitrate in kbps
     pub audio_bitrate: u32,
+    /// The export's speed-ups: render scale, upscaler, escape-time
+    /// supersampling (`ExportRung`). Kept for the session, full quality
+    /// at first.
+    pub rung: crate::animation::export::ExportRung,
 }
 
 impl Default for AnimationExportSettings {
@@ -120,6 +124,7 @@ impl Default for AnimationExportSettings {
             audio_fade_in: 0.0,
             audio_fade_out: 0.0,
             audio_bitrate: 192,
+            rung: crate::animation::export::ExportRung::default(),
         };
         s.set_encoding(&crate::storage::SystemSettings::default().video_encoding);
         s
@@ -614,9 +619,10 @@ pub fn render_export_panel(
     ctx: &egui::Context,
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
-    // The picture's size, which the frames are rendered at.
+    // The picture: its size, which the frames are rendered at, and what
+    // the speed-ups act on.
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    image_size: (u32, u32),
+    picture: &crate::config::FractalConfig,
     // Only read on desktop (the wasm branch shows "not available").
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     export_active: bool,
@@ -652,7 +658,7 @@ pub fn render_export_panel(
                 }
 
                 ui.add_enabled_ui(has_animation && !export_active && ffmpeg_available, |ui| {
-                    render_export_settings(ui, controller, settings, image_size, &mut export_request, window);
+                    render_export_settings(ui, controller, settings, picture, &mut export_request, window);
                 });
             }
 
@@ -665,16 +671,23 @@ pub fn render_export_panel(
     export_request
 }
 
+/// The render scales the video export offers (`ExportRung`): the viewport's
+/// and two more, since a draft video can afford to be softer than a
+/// viewport.
+#[cfg(not(target_arch = "wasm32"))]
+const EXPORT_RENDER_SCALES: [f32; 5] = [1.0, 0.75, 2.0 / 3.0, 0.5, 0.25];
+
 /// Render export settings controls (used inside the export panel)
 #[cfg(not(target_arch = "wasm32"))]
 fn render_export_settings(
     ui: &mut Ui,
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
-    image_size: (u32, u32),
+    picture: &crate::config::FractalConfig,
     export_request: &mut Option<AnimationExportSettings>,
     window: &winit::window::Window,
 ) {
+    let image_size = picture.image_size;
     // Output file path
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.output"));
@@ -920,6 +933,66 @@ fn render_export_settings(
                 }
             }));
         super::vkb_sync_opts(ui, &r, &format!("{}", settings.max_iterations), "integer");
+    });
+
+    // ── Speed: the same for every frame (docs/archive/projects/quality-governor.md,
+    // *Exports*) ──
+    ui.separator();
+    ui.collapsing(t!("animation_panel.speed_section"), |ui| {
+        use super::visibility::{gated, Control};
+        let (mode, tone) = (picture.render_mode, picture.tonemap_mode);
+        let percent = |s: f32| format!("{}%", (s * 100.0).round());
+        ui.horizontal(|ui| {
+            ui.label(t!("animation_panel.render_scale"));
+            egui::ComboBox::from_id_salt("export_render_scale")
+                .selected_text(percent(settings.rung.render_scale))
+                .show_ui(ui, |ui| {
+                    for s in EXPORT_RENDER_SCALES {
+                        ui.selectable_value(&mut settings.rung.render_scale, s, percent(s));
+                    }
+                })
+                .response
+                .on_hover_text(t!("animation_panel.render_scale_tip"));
+        });
+        if settings.rung.render_scale < 1.0 {
+            gated(ui, Control::ExportUpscaler, mode, tone, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(t!("animation_panel.upscaler"));
+                    egui::ComboBox::from_id_salt("export_upscaler")
+                        .selected_text(t!(settings.rung.upscaler.label_key()))
+                        .show_ui(ui, |ui| {
+                            for f in crate::renderer::upscale::UpscaleFilter::ALL {
+                                ui.selectable_value(&mut settings.rung.upscaler, f, t!(f.label_key()));
+                            }
+                        });
+                });
+            });
+            gated(ui, Control::ExportSimGrid, mode, tone, |ui| {
+                ui.small(match picture.sim.grid {
+                    crate::config::sim::SimGrid::Viewport { .. } => t!("animation_panel.render_scale_sim_bound"),
+                    crate::config::sim::SimGrid::Fixed { .. } => t!("animation_panel.render_scale_sim_fixed"),
+                });
+            });
+        }
+        gated(ui, Control::ExportEscapeAntialiasing, mode, tone, |ui| {
+            let full = picture.escape.supersample.max(1);
+            let label = |n: Option<u32>| match n.filter(|n| *n < full) {
+                None => t!("animation_panel.escape_aa_picture", n = full).to_string(),
+                Some(n) => format!("{n}x"),
+            };
+            ui.horizontal(|ui| {
+                ui.label(t!("animation_panel.escape_aa"));
+                egui::ComboBox::from_id_salt("export_escape_aa")
+                    .selected_text(label(settings.rung.escape_supersample))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut settings.rung.escape_supersample, None, label(None));
+                        for n in (1..full).rev() {
+                            ui.selectable_value(&mut settings.rung.escape_supersample, Some(n), label(Some(n)));
+                        }
+                    });
+            });
+        });
+        ui.small(t!("animation_panel.speed_hint"));
     });
 
     // Estimate

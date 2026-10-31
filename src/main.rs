@@ -195,6 +195,21 @@ enum Commands {
         /// Audio bitrate in kbps (default: 192)
         #[arg(long, default_value = "192")]
         audio_bitrate: u32,
+
+        /// Render each frame at this share of each side (0.25-1) and draw it
+        /// up to the video's size: faster, softer. A simulation's bound grid
+        /// scales instead (a different run from the still).
+        #[arg(long, default_value = "1.0")]
+        render_scale: f32,
+
+        /// How a frame rendered below the video's size is drawn up: nearest,
+        /// bilinear, catmull-rom or fsr (default: catmull-rom)
+        #[arg(long, default_value = "catmull-rom")]
+        upscaler: String,
+
+        /// Escape-time supersampling at most this (never above the config's)
+        #[arg(long)]
+        escape_supersample: Option<u32>,
     },
 }
 
@@ -369,7 +384,7 @@ fn main() {
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader, transparent, premultiplied, engine, supersample);
             }
-            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality, audio, audio_offset, audio_fade_in, audio_fade_out, audio_bitrate }) => {
+            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality, audio, audio_offset, audio_fade_in, audio_fade_out, audio_bitrate, render_scale, upscaler, escape_supersample }) => {
                 use fractal_flame_wgpu::animation::export::{HardwareAccel, VideoCodec};
 
                 // An unknown name falls back to the DEFAULT, and says
@@ -426,8 +441,25 @@ fn main() {
                     }
                 });
 
+                // The export's speed-ups (`ExportRung`).
+                let upscaler = fractal_flame_wgpu::renderer::upscale::UpscaleFilter::from_cli_name(&upscaler).unwrap_or_else(|| {
+                    let fallback = fractal_flame_wgpu::renderer::upscale::UpscaleFilter::default();
+                    eprintln!(
+                        "Unknown upscaler '{upscaler}' (expected nearest, bilinear, catmull-rom or fsr). Using the default, {fallback:?}."
+                    );
+                    fallback
+                });
+                if !(0.25..=1.0).contains(&render_scale) {
+                    eprintln!("--render-scale {render_scale} is outside 0.25-1; it is clamped.");
+                }
+                let rung = fractal_flame_wgpu::animation::export::ExportRung {
+                    render_scale,
+                    upscaler,
+                    escape_supersample,
+                };
+
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(config.as_deref(), &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config);
+                fractal_flame_wgpu::export_animation_mode(config.as_deref(), &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config, rung);
             }
             None => {
                 // Run normal GUI mode

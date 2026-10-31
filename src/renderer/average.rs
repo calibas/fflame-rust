@@ -223,7 +223,13 @@ impl ImageAverage {
         let Some((ta, _, tb, _)) = self.pair.as_ref() else {
             return;
         };
-        let src = if self.front == 0 { ta } else { tb };
+        let src = if self.front == 0 { ta } else { tb }.clone();
+        self.present_texture(device, encoder, &src);
+    }
+
+    /// Keep `src` aside instead, an image in the same layout: a finished
+    /// single render, shown while the next renders over several frames.
+    pub fn present_texture(&mut self, device: &Device, encoder: &mut CommandEncoder, src: &Texture) {
         let size = Extent3d { width: src.width(), height: src.height(), depth_or_array_layers: 1 };
         if self.presented.as_ref().is_none_or(|(t, _)| t.width() != size.width || t.height() != size.height) {
             if let Some((t, _)) = self.presented.take() {

@@ -11,7 +11,11 @@ struct EffectParams {
     params: array<vec4<f32>, 12>,
     width: u32,
     height: u32,
-    _padding: vec2<f32>,
+    // Render pixels per logical viewport point (the viewport's render
+    // scale; 1 everywhere else): this effect's sizes in pixels are in
+    // points, so they are multiplied by it.
+    _density_mean: f32,
+    pixel_scale: f32,
 }
 
 fn get_param(index: u32) -> f32 {
@@ -47,8 +51,8 @@ fn luminance(c: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let radius = i32(clamp(get_param(0u), 1.0, 10.0));
-    let sigma_spatial = max(0.1, get_param(1u));
+    let radius = i32(clamp(get_param(0u) * effect_params.pixel_scale, 1.0, 10.0));
+    let sigma_spatial = max(0.1, get_param(1u) * effect_params.pixel_scale);
     let sigma_range = max(0.01, get_param(2u));
 
     let texel = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));

@@ -1167,7 +1167,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn resolve_body(up: SimUpscale, down: SimDownscale, magnifying: bool) -> String {
     if magnifying {
         match up {
-            SimUpscale::Nearest => r#"
+            // FSR colours the cells near 1:1 and upscales the picture
+            // after (`SimRenderer::fsr_size`), so its colour pass is
+            // compiled as not magnifying; were it asked to, a cell each.
+            SimUpscale::Nearest | SimUpscale::Fsr => r#"
     let cell = sim_view_cell(vec2<i32>(floor(gf)), g - vec2<i32>(1, 1));
     let col = sim_shade(cell);
 "#
@@ -2626,6 +2629,11 @@ mod tests {
             shader_lint::subnormal_literals(src).is_empty(),
             "{what}: subnormal literal -- {:?}",
             shader_lint::subnormal_literals(src)
+        );
+        assert!(
+            shader_lint::mixed_operators(src).is_empty(),
+            "{what}: operator mixes Tint refuses -- {:?}",
+            shader_lint::mixed_operators(src)
         );
     }
 
