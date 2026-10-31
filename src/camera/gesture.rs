@@ -12,7 +12,7 @@
 //! | | 2D | 3D |
 //! |---|---|---|
 //! | drag | [`pan`] | [`pan`]: in the screen plane; a terrain's along the ground |
-//! | Alt+drag, right drag | [`turn`]: rotate the view about the centre | [`turn`]: orbit the target, a turntable |
+//! | Ctrl+drag, right drag | [`turn`]: rotate the view about the centre | [`turn`]: orbit the target, a turntable |
 //! | wheel | [`zoom`] toward the cursor, in and out | [`zoom`]: dolly toward the cursor (a flame: its 2D zoom) |
 //! | pinch | [`pinch`]: zoom, pan, twist to rotate | [`pinch`]: dolly, pan, twist to orbit |
 //!

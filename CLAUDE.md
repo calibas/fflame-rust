@@ -76,7 +76,7 @@ Opt-in, 2D flames only (config `cylinder_targeting`; code says "cylinder targeti
 
 ### UI ([UI.md](docs/main/UI.md))
 - Dockable panels (`PanelType` in `src/ui/workspace.rs`: 32), each in its own `src/ui/*.rs`; cross-panel results bubble through `UiResponse` (`src/ui/response.rs`) and are handled in `src/app/ui_handlers.rs`. Menus: File, Edit, View, Rendering, Window, Help, then the mode button (named by the current mode; `src/ui/menu_bar.rs`), the language (globe) menu on the right; `src/ui/compact_menu.rs` is the mobile equivalent. Both Window menus draw their rows from `visibility::WINDOW_MENU`.
-- Input: one control set for every camera (`camera::gesture`): drag pans, Alt+drag or right-drag turns (2D rotates, 3D orbits), the wheel zooms toward the cursor (3D dollies; in fly mode it sets the speed). Touch: long press = right button, the viewport's Pan/Turn toggle = Alt. Fly mode (F2) in every 3D view: FreeLook or FPS. The table is in UI.md.
+- Input: one control set for every camera (`camera::gesture`): drag pans, Ctrl+drag or right-drag turns (2D rotates, 3D orbits), the wheel zooms toward the cursor (3D dollies; in fly mode it sets the speed). Touch: long press = right button, the viewport's Pan/Turn toggle = Ctrl. Fly mode (F2) in every 3D view: FreeLook or FPS. The table is in UI.md.
 - i18n: rust-i18n, `locales/*.yml` (en, es, ja, zh-CN; the non-English locales cover a fraction of the keys and fall back to English). Desktop loads Noto Sans JP/SC at runtime for CJK; WASM has no CJK font. [I18N.md](docs/main/I18N.md)
 
 ### Config, state, storage ([CONFIG.md](docs/main/CONFIG.md))

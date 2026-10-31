@@ -586,14 +586,14 @@ to bring it to every mode, under this convention, is
 - **The viewport** (`src/ui/panel_viewer.rs`): `view_drag` and
   `view_scroll` are the one input path, for the viewport body and the
   tab-bar strip alike.
-  - Alt+drag or a right drag turns, a plain drag pans, and Shift makes
+  - Ctrl+drag or a right drag turns, a plain drag pans, and Shift makes
     either a quarter as fine.
   - In fly mode a drag accumulates into a look, which the app applies
     (`App::apply_fly_mouse_look`).
 - **Touch** (`TouchTracker`):
   - a finger held still for half a second within 10 points is a long
     press, the touch's right button: dragged, it turns;
-  - the viewport's Pan/Turn toggle is the touch's Alt;
+  - the viewport's Pan/Turn toggle is the touch's Ctrl;
   - two fingers are `pinch`.
 
 ---

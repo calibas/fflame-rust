@@ -29,7 +29,7 @@ pub enum TouchGesture {
     /// Single finger drag (translation delta)
     Pan(egui::Vec2),
     /// A single finger's drag after a long press -- the touch's right
-    /// drag, which turns as Alt+drag does (camera-unification C3).
+    /// drag, which turns as Ctrl+drag does (camera-unification C3).
     Turn(egui::Vec2),
     /// A single finger held still past the long press -- the touch's
     /// right button held, here.
@@ -1455,13 +1455,13 @@ impl<'a> PanelViewer<'a> {
                 None => {}
             }
 
-            // The mouse (camera-unification C3): a drag pans, Alt+drag or a
-            // right drag turns -- a 2D view rotates, a 3D camera orbits --
-            // and fly mode looks. Skipped during touch to avoid
-            // double-handling.
+            // The mouse (camera-unification C3): a drag pans, Ctrl+drag or
+            // a right drag turns -- a 2D view rotates, a 3D camera orbits --
+            // and fly mode looks. (Alt until 2026-10-31.) Skipped during
+            // touch to avoid double-handling.
             if !touch_active {
-                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
-                for (button, turn) in [(egui::PointerButton::Primary, alt), (egui::PointerButton::Secondary, true)] {
+                let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.shift));
+                for (button, turn) in [(egui::PointerButton::Primary, ctrl), (egui::PointerButton::Secondary, true)] {
                     if response.dragged_by(button) {
                         view_drag(
                             self.context.config_manager,
@@ -1542,7 +1542,7 @@ impl<'a> PanelViewer<'a> {
     }
 
     /// The Pan/Turn toggle for touch, at the viewport's bottom left: what a
-    /// one-finger drag does (Turn is Alt+drag: a 2D view rotates, a 3D
+    /// one-finger drag does (Turn is Ctrl+drag: a 2D view rotates, a 3D
     /// camera orbits). A long press and drag turns either way.
     fn render_touch_mode_toggle(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         egui::Area::new(egui::Id::new("viewport_touch_mode"))

@@ -201,7 +201,7 @@ help:
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom toward the cursor (3D: move closer)"
   center_minibrot: "Center on Minibrot"
-  alt_drag_rotate: "  Alt-Drag or Right-Drag - Rotate view (3D: orbit)"
+  alt_drag_rotate: "  Ctrl-Drag or Right-Drag - Rotate view (3D: orbit)"
   shift_fine: "  Shift    - Finer steps while dragging or scrolling"
   fly_controls: "Fly Mode:"
   fly_look: "  Drag     - Look around (turns about the eye)"
@@ -2138,7 +2138,7 @@ viewport:
   touch_pan: "✋ Pan"
   touch_pan_tip: "A one-finger drag moves the view. Long-press, then drag, to turn instead."
   touch_turn: "⟳ Turn"
-  touch_turn_tip: "A one-finger drag turns the view, as Alt+drag does: a 2D view rotates, a 3D camera orbits. Two fingers still pinch to zoom."
+  touch_turn_tip: "A one-finger drag turns the view, as Ctrl+drag does: a 2D view rotates, a 3D camera orbits. Two fingers still pinch to zoom."
 
 # Path Info Overlay (right-click in PathMap mode, or a long press on touch)
 path_overlay:
@@ -2450,7 +2450,7 @@ sim_panel:
   terrain: "3D terrain"
   terrain_enabled: "Show as a 3D terrain"
   terrain_tip: "The grid as a height field: one channel of a layer, smoothed, as its height, coloured by the colour stack, seen through a camera over it. Lit while the simulation runs; path traced once it rests."
-  terrain_gestures: "In the viewport: drag to pan, Alt+drag or right-drag to orbit, wheel to move closer."
+  terrain_gestures: "In the viewport: drag to pan, Ctrl+drag or right-drag to orbit, wheel to move closer."
   terrain_layer: "Layer"
   terrain_channel: "Channel"
   terrain_channel_tip: "Which of the layer's channels is the height."
@@ -2834,7 +2834,7 @@ escape_panel:
   terrain_enabled: "Show as a 3D terrain"
   terrain_tip: "Draw the picture as a lit landscape: its distance estimate (or escape count, or relief) as the height, its colours as the ground. The view's centre and zoom are the terrain's, so a zoom is a new stretch of ground."
   terrain_solid: "A solid formula is already 3D."
-  terrain_gestures: "Drag to pan, Alt+drag or right-drag to orbit, wheel to move in."
+  terrain_gestures: "Drag to pan, Ctrl+drag or right-drag to orbit, wheel to move in."
   view_has_camera: "The camera, fog, lighting, material and the path tracer are in the View panel."
   terrain_source: "Height from"
   terrain_source_distance: "Distance estimate"
