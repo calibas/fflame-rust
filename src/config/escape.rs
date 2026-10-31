@@ -3283,7 +3283,12 @@ mod tests {
             json_to_config_value(&serde_json::json!(true), &ConfigPath::EscapeJulia),
             Some(ConfigValue::Bool(true))
         );
+        // The centre: a track's number becomes the decimal string.
         assert_eq!(json_to_config_value(&serde_json::json!("0.1"), &ConfigPath::EscapeCenterRe), None);
+        assert_eq!(
+            json_to_config_value(&serde_json::json!(-0.75), &ConfigPath::EscapeCenterRe),
+            Some(ConfigValue::String("-0.75".into()))
+        );
         assert_eq!(
             json_to_config_value(&serde_json::json!("kaliset"), &ConfigPath::EscapeFormula),
             None

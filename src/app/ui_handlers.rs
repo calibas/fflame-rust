@@ -1356,6 +1356,9 @@ impl App {
 
             for (flame_target, path_str, json_value) in frame_values {
                 if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
+                    if crate::animation::holds_exact_centre(self.config_manager.active_config(), &path, &json_value) {
+                        continue;
+                    }
                     if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
                         if let Err(e) = self
                             .config_manager

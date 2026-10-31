@@ -146,6 +146,10 @@ impl AnimBuilder {
         if animation.tracks.is_empty() {
             warnings.push("the script defined an animation with no usable tracks".into());
         }
+        // A script that names the zoom in base 2 (`"Escape.ZoomLog2"`,
+        // as scripts written before 2026-10-31 do) gets the base-10 track
+        // the track editor shows, playing the same.
+        animation.zoom_tracks_to_log10();
         Some(animation)
     }
 }
@@ -187,8 +191,8 @@ pub(crate) fn resolve_flame_target(name: &str) -> Result<String, String> {
     Err(format!(
         "`{name}` is not an animatable setting. Use the same name `config.set` takes \
          (for example \"zoom\", \"rotation\", \"camera_rotation_x\", \"exposure\"), \
-         an escape or simulation setting by its track name (\"Escape.ZoomLog2\", \
-         \"Sim.Steps\", \"Sim.Terrain.Height\" -- or \"escape.zoom_log2\"), \
+         an escape or simulation setting by its track name (\"Escape.ZoomLog10\", \
+         \"Sim.Steps\", \"Sim.Terrain.Height\" -- or \"escape.zoom_log10\"), \
          or a transform's own `key()` for per-transform values."
     ))
 }

@@ -170,10 +170,22 @@ A target is a `ConfigPath` in its string form
 | linked / final pools | `LinkedTransform.1.Scale`, `FinalTransform.0.PostAffine.C` |
 | xaos | `Xaos.0.2` |
 | effects | `DensityEffect.0.Enabled`, `ColorEffect.1.<param>` |
-| escape | `Escape.ZoomLog2`, `Escape.JuliaIm`, `Escape.FormulaParam.<name>` |
+| escape | `Escape.ZoomLog10`, `Escape.CenterRe`, `Escape.JuliaIm`, `Escape.FormulaParam.<name>` |
 | simulation | `Sim.Steps`, `Sim.ModelParam.feed`, `Sim.Layer.1.Param.<name>`, `Sim.Terrain.Height` |
 
 Indices in keys are 0-based; the track list shows `Transform.N` 1-based.
+
+**Escape-time's zoom is a base-10 track** (`Escape.ZoomLog10`), as the
+View panel shows it; the config keeps the base-2 exponent the deep-zoom
+maths needs. A track on `Escape.ZoomLog2`, from a file or a script
+written before 2026-10-31, is converted to it when the animation loads
+(`Animation::zoom_tracks_to_log10`: keyframes and a signal's range,
+scaled by log10 2), and plays the same. **The planar centre**
+(`Escape.CenterRe`, `Escape.CenterIm`) is an exact decimal carried by
+an f64 track, about 16 digits: a moving centre is only that precise
+(past a zoom of about 10^13 its steps show), and a frame whose value is
+the centre's own f64 leaves the exact decimal alone
+(`animation::holds_exact_centre`), so a held centre survives any zoom.
 Angles are stored in **radians** (`is_angle_path` in
 [track_editor.rs](../../src/ui/track_editor.rs) lists them) and the
 editor shows and accepts degrees.
