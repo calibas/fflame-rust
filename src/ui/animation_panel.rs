@@ -112,7 +112,7 @@ impl Default for AnimationExportSettings {
             output_path: default_video_output_path(),
             size_override: None,
             fps: 30,
-            iterations_per_thread: 256,
+            iterations_per_thread: crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD,
             max_iterations: 10_000_000,
             video_codec: VideoCodec::H265,
             hardware_accel: HardwareAccel::None,

@@ -567,7 +567,7 @@ no undo, saved on every change, the same for every picture.
 | --- | --- | --- |
 | rendering | `vsync_enabled` | true |
 | | `target_fps` (used when VSync is off) | 60 |
-| | `iterations_per_thread` | 256 |
+| | `iterations_per_thread` | 1024 (256 until 2026-10-31) |
 | | `burn_in` | 20 |
 | | `frame_governor` | true |
 | | `manual_workgroups` (with the governor off; clamped 1–65535) | 128 |

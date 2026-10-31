@@ -594,7 +594,7 @@ three.
   change the cost), and a measurement tagged before the restart is not
   used. Without timestamp queries (some browsers) it stays at the batch.
   Measured at 754x786 on a GTX 1660 SUPER: 4 billion iterations of Julian
-  Disc in 1.6 s (8.1 s before; the CLI 0.94 s), 1.8 s at the default 256
+  Disc in 1.6 s (8.1 s before; the CLI 0.94 s), 1.8 s at the then default 256
   a thread; Grand Julian 5.5 s (8.1 s; the CLI 2.9 s); heavy flames,
   which the governor already sheds, unchanged.
 - **The pacing cap** (`BatchCap`, `capped_scale` in `src/app/governor.rs`):

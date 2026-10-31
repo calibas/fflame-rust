@@ -56,13 +56,16 @@ pub const DEFAULT_BLEND_FACTOR: f32 = 0.1; // 10% blend rate (used when dynamic 
 pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 → 0.01
 
 // Performance
-pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
+/// The app's iterations per thread (`SystemSettings::iterations_per_thread`),
+/// desktop and web alike: 1024 since 2026-10-31, 256 before. Orbits persist
+/// across dispatches, so the length only slices the work, and the frame
+/// governor shortens a dispatch that does not fit the frame.
+pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 1024;
 
 /// The CLI exports' default (PNG and video) when
-/// `--iterations-per-thread` is not given.
+/// `--iterations-per-thread` is not given: the app's since 2026-10-31.
 ///
-/// Deliberately higher than the interactive default above: ipt is
-/// trajectory depth (trajectories don't survive across dispatches), and
+/// It was higher than the app's until then: ipt is trajectory depth, and
 /// an export has no frame budget to protect. The total iteration budget
 /// is unchanged — deeper trajectories reach it in fewer dispatches, so
 /// less restart/burn-in overhead, unconditionally.
