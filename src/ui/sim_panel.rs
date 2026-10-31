@@ -248,6 +248,23 @@ pub fn render_sim_content(
                     .italics(),
             );
         }
+        // The run's speed, under the step it is at (the user, 2026-10-31:
+        // out of Settings, beside the transport it drives). Committed when
+        // the drag ends: a frame runs this many steps, so each value a
+        // drag passed would slow the next frame more (`slow_controls`).
+        let mut spf = sim.steps_per_frame;
+        let id = ui.id().with("sim_steps_per_frame");
+        let (_, spf_changed) = super::slow_controls::on_release(ui, id, &mut spf, |ui, v| {
+            ui.add(
+                egui::Slider::new(v, 1..=2048)
+                    .text(t!("sim_panel.steps_per_frame").as_ref())
+                    .logarithmic(true),
+            )
+            .on_hover_text(t!("sim_panel.steps_per_frame_tip"))
+        });
+        if spf_changed {
+            let _ = config_manager.update_param(ConfigPath::SimStepsPerFrame, spf.into());
+        }
 
         ui.separator();
     }
@@ -476,22 +493,6 @@ pub fn render_sim_content(
                     // seed. Saying it here beats finding out from a blank PNG.
                     ui.label(egui::RichText::new(t!("sim_panel.steps_uncapped")).small().weak())
                         .on_hover_text(t!("sim_panel.steps_uncapped_tip"));
-                }
-                // Committed when the drag ends: a frame runs this many steps,
-                // so each value a drag passed would slow the next frame more
-                // (`slow_controls`).
-                let mut spf = sim.steps_per_frame;
-                let id = ui.id().with("sim_steps_per_frame");
-                let (_, spf_changed) = super::slow_controls::on_release(ui, id, &mut spf, |ui, v| {
-                    ui.add(
-                        egui::Slider::new(v, 1..=2048)
-                            .text(t!("sim_panel.steps_per_frame").as_ref())
-                            .logarithmic(true),
-                    )
-                    .on_hover_text(t!("sim_panel.steps_per_frame_tip"))
-                });
-                if spf_changed {
-                    let _ = config_manager.update_param(ConfigPath::SimStepsPerFrame, spf.into());
                 }
                 // An automaton advances by a generation, not by dt: showing the
                 // slider would be a control that does nothing.
