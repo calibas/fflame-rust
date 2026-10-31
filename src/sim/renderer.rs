@@ -3467,8 +3467,13 @@ impl SimRenderer {
             // still in flight; an exponential average settles on the
             // real cost within a few batches without a spike moving it
             // far.
-            self.batches_timed += 1;
-            self.last_step_ms = per_step;
+            // Not where the wait does not block (a browser): the time is
+            // the submit's, near nothing, and the quality governor would
+            // read every model as free. It is left unmeasured there.
+            if cfg!(not(target_arch = "wasm32")) {
+                self.batches_timed += 1;
+                self.last_step_ms = per_step;
+            }
             self.ms_per_step = if self.ms_per_step > 0.0 {
                 self.ms_per_step * 0.7 + per_step * 0.3
             } else {

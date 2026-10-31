@@ -1069,7 +1069,13 @@ impl App {
             last_health_check: None,
         };
 
-        app.frame_timer = crate::gpu::timer::FrameTimer::new(&app.gpu.device, &app.gpu.queue);
+        // A scripted run may go without it (`FFLAME_FRAME_LOG_NO_GPU_TIMER`;
+        // frame_log.rs), as a browser without `timestamp-query` does.
+        app.frame_timer = if frame_log::without_gpu_timer() {
+            None
+        } else {
+            crate::gpu::timer::FrameTimer::new(&app.gpu.device, &app.gpu.queue)
+        };
         app.frame_log = frame_log::FrameLog::from_env(app.frame_timer.is_some());
 
         // Register live audio capture as a signal producer so live_* signals
@@ -2605,31 +2611,26 @@ impl App {
                     }
                     esc
                 });
-                // The frame governor's antialiasing axis (aa_governor.rs):
-                // while an animation plays, with the governor on, the
-                // viewport's factor is governed to keep up with the
-                // display. Otherwise, and the moment playback stops, it is
-                // the config's.
+                // The quality governor's rung (governor.rs) while an
+                // animation plays or a picture is edited, with the governor
+                // on; otherwise, and the moment playback stops, the
+                // config's factor.
                 let aa_ceiling = crate::escape::EscapeRenderer::affordable_supersample(
                     &self.gpu.device,
                     renderer.width,
                     renderer.height,
                     final_config.escape.supersample,
                 );
-                // The quality governor's rung (governor.rs). Without a GPU
-                // timer, playback falls back to the antialiasing governor
-                // (aa_governor.rs), which reads dropped frames.
-                let aa_governed = escape_rung.is_some()
-                    || (self.frame_timer.is_none()
-                        && self.animation_controller.is_playing()
-                        && self.config_manager.system_settings().frame_governor);
+                // Without a GPU timer the rung is the dropped-frame
+                // walker's (aa_governor.rs, `governor::fallback_rung`),
+                // which keeps its state while it governs.
+                let aa_governed = escape_rung.is_some();
                 let aa_factor = if let Some(rung) = escape_rung {
-                    self.escape_aa.release();
-                    self.escape_aa_settled_at = None;
+                    if self.governor.fallback.is_none() {
+                        self.escape_aa.release();
+                        self.escape_aa_settled_at = None;
+                    }
                     rung.supersample.min(aa_ceiling)
-                } else if aa_governed {
-                    refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
-                    self.escape_aa.factor(aa_ceiling)
                 } else {
                     self.escape_aa.release();
                     self.escape_aa_settled_at = None;
@@ -2836,18 +2837,14 @@ impl App {
                     if !done {
                         self.window.request_redraw();
                     }
-                    // A settled playback frame: how long since the last one,
-                    // against the governor's budget.
-                    if done && self.escape_aa.active() {
+                    // A settled playback frame without a GPU timer: how long
+                    // since the last one, against the governor's budget, for
+                    // the dropped-frame walker.
+                    if let Some((steps, budget_ms)) = self.governor.fallback.filter(|_| done && self.escape_aa.active()) {
                         let now = Instant::now();
                         if let Some(prev) = self.escape_aa_settled_at.replace(now) {
-                            let budget = crate::app::frame_budget(
-                                vsync,
-                                self.config_manager.system_settings().target_fps,
-                                self.display_refresh_mhz,
-                            );
-                            let ratio = now.duration_since(prev).as_secs_f64() / budget;
-                            if self.escape_aa.observe(ratio, aa_ceiling) {
+                            let ratio = now.duration_since(prev).as_secs_f64() * 1000.0 / budget_ms.max(1.0);
+                            if self.escape_aa.observe(ratio, steps) {
                                 self.window.request_redraw();
                             }
                         }

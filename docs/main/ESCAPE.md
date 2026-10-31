@@ -1790,8 +1790,11 @@ setting down (supersampling to 2x, then 75% and 50% scale, then 1x; a
 solid 2x, 1x, then 75%, 50%, 25%), a rung chosen from each picture's
 measured GPU time against the Target Frame Rate. Stills, exports and video
 render at the config's factor. Without a GPU timer (a browser without
-`timestamp-query`), playback falls back to the antialiasing governor
-(`src/app/aa_governor.rs`), which reads dropped frames.
+`timestamp-query`), playback walks the same ladder by dropped frames
+(`governor::fallback_rung`, `src/app/aa_governor.rs`): a step down after
+several settled frames come a refresh late, a step up after a run with
+none, a failed step up waiting twice as long the next time; editing is
+not governed there.
 
 **An output pixel** is what the relief (its height, softness and texture
 scale), the distance-estimate colourings and the relief's slope
