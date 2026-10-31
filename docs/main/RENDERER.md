@@ -597,6 +597,21 @@ three.
   Disc in 1.6 s (8.1 s before; the CLI 0.94 s), 1.8 s at the default 256
   a thread; Grand Julian 5.5 s (8.1 s; the CLI 2.9 s); heavy flames,
   which the governor already sheds, unchanged.
+- **The pacing cap** (`BatchCap`, `capped_scale` in `src/app/governor.rs`):
+  under vsync, while a flame plays or is edited, the batch may not grow
+  past where the frame's whole GPU span (the frame timer's) fills 70% of
+  the budget, and above it it comes down at the governor's slew. Under
+  vsync a frame on time reads the refresh however full the GPU is, so the
+  governor grows a heavy batch until frames miss, and they then alternate
+  long and short. The span is split by a linear model into the dispatch
+  (its timed cost a thread-iteration, times what the frame dispatched)
+  and the rest, so the cap does not move with the batch. Not in a still,
+  which the fill lengthens instead, nor without vsync, where the frame
+  intervals follow the GPU already. Measured at 60 Hz, a 2D flame whose
+  full batch was about two frames' work: 45 fps, 40% of the frames over
+  25 ms and 43% under 8, uncapped; 59.8 fps and none either way, the batch
+  held at 35%, capped. Light flames (a full batch under the cap) keep the
+  full batch.
 - **`Batch::while_planning`**: while a Focused Rendering plan is being
   made, the dispatch is capped to the floor's length and the governor
   stops measuring — the planner shares the render's queue.
@@ -605,10 +620,11 @@ three.
   `SystemSettings::manual_workgroups` (default 128) at the full length,
   still capped while a plan is made.
 
-The governor resets its timing when iteration stops. During escape
-animation playback the same switch governs the viewport's
-supersampling instead (`src/app/aa_governor.rs`; see
-[ESCAPE.md](ESCAPE.md)).
+The governor resets its timing when iteration stops. The same switch,
+the Rendering menu's Quality Governor, also sets a flame's render scale
+from the samples a frame plots, and governs escape-time, terrains and
+simulations (`src/app/governor.rs`;
+[quality-governor.md](../projects/quality-governor.md)).
 
 ### Configuration to GPU
 

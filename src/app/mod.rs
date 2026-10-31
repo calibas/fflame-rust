@@ -1435,7 +1435,7 @@ impl App {
                     let audio_capturing = app.audio_capture.is_capturing();
 
                     // Update present mode based on system settings
-                    app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
+                    app.gpu.set_present_mode(app.vsync_enabled());
 
                     // Time-based UI idle detection (600ms after last input)
                     const UI_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
@@ -1505,7 +1505,7 @@ impl App {
                     // During audio playback or live capture, keep redrawing to update UI
                     if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || app.viewport_resize_pending || just_finished_rendering || fly_active || sim_active || progress_stale {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
-                        if app.config_manager.system_settings().vsync_enabled {
+                        if app.vsync_enabled() {
                             // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
                         } else {
@@ -2430,6 +2430,7 @@ impl App {
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
         let use_overwrite = self.should_use_overwrite();
+        let vsync = self.vsync_enabled();
         // What the picture is shown at, and how it is drawn up to it
         // (render_scale.rs): read before the renderer is borrowed too.
         let display_size = self.display_size();
@@ -2839,10 +2840,9 @@ impl App {
                     if done && self.escape_aa.active() {
                         let now = Instant::now();
                         if let Some(prev) = self.escape_aa_settled_at.replace(now) {
-                            let settings = self.config_manager.system_settings();
                             let budget = crate::app::frame_budget(
-                                settings.vsync_enabled,
-                                settings.target_fps,
+                                vsync,
+                                self.config_manager.system_settings().target_fps,
                                 self.display_refresh_mhz,
                             );
                             let ratio = now.duration_since(prev).as_secs_f64() / budget;
@@ -3370,10 +3370,9 @@ impl App {
                     // a different display, and `current_monitor` is a syscall.
                     refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
 
-                    let settings = self.config_manager.system_settings();
                     let target = crate::app::frame_budget(
-                        settings.vsync_enabled,
-                        settings.target_fps,
+                        vsync,
+                        self.config_manager.system_settings().target_fps,
                         self.display_refresh_mhz,
                     );
                     let ratio = prev.elapsed().as_secs_f64() / target;
@@ -3393,6 +3392,7 @@ impl App {
                         a.max(b).min(a.min(b).max(c)) // median of {a, b, c}
                     };
                     self.governor_ratio_prev = [self.governor_ratio_prev[1], ratio];
+                    let before = self.iter_scale;
                     if self.batch_fill > 1.0 && (median > 1.3 || ratio >= 4.0) {
                         // Late with the dispatch lengthened past the batch
                         // (`fill_step`): give back the length first.
@@ -3402,6 +3402,26 @@ impl App {
                             crate::app::governor_step(self.governor_knee, self.iter_scale, median, ratio, &batch);
                         self.governor_knee = knee;
                         self.iter_scale = scale;
+                    }
+                    // **The pacing cap** (governor.rs, `BatchCap`): under
+                    // vsync, while a flame plays or is edited, the batch may
+                    // not grow past where the frame's GPU span fills the
+                    // governor's share of the budget, and above it it comes
+                    // down at the governor's slew. Not in a still, which the
+                    // fill lengthens for throughput instead, nor without
+                    // vsync, where the frames' intervals follow the GPU's
+                    // time and the reading above is the GPU's already.
+                    self.governor.flame_cap = None;
+                    if vsync
+                        && (use_overwrite || is_controller_playing)
+                        && matches!(self.governor_knee, crate::app::Knee::Shedding { .. })
+                    {
+                        let full = batch.max_workgroups as f64 * 64.0 * batch.iterations_per_thread.max(1) as f64;
+                        if let Some(cap) = self.governor.batch_cap.cap(target * 1000.0) {
+                            let cap = (cap / full).max(batch.min_scale());
+                            self.iter_scale = crate::app::governor::capped_scale(self.iter_scale, before, cap);
+                            self.governor.flame_cap = Some(cap);
+                        }
                     }
                 }
                 self.last_iter_frame = Some(now);
@@ -3420,11 +3440,16 @@ impl App {
                     renderer.set_timing_tag(self.fill_tag);
                 }
                 self.fill_last_total = total;
-                if let Some(timing) = renderer.take_dispatch_timing().filter(|t| t.tag == self.fill_tag) {
+                let timing = renderer.take_dispatch_timing();
+                if let Some(t) = timing {
+                    // Any state's: a cost a thread-iteration (`BatchCap`).
+                    self.governor.batch_cap.dispatch_timed(t.ms, t.iterations as f64);
+                }
+                if let Some(timing) = timing.filter(|t| t.tag == self.fill_tag) {
                     let at_full_batch = matches!(self.governor_knee, crate::app::Knee::Shedding { .. }) && self.iter_scale >= 1.0;
                     self.batch_fill = if at_full_batch {
                         let settings = self.config_manager.system_settings();
-                        let budget_ms = crate::app::frame_budget(settings.vsync_enabled, settings.target_fps, self.display_refresh_mhz) * 1000.0;
+                        let budget_ms = crate::app::frame_budget(vsync, settings.target_fps, self.display_refresh_mhz) * 1000.0;
                         let full = batch.max_workgroups as f64 * 64.0 * batch.iterations_per_thread as f64;
                         crate::app::fill_step(self.batch_fill, timing.ms, timing.iterations as f64, full, budget_ms)
                     } else {
@@ -3489,6 +3514,9 @@ impl App {
                 } else {
                     Vec::new()
                 };
+                let moment_ipt = effective_ipt.div_ceil(moments.len().max(1) as u32).max(1);
+                let frame_ipt = if moments.is_empty() { effective_ipt } else { moment_ipt * moments.len() as u32 };
+                self.governor.batch_cap.dispatched(self.frame_index, effective_workgroups as f64 * 64.0 * frame_ipt as f64);
                 let samples_this_frame = if moments.is_empty() {
                     // After blurred frames the GPU holds the last moment's
                     // flame: the frame's own goes back first.
@@ -3514,7 +3542,6 @@ impl App {
                         let settings = self.config_manager.system_settings();
                         (settings.iterations_per_thread, settings.burn_in)
                     };
-                    let moment_ipt = effective_ipt.div_ceil(moments.len() as u32).max(1);
                     let mut plotted = 0;
                     for (k, m) in moments.iter().enumerate() {
                         renderer.set_moment(&self.gpu.device, &self.gpu.queue, m, setting_ipt, burn_in);

@@ -39,7 +39,7 @@ def binary():
     sys.exit('no release binary: cargo build --release')
 
 
-def run(exe, scene, log, seconds, render_scale=None, target_fps=None):
+def run(exe, scene, log, seconds, render_scale=None, target_fps=None, vsync=None):
     env = dict(os.environ, FFLAME_FRAME_LOG=log, FFLAME_FRAME_LOG_OPEN=scene,
                FFLAME_FRAME_LOG_SECONDS=str(seconds))
     if render_scale is not None:
@@ -48,6 +48,9 @@ def run(exe, scene, log, seconds, render_scale=None, target_fps=None):
     if target_fps is not None:
         # The run's Target Frame Rate ('display' or fps), likewise.
         env['FFLAME_FRAME_LOG_TARGET_FPS'] = str(target_fps)
+    if vsync is not None:
+        # The run's VSync ('on' or 'off'), likewise.
+        env['FFLAME_FRAME_LOG_VSYNC'] = vsync
     try:
         subprocess.run([exe], env=env, timeout=seconds + 120, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -65,6 +68,8 @@ def main():
                     help='render at this scale for the run (the saved setting is not touched)')
     ap.add_argument('--target-fps', default=None,
                     help="hold this frame rate for the run, 'display' or fps (the saved setting is not touched)")
+    ap.add_argument('--vsync', choices=('on', 'off'), default=None,
+                    help='VSync for the run (the saved setting is not touched)')
     ap.add_argument('--exe', default=None,
                     help='the binary to run (e.g. target/release/deps/FractalArtEditor.exe, built while a '
                          'running app locks target/release/)')
@@ -85,7 +90,7 @@ def main():
         name = f[:-5]
         log = os.path.join(out, f'{name}.csv')
         print(f'\n== {name}')
-        run(exe, os.path.join(SCENES, f), log, args.seconds, args.render_scale, args.target_fps)
+        run(exe, os.path.join(SCENES, f), log, args.seconds, args.render_scale, args.target_fps, args.vsync)
         if not os.path.exists(log):
             print('  no log written')
             continue

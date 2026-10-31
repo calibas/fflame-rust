@@ -659,8 +659,45 @@ Lenia's step cost 5.5 ms at full size and 1.13 ms at 50%, 4.9 times for
 four times the cells; 75% is predicted at 12.4 ms of steps against an
 11.7 ms share, so 50% is the pick.
 
-Not yet: the batch governor's alternation at the budget's edge
-(*The second run*), which wants the frame's GPU span as the batch's cap.
+### The flame batch's pacing cap, as built (2026-10-30)
+
+The batch governor's alternation at the budget's edge (*The second run*):
+`governor::BatchCap`. Under vsync, while a flame plays or is edited, the
+batch may not grow past where the frame's whole GPU span (the frame
+timer's: the UI's and the engine's) fills `GPU_SHARE`, 70%, of the budget,
+and above that it comes down at the batch governor's slew
+(`capped_scale`). The span is split by a linear model into the dispatch
+(its own timed cost a thread-iteration, from the pass timer the fill
+uses, times the thread-iterations the frame dispatched) and the rest, the
+median of 16 frames; the cap is the room the rest leaves, so it does not
+move with the batch, and the GPU times' lag of a few frames makes no loop.
+When the rest alone overruns the share, the dispatch keeps a fifth of it
+(`NO_FIT_SLACK`). Not in a still, which the fill lengthens for throughput;
+not without vsync, where the intervals follow the GPU's time.
+
+Measured at 60 Hz on a 754x786 viewport at 2,000 iterations a thread, with
+`flame-2d-heavy` (the 2D scene with order-3 point symmetry; a full batch
+about two frames' work):
+
+| | fps | frames over 25 ms | under 8 ms | GPU a frame | batch |
+|---|---|---|---|---|---|
+| uncapped | 45.1 | 40% | 43% | 20.7 ms | 19-100% |
+| capped at 70% | 59.8 | 0% | 0% | 11.6 ms | 33-36% |
+| capped at 80% | 59.8 | 0% | 0% | 13.3 ms | 38-41% |
+
+80% kept 14% more samples a frame and paced evenly too, a little less
+tightly (the middle 80% of intervals 14.7-17.9 ms against 15.7-17.5); 70%
+stays, the margin worth more than 6.5% less noise, near the ~84% at which
+120 Hz frames alternated. The light scenes' full batches (2D 9.6 ms, 3D
+5.9 ms) are under the cap and keep it. Order 32 was tried first and was
+too much: its first frames, before the governor shed, took 100-330 ms of
+GPU time, and the driver reset on the second run.
+
+A flame's batch keeps the display's budget, not the Target Frame Rate's:
+a flame frame is one picture, and frames slower than the display come
+unevenly unless something holds each for whole refreshes, which nothing
+does yet.
+
 Open: a deep terrain's section renders (one step can take 360 ms) want
 splitting, or a budget the governor sets ("section detail while moving",
 *The ladder*); the render scale cannot reach them.
@@ -880,7 +917,7 @@ fixes; the user's window now 1920x1080 at 120 Hz, a 1079x1056 viewport):
    2026-10-30 (*The governor, escape-time, as built*), flames, terrains and
    simulations the same day (*The governor, flames, as built*; *The
    governor, terrains and simulations, as built*); the flame batch's
-   pacing cap still open.
+   pacing cap the same day (*The flame batch's pacing cap, as built*).
 6. **Exports**: the fixed rungs in the video export and the CLI.
 7. **The web**: the fallback signal; tried in a browser.
 
