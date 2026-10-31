@@ -744,6 +744,9 @@ pub fn apply_animation_values(
     for (flame_target, path_str, json_value) in values {
         // Parse the path string to ConfigPath
         if let Some(path) = ConfigPath::from_string_key(path_str) {
+            if super::holds_exact_centre(config, &path, json_value) {
+                continue;
+            }
             // Convert JSON value to ConfigValue
             if let Some(config_value) = json_to_config_value(json_value, &path) {
                 // Apply to config, routed via the track's flame target.
@@ -960,9 +963,14 @@ fn apply_config_value(
         (ConfigPath::EscapeJulia, ConfigValue::Bool(v)) => config.escape.julia = *v,
         (ConfigPath::EscapeJuliaRe, ConfigValue::Float(v)) => config.escape.julia_re = *v,
         (ConfigPath::EscapeJuliaIm, ConfigValue::Float(v)) => config.escape.julia_im = *v,
-        (ConfigPath::EscapeZoomLog2, ConfigValue::Float(v)) => {
-            // NaN from a wild signal must not poison the view.
-            let v = *v as f64;
+        (ConfigPath::EscapeZoomLog2 | ConfigPath::EscapeZoomLog10, ConfigValue::Float(v)) => {
+            // NaN from a wild signal must not poison the view. A track's
+            // zoom is base 10 (what the user sees); the config's base 2.
+            let v = if matches!(path, ConfigPath::EscapeZoomLog10) {
+                crate::config::escape::EscapeConfig::log10_to_log2(*v as f64)
+            } else {
+                *v as f64
+            };
             config.escape.zoom_log2 =
                 if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };
         }

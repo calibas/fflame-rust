@@ -342,8 +342,21 @@ fn render_flame_group(
 /// dynamism `get_effects_items` has).
 fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
     let esc = &config.escape;
-    let mut items = vec![
-        TargetItem::new(ConfigPath::EscapeZoomLog2, "Zoom (log2)"),
+    let ifs = crate::escape::ifs::get_ifs(&esc.formula);
+    let mut items = vec![TargetItem::new(ConfigPath::EscapeZoomLog10, "Zoom (log10)")];
+    // The view's centre, but a solid's: it has a camera instead (below).
+    // An f64 on a track: about 16 digits, where a deep zoom's centre needs
+    // more, so the tip says what a moving centre can and cannot do.
+    if !ifs.is_some_and(|d| d.solid) {
+        const CENTRE_TIP: &str = "The view's centre, as a number with about 16 significant digits. \
+             A centre that moves is only that precise: past a zoom of about 10^13 its steps \
+             show. A centre the track holds still keeps its exact value at any depth.";
+        items.extend([
+            TargetItem::new(ConfigPath::EscapeCenterRe, "Center Re").with_tip(CENTRE_TIP),
+            TargetItem::new(ConfigPath::EscapeCenterIm, "Center Im").with_tip(CENTRE_TIP),
+        ]);
+    }
+    items.extend([
         TargetItem::new(ConfigPath::EscapeRotation, "Rotation"),
         TargetItem::new(ConfigPath::EscapeMaxIter, "Max Iterations"),
         TargetItem::new(ConfigPath::EscapeBailout, "Bailout"),
@@ -351,12 +364,11 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::EscapeJuliaIm, "Julia Seed Im"),
         TargetItem::new(ConfigPath::EscapeDampingRe, "Damping Re"),
         TargetItem::new(ConfigPath::EscapeDampingIm, "Damping Im"),
-    ];
+    ]);
 
     // The camera, for a SOLID formula. A planar view has no camera to
     // move -- it has a centre and a zoom, already above -- so offering
     // these there would be seven targets that animate nothing.
-    let ifs = crate::escape::ifs::get_ifs(&esc.formula);
     if ifs.is_some_and(|d| d.solid) {
         items.extend([
             TargetItem::new(ConfigPath::EscapeCamTargetX, "Camera Position X"),
@@ -397,6 +409,15 @@ fn get_escape_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::EscapePathAperture, "Path: Aperture"),
             TargetItem::new(ConfigPath::EscapePathFocus, "Path: Focus"),
         ]);
+        // The sky map's turn, horizon and stars, once one is chosen (the
+        // Lighting panel's rule).
+        if !esc.path.environment_map.is_empty() {
+            items.extend([
+                TargetItem::new(ConfigPath::EscapePathEnvironmentRotation, "Path: Sky rotation"),
+                TargetItem::new(ConfigPath::EscapePathEnvironmentHorizon, "Path: Sky horizon"),
+                TargetItem::new(ConfigPath::EscapePathEnvironmentStars, "Path: Stars"),
+            ]);
+        }
     }
 
     // The formula's own parameters, from whichever registry owns it.
@@ -711,6 +732,13 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::SimPathAperture, "Path: Aperture"),
             TargetItem::new(ConfigPath::SimPathFocus, "Path: Focus"),
         ]);
+        if !sim.terrain.path.environment_map.is_empty() {
+            items.extend([
+                TargetItem::new(ConfigPath::SimPathEnvironmentRotation, "Path: Sky rotation"),
+                TargetItem::new(ConfigPath::SimPathEnvironmentHorizon, "Path: Sky horizon"),
+                TargetItem::new(ConfigPath::SimPathEnvironmentStars, "Path: Stars"),
+            ]);
+        }
     }
     items
 }
@@ -806,6 +834,16 @@ fn get_view_items(config: &FractalConfig) -> Vec<TargetItem> {
             TargetItem::new(ConfigPath::PanY, "Pan Y"),
             TargetItem::new(ConfigPath::Rotation, "Rotation"),
         ]);
+        // Post-symmetry's centre, and an axis's distance and turn, while
+        // it is on (the View panel's).
+        if config.flame.post_symmetry.ty != crate::scene::transforms::PostSymmetryType::None {
+            items.extend([
+                TargetItem::new(ConfigPath::PostSymmetryCenterX, "Symmetry Center X"),
+                TargetItem::new(ConfigPath::PostSymmetryCenterY, "Symmetry Center Y"),
+                TargetItem::new(ConfigPath::PostSymmetryDistance, "Symmetry Distance"),
+                TargetItem::new(ConfigPath::PostSymmetryRotation, "Symmetry Rotation"),
+            ]);
+        }
     }
     if config.render_mode == RenderMode::ThreeD {
         items.extend([
@@ -885,6 +923,8 @@ fn get_color_items() -> Vec<TargetItem> {
     vec![
         TargetItem::new(ConfigPath::PaletteRotation, "Palette Rotation"),
         TargetItem::new(ConfigPath::PaletteSqueeze, "Palette Squeeze"),
+        TargetItem::new(ConfigPath::PaletteSqueezeFalloff, "Palette Squeeze Falloff"),
+        TargetItem::new(ConfigPath::PaletteLogStrength, "Palette Log Redistribute"),
         TargetItem::new(ConfigPath::SpeedFactor, "Speed Blend Factor"),
         TargetItem::new(ConfigPath::BackgroundColorR, "Background Red"),
         TargetItem::new(ConfigPath::BackgroundColorG, "Background Green"),
@@ -906,6 +946,9 @@ fn get_tonemapping_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::LevelsLow, "Levels Low"),
         TargetItem::new(ConfigPath::LevelsHigh, "Levels High"),
         TargetItem::new(ConfigPath::LevelsGamma, "Levels Midtones"),
+        TargetItem::new(ConfigPath::WhiteLevel, "Highlights"),
+        TargetItem::new(ConfigPath::AlphaBlendLow, "Alpha Blend Low"),
+        TargetItem::new(ConfigPath::AlphaBlendHigh, "Alpha Blend High"),
     ]
 }
 
@@ -919,6 +962,8 @@ fn get_rendering_items(config: &FractalConfig) -> Vec<TargetItem> {
     if matches!(config.render_mode, RenderMode::TwoD | RenderMode::ThreeD) {
         items.push(TargetItem::new(ConfigPath::BlendFactor, "Blend Factor"));
         items.push(TargetItem::new(ConfigPath::SoloTransform, "Solo Transform"));
+        items.push(TargetItem::new(ConfigPath::FilterRadius, "Spatial Filter Radius"));
+        items.push(TargetItem::new(ConfigPath::FilterBlurEdges, "Spatial Filter Blur Edges"));
     }
     if config.render_mode == RenderMode::ThreeD {
         items.extend([
@@ -1357,6 +1402,24 @@ mod escape_target_tests {
         assert_eq!(zoom, Some(7.25));
         let y = super::super::track_editor::get_current_value(&escape, EditingTarget::Main, &ConfigPath::EscapeCamTargetY);
         assert_eq!(y, Some(-1.5));
+    }
+
+    /// The zoom is offered in base 10, what the View panel shows, and the
+    /// planar centre with it (2026-10-31); a solid has a camera instead.
+    #[test]
+    fn the_zoom_is_base_10_and_the_plane_offers_its_centre() {
+        let mut plane = FractalConfig::default();
+        plane.render_mode = crate::scene::transforms::RenderMode::Escape;
+        let k = keys(&plane);
+        assert!(k.contains(&"Escape.ZoomLog10".to_string()), "{k:?}");
+        assert!(!k.contains(&"Escape.ZoomLog2".to_string()), "base 2 is not shown");
+        for c in ["Escape.CenterRe", "Escape.CenterIm"] {
+            assert!(k.contains(&c.to_string()), "{c} is not offered");
+        }
+        assert!(!keys(&solid_config()).contains(&"Escape.CenterRe".to_string()), "a solid has a camera");
+        plane.escape.zoom_log2 = 10.0;
+        let z = super::super::track_editor::get_current_value(&plane, EditingTarget::Main, &ConfigPath::EscapeZoomLog10);
+        assert!((z.unwrap() - 10.0 * std::f64::consts::LOG10_2).abs() < 1e-5, "{z:?}");
     }
 
     #[test]

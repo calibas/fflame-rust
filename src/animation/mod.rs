@@ -15,6 +15,27 @@ pub use controller::AnimationController;
 pub use interpolation::{EasingFunction, Interpolation};
 pub use export::AudioExportConfig;
 
+/// **A held centre keeps its exact decimal.** A track on escape-time's
+/// centre carries an f64 (`json_to_config_value`), where the centre is an
+/// exact decimal for deep zoom. A frame whose value is the centre's own
+/// f64, to a few ulps (a spline over equal keyframes can miss it by one),
+/// leaves the decimal alone: a centre held through a deep zoom stays where
+/// it was, where rewriting it from the f64 would move it by up to half an
+/// ulp, which is whole screens at depth. Every place a track's value is
+/// applied asks this first.
+pub fn holds_exact_centre(config: &FractalConfig, path: &crate::config::ConfigPath, json: &serde_json::Value) -> bool {
+    use crate::config::ConfigPath;
+    let current = match path {
+        ConfigPath::EscapeCenterRe => &config.escape.center_re,
+        ConfigPath::EscapeCenterIm => &config.escape.center_im,
+        _ => return false,
+    };
+    match (json.as_f64(), current.trim().parse::<f64>()) {
+        (Some(v), Ok(c)) => (v - c).abs() <= 4.0 * f64::EPSILON * c.abs().max(f64::MIN_POSITIVE),
+        _ => false,
+    }
+}
+
 /// Complete animation definition with parameter tracks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Animation {
@@ -459,9 +480,40 @@ impl Animation {
         self.tracks.get_mut(index)
     }
 
-    /// Load from JSON file
+    /// Load from JSON file. A zoom track saved in base 2 comes back in
+    /// base 10 (`zoom_tracks_to_log10`).
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
+        let mut anim: Self = serde_json::from_str(json)?;
+        anim.zoom_tracks_to_log10();
+        Ok(anim)
+    }
+
+    /// **Escape-time zoom tracks in base 10**, what the user sees. Tracks
+    /// on `Escape.ZoomLog2`, from files saved before 2026-10-31 or a
+    /// script that names it, move to `Escape.ZoomLog10` with their values
+    /// scaled by log10(2): keyframes, and a signal's output range. Every
+    /// way a track's value is made is linear in those values (the
+    /// interpolations, the easings on time, a signal's fades), so the
+    /// track plays exactly as it did.
+    pub fn zoom_tracks_to_log10(&mut self) {
+        const LOG2: &str = "Escape.ZoomLog2";
+        let k = std::f64::consts::LOG10_2;
+        for track in self.tracks.iter_mut().filter(|t| t.target == LOG2) {
+            track.target = "Escape.ZoomLog10".to_string();
+            match &mut track.source {
+                TrackSource::Keyframes { keyframes } => {
+                    for kf in keyframes {
+                        if let Some(v) = kf.value.as_f64() {
+                            kf.value = serde_json::json!(v * k);
+                        }
+                    }
+                }
+                TrackSource::Signal { min_output, max_output, .. } => {
+                    *min_output *= k;
+                    *max_output *= k;
+                }
+            }
+        }
     }
 
     /// Save to JSON string
@@ -860,6 +912,64 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A zoom track saved in base 2 loads in base 10, what the track
+    /// editor shows (2026-10-31), and plays the same zoom: keyframes and a
+    /// signal's range alike.
+    #[test]
+    fn a_log2_zoom_track_loads_as_log10_and_plays_the_same() {
+        let k = std::f64::consts::LOG10_2;
+        let kf = |time: f64, v: f64| Keyframe { time, value: serde_json::json!(v), easing: EasingFunction::Linear };
+        let mut anim = Animation::new("dive".into(), 4.0);
+        anim.add_track(Track::new(
+            "Escape.ZoomLog2".into(),
+            TrackSource::Keyframes { keyframes: vec![kf(0.0, 2.0), kf(4.0, 12.0)] },
+        ));
+        anim.add_track(Track::new(
+            "Escape.ZoomLog2".into(),
+            TrackSource::Signal {
+                signal_name: "s".into(),
+                min_output: 1.0,
+                max_output: 9.0,
+                smoothing: 0.0,
+                start_time: 0.0,
+                end_time: 0.0,
+                fade_in: 0.0,
+                fade_in_easing: EasingFunction::Linear,
+                fade_out: 0.0,
+                fade_out_easing: EasingFunction::Linear,
+            },
+        ));
+        let loaded = Animation::from_json(&anim.to_json().unwrap()).unwrap();
+        assert!(loaded.tracks.iter().all(|t| t.target == "Escape.ZoomLog10"));
+        let TrackSource::Keyframes { keyframes } = &loaded.tracks[0].source else { panic!("keyframes") };
+        let values: Vec<f64> = keyframes.iter().map(|k| k.value.as_f64().unwrap()).collect();
+        assert_eq!(values, vec![2.0 * k, 12.0 * k]);
+        let TrackSource::Signal { min_output, max_output, .. } = &loaded.tracks[1].source else { panic!("signal") };
+        assert_eq!((*min_output, *max_output), (k, 9.0 * k));
+
+        // The zoom it plays is the base-2 one it played before.
+        let mut c = FractalConfig::default();
+        export::apply_animation_values(&mut c, &[(EditingTarget::Main, "Escape.ZoomLog10".into(), serde_json::json!(values[1]))]);
+        assert!((c.escape.zoom_log2 - 12.0).abs() < 1e-4, "{}", c.escape.zoom_log2);
+    }
+
+    /// A track on the planar centre carries an f64; a frame whose value
+    /// is the centre's own f64 leaves the exact decimal alone, so a held
+    /// centre survives a deep zoom, and a moving one is the track's value.
+    #[test]
+    fn a_held_centre_keeps_its_exact_decimal() {
+        let deep = "-0.743643887037158704752191506114774";
+        let mut c = FractalConfig::default();
+        c.escape.center_re = deep.into();
+        let held = serde_json::json!(deep.parse::<f64>().unwrap());
+        assert!(holds_exact_centre(&c, &crate::config::ConfigPath::EscapeCenterRe, &held));
+        export::apply_animation_values(&mut c, &[(EditingTarget::Main, "Escape.CenterRe".into(), held)]);
+        assert_eq!(c.escape.center_re, deep);
+        export::apply_animation_values(&mut c, &[(EditingTarget::Main, "Escape.CenterRe".into(), serde_json::json!(-0.5))]);
+        assert_eq!(c.escape.center_re, "-0.5");
+        assert!(!holds_exact_centre(&c, &crate::config::ConfigPath::EscapeZoomLog10, &serde_json::json!(-0.5)));
+    }
 
     #[test]
     fn test_base_config_serializes_with_version_and_migrates() {

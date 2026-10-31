@@ -348,15 +348,25 @@ pub enum ConfigPath {
     EscapeJuliaRe,
     /// Julia seed, imaginary part.
     EscapeJuliaIm,
-    /// View center, exact decimal string (deep-zoom payload — undoable,
-    /// deliberately NOT animatable; see the plan's open questions).
+    /// View center, exact decimal string (deep-zoom payload). Undoable,
+    /// and animatable since 2026-10-31 through an f64 track
+    /// (`json_to_config_value`): about 16 digits, so a moving centre is
+    /// only as deep as an f64, and a held one keeps its exact decimal
+    /// (`animation::export::holds_exact_centre`).
     EscapeCenterRe,
     EscapeCenterIm,
     /// Zoom exponent (log2). Stored f64; travels as ConfigValue::Float,
     /// whose f32 mantissa (~6e-5 granularity at exponent 1000) is far
     /// below anything a slider or track produces. Phase 4 revisits if a
-    /// deep dive ever needs finer undo steps.
+    /// deep dive ever needs finer undo steps. What the panels and the
+    /// gestures write; an animation track's is [`Self::EscapeZoomLog10`].
     EscapeZoomLog2,
+    /// The zoom as a base-10 exponent: what the user sees (the View
+    /// panel's zoom, the animation target). Converted to the stored base 2
+    /// on the way in (`EscapeConfig::log10_to_log2`). Tracks saved on
+    /// `Escape.ZoomLog2` before it are converted to it when an animation
+    /// loads (`Animation::zoom_tracks_to_log10`).
+    EscapeZoomLog10,
     /// The solid camera's target, one axis each, as decimal strings —
     /// the precision a deep 3D zoom needs (D8).
     EscapeCamTargetX,
@@ -1180,6 +1190,7 @@ impl Display for ConfigPath {
             ConfigPath::EscapeCenterRe => write!(f, "Escape Center Re"),
             ConfigPath::EscapeCenterIm => write!(f, "Escape Center Im"),
             ConfigPath::EscapeZoomLog2 => write!(f, "Escape Zoom"),
+            ConfigPath::EscapeZoomLog10 => write!(f, "Escape Zoom (log10)"),
             ConfigPath::EscapeCamTargetX => write!(f, "Camera Target X"),
             ConfigPath::EscapeCamTargetY => write!(f, "Camera Target Y"),
             ConfigPath::EscapeCamTargetZ => write!(f, "Camera Target Z"),
@@ -1616,7 +1627,7 @@ impl ConfigPath {
             ConfigPath::EscapeJuliaIm => I18nKey::simple("history.param.escape_julia_im"),
             ConfigPath::EscapeCenterRe => I18nKey::simple("history.param.escape_center_re"),
             ConfigPath::EscapeCenterIm => I18nKey::simple("history.param.escape_center_im"),
-            ConfigPath::EscapeZoomLog2 => I18nKey::simple("history.param.escape_zoom"),
+            ConfigPath::EscapeZoomLog2 | ConfigPath::EscapeZoomLog10 => I18nKey::simple("history.param.escape_zoom"),
             ConfigPath::EscapeCamTargetX => {
                 I18nKey::simple("history.param.escape_cam_target_x")
             }
@@ -3219,6 +3230,7 @@ impl ConfigPath {
             | ConfigPath::EscapeCenterRe
             | ConfigPath::EscapeCenterIm
             | ConfigPath::EscapeZoomLog2
+            | ConfigPath::EscapeZoomLog10
             | ConfigPath::EscapeCamTargetX
             | ConfigPath::EscapeCamTargetY
             | ConfigPath::EscapeCamTargetZ
@@ -3705,6 +3717,7 @@ impl ConfigPath {
             ConfigPath::EscapeCenterRe => "Escape.CenterRe".to_string(),
             ConfigPath::EscapeCenterIm => "Escape.CenterIm".to_string(),
             ConfigPath::EscapeZoomLog2 => "Escape.ZoomLog2".to_string(),
+            ConfigPath::EscapeZoomLog10 => "Escape.ZoomLog10".to_string(),
             ConfigPath::EscapeCamTargetX => "Escape.CamTargetX".to_string(),
             ConfigPath::EscapeCamTargetY => "Escape.CamTargetY".to_string(),
             ConfigPath::EscapeCamTargetZ => "Escape.CamTargetZ".to_string(),
@@ -4140,6 +4153,7 @@ impl ConfigPath {
                 ["CenterRe"] => return Some(ConfigPath::EscapeCenterRe),
                 ["CenterIm"] => return Some(ConfigPath::EscapeCenterIm),
                 ["ZoomLog2"] => return Some(ConfigPath::EscapeZoomLog2),
+                ["ZoomLog10"] => return Some(ConfigPath::EscapeZoomLog10),
                 ["CamTargetX"] => return Some(ConfigPath::EscapeCamTargetX),
                 ["CamTargetY"] => return Some(ConfigPath::EscapeCamTargetY),
                 ["CamTargetZ"] => return Some(ConfigPath::EscapeCamTargetZ),
@@ -5039,6 +5053,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::EscapeJuliaRe
         | ConfigPath::EscapeJuliaIm
         | ConfigPath::EscapeZoomLog2
+        | ConfigPath::EscapeZoomLog10
         | ConfigPath::EscapeRotation
         | ConfigPath::EscapeBailout
         | ConfigPath::EscapeDampingRe
@@ -5239,9 +5254,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // parameters can, and do. So with the transformations (C4).
         | ConfigPath::EscapeLens
         | ConfigPath::EscapeTransforms => None,
-        // Selectors and the deep-zoom center strings are structural /
-        // exact — not animatable (centers deliberately: see the plan's
-        // open questions on center-path animation).
+        // Selectors are structural, not animatable.
         ConfigPath::EscapeFormula
         | ConfigPath::EscapeCustomFormula
         | ConfigPath::EscapeCustomColoring
@@ -5250,26 +5263,26 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend
         | ConfigPath::EscapeReferencePeriod
-        | ConfigPath::EscapeBiomorph
-        | ConfigPath::EscapeCenterRe
-        | ConfigPath::EscapeCenterIm => None,
+        | ConfigPath::EscapeBiomorph => None,
 
         // The camera's target is decimal STRINGS, like the planar
         // centre, and for the same reason: a deep zoom needs more
         // digits than a float holds. A track carries f64 anyway, so
         // it is offered and the string is rebuilt from the number.
         //
-        // The planar centre is NOT offered alongside it, and the
-        // difference is real rather than an oversight. A planar zoom
-        // runs past 2^100, where f64 has nothing like the digits the
-        // centre needs; a SOLID orbits an attractor of order one, so
-        // f64 is far more precision than the picture can show. The
-        // cost is a ceiling on how deep an animated solid camera can
-        // sit, and that ceiling is far beyond where a solid is
-        // legible at all.
+        // The planar centre too, since 2026-10-31 (the user asked for
+        // it). A planar zoom runs past 2^100, where f64 has nothing like
+        // the digits the centre needs, so a MOVING centre is only as
+        // deep as an f64 (about 16 digits; the target's tooltip says
+        // so), and a frame whose value is the centre's own f64 leaves
+        // the exact decimal alone (`holds_exact_centre`), so a held
+        // centre survives any zoom. A solid orbits an attractor of order
+        // one, where f64 is far more than the picture can show.
         ConfigPath::EscapeCamTargetX
         | ConfigPath::EscapeCamTargetY
-        | ConfigPath::EscapeCamTargetZ => json
+        | ConfigPath::EscapeCamTargetZ
+        | ConfigPath::EscapeCenterRe
+        | ConfigPath::EscapeCenterIm => json
             .as_f64()
             .filter(|f| f.is_finite())
             .map(|f| ConfigValue::String(format!("{f:?}"))),

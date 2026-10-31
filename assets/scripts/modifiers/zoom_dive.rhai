@@ -13,12 +13,12 @@
 //
 // ESCAPE-TIME FRACTALS ZOOM ON A DIFFERENT SETTING, and the difference
 // is not just the name. A flame's zoom is a multiplier; an escape
-// view's Escape.ZoomLog2 is that multiplier's EXPONENT — zoom 30
-// means 2^30. Equal ratio per unit time is therefore equal INCREMENT
-// per unit time here, so this leg takes a LINEAR track and adds
-// log2(factor) rather than multiplying. Running the flame's
-// exponential curve over an exponent would accelerate absurdly: a
-// 50x dive from zoom 20 would end at 2^1000.
+// view's Escape.ZoomLog10 is that multiplier's EXPONENT — zoom 9
+// means 10^9, as the View panel shows it. Equal ratio per unit time is
+// therefore equal INCREMENT per unit time here, so this leg takes a
+// LINEAR track and adds log10(factor) rather than multiplying. Running
+// the flame's exponential curve over an exponent would accelerate
+// absurdly: a 50x dive from zoom 6 would end at 10^300.
 //
 // Run it, then open the Animation panel and press play (or Space).
 
@@ -45,18 +45,20 @@ let start = 1.0;
 let target = 1.0;
 
 if is_escape {
-    track = "Escape.ZoomLog2";
+    track = "Escape.ZoomLog10";
     // Linear, because the value is already an exponent — see the
     // header.
     curve = "linear";
-    start = escape.zoom;
-    // log2(factor): Rhai has ln, so divide by ln 2.
-    let octaves = ln(factor) / ln(2.0);
-    target = if direction == "Dive in" { start + octaves } else { start - octaves };
-    // The view stops meaning anything below about 2^-8 (the whole set
-    // is a speck by then), and the app clamps there anyway. Clamping
-    // HERE keeps the loop closing on the value it started from.
-    if target < -8.0 { target = -8.0; }
+    // `escape.zoom` is the engine's base 2; the track is base 10.
+    start = escape.zoom * ln(2.0) / ln(10.0);
+    // log10(factor): Rhai has ln, so divide by ln 10.
+    let decades = ln(factor) / ln(10.0);
+    target = if direction == "Dive in" { start + decades } else { start - decades };
+    // The view stops meaning anything below about 10^-2.4 (2^-8: the
+    // whole set is a speck by then), and the app clamps there anyway.
+    // Clamping HERE keeps the loop closing on the value it started from.
+    let floor = -8.0 * ln(2.0) / ln(10.0);
+    if target < floor { target = floor; }
 } else {
     // Start from the zoom the flame already has, so frame one is the
     // image you are looking at. (Absent from the config means it's at
@@ -81,8 +83,8 @@ if and_back {
     anim.key(track, seconds, start, "linear");
 }
 
-print((if is_escape { "escape zoom 2^" } else { "zoom " }) + start
-    + " -> " + (if is_escape { "2^" } else { "" }) + target
+print((if is_escape { "escape zoom 10^" } else { "zoom " }) + start
+    + " -> " + (if is_escape { "10^" } else { "" }) + target
     + " over " + (if and_back { leg } else { seconds }) + "s"
     + if and_back { ", then back — loops seamlessly" } else { "" });
 print("open the Animation panel to play it (Space), or export a video");

@@ -672,7 +672,7 @@ fn list_details(config: &FractalConfig) -> Vec<String> {
         // The escape zoom is a log2 exponent that deep zooms take past
         // anything a plain number can show, so it is shown as one.
         RenderMode::Escape => vec![
-            t!("fractal_gallery.zoom", value = format!("2^{:.2}", config.escape.zoom_log2)).to_string(),
+            t!("fractal_gallery.zoom", value = format!("10^{:.2}", config.escape.zoom_log10())).to_string(),
             t!("fractal_gallery.max_iterations", value = config.escape.max_iter).to_string(),
         ],
         RenderMode::Simulation => vec![

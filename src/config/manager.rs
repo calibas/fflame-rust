@@ -1967,6 +1967,7 @@ impl ConfigManager {
             // f32 view of an f64 field — see the ConfigPath doc for why
             // the precision ceiling is acceptable until phase 4.
             ConfigPath::EscapeZoomLog2 => Ok((config.escape.zoom_log2 as f32).into()),
+            ConfigPath::EscapeZoomLog10 => Ok((config.escape.zoom_log10() as f32).into()),
             ConfigPath::EscapeRotation => Ok(config.escape.rotation.into()),
             ConfigPath::EscapeMaxIter => Ok(ConfigValue::UInt(config.escape.max_iter)),
 
@@ -3251,11 +3252,15 @@ impl ConfigManager {
                 let v: f32 = value.try_into()?;
                 self.current.escape.cam_fov = v.clamp(0.05, 3.0);
             }
-            ConfigPath::EscapeZoomLog2 => {
+            ConfigPath::EscapeZoomLog2 | ConfigPath::EscapeZoomLog10 => {
                 let v: f32 = value.try_into()?;
                 // Same travel range as the input paths; NaN from a
                 // wild animation signal must not poison the view.
-                let v = v as f64;
+                let v = if matches!(path, ConfigPath::EscapeZoomLog10) {
+                    crate::config::escape::EscapeConfig::log10_to_log2(v as f64)
+                } else {
+                    v as f64
+                };
                 self.current.escape.zoom_log2 =
                     if v.is_finite() { v.clamp(-8.0, 100_000_000.0) } else { 0.0 };
             }

@@ -1496,6 +1496,10 @@ pub fn get_current_value(
                 crate::escape::ifs::solid_analysis(config, &registry).map(|i| i.ball.centre[k])
             }
         }
+        // The planar centre: an exact decimal, read as the f64 a track
+        // carries (`animation::holds_exact_centre`).
+        ConfigPath::EscapeCenterRe => config.escape.center_re.trim().parse::<f64>().ok(),
+        ConfigPath::EscapeCenterIm => config.escape.center_im.trim().parse::<f64>().ok(),
         _ if path.to_string_key().starts_with("System.") => None,
         _ => crate::config::ConfigManager::get_value_from_config(config, path, flame_target)
             .ok()

@@ -277,8 +277,9 @@ an inactive formula are kept, as `variation_params` keeps them.
 | 3D | `terrain` (`TerrainConfig`), `path` (`PathTraceConfig`) |
 
 The centre is a pair of strings because no float the config could hold
-reaches a deep-zoom centre; the zoom is a log2 exponent so animating it
-is an ordinary float track. `bailout` has two defaults: a new config
+reaches a deep-zoom centre (an animation track carries it as an f64:
+[ANIMATION.md](ANIMATION.md)); the zoom is a log2 exponent, shown and
+animated as log10 (`zoom_log10`, the track `Escape.ZoomLog10`). `bailout` has two defaults: a new config
 gets 1e4, while a file without the key loads as 4, the value it was
 saved under. What the fields do is in [ESCAPE.md](ESCAPE.md) and
 [TERRAIN.md](TERRAIN.md).
