@@ -823,7 +823,7 @@ pub struct SimGovernorUi {
     pub fit: Option<f32>,
 }
 
-/// An active simulation's hold on its grid (docs/projects/quality-governor.md,
+/// An active simulation's hold on its grid (docs/archive/projects/quality-governor.md,
 /// D7): while a run is active, a resize never changes its field, so the
 /// viewport letterboxes to the grid's shape instead, once its size is no
 /// longer the one the run began at. Set by the app each frame

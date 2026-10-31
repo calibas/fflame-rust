@@ -674,7 +674,7 @@ pub const MAX_KERNEL_RADIUS: u32 = 32;
 /// invisible in the middle of the grid and wrong only at the edges.
 /// What a cell's state is: how a live field is carried into a grid of
 /// another size when a bound grid's scale changes (the field resampler,
-/// `SimRenderer::request_resample`; docs/projects/quality-governor.md).
+/// `SimRenderer::request_resample`; docs/archive/projects/quality-governor.md).
 /// Every model declares one; a config with several layers takes the most
 /// careful of theirs (`StateKind::of_config`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

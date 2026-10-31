@@ -624,7 +624,7 @@ The governor resets its timing when iteration stops. The same switch,
 the Rendering menu's Quality Governor, also sets a flame's render scale
 from the samples a frame plots, and governs escape-time, terrains and
 simulations (`src/app/governor.rs`;
-[quality-governor.md](../projects/quality-governor.md)).
+[quality-governor.md](../archive/projects/quality-governor.md)).
 
 ### Configuration to GPU
 

@@ -1,4 +1,4 @@
-//! **The viewport's upscale** (docs/projects/quality-governor.md, render
+//! **The viewport's upscale** (docs/archive/projects/quality-governor.md, render
 //! scale): the picture rendered below the display's size -- at a render
 //! scale, or at logical points on a high-DPI screen -- drawn at the
 //! display's physical size for egui to show 1:1.
@@ -470,7 +470,7 @@ impl Upscale {
         dispatch(device, encoder, layout, simple, params, src, dst, (w, h), "Viewport Upscale");
     }
 
-    /// **An export frame drawn up** (docs/projects/quality-governor.md,
+    /// **An export frame drawn up** (docs/archive/projects/quality-governor.md,
     /// *Exports*): `rgba`, a picture read back at `src_size` -- an export
     /// rendered at a render scale -- drawn at `dst_size` by `filter`, the
     /// viewport's pass, and read back. The same pass for every frame, so a

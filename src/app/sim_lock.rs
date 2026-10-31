@@ -1,4 +1,4 @@
-//! **An active simulation keeps its grid** (docs/projects/quality-governor.md,
+//! **An active simulation keeps its grid** (docs/archive/projects/quality-governor.md,
 //! D7). A bound grid's cells follow the viewport, and a change of cells
 //! reseeds the run, so a resize or full screen used to restart a live
 //! simulation. While a run is active (the transport running, or the

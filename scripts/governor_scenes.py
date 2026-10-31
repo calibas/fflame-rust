@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the quality governor's reference animations (docs/projects/quality-governor.md, phase 1).
+"""Write the quality governor's reference animations (docs/archive/projects/quality-governor.md, phase 1).
 
     python scripts/governor_scenes.py [OUT_DIR]     # default output/governor/scenes
 

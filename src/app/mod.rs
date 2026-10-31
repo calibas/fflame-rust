@@ -2673,7 +2673,7 @@ impl App {
                 // (a deep zoom, a solid) keeps the last settled one up
                 // until it does, as a motion-blurred frame does: shown
                 // chunk by chunk, playback was a part-drawn picture every
-                // frame (docs/projects/quality-governor.md, phase 1).
+                // frame (docs/archive/projects/quality-governor.md, phase 1).
                 let hold = self.animation_controller.is_playing() && !solid_traced;
                 if motion_blur::blurring(&self.animation_controller) && !solid_traced {
                     if self.escape_dirty && self.escape_motion.is_none() {

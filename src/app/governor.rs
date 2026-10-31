@@ -1,4 +1,4 @@
-//! **The quality governor** (docs/projects/quality-governor.md, order of
+//! **The quality governor** (docs/archive/projects/quality-governor.md, order of
 //! work item 5): one target frame rate, held while the user interacts or
 //! an animation plays, by giving up fidelity on the rungs of each engine's
 //! ladder -- never the look, and never in a still or an export.

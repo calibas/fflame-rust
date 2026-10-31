@@ -1,4 +1,4 @@
-//! **Render scale** (docs/projects/quality-governor.md): the size the
+//! **Render scale** (docs/archive/projects/quality-governor.md): the size the
 //! viewport's picture renders at, and the size it is shown at.
 //!
 //! The viewport panel reports its size in egui's logical points

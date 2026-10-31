@@ -379,7 +379,7 @@ pub enum Control {
     /// The viewport's render scale and upscaler (`renderer::upscale`).
     /// Not a simulation's: its grid is the content, a bound grid's cells
     /// follow the viewport's size, and its grid scale is the render scale
-    /// (docs/projects/quality-governor.md).
+    /// (docs/archive/projects/quality-governor.md).
     RenderScale,
     /// The video export's upscaler (`ExportRung`): a flame or escape-time
     /// frame rendered below the video's size is drawn up by it. A

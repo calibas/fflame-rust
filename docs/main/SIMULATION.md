@@ -655,7 +655,7 @@ keeps the hold: the grid is the run's at the new scale, the same shape,
 and the field is carried into it.
 
 **The quality governor** (`src/app/governor.rs`, `SimGovernor`;
-[quality-governor.md](../projects/quality-governor.md)). While a bound
+[quality-governor.md](../archive/projects/quality-governor.md)). While a bound
 grid's run is active and the Rendering menu's Quality Governor is on, the
 run's scale is picked when it starts, from the measured cost of a step,
 as the best of the config's and 75, 50, 37.5, 25, 18.75 or 12.5% at which

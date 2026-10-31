@@ -379,7 +379,7 @@ previous-run columns show "—" until two runs with the new names exist.
 
 ### Frame cost in the app, and the governor's calibration
 
-For the quality governor ([quality-governor.md](projects/quality-governor.md)).
+For the quality governor ([quality-governor.md](archive/projects/quality-governor.md)).
 All of these write to `output/governor/`; run them with the machine
 otherwise idle, since the times are real.
 

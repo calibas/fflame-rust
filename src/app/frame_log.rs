@@ -1,4 +1,4 @@
-//! **The frame log** (docs/projects/quality-governor.md, phase 1): a
+//! **The frame log** (docs/archive/projects/quality-governor.md, phase 1): a
 //! row a frame of what the frame cost and what it rendered, for
 //! measuring the governor's rungs in the running app.
 //!

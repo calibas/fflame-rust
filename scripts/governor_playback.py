@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Play the quality governor's reference animations in the app, logging every frame
-(docs/projects/quality-governor.md, phase 1).
+(docs/archive/projects/quality-governor.md, phase 1).
 
     python scripts/governor_scenes.py                   # once: write the scenes
     python scripts/governor_playback.py [--seconds N] [--only a,b] [--warm] [--tag T] [--render-scale S]

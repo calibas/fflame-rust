@@ -1,4 +1,4 @@
-//! **The governor's calibration** (docs/projects/quality-governor.md,
+//! **The governor's calibration** (docs/archive/projects/quality-governor.md,
 //! phase 1): each scene rendered at each rung of its ladder, timed, and
 //! written for `scripts/frame_metrics.py loss` to compare against the
 //! scene's reference.
@@ -232,7 +232,7 @@ fn governor_calibration() {
     }
 }
 
-/// **The upscalers compared** (docs/projects/quality-governor.md, order of
+/// **The upscalers compared** (docs/archive/projects/quality-governor.md, order of
 /// work item 4): every rung the calibration rendered below full size,
 /// drawn up to its reference's size by the viewport's own pass
 /// (`renderer::upscale`) with each filter, as the viewport would show it,
@@ -332,7 +332,7 @@ fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture) -
     (0..h).flat_map(|y| bytes[(y * row) as usize..(y * row + w * 4) as usize].to_vec()).collect()
 }
 
-/// **A scale change's cost** (docs/projects/quality-governor.md, phase 1
+/// **A scale change's cost** (docs/archive/projects/quality-governor.md, phase 1
 /// item 5): the governor changes the render size on a rung change, which
 /// reallocates each engine's per-pixel buffers as a resize does. Timed here
 /// between 1920x1080 and 960x540, wall clock to the GPU's finish: the

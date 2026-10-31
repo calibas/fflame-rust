@@ -1,5 +1,5 @@
 // upscale_fsr.wgsl -- AMD FidelityFX Super Resolution 1.0 (FSR 1) for the
-// viewport's upscale (src/renderer/upscale.rs, docs/projects/quality-governor.md):
+// viewport's upscale (src/renderer/upscale.rs, docs/archive/projects/quality-governor.md):
 // EASU, the edge-adaptive spatial upsampling, then RCAS, the robust
 // contrast-adaptive sharpening, as two passes.
 //
