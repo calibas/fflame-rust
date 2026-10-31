@@ -2895,7 +2895,7 @@ impl SimRenderer {
     /// pair (seed, step_index) is the state's identity, and a reseed
     /// starts a new run.
     /// Carry a field kept by `resize` into the new grid (the field
-    /// resampler; docs/projects/quality-governor.md): every slice, each
+    /// resampler; docs/archive/projects/quality-governor.md): every slice, each
     /// cell from where its centre falls in the old grid. Continuous state
     /// by Catmull-Rom, held within its 2x2 neighbourhood's range so it
     /// never overshoots; discrete state from the nearest cell. The run

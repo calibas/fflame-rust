@@ -184,7 +184,7 @@ pub struct SystemSettings {
     #[serde(default)]
     pub viewport_letterbox: bool,
 
-    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// The viewport's render scale (docs/archive/projects/quality-governor.md):
     /// the picture renders at this share of the display's size each side,
     /// and `upscaler` draws it up to the display. 1 is full size. Not in
     /// Simulation mode, where the grid's scale is the render scale. The
@@ -204,7 +204,7 @@ pub struct SystemSettings {
     pub render_physical_pixels: bool,
 
     /// The frame rate the quality governor holds while the user interacts
-    /// or an animation plays (docs/projects/quality-governor.md, D2).
+    /// or an animation plays (docs/archive/projects/quality-governor.md, D2).
     #[serde(default)]
     pub target_rate: TargetRate,
 

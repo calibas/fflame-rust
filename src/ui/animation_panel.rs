@@ -935,7 +935,7 @@ fn render_export_settings(
         super::vkb_sync_opts(ui, &r, &format!("{}", settings.max_iterations), "integer");
     });
 
-    // ── Speed: the same for every frame (docs/projects/quality-governor.md,
+    // ── Speed: the same for every frame (docs/archive/projects/quality-governor.md,
     // *Exports*) ──
     ui.separator();
     ui.collapsing(t!("animation_panel.speed_section"), |ui| {

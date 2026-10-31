@@ -159,7 +159,7 @@ pub struct FrameTiming {
     pub engine_ms: f64,
 }
 
-/// **A whole frame timed on the GPU** (docs/projects/quality-governor.md,
+/// **A whole frame timed on the GPU** (docs/archive/projects/quality-governor.md,
 /// phase 1), where [`PassTimer`] times one pass. Three marks: the frame's
 /// start, the UI painted, the engine's work done. Each mark is an empty
 /// compute pass with an end-of-pass timestamp, which lands once all the

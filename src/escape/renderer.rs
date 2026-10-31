@@ -3301,7 +3301,7 @@ impl EscapeRenderer {
     /// Keep the settled picture as the one the viewport shows
     /// ([`Self::presented_view`]) while the next renders in chunks over
     /// several frames: in playback, the chunks were each shown, a
-    /// part-drawn picture every frame (docs/projects/quality-governor.md,
+    /// part-drawn picture every frame (docs/archive/projects/quality-governor.md,
     /// phase 1). Not a path-traced solid's, which is its own picture.
     pub fn present_output(&mut self, device: &Device, encoder: &mut CommandEncoder) {
         let src = self.final_texture.as_ref().unwrap_or(&self.output_texture);
@@ -8297,7 +8297,7 @@ fn downsample_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         self.supersample as f32 * self.pixel_scale
     }
 
-    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// The viewport's render scale (docs/archive/projects/quality-governor.md):
     /// render pixels per logical viewport point, before supersampling. 1
     /// for every other render. True when it changed, and the picture with
     /// it.

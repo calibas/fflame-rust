@@ -622,7 +622,7 @@ large one that never went deep was refused
 ### Speed: render scale, upscaler, antialiasing
 
 An export's speed-ups (`ExportRung`; the quality governor's
-[*Exports*](../projects/quality-governor.md), D3): chosen by the user in
+[*Exports*](../archive/projects/quality-governor.md), D3): chosen by the user in
 the dialog's Speed section or by the CLI's flags, and the same for every
 frame, so a video's frames never depend on the machine's load. The
 default renders as before.

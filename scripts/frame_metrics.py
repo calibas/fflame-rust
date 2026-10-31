@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measurements for the quality governor (docs/projects/quality-governor.md, phase 1).
+"""Measurements for the quality governor (docs/archive/projects/quality-governor.md, phase 1).
 
     python scripts/frame_metrics.py loss [DIR]       # default output/governor
     python scripts/frame_metrics.py upscalers [DIR]  # the viewport's upscalers

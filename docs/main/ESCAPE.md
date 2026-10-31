@@ -1785,7 +1785,7 @@ Coverage is averaged once, as straight alpha.
 **While an animation plays, or a 2D picture is being edited,** with the
 frame governor on, the viewport's supersampling and render scale are the
 quality governor's (`src/app/governor.rs`;
-[quality-governor.md](../projects/quality-governor.md)): a ladder from the
+[quality-governor.md](../archive/projects/quality-governor.md)): a ladder from the
 setting down (supersampling to 2x, then 75% and 50% scale, then 1x; a
 solid 2x, 1x, then 75%, 50%, 25%), a rung chosen from each picture's
 measured GPU time against the Target Frame Rate. Stills, exports and video

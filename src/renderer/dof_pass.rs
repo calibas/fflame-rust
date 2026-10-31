@@ -190,7 +190,7 @@ impl DofPass {
         }
     }
 
-    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// The viewport's render scale (docs/archive/projects/quality-governor.md):
     /// render pixels per logical point. The circle of confusion is
     /// relative to the picture already; only its cap is in pixels.
     pub fn set_pixel_scale(&mut self, s: f32) {

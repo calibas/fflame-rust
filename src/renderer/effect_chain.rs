@@ -447,7 +447,7 @@ impl EffectChainRunner {
     }
 
     /// Resize textures if dimensions changed
-    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// The viewport's render scale (docs/archive/projects/quality-governor.md):
     /// render pixels per logical point, which the effects' sizes in
     /// pixels are measured in (`EffectParams::pixel_scale`).
     pub fn set_pixel_scale(&mut self, s: f32) {

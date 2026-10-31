@@ -1913,7 +1913,7 @@ impl FlameRenderer {
         self.buffers.current_accumulation_view()
     }
 
-    /// The viewport's render scale (docs/projects/quality-governor.md):
+    /// The viewport's render scale (docs/archive/projects/quality-governor.md):
     /// render pixels per logical point, for the parameters measured in
     /// pixels. A change re-runs the DoF on the next frame.
     pub fn set_pixel_scale(&mut self, s: f32) {

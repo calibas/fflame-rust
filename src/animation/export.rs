@@ -469,7 +469,7 @@ impl AudioExportConfig {
     }
 }
 
-/// **An export's speed-ups** (docs/projects/quality-governor.md, *Exports*;
+/// **An export's speed-ups** (docs/archive/projects/quality-governor.md, *Exports*;
 /// D3: the user's choice, not the machine's): the same for every frame, so
 /// a video's frames never depend on the load. The default renders as
 /// before. A flame's samples are the export's own setting already (its

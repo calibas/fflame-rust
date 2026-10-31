@@ -12,7 +12,7 @@ which rewrites the references in code comments too).
 
 | Doc | Status |
 |---|---|
-| [quality-governor.md](quality-governor.md) | Planned 2026-10-29; phase 1 measured the same day (escape drops scale before supersampling; flames only below ~2 samples a pixel; two playback faults found): one governor holding a user-set target frame rate by giving up fidelity (render scale with a bicubic or FSR upscale, supersampling, samples), in playback, while interacting, and as fixed options for exports; a bound simulation grid's field down to 12.5% for real-time playback. Measurement first; an active simulation letterboxed to its grid, so a resize no longer restarts it. All seven decisions taken. |
+| [terrain-speed.md](terrain-speed.md) | A rough outline (2026-10-31), not started: a deep escape terrain's section renders (single steps of 100-360 ms), which the quality governor's render scale cannot reach; the lit tier's antialiasing redrawn and thrown away while sections arrive (suspected); candidates from one lit picture a ground to a section budget the governor sets. |
 | [camera-lens-everywhere.md](camera-lens-everywhere.md) | Planned 2026-10-10, not started: the camera lens in every mode. Three decisions first. |
 | [hyperbolic-camera-extras.md](hyperbolic-camera-extras.md) | The hyperbolic camera's roadmap: its first half shipped in `hyperbolic_camera`; pathing and navigation through the animation system is next. |
 | [v0.6.0-release.md](v0.6.0-release.md) | The v0.6.0 release's TODOs, tracked while changes still land: update the API, deploy the latest modules, cross-platform testing. |

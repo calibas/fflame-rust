@@ -75,7 +75,7 @@ pub struct RenderJob<'a> {
     /// pixels (filter radii, effect radii, escape-time's relief): 1 -- the
     /// default -- for a render at its output's size, and an export's render
     /// scale for one rendered smaller and drawn up after
-    /// (docs/projects/quality-governor.md, *Exports*).
+    /// (docs/archive/projects/quality-governor.md, *Exports*).
     pub pixel_scale: f32,
 
     /// The frame's motion-blur moments (docs/archive/projects/motion-blur.md):
@@ -2020,7 +2020,7 @@ mod motion_tests {
 
     /// Playback's settled picture (`present_output`) stays as it settled
     /// while the next renders, so the viewport shows it and not the next
-    /// one's chunks (docs/projects/quality-governor.md, phase 1).
+    /// one's chunks (docs/archive/projects/quality-governor.md, phase 1).
     #[test]
     fn a_settled_picture_stays_while_the_next_renders() {
         let Some((device, queue)) = device() else {
