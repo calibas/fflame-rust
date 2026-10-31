@@ -104,6 +104,7 @@ body, and:
 | `diffusion` | which parameters are diffusion rates, for the dt ceiling. |
 | `dt_bound` | a bound the model derives itself, overriding the diffusion one (the fourth-order PDEs). |
 | `agents` | an `AgentDef` for the models with a moving population (physarum). |
+| `state` | a `StateKind`: how a live field is carried into a grid of another size when a bound grid's scale changes (the field resampler). `Continuous` is interpolated (Catmull-Rom, held to each neighbourhood's range); `Discrete`, for any model with a discrete channel (states, spins, grains, occupancy), takes the nearest cell, which is exact; `Agents` is not carried and reseeds. A test holds `Agents` to the models with agents. |
 | `kernel` | a function building a `SimKernel` lookup table, for the large-radius convolution models (Lenia, SmoothLife, McCabe). |
 | `wgsl_seed` | `fn sim_seed(inside, noise, p)`: the initial state of a cell, given the init shape's mask. |
 | `default_steps`, `default_dt` | what selecting the model sets `steps` and `dt` to (its parameters are cleared to their defaults too). |
@@ -319,7 +320,7 @@ batch freely while a still stays reproducible.
 | --- | --- |
 | the run | `model`, `model_params`, `seed`, `init` (`Noise`, `Blob`, `Blobs`, `Ring`, `Line`, `Center`, `BrokenWave`), `steps`, `steps_per_frame`, `dt`, `boundary` |
 | the grid | `grid` (`Fixed { width, height }` or `Viewport { scale }`) |
-| the resolve | `upscale` (`Nearest`/`Bilinear`/`Bicubic`), `downscale` (`Box`/`Nearest`), `fit` (`Letterbox`/`Cover`) |
+| the resolve | `upscale` (`Nearest`/`Bilinear`/`Bicubic`/`Fsr`), `downscale` (`Box`/`Nearest`), `fit` (`Letterbox`/`Cover`) |
 | the view | `view`: `center_x`, `center_y` (fractions of the grid), `zoom` (over the fit), `rotation`, `tile` |
 | the picture | `coloring`, `coloring_params`, `matte` (`channel`, `cutoff`, `softness`, `invert`, `edge`) |
 | motion | `warp`: `zoom`, `rotation`, `pan_x`, `pan_y`, `flow`, `filter` (`Bilinear`/`Nearest`/`Bicubic`), `mode` (`Continuous`/`Octaves`), `cull`, `layers` (channel mask) |
@@ -337,9 +338,11 @@ filter and mode, the fit and the matte's channel and edge are not.
 
 What an edit costs the run is its `UpdateType`: `SimRerender` (colour,
 resolve, view, matte, warp, model and colouring parameters, steps, `dt`,
-the terrain: the run continues), `SimResample` (a bound grid's scale: the live
-field is interpolated into the new grid), or `SimReseed` (model, seed,
-init, boundary, grid mode or size: the run restarts).
+the terrain: the run continues), `SimResample` (a bound grid's scale: the
+live field is carried into the new grid as the model's `state` allows, and
+the run continues at its step; see below),
+or `SimReseed` (model, seed, init, boundary, grid mode or size: the run
+restarts).
 
 A bound grid is `round(output × scale)` cells with the scale clamped to
 0.125–4 (`SimGrid::cells_for`), so it re-simulates whenever the output
@@ -486,6 +489,17 @@ integer pans and for integer state, which bilinear would smear into
 values a sandpile has no meaning for. Bicubic (Catmull-Rom) is sharper
 than bilinear under magnification.
 
+**FSR** (`SimUpscale::Fsr`) is the resolve's one upscale of COLOURS rather
+than state. While the picture magnifies the grid, the colour pass runs at
+about a cell a pixel through the same view (`SimRenderer::fsr_size`: the
+output over the fit's magnification times the view's zoom), compiled as
+not magnifying, and FSR 1 (`renderer::upscale::Fsr`, `FsrTarget::Linear`:
+AMD's EASU and RCAS, `shaders/upscale_fsr.wgsl`) draws that up to the
+output, the linear colours encoded into [0, 1) around its passes so its
+limiters hold. An edge stays crisp where interpolating the state rounds
+it, and a colour between two palette entries can appear where an edge
+passes, as in any upscale of a picture.
+
 The warp has two **modes**. `Continuous` resamples the whole affine into
 the field every step. `Octaves` applies the zoom alone: the per-step
 zoom accumulates as a view magnification in [1, 2) that the colour pass
@@ -610,8 +624,48 @@ renderer restarts when the config no longer describes it. `SeedIdentity`
 ([src/sim/renderer.rs](../../src/sim/renderer.rs)) is the part that
 matters: the model of every layer, the boundary, the init, the seed, and
 each layer's memory slice count. Change any of those and the run
-restarts. A change of grid size reseeds too (`SimReseed`), except a
-bound grid's scale, which resamples the live field (`SimResample`).
+restarts. A change of grid size reseeds too (`SimReseed`), and so does a
+resize that changes a bound grid's cells while nothing holds them.
+
+**A bound grid's scale carries the field** (`SimResample`;
+`SimRenderer::request_resample`, `carry_field`). The resize that changes
+the grid keeps the old field, and before the next step or colour reads
+it, every slice is resampled into the new grid, each cell from where its
+centre falls in the old one: Catmull-Rom for a `Continuous` model, held
+within its 2x2 neighbourhood's range so nothing overshoots, the nearest
+cell for a `Discrete` one. A config with several layers takes the most
+careful of their kinds (`StateKind::of_config`). The run goes on at its
+step: a feature keeps its size in cells, so the picture is the same one,
+finer or blockier, and the pattern then re-forms at its own size. An
+agent model, a run not yet seeded, or a grid of another shape (the carry
+maps each axis by its own ratio, and a field is never stretched) reseeds
+as before.
+
+**A resize does not restart an active run** (`src/app/sim_lock.rs`).
+While the transport runs or the timeline drives the steps, a bound grid
+is held at the run's cells: the renderer is resized with that grid fixed,
+and once the viewport is not the size the run began at it letterboxes to
+the grid's shape (`ui::SimLock`, `view_controls::letterbox_shape`), so
+full screen shows the same field larger, at its step. Pausing or stopping
+lets go: the viewport fills its panel and the grid follows it at the
+config's scale, from the seed. Not with the letterbox setting on, whose
+shape is the picture's already, nor for a fixed grid. A change of the
+run's scale while it is held (an edit, or the quality governor's pick)
+keeps the hold: the grid is the run's at the new scale, the same shape,
+and the field is carried into it.
+
+**The quality governor** (`src/app/governor.rs`, `SimGovernor`;
+[quality-governor.md](../archive/projects/quality-governor.md)). While a bound
+grid's run is active and the Rendering menu's Quality Governor is on, the
+run's scale is picked when it starts, from the measured cost of a step,
+as the best of the config's and 75, 50, 37.5, 25, 18.75 or 12.5% at which
+its steps a frame fit the Target Frame Rate. It is held for the run,
+picked again only when far wrong for two seconds with no edit, and the
+field is carried back to the config's scale on stop. A governed run is a
+different run from the still: a still and an export re-run at the
+config's grid. The panel says "Playing at 50% (quality governor)" under
+the grid scale, and **Fit to Target** writes the scale that plays in real
+time to the config (an undoable edit), for a still or an export at it.
 
 Model and colouring **parameters are deliberately excluded** — turning
 Gray–Scott's feed rate while it runs is what the slider is for, and

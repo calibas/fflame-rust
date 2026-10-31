@@ -1204,34 +1204,7 @@ impl App {
             if let Some(text) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
             }) {
-                let is_xml = text.trim_start().starts_with('<');
-                if is_xml {
-                    match crate::flame_xml::parse_flame_xml(&text) {
-                        Ok(configs) => {
-                            if let Some(config) = configs.into_iter().next() {
-                                if let Err(e) = self.load_config_with_undo(config, "history.action.import_flame_xml".to_string(), None) {
-                                    log::error!("Failed to import Apophysis flame: {}", e);
-                                } else {
-                                    log::info!("Apophysis flame imported successfully");
-                                }
-                            } else {
-                                log::error!("No flames found in Apophysis file");
-                            }
-                        }
-                        Err(e) => log::error!("Failed to parse Apophysis XML: {}", e),
-                    }
-                } else {
-                    match FractalConfig::from_json(&text) {
-                        Ok(config) => {
-                            if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
-                                log::error!("Failed to load config: {}", e);
-                            } else {
-                                log::info!("Config loaded successfully");
-                            }
-                        }
-                        Err(e) => log::error!("Failed to parse config JSON: {}", e),
-                    }
-                }
+                self.open_config_text(&text);
             }
 
             // Check for pending Apophysis import (raw XML text from native file picker)
@@ -1260,36 +1233,7 @@ impl App {
             if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<String>(egui::Id::new("pending_animation_load_raw"))
             }) {
-                match crate::animation::Animation::from_json(&json) {
-                    Ok(mut animation) => {
-                        // If animation has embedded config, load it first
-                        if let Some(ref config) = animation.base_config {
-                            log::info!("Animation '{}' has embedded config, loading it", animation.name);
-                            let description = format!("history.action.load_animation_config|name={}", animation.name);
-                            if let Err(e) = self.load_config_with_undo(config.clone(), description, None) {
-                                log::error!("Failed to load animation's embedded config: {}", e);
-                            }
-                        }
-                        let generators = animation.generators.clone();
-                        let duration = animation.duration;
-                        self.animation_controller.load(animation);
-                        // Bind AFTER controller.load so we're binding
-                        // the new animation that's now in the
-                        // controller. The embedded config (if any)
-                        // was loaded above via load_config_with_undo,
-                        // so active_config carries the new IDs the
-                        // tracks will resolve against.
-                        if let Some(anim) = self.animation_controller.animation.as_mut() {
-                            anim.bind_to_config(self.config_manager.active_config());
-                        }
-                        self.egui_layer.signal_panel_state.restore_generators(
-                            generators, &mut self.signal_manager, duration,
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse animation JSON: {}", e);
-                    }
-                }
+                self.open_animation_text(&json);
             }
 
             // Check for pending file browser JSON (raw text from native file picker)
@@ -1331,6 +1275,75 @@ impl App {
                         log::error!("Failed to load audio file: {}", e);
                     }
                 }
+            }
+        }
+    }
+
+    /// Open a config file's text, JSON `.fflame` or XML `.flame`: the web
+    /// file picker hands over only the text, so the first non-space
+    /// character tells them apart (`<` is XML). The frame log's
+    /// `FFLAME_FRAME_LOG_OPEN` opens a file this way on desktop too.
+    pub(super) fn open_config_text(&mut self, text: &str) {
+        let is_xml = text.trim_start().starts_with('<');
+        if is_xml {
+            match crate::flame_xml::parse_flame_xml(text) {
+                Ok(configs) => {
+                    if let Some(config) = configs.into_iter().next() {
+                        if let Err(e) = self.load_config_with_undo(config, "history.action.import_flame_xml".to_string(), None) {
+                            log::error!("Failed to import Apophysis flame: {}", e);
+                        } else {
+                            log::info!("Apophysis flame imported successfully");
+                        }
+                    } else {
+                        log::error!("No flames found in Apophysis file");
+                    }
+                }
+                Err(e) => log::error!("Failed to parse Apophysis XML: {}", e),
+            }
+        } else {
+            match FractalConfig::from_json(text) {
+                Ok(config) => {
+                    if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
+                        log::error!("Failed to load config: {}", e);
+                    } else {
+                        log::info!("Config loaded successfully");
+                    }
+                }
+                Err(e) => log::error!("Failed to parse config JSON: {}", e),
+            }
+        }
+    }
+
+    /// Open an animation file's text, its embedded config first.
+    pub(super) fn open_animation_text(&mut self, json: &str) {
+        match crate::animation::Animation::from_json(json) {
+            Ok(animation) => {
+                // If animation has embedded config, load it first
+                if let Some(ref config) = animation.base_config {
+                    log::info!("Animation '{}' has embedded config, loading it", animation.name);
+                    let description = format!("history.action.load_animation_config|name={}", animation.name);
+                    if let Err(e) = self.load_config_with_undo(config.clone(), description, None) {
+                        log::error!("Failed to load animation's embedded config: {}", e);
+                    }
+                }
+                let generators = animation.generators.clone();
+                let duration = animation.duration;
+                self.animation_controller.load(animation);
+                // Bind AFTER controller.load so we're binding
+                // the new animation that's now in the
+                // controller. The embedded config (if any)
+                // was loaded above via load_config_with_undo,
+                // so active_config carries the new IDs the
+                // tracks will resolve against.
+                if let Some(anim) = self.animation_controller.animation.as_mut() {
+                    anim.bind_to_config(self.config_manager.active_config());
+                }
+                self.egui_layer.signal_panel_state.restore_generators(
+                    generators, &mut self.signal_manager, duration,
+                );
+            }
+            Err(e) => {
+                log::error!("Failed to parse animation JSON: {}", e);
             }
         }
     }

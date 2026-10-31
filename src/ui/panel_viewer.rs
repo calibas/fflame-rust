@@ -351,6 +351,14 @@ pub struct PanelContext<'a> {
     // Fractal texture for display
     pub fractal_texture_id: Option<egui::TextureId>,
     pub fractal_viewport_size: &'a mut Option<(u32, u32)>,
+    /// Set by the viewport: whether it letterboxed this frame (the tab
+    /// bar's cover reads it).
+    pub viewport_letterboxed: &'a mut bool,
+    /// An active simulation's hold on its grid (`SimLock`), which the
+    /// viewport letterboxes to once its size is not the run's.
+    pub sim_lock: Option<super::SimLock>,
+    /// The governor's part in a simulation (`SimGovernorUi`).
+    pub sim_governor: super::SimGovernorUi,
     /// Tab bar height from previous frame, used to inflate fractal texture size
     pub viewport_tab_bar_height: f32,
 
@@ -829,6 +837,7 @@ impl<'a> PanelViewer<'a> {
                         timeline_target: self.context.sim_timeline_target,
                         timeline_holding: self.context.sim_timeline_holding,
                         timeline_driven: self.context.sim_timeline_driven,
+                        governor: self.context.sim_governor,
                     },
                 );
             }
@@ -1238,16 +1247,26 @@ impl<'a> PanelViewer<'a> {
             // centred, and none of it under the tab bar (the cover is black
             // then too). Everything below -- the renderer's size, a drag, a
             // zoom at the cursor -- is that rect's.
-            let letterbox = self
-                .context
-                .config_manager
-                .system_settings()
-                .viewport_letterbox
-                .then(|| {
-                    let panel = ui.available_rect_before_wrap();
-                    ui.painter().rect_filled(panel, 0.0, egui::Color32::BLACK);
-                    super::view_controls::letterbox_rect(panel, self.context.config_manager.active_config().image_size)
-                });
+            // Or to an active simulation's grid (`SimLock`), once the
+            // viewport is not the size the run began at: its field keeps
+            // its cells, and the picture its shape (D7). Compared with the
+            // size it reports unletterboxed, the tab bar's strip included.
+            let natural = {
+                let a = ui.available_size();
+                (a.x.max(1.0) as u32, (a.y + self.context.viewport_tab_bar_height).max(1.0) as u32)
+            };
+            let shape = super::view_controls::letterbox_shape(
+                self.context.config_manager.system_settings().viewport_letterbox,
+                self.context.config_manager.active_config().image_size,
+                self.context.sim_lock,
+                natural,
+            );
+            *self.context.viewport_letterboxed = shape.is_some();
+            let letterbox = shape.map(|shape| {
+                let panel = ui.available_rect_before_wrap();
+                ui.painter().rect_filled(panel, 0.0, egui::Color32::BLACK);
+                super::view_controls::letterbox_rect(panel, shape)
+            });
             // Get the actual panel size and report it for texture sizing
             let available_size = letterbox.map_or_else(|| ui.available_size(), |r| r.size());
             let tab_bar_h = if letterbox.is_some() { 0.0 } else { self.context.viewport_tab_bar_height };
@@ -1480,7 +1499,10 @@ impl<'a> PanelViewer<'a> {
             };
             if is_path_map_mode {
                 if let Some(pointer_pos) = held_at {
-                    // Convert from panel coordinates to texture coordinates
+                    // Convert from panel coordinates to the renderer's
+                    // pixels: fewer than the panel's points at a render
+                    // scale (app/render_scale.rs).
+                    let (width, height) = self.context.flame_renderer.map_or((width, height), |r| (r.width, r.height));
                     let local_x = pointer_pos.x - response.rect.min.x;
                     let local_y = pointer_pos.y - response.rect.min.y;
                     let pixel_x = (local_x / available_size.x * width as f32) as u32;

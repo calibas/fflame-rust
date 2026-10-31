@@ -420,6 +420,21 @@ mod tests {
         assert_eq!(letterbox_rect(same, (1920, 1080)), same);
     }
 
+    /// The shape the viewport letterboxes to: the picture's with the
+    /// setting on; an active simulation's grid only once the viewport is
+    /// not the size its run began at (D7), so starting a run moves nothing.
+    #[test]
+    fn a_running_simulation_letterboxes_only_after_a_resize() {
+        use super::super::view_controls::letterbox_shape;
+        use super::super::SimLock;
+        let lock = SimLock { grid: (540, 528), viewport: (1079, 1056) };
+        assert_eq!(letterbox_shape(false, (1920, 1080), None, (1079, 1056)), None);
+        assert_eq!(letterbox_shape(true, (1920, 1080), None, (1079, 1056)), Some((1920, 1080)));
+        assert_eq!(letterbox_shape(false, (1920, 1080), Some(lock), (1079, 1056)), None, "the size the run began at");
+        assert_eq!(letterbox_shape(false, (1920, 1080), Some(lock), (1920, 1080)), Some((540, 528)), "after a resize");
+        assert_eq!(letterbox_shape(true, (1920, 1080), Some(lock), (1920, 1080)), Some((1920, 1080)), "the setting first");
+    }
+
     /// The Output Size edits the picture's size through the history: a side
     /// within the range, clamped to it, and a preset both sides in one step
     /// that undo takes back whole.

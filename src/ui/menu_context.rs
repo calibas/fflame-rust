@@ -41,10 +41,17 @@ pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
     pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
-    /// Turn the frame-time governor on or off.
+    /// Turn the quality governor on or off (every mode's).
     pub set_frame_governor: Option<bool>,
     /// The workgroups a frame dispatches while the governor is off.
     pub set_manual_workgroups: Option<u32>,
+    /// The viewport's render scale, its upscaler, and whether it renders
+    /// at physical pixels (`renderer::upscale`).
+    pub set_render_scale: Option<f32>,
+    pub set_upscaler: Option<crate::renderer::upscale::UpscaleFilter>,
+    pub set_render_physical_pixels: Option<bool>,
+    /// The frame rate the quality governor holds.
+    pub set_target_rate: Option<crate::storage::settings::TargetRate>,
     pub reset_to_defaults: bool,
 }
 
@@ -83,10 +90,18 @@ pub struct MenuState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub is_paused: bool,
-    /// Whether the frame-time governor sizes each frame's dispatch, and the
-    /// workgroups a frame dispatches when it does not.
+    /// Whether the quality governor is on (every mode's), and the
+    /// workgroups a flame's frame dispatches when it is not.
     pub frame_governor: bool,
     pub manual_workgroups: u32,
+    /// The viewport's render scale, upscaler and physical-pixel setting.
+    pub render_scale: f32,
+    pub upscaler: crate::renderer::upscale::UpscaleFilter,
+    pub render_physical_pixels: bool,
+    /// The governor's target, and what it is in frames a second now.
+    pub target_rate: crate::storage::settings::TargetRate,
+    pub target_fps_now: f32,
+    pub export_fps: u32,
     /// The active mode. It was a `render_mode_2d: bool`, which could
     /// not tell Escape and Simulation from 3D -- so the View menu drew
     /// "3D Mode" as selected in both, and Fly Mode stayed enabled.

@@ -1654,6 +1654,7 @@ mod tests {
         use crate::variations::shader_lint;
         assert!(shader_lint::self_operations(src).is_empty());
         assert!(shader_lint::subnormal_literals(src).is_empty());
+        assert!(shader_lint::mixed_operators(src).is_empty(), "{:?}", shader_lint::mixed_operators(src));
     }
 
     /// Effects sample with an explicit level, never an implicit

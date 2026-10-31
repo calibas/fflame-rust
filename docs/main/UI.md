@@ -108,7 +108,7 @@ actions by folding them into the frame's `UiResponse`.
 | File | New, Open, Save As, Export Flame XML, From Preset Library (the Fractal Browser), Random Flame, Random Batch (the Random Generator), Online features (the `online_mode` switch; [ONLINE.md](ONLINE.md)), Save Online (online mode only), Export PNG (the Export panel), Config Import/Export, Quit |
 | Edit | Undo, Redo (Preferences is a disabled stub) |
 | View | Reset View, Zoom In, Zoom Out — present in every mode (`Control::ViewNavigation`) |
-| Rendering | Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), Frame-Time Governor, and the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Every item configures the chaos game, so outside the flame modes the menu says so and its rows are disabled; it is always there, so nothing after it moves with the mode |
+| Rendering | First the viewport's **Render Scale** (100/75/50%), its **Upscaler** (Catmull-Rom, the default, bilinear, nearest, or FSR 1: AMD's edge-adaptive upscale and sharpening, `shaders/upscale_fsr.wgsl`) and **Render at Physical Pixels** (`SystemSettings::render_scale`, `upscaler`, `render_physical_pixels`, saved at once; `app/render_scale.rs`, `renderer::upscale`): the picture renders at that share of the viewport each side and is drawn up to the screen's pixels; disabled in Simulation, whose grid scale is its render scale (`Control::RenderScale`). Then the **Quality Governor**, on or off in every mode (`SystemSettings::frame_governor`; off, nothing is governed: the flame's batch, its render scale, escape-time's antialiasing and render scale), and the **Target Frame Rate** it holds (`SystemSettings::target_rate`: the display's refresh, the video export's frame rate, or 24/30/60/120; `app/governor.rs`). Then Pause/Resume, Reset Accumulation, Iterations per Thread (128 to 4096), the Workgroups a frame dispatches while the governor is off, Reset to Defaults. Those configure the chaos game, so outside the flame modes the menu says so and their rows are disabled; it is always there, so nothing after it moves with the mode |
 | Window | Reset Workspace, Mobile View, the panel rows, Workspace Layout |
 | Help | Help, Keyboard Shortcuts, Report Bug, About |
 
@@ -317,6 +317,7 @@ widget:
 | `FocusedRendering` | Focused Rendering and PathMap | Show | Grey | Hide | Hide |
 | `OrbitCache` | escape's deep-zoom reference orbit cache | Hide | Hide | Show | Hide |
 | `ViewNavigation` | drag, wheel, pinch, arrow keys, the View menu | Show | Show | Show | Show |
+| `RenderScale` | the Rendering menu's render scale, upscaler and physical pixels | Show | Show | Show | Grey |
 | `TonemapMode` | the tone-map mode selector | Show | Show | Grey | Grey |
 | `LogOnlyTone` | gamma threshold, brightness, vibrancy, highlights | Show | Show | Grey | Grey |
 | `AlphaBlendCurve` | alpha blend low/high | Show (Grey under Linear) | Show (Grey under Linear) | Grey | Grey |
@@ -538,7 +539,7 @@ in [CAMERA.md](CAMERA.md).
 
 | Section | Shown for | Holds |
 |---|---|---|
-| Output Size | every view | the picture's size (`FractalConfig::image_size`, `ConfigPath::ImageWidth`/`ImageHeight`, undoable): what Export PNG and Export Animation render at. Presets (720p, 1080p, 1440p, 4K, 1:1) and a swap for portrait, each one history step. **Letterbox the viewport** (`SystemSettings::viewport_letterbox`, off by default, saved at once): the viewport shows the picture's shape, black bars beside or above it (`view_controls::letterbox_rect`), and renders, pans and zooms at that rect's size; the tab-bar cover goes black and stops steering, and fullscreen letterboxes alike |
+| Output Size | every view | the picture's size (`FractalConfig::image_size`, `ConfigPath::ImageWidth`/`ImageHeight`, undoable): what Export PNG and Export Animation render at. Presets (720p, 1080p, 1440p, 4K, 1:1) and a swap for portrait, each one history step. **Letterbox the viewport** (`SystemSettings::viewport_letterbox`, off by default, saved at once): the viewport shows the picture's shape, black bars beside or above it (`view_controls::letterbox_rect`), and renders, pans and zooms at that rect's size; the tab-bar cover goes black and stops steering, and fullscreen letterboxes alike. An active simulation letterboxes the same way to its grid's shape once the viewport is no longer the size its run began at (`view_controls::letterbox_shape`, `app/sim_lock.rs`; [SIMULATION.md](SIMULATION.md)) |
 | Camera | 2D views, and a 3D flame's projected picture | zoom, centre (the escape centre as exact decimals), rotation, an arrow pad and Reset, through `camera::gesture` as the keys and the mouse are |
 | 3D Camera | every 3D view | position, target, zoom or distance, pitch, yaw, bank, roll, field of view or perspective, Reset, and fly mode with its settings. A terrain shows its eye as a readout; a solid's eye is editable, and moving it moves the camera, target and all; a terrain's target has a lift |
 | Camera Lens | an escape plane or solid | a variation used as a lens on the pixels or rays |

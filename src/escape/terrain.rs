@@ -4547,6 +4547,11 @@ mod tests {
             "{what}: subnormal literal -- {:?}",
             crate::variations::shader_lint::subnormal_literals(src)
         );
+        assert!(
+            crate::variations::shader_lint::mixed_operators(src).is_empty(),
+            "{what}: operator mixes Tint refuses -- {:?}",
+            crate::variations::shader_lint::mixed_operators(src)
+        );
     }
 
     #[test]

@@ -10,6 +10,11 @@ mod variation_fetch;
 mod texture_sync;
 mod aa_governor;
 mod motion_blur;
+mod frame_log;
+mod governor;
+mod render_scale;
+#[cfg(feature = "engine-sim")]
+mod sim_lock;
 mod render_progress;
 pub mod script_cloud;
 mod fly_camera;
@@ -492,6 +497,10 @@ pub struct App {
     /// use so a flame session never allocates it.
     #[cfg(feature = "engine-sim")]
     pub(super) sim_renderer: Option<crate::sim::SimRenderer>,
+    /// An active run's hold on its grid, and the scale it was taken at
+    /// (sim_lock.rs): a resize letterboxes instead of restarting it.
+    #[cfg(feature = "engine-sim")]
+    pub(super) sim_lock: Option<(crate::ui::SimLock, f32)>,
     /// The simulation's 3D terrain (heightfield plan T4), while the config
     /// draws one.
     #[cfg(all(feature = "terrain", feature = "engine-sim"))]
@@ -506,6 +515,17 @@ pub struct App {
     /// Restart from the seed before the next frame (a reseed-class
     /// edit, a device loss, or a grid the field cannot be carried into).
     pub(super) sim_reseed: bool,
+    /// A bound grid's scale was edited (`SimResample`), or the quality
+    /// governor picked or let go of one: the resize that changes the grid
+    /// carries the field across (`request_resample`), when its shape is
+    /// the same.
+    pub(super) sim_resample: bool,
+    /// When a simulation's settings were last edited (not by playback): a
+    /// governed run is not picked again meanwhile (governor.rs).
+    pub(super) sim_last_edit: Option<web_time::Instant>,
+    /// The bound grid scale the simulation's grid was last sized at (the
+    /// governor's or the config's); None for a fixed grid.
+    pub(super) sim_grid_at: Option<f32>,
     /// The step count the TIMELINE has committed the grid to.
     ///
     /// `Some` means the timeline owns the step count: the driver walks
@@ -623,6 +643,19 @@ pub struct App {
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
+    /// The frame log (`FFLAME_FRAME_LOG`; frame_log.rs), when asked for.
+    pub(super) frame_log: Option<frame_log::FrameLog>,
+    /// Each frame's GPU time for the UI and for the engine
+    /// (`gpu::timer::FrameTimer`), while the device can time passes: what
+    /// the quality governor measures (governor.rs), and the frame log logs.
+    pub(super) frame_timer: Option<crate::gpu::timer::FrameTimer>,
+    /// The frames rendered: the frame timer's index for each.
+    pub(super) frame_index: u64,
+    /// The quality governor's rungs, costs and pictures (governor.rs).
+    pub(super) governor: governor::GovernorState,
+    /// The picture drawn up to the display's size when it renders below
+    /// it (render_scale.rs, `renderer::upscale`).
+    pub(super) upscale: crate::renderer::upscale::Upscale,
     // Debounce viewport resize (WASM only - prevents rapid resize loops)
     #[cfg(target_arch = "wasm32")]
     pub(super) last_viewport_resize_time: Option<web_time::Instant>,
@@ -915,6 +948,8 @@ impl App {
             escape_last_edit: None,
             #[cfg(feature = "engine-sim")]
             sim_renderer: None,
+            #[cfg(feature = "engine-sim")]
+            sim_lock: None,
             #[cfg(all(feature = "terrain", feature = "engine-sim"))]
             sim_terrain: None,
             // Runs on entry: a simulation that sits still looks broken,
@@ -922,6 +957,9 @@ impl App {
             sim_running: true,
             sim_step_once: false,
             sim_reseed: true,
+            sim_resample: false,
+            sim_last_edit: None,
+            sim_grid_at: None,
             #[cfg(feature = "engine-sim")]
             sim_timeline_target: None,
             paced_anim_pending: 0.0,
@@ -959,6 +997,11 @@ impl App {
             progress_drawn: crate::ui::RenderProgress::Idle,
             viewport_resize_pending: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
+            frame_log: None,
+            frame_timer: None,
+            frame_index: 0,
+            governor: Default::default(),
+            upscale: Default::default(),
             #[cfg(target_arch = "wasm32")]
             last_viewport_resize_time: None,
             png_export_premultiplied: false,
@@ -1025,6 +1068,15 @@ impl App {
             health_policy: crate::api::health::HealthPolicy::default(),
             last_health_check: None,
         };
+
+        // A scripted run may go without it (`FFLAME_FRAME_LOG_NO_GPU_TIMER`;
+        // frame_log.rs), as a browser without `timestamp-query` does.
+        app.frame_timer = if frame_log::without_gpu_timer() {
+            None
+        } else {
+            crate::gpu::timer::FrameTimer::new(&app.gpu.device, &app.gpu.queue)
+        };
+        app.frame_log = frame_log::FrameLog::from_env(app.frame_timer.is_some());
 
         // Register live audio capture as a signal producer so live_* signals
         // appear in the animation track signal dropdown
@@ -1389,7 +1441,7 @@ impl App {
                     let audio_capturing = app.audio_capture.is_capturing();
 
                     // Update present mode based on system settings
-                    app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
+                    app.gpu.set_present_mode(app.vsync_enabled());
 
                     // Time-based UI idle detection (600ms after last input)
                     const UI_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
@@ -1459,7 +1511,7 @@ impl App {
                     // During audio playback or live capture, keep redrawing to update UI
                     if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || app.viewport_resize_pending || just_finished_rendering || fly_active || sim_active || progress_stale {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
-                        if app.config_manager.system_settings().vsync_enabled {
+                        if app.vsync_enabled() {
                             // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
                         } else {
@@ -1680,6 +1732,7 @@ impl App {
         // other non-success states bubble up as `RenderError` for
         // the event loop to handle.
         use egui_wgpu::wgpu::CurrentSurfaceTexture;
+        let t_acquire = Instant::now();
         let frame = match self.gpu.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(f) => f,
             CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -1689,15 +1742,27 @@ impl App {
             CurrentSurfaceTexture::Timeout => return Err(RenderError::Timeout),
             CurrentSurfaceTexture::Validation => return Err(RenderError::Validation),
         };
+        let acquire_ms = t_acquire.elapsed().as_secs_f64() * 1000.0;
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+        if let Some(timer) = self.frame_timer.as_mut() {
+            timer.begin(&mut encoder, self.frame_index);
+        }
 
         // ============================================================================
         // PHASE 1: Render UI First
         // ============================================================================
         // UI displays PREVIOUS frame's fractal while we prepare CURRENT frame
+        // An active simulation's grid, which the viewport letterboxes to
+        // after a resize (sim_lock.rs): decided before the UI draws it.
+        #[cfg(feature = "engine-sim")]
+        {
+            // The governor's grid scale first: the lock holds the run's.
+            self.govern_sim();
+            self.update_sim_lock();
+        }
         let t_ui_start = Instant::now();
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
@@ -1705,6 +1770,9 @@ impl App {
         // Register the appropriate texture with egui for display:
         // - If effects ran on previous frame, use the effect output texture
         // - Otherwise, use the renderer's fractal texture
+        // - Either drawn up to the display, when it renders below it
+        //   (render_scale.rs): the upscale pass's picture of it
+        let display_size = self.display_size();
         if let Some(ref renderer) = self.flame_renderer {
             // Check if we have enabled color effects
             let config = self.config_manager.active_config();
@@ -1725,12 +1793,20 @@ impl App {
 
             let texture_view = texture_view.unwrap_or_else(|| renderer.get_fractal_texture_view());
 
-            self.egui_layer.register_fractal_texture(
-                &self.gpu.device,
-                texture_view,
-                self.fractal_viewport_size.0,
-                self.fractal_viewport_size.1,
-            );
+            let upscaled = self
+                .upscale
+                .output()
+                .filter(|_| render_scale::upscales((renderer.width, renderer.height), display_size));
+            if let Some((view, (w, h))) = upscaled {
+                self.egui_layer.register_fractal_texture(&self.gpu.device, view, w, h);
+            } else {
+                self.egui_layer.register_fractal_texture(
+                    &self.gpu.device,
+                    texture_view,
+                    self.fractal_viewport_size.0,
+                    self.fractal_viewport_size.1,
+                );
+            }
         }
 
         // Snapshot the unified export status for the progress bar, and drain
@@ -1936,7 +2012,8 @@ impl App {
             self.toggle_fly_mode();
         }
 
-        self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
+        let ui_cpu_ms = t_ui_start.elapsed().as_secs_f64() * 1000.0;
+        self.metrics.record_ui_time(ui_cpu_ms);
 
         // Track UI repaint requests for frame rate optimization
         self.ui_needs_repaint = ui_response.needs_repaint;
@@ -1966,7 +2043,13 @@ impl App {
             // hit max_iterations can leave the UI sleeping mid-resize
             // (browser stops firing winit events for a beat, ui_active
             // times out, and the post-resize compute frame never runs).
-            self.viewport_resize_pending = viewport_size != self.fractal_viewport_size;
+            // A new size to render at, too: the render scale's setting, the
+            // physical-pixel one, or a mode that renders at another
+            // (render_scale.rs).
+            let render_size = self.render_size_for(viewport_size);
+            let rendered = self.flame_renderer.as_ref().map(|r| (r.width, r.height));
+            self.viewport_resize_pending =
+                viewport_size != self.fractal_viewport_size || rendered.is_some_and(|r| r != render_size);
 
             #[cfg(target_arch = "wasm32")]
             let should_resize = {
@@ -1982,8 +2065,15 @@ impl App {
             let should_resize = self.viewport_resize_pending;
 
             if should_resize {
-                log::info!("Fractal viewport resize: {:?} → {:?}", self.fractal_viewport_size, viewport_size);
+                log::info!(
+                    "Fractal viewport resize: {:?} → {:?}, rendered at {:?}",
+                    self.fractal_viewport_size,
+                    viewport_size,
+                    render_size
+                );
                 self.fractal_viewport_size = viewport_size;
+                // From here on, the size is the render's.
+                let viewport_size = render_size;
 
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -2069,6 +2159,9 @@ impl App {
         // Submit UI rendering (must happen before we start processing responses)
         let t_submit = Instant::now();
 
+        if let Some(timer) = self.frame_timer.as_mut() {
+            timer.ui_done(&mut encoder);
+        }
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
         // The paint just submitted was the last user of an output texture
@@ -2206,6 +2299,7 @@ impl App {
                             bitrate_kbps: export_settings.audio_bitrate,
                         }
                     }),
+                    rung: export_settings.rung,
                     signals: {
                         let mut signals = self.signal_manager.clone_signals();
                         // The offset moves the muxed audio; the
@@ -2300,6 +2394,38 @@ impl App {
         // renders, and the picture it last drew stays on screen.
         let frozen = self.freeze_viewport();
 
+        // The quality governor's rung for escape-time this frame (governor.rs):
+        // None in a still, a terrain, a path-traced solid, another mode. An
+        // escape terrain's render scale instead, in its lit tiers.
+        let (escape_rung, terrain_scale) = {
+            let c = self.config_manager.active_config();
+            let is_escape = c.render_mode == crate::scene::transforms::RenderMode::Escape;
+            let solid = crate::escape::ifs::formula_is_solid(&c.escape.formula);
+            let governable = is_escape
+                && !c.escape.terrain_active()
+                && !(solid && c.escape.solid_tier != crate::config::escape::RenderTier::Lit);
+            let terrain = is_escape
+                && c.escape.terrain_active()
+                && c.escape.terrain.tier != crate::config::escape::RenderTier::PathTraced;
+            let (ss, user_scale) = (c.escape.supersample, self.user_render_scale());
+            // The budget is the display's refresh (`governor_budget_ms`):
+            // asked of the platform every so often.
+            if governable || terrain {
+                refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
+            }
+            if governable {
+                self.govern_terrain_off();
+                (self.govern_escape(ss, solid, user_scale), None)
+            } else if terrain {
+                self.govern_escape_off();
+                (None, self.govern_terrain(user_scale))
+            } else {
+                self.govern_escape_off();
+                self.govern_terrain_off();
+                (None, None)
+            }
+        };
+
         // Single config read after all updates are complete
         let final_config = self.config_manager.active_config();
 
@@ -2311,6 +2437,11 @@ impl App {
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
         let use_overwrite = self.should_use_overwrite();
+        let vsync = self.vsync_enabled();
+        // What the picture is shown at, and how it is drawn up to it
+        // (render_scale.rs): read before the renderer is borrowed too.
+        let display_size = self.display_size();
+        let upscaler = self.config_manager.system_settings().upscaler;
         // Read before the renderer is borrowed: the simulation driver
         // below needs it and the method takes `&self`.
         #[cfg(feature = "engine-sim")]
@@ -2319,6 +2450,12 @@ impl App {
         // Run flame compute shader with progressive refinement
         if let (false, Some(renderer)) = (frozen, self.flame_renderer.as_mut()) {
             renderer.set_overwrite_mode(use_overwrite);
+            // Render pixels per logical point (render_scale.rs): the unit of
+            // every parameter measured in pixels, so a render scale keeps
+            // their size on the screen. Exactly 1 at full size.
+            let pixel_scale = renderer.height as f32 / self.fractal_viewport_size.1.max(1) as f32;
+            renderer.set_pixel_scale(pixel_scale);
+            self.effect_chain.set_pixel_scale(pixel_scale);
 
             // Escape-time mode: the generator is one compute dispatch,
             // not a progressive chaos game — render it only when an
@@ -2343,7 +2480,14 @@ impl App {
             let terrain_on = false;
             #[cfg(feature = "terrain")]
             if terrain_on {
-                self.egui_layer.update_escape_aa(None);
+                // The governor's render scale, under the antialiasing
+                // control as escape-time's is; nothing when it is full.
+                self.egui_layer.update_escape_aa(terrain_scale.filter(|s| *s < 1.0).map(|scale| crate::ui::EscapeAa {
+                    in_use: final_config.escape.supersample,
+                    requested: final_config.escape.supersample,
+                    reason: Some(crate::ui::AaReason::Governor),
+                    scale,
+                }));
                 // One engine at a time: the footprint is a full escape
                 // render of its own.
                 if let Some(esc) = self.escape_renderer.take() {
@@ -2421,6 +2565,19 @@ impl App {
                 if !exporting && terrain.render_viewport_moments(device, queue, &final_config, &moments) {
                     busy = true;
                 }
+                // A frame of a moving view: the governor's sample of the
+                // lit tier's cost (governor.rs). Not while sections arrive,
+                // as the tiers time their passes: a section's render is no
+                // cost the render scale moves, and a deep terrain's took
+                // 200 ms a step and shed for nothing (2026-10-30).
+                if !exporting && terrain.drew_fresh_lit() && terrain.sections_missing() == 0 {
+                    self.governor.pictures.push_back(governor::Picture {
+                        first: self.frame_index,
+                        last: self.frame_index,
+                        governed: terrain_scale.is_some(),
+                        terrain: true,
+                    });
+                }
                 // Not settled while paused; the export's cadence redraws.
                 self.escape_dirty = busy || exporting;
                 if busy {
@@ -2454,22 +2611,26 @@ impl App {
                     }
                     esc
                 });
-                // The frame governor's antialiasing axis (aa_governor.rs):
-                // while an animation plays, with the governor on, the
-                // viewport's factor is governed to keep up with the
-                // display. Otherwise, and the moment playback stops, it is
-                // the config's.
+                // The quality governor's rung (governor.rs) while an
+                // animation plays or a picture is edited, with the governor
+                // on; otherwise, and the moment playback stops, the
+                // config's factor.
                 let aa_ceiling = crate::escape::EscapeRenderer::affordable_supersample(
                     &self.gpu.device,
                     renderer.width,
                     renderer.height,
                     final_config.escape.supersample,
                 );
-                let aa_governed = self.animation_controller.is_playing()
-                    && self.config_manager.system_settings().frame_governor;
-                let aa_factor = if aa_governed {
-                    refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
-                    self.escape_aa.factor(aa_ceiling)
+                // Without a GPU timer the rung is the dropped-frame
+                // walker's (aa_governor.rs, `governor::fallback_rung`),
+                // which keeps its state while it governs.
+                let aa_governed = escape_rung.is_some();
+                let aa_factor = if let Some(rung) = escape_rung {
+                    if self.governor.fallback.is_none() {
+                        self.escape_aa.release();
+                        self.escape_aa_settled_at = None;
+                    }
+                    rung.supersample.min(aa_ceiling)
                 } else {
                     self.escape_aa.release();
                     self.escape_aa_settled_at = None;
@@ -2478,17 +2639,28 @@ impl App {
                 if escape.resize(&self.gpu.device, renderer.width, renderer.height, aa_factor) {
                     self.escape_dirty = true;
                 }
+                // The relief and the distance-estimate colourings measure in
+                // output pixels; at a render scale one is a fraction of a
+                // render pixel (render_scale.rs).
+                if escape.set_pixel_scale(pixel_scale) {
+                    self.escape_dirty = true;
+                }
                 crate::escape::set_viewport_render_lines(
                     renderer.height.saturating_mul(escape.effective_supersample()),
                 );
                 // The viewport's corner says what it is drawn at, and why
                 // that is below the setting when it is.
-                self.egui_layer.update_escape_aa(Some(aa_governor::readout(
+                let mut readout = aa_governor::readout(
                     escape.effective_supersample(),
                     final_config.escape.supersample,
                     aa_governed,
                     aa_ceiling,
-                )));
+                );
+                if let Some(rung) = escape_rung.filter(|r| r.scale < 1.0) {
+                    readout.scale = rung.scale;
+                    readout.reason = Some(crate::ui::AaReason::Governor);
+                }
+                self.egui_layer.update_escape_aa(Some(readout));
                 // Motion blur (motion_blur.rs): a new frame while it plays
                 // starts its moments in the accumulation. Stopped or
                 // paused, the sharp frame at the playhead is drawn again.
@@ -2497,6 +2669,12 @@ impl App {
                 // phase 5).
                 let solid_traced = crate::escape::ifs::formula_is_solid(&final_config.escape.formula)
                     && final_config.escape.solid_tier != crate::config::escape::RenderTier::Lit;
+                // Playing, a picture that takes several frames to settle
+                // (a deep zoom, a solid) keeps the last settled one up
+                // until it does, as a motion-blurred frame does: shown
+                // chunk by chunk, playback was a part-drawn picture every
+                // frame (docs/archive/projects/quality-governor.md, phase 1).
+                let hold = self.animation_controller.is_playing() && !solid_traced;
                 if motion_blur::blurring(&self.animation_controller) && !solid_traced {
                     if self.escape_dirty && self.escape_motion.is_none() {
                         let moments = crate::animation::export::moment_configs(
@@ -2508,7 +2686,7 @@ impl App {
                         escape.begin_accumulation_of(&self.gpu.device, &self.gpu.queue, moments.len() as u32);
                         self.escape_motion = Some(motion_blur::Moments { moments, next: 0, rewind: false });
                     }
-                } else if self.escape_motion.take().is_some() | escape.drop_presented() {
+                } else if self.escape_motion.take().is_some() | (!hold && escape.drop_presented()) {
                     self.escape_dirty = true;
                 }
                 // What the escape pass renders: the moment, or the frame.
@@ -2612,6 +2790,11 @@ impl App {
                     self.escape_dirty = false;
                 }
                 if self.escape_dirty {
+                    // The frames a picture takes, for the governor's measure
+                    // of its GPU cost (governor.rs).
+                    if self.governor.picture_from.is_none() {
+                        self.governor.picture_from = Some(self.frame_index);
+                    }
                     let settled = escape.render(
                         &self.gpu.device,
                         &self.gpu.queue,
@@ -2634,6 +2817,18 @@ impl App {
                     };
                     if done && self.escape_motion.take().is_some() {
                         escape.present_accumulation(&self.gpu.device, &mut render_encoder);
+                    } else if done && hold {
+                        escape.present_output(&self.gpu.device, &mut render_encoder);
+                    }
+                    if done {
+                        if let Some(first) = self.governor.picture_from.take() {
+                            self.governor.pictures.push_back(governor::Picture {
+                                first,
+                                last: self.frame_index,
+                                governed: escape_rung.is_some(),
+                                terrain: false,
+                            });
+                        }
                     }
                     // Progressive deep zoom: an unsettled frame keeps
                     // the dirty flag so the next frame re-renders with
@@ -2642,19 +2837,14 @@ impl App {
                     if !done {
                         self.window.request_redraw();
                     }
-                    // A settled playback frame: how long since the last one,
-                    // against the governor's budget.
-                    if done && self.escape_aa.active() {
+                    // A settled playback frame without a GPU timer: how long
+                    // since the last one, against the governor's budget, for
+                    // the dropped-frame walker.
+                    if let Some((steps, budget_ms)) = self.governor.fallback.filter(|_| done && self.escape_aa.active()) {
                         let now = Instant::now();
                         if let Some(prev) = self.escape_aa_settled_at.replace(now) {
-                            let settings = self.config_manager.system_settings();
-                            let budget = crate::app::frame_budget(
-                                settings.vsync_enabled,
-                                settings.target_fps,
-                                self.display_refresh_mhz,
-                            );
-                            let ratio = now.duration_since(prev).as_secs_f64() / budget;
-                            if self.escape_aa.observe(ratio, aa_ceiling) {
+                            let ratio = now.duration_since(prev).as_secs_f64() * 1000.0 / budget_ms.max(1.0);
+                            if self.escape_aa.observe(ratio, steps) {
                                 self.window.request_redraw();
                             }
                         }
@@ -2702,13 +2892,42 @@ impl App {
                 if self.sim_renderer.is_none() {
                     self.sim_motion = None;
                 }
-                let sim = self.sim_renderer.get_or_insert_with(|| {
-                    crate::sim::SimRenderer::new(&self.gpu.device, &final_config.sim, w, h)
+                // An active run's grid is held (sim_lock.rs): resized with
+                // its cells fixed, the viewport letterboxed to their shape,
+                // at the run's scale. Unheld, a governed run's grid is the
+                // config's at the governor's scale (governor.rs).
+                let run_scale = match final_config.sim.grid {
+                    crate::config::sim::SimGrid::Viewport { scale } => Some(self.governor.sim.scale.unwrap_or(scale)),
+                    crate::config::sim::SimGrid::Fixed { .. } => None,
+                };
+                let held_grid = self.sim_lock.map(|(lock, at)| {
+                    let (width, height) = sim_lock::held_grid(lock, at, run_scale.unwrap_or(at));
+                    let mut c = final_config.sim.clone();
+                    c.grid = crate::config::sim::SimGrid::Fixed { width, height };
+                    c
                 });
+                let governed_grid = self.governor.sim.scale.filter(|_| held_grid.is_none() && run_scale.is_some()).map(|scale| {
+                    let mut c = final_config.sim.clone();
+                    c.grid = crate::config::sim::SimGrid::Viewport { scale };
+                    c
+                });
+                let grid_cfg = held_grid.as_ref().or(governed_grid.as_ref()).unwrap_or(&final_config.sim);
+                // The scale the grid is at from here on: the lock is taken
+                // only of a grid at the run's scale (sim_lock.rs).
+                self.sim_grid_at = run_scale;
+                let sim = self.sim_renderer.get_or_insert_with(|| {
+                    crate::sim::SimRenderer::new(&self.gpu.device, grid_cfg, w, h)
+                });
+                // A scale edit or the governor's pick carries the field into
+                // its new grid (the field resampler), held or not.
+                if self.sim_resample {
+                    sim.request_resample();
+                    self.sim_resample = false;
+                }
                 // A resize may change the grid (bound) or only the
                 // resolve ratio (fixed); the renderer decides which and
                 // reports whether the field survived.
-                sim.resize(&self.gpu.device, &final_config.sim, w, h);
+                sim.resize(&self.gpu.device, grid_cfg, w, h);
                 // The flame's transforms are the layers' maps when the
                 // config asks (simulation-layers plan, section 4).
                 if final_config.sim.use_transforms {
@@ -2721,7 +2940,10 @@ impl App {
                 // Budgeted walks of the grid, so a jump it cannot make in
                 // one display frame is walked over the next few instead of
                 // freezing the UI.
+                // Governed, the share of the frame the governor allows
+                // (governor.rs).
                 const SIM_CATCHUP_BUDGET_MS: f64 = 8.0;
+                let walk_ms = self.governor.sim.walk_ms.unwrap_or(SIM_CATCHUP_BUDGET_MS);
                 // Motion blur (motion_blur.rs): a frame's moments, where
                 // they differ from the frame -- a run the timeline does not
                 // step, with no colouring track, is the same at every
@@ -2761,7 +2983,7 @@ impl App {
                     // a display frame held a blurred frame to the display's
                     // rate over the moments -- 120 fps to 15 at eight --
                     // however little each cost.
-                    let mut budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS).max(1);
+                    let mut budget = sim.steps_in(walk_ms).max(1);
                     while motion.next < motion.moments.len() && budget > 0 {
                         let m = motion.current();
                         let index = if sim.will_reseed(&m.sim) { 0 } else { sim.step_index() };
@@ -2804,7 +3026,7 @@ impl App {
                     // ask for a two-thousand-step jump on every slider
                     // event. `steps_in` sizes it from the measured
                     // cost of a step.
-                    let budget = sim.steps_in(SIM_CATCHUP_BUDGET_MS);
+                    let budget = sim.steps_in(walk_ms);
                     let reached = sim.advance_to(
                         &self.gpu.device,
                         &self.gpu.queue,
@@ -3146,10 +3368,9 @@ impl App {
                     // a different display, and `current_monitor` is a syscall.
                     refresh_display_rate(&mut self.display_refresh_age, &mut self.display_refresh_mhz, window);
 
-                    let settings = self.config_manager.system_settings();
                     let target = crate::app::frame_budget(
-                        settings.vsync_enabled,
-                        settings.target_fps,
+                        vsync,
+                        self.config_manager.system_settings().target_fps,
                         self.display_refresh_mhz,
                     );
                     let ratio = prev.elapsed().as_secs_f64() / target;
@@ -3169,6 +3390,7 @@ impl App {
                         a.max(b).min(a.min(b).max(c)) // median of {a, b, c}
                     };
                     self.governor_ratio_prev = [self.governor_ratio_prev[1], ratio];
+                    let before = self.iter_scale;
                     if self.batch_fill > 1.0 && (median > 1.3 || ratio >= 4.0) {
                         // Late with the dispatch lengthened past the batch
                         // (`fill_step`): give back the length first.
@@ -3178,6 +3400,26 @@ impl App {
                             crate::app::governor_step(self.governor_knee, self.iter_scale, median, ratio, &batch);
                         self.governor_knee = knee;
                         self.iter_scale = scale;
+                    }
+                    // **The pacing cap** (governor.rs, `BatchCap`): under
+                    // vsync, while a flame plays or is edited, the batch may
+                    // not grow past where the frame's GPU span fills the
+                    // governor's share of the budget, and above it it comes
+                    // down at the governor's slew. Not in a still, which the
+                    // fill lengthens for throughput instead, nor without
+                    // vsync, where the frames' intervals follow the GPU's
+                    // time and the reading above is the GPU's already.
+                    self.governor.flame_cap = None;
+                    if vsync
+                        && (use_overwrite || is_controller_playing)
+                        && matches!(self.governor_knee, crate::app::Knee::Shedding { .. })
+                    {
+                        let full = batch.max_workgroups as f64 * 64.0 * batch.iterations_per_thread.max(1) as f64;
+                        if let Some(cap) = self.governor.batch_cap.cap(target * 1000.0) {
+                            let cap = (cap / full).max(batch.min_scale());
+                            self.iter_scale = crate::app::governor::capped_scale(self.iter_scale, before, cap);
+                            self.governor.flame_cap = Some(cap);
+                        }
                     }
                 }
                 self.last_iter_frame = Some(now);
@@ -3196,11 +3438,16 @@ impl App {
                     renderer.set_timing_tag(self.fill_tag);
                 }
                 self.fill_last_total = total;
-                if let Some(timing) = renderer.take_dispatch_timing().filter(|t| t.tag == self.fill_tag) {
+                let timing = renderer.take_dispatch_timing();
+                if let Some(t) = timing {
+                    // Any state's: a cost a thread-iteration (`BatchCap`).
+                    self.governor.batch_cap.dispatch_timed(t.ms, t.iterations as f64);
+                }
+                if let Some(timing) = timing.filter(|t| t.tag == self.fill_tag) {
                     let at_full_batch = matches!(self.governor_knee, crate::app::Knee::Shedding { .. }) && self.iter_scale >= 1.0;
                     self.batch_fill = if at_full_batch {
                         let settings = self.config_manager.system_settings();
-                        let budget_ms = crate::app::frame_budget(settings.vsync_enabled, settings.target_fps, self.display_refresh_mhz) * 1000.0;
+                        let budget_ms = crate::app::frame_budget(vsync, settings.target_fps, self.display_refresh_mhz) * 1000.0;
                         let full = batch.max_workgroups as f64 * 64.0 * batch.iterations_per_thread as f64;
                         crate::app::fill_step(self.batch_fill, timing.ms, timing.iterations as f64, full, budget_ms)
                     } else {
@@ -3265,6 +3512,9 @@ impl App {
                 } else {
                     Vec::new()
                 };
+                let moment_ipt = effective_ipt.div_ceil(moments.len().max(1) as u32).max(1);
+                let frame_ipt = if moments.is_empty() { effective_ipt } else { moment_ipt * moments.len() as u32 };
+                self.governor.batch_cap.dispatched(self.frame_index, effective_workgroups as f64 * 64.0 * frame_ipt as f64);
                 let samples_this_frame = if moments.is_empty() {
                     // After blurred frames the GPU holds the last moment's
                     // flame: the frame's own goes back first.
@@ -3290,7 +3540,6 @@ impl App {
                         let settings = self.config_manager.system_settings();
                         (settings.iterations_per_thread, settings.burn_in)
                     };
-                    let moment_ipt = effective_ipt.div_ceil(moments.len() as u32).max(1);
                     let mut plotted = 0;
                     for (k, m) in moments.iter().enumerate() {
                         renderer.set_moment(&self.gpu.device, &self.gpu.queue, m, setting_ipt, burn_in);
@@ -3306,6 +3555,11 @@ impl App {
                     renderer.set_continuing_frame(false);
                     plotted
                 };
+                if let Some(log) = self.frame_log.as_mut() {
+                    log.flame(effective_workgroups, effective_ipt, samples_this_frame);
+                }
+                // The governor's measure for a flame's render scale (governor.rs).
+                self.governor.flame_samples = Some(samples_this_frame);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
                 // The histogram holds every frame of the batch: count them
@@ -3497,11 +3751,35 @@ impl App {
                 // Effects are enabled in config but didn't run - log why
                 log::warn!("Config has {} enabled color effects but run_color_effects returned false", color_effect_count);
             }
+
+            // Rendered below the display's size (render_scale.rs): drawn up
+            // to it, for egui to show 1:1.
+            if render_scale::upscales((renderer.width, renderer.height), display_size) {
+                let shown = if effects_ran { self.effect_chain.get_color_output() } else { None }
+                    .unwrap_or_else(|| renderer.get_fractal_texture_view());
+                self.upscale.run(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut render_encoder,
+                    shown,
+                    (renderer.width, renderer.height),
+                    display_size,
+                    upscaler,
+                );
+                if let Some((view, (w, h))) = self.upscale.output() {
+                    self.egui_layer.register_fractal_texture(&self.gpu.device, view, w, h);
+                }
+            } else {
+                self.upscale.release();
+            }
         }
 
         // Submit rendering commands
         let t_submit = Instant::now();
 
+        if let Some(timer) = self.frame_timer.as_mut() {
+            timer.end(&mut render_encoder);
+        }
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
@@ -3713,6 +3991,33 @@ impl App {
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
+        // The GPU's times of the frames a few back (`FrameTimer`): the
+        // governor's measure and the frame log's.
+        let timings = self.frame_timer.as_mut().map(|t| t.collect()).unwrap_or_default();
+        {
+            // The frame's own CPU time, without its waits for the surface:
+            // a frame the CPU holds up is not shed for.
+            let own = render_start.elapsed().as_secs_f64() * 1000.0 - acquire_ms - t5.elapsed().as_secs_f64() * 1000.0;
+            let g = &mut self.governor;
+            g.cpu_ms += 0.2 * (own.max(0.0) - g.cpu_ms);
+            g.frame_interval(delta_time * 1000.0);
+        }
+        let budget_ms = self.governor_budget_ms();
+        if self.governor.take_timings(&timings, self.frame_index, budget_ms) {
+            self.window.request_redraw();
+        }
+        self.govern_flame();
+        self.egui_layer.set_governor_fps((1000.0 / self.governor.capped.unwrap_or(budget_ms)) as f32);
+        if self.frame_log.is_some() {
+            let mut state = self.frame_state(delta_time * 1000.0, render_start.elapsed().as_secs_f64() * 1000.0, ui_cpu_ms);
+            state.acquire_ms = acquire_ms;
+            state.present_ms = t5.elapsed().as_secs_f64() * 1000.0;
+            if let Some(log) = self.frame_log.as_mut() {
+                log.finish(state, self.frame_index, &timings);
+            }
+            self.frame_log_drive();
+        }
+        self.frame_index += 1;
 
         // Save current low-density state for next frame's brightness decision
         // (matches ping-pong buffer timing - tonemap reads previous frame's buffer)

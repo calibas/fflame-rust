@@ -180,6 +180,168 @@ fn small_config() -> SimConfig {
     cfg
 }
 
+/// An active run's grid held through a resize (app/sim_lock.rs, D7):
+/// resized with its cells fixed, the field and its step survive a new
+/// picture size, shown larger; resized as the bound grid it is, the cells
+/// follow the picture and the run starts over from the seed.
+#[test]
+fn a_held_grid_keeps_its_run_through_a_resize() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut cfg = small_config();
+    cfg.grid = SimGrid::Viewport { scale: 1.0 };
+    let mut r = SimRenderer::new(&device, &cfg, 64, 48);
+    r.seed(&device, &queue, &cfg);
+    r.run_steps(&device, &queue, &cfg, 20);
+    let at = r.step_index();
+    assert!(at > 0 && !r.will_reseed(&cfg), "a run under way");
+
+    let mut held = cfg.clone();
+    held.grid = SimGrid::Fixed { width: 64, height: 48 };
+    r.resize(&device, &held, 128, 96);
+    assert_eq!(r.grid_size(), (64, 48), "the cells are kept");
+    assert_eq!(r.output_size(), (128, 96), "the picture is the new size");
+    assert!(!r.will_reseed(&cfg), "the run goes on");
+    assert_eq!(r.step_index(), at, "at its step");
+
+    r.resize(&device, &cfg, 128, 96);
+    assert_eq!(r.grid_size(), (128, 96), "let go, the bound grid follows the picture");
+    assert!(r.will_reseed(&cfg), "and the run starts over from the seed");
+}
+
+/// Run a bound grid's model at 64x48, then halve its scale, asked to
+/// carry the field (`request_resample`, the field resampler): the run's
+/// field before, the renderer after.
+fn halve_a_run(device: &Device, queue: &Queue, mut cfg: SimConfig, steps: u32, carry: bool) -> (Vec<[f32; 4]>, SimRenderer) {
+    cfg.grid = SimGrid::Viewport { scale: 1.0 };
+    let mut r = SimRenderer::new(device, &cfg, 64, 48);
+    r.seed(device, queue, &cfg);
+    r.run_steps(device, queue, &cfg, steps);
+    let before = read_rgba32f(device, queue, r.field_texture(), 64, 48);
+    cfg.grid = SimGrid::Viewport { scale: 0.5 };
+    if carry {
+        r.request_resample();
+    }
+    r.resize(device, &cfg, 64, 48);
+    assert_eq!(r.grid_size(), (32, 24));
+    // The carry runs before the next step or colour reads the field.
+    r.run_steps(device, queue, &cfg, 0);
+    (before, r)
+}
+
+/// A continuous field is carried into a halved grid, not reseeded: the run
+/// goes on at its step, and every cell lies within the values around where
+/// it came from (Catmull-Rom held to its neighbourhood: nothing overshoots).
+#[test]
+fn a_scale_edit_carries_a_continuous_field() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (before, r) = halve_a_run(&device, &queue, small_config(), 200, true);
+    let cfg = small_config();
+    assert!(!r.will_reseed(&cfg), "carried, not reseeded");
+    assert_eq!(r.step_index(), 200, "at its step");
+    let after = read_rgba32f(&device, &queue, r.field_texture(), 32, 24);
+    for (i, cell) in after.iter().enumerate() {
+        let (x, y) = ((i % 32) as usize * 2, (i / 32) as usize * 2);
+        let around: Vec<[f32; 4]> = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
+            .iter()
+            .map(|&(cx, cy)| before[cy.min(47) * 64 + cx.min(63)])
+            .collect();
+        for c in 0..4 {
+            let lo = around.iter().map(|v| v[c]).fold(f32::INFINITY, f32::min);
+            let hi = around.iter().map(|v| v[c]).fold(f32::NEG_INFINITY, f32::max);
+            assert!(cell[c] >= lo - 1e-6 && cell[c] <= hi + 1e-6, "cell {i} channel {c}: {} outside {lo}..{hi}", cell[c]);
+        }
+    }
+    let spread = |f: &[[f32; 4]]| {
+        let (lo, hi) = f.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| (lo.min(v[1]), hi.max(v[1])));
+        hi - lo
+    };
+    assert!(spread(&after) > 0.5 * spread(&before), "the pattern came across, not a flat field");
+}
+
+/// A discrete field is carried by the nearest cell: every carried cell is
+/// exactly one of the old field's, so no state the rule cannot hold appears.
+#[test]
+fn a_scale_edit_carries_a_discrete_field_exactly() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut cfg = sandpile_config(64, 10.0, false);
+    cfg.init = SimInit::Center;
+    let (before, r) = halve_a_run(&device, &queue, cfg.clone(), 300, true);
+    assert!(!r.will_reseed(&cfg), "carried, not reseeded");
+    let after = read_rgba32f(&device, &queue, r.field_texture(), 32, 24);
+    for (i, cell) in after.iter().enumerate() {
+        let (x, y) = ((i % 32) * 2 + 1, (i / 32) * 2 + 1);
+        assert_eq!(*cell, before[y * 64 + x], "cell {i} is its nearest old cell");
+    }
+}
+
+/// What is not carried starts over from the seed: a resize without a scale
+/// edit, and a model whose state is a population of agents.
+#[test]
+fn a_resize_or_an_agent_model_starts_over() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let (_, r) = halve_a_run(&device, &queue, small_config(), 20, false);
+    assert!(r.will_reseed(&small_config()), "no request, a resize: from the seed");
+    let mut physarum = small_config();
+    physarum.model = "physarum".into();
+    let (_, r) = halve_a_run(&device, &queue, physarum.clone(), 20, true);
+    assert!(r.will_reseed(&physarum), "agents are not carried");
+}
+
+/// `SimUpscale::Fsr`: the field coloured at a cell a pixel, then drawn up
+/// to the output by FSR (`fsr_size`). Finite and in range; the same
+/// picture as nearest on average (an upscale does not move its
+/// brightness), but not nearest's blocks; and a letterbox's bars still
+/// empty.
+#[test]
+fn fsr_draws_a_simulation_up_from_its_cells() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let shown = |upscale: crate::config::sim::SimUpscale, out: (u32, u32)| {
+        let mut cfg = small_config();
+        cfg.upscale = upscale;
+        let mut r = SimRenderer::new(&device, &cfg, out.0, out.1);
+        r.seed(&device, &queue, &cfg);
+        r.run_steps(&device, &queue, &cfg, 400);
+        r.color(&device, &queue, &cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        (r.fsr_size(&cfg), read_rgba32f(&device, &queue, r.output_texture(), out.0, out.1))
+    };
+    let (small, fsr) = shown(crate::config::sim::SimUpscale::Fsr, (256, 256));
+    assert_eq!(small, Some((64, 64)), "coloured at the grid's size");
+    let (_, nearest) = shown(crate::config::sim::SimUpscale::Nearest, (256, 256));
+    for (i, px) in fsr.iter().enumerate() {
+        assert!(px.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.5), "pixel {i}: {px:?}");
+    }
+    let mean = |f: &[[f32; 4]]| f.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / f.len() as f32;
+    let (a, b) = (mean(&fsr), mean(&nearest));
+    assert!((a - b).abs() <= 0.03 * b.max(1e-3), "FSR's mean {a} against nearest's {b}");
+    let differs = fsr.iter().zip(&nearest).filter(|(x, y)| (x[1] - y[1]).abs() > 0.01).count();
+    assert!(differs > fsr.len() / 20, "only {differs} pixels differ from nearest's blocks");
+
+    // A square grid in a wide picture: bars beside it, empty.
+    let (small, wide) = shown(crate::config::sim::SimUpscale::Fsr, (256, 128));
+    assert_eq!(small, Some((128, 64)));
+    for y in [0u32, 64, 127] {
+        let px = wide[(y * 256 + 4) as usize];
+        assert_eq!(px[3], 0.0, "a bar is empty at row {y}: {px:?}");
+    }
+}
+
 /// The field after a real run is a Gray–Scott field: finite, inside
 /// [0, 1], and actually patterned rather than uniform.
 #[test]

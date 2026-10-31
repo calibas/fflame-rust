@@ -812,10 +812,35 @@ use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
 use winit::{event::WindowEvent, window::Window};
 
+/// The quality governor's part in a simulation (app/governor.rs), for the
+/// Simulation panel. Set by the app each frame.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SimGovernorUi {
+    /// The grid scale a governed run holds, while it is not the config's.
+    pub held: Option<f32>,
+    /// *Fit to target*'s scale: the best at which Steps per Frame fit the
+    /// Target Frame Rate, as measured; None before a step has been.
+    pub fit: Option<f32>,
+}
+
+/// An active simulation's hold on its grid (docs/archive/projects/quality-governor.md,
+/// D7): while a run is active, a resize never changes its field, so the
+/// viewport letterboxes to the grid's shape instead, once its size is no
+/// longer the one the run began at. Set by the app each frame
+/// (`app/sim_lock.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SimLock {
+    /// The run's grid, in cells: the shape the viewport keeps.
+    pub grid: (u32, u32),
+    /// The viewport's size when the run began, as it reports it
+    /// unletterboxed: while it is that size, nothing is letterboxed.
+    pub viewport: (u32, u32),
+}
+
 /// The antialiasing the escape viewport is drawn at this frame, and why
 /// it is below the setting when it is (shown under the Escape panel's
 /// Antialiasing control).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EscapeAa {
     /// The factor in use.
     pub in_use: u32,
@@ -823,6 +848,9 @@ pub struct EscapeAa {
     pub requested: u32,
     /// Why `in_use` is lower, if it is.
     pub reason: Option<AaReason>,
+    /// The quality governor's render scale, 1 when it is not lowering it
+    /// (app/governor.rs).
+    pub scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -956,6 +984,12 @@ pub struct EguiLayer {
     deep_zoom: DeepZoom,
     /// The escape viewport's antialiasing, while in escape mode.
     escape_aa: Option<EscapeAa>,
+    /// An active simulation's hold on its grid, while there is one.
+    sim_lock: Option<SimLock>,
+    /// The governor's part in a simulation (`SimGovernorUi`).
+    sim_governor: SimGovernorUi,
+    /// The frame rate the governor holds now, for the Rendering menu.
+    governor_fps: f32,
     /// What the menu bar's progress bar shows. Set by App each frame.
     render_progress: RenderProgress,
 
@@ -1112,6 +1146,9 @@ impl EguiLayer {
             density_histogram: crate::renderer::DensityHistogram::default(),
             deep_zoom: DeepZoom::default(),
             escape_aa: None,
+            sim_lock: None,
+            sim_governor: SimGovernorUi::default(),
+            governor_fps: 60.0,
             render_progress: RenderProgress::Idle,
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
@@ -1537,6 +1574,9 @@ impl EguiLayer {
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
+        // Whether the docked viewport letterboxed this frame: the tab
+        // bar's cover, drawn after it, goes black then.
+        let mut viewport_letterboxed = config_manager.system_settings().viewport_letterbox;
 
         // Free-fly camera: drag delta accumulator + toggle flag
         // populated by the viewport panel; consumed by App on response.
@@ -1601,6 +1641,12 @@ impl EguiLayer {
             is_paused: *paused,
             frame_governor: config_manager.system_settings().frame_governor,
             manual_workgroups: config_manager.system_settings().manual_workgroups,
+            render_scale: config_manager.system_settings().render_scale,
+            upscaler: config_manager.system_settings().upscaler,
+            render_physical_pixels: config_manager.system_settings().render_physical_pixels,
+            target_rate: config_manager.system_settings().target_rate,
+            target_fps_now: self.governor_fps,
+            export_fps: self.animation_export_settings.fps,
             render_mode: config_manager.config().render_mode,
             fly_available: crate::ui::visibility::fly_mode(crate::camera::gesture::view_kind(config_manager.config())).is_show(),
             tonemap_mode: config_manager.config().tonemap_mode,
@@ -1669,9 +1715,15 @@ impl EguiLayer {
                         if let Some(texture_id) = fractal_texture_id {
                             // Letterboxed as the docked viewport is.
                             let panel = ui.available_rect_before_wrap();
-                            let rect = if config_manager.system_settings().viewport_letterbox {
+                            let shape = view_controls::letterbox_shape(
+                                config_manager.system_settings().viewport_letterbox,
+                                config_manager.active_config().image_size,
+                                self.sim_lock,
+                                (panel.width() as u32, panel.height() as u32),
+                            );
+                            let rect = if let Some(shape) = shape {
                                 ui.painter().rect_filled(panel, 0.0, egui::Color32::BLACK);
-                                view_controls::letterbox_rect(panel, config_manager.active_config().image_size)
+                                view_controls::letterbox_rect(panel, shape)
                             } else {
                                 panel
                             };
@@ -1823,6 +1875,9 @@ impl EguiLayer {
                         // Fractal texture for display
                         fractal_texture_id,
                         fractal_viewport_size: &mut fractal_viewport_size,
+                        viewport_letterboxed: &mut viewport_letterboxed,
+                        sim_lock: self.sim_lock,
+                        sim_governor: self.sim_governor,
                         fly_mouse_drag: &mut fly_mouse_drag,
                         fly_mode_toggle_requested: &mut fly_mode_toggle_requested,
                         fly_mode_active,
@@ -1999,7 +2054,7 @@ impl EguiLayer {
                         // Letterboxed, the strip is a bar: black, the texture
                         // not under it, and not a place to steer from (the
                         // picture's rect is elsewhere in the leaf).
-                        let letterbox = config_manager.system_settings().viewport_letterbox;
+                        let letterbox = viewport_letterboxed;
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
                             .order(egui::Order::Background)
@@ -2123,7 +2178,7 @@ impl EguiLayer {
                 ctx,
                 animation_controller,
                 &mut self.animation_export_settings,
-                config_manager.active_config().image_size,
+                config_manager.active_config(),
                 export_status.active,
                 &mut self.export_panel_state,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -2505,6 +2560,30 @@ impl EguiLayer {
             let _ = config_manager.update_system_setting(crate::config::ConfigPath::SystemManualWorkgroups, w.into());
         }
 
+        // The viewport's render scale: read by the app each frame, which
+        // resizes the renderer when the size it asks for changes.
+        let rendering = &menu_actions.rendering;
+        if rendering.set_render_scale.is_some()
+            || rendering.set_upscaler.is_some()
+            || rendering.set_render_physical_pixels.is_some()
+            || rendering.set_target_rate.is_some()
+        {
+            let settings = config_manager.system_settings_mut();
+            if let Some(scale) = rendering.set_render_scale {
+                settings.render_scale = scale;
+            }
+            if let Some(filter) = rendering.set_upscaler {
+                settings.upscaler = filter;
+            }
+            if let Some(on) = rendering.set_render_physical_pixels {
+                settings.render_physical_pixels = on;
+            }
+            if let Some(rate) = rendering.set_target_rate {
+                settings.target_rate = rate;
+            }
+            let _ = settings.save();
+        }
+
         if menu_actions.rendering.reset_to_defaults {
             reset_rendering_to_defaults(config_manager);
             *paused = false; // Resume rendering after reset
@@ -2751,6 +2830,27 @@ impl EguiLayer {
 
     /// The escape viewport's antialiasing this frame (`None` outside
     /// escape mode).
+    /// An active simulation's hold on its grid, for the viewport's
+    /// letterbox (`SimLock`).
+    pub fn set_sim_lock(&mut self, lock: Option<SimLock>) {
+        self.sim_lock = lock;
+    }
+
+    /// The governor's part in a simulation, for the Simulation panel.
+    pub fn set_sim_governor(&mut self, g: SimGovernorUi) {
+        self.sim_governor = g;
+    }
+
+    /// The frame rate the governor holds now (the Rendering menu shows it).
+    pub fn set_governor_fps(&mut self, fps: f32) {
+        self.governor_fps = fps;
+    }
+
+    /// The animation export's frame rate (`TargetRate::Animation`).
+    pub fn export_fps(&self) -> u32 {
+        self.animation_export_settings.fps
+    }
+
     pub fn update_escape_aa(&mut self, aa: Option<EscapeAa>) {
         self.escape_aa = aa;
     }

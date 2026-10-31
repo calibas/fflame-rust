@@ -182,6 +182,7 @@ pub fn export_animation_mode(
     iterations_per_thread: u32,
     video_settings: animation::export::VideoEncodingSettings,
     audio: Option<animation::export::AudioExportConfig>,
+    rung: animation::export::ExportRung,
 ) {
     env_logger::init();
     // Enable inlined constants for animation export - maximum shader performance
@@ -195,7 +196,7 @@ pub fn export_animation_mode(
     // missing.
     if let Err(e) = pollster::block_on(export_animation_async(
         config_path, animation_path, output_path, width, height, fps,
-        iterations_per_thread, video_settings, audio,
+        iterations_per_thread, video_settings, audio, rung,
     )) {
         eprintln!("Animation export failed: {e}");
         std::process::exit(1);
@@ -313,6 +314,7 @@ async fn export_animation_async(
     iterations_per_thread: u32,
     video_settings: animation::export::VideoEncodingSettings,
     audio: Option<animation::export::AudioExportConfig>,
+    rung: animation::export::ExportRung,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
     use animation::export::{AnimationExportConfig, export_animation, is_ffmpeg_available};
@@ -366,6 +368,17 @@ async fn export_animation_async(
     }
     let config = animation::export::cli_base_config(from_flag, anim.base_config.as_ref())?;
     println!("Loaded config: {}", config.flame.name);
+    if rung.render_scale < 1.0 {
+        let percent = rung.render_scale.clamp(0.25, 1.0) * 100.0;
+        if config.render_mode == scene::transforms::RenderMode::Simulation {
+            println!("Render scale: {percent:.0}%: a bound simulation grid scales by it each side (a different run from the still; a fixed grid is unchanged)");
+        } else {
+            println!("Render scale: {percent:.0}%, drawn up by {:?}", rung.upscaler);
+        }
+    }
+    if let Some(n) = rung.escape_supersample {
+        println!("Escape supersampling: at most {n}x");
+    }
 
     let total_frames = (anim.duration * fps as f64).ceil() as u32;
     println!("Total frames: {}", total_frames);
@@ -385,6 +398,7 @@ async fn export_animation_async(
         // No signals of its own: the exporter renders the animation's
         // generators. Audio analysis and .signal files are app-side.
         signals: std::collections::HashMap::new(),
+        rung,
     };
     // The exporter logs these too, but the CLI's logger shows errors
     // only unless RUST_LOG says otherwise.

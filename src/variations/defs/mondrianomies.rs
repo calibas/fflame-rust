@@ -248,7 +248,7 @@ macro_rules! mnd_body {
     () => {
         r#"
 fn mnd_hash01(a: i32, b: i32) -> f32 {
-    var h = u32(a) * 0x8da6b343u ^ u32(b) * 0xd8163841u;
+    var h = (u32(a) * 0x8da6b343u) ^ (u32(b) * 0xd8163841u);
     h = h ^ (h >> 16u);
     h = h * 0x7feb352du;
     h = h ^ (h >> 13u);

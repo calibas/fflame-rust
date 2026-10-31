@@ -1,4 +1,12 @@
-//! **The frame governor's antialiasing axis**, for escape-time playback.
+//! **The quality governor without a GPU timer**, for escape-time playback.
+//!
+//! Where the device cannot time its frames (a browser without
+//! `timestamp-query`) the quality governor (governor.rs) has no GPU time to
+//! predict rungs from, and this walks escape-time's ladder by dropped
+//! frames instead (`governor::fallback_rung`): its "factor" is a position
+//! on the ladder, 1 the cheapest rung, its ceiling the ladder's length and
+//! the best. It was the antialiasing governor before the quality governor,
+//! walking the supersampling alone, and what follows was written of that.
 //!
 //! An escape animation advances only on settled frames
 //! (`update_animation`), so a frame that outlasts the refresh interval
@@ -165,7 +173,7 @@ pub(crate) fn readout(in_use: u32, requested: u32, governed: bool, ceiling: u32)
     } else {
         crate::ui::AaReason::Size
     });
-    crate::ui::EscapeAa { in_use, requested, reason }
+    crate::ui::EscapeAa { in_use, requested, reason, scale: 1.0 }
 }
 
 #[cfg(test)]

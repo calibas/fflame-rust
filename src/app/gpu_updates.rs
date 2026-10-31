@@ -417,6 +417,13 @@ impl App {
         // because it subsumes it.
         if actions.reseed_sim {
             self.sim_reseed = true;
+        } else if actions.resample_sim {
+            self.sim_resample = true;
+        }
+        // An edit, not a frame of playback: a governed run's pick waits
+        // for the edits to stop (governor.rs).
+        if (actions.rerender_sim || actions.reseed_sim || actions.resample_sim) && !self.animation_controller.is_playing() {
+            self.sim_last_edit = Some(web_time::Instant::now());
         }
 
         // Clear pending actions after executing them

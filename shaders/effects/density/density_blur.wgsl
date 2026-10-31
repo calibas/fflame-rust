@@ -23,7 +23,9 @@ struct EffectParams {
     // The frame's mean density: a pixel's `a` divided by it is in
     // multiples of the mean.
     density_mean: f32,
-    _padding: f32,
+    // Render pixels per logical viewport point (the viewport's render
+    // scale; 1 everywhere else): the radius is in points.
+    pixel_scale: f32,
 }
 
 // Helper to get parameter by index
@@ -64,7 +66,7 @@ fn gaussian(x: f32, sigma: f32) -> f32 {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Get parameters
-    let max_radius = get_param(0u);
+    let max_radius = get_param(0u) * effect_params.pixel_scale;
     let threshold = get_param(1u);
     let falloff = get_param(2u);
 

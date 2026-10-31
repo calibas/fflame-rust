@@ -71,6 +71,13 @@ pub struct RenderJob<'a> {
     /// path passes -- means a fresh engine for this render.
     pub engines: Option<&'a mut RenderEngines>,
 
+    /// Render pixels per output pixel, for the parameters measured in
+    /// pixels (filter radii, effect radii, escape-time's relief): 1 -- the
+    /// default -- for a render at its output's size, and an export's render
+    /// scale for one rendered smaller and drawn up after
+    /// (docs/archive/projects/quality-governor.md, *Exports*).
+    pub pixel_scale: f32,
+
     /// The frame's motion-blur moments (docs/archive/projects/motion-blur.md):
     /// the config at each moment of the shutter, averaged before the
     /// tail. Empty -- the default -- renders `config` alone; `config` is
@@ -103,6 +110,7 @@ impl<'a> RenderJob<'a> {
             transparent: false,
             premultiplied: false,
             engines: None,
+            pixel_scale: 1.0,
             moments: &[],
             throwaway_renderer: false,
             #[cfg(test)]
@@ -137,6 +145,13 @@ impl<'a> RenderJob<'a> {
     /// Use premultiplied alpha (vs straight-alpha reconstruction) for transparent export
     pub fn with_premultiplied(mut self, premultiplied: bool) -> Self {
         self.premultiplied = premultiplied;
+        self
+    }
+
+    /// Measure sizes in pixels at `s` render pixels an output pixel (an
+    /// export at a render scale).
+    pub fn with_pixel_scale(mut self, s: f32) -> Self {
+        self.pixel_scale = if s.is_finite() && s > 0.0 { s } else { 1.0 };
         self
     }
 
@@ -460,6 +475,9 @@ pub async fn render_with(
         return Err(RenderError::TooLarge(format!("this flame cannot be rendered: {why}")));
     }
     let start_time = web_time::Instant::now();
+    // Sizes in pixels, for every engine's tail (the effect chains read it
+    // off the renderer) and the flame's own passes.
+    renderer.set_pixel_scale(job.pixel_scale);
     // The variations the flame carries the source of, registered for
     // every engine: a flame's, an escape lens, a simulation's warp.
     #[cfg(feature = "engine-escape")]
@@ -729,6 +747,7 @@ pub async fn render_with(
     // Reset effect slot counter (allows multiple effects with unique params in same submit)
     if let Some(chain) = effect_chain.as_mut() {
         chain.reset_slots();
+        chain.set_pixel_scale(renderer.pixel_scale());
     }
 
     // Solid brightness renormalization: exact accepted-density measurement
@@ -1122,6 +1141,7 @@ async fn render_sim(
     };
     if let Some(chain) = effect_chain.as_mut() {
         chain.reset_slots();
+        chain.set_pixel_scale(renderer.pixel_scale());
     }
 
     let picture = match sim.moments_view() {
@@ -1339,6 +1359,7 @@ async fn render_escape(
     // CLI, thumbnails): a saved file reproduces exactly.
     let want_ss = if solid_path { 1 } else { job.config.escape.supersample.max(1) };
     escape_renderer.resize(device, job.width, job.height, want_ss);
+    escape_renderer.set_pixel_scale(job.pixel_scale);
     // A browser has no blocking wait: the polls below return at once, so
     // chunks go in back to back and the adaptive sizer, which times the
     // gap between calls, would read each as free and grow toward a
@@ -1548,6 +1569,7 @@ async fn escape_tail(
     };
     if let Some(chain) = effect_chain.as_mut() {
         chain.reset_slots();
+        chain.set_pixel_scale(renderer.pixel_scale());
     }
 
     if has_density_effects {
@@ -1993,6 +2015,44 @@ mod motion_tests {
         let building = read(&device, &queue, escape.accumulated_texture().expect("accumulated"));
         assert!(still == shown, "the frame shown changed while the next built");
         assert!(building != finished, "the next frame did not build");
+        escape.destroy();
+    }
+
+    /// Playback's settled picture (`present_output`) stays as it settled
+    /// while the next renders, so the viewport shows it and not the next
+    /// one's chunks (docs/archive/projects/quality-governor.md, phase 1).
+    #[test]
+    fn a_settled_picture_stays_while_the_next_renders() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let at = |d: f64| view(&format!("{:.16}", -0.7436438870371587 + d));
+        let flame = FlameRenderer::for_job(&device, &queue, TextureFormat::Rgba8Unorm, W, H, &at(0.0));
+        let mut escape = crate::escape::EscapeRenderer::new(&device, W, H);
+        let settle = |escape: &mut crate::escape::EscapeRenderer, c: &FractalConfig, hold: bool| {
+            let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            while !escape.render(&device, &queue, &mut enc, &c.escape, flame.escape_palette_view(false), flame.palette_generation()) {
+                queue.submit(std::iter::once(enc.finish()));
+                let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+                enc = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            }
+            if hold {
+                escape.present_output(&device, &mut enc);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        };
+        settle(&mut escape, &at(0.0), true);
+        let shown = read(&device, &queue, escape.presented_texture().expect("presented"));
+        let first = read(&device, &queue, escape.output_texture_for_test());
+        assert!(shown == first, "the picture held is the one that settled");
+
+        settle(&mut escape, &at(0.02), false);
+        let still = read(&device, &queue, escape.presented_texture().expect("presented"));
+        let next = read(&device, &queue, escape.output_texture_for_test());
+        assert!(still == shown, "the picture held changed while the next rendered");
+        assert!(next != first, "the next picture did not render");
         escape.destroy();
     }
 

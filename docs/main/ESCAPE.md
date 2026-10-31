@@ -1782,11 +1782,28 @@ blur*). The viewport's blurred playback keeps the finished average aside
 `Vivid` (the average, with the saturation the samples had restored).
 Coverage is averaged once, as straight alpha.
 
-**During animation playback** with the frame governor on, the viewport's
-factor is governed instead (`src/app/aa_governor.rs`): a step is shed
-when several recent settled frames came more than 1.5 budgets late,
-probed back up after a clean run, and a failed probe waits twice as long
-next time. Stills, exports and video render at the config's factor.
+**While an animation plays, or a 2D picture is being edited,** with the
+frame governor on, the viewport's supersampling and render scale are the
+quality governor's (`src/app/governor.rs`;
+[quality-governor.md](../archive/projects/quality-governor.md)): a ladder from the
+setting down (supersampling to 2x, then 75% and 50% scale, then 1x; a
+solid 2x, 1x, then 75%, 50%, 25%), a rung chosen from each picture's
+measured GPU time against the Target Frame Rate. Stills, exports and video
+render at the config's factor. Without a GPU timer (a browser without
+`timestamp-query`), playback walks the same ladder by dropped frames
+(`governor::fallback_rung`, `src/app/aa_governor.rs`): a step down after
+several settled frames come a refresh late, a step up after a run with
+none, a failed step up waiting twice as long the next time; editing is
+not governed there.
+
+**An output pixel** is what the relief (its height, softness and texture
+scale), the distance-estimate colourings and the relief's slope
+cancellations measure in: `esc_supersample()`, which reads
+`EscapeParams.px_scale`, render pixels per output pixel. That is the
+supersample factor, times the viewport's render scale
+(`EscapeRenderer::set_pixel_scale`, 1 for every export), so neither
+antialiasing nor a lower render scale moves the colours or the relief.
+Mode D's march steps by the integer factor in `flags` bits 4-7.
 
 ### The recolour cache
 

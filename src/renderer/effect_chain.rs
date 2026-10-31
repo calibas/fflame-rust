@@ -183,8 +183,11 @@ struct EffectParams {
     /// count. 1 for escape and simulation images, whose `a` is not a
     /// hit count; 0 for colour effects.
     density_mean: f32,
-    /// Padding to align struct to 16 bytes (WGSL uniform buffer requirement)
-    _padding: f32,
+    /// Render pixels per logical viewport point (`set_pixel_scale`, the
+    /// viewport's render scale; 1 everywhere else). The effects with sizes
+    /// in pixels read it (the density blurs, sharpen, chromatic aberration,
+    /// the kaleidoscope's edge offset); the rest declare it as padding.
+    pixel_scale: f32,
 }
 
 // The uniform packs parameters in vec4 groups, so the count must divide
@@ -323,6 +326,9 @@ pub struct EffectChainRunner {
     /// ping-pong plus the seed/flood/composite pipelines. Lazily
     /// created, absent unless the effect is in the chain.
     jfa: Option<JfaResources>,
+    /// Render pixels per logical viewport point (`set_pixel_scale`): the
+    /// viewport's render scale. 1 for the exporters.
+    pixel_scale: f32,
 }
 
 /// Multi-pass state for the `distance_field` effect. The effect
@@ -374,6 +380,7 @@ impl EffectChainRunner {
             width,
             height,
             jfa: None,
+            pixel_scale: 1.0,
         }
     }
 
@@ -440,6 +447,13 @@ impl EffectChainRunner {
     }
 
     /// Resize textures if dimensions changed
+    /// The viewport's render scale (docs/archive/projects/quality-governor.md):
+    /// render pixels per logical point, which the effects' sizes in
+    /// pixels are measured in (`EffectParams::pixel_scale`).
+    pub fn set_pixel_scale(&mut self, s: f32) {
+        self.pixel_scale = if s.is_finite() && s > 0.0 { s } else { 1.0 };
+    }
+
     pub fn resize(&mut self, _device: &Device, width: u32, height: u32) {
         if self.width != width || self.height != height {
             self.width = width;
@@ -634,6 +648,7 @@ impl EffectChainRunner {
         sampler: &Sampler,
         width: u32,
         height: u32,
+        pixel_scale: f32,
     ) {
         let n_floods = Self::jfa_pass_count(width, height) as usize;
         if slots.len() < n_floods + 2 {
@@ -645,7 +660,7 @@ impl EffectChainRunner {
             width,
             height,
             density_mean: 0.0,
-            _padding: 0.0,
+            pixel_scale,
         };
         let registry = global_effect_registry();
         if let Some(info) = registry.get("distance_field") {
@@ -961,6 +976,7 @@ impl EffectChainRunner {
                     width,
                     height,
                     density_mean,
+                    self.pixel_scale,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -1093,6 +1109,7 @@ impl EffectChainRunner {
                             &self.sampler,
                             width,
                             height,
+                            self.pixel_scale,
                         );
                         textures.swap();
                     }
@@ -1114,6 +1131,7 @@ impl EffectChainRunner {
                     width,
                     height,
                     0.0, // colour effects have no density
+                    self.pixel_scale,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -1150,6 +1168,7 @@ impl EffectChainRunner {
         width: u32,
         height: u32,
         density_mean: f32,
+        pixel_scale: f32,
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
@@ -1166,7 +1185,7 @@ impl EffectChainRunner {
             width,
             height,
             density_mean,
-            _padding: 0.0,
+            pixel_scale,
         };
 
         // Fill in effect parameters (packed into vec4s)
@@ -1568,6 +1587,59 @@ mod gpu_tests {
         assert!((sparse - 0.5).abs() < 0.2, "a tenth of the mean is sparse, but the stripes stayed sharp: red {sparse}");
         let dense = red_at_centre(100.0);
         assert!(dense == 0.0 || dense == 1.0, "ten times the mean is dense, but the stripes blurred: red {dense}");
+    }
+
+    /// Sizes in pixels are in logical points (`set_pixel_scale`, the
+    /// viewport's render scale): at half scale a radius of 8 is the radius
+    /// 4 at full scale, to the bit, for a density blur and a colour
+    /// effect's offset alike.
+    #[test]
+    fn a_size_in_pixels_follows_the_pixel_scale() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        const W: u32 = 32;
+        const H: u32 = 8;
+        let data: Vec<u8> = (0..W * H)
+            .flat_map(|i| [(i % W % 2) as f32, 0.0, 0.0, 1000.0])
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba32Float, &data);
+        let blurred = |radius: f32, scale: f32| {
+            let mut blur = EffectInstance::new("density_blur");
+            blur.set_param("radius", radius);
+            let mut chain = EffectChainRunner::new(&device, W, H);
+            chain.set_pixel_scale(scale);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
+            chain.reset_slots();
+            assert!(chain.run_density_effects(&device, &queue, &mut encoder, &view, &[blur], 10_000.0));
+            queue.submit(Some(encoder.finish()));
+            let out = chain.read_density_output_blocking(&device, &queue);
+            chain.destroy();
+            out
+        };
+        assert_eq!(blurred(8.0, 0.5), blurred(4.0, 1.0), "density_blur's radius");
+        assert_ne!(blurred(8.0, 1.0), blurred(4.0, 1.0), "the radius changes the blur at all");
+
+        let colour: Vec<u8> = (0..W * H).flat_map(|i| [((i % W) * 8) as u8, 0, ((i / W) * 30) as u8, 255]).collect();
+        let (_c, cview) = texture_of(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &colour);
+        let shifted = |amount: f32, scale: f32| {
+            let mut ca = EffectInstance::new("chromatic_aberration");
+            ca.set_param("amount", amount);
+            ca.set_param("radial", 0.0);
+            let mut chain = EffectChainRunner::new(&device, W, H);
+            chain.set_pixel_scale(scale);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("colour") });
+            chain.reset_slots();
+            assert!(chain.run_color_effects(&device, &queue, &mut encoder, &cview, &[ca]));
+            queue.submit(Some(encoder.finish()));
+            let out = pollster::block_on(chain.read_color_output_pixels(&device, &queue)).expect("read").2;
+            chain.destroy();
+            out
+        };
+        assert_eq!(shifted(6.0, 0.5), shifted(3.0, 1.0), "chromatic aberration's amount");
+        assert_ne!(shifted(6.0, 1.0), shifted(3.0, 1.0), "the amount moves the channels at all");
     }
 
     /// A frame's chains may need more parameter slots than the buffer

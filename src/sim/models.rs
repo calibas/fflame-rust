@@ -17,7 +17,7 @@
 //! * `sim_dt()` — the config's `dt`.
 //! * `sim_rng()` / `sim_step_index()` — for `NeedsRng` models only.
 
-use super::{ModelDef, ModelFeature, SimParamDef, SimPreset, MAX_KERNEL_RADIUS};
+use super::{ModelDef, ModelFeature, SimParamDef, SimPreset, MAX_KERNEL_RADIUS, StateKind};
 
 /// Gray–Scott reaction–diffusion, in Karl Sims' discretisation.
 ///
@@ -40,6 +40,7 @@ use super::{ModelDef, ModelFeature, SimParamDef, SimPreset, MAX_KERNEL_RADIUS};
 /// `.w` spare.
 pub static GRAY_SCOTT: ModelDef = ModelDef {
     name: "gray_scott",
+    state: StateKind::Continuous,
     display_name: "Gray–Scott",
     description: "Two-species reaction–diffusion. Pearson's (F, k) plane holds spots, \
                   worms, mazes and mitosis — the classic reaction–diffusion patterns.",
@@ -235,6 +236,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// `.z` = the step this cell last fired, `.w` spare.
 pub static FITZHUGH_NAGUMO: ModelDef = ModelDef {
     name: "fitzhugh_nagumo",
+    state: StateKind::Continuous,
     display_name: "FitzHugh–Nagumo",
     description: "Excitable medium: travelling pulses and rotating spiral waves. \
                   Needs a cut wavefront to nucleate — from noise it relaxes flat.",
@@ -405,6 +407,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = X, `.y` = Y, `.z` = age, `.w` spare.
 pub static BRUSSELATOR: ModelDef = ModelDef {
     name: "brusselator",
+    state: StateKind::Continuous,
     display_name: "Brusselator",
     description: "The textbook Turing system: stationary spots when Y diffuses faster \
                   than X, bulk oscillation when it does not.",
@@ -583,6 +586,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = u, `.y` = v, `.z` = age, `.w` spare.
 pub static SCHNAKENBERG: ModelDef = ModelDef {
     name: "schnakenberg",
+    state: StateKind::Continuous,
     display_name: "Schnakenberg",
     description: "Minimal Turing system: spots at a large diffusion ratio. Feature size \
                   scales as the square root of the diffusion rates.",
@@ -749,6 +753,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = state, `.z` = age, `.w` spare.
 pub static HODGEPODGE: ModelDef = ModelDef {
     name: "hodgepodge",
+    state: StateKind::Discrete,
     display_name: "Hodgepodge",
     description: "Belousov–Zhabotinsky as a cellular automaton: dense interlocking \
                   spirals and scrolls in an excitable integer medium.",
@@ -972,6 +977,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = state, `.z` = age, `.w` spare.
 pub static CYCLIC_CA: ModelDef = ModelDef {
     name: "cyclic_ca",
+    state: StateKind::Discrete,
     display_name: "Cyclic CA",
     description: "States chase each other around a cycle: debris coarsens into droplets \
                   and then into spirals whose cores never settle.",
@@ -1137,6 +1143,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = species (0 empty, 1..k), `.z` = age, `.w` spare.
 pub static SPATIAL_RPS: ModelDef = ModelDef {
     name: "spatial_rps",
+    state: StateKind::Discrete,
     display_name: "Spatial RPS",
     description: "Cyclic competition: each species beats the next and loses to the one \
                   before, and no species can win. Rotating domain spirals.",
@@ -1270,6 +1277,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = spin, `.z` = age, `.w` spare.
 pub static ISING: ModelDef = ModelDef {
     name: "ising",
+    state: StateKind::Discrete,
     display_name: "Ising",
     description: "Spins on a lattice at temperature T. Domains coarsen below the critical \
                   point, are fractal at it, and are noise above it.",
@@ -1413,6 +1421,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = occupied, `.z` = arrival step, `.w` spare.
 pub static EDEN: ModelDef = ModelDef {
     name: "eden",
+    state: StateKind::Discrete,
     display_name: "Eden Growth",
     description: "A cluster grown one site at a time into its neighbourhood. Compact, with \
                   a rough interface — the growth rings are the subject.",
@@ -1538,6 +1547,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// `.z` = arrival step.
 pub static BALLISTIC_DEPOSITION: ModelDef = ModelDef {
     name: "ballistic_deposition",
+    state: StateKind::Discrete,
     display_name: "Ballistic Deposition",
     description: "Particles fall and stick where they first touch. Lateral sticking builds \
                   overhangs and a correlated surface; without it the columns are independent.",
@@ -1680,6 +1690,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = cell state, `.z` = row index (its generation).
 pub static WOLFRAM_ECA: ModelDef = ModelDef {
     name: "wolfram_eca",
+    state: StateKind::Discrete,
     display_name: "Wolfram ECA",
     description: "One-dimensional binary automata drawn as space-time: rule 90 is \
                   Sierpinski's triangle, rule 30 is chaotic, rule 110 is Turing-complete.",
@@ -1820,6 +1831,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = frozen, `.z` = freeze step, `.w` spare.
 pub static PACKARD_SNOWFLAKE: ModelDef = ModelDef {
     name: "packard_snowflake",
+    state: StateKind::Discrete,
     display_name: "Packard Snowflake",
     description: "Hexagonal solidification: a vacant cell freezes on a chosen count of \
                   frozen neighbours. Plates, branches and dendrites.",
@@ -1983,6 +1995,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// `.y` = open, `.z` = the step it last changed.
 pub static PERCOLATION: ModelDef = ModelDef {
     name: "percolation",
+    state: StateKind::Discrete,
     display_name: "Percolation",
     description: "Random open sites, coloured by which connected cluster they belong to. \
                   At the critical threshold the spanning cluster is fractal.",
@@ -2155,6 +2168,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// `.z` = age, `.w` spare.
 pub static SWIFT_HOHENBERG: ModelDef = ModelDef {
     name: "swift_hohenberg",
+    state: StateKind::Continuous,
     display_name: "Swift–Hohenberg",
     description: "The canonical pattern-forming equation: one wavelength is amplified and \
                   every other damped, giving a labyrinth with a definite spacing.",
@@ -2341,6 +2355,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// `.z` = age, `.w` spare.
 pub static CAHN_HILLIARD: ModelDef = ModelDef {
     name: "cahn_hilliard",
+    state: StateKind::Continuous,
     display_name: "Cahn–Hilliard",
     description: "A mixture separating into two phases and then coarsening: labyrinths at \
                   an even mix, droplets of the minority phase away from it.",
@@ -2526,6 +2541,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = u, `.y` = v, `.z` = age, `.w` spare.
 pub static OREGONATOR: ModelDef = ModelDef {
     name: "oregonator",
+    state: StateKind::Continuous,
     display_name: "Oregonator",
     description: "The Belousov–Zhabotinskii reaction as chemistry rather than as an \
                   automaton: an oscillating medium that carries travelling wave trains.",
@@ -2723,6 +2739,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// channel; the crystal's history is in T.
 pub static KOBAYASHI: ModelDef = ModelDef {
     name: "kobayashi",
+    state: StateKind::Continuous,
     display_name: "Kobayashi Dendrite",
     description: "Phase-field solidification: a crystal grown into an undercooled melt, \
                   with the anisotropy that turns a blob into a snowflake.",
@@ -2992,6 +3009,7 @@ const KOB_DX_SQ_OVER_4: f32 = 0.03 * 0.03 / 4.0;
 /// Channels: `.x` = A, `.y` = the last potential K*A, `.z` = age.
 pub static LENIA: ModelDef = ModelDef {
     name: "lenia",
+    state: StateKind::Continuous,
     display_name: "Lenia",
     description: "Life made continuous: a ring-shaped kernel and a smooth growth rule, \
                   giving soft filaments and cells that crawl.",
@@ -3159,6 +3177,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = f, `.y` = the last neighbourhood n, `.z` = age.
 pub static SMOOTHLIFE: ModelDef = ModelDef {
     name: "smoothlife",
+    state: StateKind::Continuous,
     display_name: "SmoothLife",
     description: "Conway's Life on a continuous domain: the same birth and survival rules \
                   read as smooth thresholds, giving gliders and rolling labyrinths.",
@@ -3681,6 +3700,7 @@ pub fn mccabe_scale_discs(params: &std::collections::BTreeMap<String, f32>) -> V
 
 pub static MCCABE: ModelDef = ModelDef {
     name: "mccabe",
+    state: StateKind::Continuous,
     display_name: "McCabe Multi-Scale",
     description: "Turing patterns at several scales at once, the finest structure nested \
                   inside the coarsest — the electron-microscope look — with optional \
@@ -4997,6 +5017,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// agents actually are, for the `occupancy` colouring).
 pub static PHYSARUM: ModelDef = ModelDef {
     name: "physarum",
+    state: StateKind::Agents,
     display_name: "Physarum",
     description: "Slime mould: thousands of agents lay a chemical trail and follow it, and \
                   the feedback builds a transport network of filaments and junctions.",
@@ -5320,6 +5341,7 @@ fn sim_agent2(a: SimAgent, i: u32) -> SimAgent {
 /// draws the growth order -- the classic DLA rainbow).
 pub static DLA: ModelDef = ModelDef {
     name: "dla",
+    state: StateKind::Agents,
     display_name: "Diffusion-Limited Aggregation",
     description: "Random walkers that stick where they first touch a growing cluster, \
                   building the branching aggregate of soot, frost and mineral dendrites.",
@@ -5567,6 +5589,7 @@ fn sim_agent(a: SimAgent, i: u32) -> SimAgent {
 /// which is what `age` draws as the avalanche front.
 pub static SANDPILE: ModelDef = ModelDef {
     name: "sandpile",
+    state: StateKind::Discrete,
     display_name: "Abelian Sandpile",
     description: "Grains dropped on one site and toppled until stable. The four-colour \
                   height field is a fractal limit shape; the edges are sinks.",
@@ -5758,6 +5781,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// step it was invaded.
 pub static INVASION_PERCOLATION: ModelDef = ModelDef {
     name: "invasion_percolation",
+    state: StateKind::Discrete,
     display_name: "Invasion Percolation",
     description: "A cluster that spreads into whichever sites resist it least, as a rising \
                   threshold. At the percolation threshold it is a critical cluster, all \
@@ -5979,6 +6003,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// just attached.
 pub static SNOWFAKE: ModelDef = ModelDef {
     name: "snowfake",
+    state: StateKind::Discrete,
     display_name: "Gravner–Griffeath Snowfake",
     description: "A planar snow crystal grown from vapour on a hexagonal lattice: diffusion, \
                   a quasi-liquid boundary layer, and attachment that is harder on a flat face \
@@ -6419,6 +6444,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// `.y` = φ, `.z` = the step the site joined, `.w` = in the pattern.
 pub static DBM: ModelDef = ModelDef {
     name: "dbm",
+    state: StateKind::Discrete,
     display_name: "Dielectric Breakdown",
     description: "A discharge that branches into whichever gap has the strongest field, one \
                   site at a time, exactly as the paper draws it. Lightning and Lichtenberg \
@@ -6816,6 +6842,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// normalisation), `.y` = p, `.z` = c -- the picture, `.w` = spare.
 pub static FINGERING: ModelDef = ModelDef {
     name: "fingering",
+    state: StateKind::Discrete,
     display_name: "Viscous Fingering",
     description: "A thin fluid pushed into a thick one in a porous slab: the front is \
                   unstable and breaks into fingers that race ahead and shield their \
@@ -7093,6 +7120,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: the four fields, one per channel, each in [−1, 1].
 pub static LATTICE4: ModelDef = ModelDef {
     name: "lattice4",
+    state: StateKind::Continuous,
     display_name: "Coupled Turing Lattice",
     description: "Four Turing patterns on one lattice, coupled by a 4×4 matrix. Chained in a \
                   ring they chase each other and every cell cycles in place, like a \
@@ -7630,6 +7658,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = u₁, `.y` = v₁, `.z` = u₂, `.w` = v₂.
 pub static BRUSSELATOR2: ModelDef = ModelDef {
     name: "brusselator2",
+    state: StateKind::Continuous,
     display_name: "Two-Layer Brusselator",
     description: "Two Brusselator layers with different wavelengths, coupled linearly or \
                   cubically. Cubic coupling of the right strength makes patterns that are \
@@ -7943,6 +7972,7 @@ fn sim_seed(inside: f32, noise: f32, p: vec2<i32>) -> vec4<f32> {
 /// Channels: `.x` = u, `.y` = v, `.z` = w, `.w` = the envelope of u.
 pub static ROSSLER: ModelDef = ModelDef {
     name: "rossler",
+    state: StateKind::Continuous,
     display_name: "Rössler Lattice",
     description: "Chaotic Rössler oscillators coupled by diffusion. The snapshots are chaos; \
                   the time-maximum of u, kept in the fourth channel, is a still, ordered \
@@ -8263,6 +8293,7 @@ pub(crate) fn difference_of_discs(p: &super::Params) -> crate::sim::SimKernel {
 /// field coloured on its own in the stack.
 pub static TURING: ModelDef = ModelDef {
     name: "turing",
+    state: StateKind::Continuous,
     display_name: "Turing Field",
     description: "One difference-of-discs Turing field, made to be a layer: coupled to other \
                   Turing fields through Signal couplings it is one field of the coupled \

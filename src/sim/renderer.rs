@@ -604,9 +604,27 @@ pub struct SimRenderer {
     /// run. Used by the interactive driver to size a per-display-frame
     /// budget so catching up to a timeline target never blocks the UI.
     ms_per_step: f64,
+    /// The batches timed since the renderer was made, and the last one's
+    /// ms a step, raw: the quality governor takes a median of these.
+    batches_timed: u64,
+    last_step_ms: f64,
     /// Set when the field has not been seeded yet, or the config
     /// changed in a way that invalidates it.
     needs_seed: bool,
+    /// A scale edit asked that the next change of grid carry the live
+    /// field across rather than reseed (`request_resample`). Read and
+    /// cleared by the next `resize`.
+    resample_requested: bool,
+    /// The old field, kept by a resize that carries it into the new grid
+    /// (`carry_field`, before the next step or colour reads the field):
+    /// its current texture, a view of it, and how its state is carried.
+    carry_from: Option<(Texture, TextureView, crate::sim::StateKind)>,
+    /// The resampler's pipeline, made the first time a field is carried.
+    carry_pipeline: Option<(ComputePipeline, BindGroupLayout)>,
+    /// `SimUpscale::Fsr`'s picture at about a cell a pixel (`fsr_size`),
+    /// and the passes that draw it up to the output.
+    fsr_small: Option<(Texture, TextureView)>,
+    fsr: Option<crate::renderer::upscale::Fsr>,
     /// What the live field was seeded from, or `None` before the
     /// first seed. Compared against the config every frame, so a
     /// config that arrives by any route at all cannot inherit the
@@ -799,7 +817,14 @@ impl SimRenderer {
             color_layers_buffer,
             steps_per_submit: FIRST_SUBMIT,
             ms_per_step: 0.0,
+            batches_timed: 0,
+            last_step_ms: 0.0,
             needs_seed: true,
+            resample_requested: false,
+            carry_from: None,
+            carry_pipeline: None,
+            fsr_small: None,
+            fsr: None,
             seeded_as: None,
             run_identity: None,
         }
@@ -1591,6 +1616,17 @@ impl SimRenderer {
         (self.grid_w, self.grid_h)
     }
 
+    /// The batches timed so far and the last one's ms a step, unsmoothed
+    /// (the quality governor's measure: a new count is a new sample).
+    pub fn last_step(&self) -> (u64, f64) {
+        (self.batches_timed, self.last_step_ms)
+    }
+
+    /// The picture's size: what the field is resolved to.
+    pub fn output_size(&self) -> (u32, u32) {
+        (self.out_w, self.out_h)
+    }
+
     /// Move a shifted pyramid lattice every `steps` steps instead of
     /// every one. For measurements; a run should keep one period.
     pub fn set_lattice_shift_every(&mut self, steps: u32) {
@@ -1610,7 +1646,15 @@ impl SimRenderer {
     /// state, which is a phase-3 concern (`resample_into`). Saying so
     /// by reseeding is honest; silently continuing on a stretched
     /// field would not be.
+    /// The next change of grid comes from a scale edit (`SimResample`):
+    /// carry the live field into it rather than reseed, as the kind of
+    /// its state allows (`StateKind`). Read by the next `resize` only.
+    pub fn request_resample(&mut self) {
+        self.resample_requested = true;
+    }
+
     pub fn resize(&mut self, device: &Device, cfg: &SimConfig, out_w: u32, out_h: u32) -> bool {
+        let resample = std::mem::take(&mut self.resample_requested);
         let (gw, gh) = Self::allocatable_grid(cfg, out_w, out_h);
         let out_changed = out_w != self.out_w || out_h != self.out_h;
         let grid_changed = gw != self.grid_w || gh != self.grid_h;
@@ -1628,8 +1672,29 @@ impl SimRenderer {
         }
         if grid_changed {
             let (f, fv) = Self::create_field_pair(device, gw, gh, self.layers);
-            self.field = f;
-            self.field_view = fv;
+            let old_field = std::mem::replace(&mut self.field, f);
+            let old_view = std::mem::replace(&mut self.field_view, fv);
+            // A scale edit carries a seeded run's field into the new grid
+            // (`carry_field`), unless its state cannot be carried; a resize
+            // or a new run starts from the seed, as it always did. A carry
+            // still pending keeps its field: the one just replaced was
+            // never written.
+            // Only into a grid of the same shape, within a cell's rounding:
+            // the carry maps each axis by its own ratio, and a field is
+            // never stretched (D7) -- a letterboxed run's grid, let go
+            // into a viewport of another shape, starts from the seed.
+            let kind = crate::sim::StateKind::of_config(cfg);
+            let same_shape = (gw as f64 * self.grid_h as f64 - gh as f64 * self.grid_w as f64).abs()
+                <= 0.5 * (self.grid_w + self.grid_h) as f64 + 1.0;
+            if resample && same_shape && !self.needs_seed && kind != crate::sim::StateKind::Agents {
+                if self.carry_from.is_none() {
+                    let [a, b] = old_field;
+                    let [va, vb] = old_view;
+                    self.carry_from = Some(if self.current == 0 { (a, va, kind) } else { (b, vb, kind) });
+                }
+            } else {
+                self.carry_from = None;
+            }
             // Re-created lazily at the new size, if the model reads it.
             self.pyramid.clear();
             self.jfa = None;
@@ -1646,7 +1711,7 @@ impl SimRenderer {
             self.grid_w = gw;
             self.grid_h = gh;
             self.current = 0;
-            self.needs_seed = true;
+            self.needs_seed = self.carry_from.is_none();
         }
         // Do NOT clear `pipelines` here. The resolve direction is part
         // of the pipeline key, so `ensure_pipelines` already rebuilds
@@ -1681,7 +1746,8 @@ impl SimRenderer {
             upscale: cfg.upscale,
             downscale: cfg.downscale,
             init_kind: cfg.init.kind_name(),
-            magnifying: self.magnifying(cfg),
+            // FSR magnifies after the colour pass, not in it (`fsr_size`).
+            magnifying: self.magnifying(cfg) && cfg.upscale != crate::config::sim::SimUpscale::Fsr,
         }
     }
 
@@ -1692,6 +1758,33 @@ impl SimRenderer {
     fn magnifying(&self, cfg: &SimConfig) -> bool {
         let z = cfg.view.zoom.max(1.0e-6) as f64;
         self.out_w as f64 * z >= self.grid_w as f64 && self.out_h as f64 * z >= self.grid_h as f64
+    }
+
+    /// With `SimUpscale::Fsr`, while the picture magnifies the grid: the
+    /// size the colour pass runs at instead of the output's, about one
+    /// pixel a cell through the same view (the output over its
+    /// magnification, the fit's times the view's zoom), for FSR to draw up
+    /// to the output after (`renderer::upscale::Fsr`). None otherwise, and
+    /// when that is the output's size anyway.
+    pub fn fsr_size(&self, cfg: &SimConfig) -> Option<(u32, u32)> {
+        if cfg.upscale != crate::config::sim::SimUpscale::Fsr || !self.magnifying(cfg) {
+            return None;
+        }
+        let (rx, ry) = (
+            self.out_w as f64 / self.grid_w.max(1) as f64,
+            self.out_h as f64 / self.grid_h.max(1) as f64,
+        );
+        let fit = match cfg.fit {
+            crate::config::sim::SimFit::Letterbox => rx.min(ry),
+            crate::config::sim::SimFit::Cover => rx.max(ry),
+        };
+        let m = fit * cfg.view.zoom.max(1.0e-6) as f64;
+        if m <= 1.0 {
+            return None;
+        }
+        let side = |n: u32| ((n as f64 / m).round() as u32).clamp(1, n);
+        let size = (side(self.out_w), side(self.out_h));
+        (size != (self.out_w, self.out_h)).then_some(size)
     }
 
     fn ensure_pipelines(&mut self, device: &Device, cfg: &SimConfig) {
@@ -2801,7 +2894,112 @@ impl SimRenderer {
     /// Seed the field from the config. Resets the step counter: the
     /// pair (seed, step_index) is the state's identity, and a reseed
     /// starts a new run.
+    /// Carry a field kept by `resize` into the new grid (the field
+    /// resampler; docs/archive/projects/quality-governor.md): every slice, each
+    /// cell from where its centre falls in the old grid. Continuous state
+    /// by Catmull-Rom, held within its 2x2 neighbourhood's range so it
+    /// never overshoots; discrete state from the nearest cell. The run
+    /// goes on at its step: a feature keeps its size in cells, so the
+    /// picture looks the same, finer or blockier, and then re-forms at
+    /// its own size.
+    fn carry_field(&mut self, device: &Device, queue: &Queue) {
+        let Some((old, old_view, kind)) = self.carry_from.take() else {
+            return;
+        };
+        let (pipeline, layout) = self.carry_pipeline.get_or_insert_with(|| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Sim Field Carry"),
+                source: wgpu::ShaderSource::Wgsl(CARRY_WGSL.into()),
+            });
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Sim Field Carry Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: TextureViewDimension::D2Array,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Sim Field Carry Pipeline Layout"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Sim Field Carry"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some("carry_main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            (pipeline, layout)
+        });
+        let mut raw = [0u8; 16];
+        raw[0..4].copy_from_slice(&(old.width() as f32 / self.grid_w.max(1) as f32).to_le_bytes());
+        raw[4..8].copy_from_slice(&(old.height() as f32 / self.grid_h.max(1) as f32).to_le_bytes());
+        raw[8..12].copy_from_slice(&u32::from(kind == crate::sim::StateKind::Continuous).to_le_bytes());
+        let params = device.create_buffer(&BufferDescriptor {
+            label: Some("Sim Field Carry Params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&params, 0, &raw);
+        let bg = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Sim Field Carry BG"),
+            layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&old_view) },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&self.field_view[self.current]) },
+                BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
+            ],
+        });
+        let mut enc = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("Sim Field Carry") });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Sim Field Carry"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            let (gx, gy) = Self::dispatch_size(self.grid_w, self.grid_h);
+            pass.dispatch_workgroups(gx, gy, self.layers.max(1));
+        }
+        queue.submit(std::iter::once(enc.finish()));
+        drop(old_view);
+        drop(old);
+    }
+
     pub fn seed(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig) {
+        // A seed is a new run: a field waiting to be carried is not one.
+        self.carry_from = None;
         self.ensure_layers(device, queue, cfg);
         self.ensure_pipelines(device, cfg);
         self.ensure_pyramid(device, cfg);
@@ -2971,6 +3169,7 @@ impl SimRenderer {
     /// blocking poll in WebGPU), the measured cost is ~0, and the
     /// batch sits at the ceiling; browsers have no 2 s reset to avoid.
     pub fn run_steps(&mut self, device: &Device, queue: &Queue, cfg: &SimConfig, count: u32) {
+        self.carry_field(device, queue);
         if count == 0 {
             return;
         }
@@ -3249,14 +3448,16 @@ impl SimRenderer {
                     self.step_index += 1;
                 }
             }
+            // What is still in flight first (a previous frame's tail, the
+            // seed pass): timed with it, a frame the GPU is behind on read
+            // the steps as dearer than they are, and the quality governor
+            // picked a smaller grid than fitted (2026-10-30). The GPU idles
+            // for the submit's latency only.
+            let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             queue.submit(std::iter::once(enc.finish()));
             done += batch;
 
-            // Time this submission and size the next one from it. The
-            // measurement can include unrelated work still in flight
-            // (the seed pass, a previous frame's tonemap), which only
-            // overestimates the cost and shrinks the next batch: the
-            // safe direction.
+            // Time this submission and size the next one from it.
             let started = web_time::Instant::now();
             let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
             let ms = started.elapsed().as_secs_f64() * 1e3;
@@ -3266,6 +3467,13 @@ impl SimRenderer {
             // still in flight; an exponential average settles on the
             // real cost within a few batches without a spike moving it
             // far.
+            // Not where the wait does not block (a browser): the time is
+            // the submit's, near nothing, and the quality governor would
+            // read every model as free. It is left unmeasured there.
+            if cfg!(not(target_arch = "wasm32")) {
+                self.batches_timed += 1;
+                self.last_step_ms = per_step;
+            }
             self.ms_per_step = if self.ms_per_step > 0.0 {
                 self.ms_per_step * 0.7 + per_step * 0.3
             } else {
@@ -3292,8 +3500,33 @@ impl SimRenderer {
         cfg: &SimConfig,
         palette_view: &TextureView,
     ) {
+        self.carry_field(device, queue);
         self.ensure_pipelines(device, cfg);
-        self.write_params_slot0(queue, cfg);
+        // With FSR, the colour pass runs at about a cell a pixel and FSR
+        // draws that up to the output (`fsr_size`).
+        let fsr_size = self.fsr_size(cfg);
+        match fsr_size {
+            Some(small) => {
+                if self.fsr_small.as_ref().is_none_or(|(t, _)| (t.width(), t.height()) != small) {
+                    if let Some((t, _)) = self.fsr_small.take() {
+                        t.destroy();
+                    }
+                    self.fsr_small = Some(Self::create_output(device, small.0, small.1));
+                }
+                let mut p = self.params_for(cfg, self.step_index);
+                p.out_size = [small.0, small.1];
+                queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&p));
+            }
+            None => {
+                if let Some((t, _)) = self.fsr_small.take() {
+                    t.destroy();
+                }
+                if let Some(fsr) = self.fsr.as_mut() {
+                    fsr.release();
+                }
+                self.write_params_slot0(queue, cfg);
+            }
+        }
         let model = model_or_default(&cfg.model);
         let coloring = coloring_or_default(&cfg.coloring);
         self.write_param_arrays(queue, model, coloring, cfg);
@@ -3332,7 +3565,9 @@ impl SimRenderer {
                 BindGroupEntry { binding: 2, resource: self.coloring_params_buffer.as_entire_binding() },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(&self.output_view),
+                    resource: BindingResource::TextureView(
+                        self.fsr_small.as_ref().filter(|_| fsr_size.is_some()).map_or(&self.output_view, |(_, v)| v),
+                    ),
                 },
                 BindGroupEntry {
                     binding: 4,
@@ -3351,8 +3586,14 @@ impl SimRenderer {
             });
             pass.set_pipeline(&p.color);
             pass.set_bind_group(0, &bg, &[0]);
-            let (gx, gy) = Self::dispatch_size(self.out_w, self.out_h);
+            let (w, h) = fsr_size.unwrap_or((self.out_w, self.out_h));
+            let (gx, gy) = Self::dispatch_size(w, h);
             pass.dispatch_workgroups(gx, gy, 1);
+        }
+        if let (Some(small), Some((_, small_view))) = (fsr_size, self.fsr_small.as_ref()) {
+            self.fsr
+                .get_or_insert_with(|| crate::renderer::upscale::Fsr::new(crate::renderer::upscale::FsrTarget::Linear))
+                .encode(device, queue, &mut enc, small_view, small, &self.output_view, (self.out_w, self.out_h));
         }
         queue.submit(std::iter::once(enc.finish()));
     }
@@ -3470,6 +3711,77 @@ impl SimRenderer {
         self.color(device, queue, cfg, palette_view);
     }
 }
+
+/// The field resampler (`SimRenderer::carry_field`): the old field's every
+/// slice into the new grid, each cell from where its centre falls in the
+/// old one. Catmull-Rom for continuous state, clamped to the 2x2
+/// neighbourhood's range (no overshoot into values the rule cannot hold);
+/// the nearest cell for discrete state, exact.
+const CARRY_WGSL: &str = r#"
+struct CarryParams {
+    // Old cells per new cell, each axis.
+    ratio: vec2<f32>,
+    // 1 continuous (Catmull-Rom), 0 discrete (nearest). (`smooth` is
+    // reserved in WGSL.)
+    continuous: u32,
+    _pad: u32,
+}
+
+@group(0) @binding(0) var old_field: texture_2d_array<f32>;
+@group(0) @binding(1) var new_field: texture_storage_2d_array<rgba32float, write>;
+@group(0) @binding(2) var<uniform> p: CarryParams;
+
+fn carry_tap(q: vec2<i32>, layer: i32, size: vec2<i32>) -> vec4<f32> {
+    return textureLoad(old_field, clamp(q, vec2<i32>(0), size - vec2<i32>(1)), layer, 0);
+}
+
+fn carry_weights(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(
+        -0.5 * t3 + t2 - 0.5 * t,
+        1.5 * t3 - 2.5 * t2 + 1.0,
+        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+        0.5 * t3 - 0.5 * t2,
+    );
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn carry_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = vec2<i32>(textureDimensions(new_field));
+    let q = vec2<i32>(i32(gid.x), i32(gid.y));
+    if (q.x >= dims.x || q.y >= dims.y) {
+        return;
+    }
+    let layer = i32(gid.z);
+    let size = vec2<i32>(textureDimensions(old_field));
+    let at = (vec2<f32>(q) + vec2<f32>(0.5)) * p.ratio;
+    if (p.continuous == 0u) {
+        textureStore(new_field, q, layer, carry_tap(vec2<i32>(floor(at)), layer, size));
+        return;
+    }
+    let c = at - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(c));
+    let f = c - floor(c);
+    let wx = carry_weights(f.x);
+    let wy = carry_weights(f.y);
+    var v = vec4<f32>(0.0);
+    for (var j = 0; j < 4; j = j + 1) {
+        var row = vec4<f32>(0.0);
+        for (var i = 0; i < 4; i = i + 1) {
+            row = row + carry_tap(base + vec2<i32>(i - 1, j - 1), layer, size) * wx[i];
+        }
+        v = v + row * wy[j];
+    }
+    let a = carry_tap(base, layer, size);
+    let b = carry_tap(base + vec2<i32>(1, 0), layer, size);
+    let d = carry_tap(base + vec2<i32>(0, 1), layer, size);
+    let e = carry_tap(base + vec2<i32>(1, 1), layer, size);
+    let lo = min(min(a, b), min(d, e));
+    let hi = max(max(a, b), max(d, e));
+    textureStore(new_field, q, layer, clamp(v, lo, hi));
+}
+"#;
 
 /// A 3D terrain's inputs at grid size (`SimRenderer::terrain_inputs`).
 #[cfg(feature = "terrain")]
