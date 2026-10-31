@@ -90,25 +90,25 @@ pub enum NewTrackType {
 /// Internal paths use 0-based indices for backward compatibility with saved files,
 /// but UI displays 1-based indices to match the rest of the application.
 fn path_to_display(path: &str) -> String {
-    // Match "Transform.N." pattern and increment the number
-    if let Some(rest) = path.strip_prefix("Transform.") {
-        if let Some(dot_pos) = rest.find('.') {
-            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
-                return format!("Transform.{}.{}", index + 1, &rest[dot_pos + 1..]);
-            }
-        }
-    }
-    // Return unchanged for non-transform paths
-    path.to_string()
+    // Every number in a key is a list index (a transform, an effect, a
+    // light, a layer, a coupling, a xaos cell), stored from 0 and shown
+    // from 1 (the user, 2026-10-31: user-facing numbers start at 1;
+    // scripts and files keep 0).
+    path.split('.')
+        .map(|seg| match seg.parse::<usize>() {
+            Ok(index) => (index + 1).to_string(),
+            Err(_) => seg.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Human-readable prefix for a track's flame target — `"Main"` or
-/// `"Subflame 0"`. Subflame indices are displayed 0-based to match
-/// the Subflames panel.
+/// `"Subflame 1"`, numbered from 1 as the Subflames panel numbers them.
 fn flame_target_prefix(flame_target: EditingTarget) -> String {
     match flame_target {
         EditingTarget::Main => "Main".to_string(),
-        EditingTarget::Subflame { index } => format!("Subflame {}", index),
+        EditingTarget::Subflame { index } => format!("Subflame {}", index + 1),
     }
 }
 

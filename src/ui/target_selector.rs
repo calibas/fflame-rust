@@ -161,9 +161,9 @@ pub fn render_target_selector(
             for (i, subflame) in config.flame.subflames.iter().enumerate() {
                 let target = EditingTarget::Subflame { index: i };
                 let header_label = if subflame.name.is_empty() {
-                    format!("Subflame {}", i)
+                    format!("Subflame {}", i + 1)
                 } else {
-                    format!("Subflame {} — {}", i, subflame.name)
+                    format!("Subflame {} — {}", i + 1, subflame.name)
                 };
                 let header_id = format!("flame_subflame_{}", i);
                 let is_expanded = state.expanded.contains(&header_id) || has_filter;
@@ -662,7 +662,7 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
                 ConfigPath::SimModelParam { param: p.name.to_string() }
             };
             let label = if layered {
-                format!("Layer {l} {}: {}", model.display_name, p.display_name)
+                format!("Layer {} {}: {}", l + 1, model.display_name, p.display_name)
             } else {
                 format!("{}: {}", model.display_name, p.display_name)
             };
@@ -687,27 +687,27 @@ fn get_sim_items(config: &FractalConfig) -> Vec<TargetItem> {
             for p in coloring.parameters {
                 items.push(TargetItem::new(
                     ConfigPath::SimColorLayerParam { index: k, param: p.name.to_string() },
-                    &format!("Colour {k} {}: {}", coloring.display_name, p.display_name),
+                    &format!("Colour {} {}: {}", k + 1, coloring.display_name, p.display_name),
                 ));
             }
             items.push(TargetItem::new(
                 ConfigPath::SimColorLayerOpacity { index: k },
-                &format!("Colour {k}: opacity"),
+                &format!("Colour {}: opacity", k + 1),
             ));
             items.push(TargetItem::new(
                 ConfigPath::SimColorLayerMatteCutoff { index: k },
-                &format!("Colour {k} matte: cutoff"),
+                &format!("Colour {} matte: cutoff", k + 1),
             ));
             items.push(TargetItem::new(
                 ConfigPath::SimColorLayerMatteSoftness { index: k },
-                &format!("Colour {k} matte: softness"),
+                &format!("Colour {} matte: softness", k + 1),
             ));
         }
     }
 
     // The couplings' strengths.
     for k in 0..sim.couplings.len() {
-        items.push(TargetItem::new(ConfigPath::SimCouplingStrength { index: k }, &format!("Coupling {k}: Strength")));
+        items.push(TargetItem::new(ConfigPath::SimCouplingStrength { index: k }, &format!("Coupling {}: Strength", k + 1)));
     }
 
     // The 3D terrain's camera, ground and path tracer, when it is on.

@@ -718,9 +718,10 @@ fn render_terrain_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager,
             if layers > 1 {
                 ui.horizontal(|ui| {
                     ui.label(t!("sim_panel.terrain_layer"));
-                    let mut v = t.layer.min(layers - 1);
-                    if ui.add(egui::Slider::new(&mut v, 0..=layers - 1)).changed() {
-                        let _ = config_manager.update_param(ConfigPath::SimTerrainLayer, ConfigValue::UInt(v));
+                    // Numbered from 1, as the layer list is; stored from 0.
+                    let mut v = t.layer.min(layers - 1) + 1;
+                    if ui.add(egui::Slider::new(&mut v, 1..=layers)).changed() {
+                        let _ = config_manager.update_param(ConfigPath::SimTerrainLayer, ConfigValue::UInt(v - 1));
                     }
                 });
             }
@@ -953,7 +954,7 @@ fn render_coloring_section(
             // With one entry this is the Colouring row it has always
             // been; with several it is entry k of a stack.
             let label = if count > 1 {
-                t!("sim_panel.color_layer_label", n = k.to_string())
+                t!("sim_panel.color_layer_label", n = (k + 1).to_string())
             } else {
                 t!("sim_panel.coloring")
             };
@@ -1016,11 +1017,11 @@ fn render_coloring_section(
                 if n_sim_layers > 1 {
                     let source = entry.map(|l| l.source).unwrap_or(0);
                     egui::ComboBox::from_id_salt(format!("{}_source", slot.salt()))
-                        .selected_text(t!("sim_panel.layer_label", n = source.to_string()).as_ref())
+                        .selected_text(t!("sim_panel.layer_label", n = (source + 1).to_string()).as_ref())
                         .show_ui(ui, |ui| {
                             for l in 0..n_sim_layers {
                                 if ui
-                                    .selectable_label(l == source, t!("sim_panel.layer_label", n = l.to_string()).as_ref())
+                                    .selectable_label(l == source, t!("sim_panel.layer_label", n = (l + 1).to_string()).as_ref())
                                     .clicked()
                                 {
                                     action = Some(Box::new(move |s: &mut SimConfig| {
@@ -1553,7 +1554,7 @@ fn render_model_section(
             // With one layer this is the Model row it has always been;
             // with several it is entry i of a list.
             let label = if count > 1 {
-                t!("sim_panel.layer_label", n = i.to_string())
+                t!("sim_panel.layer_label", n = (i + 1).to_string())
             } else {
                 t!("sim_panel.model")
             };
@@ -1719,11 +1720,11 @@ fn render_model_section(
                     ui.horizontal(|ui| {
                         let layer_combo = |ui: &mut egui::Ui, salt: String, value: usize, path: ConfigPath, config_manager: &mut ConfigManager| {
                             egui::ComboBox::from_id_salt(salt)
-                                .selected_text(t!("sim_panel.layer_label", n = value.to_string()).as_ref())
+                                .selected_text(t!("sim_panel.layer_label", n = (value + 1).to_string()).as_ref())
                                 .show_ui(ui, |ui| {
                                     for l in 0..n {
                                         if ui
-                                            .selectable_label(l == value, t!("sim_panel.layer_label", n = l.to_string()).as_ref())
+                                            .selectable_label(l == value, t!("sim_panel.layer_label", n = (l + 1).to_string()).as_ref())
                                             .clicked()
                                         {
                                             let _ = config_manager.update_param(path.clone(), (l as i32).into());

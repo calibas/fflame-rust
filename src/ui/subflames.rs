@@ -73,12 +73,12 @@ pub fn render_subflames_content(
             for i in 0..logical_count {
                 let row_selected = matches!(active, EditingTarget::Subflame { index } if index == i);
                 let name = subflame_display_name(config_manager, i);
-                // Row label always leads with the index so the user
+                // Row label always leads with the number so the user
                 // can tell rows apart even when names collide / are
-                // blank. Format: "{index} - {name}", with "Subflame"
-                // as a placeholder name when unnamed.
+                // blank. Format: "{n} - {name}", numbered from 1, with
+                // "Subflame" as a placeholder name when unnamed.
                 let display = if name.is_empty() { "Subflame" } else { name.as_str() };
-                let label = format!("{} - {}", i, display);
+                let label = format!("{} - {}", i + 1, display);
                 ui.push_id(("subflame_row", i), |ui| {
                     ui.horizontal(|ui| {
                         ui.with_layout(
