@@ -602,7 +602,7 @@ behind them is in [CAMERA.md](CAMERA.md).
 | | 2D view | 3D view | 3D, fly mode |
 |---|---|---|---|
 | Drag | pan | pan (a terrain: along the ground) | look (about the eye) |
-| Alt+drag, right drag | rotate (grab and twist) | orbit the target (a turntable) | look |
+| Ctrl+drag, right drag | rotate (grab and twist) | orbit the target (a turntable) | look |
 | Wheel | zoom toward the cursor | dolly toward the cursor (a flame: its 2D zoom) | flying speed |
 | Shift | finer steps | finer steps | sprint |
 | W A S D Q E | -- | -- | fly (Q/E: screen up in FreeLook, world up in FPS) |
@@ -619,7 +619,7 @@ behind them is in [CAMERA.md](CAMERA.md).
   second is a **long press -- the touch's right button**: held, it reads
   the path in PathMap (as holding the right button does); dragged, it
   turns. The **Pan/Turn toggle** at the viewport's bottom left is the
-  touch's **Alt**: a sticky choice of what a one-finger drag does. It
+  touch's **Ctrl**: a sticky choice of what a one-finger drag does. It
   shows on the compact layout and once a touch has been seen.
 - **Keys** ([src/app/input.rs](../../src/app/input.rs),
   `handle_keyboard`): arrows pan 5% of the view a press and + / −
