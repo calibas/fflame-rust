@@ -175,7 +175,7 @@ fn declare_script(
     }
     let kind = ScriptKind::parse(kind).ok_or_else(|| {
         err(format!(
-            "unknown script kind `{kind}` — expected \"generator\" or \"modifier\""
+            "unknown script kind `{kind}` — expected \"generator\", \"modifier\" or \"library\""
         ))
     })?;
 
@@ -2654,16 +2654,19 @@ fn register_run_script(
     let state2 = Rc::clone(&state);
     let c = Rc::clone(&cfg);
     let s = Rc::clone(&state);
-    engine.register_fn("run_script", move |id: &str| -> Result<(), Box<EvalAltResult>> {
-        call_script(&c, &s, id, rhai::Map::new(), None)
-    });
+    engine.register_fn(
+        "run_script",
+        move |ctx: rhai::NativeCallContext, id: &str| -> Result<(), Box<EvalAltResult>> {
+            call_script(&ctx, &c, &s, id, rhai::Map::new(), None)
+        },
+    );
 
     let c = Rc::clone(&cfg);
     let s = Rc::clone(&state);
     engine.register_fn(
         "run_script",
-        move |id: &str, params: rhai::Map| -> Result<(), Box<EvalAltResult>> {
-            call_script(&c, &s, id, params, None)
+        move |ctx: rhai::NativeCallContext, id: &str, params: rhai::Map| -> Result<(), Box<EvalAltResult>> {
+            call_script(&ctx, &c, &s, id, params, None)
         },
     );
 
@@ -2671,8 +2674,8 @@ fn register_run_script(
     // continuing the caller's stream.
     engine.register_fn(
         "run_script",
-        move |id: &str, params: rhai::Map, seed: i64| -> Result<(), Box<EvalAltResult>> {
-            call_script(&cfg, &state, id, params, Some(seed as u64))
+        move |ctx: rhai::NativeCallContext, id: &str, params: rhai::Map, seed: i64| -> Result<(), Box<EvalAltResult>> {
+            call_script(&ctx, &cfg, &state, id, params, Some(seed as u64))
         },
     );
 
@@ -2681,6 +2684,7 @@ fn register_run_script(
 }
 
 fn call_script(
+    ctx: &rhai::NativeCallContext,
     cfg: &Rc<RefCell<FractalConfig>>,
     state: &Rc<RefCell<ScriptState>>,
     id: &str,
@@ -2698,7 +2702,10 @@ fn call_script(
     for (key, value) in params {
         supplied.insert(key.to_string(), dynamic_to_param(&value)?);
     }
-    super::host::run_sub_script(cfg, state, id, supplied, seed).map_err(err)
+    // Whose code is calling: a downloaded library's function is held to
+    // the downloaded-script rule even when a trusted script called it.
+    let restricted = super::host::untrusted_code_running(&state.borrow(), ctx.iter_namespaces());
+    super::host::run_sub_script(cfg, state, id, supplied, seed, restricted).map_err(err)
 }
 
 /// Turn a value from a `run_script` parameter map into a ParamValue.

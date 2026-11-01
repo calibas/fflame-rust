@@ -113,6 +113,15 @@ pub fn generate_mode(
         return;
     }
 
+    if meta.kind == Some(ScriptKind::Library) {
+        eprintln!(
+            "`{}` is a library: it has nothing to generate. Import it from another script \
+             with `import \"<its id>\" as lib;`.",
+            meta.name
+        );
+        std::process::exit(1);
+    }
+
     if meta.kind == Some(ScriptKind::Modifier) && base_path.is_none() {
         eprintln!(
             "Warning: `{}` is a modifier script but no --base was given; \

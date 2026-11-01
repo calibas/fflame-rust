@@ -5,10 +5,13 @@
 //! hard execution budgets. See
 //! [docs/archive/projects/flame-scripting.md](../../docs/archive/projects/flame-scripting.md).
 //!
-//! Two kinds, declared by the script itself:
+//! Three kinds, declared by the script itself:
 //!
 //! * **Generator** — builds a flame from a default config.
 //! * **Modifier** — transforms a *copy* of the current config.
+//! * **Library** — functions and constants for other scripts to
+//!   `import` (resolved through the script library, never a file:
+//!   [`host::LibraryResolver`]).
 //!
 //! Both are seeded from a pinned PRNG algorithm, so script + seed
 //! reproduces a flame byte-for-byte on desktop, web, and Python.
@@ -40,6 +43,11 @@ pub enum ScriptKind {
     Generator,
     /// Transforms an existing flame (starts from the current config).
     Modifier,
+    /// Functions and constants other scripts `import`. Not run on its
+    /// own: its top level may only declare (see
+    /// [`host::check_library`]), so importing one never changes the
+    /// flame.
+    Library,
 }
 
 impl ScriptKind {
@@ -47,6 +55,7 @@ impl ScriptKind {
         match s.trim().to_ascii_lowercase().as_str() {
             "generator" | "generate" | "gen" => Some(Self::Generator),
             "modifier" | "modify" | "mod" => Some(Self::Modifier),
+            "library" | "lib" => Some(Self::Library),
             _ => None,
         }
     }
@@ -55,6 +64,7 @@ impl ScriptKind {
         match self {
             Self::Generator => "generator",
             Self::Modifier => "modifier",
+            Self::Library => "library",
         }
     }
 }

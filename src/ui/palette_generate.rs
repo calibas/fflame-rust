@@ -43,14 +43,14 @@ impl PaletteGenerator {
     fn reload(&mut self, config_manager: &ConfigManager) {
         let previous = self.entries.get(self.selected).map(|e| e.id.clone());
         let base = config_manager.active_config().clone();
+        let host = library::with_library(ScriptHost::new());
         self.entries = library::discover(&base)
             .into_iter()
             .filter(|e| {
                 // The declared flag is the whole opt-in. Reading it needs
                 // the collect pass, which discover has already paid for
                 // — but it does not keep the flags, so ask again.
-                ScriptHost::new()
-                    .collect(&e.source, &base)
+                host.collect(&e.source, &base)
                     .map(|m| m.flags.palette)
                     .unwrap_or(false)
             })
@@ -71,7 +71,11 @@ impl PaletteGenerator {
             return;
         };
         let base = config_manager.active_config().clone();
-        match ScriptHost::new().collect(&entry.source, &base) {
+        let mut host = library::with_library(ScriptHost::new());
+        if entry.untrusted {
+            host = host.with_untrusted_entry();
+        }
+        match host.collect(&entry.source, &base) {
             Ok(meta) => {
                 self.meta = Some(meta);
             }
@@ -91,12 +95,14 @@ impl PaletteGenerator {
     fn run(&mut self, config_manager: &ConfigManager, palettes: &[Palette]) -> Option<Palette> {
         let entry = self.entries.get(self.selected)?;
         let base = config_manager.active_config().clone();
-        let host = ScriptHost::with_palettes(palettes.to_vec()).with_scripts(
-            library::discover(&base)
-                .into_iter()
-                .map(|e| (e.id, e.source))
-                .collect(),
-        );
+        // The library's sources, not `discover`'s parsed entries: a run
+        // needs only the text. Downloaded scripts marked, and the entry
+        // too, as in the Scripts panel -- a downloaded palette script is
+        // held to the same rule here.
+        let mut host = library::with_library(ScriptHost::with_palettes(palettes.to_vec()));
+        if entry.untrusted {
+            host = host.with_untrusted_entry();
+        }
         match host.run(&entry.source, &base, self.seed, self.values.clone()) {
             Ok(outcome) => {
                 self.messages = outcome.messages;
