@@ -1271,7 +1271,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "octaves".to_string(),
-                param_type: ParamType::Float,
+                param_type: ParamType::Integer,
                 default_value: 4.0,
                 min_value: Some(1.0),
                 max_value: Some(6.0),
@@ -1341,7 +1341,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "octaves".to_string(),
-                param_type: ParamType::Float,
+                param_type: ParamType::Integer,
                 default_value: 4.0,
                 min_value: Some(1.0),
                 max_value: Some(6.0),
