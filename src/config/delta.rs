@@ -307,6 +307,8 @@ pub enum ConfigPath {
     /// each iteration. Flipping it changes the `FLATTEN_Z_PER_ITER`
     /// shader gate and forces a shader rebuild via ShaderConstants.
     PreserveZ,
+    /// Restart every orbit each dispatch (`FractalConfig::reset_orbits`).
+    ResetOrbits,
     /// The picture's size in pixels (`FractalConfig::image_size`): what
     /// the PNG and video exports render at, and the aspect the viewport
     /// letterboxes to when asked. A `.flame`'s `size`.
@@ -1439,6 +1441,7 @@ impl Display for ConfigPath {
             ConfigPath::PostSymmetryDistance => write!(f, "Symmetry Distance"),
             ConfigPath::PostSymmetryRotation => write!(f, "Symmetry Rotation"),
             ConfigPath::PreserveZ => write!(f, "Preserve Z"),
+            ConfigPath::ResetOrbits => write!(f, "Reset Orbits"),
             ConfigPath::ImageWidth => write!(f, "Image Width"),
             ConfigPath::ImageHeight => write!(f, "Image Height"),
 
@@ -2186,6 +2189,7 @@ impl ConfigPath {
             ConfigPath::PostSymmetryDistance => I18nKey::simple("history.param.post_symmetry_distance"),
             ConfigPath::PostSymmetryRotation => I18nKey::simple("history.param.post_symmetry_rotation"),
             ConfigPath::PreserveZ => I18nKey::simple("history.param.preserve_z"),
+            ConfigPath::ResetOrbits => I18nKey::simple("history.param.reset_orbits"),
             ConfigPath::ImageWidth => I18nKey::simple("history.param.image_width"),
             ConfigPath::ImageHeight => I18nKey::simple("history.param.image_height"),
 
@@ -3207,6 +3211,7 @@ impl ConfigPath {
             | ConfigPath::PostSymmetryDistance
             | ConfigPath::PostSymmetryRotation
             | ConfigPath::PreserveZ
+            | ConfigPath::ResetOrbits
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng
             // Both change the compute shader (FRAME_COVERAGE /
@@ -3959,6 +3964,7 @@ impl ConfigPath {
             ConfigPath::PostSymmetryDistance => "PostSymmetryDistance".to_string(),
             ConfigPath::PostSymmetryRotation => "PostSymmetryRotation".to_string(),
             ConfigPath::PreserveZ => "PreserveZ".to_string(),
+            ConfigPath::ResetOrbits => "ResetOrbits".to_string(),
             ConfigPath::ImageWidth => "ImageWidth".to_string(),
             ConfigPath::ImageHeight => "ImageHeight".to_string(),
 
@@ -4105,6 +4111,7 @@ impl ConfigPath {
             "PostSymmetryDistance" => return Some(ConfigPath::PostSymmetryDistance),
             "PostSymmetryRotation" => return Some(ConfigPath::PostSymmetryRotation),
             "PreserveZ" => return Some(ConfigPath::PreserveZ),
+            "ResetOrbits" => return Some(ConfigPath::ResetOrbits),
             "ImageWidth" => return Some(ConfigPath::ImageWidth),
             "ImageHeight" => return Some(ConfigPath::ImageHeight),
 
@@ -4938,6 +4945,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::SystemFrameGovernor
         | ConfigPath::SystemShowHelpOnStartup
         | ConfigPath::PreserveZ
+        | ConfigPath::ResetOrbits
         => {
             json.as_bool().map(ConfigValue::Bool)
         }

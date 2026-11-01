@@ -94,6 +94,22 @@ pub fn render_settings_content(
                 temp_iterations.into()
             );
         }
+
+        // Reset orbits every dispatch: each orbit then Iterations per
+        // Thread long. A variation that needs it holds it on.
+        let forced_by = config.flame.fresh_orbits_variation(&crate::variations::global_registry());
+        let mut reset = config.reset_orbits || forced_by.is_some();
+        let tip = match &forced_by {
+            Some(name) => t!("settings.tooltip_reset_orbits_forced", variation = name),
+            None => t!("settings.tooltip_reset_orbits"),
+        };
+        let response = ui
+            .add_enabled(forced_by.is_none(), egui::Checkbox::new(&mut reset, t!("settings.reset_orbits").as_ref()))
+            .on_hover_text(tip.as_ref())
+            .on_disabled_hover_text(tip.as_ref());
+        if response.changed() {
+            let _ = config_manager.update_param(ConfigPath::ResetOrbits, reset.into());
+        }
     }
 
     // Advanced settings (collapsed by default)

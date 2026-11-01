@@ -62,7 +62,7 @@ field loads with its default.
 | group | fields |
 | --- | --- |
 | the flame | `flame: Flame` — transforms in three pools, xaos, solo, post-symmetry, subflames. Variation weights are `HashMap<String, f32>` keyed by variation name; parameters are `HashMap<String, f32>` keyed `"variation.param"`. See [TRANSFORMS.md](TRANSFORMS.md). |
-| scene-level render | `render_mode` (`TwoD`, `ThreeD`, `Escape`, `Simulation`; wire form `"2d"`, `"3d"`, `"escape"`, `"simulation"`), `preserve_z`, `perspective_strength`, `depth_density_compensation`, `far_density_fade`, `far_density_fade_start` |
+| scene-level render | `render_mode` (`TwoD`, `ThreeD`, `Escape`, `Simulation`; wire form `"2d"`, `"3d"`, `"escape"`, `"simulation"`), `preserve_z`, `reset_orbits` (restart every orbit each dispatch, [RENDERER.md](RENDERER.md) *Persistent orbits*; skipped when off), `perspective_strength`, `depth_density_compensation`, `far_density_fade`, `far_density_fade_start` |
 | 2D view | `zoom` (f32), `pan_x`, `pan_y` (f64), `rotation` (radians) |
 | 3D camera | `camera_rotation_x` (pitch), `camera_rotation_y` (yaw), `camera_bank`, `camera_x`, `camera_y`, `camera_z` |
 | depth effects | `dof_focus_distance`, `dof_blur_strength`, `fog_strength`, `fog_start` |

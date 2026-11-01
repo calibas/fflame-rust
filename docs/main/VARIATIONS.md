@@ -209,6 +209,7 @@ them with `has_feature`; the vocabulary on the wire is
 | `AnalyticBlur` | An input-independent blur that the analytic blur path can render as a mean splat plus a convolution ([analytic-blur-buffer.md](../archive/projects/analytic-blur-buffer.md)). Carried by `analytic_blur` and `analytic_gaussian_blur`. |
 | `NeedsW` | Carries the per-thread 4th coordinate: read `point_w`, write the raw output to `point_w_out`; the dispatcher weight-sums it like x/y/z. 3D only. |
 | `NeedsMobiusLib` | Splices in the SL(2,ℂ) Möbius library (*Helper libraries*). Changes nothing else. |
+| `ResetsOrbits` | A flame using it at a weight other than 0 starts its orbits afresh every dispatch, the config's `reset_orbits` held on ([RENDERER.md](RENDERER.md) *Persistent orbits*): for a map whose orbits settle, whose picture is their way from their starts. A renderer flag only; a Rhai variation declares it with `resets_orbits: true` in `INFO`. Carried by no built-in; the Dynamic System example has it. |
 
 Per-feature counts are in the generated contract.
 

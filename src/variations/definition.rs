@@ -229,6 +229,16 @@ pub enum Feature {
     /// `fuchsian_triangle`, …). Purely a code-injection flag — it does
     /// not change the variation's generated signature or dispatch.
     NeedsMobiusLib,
+
+    /// The variation's picture is its orbits' way from their starts: a
+    /// map whose orbits settle onto a few points or loops (Iterated
+    /// Dynamics' dynamic system). A flame using it, at a weight other
+    /// than 0, starts every orbit afresh each dispatch -- the config's
+    /// `reset_orbits`, forced on -- where orbits otherwise persist and
+    /// would draw that way once. Purely a renderer flag: no signature or
+    /// code changes. A Rhai variation declares it with
+    /// `INFO = #{ ..., resets_orbits: true }`.
+    ResetsOrbits,
 }
 
 impl Feature {
@@ -259,6 +269,7 @@ impl Feature {
         Feature::AnalyticBlur,
         Feature::NeedsW,
         Feature::NeedsMobiusLib,
+        Feature::ResetsOrbits,
     ];
 
     /// The canonical wire spelling for the API's `features` array.
@@ -281,6 +292,7 @@ impl Feature {
             Feature::AnalyticBlur => "analytic_blur",
             Feature::NeedsW => "needs_w",
             Feature::NeedsMobiusLib => "needs_mobius_lib",
+            Feature::ResetsOrbits => "resets_orbits",
             // Payload-carrying: the NAME goes here, the count travels in
             // its own `plot_emits` field. See `ALL`.
             Feature::PlotEmits(_) => "plot_emits",

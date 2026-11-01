@@ -10,9 +10,13 @@
 // below. It starts one orbit in each cell of a grid over its view (-20
 // to 20). Use it alone, at weight 1, on one transform whose triangle is
 // the identity: the chaos game iterates it, every thread's orbit from
-// where the flame's starts, in [-1, 1]. An orbit follows its own flow
-// line near where it starts, so the picture is the flow about the
-// origin, about 14 units across. To see it whole, scale what is
+// where the flame's starts, in [-1, 1]. Stepped so, an orbit spirals
+// out of the centre over a few hundred passes and settles onto loops
+// about the origin, about 14 units across: the picture is mostly that
+// way out, which an orbit kept from dispatch to dispatch would draw
+// once. So a flame using it starts its orbits afresh every dispatch,
+// each Iterations per Thread long (`resets_orbits` in INFO), much as
+// Fractint draws many short orbits. To see it whole, scale what is
 // plotted, not the view: a final transform whose triangle shrinks it by
 // about 4 / 14 (a final plots and does not feed the orbit), at a zoom
 // near 1. Zooming the view out that far instead darkens it, as the log
@@ -33,7 +37,7 @@ const PARAMS = #{
     color_offset: #{ value: 0.0, min: 0.0, max: 1.0, caption: "Color Offset", hint: "Added to the palette index" },
 };
 
-const INFO = #{ title: "Dynamic System", name: "dynamic_system" };
+const INFO = #{ title: "Dynamic System", name: "dynamic_system", resets_orbits: true };
 
 // The palette index for the step from z to w, as the Color choice says;
 // `longest` the longest step.

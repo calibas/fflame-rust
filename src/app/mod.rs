@@ -3343,6 +3343,7 @@ impl App {
                         max_workgroups: NUM_WORKGROUPS,
                         iterations_per_thread: settings.iterations_per_thread,
                         burn_in: settings.burn_in,
+                        resets_orbits: renderer.resets_orbits(),
                     }
                 };
                 if self.governor_batch != Some(batch) {
@@ -4231,11 +4232,16 @@ const KNEE_FREE: f64 = 1.25;
 /// fps). Until orbits persisted it shortened only under targeting, where
 /// a forced sample's position comes from its word, not from how long the
 /// free orbit has run.
+///
+/// Where orbits are reset every dispatch (`FractalConfig::reset_orbits`),
+/// a dispatch's length is its orbits' length: the picture, not the work.
+/// There the governor only sheds workgroups, as before orbits persisted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Batch {
     pub max_workgroups: u32,
     pub iterations_per_thread: u32,
     pub burn_in: u32,
+    pub resets_orbits: bool,
 }
 
 impl Batch {
@@ -4249,8 +4255,19 @@ impl Batch {
     }
 
     /// The shortest dispatch a batch is cut to: 64 iterations, or three
-    /// burn-ins, never more than the setting.
+    /// burn-ins, never more than the setting -- the whole setting where
+    /// orbits are reset, as each is one dispatch long.
     fn ipt_floor(&self) -> u32 {
+        if self.resets_orbits {
+            return self.iterations_per_thread.max(1);
+        }
+        self.planning_floor()
+    }
+
+    /// The shortest dispatch, for the planner's cap (`while_planning`):
+    /// what is drawn meanwhile is thrown away when the plan lands, so it
+    /// is cut there even where orbits are reset.
+    fn planning_floor(&self) -> u32 {
         self.iterations_per_thread.min((3 * self.burn_in).max(64)).max(1)
     }
 
@@ -4282,7 +4299,7 @@ impl Batch {
     /// when the plan lands, so the length it gives up costs nothing kept.
     pub fn while_planning(&self, knee: Knee, scale: f64) -> (u32, u32) {
         let (w, ipt) = self.shape(knee, scale);
-        (w, ipt.min(self.ipt_floor()))
+        (w, ipt.min(self.planning_floor()))
     }
 
     /// **The dispatch with the governor off**: `workgroups` of the full
@@ -4291,7 +4308,7 @@ impl Batch {
     /// governor's (tracker P10: the plan's round trips queue behind it).
     pub fn fixed(&self, workgroups: u32, planning: bool) -> (u32, u32) {
         let ipt = self.iterations_per_thread.max(1);
-        (workgroups.max(1), if planning { ipt.min(self.ipt_floor()) } else { ipt })
+        (workgroups.max(1), if planning { ipt.min(self.planning_floor()) } else { ipt })
     }
 
     /// The width of the floor's dispatch.
@@ -4416,7 +4433,7 @@ mod governor_tests {
     /// and never heavier than the governor's own shape.
     #[test]
     fn a_dispatch_while_planning_is_short() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 256, burn_in: 20, resets_orbits: false };
         let knees = [
             Knee::Shedding { over: 0 },
             Knee::Probing { width: 16, free: 1.0, frames: 0 },
@@ -4433,7 +4450,7 @@ mod governor_tests {
         // The full batch, as the app runs it on a light flame.
         assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0), (128, 64));
         // A setting shorter than the floor stays as it is.
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 32, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 32, burn_in: 20, resets_orbits: false };
         assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0).1, 32);
     }
 
@@ -4450,7 +4467,7 @@ mod governor_tests {
     /// render, since orbits persist.
     #[test]
     fn a_render_shortens_its_dispatch_and_keeps_its_width() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         let run = drive(batch, 300, &latency_bound);
         let (w, ipt, t) = *run.last().unwrap();
         assert_eq!(w, 128, "the width was shed: {run:?}");
@@ -4459,6 +4476,20 @@ mod governor_tests {
         let now = w as f64 * 64.0 * (ipt - 20) as f64 / t;
         let before = 64.0 * 980.0 / latency_bound(1, 1000);
         assert!(now > 50.0 * before, "{now:.3e} samples a second against {before:.3e}");
+    }
+
+    /// **Where orbits are reset, the dispatch keeps its length**: each is
+    /// an orbit, the picture's, so a frame over budget sheds width only.
+    #[test]
+    fn reset_orbits_shed_width_not_length() {
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: true };
+        // Width-bound: 26.6 ms at full width, within budget near 80.
+        let run = drive(batch, 300, &|w, ipt| 0.001 + w as f64 * ipt as f64 * 2e-7);
+        assert!(run.iter().all(|(_, ipt, _)| *ipt == 1000), "a dispatch was shortened: {run:?}");
+        let (w, _, t) = *run.last().unwrap();
+        assert!(w < 128 && t <= 1.3 / 60.0, "{w} workgroups, {:.1} ms a frame", t * 1e3);
+        // The planner's cap still cuts it.
+        assert_eq!(batch.while_planning(Knee::Shedding { over: 0 }, 1.0).1, 64);
     }
 
     /// A latency-bound frame too long even at the floor's length: 400 us an
@@ -4473,7 +4504,7 @@ mod governor_tests {
     /// once the floor proves no faster.
     #[test]
     fn shedding_that_does_not_help_is_undone() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         let run = drive(batch, 400, &too_slow);
         let (w, ipt, _) = *run.last().unwrap();
         assert_eq!((w, ipt), (128, 64), "the batch stayed shed: {:?}", &run[run.len() - 5..]);
@@ -4485,7 +4516,7 @@ mod governor_tests {
     /// never a frame much past twice the floor's.
     #[test]
     fn where_width_costs_the_floor_holds() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         let heavy = |w: u32, _ipt: u32| 0.004 + w as f64 * 0.020;
         let run = drive(batch, 400, &heavy);
         let settled = &run[100..];
@@ -4499,7 +4530,7 @@ mod governor_tests {
     /// the floor's length.
     #[test]
     fn the_knee_is_where_widening_starts_to_cost() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         let waves = |w: u32, ipt: u32| 0.004 + ipt as f64 * 400e-6 * ((w + 15) / 16) as f64;
         let run = drive(batch, 400, &waves);
         assert_eq!(run.last().unwrap().0, 16, "{:?}", &run[run.len() - 5..]);
@@ -4509,7 +4540,7 @@ mod governor_tests {
     /// full.
     #[test]
     fn a_lighter_flame_leaves_the_hold() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         let (mut scale, mut knee, mut prev) = (1.0f64, Knee::Shedding { over: 0 }, [1.0f64, 1.0]);
         let mut shapes = Vec::new();
         for i in 0..600 {
@@ -4530,7 +4561,7 @@ mod governor_tests {
     /// the full length -- but for the planner's cap while a plan is made.
     #[test]
     fn with_the_governor_off_the_dispatch_is_fixed() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         assert_eq!(batch.fixed(512, false), (512, 1000));
         assert_eq!(batch.fixed(512, true), (512, 64));
         assert_eq!(batch.fixed(0, false), (1, 1000));
@@ -4541,7 +4572,7 @@ mod governor_tests {
     /// one workgroup of the shortest dispatch.
     #[test]
     fn the_floor_is_the_smallest_batch() {
-        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20 };
+        let batch = Batch { max_workgroups: 128, iterations_per_thread: 1000, burn_in: 20, resets_orbits: false };
         assert_eq!(batch.shape(Knee::Shedding { over: 0 }, 1.0), (128, 1000));
         assert_eq!(batch.shape(Knee::Shedding { over: 0 }, 0.25), (128, 250));
         assert_eq!(batch.shape(Knee::Shedding { over: 0 }, batch.min_scale()), (1, 64));
