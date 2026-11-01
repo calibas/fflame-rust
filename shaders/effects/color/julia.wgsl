@@ -104,16 +104,16 @@ fn iterate_julia(z_start: vec2<f32>, c: vec2<f32>, max_iter: i32) -> vec2<f32> {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let mode = i32(get_param(0u));
+    let mode = i32(round(get_param(0u)));
     let julia_cx = get_param(1u);
     let julia_cy = get_param(2u);
     let max_iter = max(10, i32(get_param(3u)));
     let zoom = max(0.1, get_param(4u));
     let center_x = get_param(5u);
     let center_y = get_param(6u);
-    let color_mode = i32(get_param(7u));
+    let color_mode = i32(round(get_param(7u)));
     let intensity = get_param(8u);
-    let blend_mode = i32(get_param(9u));
+    let blend_mode = i32(round(get_param(9u)));
 
     let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 

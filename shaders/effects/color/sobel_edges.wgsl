@@ -50,7 +50,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let threshold = get_param(1u);
     let glow = get_param(2u);
     let preserve_color = get_param(3u);
-    let blend_mode = i32(get_param(4u));
+    let blend_mode = i32(round(get_param(4u)));
 
     let texel = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
     let uv = input.uv;

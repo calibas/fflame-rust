@@ -99,7 +99,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let scale = max(0.5, get_param(1u));
     let octaves = clamp(i32(get_param(2u)), 1, 6);
     let time = get_param(3u);
-    let blend_mode = i32(get_param(4u));
+    let blend_mode = i32(round(get_param(4u)));
     let direction = get_param(5u) * PI / 180.0;
 
     let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);

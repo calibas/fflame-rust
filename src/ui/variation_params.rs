@@ -380,8 +380,15 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
         return (false, false);
     }
 
-    let current_idx = (*value as usize).min(choices.len().saturating_sub(1));
-    let mut selected = current_idx;
+    // Round rather than truncate, and clamp (as escape_panel's choices):
+    // a value saved while the param was a number, or set by a script or
+    // an animation mid-key, must land on a real entry.
+    let last = choices.len() - 1;
+    let mut selected = if value.is_finite() {
+        (value.round().max(0.0) as usize).min(last)
+    } else {
+        0
+    };
 
     let mut changed = false;
     let combo = egui::ComboBox::from_label(&param.display_name)

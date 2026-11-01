@@ -110,9 +110,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(0u);
     let scale = max(1.0, get_param(1u));
     let time = get_param(2u);
-    let mode = i32(get_param(3u));
-    let color_mode = i32(get_param(4u));
-    let blend_mode = i32(get_param(5u));
+    let mode = i32(round(get_param(3u)));
+    let color_mode = i32(round(get_param(4u)));
+    let blend_mode = i32(round(get_param(5u)));
     let direction = get_param(6u) * PI / 180.0;
 
     let uv = input.uv;

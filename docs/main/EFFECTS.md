@@ -252,7 +252,9 @@ the colour effects use it; `distance_field` and the three density
 effects do not.
 
 `apply_blend(base, effect, mode, intensity)` blends by mode, then mixes
-with the base by `intensity`:
+with the base by `intensity`. `BLEND_MODE_NAMES` (`src/effects/mod.rs`)
+names the modes for every `blend_mode` dropdown, held to the shader's
+`switch` by `blend_mode_names_match_apply_blend`:
 
 | `blend_mode` | Mode | `blend_mode` | Mode |
 | --- | --- | --- | --- |
@@ -338,8 +340,13 @@ Effects", available in every render mode:
   reorder, remove, and a control per parameter while enabled. The
   controls are the variation parameters' (`variation_params`, through
   an `EffectTarget`): a slider for a Float (0 to 1 where its range is
-  absent), an integer slider for an Integer, a checkbox for a Boolean,
-  degrees for an Angle, with the description as the tooltip. A value is
+  absent), an integer slider for an Integer, a dropdown for an Enum,
+  a checkbox for a Boolean, degrees for an Angle, with the description
+  as the tooltip. Every `blend_mode`, `mode` and `color_mode` is an
+  Enum: the value stays the choice's index, the shader reads it as
+  `i32(round(get_param(n)))` and the dropdown rounds the same way, so a
+  value saved while these were integer sliders is the same entry, and
+  a track animating one switches at the halfway point. A value is
   written only when it changes, never by being drawn. Undo entries name
   the effect the same way.
 - An **Add effect** combo per chain, listing that category's

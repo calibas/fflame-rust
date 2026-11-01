@@ -119,7 +119,7 @@ fn fs_composite(input: VertexOutput) -> @location(0) vec4<f32> {
         return base;
     }
     let spread = max(get_param(1u), 0.01);
-    let mode = i32(get_param(2u));
+    let mode = i32(round(get_param(2u)));
     let intensity = get_param(3u);
     let bands = max(get_param(4u), 1.0);
     let max_dim = f32(max(effect_params.width, effect_params.height));

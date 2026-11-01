@@ -552,16 +552,19 @@ mod tests {
         assert_eq!(effect_label(&registry, "no_such_effect"), "no_such_effect");
     }
 
-    /// Integer, Boolean and Angle parameters keep their type on the way
-    /// to the widget renderer: every one used to be a float slider.
+    /// Enum, Integer, Boolean and Angle parameters keep their type on the
+    /// way to the widget renderer: every one used to be a float slider.
     #[test]
     fn effect_parameters_keep_their_types() {
         let registry = global_effect_registry();
         let vignette = registry.get("vignette").expect("vignette");
         let blend = vignette.get_param("blend_mode").expect("blend_mode");
         let w = widget_param(blend);
-        assert!(matches!(w.param_type, ParamType::Integer));
+        assert!(matches!(w.param_type, ParamType::Enum { choices } if choices.len() == 13));
         assert_eq!((w.min_value, w.max_value), (Some(0.0), Some(12.0)));
+        let kaleidoscope = registry.get("kaleidoscope").expect("kaleidoscope");
+        let offset = widget_param(kaleidoscope.get_param("edge_offset").expect("edge_offset"));
+        assert!(matches!(offset.param_type, ParamType::Integer));
 
         let typed: Vec<_> = registry
             .all()
