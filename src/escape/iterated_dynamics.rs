@@ -245,6 +245,54 @@ fn the_dynamic_systems_euler_order_steps_y_first() {
     }
 }
 
+/// The orbit maps as escape-time formulas (`orbits-*.rhai`) step as their
+/// variations do: one pass from a pixel is the variation's point there,
+/// over Size (from Start z for the two 3D maps, the colouring reading x and y), at
+/// the defaults, over each formula's own view -- so each picture's map is
+/// the one the tests above hold to the program's.
+#[test]
+fn the_orbit_formulas_step_as_their_variations() {
+    let names = [
+        "hopalong", "martin", "chip", "quadruptwo", "threeply", "gingerbreadman", "latoocarfian", "kamtorus",
+        "pickover-popcorn", "dynamic-system", "pickover-attractor", "rossler-attractor",
+    ];
+    for name in names {
+        let file = format!("orbits-{name}.rhai");
+        let src = example(&file);
+        let formula = rhai::program(src).unwrap_or_else(|d| panic!("{file}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+        let values = ParamValues::defaults(&formula);
+        let size = formula.params.iter().find(|x| x.name == "size").expect("Size").default.0;
+        let vsrc = example(&format!("variation-{name}.rhai"));
+        let three = name.ends_with("attractor");
+        let variation = if three { rhai::transformation3(vsrc) } else { rhai::transformation(vsrc) }.unwrap();
+        let vvalues = ParamValues::defaults(&variation);
+        let mut run_v = VariationRun::new(&variation, &vvalues, 1);
+        let (cx, cy) = formula.view.center.expect("a centre");
+        let span = 4.0 / formula.view.magn.expect("a magnification");
+        let mut checked = 0;
+        for i in 0..10 {
+            for j in 0..10 {
+                let px = C64::new(cx + span * (i as f64 / 9.0 - 0.5) + 0.013 * span, cy + span * (j as f64 / 9.0 - 0.5) - 0.007 * span);
+                let want = if three {
+                    let (w, _) = run_v.call3([px.re, px.im, 0.0], [0.0; 3], 1.0);
+                    C64::new(w[0], w[1])
+                } else {
+                    run_v.call(px, C64::ZERO, 1.0).0
+                };
+                if !(want.re.is_finite() && want.im.is_finite()) {
+                    continue;
+                }
+                // The colouring reads the orbit over Size.
+                let got = run(&formula, &values, None, &Env::at(px, 1)).z.scale(size);
+                let tol = 1e-12 * (1.0 + want.abs());
+                assert!((got.re - want.re).abs() <= tol && (got.im - want.im).abs() <= tol, "{file} at {px:?}: {got:?} against {want:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 90, "{file}: only {checked} checked");
+    }
+}
+
 /// Each map's Direct Color: in every Color mode, at Color Cycles 1.5 and
 /// Offset 0.25, the palette index its step gives, against the step's
 /// direction, length, the new point's distance and angle (or height)
