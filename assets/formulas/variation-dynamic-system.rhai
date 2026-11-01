@@ -17,20 +17,46 @@
 // about 4 / 14 (a final plots and does not feed the orbit), at a zoom
 // near 1. Zooming the view out that far instead darkens it, as the log
 // tone map divides by the view's area (Apophysis's too).
+//
+// It colours as a direct-colour variation: each point's palette index
+// follows its step (the Color choice), and the transform's Direct Color
+// sets how much of that shows (0 gives back the transform's colour).
 
 const PARAMS = #{
     dt: #{ value: 0.1, caption: "Time step", hint: "How far each pass flows" },
     a: #{ value: 1.0, caption: "a", hint: "How much the inner sine bends the flow" },
     b: #{ value: 3.0, caption: "b", hint: "The inner sine's frequency" },
     update: #{ value: 0, caption: "Update", choices: ["Both from the old point", "y first (Euler)"], hint: "Fractint's two orders: both parts from the old point, or y first and x from the new y (its negative time step)" },
+    color: #{ value: 0, caption: "Color", choices: ["Direction", "Step length", "Distance", "Angle"], hint: "What the palette index follows: the step's direction, its length against the longest a step can be (the Time step times the square root of 2), the new point's distance from the origin, or its angle about it" },
+    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction, Angle), from no step to the longest (Step length), or per Color Size (Distance)" },
+    color_size: #{ value: 14.0, min: 0.0, caption: "Color Size", hint: "The length one cycle of the palette spans, for Distance (the picture spans about 14 at the defaults)" },
+    color_offset: #{ value: 0.0, min: 0.0, max: 1.0, caption: "Color Offset", hint: "Added to the palette index" },
 };
 
 const INFO = #{ title: "Dynamic System", name: "dynamic_system" };
+
+// The palette index for the step from z to w, as the Color choice says;
+// `longest` the longest step.
+fn dynamic_color(z, w, mode, cycles, size, offset, longest) {
+    let d = w - z;
+    let q = if mode == 0 {
+        atan2(d.im, d.re) / (2.0 * PI()) + 0.5
+    } else if mode == 1 {
+        if longest > 0.0 { d.abs() / longest } else { 0.0 }
+    } else if mode == 2 {
+        w.abs() / size
+    } else {
+        atan2(w.im, w.re) / (2.0 * PI()) + 0.5
+    };
+    let k = offset + cycles * q;
+    k - floor(k)
+}
 
 fn variation(z, p) {
     let x = z.re;
     let y = z.im;
     let ny = y + p.dt * sin(x + p.a * sin(p.b * x));
     let yy = if p.update == 1 { ny } else { y };
-    complex(x - p.dt * sin(yy + p.a * sin(p.b * yy)), ny)
+    let w = complex(x - p.dt * sin(yy + p.a * sin(p.b * yy)), ny);
+    #{ z: w, color: dynamic_color(z, w, p.color, p.color_cycles, p.color_size, p.color_offset, p.dt.abs() * sqrt(2.0)) }
 }

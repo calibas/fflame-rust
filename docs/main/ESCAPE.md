@@ -549,9 +549,16 @@ fn escaped(s, p) {
   `-chip`, `-quadruptwo`, `-threeply`, `-gingerbreadman`,
   `-latoocarfian`, `-kamtorus`, `-pickover-popcorn`, `-dynamic-system`,
   and in 3D `-pickover-attractor`, `-rossler-attractor`), each stepping
-  as the program's code does (`src/escape/iterated_dynamics.rs`); the hooks' twins
-  of `blur` and `macmillan`, and the 3D twins of `spherical3D`,
-  `hemisphere` and `zcone`, are in `variations::custom`'s tests.
+  as the program's code does (`src/escape/iterated_dynamics.rs`) and
+  colouring as a direct-colour variation: a palette index from its step
+  by its Color choice -- the step's direction or length, the new point's
+  distance from the origin or its angle about it (its height in 3D) --
+  with Color Cycles, Size and Offset (a flow's step length is against
+  its longest step, Popcorn's and the dynamic system's, or a speed,
+  Rossler's); the transform's Direct Color sets how much shows. The
+  hooks' twins of `blur` and `macmillan`, and the 3D twins of
+  `spherical3D`, `hemisphere` and `zcone`, are in `variations::custom`'s
+  tests.
 - **`rand()`** anywhere else -- a formula, a colouring, a variation
   `vary` inlines there -- draws a stream of the pixel's own, seeded by
   its place on the screen (`uf_draw`; the interpreter draws the same
