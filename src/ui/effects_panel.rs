@@ -95,7 +95,17 @@ fn render_effect_params(
     // write through the config manager.
     let Some(params) = global_effect_registry()
         .get(effect_type)
-        .map(|info| info.parameters.iter().map(widget_param).collect::<Vec<_>>())
+        .map(|info| {
+            info.parameters
+                .iter()
+                .map(|p| {
+                    // In the current language, for a Rhai effect's labels.
+                    let mut w = widget_param(p);
+                    (w.display_name, w.description) = info.param_label(p);
+                    w
+                })
+                .collect::<Vec<_>>()
+        })
     else {
         return UpdateType::None;
     };

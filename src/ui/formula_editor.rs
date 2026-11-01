@@ -48,6 +48,8 @@ struct EntryRow {
     as_transform: Vec<String>,
     /// As a solid (B3): Rhai only.
     as_solid: Vec<String>,
+    /// As an effect (P2): Rhai only.
+    as_effect: Vec<String>,
 }
 
 impl EntryRow {
@@ -57,6 +59,7 @@ impl EntryRow {
             EntryKind::Coloring => &self.as_coloring,
             EntryKind::Transform => &self.as_transform,
             EntryKind::Solid => &self.as_solid,
+            EntryKind::Effect => &self.as_effect,
         }
     }
 }
@@ -168,6 +171,7 @@ impl FormulaEditorPanel {
             EntryKind::Coloring => lang::rhai::coloring(&text),
             EntryKind::Transform => lang::rhai::transformation_any(&text),
             EntryKind::Solid => lang::rhai::solid(&text),
+            EntryKind::Effect => lang::rhai::effect(&text),
         };
         let mut errors: Vec<String> = match &checked {
             Ok(_) => Vec::new(),
@@ -183,6 +187,14 @@ impl FormulaEditorPanel {
                 errors.push(e);
             }
         }
+        // An effect becomes one: its module too, under the id Use gives it
+        // when it has none.
+        if kind == EntryKind::Effect && checked.is_ok() {
+            let with_id = lang::rhai::with_info_id(&text, &crate::scripted::mint_id());
+            if let Err(e) = crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Custom) {
+                errors.push(e);
+            }
+        }
         let title = match &checked {
             Ok(p) => p.name.clone(),
             Err(_) => lang::rhai::title(&text).unwrap_or_else(|| self.name.clone()),
@@ -194,27 +206,31 @@ impl FormulaEditorPanel {
                 errors.push(e);
             }
         }
-        let not = |key: &str| (is(key), is(key), is(key), is(key));
-        let (as_formula, as_coloring, as_transform, as_solid) = match kind {
+        let not = |key: &str| (is(key), is(key), is(key), is(key), is(key));
+        let (as_formula, as_coloring, as_transform, as_solid, as_effect) = match kind {
             EntryKind::Formula => {
                 let n = not("formula_editor.rhai_is_formula");
-                (errors, n.1, n.2, n.3)
+                (errors, n.1, n.2, n.3, n.4)
             }
             EntryKind::Coloring => {
                 let n = not("formula_editor.rhai_is_coloring");
-                (n.0, errors, n.2, n.3)
+                (n.0, errors, n.2, n.3, n.4)
             }
             EntryKind::Transform => {
                 let n = not("formula_editor.rhai_is_transform");
-                (n.0, n.1, errors, n.3)
+                (n.0, n.1, errors, n.3, n.4)
             }
             EntryKind::Solid => {
                 let n = not("formula_editor.rhai_is_solid");
-                (n.0, n.1, n.2, errors)
+                (n.0, n.1, n.2, errors, n.4)
+            }
+            EntryKind::Effect => {
+                let n = not("formula_editor.rhai_is_effect");
+                (n.0, n.1, n.2, n.3, errors)
             }
         };
         self.parse_errors = Vec::new();
-        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid }];
+        self.entries = vec![EntryRow { name: title, source: text.clone(), likely: kind, as_formula, as_coloring, as_transform, as_solid, as_effect }];
         self.checked = Some(text);
     }
 
@@ -252,7 +268,7 @@ impl FormulaEditorPanel {
                 let check = |kind| {
                     let (p, d) = match kind {
                         EntryKind::Formula => lang::switch::check_formula(&file, e, dialect),
-                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => lang::check::check(e, kind, dialect),
+                        EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => lang::check::check(e, kind, dialect),
                     };
                     let mut msgs = own.clone();
                     msgs.extend(d.iter().filter(|x| x.severity == Severity::Error).map(render));
@@ -282,6 +298,7 @@ impl FormulaEditorPanel {
                     // (UF support is paused): it shows its errors alone.
                     as_transform: if transform { check(EntryKind::Transform) } else { vec![t!("formula_editor.not_a_transform").to_string()] },
                     as_solid: vec![t!("formula_editor.solid_rhai_only").to_string()],
+                    as_effect: vec![t!("formula_editor.effect_rhai_only").to_string()],
                 }
             })
             .collect();
@@ -295,6 +312,9 @@ impl FormulaEditorPanel {
         if kind == EntryKind::Transform {
             return self.use_variation(cm, row);
         }
+        if kind == EntryKind::Effect {
+            return self.use_effect(cm, row);
+        }
         let Some(entry) = self.entries.get(row) else { return };
         // With the variations it calls (`vary`), which the config carries.
         let src = custom::with_called_variations(kind, CustomSource { dialect: self.dialect, entry: entry.name.clone(), source: entry.source.clone(), variations: Vec::new() });
@@ -303,7 +323,7 @@ impl FormulaEditorPanel {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
             EntryKind::Coloring => custom::compile_coloring(&src, &name).map(|_| ()),
             EntryKind::Solid => custom::compile_solid(&src, &name).map(|_| ()),
-            EntryKind::Transform => return,
+            EntryKind::Transform | EntryKind::Effect => return,
         };
         if let Err(d) = compiled {
             let first = d.first().map(|x| x.render(&src.source)).unwrap_or_default();
@@ -319,7 +339,7 @@ impl FormulaEditorPanel {
                 ConfigPath::EscapeFormula,
                 "history.action.use_custom_formula",
             ),
-            EntryKind::Coloring | EntryKind::Transform => (
+            EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect => (
                 escape.custom_coloring.as_ref(),
                 ConfigPath::EscapeCustomColoring,
                 ConfigPath::EscapeColoring,
@@ -356,7 +376,7 @@ impl FormulaEditorPanel {
                 self.status = Some(match kind {
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
                     EntryKind::Solid => t!("formula_editor.using_solid", entry = src.entry),
-                    EntryKind::Coloring | EntryKind::Transform => t!("formula_editor.using_coloring", entry = src.entry),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect => t!("formula_editor.using_coloring", entry = src.entry),
                 }
                 .to_string());
             }
@@ -429,6 +449,86 @@ impl FormulaEditorPanel {
         }
     }
 
+    /// Use an effect (P2): give it an id if it has none -- written into the
+    /// file, which Save then keeps -- register it, and put its source in
+    /// the config, with an instance at the end of its chain the first time
+    /// (a second undo step: adding an instance is structural). Used again,
+    /// its source is replaced and its instances stay.
+    fn use_effect(&mut self, cm: &mut ConfigManager, row: usize) {
+        use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
+        let Some(entry) = self.entries.get(row) else { return };
+        if self.dialect != CustomDialect::Rhai {
+            self.status = Some(t!("formula_editor.effect_rhai_only").to_string());
+            return;
+        }
+        let name = entry.name.clone();
+        let mut source = entry.source.clone();
+        let mut minted = false;
+        if lang::rhai::info_string(&source, "id").is_none() {
+            source = lang::rhai::with_info_id(&source, &crate::scripted::mint_id());
+            minted = true;
+        }
+        let id = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+            Ok(id) => id,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = name, error = e).to_string());
+                return;
+            }
+        };
+        if minted {
+            // The file carries its id from now on.
+            self.text = source.clone();
+            self.changed_at = Some(web_time::Instant::now());
+        }
+        // The config carries the sources its chains use: this one, and
+        // those an instance still names.
+        let config = cm.config();
+        let used = |s: &CustomSource| s.entry == id || config.color_effects.iter().chain(&config.density_effects).any(|e| e.effect_type == s.entry);
+        let mut list: Vec<CustomSource> = config.custom_effects.iter().filter(|s| used(s)).cloned().collect();
+        let Some(src) = crate::effects::custom::carried(&source) else { return };
+        match list.iter_mut().find(|s| s.entry == id) {
+            Some(s) => *s = src,
+            None => list.push(src),
+        }
+        let in_chain = config.color_effects.iter().chain(&config.density_effects).any(|e| e.effect_type == id);
+        let json = serde_json::to_string(&list).unwrap_or_default();
+        if let Err(e) = cm.update_batch(vec![(ConfigPath::CustomEffects, ConfigValue::String(json))], "history.action.use_custom_effect".to_string()) {
+            self.status = Some(format!("{e:?}"));
+            return;
+        }
+        let (title, category) = {
+            let registry = global_effect_registry();
+            let info = registry.get(&id);
+            (info.map(|i| i.translated_name()).unwrap_or_else(|| id.clone()), info.map(|i| i.category))
+        };
+        if !in_chain {
+            let effect = EffectInstance::new(&id);
+            let description = format!("Add Effect: {title}");
+            let change = match category {
+                Some(EffectCategory::Density) => {
+                    let index = cm.active_config().density_effects.len();
+                    crate::config::ConfigChange::add_density_effect_snapshot(index, effect, description)
+                }
+                _ => {
+                    let index = cm.active_config().color_effects.len();
+                    crate::config::ConfigChange::add_color_effect_snapshot(index, effect, description)
+                }
+            };
+            if let Err(e) = cm.apply_structural_change(change) {
+                self.status = Some(format!("{e:?}"));
+                return;
+            }
+        }
+        self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Effect && *n == id));
+        self.in_use.push((EntryKind::Effect, self.file.clone(), id));
+        self.status = Some(if minted {
+            t!("formula_editor.id_minted", entry = name)
+        } else {
+            t!("formula_editor.using_effect", name = title)
+        }
+        .to_string());
+    }
+
     /// Live: re-apply the entries in use whose text changed and still
     /// compiles, while the config still uses them.
     fn reapply_live(&mut self, cm: &mut ConfigManager) {
@@ -449,10 +549,22 @@ impl FormulaEditorPanel {
                 }
                 continue;
             }
+            // An effect: by its id, while the config carries it.
+            if kind == EntryKind::Effect {
+                let carried = cm.config().custom_effects.iter().find(|s| s.entry == entry).map(|s| s.source.clone());
+                let row = self.entries.iter().position(|r| lang::rhai::info_string(&r.source, "id").as_deref() == Some(entry.as_str()));
+                if let (Some(carried), Some(row)) = (carried, row) {
+                    let r = &self.entries[row];
+                    if r.errors(kind).is_empty() && r.source != carried {
+                        self.use_effect(cm, row);
+                    }
+                }
+                continue;
+            }
             let escape = &cm.config().escape;
             let (carried, name) = match kind {
                 EntryKind::Formula | EntryKind::Solid => (escape.custom_formula.as_ref(), &escape.formula),
-                EntryKind::Coloring | EntryKind::Transform => (escape.custom_coloring.as_ref(), &escape.coloring),
+                EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect => (escape.custom_coloring.as_ref(), &escape.coloring),
             };
             let Some(carried) = carried else { continue };
             if carried.entry != entry || !name.starts_with(custom::PREFIX) {
@@ -648,10 +760,11 @@ impl FormulaEditorPanel {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(&row.name);
                 let order = match row.likely {
-                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform, EntryKind::Solid],
-                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula, EntryKind::Transform, EntryKind::Solid],
-                    EntryKind::Transform => [EntryKind::Transform, EntryKind::Formula, EntryKind::Coloring, EntryKind::Solid],
-                    EntryKind::Solid => [EntryKind::Solid, EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform],
+                    EntryKind::Formula => [EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform, EntryKind::Solid, EntryKind::Effect],
+                    EntryKind::Coloring => [EntryKind::Coloring, EntryKind::Formula, EntryKind::Transform, EntryKind::Solid, EntryKind::Effect],
+                    EntryKind::Transform => [EntryKind::Transform, EntryKind::Formula, EntryKind::Coloring, EntryKind::Solid, EntryKind::Effect],
+                    EntryKind::Solid => [EntryKind::Solid, EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform, EntryKind::Effect],
+                    EntryKind::Effect => [EntryKind::Effect, EntryKind::Formula, EntryKind::Coloring, EntryKind::Transform, EntryKind::Solid],
                 };
                 for kind in order {
                     let ok = row.errors(kind).is_empty();
@@ -661,6 +774,7 @@ impl FormulaEditorPanel {
                         EntryKind::Transform if escape_mode => t!("formula_editor.use_lens"),
                         EntryKind::Transform => t!("formula_editor.use_variation"),
                         EntryKind::Solid => t!("formula_editor.use_solid"),
+                        EntryKind::Effect => t!("formula_editor.use_effect"),
                     };
                     // The kind it is not is offered only when it compiles
                     // as that too; the kind it is shows its errors.

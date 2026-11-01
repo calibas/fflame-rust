@@ -285,6 +285,9 @@ pub enum ConfigPath {
     /// The variations the user wrote that the flame uses
     /// (`config.flame.custom_variations`), as JSON: their sources.
     FlameCustomVariations,
+    /// The effects the user wrote that the chains use
+    /// (`config.custom_effects`), as JSON: their sources.
+    CustomEffects,
     /// Solo transform index (0-indexed). When Some(n), only transform n is active,
     /// all others effectively have weight 0. Used for debugging.
     /// Matches Apophysis XML: soloxform="N"
@@ -1432,6 +1435,7 @@ impl Display for ConfigPath {
             }
             ConfigPath::SoloTransform => write!(f, "Solo Transform"),
             ConfigPath::FlameCustomVariations => write!(f, "Custom Variations"),
+            ConfigPath::CustomEffects => write!(f, "Custom Effects"),
 
             // Post-symmetry
             ConfigPath::PostSymmetryType => write!(f, "Symmetry Type"),
@@ -2182,6 +2186,7 @@ impl ConfigPath {
             ),
             ConfigPath::SoloTransform => I18nKey::simple("history.param.solo_transform"),
             ConfigPath::FlameCustomVariations => I18nKey::simple("history.param.flame_custom_variations"),
+            ConfigPath::CustomEffects => I18nKey::simple("history.param.custom_effects"),
             ConfigPath::PostSymmetryType => I18nKey::simple("history.param.post_symmetry_type"),
             ConfigPath::PostSymmetryOrder => I18nKey::simple("history.param.post_symmetry_order"),
             ConfigPath::PostSymmetryCenterX => I18nKey::simple("history.param.post_symmetry_center_x"),
@@ -3467,7 +3472,8 @@ impl ConfigPath {
             | ConfigPath::AddColorEffect { .. }
             | ConfigPath::RemoveColorEffect { .. }
             | ConfigPath::AddDensityEffect { .. }
-            | ConfigPath::RemoveDensityEffect { .. } => UpdateType::ToneMappingOnly,
+            | ConfigPath::RemoveDensityEffect { .. }
+            | ConfigPath::CustomEffects => UpdateType::ToneMappingOnly,
 
             // The size the exports render at. Nothing on screen changes,
             // or the viewport's letterbox takes the new aspect, which
@@ -3957,6 +3963,7 @@ impl ConfigPath {
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
             ConfigPath::SoloTransform => "SoloTransform".to_string(),
             ConfigPath::FlameCustomVariations => "CustomVariations".to_string(),
+            ConfigPath::CustomEffects => "CustomEffects".to_string(),
             ConfigPath::PostSymmetryType => "PostSymmetryType".to_string(),
             ConfigPath::PostSymmetryOrder => "PostSymmetryOrder".to_string(),
             ConfigPath::PostSymmetryCenterX => "PostSymmetryCenterX".to_string(),
@@ -4104,6 +4111,7 @@ impl ConfigPath {
             "FarDensityFadeStart" => return Some(ConfigPath::FarDensityFadeStart),
             "SoloTransform" => return Some(ConfigPath::SoloTransform),
             "CustomVariations" => return Some(ConfigPath::FlameCustomVariations),
+            "CustomEffects" => return Some(ConfigPath::CustomEffects),
             "PostSymmetryType" => return Some(ConfigPath::PostSymmetryType),
             "PostSymmetryOrder" => return Some(ConfigPath::PostSymmetryOrder),
             "PostSymmetryCenterX" => return Some(ConfigPath::PostSymmetryCenterX),
@@ -5267,6 +5275,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeCustomFormula
         | ConfigPath::EscapeCustomColoring
         | ConfigPath::FlameCustomVariations
+        | ConfigPath::CustomEffects
         | ConfigPath::EscapeColoring
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend

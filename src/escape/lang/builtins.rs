@@ -185,10 +185,30 @@ pub enum Builtin {
     /// f32 code does, an operation at a time (Origami's line table). On
     /// the GPU, the identity.
     F32,
+    /// An effect's read of its input image, one channel (P2): filtered at
+    /// a position (`input(uv)` in Rhai), or loaded at a pixel
+    /// (`input_at(x, y)`, the argument `complex(x, y)`). The lowering's
+    /// own names; an effect's only, and the GPU's: 0 on the CPU.
+    SampleR,
+    SampleG,
+    SampleB,
+    SampleA,
+    LoadR,
+    LoadG,
+    LoadB,
+    LoadA,
 }
 
 /// Every built-in by name (lowered).
 pub const BUILTINS: &[(&str, Builtin)] = &[
+    ("__sample_r", Builtin::SampleR),
+    ("__sample_g", Builtin::SampleG),
+    ("__sample_b", Builtin::SampleB),
+    ("__sample_a", Builtin::SampleA),
+    ("__load_r", Builtin::LoadR),
+    ("__load_g", Builtin::LoadG),
+    ("__load_b", Builtin::LoadB),
+    ("__load_a", Builtin::LoadA),
     ("sqr", Builtin::Sqr),
     ("sqrt", Builtin::Sqrt),
     ("log", Builtin::Log),
@@ -286,6 +306,7 @@ impl Builtin {
         Ok(match self {
             IsInf | IsNan => Ty::Bool,
             Cabs | Real | Imag | Atan2 => Ty::Float,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => Ty::Float,
             Conj | Flip | Cosxx => Ty::Complex,
             // Keep an integer an integer where the result must be one.
             Sqr | Abs | Ident | Zero => arg,
@@ -360,6 +381,8 @@ impl Builtin {
             Expm1 => z.expm1(),
             Log1p => z.ln1p(),
             F32 => C64::new(z.re as f32 as f64, z.im as f32 as f64),
+            // An effect's image is the GPU's.
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => C64::ZERO,
         }
     }
 
@@ -394,6 +417,7 @@ impl Builtin {
             Expm1 => z.exp(),
             Log1p => one.div(one.add(z)),
             F32 => one,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => C64::ZERO,
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -441,6 +465,7 @@ impl Builtin {
             Expm1 => x.exp_m1(),
             Log1p => x.ln_1p(),
             F32 => x as f32 as f64,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => 0.0,
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
         }
     }

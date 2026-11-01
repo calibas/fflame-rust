@@ -337,7 +337,34 @@ Before a fourth registry is written for effects:
 Exit: every test, shader dump and visual config unchanged. No new
 feature.
 
+**Order taken (2026-11-01).** Built first, as the core every kind
+shares: `crate::scripted` (UUIDs, versions, the `Ledger`, `Label` and
+`Labels`), labels by locale in the dialect, `with_info_id`. Effects (P2)
+were then built on it directly, with UUID identity from the start, so
+they needed no migration and tested the core. **Not done, for the
+user's review first**: moving Rhai variations and the escape slots onto
+it. That migration changes what configs hold -- a transform's variation
+key becomes the variation's id, `vary("name", z)` in a formula's text
+must find a variation by id or by a name that is no longer unique, the
+lens and escape transformations name variations, and an edited
+variation's Live re-Use replaces one version with another -- and one
+choice in it is the user's: whether two versions of one id may be live
+at once (a version-keyed registry, every lookup through the config) or
+one at a time, a config's carried version registered before it renders
+(simpler; rule 7 then reads "renders as saved" rather than "beside it").
+
 ### P2. Effects in Rhai
+
+**Status 2026-11-01** (branch `rhai-plugins`): steps 1-5 built, on the
+shared core (rule 7's UUIDs, rule 8's labels) rather than after the rest
+of P1 -- see *Order taken* below. The vignette's twin
+(`assets/effects/vignette.rhai`) matches its WGSL within a step of 8-bit
+rounding (`the_vignettes_rhai_twin_matches_the_wgsl`); the other 14
+twins and step 7 are next. Found on the way, for step 7: a build
+without `engine-escape` (the gallery's flame-only module) has no
+compiler, so a built-in replaced by its Rhai source needs its compiled
+WGSL committed and held current by a staleness test, as the shader
+dumps are, or that build loses the effect.
 
 1. **Dialect**: `vec4` (split into scalars like `vec3`); an `effect`
    entry kind returning a `vec4`; the pixel's position, the image size,

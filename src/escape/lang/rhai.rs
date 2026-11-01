@@ -137,6 +137,11 @@ pub fn solid(source: &str) -> Result<Program, Vec<Diag>> {
     compile(source, EntryKind::Solid)
 }
 
+/// An effect (P2): `fn effect(c, p, ctx)`, per pixel of an image.
+pub fn effect(source: &str) -> Result<Program, Vec<Diag>> {
+    compile(source, EntryKind::Effect)
+}
+
 /// A number field of a script's `INFO` (a solid's `radius`, `depth`).
 pub fn info_number(source: &str, key: &str) -> Option<f64> {
     info_field(source, key, |v| match v {
@@ -182,34 +187,13 @@ pub fn label_of(v: &Expr) -> Option<crate::scripted::Label> {
     }
 }
 
-/// What a person reads of a script, as written, for whatever shows it in
-/// the current language when it shows it: `INFO.title`, and each
-/// `PARAMS` entry's caption, hint and choices.
-#[derive(Debug, Clone, Default)]
-pub struct SourceLabels {
-    pub title: crate::scripted::Label,
-    pub params: Vec<ParamLabels>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ParamLabels {
-    pub key: String,
-    pub caption: crate::scripted::Label,
-    pub hint: crate::scripted::Label,
-    pub choices: Vec<crate::scripted::Label>,
-}
-
-impl SourceLabels {
-    pub fn param(&self, key: &str) -> Option<&ParamLabels> {
-        self.params.iter().find(|p| p.key == key)
-    }
-}
-
-/// A script's labels, read from its `INFO` and `PARAMS` as written.
-/// `None` when it does not parse; a label it does not write is empty.
-pub fn source_labels(source: &str) -> Option<SourceLabels> {
+/// A script's labels (`crate::scripted::Labels`), read from its `INFO`
+/// and `PARAMS` as written, for whatever shows them to resolve in the
+/// current language when it shows them. `None` when it does not parse; a
+/// label it does not write is empty.
+pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
     let (ast, _) = parse(source).ok()?;
-    let mut out = SourceLabels::default();
+    let mut out = crate::scripted::Labels::default();
     for st in ast.statements() {
         let Stmt::Var(x, _, _) = st else { continue };
         let (ident, value, _) = &**x;
@@ -222,7 +206,7 @@ pub fn source_labels(source: &str) -> Option<SourceLabels> {
             }
             "PARAMS" => {
                 for (k, v) in &m.0 {
-                    let mut p = ParamLabels { key: k.name.to_string(), ..Default::default() };
+                    let mut p = crate::scripted::ParamLabels { key: k.name.to_string(), ..Default::default() };
                     if let Expr::Map(fields, _) = v {
                         for (f, x) in &fields.0 {
                             match f.name.as_str() {
@@ -244,6 +228,39 @@ pub fn source_labels(source: &str) -> Option<SourceLabels> {
         }
     }
     Some(out)
+}
+
+/// `source` with `id` in its `INFO` -- first in the map, or a new `INFO`
+/// above the first line of code -- unless it has an id already: how a
+/// script gets the identity it carries (design rule 7). Nothing else of
+/// the text changes.
+pub fn with_info_id(source: &str, id: &str) -> String {
+    if info_string(source, "id").is_some() {
+        return source.to_string();
+    }
+    if let Ok((ast, pos)) = parse(source) {
+        let info = ast.statements().iter().find_map(|st| match st {
+            Stmt::Var(x, _, p) if x.0.name.as_str() == "INFO" && matches!(x.1, Expr::Map(..)) => Some(*p),
+            _ => None,
+        });
+        if let Some(p) = info {
+            let from = pos.span(p).start.min(source.len());
+            if let Some(at) = source[from..].find("#{").map(|i| from + i + 2) {
+                return format!("{} id: \"{id}\",{}", &source[..at], &source[at..]);
+            }
+        }
+    }
+    // Above the first line that is not a comment or blank, so a header
+    // comment stays the header.
+    let mut at = 0;
+    for line in source.split_inclusive('\n') {
+        let t = line.trim();
+        if !(t.is_empty() || t.starts_with("//")) {
+            break;
+        }
+        at += line.len();
+    }
+    format!("{}const INFO = #{{ id: \"{id}\" }};\n{}", &source[..at], &source[at..])
 }
 
 fn info_field<T>(source: &str, key: &str, read: impl Fn(&Expr) -> Option<T>) -> Option<T> {
@@ -366,7 +383,9 @@ fn checked(lowered: Lowered, kind: EntryKind) -> Result<Program, Vec<Diag>> {
 pub fn kind_of(source: &str) -> Option<EntryKind> {
     let (ast, _) = parse(source).ok()?;
     let has = |n: &str| ast.iter_fn_def().any(|f| f.name == n);
-    if has("variation") || has("variation3") {
+    if has("effect") {
+        Some(EntryKind::Effect)
+    } else if has("variation") || has("variation3") {
         Some(EntryKind::Transform)
     } else if has("distance") {
         Some(EntryKind::Solid)
@@ -461,6 +480,7 @@ fn lower_full(source: &str, kind: EntryKind, extra: &[(String, ScriptFuncDef)], 
         param_vecs: HashMap::new(),
         three,
         solid: kind == EntryKind::Solid,
+        effect: kind == EntryKind::Effect,
         probe: std::cell::Cell::new(0),
     };
     for (name, def) in extra {
@@ -594,6 +614,8 @@ enum Fn3 {
     Creases,
     /// A transformation's `variation`: the new point.
     Variation,
+    /// An effect's `effect`: the pixel's colour (P2).
+    Effect,
 }
 
 impl Fn3 {
@@ -642,6 +664,8 @@ struct Lowerer<'s> {
     /// Lowering a solid (B3): its `z` is a vector of its own, not the
     /// formula's iterate.
     solid: bool,
+    /// Lowering an effect (P2): `fn effect`, its reads of the image.
+    effect: bool,
     /// How deep [`Lowerer::is_vec`] has looked into helpers, against a
     /// helper that calls itself.
     probe: std::cell::Cell<usize>,
@@ -731,6 +755,8 @@ impl<'s> Lowerer<'s> {
             "a colouring"
         } else if self.transform {
             "a transformation"
+        } else if self.effect {
+            "an effect"
         } else if kind == EntryKind::Solid {
             "a solid"
         } else {
@@ -767,6 +793,8 @@ impl<'s> Lowerer<'s> {
             "Colouring"
         } else if self.transform {
             "Variation"
+        } else if self.effect {
+            "Effect"
         } else if kind == EntryKind::Solid {
             "Solid"
         } else {
@@ -795,6 +823,18 @@ impl<'s> Lowerer<'s> {
                     _ => return self.err(*p, "`resets_orbits` is true or false"),
                 },
                 o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `name` and `resets_orbits`, not `{o}`")),
+                // An effect's identity (design rule 7: a UUID, or a
+                // built-in's name) and its place in the pipeline, read
+                // apart (`info_string`).
+                "id" if self.effect => match v {
+                    Expr::StringConstant(..) => {}
+                    _ => return self.err(*p, "`id` is a string: the effect's UUID, or a built-in's name"),
+                },
+                "category" if self.effect => match v {
+                    Expr::StringConstant(s, _) if matches!(s.as_str(), "color" | "density") => {}
+                    _ => return self.err(*p, "`category` is \"color\" (after the tone map) or \"density\" (before it)"),
+                },
+                o if self.effect => return self.err(*p, format!("an effect's `INFO` has `title`, `id` and `category`, not `{o}`")),
                 // A solid's ball: the set lies within this radius
                 // (`info_number`, read apart).
                 "radius" if kind == EntryKind::Solid => match v {
@@ -847,6 +887,10 @@ impl<'s> Lowerer<'s> {
             let f = &self.fns["prepare"];
             return self.err(f.body.position(), "a transformation has no `prepare` yet: its values are computed in `variation`");
         }
+        if self.effect && self.fns.contains_key("prepare") {
+            let f = &self.fns["prepare"];
+            return self.err(f.body.position(), "an effect has no `prepare` yet: its values are computed in `effect`");
+        }
         // prepare: once per image, its map's fields read as `p.name`.
         if let Some(prep) = self.fns.get("prepare").cloned() {
             let mut scope = Scope::new(Fn3::Prepare, Vec::new());
@@ -881,6 +925,7 @@ impl<'s> Lowerer<'s> {
             EntryKind::Coloring => sections.extend(self.coloring_sections(span)?),
             EntryKind::Transform => sections.push(self.transform_section(span, state_fields)?),
             EntryKind::Solid => sections.extend(self.solid_sections(span)?),
+            EntryKind::Effect => sections.push(self.effect_section(span)?),
         }
         default.items.push(Setting { name: "title".into(), value: SettingValue::Strings(vec![title.clone()]), span });
         let setting = region.filter(|r| r != "both");
@@ -955,6 +1000,81 @@ impl<'s> Lowerer<'s> {
             body.push(assign(mk(ExprKind::Predef("vcolor".into()), at), c, at));
         }
         body.push(assign(mk(ExprKind::Predef("pixel".into()), at), value, at));
+        Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
+    }
+
+    /// An effect's function as its section (P2): `effect(c, p[, ctx])`,
+    /// `c` the input's colour at the pixel (an `rgba`, read once), `p` the
+    /// parameters, `ctx` the pixel's position (`ctx.uv`, 0 to 1), the
+    /// image's size and its density. The last value is the output: an
+    /// `rgba`; a `vec3`, the input's alpha kept; or `#{ color, blend,
+    /// amount }` -- `color` either -- which the template blends over the
+    /// input with the blend library's mode `blend` (an int, the order of
+    /// `effects::BLEND_MODE_NAMES`) at `amount` (1 when absent).
+    fn effect_section(&mut self, span: Span) -> R<Section> {
+        let Some(f) = self.fns.get("effect").cloned() else {
+            return self.err(Position::NONE, "an effect has `fn effect(c, p)`");
+        };
+        if f.params.is_empty() || f.params.len() > 3 {
+            return self.err(f.body.position(), "`effect(c)`, `effect(c, p)` or `effect(c, p, ctx)`");
+        }
+        let mut scope = Scope::new(Fn3::Effect, Vec::new());
+        let input = self.vec_local(vec::Kind::Rgba, &f.params[0]);
+        let mut body = Vec::new();
+        for (n, ch) in input.iter().zip(["r", "g", "b", "a"]) {
+            let read = mk(ExprKind::Call { name: format!("__sample_{ch}"), args: vec![mk(ExprKind::Predef("pixel".into()), span)], user: false }, span);
+            body.push(ast::Stmt::Decl { ty: TypeName::Float, name: n.clone(), init: Some(read), dims: None, span });
+        }
+        scope.bind(&f.params[0], Binding::VecLocal(vec::Kind::Rgba, input.clone()));
+        if let Some(p) = f.params.get(1) {
+            scope.bind(p, Binding::Params);
+        }
+        if let Some(c) = f.params.get(2) {
+            scope.bind(c, Binding::Ctx);
+        }
+        const RESULT: &str = "`effect` ends with the output: an `rgba`, a `vec3` (the input's alpha kept), or `#{ color, blend, amount }`";
+        let stmts = f.body.statements();
+        let Some((last, rest)) = stmts.split_last() else { return self.err(f.body.position(), RESULT) };
+        for st in rest {
+            self.stmt(st, &mut scope, &mut body)?;
+        }
+        let (mut blend, mut amount) = (None, None);
+        let color = match final_value(last) {
+            Some(Final::Expr(Expr::Map(m, mp))) => {
+                let mut color = None;
+                for (k, v) in &m.0 {
+                    match k.name.as_str() {
+                        "color" => color = Some(self.vexpr(v, &mut scope)?),
+                        "blend" => blend = Some(self.expr(v, &mut scope)?),
+                        "amount" => amount = Some(self.expr(v, &mut scope)?),
+                        o => return self.err(k.pos, format!("an effect's result has `color`, `blend` and `amount`, not `{o}`")),
+                    }
+                }
+                match color {
+                    Some(c) => c,
+                    None => return self.err(*mp, "the result needs `color`, the effect's colour"),
+                }
+            }
+            Some(f) => self.final_vec(f, &mut scope)?,
+            None => return self.err(last.position(), RESULT),
+        };
+        let parts = match color.kind {
+            vec::Kind::Rgba => color.parts,
+            vec::Kind::Vec3 => {
+                let mut parts = color.parts;
+                parts.push(mk(ExprKind::Name(input[3].clone()), span));
+                parts
+            }
+            vec::Kind::Quat => return self.err(last.position(), "an effect's output is a colour: an `rgba`, or a `vec3`"),
+        };
+        self.flush(&mut body);
+        let at = self.pos.span(last.position());
+        let put = |name: &str, value: ast::Expr| assign(mk(ExprKind::Predef(name.into()), at), value, at);
+        for (name, part) in ["effect_r", "effect_g", "effect_b", "effect_a"].into_iter().zip(parts) {
+            body.push(put(name, part));
+        }
+        body.push(put("effect_blend", blend.unwrap_or_else(|| mk(ExprKind::Int(-1), at))));
+        body.push(put("effect_amount", amount.unwrap_or_else(|| mk(ExprKind::Float(1.0), at))));
         Ok(Section { kind: SectionKind::Transform, span, body, last_is_bailout: false, labelled: true })
     }
 
@@ -1420,7 +1540,7 @@ impl<'s> Lowerer<'s> {
         let Some(value) = value else { return self.err(p, "a parameter needs its `value`") };
         // A vector: three float parameters (B1).
         if let Expr::FnCall(fc, _) = value {
-            if matches!(fc.name.as_str(), "vec3" | "quat") {
+            if matches!(fc.name.as_str(), "vec3" | "quat" | "rgba") {
                 return self.vec_param(name, fc, settings, span, out);
             }
         }
@@ -2241,6 +2361,13 @@ impl<'s> Lowerer<'s> {
                         }
                         Ok(mk(ExprKind::Param(name.to_string()), span))
                     }
+                    // An effect's (P2): the pixel's position, the image's
+                    // size and density.
+                    Base::Ctx if self.effect => match name {
+                        "uv" => Ok(mk(ExprKind::Predef("pixel".into()), span)),
+                        "width" | "height" | "density_mean" | "pixel_scale" => Ok(mk(ExprKind::Predef(name.into()), span)),
+                        o => self.err(*p, format!("an effect's context has `uv`, `width`, `height`, `density_mean` and `pixel_scale`; not `{o}`")),
+                    },
                     // A variation's (C2b): what the flame hands it.
                     Base::Ctx if self.transform => match name {
                         "accum" => Ok(mk(ExprKind::Predef("accum".into()), span)),
@@ -2332,6 +2459,9 @@ impl<'s> Lowerer<'s> {
             if !f.args.is_empty() {
                 return self.err(p, "`rand()` takes no argument: a draw in [0, 1)");
             }
+            if self.effect {
+                return self.err(p, "an effect has no `rand()`: a picture is the same every frame -- hash the pixel's position and a seed parameter");
+            }
             return Ok(mk(ExprKind::Predef("draw".into()), span));
         }
         // A helper of the script's own, inlined; it reads only its
@@ -2374,7 +2504,9 @@ impl<'s> Lowerer<'s> {
         }
         // Numbers of vectors (`dot`, `length`), and the functions that came
         // with them (`min`, `max`, `clamp` of numbers) (B1).
-        if matches!(name, "vec3" | "quat" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp") || f.args.iter().any(|a| self.is_vec(a, scope)) {
+        if matches!(name, "vec3" | "quat" | "rgba" | "input" | "input_at" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp")
+            || f.args.iter().any(|a| self.is_vec(a, scope))
+        {
             let mut vals: Vec<Val> = args.drain(..).map(Val::S).collect();
             for a in f.args.iter() {
                 vals.push(self.arg(a, scope)?);
@@ -2860,6 +2992,20 @@ fn escaped(s, p) {
     s.z.norm_sqr() > p.bailout
 }
 "#;
+
+    /// An id goes into the script's own text (design rule 7): first in its
+    /// `INFO`, or a new `INFO` under its header comment; one it has stays.
+    #[test]
+    fn an_id_is_written_into_the_source() {
+        let id = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+        let with = with_info_id("const INFO = #{ title: \"Glow\" };\nfn effect(c, p) { c }\n", id);
+        assert_eq!(info_string(&with, "id").as_deref(), Some(id));
+        assert_eq!(info_string(&with, "title").as_deref(), Some("Glow"));
+        let bare = with_info_id("// Glow: a soft bloom.\n\nfn effect(c, p) { c }\n", id);
+        assert!(bare.starts_with("// Glow: a soft bloom.\n\nconst INFO = #{ id: "), "{bare}");
+        assert_eq!(info_string(&bare, "id").as_deref(), Some(id));
+        assert_eq!(with_info_id(&with, "another"), with, "an id it has stays");
+    }
 
     /// Labels by locale (design rule 8): a title, caption, hint or choice
     /// written as a map compiles, in the current language, and

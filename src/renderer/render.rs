@@ -726,6 +726,7 @@ pub async fn render_with(
     }
 
     // Check for enabled effects
+    crate::effects::ensure_custom(&job.config);
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
 
@@ -1140,6 +1141,7 @@ async fn render_sim(
     });
 
     // Shared tail: density effects → tonemap → color effects → read.
+    crate::effects::ensure_custom(&job.config);
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
     let mut effect_chain = if has_density_effects || has_color_effects {
@@ -1568,6 +1570,7 @@ async fn escape_tail(
     });
 
     // Shared tail: density effects → tonemap → color effects → read.
+    crate::effects::ensure_custom(&config);
     let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
     let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
     let mut effect_chain = if has_density_effects || has_color_effects {

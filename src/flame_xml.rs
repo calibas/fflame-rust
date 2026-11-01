@@ -560,6 +560,7 @@ fn parse_flame_element(
         // Effects - empty by default (zero cost)
         density_effects: Vec::new(),
         color_effects: Vec::new(),
+        custom_effects: Vec::new(),
     })
 }
 

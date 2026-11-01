@@ -3739,6 +3739,7 @@ impl App {
             // Run density effects (before tonemap, on HDR accumulation data).
             // A flame's alpha is a hit count, measured against its mean; an
             // escape or simulation image's is not, and is read as it is.
+            crate::effects::ensure_custom(&final_config);
             let density_mean = if is_non_flame { 1.0 } else { renderer.mean_density() };
             let density_effects_ran = self.effect_chain.run_density_effects(
                 &self.gpu.device,

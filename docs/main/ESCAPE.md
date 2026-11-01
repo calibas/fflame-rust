@@ -766,6 +766,25 @@ fn escaped(s, p) {
   `bristors_rule_gives_his_witnesses`, `the_solids_run_as_their_algebras`
   (against the product built from the rule in f64),
   `neither_is_stepped_through`.
+- **Colours** (`rhai/vec.rs`, the same machinery; rhai-plugins.md P2):
+  `rgba(r, g, b, a)`, `rgba(v, a)` (`v` a `vec3`) or `rgba(s)`; `c.r`,
+  `c.g`, `c.b`, `c.a` read and set, `c.rgb` the colour as a `vec3`
+  (settable), whose parts are `.r`, `.g`, `.b` as well as `.x`, `.y`,
+  `.z`; the vector's arithmetic part by part, `abs`, `floor`, `min`,
+  `max`, `clamp`, and `mix(a, b, t)` of colours or vectors. A `PARAMS`
+  entry `rgba(...)` is four float parameters, `name_r` first.
+- **Effects** (`EntryKind::Effect`, `fn effect(c, p, ctx)`; P2) run per
+  pixel of an image, read it with `input(uv)` and `input_at(x, y)` (an
+  effect's alone: the `__sample_*` and `__load_*` built-ins the lowering
+  emits), and end with a colour or `#{ color, blend, amount }`. What an
+  effect is and how it registers is in
+  [EFFECTS.md](EFFECTS.md#effects-written-in-rhai).
+- **Labels by locale** (design rule 8): `INFO.title` and a parameter's
+  `caption`, `hint` and each choice may be a map of locale to string,
+  `#{ en: "Spiral", ja: "螺旋" }`, compiled in the current language;
+  `rhai::source_labels` keeps every language for a kind that shows them
+  at display time (effects). `rhai::with_info_id` writes an id into a
+  script's `INFO` (design rule 7).
 - **`fn degree(p)`**, optional: the formula's degree at infinity, which
   the smooth colourings divide by, as a built-in's `escape_degree`
   (`Program::degree`; `custom::escape_degree` serves it to

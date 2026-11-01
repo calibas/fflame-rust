@@ -371,7 +371,7 @@ impl Checker {
                     }
                     EntryKind::Formula => kind = SectionKind::Init,
                     EntryKind::Coloring => kind = SectionKind::Final,
-                    EntryKind::Transform => kind = SectionKind::Transform,
+                    EntryKind::Transform | EntryKind::Effect => kind = SectionKind::Transform,
                     EntryKind::Solid => kind = SectionKind::Init,
                 }
             }
@@ -382,6 +382,8 @@ impl Checker {
                 // A variation's `init(p)`: the state a thread starts with
                 // (C2c).
                 (EntryKind::Transform, SectionKind::Transform | SectionKind::Init) => true,
+                // An effect's `fn effect`, per pixel (P2).
+                (EntryKind::Effect, SectionKind::Transform) => true,
                 (EntryKind::Formula, SectionKind::Init | SectionKind::Loop | SectionKind::Bailout) => true,
                 (EntryKind::Formula, SectionKind::PerturbInit | SectionKind::PerturbLoop) => true,
                 (EntryKind::Formula, SectionKind::Creases) => true,
@@ -397,6 +399,7 @@ impl Checker {
                     EntryKind::Coloring => "a colouring",
                     EntryKind::Transform => "a transformation",
                     EntryKind::Solid => "a solid",
+                    EntryKind::Effect => "an effect",
                 };
                 self.error(s.span, format!("{what} has no `{}:` section", kind.label()));
                 continue;
@@ -431,6 +434,12 @@ impl Checker {
             EntryKind::Solid => {
                 if !has(SectionKind::Loop) || !has(SectionKind::Final) {
                     self.error(entry.span, "a solid needs `step` and `distance`");
+                    return None;
+                }
+            }
+            EntryKind::Effect => {
+                if !has(SectionKind::Transform) {
+                    self.error(entry.span, "an effect has `fn effect(c, p)`");
                     return None;
                 }
             }
@@ -921,6 +930,23 @@ impl Checker {
                     _ => Predef::VarColor,
                 }
             }
+            // An effect's result and context (P2).
+            "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_blend" | "effect_amount" | "density_mean" | "pixel_scale" if self.internal => {
+                if self.kind != EntryKind::Effect {
+                    self.error(span, format!("`{name}` is an effect's"));
+                    return None;
+                }
+                match name {
+                    "effect_r" => Predef::EffectR,
+                    "effect_g" => Predef::EffectG,
+                    "effect_b" => Predef::EffectB,
+                    "effect_a" => Predef::EffectA,
+                    "effect_blend" => Predef::EffectBlend,
+                    "effect_amount" => Predef::EffectAmount,
+                    "density_mean" => Predef::DensityMean,
+                    _ => Predef::PixelScale,
+                }
+            }
             "juliac" if self.internal => Predef::JuliaC,
             "crease_decay" | "crease_pattern" | "crease_sign" | "crease_reach" | "crease_height" | "crease_slope"
                 if self.internal =>
@@ -974,6 +1000,15 @@ impl Checker {
         // estimate it gives is `#index`, in `final:`.
         if self.kind == EntryKind::Solid && !matches!(p, Predef::Pixel | Predef::PixelZ | Predef::Pi | Predef::E | Predef::Index) {
             self.error(span, format!("a solid reads its position, `#pi` and `#e`, not `#{name}`"));
+            return None;
+        }
+        // An effect sees its pixel's position, the image's size and its
+        // own context; its colour comes through its reads of the image.
+        if self.kind == EntryKind::Effect
+            && !matches!(p, Predef::Pixel | Predef::Width | Predef::Height | Predef::Pi | Predef::E | Predef::DensityMean | Predef::PixelScale)
+            && !matches!(p, Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount)
+        {
+            self.error(span, format!("an effect reads its pixel's position, the image's size, `#pi` and `#e`, not `#{name}`"));
             return None;
         }
         if self.kind == EntryKind::Transform && !matches!(p, Predef::Pixel | Predef::Pi | Predef::E | Predef::Draw | Predef::Accum | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ) {
@@ -1348,7 +1383,8 @@ impl Checker {
                     Predef::Index | Predef::Solid => self.section == SectionKind::Final,
                     Predef::DZ => true,
                     Predef::CreaseHeight | Predef::CreaseSlope => true,
-                    Predef::Pixel | Predef::VarColor | Predef::PixelZ => self.section == SectionKind::Transform,
+                    Predef::Pixel | Predef::VarColor | Predef::PixelZ => self.section == SectionKind::Transform && self.kind != EntryKind::Effect,
+                    Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount => self.section == SectionKind::Transform,
                     _ => false,
                 };
                 if !ok {
@@ -1369,6 +1405,7 @@ impl Checker {
                     Predef::Pixel => (Place::Pixel, Ty::Complex),
                     Predef::VarColor => (Place::Color, Ty::Float),
                     Predef::PixelZ => (Place::PixelZ, Ty::Float),
+                    p @ (Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectBlend | Predef::EffectAmount) => (Place::Effect(p), p.ty()),
                     _ => (Place::Solid, Ty::Bool),
                 })
             }
@@ -1546,6 +1583,13 @@ impl Checker {
             self.error(span, format!("unknown function `{name}`{hint}"));
             return None;
         };
+        // An effect's reads of its image (P2): an effect's alone.
+        if matches!(b, Builtin::SampleR | Builtin::SampleG | Builtin::SampleB | Builtin::SampleA | Builtin::LoadR | Builtin::LoadG | Builtin::LoadB | Builtin::LoadA)
+            && self.kind != EntryKind::Effect
+        {
+            self.error(span, format!("unknown function `{name}`"));
+            return None;
+        }
         let arg = self.expr(&args[0])?;
         // Rhai's `abs` of a complex is its modulus (UF's folds each
         // part; Rhai formulas spell that `fold`).
@@ -1972,6 +2016,7 @@ fn place_read(p: Place) -> Option<IExprKind> {
         Place::Pixel => IExprKind::Predef(Predef::Pixel),
         Place::Color => IExprKind::Predef(Predef::VarColor),
         Place::PixelZ => IExprKind::Predef(Predef::PixelZ),
+        Place::Effect(p) => IExprKind::Predef(p),
     })
 }
 

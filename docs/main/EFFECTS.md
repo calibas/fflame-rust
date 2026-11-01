@@ -95,8 +95,8 @@ density-keyed effect behaves differently in those modes.
 
 `global_effect_registry()` returns a read guard on a lazily built
 `EffectRegistry`; `global_effect_registry_mut()` a write guard. It is
-behind a lock because effects are not a closed set: downloads and local
-plugins register at runtime. Bind the guard to a variable before
+behind a lock because effects are not a closed set: downloads and Rhai
+effects register at runtime. Bind the guard to a variable before
 borrowing from it -- `global_effect_registry().get(x)` drops the guard
 at the end of the statement.
 
@@ -109,14 +109,22 @@ Add lists and the corpus exporter (sorted by name) read it.
 | --- | --- |
 | `name` | The key a config stores (`"vignette"`) |
 | `category` | `Density` or `Color`: the pipeline position |
-| `display_name` | Empty for built-ins, which are labelled from `locales/*.yml` (`effects.<name>.name`). A download or plugin carries its own |
+| `display_name` | Empty for built-ins, which are labelled from `locales/*.yml` (`effects.<name>.name`). A download or a Rhai effect carries its own |
 | `source` | `EffectSource::Builtin { embedded, path }` or `EffectSource::Owned(wgsl)` |
 | `parameters` | `EffectParameter`s, in slot order |
-| `provenance` | `Builtin`, `Api { version }` or `Local` |
+| `provenance` | `Builtin`, `Api { version }` or `Custom` (a Rhai effect) |
+| `labels` | A Rhai effect's labels as written, strings or by locale (`scripted::Labels`); `None` otherwise |
 
-`EffectInfo::translated_name` reads the locale first, then the declared
-`display_name`, then the raw `name`. A locale miss is detected rather
-than trusted, because rust-i18n returns the key on a miss.
+`EffectInfo::translated_name` reads the locale first, then the labels'
+title in the current language, then the declared `display_name`, then
+the raw `name`. A locale miss is detected rather than trusted, because
+rust-i18n returns the key on a miss. `param_label` gives a parameter's
+caption and hint the same way; the Effects panel draws them.
+
+Each registration of a name is counted (`EffectRegistry::revision`):
+the runner keeps the revision a pipeline was built from and builds it
+again when the name is registered again -- a Rhai effect edited, a
+download updated. `remove_by_name` removes one.
 
 **`EffectParameter`** carries `name`, `display_name`, `param_type` (the
 variations' `ParamType`), `default_value`, optional `min_value` and
@@ -360,16 +368,15 @@ Effects", available in every render mode:
 
 ## Effects that did not ship
 
-An effect a flame names may not be in this build. Three sources fill
-the registry beyond the built-ins, all through one registration path
-(`EffectRegistry::register_from_api`) with one set of refusals.
+An effect a flame names may not be in this build. Downloads fill the
+registry beyond the built-ins through one registration path
+(`EffectRegistry::register_from_api`) with one set of refusals; a
+config's own Rhai effects come with it ([below](#effects-written-in-rhai)).
 
 **At startup** `storage::load_installed_resources` registers cached
-downloads (`effect_cache::load_all_into_registry`) and then local
-plugins (`plugins::load_all`). Every entry point that renders calls it:
-`App::new` and the headless entry points. A cached entry the current
-build would refuse is dropped with a warning. A refused plugin is
-reported -- a notification in the app, stderr headless.
+downloads (`effect_cache::load_all_into_registry`). Every entry point
+that renders calls it: `App::new` and the headless entry points. A
+cached entry the current build would refuse is dropped with a warning.
 
 **On demand.** When compiling finds an unknown name it records it
 (`effects::note_missing_effect`). The app drains that set each frame
@@ -407,6 +414,76 @@ The wire types are `EffectListItem` and `EffectDownload` in
 client splices on the marker actually present.
 
 ---
+
+## Effects written in Rhai
+
+An effect can be written in the formula language's Rhai
+([rhai-plugins.md](../projects/rhai-plugins.md), P2; the language is in
+[ESCAPE.md](ESCAPE.md#the-formula-language)): `fn effect(c, p, ctx)`,
+run per pixel, `c` the input's colour there (an `rgba`), `p` its
+parameters, `ctx` its context. [effects/custom.rs](../../src/effects/custom.rs)
+compiles it (`EntryKind::Effect`) to `fx_effect(uv)` and wraps that in
+the effect template (`assemble`): the `EffectParams` uniform with
+`get_param`, the input texture and sampler, the fullscreen triangle,
+and the blend library when the effect blends. It registers as an
+`EffectInfo` with `EffectSource::Owned` WGSL, its labels kept.
+
+```rhai
+const PARAMS = #{
+    amount: #{ value: 0.5, min: 0.0, max: 1.0, caption: #{ en: "Amount", ja: "量" } },
+    tint: #{ value: rgba(1.0, 0.5, 0.0, 1.0), caption: "Tint" },
+    blend_mode: #{ value: 2, choices: ["Normal", "Add", "Multiply"] },
+};
+const INFO = #{ title: "Tint", id: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b", category: "color" };
+
+fn effect(c, p, ctx) {
+    #{ color: c.rgb * p.tint.rgb, blend: p.blend_mode, amount: p.amount }
+}
+```
+
+- **The result** is an `rgba`; a `vec3`, the input's alpha kept; or
+  `#{ color, blend, amount }`, blended over the input by `apply_blend`
+  with mode `blend` (an int, in `BLEND_MODE_NAMES`' order) at `amount`
+  (1 when absent), the input's alpha kept -- what the built-ins do.
+- **Reading the image:** `input(uv)`, filtered at a position
+  (`textureSampleLevel` at level 0, legal in any control flow, so the
+  WASM rule holds), and `input_at(x, y)`, loaded at a pixel and clamped
+  to the image. Each is four per-channel reads the shader compiler
+  merges.
+- **The context:** `ctx.uv` (the pixel's position, 0 to 1, a complex
+  number), `ctx.width` and `ctx.height` (ints), `ctx.density_mean` and
+  `ctx.pixel_scale` (the uniform's).
+- **Parameters** are numbers, bools, choices and colours (`rgba(...)`,
+  four slots `name_r` ...), at most `MAX_EFFECT_PARAMS`, `get_param` in
+  declaration order. Not complex numbers, not function parameters.
+  Labels may be by locale (design rule 8).
+- **No** `rand()` (a picture is the same every frame: hash the position
+  and a seed parameter), no `prepare`, no state.
+- **`INFO`**: `title`; `id` -- a UUID for one of the user's (design rule
+  7: `scripted::mint_id`; the Formula Editor writes one into the file on
+  Use), a built-in's name for a shipped one; `category`, `"color"`
+  (after the tone map, the default) or `"density"`.
+
+**Carried.** A config holds the sources its chains use
+(`FractalConfig::custom_effects`, `ConfigPath::CustomEffects`), `entry`
+the id its instances name. `effects::ensure_custom(config)` registers
+them where every path decides it has effects (`render_with`'s three
+kinds, the high-res exports, the viewport); it compares the text first
+and hashes only a new one, and a source that does not compile is
+logged once (`scripted::Ledger`). A build without `engine-escape` has
+no compiler, and a carried effect renders as an unknown one does.
+
+**In the Formula Editor**, an effect's row offers *Use as effect*: an
+id is minted into the file if it has none, the effect registers, the
+config's sources take it, and an instance is added to its chain the
+first time (a second undo step: adding an instance is structural).
+*Live* re-applies it by its id.
+
+**Twins of the built-ins** live in `assets/effects/*.rhai`, each held to
+its WGSL by a GPU compare within a step of 8-bit rounding, under the
+built-in's name with its parameters in the same order
+(`the_vignettes_rhai_twin_matches_the_wgsl`). They replace the built-ins
+only once nothing is lost (rhai-plugins.md, D1).
 
 ## The corpus for the API
 

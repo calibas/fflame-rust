@@ -16,6 +16,22 @@ use rust_i18n::t;
 
 use crate::variations::ParamType;
 
+/// Effects written in Rhai, compiled by the formula language (P2).
+#[cfg(feature = "engine-escape")]
+pub mod custom;
+
+/// Register the effects a config carries (`FractalConfig::custom_effects`)
+/// before its chains are built: every path that renders a config's effects
+/// calls this. Without the formula language (a build without
+/// `engine-escape`) a carried effect cannot compile, and renders as an
+/// unknown one does.
+pub fn ensure_custom(config: &crate::config::FractalConfig) {
+    #[cfg(feature = "engine-escape")]
+    custom::ensure(config);
+    #[cfg(not(feature = "engine-escape"))]
+    let _ = config;
+}
+
 /// The blend modes a colour effect's `blend_mode` picks, in the order
 /// `apply_blend` (shaders/effects/common/blend_modes.wgsl) numbers them.
 pub const BLEND_MODE_NAMES: &[&str] = &[
@@ -200,9 +216,29 @@ pub struct EffectInfo {
     /// [`crate::provenance::Provenance`] for why those are three
     /// questions rather than one bool.
     pub provenance: crate::provenance::Provenance,
+
+    /// A Rhai effect's labels as its source writes them (design rule 8):
+    /// shown in the current language whenever they are shown
+    /// ([`Self::translated_name`], [`Self::param_label`]). `None` for an
+    /// effect labelled from the locale files or by plain strings.
+    pub labels: Option<std::sync::Arc<crate::scripted::Labels>>,
 }
 
 impl EffectInfo {
+    /// A parameter's label and hint in the current language: its source's
+    /// when it has labels, else the definition's own.
+    pub fn param_label(&self, p: &EffectParameter) -> (String, Option<String>) {
+        if let Some(l) = self.labels.as_ref().and_then(|l| l.param(&p.name)) {
+            let caption = l.caption.resolve();
+            let hint = l.hint.resolve();
+            return (
+                if caption.is_empty() { p.display_name.clone() } else { caption },
+                if hint.is_empty() { p.description.clone() } else { Some(hint) },
+            );
+        }
+        (p.display_name.clone(), p.description.clone())
+    }
+
     /// The label to show for this effect.
     ///
     /// Locale first, so a built-in keeps its curated and translatable
@@ -218,6 +254,10 @@ impl EffectInfo {
         let translated = t!(&key);
         if translated != key {
             return translated.to_string();
+        }
+        // A Rhai effect's title, by locale as written.
+        if let Some(title) = self.labels.as_ref().map(|l| l.title.resolve()).filter(|t| !t.is_empty()) {
+            return title;
         }
         if !self.display_name.is_empty() {
             return self.display_name.clone();
@@ -335,6 +375,12 @@ pub struct EffectRegistry {
 
     /// Ordered list of effect names (registration order)
     ordered_names: Vec<String>,
+
+    /// Each name's registration, counted: what a compiled pipeline was
+    /// built from, so a re-registered effect (a Rhai effect edited, a
+    /// download updated) is compiled again ([`Self::revision`]).
+    revisions: HashMap<String, u64>,
+    registrations: u64,
 }
 
 impl EffectRegistry {
@@ -343,6 +389,8 @@ impl EffectRegistry {
         Self {
             effects: HashMap::new(),
             ordered_names: Vec::new(),
+            revisions: HashMap::new(),
+            registrations: 0,
         }
     }
 
@@ -352,7 +400,23 @@ impl EffectRegistry {
         if !self.effects.contains_key(&name) {
             self.ordered_names.push(name.clone());
         }
+        self.registrations += 1;
+        self.revisions.insert(name.clone(), self.registrations);
         self.effects.insert(name, info);
+    }
+
+    /// Which registration of `name` is current (0: none). A pipeline built
+    /// from an older one is stale.
+    pub fn revision(&self, name: &str) -> u64 {
+        self.revisions.get(name).copied().unwrap_or(0)
+    }
+
+    /// Remove an effect, any provenance; a pipeline built from it is then
+    /// stale (its revision is gone).
+    pub fn remove_by_name(&mut self, name: &str) -> Option<EffectInfo> {
+        self.ordered_names.retain(|n| n != name);
+        self.revisions.remove(name);
+        self.effects.remove(name)
     }
 
     /// Get effect info by name
@@ -585,6 +649,7 @@ pub fn check_download(dl: &crate::api::types::EffectDownload) -> Result<EffectIn
         source: EffectSource::Owned(shader),
         parameters,
         provenance: crate::provenance::Provenance::Api { version: dl.version },
+        labels: None,
     })
 }
 
@@ -632,6 +697,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/vignette.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -684,6 +750,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/film_grain.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -727,6 +794,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/chromatic_aberration.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "amount".to_string(),
@@ -779,6 +847,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/hue_cycle.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "offset".to_string(),
@@ -824,6 +893,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/density/density_blur.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "radius".to_string(),
@@ -871,6 +941,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/density/sharpen.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "amount".to_string(),
@@ -905,6 +976,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/density/bilateral_blur.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "radius".to_string(),
@@ -950,6 +1022,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/kaleidoscope.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "segments".to_string(),
@@ -1031,6 +1104,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/plasma.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -1101,6 +1175,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/tunnel.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "speed".to_string(),
@@ -1171,6 +1246,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/sobel_edges.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -1232,6 +1308,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/domain_warp.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -1302,6 +1379,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/simplex_noise.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -1383,6 +1461,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/worley_noise.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
@@ -1466,6 +1545,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/julia.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "mode".to_string(),
@@ -1581,6 +1661,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             path: "effects/color/distance_field.wgsl",
         },
         provenance: crate::provenance::Provenance::Builtin,
+        labels: None,
         parameters: vec![
             EffectParameter {
                 name: "threshold".to_string(),
@@ -1982,6 +2063,7 @@ mod label_tests {
             source: EffectSource::Owned("fn main() {}".into()),
             parameters: Vec::new(),
             provenance: crate::provenance::Provenance::Custom,
+            labels: None,
         };
         assert_eq!(info.translated_name(), "Plugin Example (Tint)");
         assert!(
@@ -2001,6 +2083,7 @@ mod label_tests {
             source: EffectSource::Owned("fn main() {}".into()),
             parameters: Vec::new(),
             provenance: crate::provenance::Provenance::Custom,
+            labels: None,
         };
         assert_eq!(info.translated_name(), "unnamed_thing");
     }
