@@ -2795,8 +2795,10 @@ impl<'s> Lowerer<'s> {
             ExprKind::Name(n) if n == "ismand" => TypeName::Complex,
             ExprKind::Name(n) => self.types.get(n).copied().unwrap_or(TypeName::Complex),
             ExprKind::Predef(n) => match n.as_str() {
-                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" => TypeName::Int,
+                "pass" | "maxiter" | "x" | "y" | "width" | "height" | "numiter" | "crease_pattern" | "effect_blend" => TypeName::Int,
                 "magn" | "pi" | "e" | "crease_decay" | "crease_sign" | "crease_reach" | "crease_height" | "draw" | "weight" | "vcolor" | "pixelz" | "accumz" => TypeName::Float,
+                // An effect's (P2).
+                "density_mean" | "pixel_scale" | "effect_r" | "effect_g" | "effect_b" | "effect_a" | "effect_amount" => TypeName::Float,
                 _ => TypeName::Complex,
             },
             ExprKind::Param(n) => self.param_tys.get(n).copied().unwrap_or(TypeName::Complex),
