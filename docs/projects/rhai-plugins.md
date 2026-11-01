@@ -254,6 +254,15 @@ only one that needs passes.
 
 ### P0. Close the CPU sandbox, keeping `import` (small; first)
 
+**Done 2026-11-01** (branch `rhai-plugins`): `host::LibraryResolver`,
+`check_library`, `ScriptKind::Library`, `sleep` / `timestamp` refused,
+`untrusted_code_running` for `run_script` and `import` alike; the panel,
+the listing and the Palette Editor read scripts through the whole
+library (the Palette Editor also now marks downloaded scripts, which it
+never did). **For the API repository**: the contract's `scripts.kinds`
+gained `"library"`, which a publish now sends -- the server must accept
+it on create.
+
 The user wants scripts to import other scripts. Half of that is already
 safe: `run_script("id", #{...})` resolves the id through the script
 library, never the filesystem, catches cycles, caps nesting at 8,

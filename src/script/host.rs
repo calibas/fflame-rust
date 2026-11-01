@@ -469,12 +469,16 @@ const MAX_SCRIPT_DEPTH: usize = 8;
 /// palette. Sharing the RNG stream (rather than re-using the caller's
 /// seed) keeps the whole run reproducible from script + seed while
 /// letting two calls produce two different results.
+///
+/// `restricted` is [`untrusted_code_running`] at the call: the caller
+/// reads it from the call context, which knows whose code is calling.
 pub(crate) fn run_sub_script(
     cfg: &Rc<RefCell<FractalConfig>>,
     state: &Rc<RefCell<ScriptState>>,
     id: &str,
     params: HashMap<String, ParamValue>,
     seed: Option<u64>,
+    restricted: bool,
 ) -> Result<(), String> {
     let (source, saved) = {
         let mut st = state.borrow_mut();
@@ -500,7 +504,7 @@ pub(crate) fn run_sub_script(
         // would report whether the user has a script by that name, which
         // is the sort of thing a downloaded script should not be able to
         // ask.
-        if st.cross_calls_restricted() && !super::library::is_builtin_stem(id) {
+        if restricted && !super::library::is_builtin_stem(id) {
             return Err(format!(
                 "a downloaded script may only call scripts that ship with the app, \
                  and `{id}` is not one of them"
@@ -570,6 +574,253 @@ pub(crate) fn run_sub_script(
     })
 }
 
+/// Whether code a downloaded script supplied is running: the entry
+/// script, a frame on the call stack, or a downloaded library whose
+/// function is executing.
+///
+/// The call stack alone cannot answer the last case. `run_script` and
+/// `import` push frames, but a library's FUNCTIONS run later, inside
+/// whoever calls them, where no frame says whose code it is -- so a
+/// downloaded library's function calling `run_script("mine")`, or
+/// `Fn("run_script")` built from a string, would pass a stack-only
+/// check from a trusted caller. Rhai pushes a module's function library
+/// while its code runs, under the id [`LibraryResolver`] gave it, so the
+/// active libraries say whose code it is wherever it was called from.
+pub(crate) fn untrusted_code_running<'a>(
+    state: &ScriptState,
+    active_libraries: impl IntoIterator<Item = &'a rhai::Module>,
+) -> bool {
+    state.cross_calls_restricted()
+        || active_libraries
+            .into_iter()
+            .any(|m| m.id().is_some_and(|id| state.untrusted.contains(id)))
+}
+
+/// The most libraries one run may import, counting repeats. Imports
+/// belong at the top of a script; this stops an `import` in a loop.
+const MAX_MODULES: usize = 64;
+
+/// `import "id" as name;` -- a library from the script library, by id.
+///
+/// Replaces the `FileModuleResolver` that `Engine::new()` installs on
+/// desktop, which loaded and ran any `.rhai` file on disk. This one never
+/// touches the filesystem, so an import means the same thing on desktop,
+/// the web and the CLI, and it keeps `run_script`'s rules: the same
+/// library (the `(id, source)` pairs the host was given), the same
+/// downloaded-script restriction, the same cycle and depth limits, and
+/// one operation budget.
+///
+/// Only a [library](ScriptKind::Library) imports: Rhai runs a module's
+/// top-level statements when it loads it, so importing a generator would
+/// run its body against the flame. [`check_library`] holds a library's
+/// top level to declarations before anything runs.
+pub struct LibraryResolver {
+    state: Rc<RefCell<ScriptState>>,
+    /// Libraries this engine has loaded, so a second import is free.
+    loaded: RefCell<HashMap<String, rhai::Shared<rhai::Module>>>,
+}
+
+impl LibraryResolver {
+    fn load(
+        &self,
+        engine: &Engine,
+        restricted: bool,
+        path: &str,
+        pos: rhai::Position,
+    ) -> Result<rhai::Shared<rhai::Module>, Box<rhai::EvalAltResult>> {
+        let fail = |message: String| Box::new(rhai::EvalAltResult::ErrorRuntime(message.into(), pos));
+        let id = path.trim().trim_end_matches(".rhai").to_string();
+        let source = {
+            let st = self.state.borrow();
+            // Before the id is resolved, as in `run_sub_script`, so the
+            // refusal does not tell a downloaded script whether the user
+            // has a library by that name.
+            if restricted && !super::library::is_builtin_stem(&id) {
+                return Err(fail(format!(
+                    "a downloaded script may only import libraries that ship with the app, \
+                     and `{id}` is not one of them"
+                )));
+            }
+            if let Some(module) = self.loaded.borrow().get(&id) {
+                return Ok(module.clone());
+            }
+            if st.call_stack.iter().any(|c| *c == id) {
+                let mut chain = st.call_stack.clone();
+                chain.push(id.clone());
+                return Err(fail(format!("scripts import each other in a loop: {}", chain.join(" -> "))));
+            }
+            if st.call_stack.len() >= MAX_SCRIPT_DEPTH {
+                return Err(fail(format!(
+                    "scripts are nested more than {MAX_SCRIPT_DEPTH} deep (at `{id}`)"
+                )));
+            }
+            match st.scripts.iter().find(|(k, _)| *k == id) {
+                Some((_, source)) => source.clone(),
+                None if st.scripts.is_empty() => {
+                    return Err(fail(format!(
+                        "cannot import `{id}`: no script library is available here \
+                         (try running from the app)"
+                    )))
+                }
+                None => return Err(fail(format!("no script with id `{id}` to import"))),
+            }
+        };
+
+        let mut ast = engine.compile(&source).map_err(|e| {
+            let line = e.position().line().map(|l| format!(" line {l}")).unwrap_or_default();
+            fail(format!("in `{id}`{line}: {}", e.err_type()))
+        })?;
+        check_library(&ast).map_err(|why| fail(format!("cannot import `{id}`: {why}")))?;
+        // Names the module's function library, which is what
+        // `untrusted_code_running` reads while its functions run.
+        ast.set_source(id.as_str());
+
+        // Its `script(...)` declaration is its own, not the importer's.
+        let saved = {
+            let mut st = self.state.borrow_mut();
+            let saved = (
+                std::mem::take(&mut st.meta),
+                std::mem::take(&mut st.provided),
+                std::mem::take(&mut st.declared),
+            );
+            st.call_stack.push(id.clone());
+            st.frame_ops.push(0);
+            saved
+        };
+        let result = rhai::Module::eval_ast_as_new(Scope::new(), &ast, engine);
+        {
+            let mut st = self.state.borrow_mut();
+            let spent = st.frame_ops.pop().unwrap_or(0);
+            st.ops_finished += spent;
+            st.call_stack.pop();
+            st.meta = saved.0;
+            st.provided = saved.1;
+            st.declared = saved.2;
+        }
+        let module = rhai::Shared::new(result.map_err(|e| {
+            let mapped = map_error(e);
+            match mapped.line {
+                Some(line) => fail(format!("in `{id}` line {line}: {}", mapped.message)),
+                None => fail(format!("in `{id}`: {}", mapped.message)),
+            }
+        })?);
+        self.loaded.borrow_mut().insert(id, module.clone());
+        Ok(module)
+    }
+}
+
+impl rhai::ModuleResolver for LibraryResolver {
+    fn resolve(
+        &self,
+        engine: &Engine,
+        _source: Option<&str>,
+        path: &str,
+        pos: rhai::Position,
+    ) -> Result<rhai::Shared<rhai::Module>, Box<rhai::EvalAltResult>> {
+        let restricted = self.state.borrow().cross_calls_restricted();
+        self.load(engine, restricted, path, pos)
+    }
+
+    /// What Rhai calls for an `import` statement: the global state says
+    /// which libraries' code is running, so an `import` inside a
+    /// downloaded library's function is held to the same rule as one at
+    /// its top level.
+    fn resolve_raw(
+        &self,
+        engine: &Engine,
+        global: &mut rhai::GlobalRuntimeState,
+        _scope: &mut Scope,
+        path: &str,
+        pos: rhai::Position,
+    ) -> Result<rhai::Shared<rhai::Module>, Box<rhai::EvalAltResult>> {
+        let restricted = untrusted_code_running(&self.state.borrow(), global.lib.iter().map(|m| m.as_ref()));
+        self.load(engine, restricted, path, pos)
+    }
+}
+
+/// Whether a script may be imported: it declares itself a library, and
+/// its top level only declares.
+///
+/// Rhai runs a module's top-level statements when it is loaded. A
+/// library's top level may hold its `script(...)` declaration, constants
+/// written out as values (numbers, strings, arrays, maps, arithmetic on
+/// them), its own imports and exports -- nothing that calls a function,
+/// so loading one cannot touch the flame, declare parameters in the
+/// importer's panel, or run another script. Its functions may do
+/// anything, under the importer's budget, when the importer calls them.
+pub(crate) fn check_library(ast: &rhai::AST) -> Result<(), String> {
+    use rhai::Stmt;
+
+    let declaration = ast.statements().iter().find_map(|stmt| match stmt {
+        Stmt::FnCall(call, _) if call.name == "script" && call.namespace.is_empty() => {
+            Some(match call.args.get(1) {
+                Some(rhai::Expr::StringConstant(kind, _)) => ScriptKind::parse(kind),
+                _ => None,
+            })
+        }
+        _ => None,
+    });
+    match declaration.flatten() {
+        Some(ScriptKind::Library) => {}
+        Some(other) => {
+            return Err(format!(
+                "it is a {}, not a library -- run it with run_script instead",
+                other.as_str()
+            ))
+        }
+        None => {
+            return Err(
+                "it does not declare itself a library: begin it with script(\"Name\", \"library\");"
+                    .to_string(),
+            )
+        }
+    }
+
+    let at = |pos: rhai::Position| pos.line().map(|l| format!("line {l}: ")).unwrap_or_default();
+    for stmt in ast.statements() {
+        let inert = match stmt {
+            Stmt::Noop(_) | Stmt::Import(..) | Stmt::Export(..) => true,
+            Stmt::Var(x, _, _) => is_inert(&x.1),
+            Stmt::FnCall(call, _) if call.name == "script" && call.namespace.is_empty() => {
+                call.args.iter().all(is_inert)
+            }
+            _ => false,
+        };
+        if !inert {
+            return Err(format!(
+                "{}a library's top level may only hold script(...), constants, imports and \
+                 functions -- this would run every time it is imported",
+                at(stmt.position())
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A value written out: literals, collections of them, operators on
+/// them, and names of constants already declared. No function calls.
+fn is_inert(expr: &rhai::Expr) -> bool {
+    use rhai::Expr;
+    match expr {
+        Expr::DynamicConstant(..)
+        | Expr::BoolConstant(..)
+        | Expr::IntegerConstant(..)
+        | Expr::FloatConstant(..)
+        | Expr::CharConstant(..)
+        | Expr::StringConstant(..)
+        | Expr::Unit(..)
+        | Expr::Variable(..) => true,
+        Expr::InterpolatedString(parts, _) | Expr::Array(parts, _) => parts.iter().all(is_inert),
+        Expr::Map(map, _) => map.0.iter().all(|(_, value)| is_inert(value)),
+        Expr::And(parts, _) | Expr::Or(parts, _) | Expr::Coalesce(parts, _) => {
+            parts.iter().all(is_inert)
+        }
+        Expr::Index(x, ..) => is_inert(&x.lhs) && is_inert(&x.rhs),
+        Expr::FnCall(call, _) => call.is_operator_call() && call.args.iter().all(is_inert),
+        _ => false,
+    }
+}
+
 fn build_engine(cfg: Rc<RefCell<FractalConfig>>, state: Rc<RefCell<ScriptState>>) -> Engine {
     let mut engine = Engine::new();
 
@@ -578,9 +829,29 @@ fn build_engine(cfg: Rc<RefCell<FractalConfig>>, state: Rc<RefCell<ScriptState>>
     engine.set_max_array_size(MAX_ARRAY_SIZE);
     engine.set_max_string_size(MAX_STRING_SIZE);
     engine.set_max_map_size(MAX_MAP_SIZE);
+    engine.set_max_modules(MAX_MODULES);
     // No dynamic code generation: scripts are shared artifacts, and
     // eval would let one smuggle in constructs past review.
     engine.disable_symbol("eval");
+    // `import` reads the script library, never the filesystem.
+    engine.set_module_resolver(LibraryResolver {
+        state: Rc::clone(&state),
+        loaded: RefCell::new(HashMap::new()),
+    });
+    // What `Engine::new()`'s packages bring that a shared script must not
+    // have: `sleep` blocks the thread the app waits on, and the operation
+    // budget never sees the time it spends; `timestamp` makes a result
+    // depend on when it ran (rule: script + seed reproduces). Registered
+    // here, in the global namespace, they are found before the packages'.
+    engine.register_fn("sleep", |_: rhai::INT| -> Result<(), Box<rhai::EvalAltResult>> {
+        Err("sleep() is not available to scripts".into())
+    });
+    engine.register_fn("sleep", |_: rhai::FLOAT| -> Result<(), Box<rhai::EvalAltResult>> {
+        Err("sleep() is not available to scripts".into())
+    });
+    engine.register_fn("timestamp", || -> Result<(), Box<rhai::EvalAltResult>> {
+        Err("timestamp() is not available to scripts: a script's result depends on its seed alone".into())
+    });
 
     // Rhai's own max_operations is per evaluation, so a script that
     // calls another would get a whole fresh allowance for it — and a

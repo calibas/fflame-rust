@@ -175,7 +175,7 @@ impl ScriptsPanel {
             return;
         }
         self.collected_from = hash;
-        match ScriptHost::new().collect(&self.text, base) {
+        match self.host().collect(&self.text, base) {
             Ok(meta) => {
                 // Drop values whose parameter no longer exists, keep the rest
                 // so editing a script doesn't reset the sliders.
@@ -207,7 +207,8 @@ impl ScriptsPanel {
         origin: ScriptOrigin,
         untrusted: bool,
     ) {
-        let kind = ScriptHost::new()
+        let kind = self
+            .host_for(untrusted)
             .collect(&source, &FractalConfig::default())
             .ok()
             .and_then(|m| m.kind)
@@ -263,14 +264,26 @@ impl ScriptsPanel {
         // library.
         let base = match self.declared_kind() {
             ScriptKind::Modifier => current.clone(),
-            ScriptKind::Generator => {
+            ScriptKind::Generator | ScriptKind::Library => {
                 let mut fresh = FractalConfig::default();
                 fresh.palette = current.palette.clone();
                 fresh
             }
         };
-        // The library the panel already discovered, so one script can
-        // call another by id exactly as it does headlessly.
+        self.host().run(&self.text, &base, seed, self.values.clone())
+    }
+
+    /// The host the selected script runs AND is read with: the library
+    /// the panel discovered, so one script calls or imports another by
+    /// id exactly as it does headlessly. Reading metadata through the
+    /// same host matters since `import`: a script importing one of the
+    /// user's libraries would otherwise fail its collect pass and show
+    /// no parameters.
+    fn host(&self) -> ScriptHost {
+        self.host_for(self.selected_is_untrusted())
+    }
+
+    fn host_for(&self, untrusted_entry: bool) -> ScriptHost {
         let mut host = ScriptHost::with_palettes(self.palettes.clone()).with_scripts(
             self.entries
                 .iter()
@@ -280,19 +293,19 @@ impl ScriptsPanel {
 
         // Downloaded scripts may only call shipped ones. Both halves are
         // needed: the library set covers a downloaded script reached
-        // through `run_script`, and the entry flag covers the ordinary
-        // case — the user pressed Run on something they downloaded,
-        // which puts no id on the call stack at all.
+        // through `run_script` or `import`, and the entry flag covers
+        // the ordinary case — the user pressed Run on something they
+        // downloaded, which puts no id on the call stack at all.
         host = host.with_untrusted(
             self.entries
                 .iter()
                 .filter(|e| e.untrusted)
                 .map(|e| e.id.clone()),
         );
-        if self.selected_is_untrusted() {
+        if untrusted_entry {
             host = host.with_untrusted_entry();
         }
-        host.run(&self.text, &base, seed, self.values.clone())
+        host
     }
 
     pub fn render(
@@ -401,6 +414,11 @@ impl ScriptsPanel {
             ScriptKind::Modifier => {
                 ui.label(
                     egui::RichText::new("Changes the flame you have open.").weak(),
+                );
+            }
+            ScriptKind::Library => {
+                ui.label(
+                    egui::RichText::new("Functions for other scripts to import.").weak(),
                 );
             }
         }
@@ -1014,6 +1032,16 @@ impl ScriptsPanel {
         current: &FractalConfig,
         response: &mut ScriptsResponse,
     ) {
+        // A library does nothing on its own; its use is the import line.
+        if self.declared_kind() == ScriptKind::Library {
+            let id = self.entries.get(self.selected).map(|e| e.id.clone()).unwrap_or_default();
+            ui.label(
+                egui::RichText::new(format!("import \"{id}\" as lib;"))
+                    .monospace(),
+            )
+            .on_hover_text("Other scripts use this library with this line, then call its functions as lib::name(...)");
+            return;
+        }
         // A script that declared `norng` ignores the seed entirely, so
         // the seed field, Reroll and Batch would all be controls that
         // change nothing — worse than absent, because they imply the
@@ -1037,7 +1065,7 @@ impl ScriptsPanel {
 
         ui.horizontal(|ui| {
             let verb = match self.declared_kind() {
-                ScriptKind::Generator => "Generate",
+                ScriptKind::Generator | ScriptKind::Library => "Generate",
                 ScriptKind::Modifier => "Apply",
             };
             if ui
@@ -1061,7 +1089,7 @@ impl ScriptsPanel {
             // flame, a different random walk each time. Name the button
             // after what it does rather than how it's implemented.
             let (batch_label, batch_hint) = match self.declared_kind() {
-                ScriptKind::Generator => (
+                ScriptKind::Generator | ScriptKind::Library => (
                     "Batch",
                     "Generate this many flames from consecutive seeds, and open them in the Fractal Browser",
                 ),

@@ -33,8 +33,9 @@ let spread = param("spread", 1.0, 0.2, 3.0); //   become sliders
 ```
 
 - `script(name, kind)` must be the first call — before any `param`.
-  The kind is `"generator"` (starts from a default config) or
-  `"modifier"` (starts from the flame currently open). An optional
+  The kind is `"generator"` (starts from a default config),
+  `"modifier"` (starts from the flame currently open) or `"library"`
+  (functions other scripts `import`; see *Composition*). An optional
   third argument lists flags: `script("T", "modifier", ["norng"])`.
 - **Parameters make sliders.** The panel discovers them by running the
   script once in a *collect* pass before the real run, so declare them
@@ -107,8 +108,9 @@ The standard math you expect is present and works on floats: `sin`,
 angles in this app's API (`rotate`, `color_hsv` hue) are **degrees**
 where the reference says so.
 
-What is deliberately missing: `eval` is disabled, there is no
-`import`, no file or network access, no clock, and no unseeded
+What is deliberately missing: `eval` is disabled, `import` reads only
+the script library (never a file), and there is no file or network
+access, no clock (`timestamp` and `sleep` are refused), and no unseeded
 randomness. If it isn't in the [reference](SCRIPTING.md) or Rhai's
 core language, it isn't there.
 
@@ -387,6 +389,32 @@ produce run by itself at that seed — the right choice when the user
 might re-run it alone to adjust. Without a seed it continues your
 stream, so two calls give two different results.
 
+A **library** shares functions instead of running on the flame. Save
+one like any script, declared as a library:
+
+```rhai
+script("Spiral Kit", "library");
+export const TURNS = 3;
+fn add_spiral(f, weight) {
+    let t = f.add_transform();
+    t.add_variation("spiral", weight);
+    t
+}
+```
+
+and import it by its id from any other script:
+
+```rhai
+script("Spirals", "generator");
+import "spiral_kit" as kit;
+for i in 0..kit::TURNS { kit::add_spiral(flame, 1.0 / (i + 1)); }
+```
+
+Pass `flame` (or a transform) in: a function cannot see your
+variables, a library's no more than your own. A library's top level
+may only declare -- `script(...)`, constants written out, imports,
+functions -- because it runs on every import; a call there is refused.
+
 ## Gotchas, collected
 
 **A `fn` cannot see your script's variables.** Rhai functions are pure:
@@ -426,7 +454,8 @@ and print in the catch.
 |---|---|
 | interpreter operations, shared incl. sub-scripts | 5,000,000 |
 | function call depth | 64 |
-| `run_script` nesting depth | 8 |
+| `run_script` and `import` nesting depth | 8 |
+| libraries imported per run (repeats count) | 64 |
 | array length | 100,000 |
 | string length | 1,000,000 |
 | map size | 10,000 |
