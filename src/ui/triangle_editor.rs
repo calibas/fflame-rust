@@ -918,8 +918,14 @@ fn render_triangle_editor_core(
                                 let xy_len = (xy_vec[0] * xy_vec[0] + xy_vec[1] * xy_vec[1]).sqrt();
 
                                 if xy_len > 1e-6 {
-                                    // Perpendicular vector to X-Y line (rotate 90°)
-                                    let perp_vec = [-xy_vec[1] / xy_len, xy_vec[0] / xy_len];
+                                    // Perpendicular vector to X-Y line (rotate 90°), turned
+                                    // to point away from O: which way the turn points
+                                    // depends on X and Y's order, and swapped they made
+                                    // a drag outward shrink the triangle.
+                                    let mut perp_vec = [-xy_vec[1] / xy_len, xy_vec[0] / xy_len];
+                                    if (x[0] - o[0]) * perp_vec[0] + (x[1] - o[1]) * perp_vec[1] < 0.0 {
+                                        perp_vec = [-perp_vec[0], -perp_vec[1]];
+                                    }
 
                                     // Convert O to canvas space
                                     let o_canvas = to_canvas(o);
