@@ -565,6 +565,11 @@ mod tests {
         let kaleidoscope = registry.get("kaleidoscope").expect("kaleidoscope");
         let offset = widget_param(kaleidoscope.get_param("edge_offset").expect("edge_offset"));
         assert!(matches!(offset.param_type, ParamType::Integer));
+        // The shaders loop `octaves` times, truncating it as the slider does.
+        for name in ["domain_warp", "simplex_noise"] {
+            let octaves = registry.get(name).and_then(|e| e.get_param("octaves")).expect(name);
+            assert!(matches!(widget_param(octaves).param_type, ParamType::Integer), "{name}");
+        }
 
         let typed: Vec<_> = registry
             .all()
