@@ -13,6 +13,11 @@
 // the function menu: this does as the code does. Fractint counts the
 // start of the Mandel forms as their first iteration, so its counts can
 // run one above these.
+//
+// t is exp((z0 - 1) ln z0) here, with no test for z0 = 0, where the
+// program's power gives 0: a test on the pixel in the start would keep
+// the formula from deep zoom. At that one point t is not a number, and
+// the pixel stays inside, as the program's does unless |Z0| >= 2.
 
 const PARAMS = #{
     form: #{ value: 0, caption: "Form", choices: ["Marks Mandel", "Marks Julia", "Marks Mandel Pwr", "Tim's Error"], hint: "Which of the four types" },
@@ -24,33 +29,17 @@ const PARAMS = #{
 
 const INFO = #{ title: "Mark Peterson's Variations", center: complex(-0.5, 0.0), magn: 1.3333333333333333, maxiter: 150 };
 
-// Fractint's complex power (cmplx_pwr): 0 for a zero base.
-fn peterson_pow(z, w) {
-    if z.norm_sqr() == 0.0 { complex(0.0, 0.0) } else { exp(w * ln(z)) }
-}
-
-// The Marks coefficient, base^(n - 1), as the program forms it.
-fn peterson_coefficient(base, n) {
-    if n < 2 {
-        complex(1.0, 0.0)
-    } else {
-        let r = base;
-        let k = 2;
-        while k < n {
-            r = r * base;
-            k += 1;
-        }
-        r
-    }
-}
-
+// The Marks forms' coefficient is base^(n - 1), 1 below 2 (the program
+// raises an Exponent under 1 to 1).
 fn start(pixel, p, ctx) {
     if p.form == 1 {
-        #{ z: pixel, k: peterson_coefficient(p.constant, p.exponent), c: p.constant }
+        #{ z: pixel, k: p.constant ** (max(p.exponent, 1) - 1), c: p.constant }
+    } else if p.form == 0 {
+        let z = pixel + p.z0;
+        #{ z: z, k: z ** (max(p.exponent, 1) - 1), c: pixel }
     } else {
         let z = pixel + p.z0;
-        let k = if p.form == 0 { peterson_coefficient(z, p.exponent) } else { peterson_pow(z, z - complex(1.0, 0.0)) };
-        #{ z: z, k: k, c: pixel }
+        #{ z: z, k: exp((z - complex(1.0, 0.0)) * ln(z)), c: pixel }
     }
 }
 
