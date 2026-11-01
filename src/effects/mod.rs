@@ -16,6 +16,24 @@ use rust_i18n::t;
 
 use crate::variations::ParamType;
 
+/// The blend modes a colour effect's `blend_mode` picks, in the order
+/// `apply_blend` (shaders/effects/common/blend_modes.wgsl) numbers them.
+pub const BLEND_MODE_NAMES: &[&str] = &[
+    "Normal",
+    "Add",
+    "Multiply",
+    "Screen",
+    "Overlay",
+    "Soft Light",
+    "Hard Light",
+    "Color Dodge",
+    "Color Burn",
+    "Hue",
+    "Saturation",
+    "Color",
+    "Luminosity",
+];
+
 /// Effect category determines when in the pipeline the effect runs
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EffectCategory {
@@ -662,7 +680,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -705,7 +723,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 4.0, // Overlay (good for grain)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -757,7 +775,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -800,7 +818,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -989,7 +1007,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -998,7 +1016,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "square_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Screen ratio (stretched)", "Square"],
+                },
                 default_value: 1.0, // 1 = Square (1:1 perfect symmetry), 0 = Screen ratio (stretched)
                 min_value: Some(0.0),
                 max_value: Some(1.0),
@@ -1068,7 +1088,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 1.0, // Add (classic plasma look)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1147,7 +1167,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1208,7 +1228,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 1.0, // Add (good for neon glow)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1269,7 +1289,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1339,7 +1359,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Color", "Distort", "Mask"],
+                },
                 default_value: 0.0, // 0=Color, 1=Distort, 2=Mask
                 min_value: Some(0.0),
                 max_value: Some(2.0),
@@ -1348,7 +1370,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 4.0, // Overlay (good for noise)
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1409,7 +1431,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Cells", "Edges", "Organic", "Crystal"],
+                },
                 default_value: 0.0, // 0=Cells, 1=Edges, 2=Organic, 3=Crystal
                 min_value: Some(0.0),
                 max_value: Some(3.0),
@@ -1418,7 +1442,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "color_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Grayscale", "Rainbow", "Original"],
+                },
                 default_value: 1.0, // 0=Grayscale, 1=Rainbow, 2=Original
                 min_value: Some(0.0),
                 max_value: Some(2.0),
@@ -1427,7 +1453,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 4.0, // Overlay
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1461,7 +1487,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
         parameters: vec![
             EffectParameter {
                 name: "mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Mandelbrot", "Julia"],
+                },
                 default_value: 1.0, // 0=Mandelbrot, 1=Julia
                 min_value: Some(0.0),
                 max_value: Some(1.0),
@@ -1524,7 +1552,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "color_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Escape", "Smooth", "Original mask"],
+                },
                 default_value: 1.0, // 0=Escape, 1=Smooth, 2=Original mask
                 min_value: Some(0.0),
                 max_value: Some(2.0),
@@ -1542,7 +1572,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum { choices: BLEND_MODE_NAMES },
                 default_value: 0.0, // Normal
                 min_value: Some(0.0),
                 max_value: Some(12.0),
@@ -1594,7 +1624,9 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "mode".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Enum {
+                    choices: &["Glow", "Contours", "Nearest fill"],
+                },
                 default_value: 0.0, // 0=Glow, 1=Contours, 2=Nearest fill
                 min_value: Some(0.0),
                 max_value: Some(2.0),
@@ -1628,6 +1660,46 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dropdown's names are `apply_blend`'s cases, in its order: a
+    /// mode added to the shader, or a reordering, fails here instead of
+    /// labelling every blend wrongly.
+    #[test]
+    fn blend_mode_names_match_apply_blend() {
+        let cases: Vec<(usize, String)> = embedded_shaders::BLEND_MODES
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("case "))
+            .filter_map(|rest| {
+                let (n, body) = rest.split_once(':')?;
+                let f = body.split("blend_").nth(1)?.split('(').next()?;
+                Some((n.trim().parse().ok()?, f.to_string()))
+            })
+            .collect();
+        let named: Vec<(usize, String)> = BLEND_MODE_NAMES
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (i, n.to_lowercase().replace(' ', "_")))
+            .collect();
+        assert_eq!(cases, named);
+    }
+
+    /// An enum's range is its choice list, so a value the slider used
+    /// to write is the same entry in the dropdown.
+    #[test]
+    fn enum_effect_params_span_their_choices() {
+        let registry = global_effect_registry();
+        let mut seen = 0;
+        for info in registry.all() {
+            for p in &info.parameters {
+                let ParamType::Enum { choices } = p.param_type else { continue };
+                seen += 1;
+                let last = choices.len() as f32 - 1.0;
+                assert_eq!((p.min_value, p.max_value), (Some(0.0), Some(last)), "{}.{}", info.name, p.name);
+                assert!((0.0..=last).contains(&p.default_value) && p.default_value.fract() == 0.0, "{}.{}", info.name, p.name);
+            }
+        }
+        assert!(seen >= 19, "{seen}");
+    }
 
     #[test]
     fn distance_field_shader_validates_all_entry_points() {

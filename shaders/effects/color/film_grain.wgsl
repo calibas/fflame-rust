@@ -50,7 +50,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(0u);
     let seed = get_param(1u);
-    let blend_mode = i32(get_param(2u));
+    let blend_mode = i32(round(get_param(2u)));
 
     let original = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
 

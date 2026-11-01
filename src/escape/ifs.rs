@@ -161,7 +161,7 @@ pub static IFS_FLAME: IfsDef = IfsDef {
                       of the ball, which happens deeper the deeper the view. Off by \
                       default while the shader half is measured; see \
                       `ifs-perturbation-delta.md`.",
-            choices: &[],
+            choices: &["Off", "On"],
         },
         EscapeParamDef {
             name: "extent",

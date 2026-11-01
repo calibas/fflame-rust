@@ -77,7 +77,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let scale = max(0.5, get_param(1u));
     let speed = get_param(2u);
     let time = get_param(3u) * speed;
-    let blend_mode = i32(get_param(4u));
+    let blend_mode = i32(round(get_param(4u)));
     let direction = get_param(5u) * PI / 180.0;
 
     // Per-pixel phase offset along direction axis creates apparent motion

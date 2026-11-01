@@ -1453,6 +1453,26 @@ mod include_tests {
         let src = "fn a() {}".to_string();
         assert_eq!(process_shader_includes(src.clone()), src);
     }
+
+    /// Every built-in effect compiles as the chain builds it, includes
+    /// spliced. Without a GPU nothing else compiles them, and a WGSL slip
+    /// is a pipeline panic the first time someone adds that effect.
+    #[test]
+    fn every_built_in_effect_validates() {
+        use wgpu::naga;
+        let registry = crate::effects::global_effect_registry();
+        let mut checked = 0;
+        for info in registry.all().filter(|i| i.provenance == crate::provenance::Provenance::Builtin) {
+            let src = super::effect_wgsl(&info.source);
+            let module = naga::front::wgsl::parse_str(&src)
+                .unwrap_or_else(|e| panic!("{}: {}", info.name, e.emit_to_string(&src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{}: {e:?}", info.name));
+            checked += 1;
+        }
+        assert!(checked >= 15, "{checked}");
+    }
 }
 
 #[cfg(test)]

@@ -92,7 +92,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let rotation = get_param(1u) * PI / 180.0;
     let zoom = max(0.1, get_param(2u));
     let intensity = get_param(3u);
-    let blend_mode = i32(get_param(4u));
+    let blend_mode = i32(round(get_param(4u)));
     let square_mode = get_param(5u) > 0.5;
     let edge_offset = get_param(6u) * effect_params.pixel_scale;
 
