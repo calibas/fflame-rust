@@ -419,6 +419,21 @@ fn reset_orbits_restart_every_dispatch() {
     println!("  panned against fresh: {lit} pixels lit, the worst pixel {worst:.2e} apart");
     assert!(lit > 100, "the fixture drew {lit} pixels");
     assert!(worst < 1e-6, "after a pan reset orbits are not a fresh render: a pixel {worst:.3} apart");
+
+    // A burn-in longer than the dispatch: each orbit restarts before it
+    // ends, so nothing is plotted, as before orbits persisted.
+    let mut r = fresh(&b);
+    let mut dark = Vec::new();
+    for _ in 0..4 {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        let n = r.compute_pass(&mut enc, &queue, &device, 32, 256, 300, b.zoom, b.pan_x as f32, b.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, b.speed_factor, true, false);
+        r.accumulate_pass(&mut enc, &queue, &device, n);
+        queue.submit(Some(enc.finish()));
+        dark.push(n);
+    }
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let lit = r.read_density_blocking(&device, &queue).iter().filter(|d| **d > 0.0).count();
+    assert!(dark.iter().all(|n| *n == 0) && lit == 0, "a burn-in past the dispatch plotted: counts {dark:?}, {lit} pixels lit");
 }
 
 /// **The count is the GPU's** (§3.5): the CPU's count (`OrbitFuses`) of plotted

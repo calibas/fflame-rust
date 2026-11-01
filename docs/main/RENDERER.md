@@ -180,11 +180,17 @@ are still seeded per dispatch from `params.seed`.
   (`Flame::needs_fresh_orbits`; a Rhai variation's `resets_orbits: true`
   in `INFO`) -- starts its orbits afresh every dispatch, as before orbits
   persisted: each orbit is one dispatch, `iterations_per_thread` long. It
-  is for a map whose orbits settle onto a few points or loops (Iterated
-  Dynamics' dynamic system), whose picture is the orbits' way from their
-  starts: persisting, they draw it once, and a pan, a zoom or the end of
-  a drag starts a picture without it. The governor then sheds width only
-  (`Batch::resets_orbits`); a render with no length given
+  is for a map whose picture is the orbits' way from their starts
+  (Iterated Dynamics' orbit maps: the dynamic system's orbits settle
+  onto a few loops, Chip's spread further the longer they run):
+  persisting, an orbit settles or spreads without end, and a pan, a
+  zoom or the end of a drag starts a picture from orbits already gone.
+  Iterations per Thread is then how far an orbit goes and Max
+  Iterations how many are drawn. The governor sheds width only
+  (`Batch::resets_orbits`); its fill (*Filling the frame*), past the
+  batch, adds dispatches of the batch's length, each its own submission,
+  rather than lengthening one; and motion-blur moments share the
+  frame's width, each moment the full length. A render with no length given
   (`RenderJob::new`, thumbnails, the high-res exporter, which drops its
   orbit buffer) takes the app's default, so it matches the viewport.
   Gate: `reset_orbits_restart_every_dispatch` (a pan is exactly a fresh

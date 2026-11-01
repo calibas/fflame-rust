@@ -3468,12 +3468,18 @@ impl App {
                 } else {
                     batch.shape(self.governor_knee, self.iter_scale)
                 };
-                let effective_ipt = if self.batch_fill > 1.0
-                    && (effective_workgroups, effective_ipt) == (batch.max_workgroups, batch.iterations_per_thread)
-                {
-                    ((effective_ipt as f64 * self.batch_fill).round() as u32).min(crate::app::MAX_FILLED_IPT)
+                // Where orbits are reset every dispatch, a dispatch is an
+                // orbit: the fill adds dispatches of the batch's length
+                // rather than lengthening one, so each orbit stays
+                // `iterations_per_thread` long.
+                let filled = self.batch_fill > 1.0
+                    && (effective_workgroups, effective_ipt) == (batch.max_workgroups, batch.iterations_per_thread);
+                let (effective_ipt, repeats) = if filled && batch.resets_orbits {
+                    (effective_ipt, (self.batch_fill.round() as u32).clamp(1, MAX_FILL as u32))
+                } else if filled {
+                    (((effective_ipt as f64 * self.batch_fill).round() as u32).min(crate::app::MAX_FILLED_IPT), 1)
                 } else {
-                    effective_ipt
+                    (effective_ipt, 1)
                 };
 
                 self.frames_since_accumulation += 1;
@@ -3513,9 +3519,21 @@ impl App {
                 } else {
                     Vec::new()
                 };
-                let moment_ipt = effective_ipt.div_ceil(moments.len().max(1) as u32).max(1);
-                let frame_ipt = if moments.is_empty() { effective_ipt } else { moment_ipt * moments.len() as u32 };
-                self.governor.batch_cap.dispatched(self.frame_index, effective_workgroups as f64 * 64.0 * frame_ipt as f64);
+                // The moments share the frame's batch: its length, or where
+                // orbits are reset (each moment's dispatch its orbits, the
+                // full length) its width.
+                let n_moments = moments.len().max(1) as u32;
+                let (moment_workgroups, moment_ipt) = if batch.resets_orbits {
+                    ((effective_workgroups / n_moments).max(1), effective_ipt)
+                } else {
+                    (effective_workgroups, effective_ipt.div_ceil(n_moments).max(1))
+                };
+                let frame_iterations = if moments.is_empty() {
+                    effective_workgroups as f64 * 64.0 * (effective_ipt * repeats) as f64
+                } else {
+                    moment_workgroups as f64 * 64.0 * (moment_ipt * moments.len() as u32) as f64
+                };
+                self.governor.batch_cap.dispatched(self.frame_index, frame_iterations);
                 let samples_this_frame = if moments.is_empty() {
                     // After blurred frames the GPU holds the last moment's
                     // flame: the frame's own goes back first.
@@ -3524,10 +3542,34 @@ impl App {
                         let (ipt, burn_in) = (settings.iterations_per_thread, settings.burn_in);
                         renderer.restore_frame(&self.gpu.device, &self.gpu.queue, final_config, ipt, burn_in);
                     }
-                    renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
-                        effective_ipt, self.config_manager.system_settings().burn_in,
-                        final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
-                        final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths)
+                    if repeats <= 1 {
+                        renderer.compute_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                            effective_ipt, self.config_manager.system_settings().burn_in,
+                            final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
+                            final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths)
+                    } else {
+                        // Reset orbits, filled: the fill as more dispatches,
+                        // each its own submission after what this frame
+                        // recorded, so each meets its own seed and
+                        // generation (an upload lands at its submission).
+                        let recorded = std::mem::replace(
+                            &mut render_encoder,
+                            self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") }),
+                        );
+                        self.gpu.queue.submit(std::iter::once(recorded.finish()));
+                        let burn_in = self.config_manager.system_settings().burn_in;
+                        let mut plotted = 0;
+                        for k in 0..repeats {
+                            let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Reset Orbits Dispatch") });
+                            plotted += renderer.compute_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                                effective_ipt, burn_in,
+                                final_config.zoom, final_config.pan_x as f32, final_config.pan_y as f32, final_config.rotation,
+                                final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_bank, final_config.camera_x, final_config.camera_y, final_config.camera_z, final_config.speed_factor,
+                                clear_histogram && k == 0, clear_paths && k == 0);
+                            self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                        }
+                        plotted
+                    }
                 } else {
                     // Each moment its own submission, after what this frame
                     // recorded before it: an upload lands at its submission,
@@ -3546,7 +3588,7 @@ impl App {
                         renderer.set_moment(&self.gpu.device, &self.gpu.queue, m, setting_ipt, burn_in);
                         renderer.set_continuing_frame(k > 0);
                         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor { label: Some("Motion Blur Moment") });
-                        plotted += renderer.compute_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, effective_workgroups,
+                        plotted += renderer.compute_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, moment_workgroups,
                             moment_ipt, burn_in,
                             m.zoom, m.pan_x as f32, m.pan_y as f32, m.rotation,
                             m.camera_rotation_x, m.camera_rotation_y, m.camera_bank, m.camera_x, m.camera_y, m.camera_z, m.speed_factor,
@@ -3557,7 +3599,7 @@ impl App {
                     plotted
                 };
                 if let Some(log) = self.frame_log.as_mut() {
-                    log.flame(effective_workgroups, effective_ipt, samples_this_frame);
+                    log.flame(effective_workgroups, effective_ipt * repeats, samples_this_frame);
                 }
                 // The governor's measure for a flame's render scale (governor.rs).
                 self.governor.flame_samples = Some(samples_this_frame);
