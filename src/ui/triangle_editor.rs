@@ -8,6 +8,7 @@ use rust_i18n::t;
 /// Mouse interaction modes for the triangle editor
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 enum MouseMode {
+    Auto,         // The part grabbed decides (`TrianglePart`), as Apophysis
     MovePoints,   // Drag individual O, X, Y points
     Translate,    // Drag to move entire triangle
     Rotate,       // Drag to rotate around O
@@ -16,8 +17,154 @@ enum MouseMode {
 
 impl Default for MouseMode {
     fn default() -> Self {
-        MouseMode::Rotate
+        MouseMode::Auto
     }
+}
+
+/// The part of a triangle Auto mode grabs, each with its own gesture, as
+/// Apophysis has them: the origin translates the triangle, X and Y move
+/// themselves, the two sides from the origin rotate about it, and the side
+/// opposite scales from it.
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+enum TrianglePart {
+    Origin,
+    XPoint,
+    YPoint,
+    EdgeOX,
+    EdgeOY,
+    EdgeXY,
+}
+
+impl TrianglePart {
+    fn is_vertex(self) -> bool {
+        matches!(self, TrianglePart::Origin | TrianglePart::XPoint | TrianglePart::YPoint)
+    }
+
+    /// What a drag of it does, for its history entry.
+    fn gesture(self) -> &'static str {
+        match self {
+            TrianglePart::Origin => "Translate",
+            TrianglePart::XPoint | TrianglePart::YPoint => "Move Points",
+            TrianglePart::EdgeOX | TrianglePart::EdgeOY => "Rotate",
+            TrianglePart::EdgeXY => "Scale",
+        }
+    }
+}
+
+/// How near the pointer must be, in pixels, to grab a vertex, then a side.
+const VERTEX_HIT: f32 = 10.0;
+const EDGE_HIT: f32 = 6.0;
+
+/// The distance from `p` to the segment `a`-`b`.
+fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    if len2 <= f32::EPSILON {
+        return p.distance(a);
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
+}
+
+/// The part of the triangle `[o, x, y]` (canvas pixels) under `p`, and its
+/// distance: the nearest vertex within `VERTEX_HIT`, else the nearest side
+/// within `EDGE_HIT`.
+fn part_at(p: Pos2, [o, x, y]: [Pos2; 3]) -> Option<(TrianglePart, f32)> {
+    let nearest = |parts: [(TrianglePart, f32); 3], within: f32| {
+        parts.into_iter().filter(|(_, d)| *d < within).min_by(|a, b| a.1.total_cmp(&b.1))
+    };
+    let vertices = [(TrianglePart::Origin, p.distance(o)), (TrianglePart::XPoint, p.distance(x)), (TrianglePart::YPoint, p.distance(y))];
+    let sides = [
+        (TrianglePart::EdgeOX, segment_distance(p, o, x)),
+        (TrianglePart::EdgeOY, segment_distance(p, o, y)),
+        (TrianglePart::EdgeXY, segment_distance(p, x, y)),
+    ];
+    nearest(vertices, VERTEX_HIT).or_else(|| nearest(sides, EDGE_HIT))
+}
+
+/// Which grabbable triangle's part is under `p`: the active one's first, so
+/// the triangle being edited stays easy to keep editing where triangles
+/// overlap; else the nearest part, a vertex before a side.
+fn pick_part(p: Pos2, candidates: &[(TransformRef, [Pos2; 3])], active: TransformRef) -> Option<(TransformRef, TrianglePart)> {
+    if let Some((xref, tri)) = candidates.iter().find(|(xref, _)| *xref == active) {
+        if let Some((part, _)) = part_at(p, *tri) {
+            return Some((*xref, part));
+        }
+    }
+    candidates
+        .iter()
+        .filter_map(|(xref, tri)| part_at(p, *tri).map(|(part, d)| (*xref, part, d)))
+        .min_by(|a, b| (!a.1.is_vertex(), a.2).partial_cmp(&(!b.1.is_vertex(), b.2)).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(xref, part, _)| (xref, part))
+}
+
+/// The resize cursor along `dir` (screen space, y down), for scaling
+/// across the far side: the OS's two-headed arrows come in four
+/// directions, so the nearest.
+fn resize_cursor_along(dir: Vec2) -> egui::CursorIcon {
+    let a = dir.y.atan2(dir.x).rem_euclid(std::f32::consts::PI);
+    let eighth = std::f32::consts::PI / 8.0;
+    if a < eighth || a >= 7.0 * eighth {
+        egui::CursorIcon::ResizeHorizontal
+    } else if a < 3.0 * eighth {
+        egui::CursorIcon::ResizeNwSe
+    } else if a < 5.0 * eighth {
+        egui::CursorIcon::ResizeVertical
+    } else {
+        egui::CursorIcon::ResizeNeSw
+    }
+}
+
+/// A rotate symbol at the pointer, which no OS cursor offers: a circular
+/// arrow round `at`, white on a dark outline so it reads on any
+/// background. Drawn in place of the hidden cursor.
+fn paint_rotate_cursor(painter: &egui::Painter, at: Pos2) {
+    use std::f32::consts::PI;
+    let r = 8.0;
+    let (from, to) = (-0.55 * PI, 1.0 * PI);
+    let arc: Vec<Pos2> = (0..=24)
+        .map(|i| {
+            let a = from + (to - from) * i as f32 / 24.0;
+            at + Vec2::new(a.cos(), a.sin()) * r
+        })
+        .collect();
+    let tip = arc[arc.len() - 1];
+    // Along the arc at its end, and outward from its centre.
+    let (along, out) = (Vec2::new(-to.sin(), to.cos()), Vec2::new(to.cos(), to.sin()));
+    let head = vec![tip + along * 5.0, tip - along * 1.0 + out * 4.5, tip - along * 1.0 - out * 4.5];
+    painter.add(egui::Shape::line(arc.clone(), Stroke::new(4.0, Color32::from_black_alpha(200))));
+    painter.add(egui::Shape::convex_polygon(head.clone(), Color32::from_black_alpha(200), Stroke::new(2.0, Color32::from_black_alpha(200))));
+    painter.add(egui::Shape::line(arc, Stroke::new(2.0, Color32::WHITE)));
+    painter.add(egui::Shape::convex_polygon(head, Color32::WHITE, Stroke::NONE));
+}
+
+/// `c` moved `amount` of the way to white: the origin's colour, so O
+/// stands apart from X and Y.
+fn lighten(c: Color32, amount: f32) -> Color32 {
+    let l = |v: u8| (v as f32 + (255.0 - v as f32) * amount).round() as u8;
+    Color32::from_rgb(l(c.r()), l(c.g()), l(c.b()))
+}
+
+/// A transform's triangle (O, X, Y) in `plane`: its affine's, or its
+/// post-affine's.
+fn plane_triangle(t: &crate::scene::transforms::Transform, plane: EditPlane, post: bool) -> ([f32; 2], [f32; 2], [f32; 2]) {
+    use crate::scene::transforms::Transform;
+    match (plane, post) {
+        (EditPlane::Xy, false) => t.to_triangle_apophysis(),
+        (EditPlane::Xy, true) => t.post_to_triangle_apophysis(),
+        (EditPlane::Yz, false) => Transform::plane_to_triangle_apophysis(&t.yz_coefs),
+        (EditPlane::Yz, true) => Transform::plane_to_triangle_apophysis(&t.yz_post_coefs),
+        (EditPlane::Zx, false) => Transform::plane_to_triangle_apophysis(&t.zx_coefs),
+        (EditPlane::Zx, true) => Transform::plane_to_triangle_apophysis(&t.zx_post_coefs),
+    }
+}
+
+/// Every transform in the flame, with its reference, in drawing order.
+fn every_transform(flame: &Flame) -> impl Iterator<Item = (TransformRef, &crate::scene::transforms::Transform)> {
+    let normal = flame.transforms.iter().enumerate().map(|(i, t)| (TransformRef::Normal(i), t));
+    let linked = flame.linked_transforms.iter().enumerate().map(|(i, t)| (TransformRef::Linked(i), t));
+    let finals = flame.final_transforms.iter().enumerate().map(|(i, t)| (TransformRef::Final(i), t));
+    normal.chain(linked).chain(finals)
 }
 
 /// Which affine to edit in the triangle editor
@@ -120,45 +267,71 @@ fn render_triangle_editor_core(
                 }
             };
 
+            // Auto selection: every triangle can be grabbed, and the one
+            // grabbed becomes the selected (active) transform, which the
+            // coordinates and buttons below edit. Off, only the selected
+            // transform's triangle can be.
+            let mut auto_select = ui.ctx().data_mut(|d| {
+                d.get_persisted::<bool>(egui::Id::new("triangle_editor_auto_select")).unwrap_or(true)
+            });
+
             ui.horizontal(|ui| {
                 if !compact {
                     ui.label(t!("triangle_editor.transform_label"))
                         .on_hover_text(t!("triangle_editor.tooltip_transform_selector"));
                 }
-                let old_selection = selected_transform;
+                let (old_selection, old_auto) = (selected_transform, auto_select);
+                let selected_text = if auto_select {
+                    t!("triangle_editor.auto_transform_active", name = xref_display(selected_transform)).to_string()
+                } else {
+                    xref_display(selected_transform)
+                };
                 egui::ComboBox::new("triangle_editor_transform_selector", "")
-                    .selected_text(xref_display(selected_transform))
+                    .selected_text(selected_text)
                     .show_ui(ui, |ui| {
+                        if ui.selectable_label(auto_select, t!("triangle_editor.auto_transform"))
+                            .on_hover_text(t!("triangle_editor.tooltip_auto_transform"))
+                            .clicked()
+                        {
+                            auto_select = true;
+                        }
+                        ui.separator();
+                        let mut entry = |ui: &mut egui::Ui, xref: TransformRef| {
+                            if ui.selectable_label(!auto_select && selected_transform == xref, xref_display(xref)).clicked() {
+                                selected_transform = xref;
+                                auto_select = false;
+                            }
+                        };
                         for i in 0..flame.transforms.len() {
-                            let xref = TransformRef::Normal(i);
-                            ui.selectable_value(&mut selected_transform, xref, xref_display(xref));
+                            entry(ui, TransformRef::Normal(i));
                         }
                         if !flame.linked_transforms.is_empty() {
                             ui.separator();
                             for i in 0..flame.linked_transforms.len() {
-                                let xref = TransformRef::Linked(i);
-                                ui.selectable_value(&mut selected_transform, xref, xref_display(xref));
+                                entry(ui, TransformRef::Linked(i));
                             }
                         }
                         if !flame.final_transforms.is_empty() {
                             ui.separator();
                             for i in 0..flame.final_transforms.len() {
-                                let xref = TransformRef::Final(i);
-                                ui.selectable_value(&mut selected_transform, xref, xref_display(xref));
+                                entry(ui, TransformRef::Final(i));
                             }
                         }
                     });
 
-                if selected_transform != old_selection {
+                if selected_transform != old_selection || auto_select != old_auto {
                     ui.ctx().data_mut(|d| {
                         d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), selected_transform);
+                        d.insert_persisted(egui::Id::new("triangle_editor_auto_select"), auto_select);
                     });
                 }
             });
 
-            // Mouse mode selector (persisted across frames)
+            // Mouse mode selector (persisted across frames). Its own key
+            // since Auto became the default, so a mode saved before it
+            // does not hide it.
             let mut mouse_mode = ui.ctx().data_mut(|d| {
-                d.get_persisted::<MouseMode>(egui::Id::new("triangle_editor_mouse_mode"))
+                d.get_persisted::<MouseMode>(egui::Id::new("triangle_editor_mouse_mode_v2"))
                     .unwrap_or_default()
             });
 
@@ -168,6 +341,8 @@ fn render_triangle_editor_core(
                 }
                 let old_mode = mouse_mode;
 
+                ui.selectable_value(&mut mouse_mode, MouseMode::Auto, format!("✋ {}", t!("triangle_editor.mode_auto")))
+                    .on_hover_text(t!("triangle_editor.tooltip_mode_auto"));
                 if ui.selectable_value(&mut mouse_mode, MouseMode::Rotate, format!("↻ {}", t!("triangle_editor.mode_rotate")))
                     .on_hover_text(t!("triangle_editor.tooltip_mode_rotate")).changed() {}
                 if ui.selectable_value(&mut mouse_mode, MouseMode::Translate, format!("↔ {}", t!("triangle_editor.mode_translate")))
@@ -180,7 +355,7 @@ fn render_triangle_editor_core(
                 // Persist mode if changed
                 if mouse_mode != old_mode {
                     ui.ctx().data_mut(|d| {
-                        d.insert_persisted(egui::Id::new("triangle_editor_mouse_mode"), mouse_mode);
+                        d.insert_persisted(egui::Id::new("triangle_editor_mouse_mode_v2"), mouse_mode);
                     });
                 }
             });
@@ -188,6 +363,7 @@ fn render_triangle_editor_core(
             // Mode description
             if !compact {
                 let mode_desc = match mouse_mode {
+                    MouseMode::Auto => t!("triangle_editor.mode_desc_auto"),
                     MouseMode::MovePoints => t!("triangle_editor.mode_desc_move_points"),
                     MouseMode::Translate => t!("triangle_editor.mode_desc_translate"),
                     MouseMode::Rotate => t!("triangle_editor.mode_desc_rotate"),
@@ -268,33 +444,28 @@ fn render_triangle_editor_core(
             let rect = response.rect;
 
             // Calculate dynamic bounds from the selected transform's vertices
-            // (in the active edit plane).
+            // (in the active edit plane) -- every transform's under Auto
+            // selection, as every triangle can be grabbed there.
             let mut max_extent = 2.0f32; // Minimum bounds
-            let selected_xform = selected_transform.get(flame);
-            if let Some(transform) = selected_xform {
-                let (o, x, y) = match edit_plane {
-                    EditPlane::Xy => transform.to_triangle_apophysis(),
-                    EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.yz_coefs),
-                    EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.zx_coefs),
+            let extent_of = |transform: &crate::scene::transforms::Transform| -> f32 {
+                let mut m = 0.0f32;
+                let mut take = |(o, x, y): ([f32; 2], [f32; 2], [f32; 2])| {
+                    for v in [o, x, y] {
+                        m = m.max(v[0].abs()).max(v[1].abs());
+                    }
                 };
-                max_extent = max_extent
-                    .max(o[0].abs())
-                    .max(o[1].abs())
-                    .max(x[0].abs())
-                    .max(x[1].abs())
-                    .max(y[0].abs())
-                    .max(y[1].abs());
+                take(plane_triangle(transform, edit_plane, false));
                 if transform.has_post_step() {
-                    let (po, px, py) = match edit_plane {
-                        EditPlane::Xy => transform.post_to_triangle_apophysis(),
-                        EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.yz_post_coefs),
-                        EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&transform.zx_post_coefs),
-                    };
-                    max_extent = max_extent
-                        .max(po[0].abs()).max(po[1].abs())
-                        .max(px[0].abs()).max(px[1].abs())
-                        .max(py[0].abs()).max(py[1].abs());
+                    take(plane_triangle(transform, edit_plane, true));
                 }
+                m
+            };
+            if auto_select {
+                for (_, transform) in every_transform(flame) {
+                    max_extent = max_extent.max(extent_of(transform));
+                }
+            } else if let Some(transform) = selected_transform.get(flame) {
+                max_extent = max_extent.max(extent_of(transform));
             }
             // Add flat padding (not percentage) to prevent feedback loop when dragging near edge
             // Using percentage (e.g., * 1.2) causes: drag → extent grows → point moves → extent grows more
@@ -390,19 +561,55 @@ fn render_triangle_editor_core(
                     .unwrap_or(None)
             });
 
+            // The part held in Auto mode, and its transform.
+            let mut auto_grab = ui.ctx().data_mut(|d| {
+                d.get_persisted::<Option<(TransformRef, TrianglePart)>>(egui::Id::new("triangle_editor_auto_grab"))
+                    .unwrap_or(None)
+            });
+
+            // The triangles the pointer can grab, in canvas pixels: every
+            // transform's under Auto selection, else the selected one's;
+            // each the triangle its edit changes (the selected one's post
+            // triangle while Post-Affine is chosen).
+            let grab_candidates = |flame: &Flame, selected: TransformRef, target: AffineTarget| -> Vec<(TransformRef, [Pos2; 3])> {
+                every_transform(flame)
+                    .filter(|(xref, _)| auto_select || *xref == selected)
+                    .map(|(xref, t)| {
+                        let post = xref == selected && target == AffineTarget::Post;
+                        let (o, x, y) = plane_triangle(t, edit_plane, post);
+                        (xref, [to_canvas(o), to_canvas(x), to_canvas(y)])
+                    })
+                    .collect()
+            };
+
+            // A press on a grabbable part: under Auto selection its
+            // transform becomes the selected one (on its affine), and in
+            // Auto mode the part is held for the drag.
+            if response.drag_started() {
+                if let Some(p) = ui.input(|i| i.pointer.press_origin()) {
+                    if let Some((xref, part)) = pick_part(p, &grab_candidates(flame, selected_transform, affine_target), selected_transform) {
+                        if xref != selected_transform {
+                            selected_transform = xref;
+                            affine_target = AffineTarget::Pre;
+                            ui.ctx().data_mut(|d| {
+                                d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), selected_transform);
+                                d.insert_persisted(egui::Id::new("triangle_editor_affine_target"), affine_target);
+                            });
+                        }
+                        if mouse_mode == MouseMode::Auto {
+                            auto_grab = Some((xref, part));
+                            drag_start_pos = Some(p);
+                            let _ = config_manager.start_modify_transform(xref);
+                        }
+                    }
+                }
+            }
+
             // Triangle accessors for the active (target, plane) selection.
             // `tri_pre`/`tri_post` are also used by the canvas drawing pass
             // so everything on screen lives in the same plane.
-            let tri_pre = |t: &crate::scene::transforms::Transform| match edit_plane {
-                EditPlane::Xy => t.to_triangle_apophysis(),
-                EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.yz_coefs),
-                EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.zx_coefs),
-            };
-            let tri_post = |t: &crate::scene::transforms::Transform| match edit_plane {
-                EditPlane::Xy => t.post_to_triangle_apophysis(),
-                EditPlane::Yz => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.yz_post_coefs),
-                EditPlane::Zx => crate::scene::transforms::Transform::plane_to_triangle_apophysis(&t.zx_post_coefs),
-            };
+            let tri_pre = |t: &crate::scene::transforms::Transform| plane_triangle(t, edit_plane, false);
+            let tri_post = |t: &crate::scene::transforms::Transform| plane_triangle(t, edit_plane, true);
             let get_tri = |t: &crate::scene::transforms::Transform| match affine_target {
                 AffineTarget::Pre => tri_pre(t),
                 AffineTarget::Post => tri_post(t),
@@ -489,6 +696,75 @@ fn render_triangle_editor_core(
 
                 // Handle different mouse modes
                 match mouse_mode {
+                    MouseMode::Auto => {
+                        // The held part's gesture, from the pointer's last
+                        // position to this one, so the part stays under it.
+                        if let (Some((_, part)), Some(prev), Some(cur), true) =
+                            (auto_grab, drag_start_pos, response.interact_pointer_pos(), response.dragged())
+                        {
+                            let world_delta = [(cur.x - prev.x) * world_size / rect.width(), -(cur.y - prev.y) * world_size / rect.height()];
+                            let shift = |v: &mut [f32; 2]| {
+                                v[0] += world_delta[0];
+                                v[1] += world_delta[1];
+                            };
+                            let action = match part {
+                                TrianglePart::Origin => {
+                                    shift(&mut o);
+                                    shift(&mut x);
+                                    shift(&mut y);
+                                    Some("history.action.triangle_edit_translate")
+                                }
+                                TrianglePart::XPoint => {
+                                    shift(&mut x);
+                                    Some("history.action.triangle_edit_move")
+                                }
+                                TrianglePart::YPoint => {
+                                    shift(&mut y);
+                                    Some("history.action.triangle_edit_move")
+                                }
+                                TrianglePart::EdgeOX | TrianglePart::EdgeOY => {
+                                    // About O, by the pointer's turn about it.
+                                    let (from, to) = (prev - o_pos, cur - o_pos);
+                                    let angle = -(to.y.atan2(to.x) - from.y.atan2(from.x));
+                                    let (s, c) = angle.sin_cos();
+                                    let turn = |v: [f32; 2]| {
+                                        let d = [v[0] - o[0], v[1] - o[1]];
+                                        [o[0] + c * d[0] - s * d[1], o[1] + s * d[0] + c * d[1]]
+                                    };
+                                    (x, y) = (turn(x), turn(y));
+                                    Some("history.action.triangle_edit_rotate")
+                                }
+                                TrianglePart::EdgeXY => {
+                                    // From O, by the pointer's distance from
+                                    // it across the side, so the side follows.
+                                    let side = y_pos - x_pos;
+                                    let mut normal = Vec2::new(-side.y, side.x).normalized();
+                                    if (x_pos - o_pos).dot(normal) < 0.0 {
+                                        normal = -normal;
+                                    }
+                                    let (before, after) = ((prev - o_pos).dot(normal), (cur - o_pos).dot(normal));
+                                    if side.length_sq() > f32::EPSILON && before > 1.0 && after > 1.0 {
+                                        let k = after / before;
+                                        let grow = |v: [f32; 2]| [o[0] + (v[0] - o[0]) * k, o[1] + (v[1] - o[1]) * k];
+                                        (x, y) = (grow(x), grow(y));
+                                        Some("history.action.triangle_edit_scale")
+                                    } else {
+                                        None
+                                    }
+                                }
+                            };
+                            if let Some(action) = action {
+                                set_tri(transform, o, x, y);
+                                let changes = make_affine_changes(transform);
+                                if let Ok(update_type) = config_manager.update_batch(changes, action.to_string()) {
+                                    sync_transform(transform, config_manager);
+                                    max_update = max_update.max(update_type);
+                                }
+                            }
+                            drag_start_pos = Some(cur);
+                        }
+                    }
+
                     MouseMode::MovePoints => {
                         let hit_radius = 10.0; // Pixels
 
@@ -642,8 +918,14 @@ fn render_triangle_editor_core(
                                 let xy_len = (xy_vec[0] * xy_vec[0] + xy_vec[1] * xy_vec[1]).sqrt();
 
                                 if xy_len > 1e-6 {
-                                    // Perpendicular vector to X-Y line (rotate 90°)
-                                    let perp_vec = [-xy_vec[1] / xy_len, xy_vec[0] / xy_len];
+                                    // Perpendicular vector to X-Y line (rotate 90°), turned
+                                    // to point away from O: which way the turn points
+                                    // depends on X and Y's order, and swapped they made
+                                    // a drag outward shrink the triangle.
+                                    let mut perp_vec = [-xy_vec[1] / xy_len, xy_vec[0] / xy_len];
+                                    if (x[0] - o[0]) * perp_vec[0] + (x[1] - o[1]) * perp_vec[1] < 0.0 {
+                                        perp_vec = [-perp_vec[0], -perp_vec[1]];
+                                    }
 
                                     // Convert O to canvas space
                                     let o_canvas = to_canvas(o);
@@ -694,6 +976,7 @@ fn render_triangle_editor_core(
                     // Drag ended - commit modify session if active
                     if config_manager.is_in_modify_session() {
                         let mode_name = match mouse_mode {
+                            MouseMode::Auto => auto_grab.map_or("Auto", |(_, part)| part.gesture()),
                             MouseMode::MovePoints => "Move Points",
                             MouseMode::Translate => "Translate",
                             MouseMode::Rotate => "Rotate",
@@ -706,12 +989,14 @@ fn render_triangle_editor_core(
                     }
                     drag_target = DragTarget::None;
                     drag_start_pos = None;
+                    auto_grab = None;
                 }
 
                 // Persist drag state
                 ui.ctx().data_mut(|d| {
                     d.insert_persisted(egui::Id::new("triangle_editor_drag_target"), drag_target);
                     d.insert_persisted(egui::Id::new("triangle_editor_drag_start_pos"), drag_start_pos);
+                    d.insert_persisted(egui::Id::new("triangle_editor_auto_grab"), auto_grab);
                 });
             }
 
@@ -753,7 +1038,12 @@ fn render_triangle_editor_core(
                         DragTarget::None => {}
                     }
                 }
-                painter.circle_filled(o_pos, point_radius, color);
+                // O a little lighter than X and Y, so it stands apart.
+                let o_color = {
+                    let c = lighten(base_color, 0.4);
+                    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+                };
+                painter.circle_filled(o_pos, point_radius, o_color);
                 painter.circle_filled(x_pos, point_radius, color);
                 painter.circle_filled(y_pos, point_radius, color);
 
@@ -811,10 +1101,14 @@ fn render_triangle_editor_core(
 
                 let point_size = if is_active_post { 5.0 } else { 3.0 };
                 let half = point_size / 2.0;
-                for pos in [o_pos, x_pos, y_pos] {
+                let o_color = {
+                    let c = lighten(base_color, 0.4);
+                    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+                };
+                for (pos, fill) in [(o_pos, o_color), (x_pos, color), (y_pos, color)] {
                     painter.rect_filled(
                         egui::Rect::from_min_size(Pos2::new(pos.x - half, pos.y - half), Vec2::splat(point_size)),
-                        0.0, color,
+                        0.0, fill,
                     );
                 }
                 if is_active_post {
@@ -855,6 +1149,54 @@ fn render_triangle_editor_core(
             for (i, transform) in flame.final_transforms.iter().enumerate() {
                 let is_active = selected_transform == TransformRef::Final(i) && affine_target == AffineTarget::Post;
                 draw_post_affine(&painter, transform, final_color(i), is_active);
+            }
+
+            // Auto mode: the part under the pointer, or the one held, drawn
+            // over in white, and a hand for the pointer.
+            if mouse_mode == MouseMode::Auto {
+                let shown = auto_grab.or_else(|| {
+                    if response.dragged() {
+                        return None;
+                    }
+                    response.hover_pos().and_then(|p| pick_part(p, &grab_candidates(flame, selected_transform, affine_target), selected_transform))
+                });
+                if let Some((xref, part)) = shown {
+                    if let Some(t) = xref.get(flame) {
+                        let post = xref == selected_transform && affine_target == AffineTarget::Post;
+                        let (o, x, y) = plane_triangle(t, edit_plane, post);
+                        let (o, x, y) = (to_canvas(o), to_canvas(x), to_canvas(y));
+                        let ring = Stroke::new(2.0, Color32::WHITE);
+                        let side = Stroke::new(4.0, Color32::from_white_alpha(200));
+                        match part {
+                            TrianglePart::Origin => { painter.circle_stroke(o, 9.0, ring); }
+                            TrianglePart::XPoint => { painter.circle_stroke(x, 9.0, ring); }
+                            TrianglePart::YPoint => { painter.circle_stroke(y, 9.0, ring); }
+                            TrianglePart::EdgeOX => { painter.line_segment([o, x], side); }
+                            TrianglePart::EdgeOY => { painter.line_segment([o, y], side); }
+                            TrianglePart::EdgeXY => { painter.line_segment([x, y], side); }
+                        }
+                        // The pointer says what a drag does: a hand to move,
+                        // a circular arrow to rotate (drawn above everything,
+                        // as no OS cursor is one), two-headed arrows across
+                        // the far side to scale.
+                        match part {
+                            TrianglePart::Origin | TrianglePart::XPoint | TrianglePart::YPoint => {
+                                ui.ctx().set_cursor_icon(if auto_grab.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+                            }
+                            TrianglePart::EdgeOX | TrianglePart::EdgeOY => {
+                                if let Some(at) = ui.input(|i| i.pointer.latest_pos()) {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                                    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("triangle_editor_rotate_cursor"));
+                                    paint_rotate_cursor(&ui.ctx().layer_painter(layer), at);
+                                }
+                            }
+                            TrianglePart::EdgeXY => {
+                                let along = y - x;
+                                ui.ctx().set_cursor_icon(resize_cursor_along(Vec2::new(-along.y, along.x)));
+                            }
+                        }
+                    }
+                }
             }
 
             ui.separator();
@@ -1202,5 +1544,63 @@ pub fn render_triangle_editor_content(
     flame: &mut Flame,
 ) -> UpdateType {
     render_triangle_editor_core(ui, config_manager, flame)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // O at (100, 100), X 100 px right of it, Y 100 px above (canvas y down).
+    const TRI: [Pos2; 3] = [Pos2::new(100.0, 100.0), Pos2::new(200.0, 100.0), Pos2::new(100.0, 0.0)];
+
+    /// Each vertex and side is found near it, nothing inside; a vertex
+    /// before the side it ends.
+    #[test]
+    fn a_triangles_parts_are_found_under_the_pointer() {
+        let at = |x: f32, y: f32| part_at(Pos2::new(x, y), TRI).map(|(part, _)| part);
+        assert_eq!(at(103.0, 102.0), Some(TrianglePart::Origin));
+        assert_eq!(at(197.0, 104.0), Some(TrianglePart::XPoint));
+        assert_eq!(at(104.0, 3.0), Some(TrianglePart::YPoint));
+        assert_eq!(at(150.0, 104.0), Some(TrianglePart::EdgeOX));
+        assert_eq!(at(96.0, 50.0), Some(TrianglePart::EdgeOY));
+        assert_eq!(at(153.0, 53.0), Some(TrianglePart::EdgeXY));
+        assert_eq!(at(130.0, 75.0), None, "inside, away from the sides");
+        assert_eq!(at(150.0, 120.0), None, "outside");
+        // On the side from O, 8 px from O: the vertex.
+        assert_eq!(at(108.0, 101.0), Some(TrianglePart::Origin));
+    }
+
+    /// Scaling across the far side shows the two-headed arrow nearest the
+    /// side's normal, whichever way it points.
+    #[test]
+    fn the_scale_cursor_runs_across_the_side() {
+        use egui::CursorIcon::*;
+        assert_eq!(resize_cursor_along(Vec2::new(1.0, 0.1)), ResizeHorizontal);
+        assert_eq!(resize_cursor_along(Vec2::new(-1.0, 0.0)), ResizeHorizontal);
+        assert_eq!(resize_cursor_along(Vec2::new(0.1, 1.0)), ResizeVertical);
+        assert_eq!(resize_cursor_along(Vec2::new(0.0, -1.0)), ResizeVertical);
+        // y down: down-right is the NW-SE diagonal, down-left NE-SW.
+        assert_eq!(resize_cursor_along(Vec2::new(1.0, 1.0)), ResizeNwSe);
+        assert_eq!(resize_cursor_along(Vec2::new(-1.0, -1.0)), ResizeNwSe);
+        assert_eq!(resize_cursor_along(Vec2::new(-1.0, 1.0)), ResizeNeSw);
+    }
+
+    /// Where triangles overlap, the active one's part is taken; among the
+    /// others, the nearest, a vertex before a side.
+    #[test]
+    fn the_active_triangle_is_grabbed_first() {
+        let shifted = |dx: f32, dy: f32| TRI.map(|p| p + Vec2::new(dx, dy));
+        let (a, b, c) = (TransformRef::Normal(0), TransformRef::Normal(1), TransformRef::Linked(0));
+        // B's origin sits on A's side from O.
+        let candidates = [(a, TRI), (b, shifted(50.0, 0.0))];
+        assert_eq!(pick_part(Pos2::new(150.0, 100.0), &candidates, a), Some((a, TrianglePart::EdgeOX)));
+        assert_eq!(pick_part(Pos2::new(150.0, 100.0), &candidates, b), Some((b, TrianglePart::Origin)));
+        // Only B's X is there.
+        assert_eq!(pick_part(Pos2::new(250.0, 100.0), &candidates, a), Some((b, TrianglePart::XPoint)));
+        // Neither active one: B's vertex before C's side.
+        let others = [(b, shifted(50.0, 0.0)), (c, shifted(0.0, 2.0))];
+        assert_eq!(pick_part(Pos2::new(152.0, 101.0), &others, a), Some((b, TrianglePart::Origin)));
+        assert_eq!(pick_part(Pos2::new(400.0, 400.0), &candidates, a), None);
+    }
 }
 
