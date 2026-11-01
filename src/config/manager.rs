@@ -2854,6 +2854,7 @@ impl ConfigManager {
             ConfigPath::PostSymmetryDistance => Ok(flame.post_symmetry.distance.into()),
             ConfigPath::PostSymmetryRotation => Ok(flame.post_symmetry.rotation_deg.into()),
             ConfigPath::PreserveZ => Ok(config.preserve_z.into()),
+            ConfigPath::ResetOrbits => Ok(config.reset_orbits.into()),
             ConfigPath::ImageWidth => Ok(config.image_size.0.into()),
             ConfigPath::ImageHeight => Ok(config.image_size.1.into()),
 
@@ -4803,6 +4804,9 @@ impl ConfigManager {
             }
             ConfigPath::PreserveZ => {
                 self.current.preserve_z = value.try_into()?;
+            }
+            ConfigPath::ResetOrbits => {
+                self.current.reset_orbits = value.try_into()?;
             }
             // Within what an export can be: the GPU's texture limit is
             // the export panel's to enforce, against the pixel budget.

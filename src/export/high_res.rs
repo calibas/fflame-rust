@@ -330,6 +330,13 @@ impl HighResExporter {
         height: u32,
         iterations_per_thread: Option<u32>,
     ) -> Result<Self, String> {
+        // Where orbits are reset every dispatch (`FractalConfig::resets_orbits`),
+        // they restart here too, each the flame's own length where a
+        // variation sets one, else the given, else the app's default.
+        if config.resets_orbits() {
+            let ipt = config.orbit_length().or(iterations_per_thread).or(Some(crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD));
+            return Self::new_with_orbits(config, width, height, ipt, false).await;
+        }
         Self::new_with_orbits(config, width, height, iterations_per_thread, true).await
     }
 

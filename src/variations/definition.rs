@@ -229,7 +229,28 @@ pub enum Feature {
     /// `fuchsian_triangle`, …). Purely a code-injection flag — it does
     /// not change the variation's generated signature or dispatch.
     NeedsMobiusLib,
+
+    /// The variation's picture is its orbits' way from their starts: a
+    /// map whose orbits settle onto a few points or loops (Iterated
+    /// Dynamics' dynamic system). A flame using it, at a weight other
+    /// than 0, starts every orbit afresh each dispatch -- the config's
+    /// `reset_orbits`, forced on -- where orbits otherwise persist and
+    /// would draw that way once. Purely a renderer flag: no signature or
+    /// code changes. A Rhai variation declares it with
+    /// `INFO = #{ ..., resets_orbits: true }`. With a parameter named
+    /// [`ORBIT_LENGTH_PARAM`], its value is the orbits' length, saved with
+    /// the flame, in place of the device's Iterations per Thread
+    /// (`Flame::orbit_length_source`).
+    ResetsOrbits,
 }
+
+/// The parameter of a [`Feature::ResetsOrbits`] variation that sets how
+/// long its flame's orbits run from each fresh start.
+pub const ORBIT_LENGTH_PARAM: &str = "orbit_length";
+
+/// The longest orbit a variation's [`ORBIT_LENGTH_PARAM`] gives: each is
+/// one dispatch, so as long as the Iterations per Thread setting goes.
+pub const MAX_ORBIT_LENGTH: u32 = 10_000;
 
 impl Feature {
     /// Every FLAG-like variant, so a generator can enumerate them.
@@ -259,6 +280,7 @@ impl Feature {
         Feature::AnalyticBlur,
         Feature::NeedsW,
         Feature::NeedsMobiusLib,
+        Feature::ResetsOrbits,
     ];
 
     /// The canonical wire spelling for the API's `features` array.
@@ -281,6 +303,7 @@ impl Feature {
             Feature::AnalyticBlur => "analytic_blur",
             Feature::NeedsW => "needs_w",
             Feature::NeedsMobiusLib => "needs_mobius_lib",
+            Feature::ResetsOrbits => "resets_orbits",
             // Payload-carrying: the NAME goes here, the count travels in
             // its own `plot_emits` field. See `ALL`.
             Feature::PlotEmits(_) => "plot_emits",

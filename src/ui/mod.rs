@@ -1641,6 +1641,9 @@ impl EguiLayer {
             is_paused: *paused,
             frame_governor: config_manager.system_settings().frame_governor,
             manual_workgroups: config_manager.system_settings().manual_workgroups,
+            reset_orbits: config_manager.active_config().reset_orbits,
+            reset_orbits_forced_by: config_manager.active_config().flame.fresh_orbits_variation(&crate::variations::global_registry()),
+            orbit_length_source: config_manager.active_config().flame.orbit_length_source(&crate::variations::global_registry()),
             render_scale: config_manager.system_settings().render_scale,
             upscaler: config_manager.system_settings().upscaler,
             render_physical_pixels: config_manager.system_settings().render_physical_pixels,
@@ -2550,6 +2553,10 @@ impl EguiLayer {
                 crate::config::ConfigPath::SystemIterationsPerThread,
                 ipt.into()
             );
+        }
+
+        if let Some(on) = menu_actions.rendering.set_reset_orbits {
+            let _ = config_manager.update_param(crate::config::ConfigPath::ResetOrbits, on.into());
         }
 
         if let Some(on) = menu_actions.rendering.set_frame_governor {

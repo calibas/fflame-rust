@@ -364,6 +364,78 @@ fn a_pan_restarts_variation_state() {
     assert!(gens.windows(2).all(|w| w[0] != w[1]), "overwrite frames kept the orbits: generations {gens:?}");
 }
 
+/// **Reset orbits start afresh every dispatch** (`FractalConfig::reset_orbits`):
+/// each dispatch is a new generation, plots `ipt - burn_in` a thread --
+/// the count before orbits persisted -- and a pan keeps nothing of the
+/// view before it: rendered at A, panned to B and rendered on, the picture
+/// is exactly a fresh render at B (the gasket, on its own a picture a pan
+/// would keep up to its first samples' noise; `a_pan_restarts_variation_state`).
+#[test]
+#[ignore = "GPU gate: persistent orbits"]
+fn reset_orbits_restart_every_dispatch() {
+    const N: u32 = 64;
+    let (device, queue) = device();
+    let mut a = gasket();
+    a.reset_orbits = true;
+    a.deterministic_rng = true;
+    a.levels_enabled = false;
+    let mut b = a.clone();
+    (b.pan_x, b.pan_y) = (0.1, -0.05);
+    let frames = |r: &mut crate::renderer::FlameRenderer, cfg: &FractalConfig, k: usize| -> Vec<(u64, u32)> {
+        let mut out = Vec::new();
+        for _ in 0..k {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let n = r.compute_pass(&mut enc, &queue, &device, 32, 256, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false);
+            r.accumulate_pass(&mut enc, &queue, &device, n);
+            queue.submit(Some(enc.finish()));
+            out.push((n, r.orbit_generation()));
+        }
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        out
+    };
+    let fresh = |cfg: &FractalConfig| {
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, N, N, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(&device, &mut enc, &queue, cfg, &cfg.palette, 256, 20);
+        queue.submit(Some(enc.finish()));
+        r
+    };
+    let mut r = fresh(&b);
+    frames(&mut r, &b, 8);
+    let truth = r.read_density_blocking(&device, &queue);
+
+    let mut r = fresh(&a);
+    assert!(r.resets_orbits());
+    let run = frames(&mut r, &a, 8);
+    assert!(run.iter().all(|(n, _)| *n == 32 * 64 * (256 - 20)), "a dispatch's count: {run:?}");
+    assert!(run.windows(2).all(|w| w[0].1 != w[1].1), "a dispatch kept the orbits: {run:?}");
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pan") });
+    r.reset(&mut enc, &queue, 256, b.zoom, b.pan_x as f32, b.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, b.speed_factor);
+    queue.submit(Some(enc.finish()));
+    frames(&mut r, &b, 8);
+    let panned = r.read_density_blocking(&device, &queue);
+    let lit = truth.iter().filter(|d| **d > 0.0).count();
+    let worst = truth.iter().zip(&panned).map(|(x, y)| (x - y).abs() / x.max(*y).max(f64::MIN_POSITIVE)).fold(0.0, f64::max);
+    println!("  panned against fresh: {lit} pixels lit, the worst pixel {worst:.2e} apart");
+    assert!(lit > 100, "the fixture drew {lit} pixels");
+    assert!(worst < 1e-6, "after a pan reset orbits are not a fresh render: a pixel {worst:.3} apart");
+
+    // A burn-in longer than the dispatch: each orbit restarts before it
+    // ends, so nothing is plotted, as before orbits persisted.
+    let mut r = fresh(&b);
+    let mut dark = Vec::new();
+    for _ in 0..4 {
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        let n = r.compute_pass(&mut enc, &queue, &device, 32, 256, 300, b.zoom, b.pan_x as f32, b.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, b.speed_factor, true, false);
+        r.accumulate_pass(&mut enc, &queue, &device, n);
+        queue.submit(Some(enc.finish()));
+        dark.push(n);
+    }
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let lit = r.read_density_blocking(&device, &queue).iter().filter(|d| **d > 0.0).count();
+    assert!(dark.iter().all(|n| *n == 0) && lit == 0, "a burn-in past the dispatch plotted: counts {dark:?}, {lit} pixels lit");
+}
+
 /// **The count is the GPU's** (§3.5): the CPU's count (`OrbitFuses`) of plotted
 /// samples equals the shader's own tally of plot attempts, exactly,
 /// through a sequence whose width and length both vary -- burn-in longer

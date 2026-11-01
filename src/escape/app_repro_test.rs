@@ -2884,7 +2884,7 @@ mod tests {
     /// at their home views, at their defaults, every pixel's count against
     /// the interpreter's in f64 -- equal but where f32 parts from f64 on a
     /// boundary. Measured (of 3,072 pixels): within one, MandelbrotMix4
-    /// 2,970 (its powers by exp and log), the rest 3,062 or more.
+    /// 2,973 (its powers by exp and log), the rest 3,062 or more.
     #[test]
     #[ignore = "needs a GPU"]
     fn the_iterated_dynamics_formulas_render_as_the_interpreter() {
@@ -2939,6 +2939,98 @@ mod tests {
             println!("{file}: {right} of {} right, {near} within one ({distinct} distinct counts)", exact.len());
             assert!(distinct > 3, "{file}: the view shows too little");
             assert!(near * 100 >= exact.len() * 95, "{file}: {near} of {} within one", exact.len());
+        }
+    }
+
+    /// The same formulas past the direct path's limit: walked into a
+    /// boundary (the slowest pixel that still stops, three octaves at a
+    /// time) to zoom 16 (`ID_ZOOM` sets another), every third pixel's
+    /// count on the direct and perturbed paths against big floats (f64
+    /// gets every one). Measured, perturbed (direct), of 1,024 right:
+    /// at 16, DivideBrot5, Taylor/Skinner and lambda, julia and manlam
+    /// fn||fn all (850-1,020); Peterson 1,010 (839); MandelbrotMix4 882
+    /// (553); Halley 808, 1,012 within one (914), most a pass late;
+    /// mandel(fn||fn) 803 (317). At 28 the clean ones all again (direct
+    /// 161-667), Halley 910 (31), mandel(fn||fn) 858 (0) -- and
+    /// julia(fn||fn) none (498): where the pixel and the reference take
+    /// different arms of the switch, the pixel's arm runs on its full
+    /// value in f32, which at depth keeps nothing of its deviation. The
+    /// f64 model of the same equations gets each right
+    /// (`escape::iterated_dynamics`): what the GPU loses is f32's.
+    /// Escher-like Julia has no deep tier.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_iterated_dynamics_formulas_deep_zoom() {
+        use rayon::prelude::*;
+        let files = [
+            "halley.rhai",
+            "mandelbrot-mix4.rhai",
+            "dividebrot5.rhai",
+            "peterson.rhai",
+            "escher-julia.rhai",
+            "taylor-skinner.rhai",
+            "lambda-fn-or-fn.rhai",
+            "julia-fn-or-fn.rhai",
+            "manlam-fn-or-fn.rhai",
+            "mandel-fn-or-fn.rhai",
+        ];
+        let (w, h) = (64u32, 48u32);
+        for file in files {
+            let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
+            let src = crate::config::escape::CustomSource {
+                dialect: crate::config::escape::CustomDialect::Rhai,
+                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                source: text.to_string(),
+                variations: Vec::new(),
+            };
+            let prog = crate::escape::lang::rhai::program(text).unwrap();
+            let (mut cx, mut cy) = prog.view.center.unwrap_or((0.0, 0.0));
+            let mut zoom = prog.view.magn.unwrap_or(1.0).log2();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            esc.max_iter = prog.view.maxiter.unwrap_or(150);
+            crate::escape::custom::ensure(&esc);
+            let tier = crate::escape::EscapeRenderer::perturb_tier(&esc);
+            let values = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            let at = |cx: f64, cy: f64, zoom: f64, i: u32| {
+                let span_y = 4.0 / zoom.exp2();
+                let span_x = span_y * w as f64 / h as f64;
+                crate::escape::lang::builtins::C64::new(cx + ((i % w) as f64 + 0.5) / w as f64 * span_x - span_x / 2.0, cy - (((i / w) as f64 + 0.5) / h as f64 - 0.5) * span_y)
+            };
+            let mx = esc.max_iter;
+            let target: f64 = std::env::var("ID_ZOOM").ok().and_then(|v| v.parse().ok()).unwrap_or(16.0);
+            while zoom < target {
+                let exact: Vec<u32> = (0..w * h).into_par_iter().map(|i| crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(at(cx, cy, zoom, i), mx)).n).collect();
+                let Some((i, _)) = exact.iter().enumerate().filter(|(_, n)| **n < mx).max_by_key(|(_, n)| **n) else { break };
+                let c = at(cx, cy, zoom, i as u32);
+                (cx, cy) = (c.re, c.im);
+                zoom = (zoom + 3.0).min(target);
+            }
+            esc.center_re = format!("{cx:.17}");
+            esc.center_im = format!("{cy:.17}");
+            esc.zoom_log2 = zoom;
+            let exact: Vec<u32> = (0..w * h).into_par_iter().map(|i| crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(at(cx, cy, zoom, i), mx)).n).collect();
+            let distinct = exact.iter().collect::<std::collections::BTreeSet<_>>().len();
+            let (cre, cim) = (format!("{cx:.17}"), format!("{cy:.17}"));
+            let truth = truth_counts_of(std::sync::Arc::new(prog.clone()), values.clone(), (&cre, &cim), zoom, mx, (w, h), 3, 6);
+            let score = |got: &dyn Fn(usize) -> u32| (truth.iter().filter(|(i, n)| got(*i) == *n).count(), truth.iter().filter(|(i, n)| got(*i).abs_diff(*n) <= 1).count());
+            let f64s = score(&|i| exact[i]);
+            let direct = records_on(&esc, w, h, false, false, true);
+            let d = score(&|i| direct[i].n);
+            let perturbed = tier.is_some().then(|| {
+                let got = records_on(&esc, w, h, false, true, false);
+                score(&|i| got[i].n)
+            });
+            println!(
+                "{file} at ({cx:.12}, {cy:.12}) zoom {zoom}: {distinct} distinct; of {} against big floats (right, within one): f64 {f64s:?}, direct {d:?}, perturbed {perturbed:?}",
+                truth.len()
+            );
+            assert_eq!(tier.is_none(), file == "escher-julia.rhai", "{file}: a deep tier but the Escher-like Julia's");
+            if ["dividebrot5.rhai", "peterson.rhai", "taylor-skinner.rhai"].contains(&file) {
+                let (right, _) = perturbed.unwrap();
+                assert!(right * 100 >= truth.len() * 95, "{file}: {right} of {} right", truth.len());
+            }
         }
     }
 

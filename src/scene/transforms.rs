@@ -2258,6 +2258,62 @@ impl Flame {
         out
     }
 
+    /// Whether a variation the flame uses, at a weight other than 0, needs
+    /// its orbits started afresh every dispatch
+    /// (`Feature::ResetsOrbits`): it forces `FractalConfig::reset_orbits`.
+    pub fn needs_fresh_orbits(&self, registry: &VariationRegistry) -> bool {
+        let needs = |t: &Transform| {
+            t.variations.iter().any(|(name, w)| {
+                *w != 0.0 && registry.get(name).is_some_and(|v| v.has_feature(crate::variations::Feature::ResetsOrbits))
+            })
+        };
+        self.transforms.iter().chain(&self.linked_transforms).chain(&self.final_transforms).any(needs)
+            || self.subflames.iter().any(|sf| sf.needs_fresh_orbits(registry))
+    }
+
+    /// The flame's own orbit length where its orbits are reset: the
+    /// longest `orbit_length` parameter (`ORBIT_LENGTH_PARAM`) of a
+    /// variation it uses that needs fresh orbits, at a weight other than
+    /// 0, and that variation's name; `None` where none has one, and the
+    /// device's Iterations per Thread rules. Saved with the flame, so a
+    /// picture whose depth is its orbits' renders the same everywhere.
+    /// At most `MAX_ORBIT_LENGTH`, as each orbit is one dispatch.
+    pub fn orbit_length_source(&self, registry: &VariationRegistry) -> Option<(String, u32)> {
+        use crate::variations::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};
+        let mut best: Option<(String, u32)> = None;
+        let mut consider = |t: &Transform| {
+            for (name, w) in &t.variations {
+                let Some(info) = registry.get(name) else { continue };
+                if *w == 0.0 || !info.has_feature(Feature::ResetsOrbits) || info.get_param_default(ORBIT_LENGTH_PARAM).is_none() {
+                    continue;
+                }
+                let length = t.get_variation_param_or_default(name, ORBIT_LENGTH_PARAM, registry).round().clamp(1.0, MAX_ORBIT_LENGTH as f32) as u32;
+                if best.as_ref().is_none_or(|(_, b)| length > *b) {
+                    best = Some((name.clone(), length));
+                }
+            }
+        };
+        self.transforms.iter().chain(&self.linked_transforms).chain(&self.final_transforms).for_each(&mut consider);
+        drop(consider);
+        for sf in &self.subflames {
+            if let Some((name, length)) = sf.orbit_length_source(registry) {
+                if best.as_ref().is_none_or(|(_, b)| length > *b) {
+                    best = Some((name, length));
+                }
+            }
+        }
+        best
+    }
+
+    /// The first variation the flame uses that needs fresh orbits, by
+    /// name: what the Settings panel says forces the option on.
+    pub fn fresh_orbits_variation(&self, registry: &VariationRegistry) -> Option<String> {
+        self.active_variation_names_ordered(registry).into_iter().find(|name| {
+            registry.get(name).is_some_and(|v| v.has_feature(crate::variations::Feature::ResetsOrbits))
+                && self.transforms.iter().chain(&self.linked_transforms).chain(&self.final_transforms).any(|t| t.variations.get(name).is_some_and(|w| *w != 0.0))
+        })
+    }
+
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
         let absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
