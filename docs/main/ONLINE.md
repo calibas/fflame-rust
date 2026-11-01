@@ -45,9 +45,8 @@ feature fails to a status line, not to a broken panel.
   [variation_cache.rs](../../src/storage/variation_cache.rs),
   [effect_cache.rs](../../src/storage/effect_cache.rs) — catalogs and
   download caches
-- [src/storage/plugins.rs](../../src/storage/plugins.rs),
-  [src/provenance.rs](../../src/provenance.rs) — local plugins, and
-  where a resource came from
+- [src/provenance.rs](../../src/provenance.rs) — where a resource came
+  from
 - [src/app/variation_fetch.rs](../../src/app/variation_fetch.rs),
   [effect_fetch.rs](../../src/app/effect_fetch.rs),
   [script_cloud.rs](../../src/app/script_cloud.rs) — the app's
@@ -222,10 +221,9 @@ the server added `escape`. Remove it when the server adds `simulation`.
 
 A flame travels as variation **names** plus its own parameters, never
 as WGSL. `a_flame_payload_carries_names_not_definitions` asserts that a
-local plugin's shader cannot leave the machine in a flame payload. A
-flame that uses a local plugin therefore renders only where the plugin
-is installed, and saving one online shows a notice naming the plugins
-(`warn_if_flame_needs_local_plugins`) — a notice, not a refusal.
+registered variation's shader cannot leave the machine in a flame
+payload. A Rhai variation's source does travel, in
+`flame.custom_variations`: a config carries what it uses.
 
 ### Save Online
 
@@ -351,7 +349,7 @@ directory on desktop and are localStorage keys on the web:
 | `variations/<name>.json` | a downloaded variation (`VariationDownload`) |
 | `variations/_catalog.json` | the cached variation catalog |
 | `effects/<name>.json`, `effects/_catalog.json` | the same for effects (`EffectDownload`) |
-| `plugins/variations/<name>.json`, `plugins/effects/<name>.json` | local plugins |
+| `plugins/variations/<name>.json`, `plugins/effects/<name>.json` | retired WGSL plug-ins, no longer loaded |
 
 A name starting with `_` is metadata, never a resource, so the catalog
 file is not listed, counted or cleared as a cached entry. Plugins live
@@ -378,7 +376,7 @@ prose — `description_plain`, `authors` — reaches the app.
 | installed | row | state |
 | --- | --- | --- |
 | built-in | any | `BuiltIn` |
-| local plugin | any | `LocalOverride` — reported, never an update candidate |
+| the user's own (`Custom`) | any | `LocalOverride` — reported, never an update candidate |
 | downloaded, older | any | `UpdateAvailable` |
 | downloaded, same or newer | any | `Downloaded` |
 | nothing | `downloadable` | `Available` |
@@ -409,7 +407,7 @@ parallel and **pause rendering** until they all finish or 30 s pass.
 Each download is cached, then registered as `Api { version }`; then the
 renderer reloads the config so the shader includes them. Failures and
 timeouts are notified. Updating from the Variations panel is the same
-fetch again; names held by a built-in or a local plugin are filtered
+fetch again; names held by a built-in or the user's own are filtered
 out first.
 
 ### Missing effects
@@ -424,29 +422,13 @@ arrives. The registration checks are in [EFFECTS.md](EFFECTS.md).
 
 ---
 
-## Local plugins
+## Local plugins (retired)
 
-A local plugin is a variation or effect installed by the user, in
-**the same JSON as a download** (`VariationDownload` /
-`EffectDownload`), so it takes the same registration path, compile path
-and limits. [plugins.rs](../../src/storage/plugins.rs):
-
-- **Where:** `<app data>/plugins/variations/` and
-  `<app data>/plugins/effects/`; on the web, localStorage keys under
-  the same prefix.
-- **Identity:** the **file name**, not the `name` inside it.
-- **Collisions are refused, never shadowed.** A plugin may not take a
-  built-in's name or one already registered (built-ins, then downloads,
-  load first), and a download may not displace a plugin.
-- **Installing:** copy the file into the folder and restart. There is
-  no install command in the UI; `plugins::install` and
-  `plugins::remove` exist (install validates with the registration
-  rules) but nothing calls them outside tests.
-
-Two worked examples, with notes, are in
-[assets/plugins-example/](../../assets/plugins-example/README.md): a
-variation equal to `linear` at its defaults and a colour effect that is
-a no-op at its defaults.
+Local WGSL plug-in files -- a variation or effect in the download's
+JSON under `<app data>/plugins/variations/` or `plugins/effects/` --
+were retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them. A start that finds such files names them in a
+notice (stderr headless) for one release and leaves them in place
+(`storage::retired_plugin_files`).
 
 ---
 

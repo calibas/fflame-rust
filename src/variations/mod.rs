@@ -607,11 +607,6 @@ impl VariationRegistry {
     /// (e.g., when a newer version is fetched). Built-in variations
     /// can't be replaced — the call is rejected with a logged warning.
     /// Register a variation from a download payload.
-    ///
-    /// Source-tagged rather than duplicated: a local plugin is **the
-    /// same object from a different source**, so it takes this path with
-    /// `Provenance::Local` instead of a parallel `register_from_local`
-    /// that would have to be kept in step with every refusal added here.
     pub fn register_from_api(
         &mut self,
         dl: &crate::api::types::VariationDownload,
@@ -625,19 +620,10 @@ impl VariationRegistry {
                 );
                 return;
             }
-            // Nor may a download displace the user's own plugin. §0
-            // decision 3: collisions are reported, never shadowed — and
-            // here the direction matters, because silently replacing
-            // something the user wrote with something they did not is
-            // the worse of the two failures.
-            if matches!(existing.provenance, crate::provenance::Provenance::Local) {
-                log::warn!(
-                    "Cannot register API variation '{}' — you have a local plugin by that name",
-                    dl.name
-                );
-                return;
-            }
             // Nor one the user wrote: only its own source replaces it.
+            // Collisions are reported, never shadowed, and silently
+            // replacing something the user wrote with something they did
+            // not is the worse direction.
             if existing.provenance == crate::provenance::Provenance::Custom && provenance != crate::provenance::Provenance::Custom {
                 log::warn!("Cannot register variation '{}' — a custom variation has that name", dl.name);
                 return;
@@ -914,44 +900,6 @@ pub fn global_registry_mut() -> RwLockWriteGuard<'static, VariationRegistry> {
     registry_lock().write().expect("variation registry RwLock poisoned")
 }
 
-/// Resources a flame uses that nobody else can resolve.
-///
-/// A flame is shared as **names**, not definitions — so one that leans
-/// on a local plugin renders correctly for its author and for nobody
-/// else, including the same person on another device. There is no error
-/// at the far end either: the name is simply unknown, and the fetch that
-/// would normally rescue it has nothing to fetch.
-///
-/// Returned rather than warned about here, so the caller decides
-/// whether this is a save (mention it) or an upload (mention it
-/// louder).
-pub fn local_plugin_dependencies(config: &crate::config::FractalConfig) -> Vec<String> {
-    let registry = global_registry();
-    let mut out: Vec<String> = config
-        .flame
-        .active_variation_names_ordered(&registry)
-        .into_iter()
-        .filter(|name| {
-            registry
-                .get(name)
-                .is_some_and(|v| matches!(v.provenance, crate::provenance::Provenance::Local))
-        })
-        .collect();
-    drop(registry);
-
-    let effects = crate::effects::global_effect_registry();
-    for e in config.color_effects.iter().chain(config.density_effects.iter()) {
-        if effects
-            .get(&e.effect_type)
-            .is_some_and(|i| matches!(i.provenance, crate::provenance::Provenance::Local))
-            && !out.contains(&e.effect_type)
-        {
-            out.push(e.effect_type.clone());
-        }
-    }
-    out
-}
-
 /// Why a name a flame references cannot be resolved.
 ///
 /// The distinction §8.4 asks for. "We can fetch this" and "you are
@@ -966,11 +914,11 @@ pub enum MissingReason {
     /// The catalog lists it but it is not fetchable — engine-integral,
     /// or not yet seeded server-side.
     KnownButNotFetchable,
-    /// Nothing knows this name. Almost always a local plugin the sender
-    /// has and the receiver does not.
-    ProbablyAPlugin,
+    /// The catalog does not list this name: from a newer build, a retired
+    /// WGSL plug-in, or a misspelling. Nothing to fetch.
+    NotInCatalog,
     /// No catalog has been fetched, so the question cannot be answered.
-    /// Distinct from `ProbablyAPlugin` — being offline is not evidence.
+    /// Distinct from `NotInCatalog` — being offline is not evidence.
     Unknown,
 }
 
@@ -986,7 +934,7 @@ pub fn classify_missing(
         Some(item) if item.downloadable => MissingReason::Downloadable,
         Some(_) => MissingReason::KnownButNotFetchable,
         None if catalog.items.is_empty() => MissingReason::Unknown,
-        None => MissingReason::ProbablyAPlugin,
+        None => MissingReason::NotInCatalog,
     }
 }
 

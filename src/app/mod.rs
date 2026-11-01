@@ -847,21 +847,18 @@ impl App {
         let gpu = GpuContext::new(window.clone()).await.expect("GPU init failed");
         let mut egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Cached downloads, then local plugins. Shared with the headless
-        // entry points so there is one order rather than two.
-        let plugin_report = crate::storage::load_installed_resources();
-        // A refused plugin must be REPORTED. The user installed a file
-        // and it is not there; a log line is not a report, and this is
-        // the one moment they can connect the absence to a cause.
-        if !plugin_report.refused.is_empty() {
-            let list = plugin_report
-                .refused
-                .iter()
-                .map(|(n, why)| format!("{n} ({why})"))
-                .collect::<Vec<_>>()
-                .join("; ");
+        // Cached downloads. Shared with the headless entry points so
+        // there is one order rather than two.
+        let retired = crate::storage::load_installed_resources();
+        // A file the user placed by hand that no longer loads must be
+        // REPORTED: this is the one moment they can connect the absence
+        // to a cause.
+        if !retired.is_empty() {
             egui_layer.show_api_notification(
-                &format!("Some plugins were not loaded — {list}"),
+                &format!(
+                    "WGSL plug-in files are no longer loaded (the plug-in system was retired; Rhai plug-ins replace it): {}",
+                    retired.join(", ")
+                ),
                 true,
             );
         }

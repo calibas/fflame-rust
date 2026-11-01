@@ -924,14 +924,13 @@ mod plugin_boundary_tests {
     use super::*;
     use crate::provenance::Provenance;
 
-    /// A local plugin's CODE must never leave this machine.
+    /// A registered variation's WGSL never rides out in a flame.
     ///
-    /// §8.4 asks for this to be asserted at the API boundary rather than
-    /// held as a convention, and the checkable form is this: a flame
-    /// travels as variation **names** plus its own parameters, never as
-    /// definitions. So there is no payload a plugin's WGSL could ride
-    /// out on, and adding one would break this test rather than pass
-    /// review.
+    /// A flame travels as variation **names** plus its own parameters,
+    /// never as WGSL definitions, so there is no payload a download's
+    /// shader could ride out on, and adding one would break this test
+    /// rather than pass review. (A Rhai variation's SOURCE does travel,
+    /// in `flame.custom_variations`: that is how a config carries it.)
     ///
     /// The client also exposes no endpoint that uploads a variation or
     /// an effect — those are server-curated, read-only (§0 decision 1) —
@@ -965,7 +964,7 @@ mod plugin_boundary_tests {
             description_plain: None,
         };
         crate::variations::global_registry_mut()
-            .register_from_api(&dl, Provenance::Local);
+            .register_from_api(&dl, Provenance::Api { version: 1 });
 
         let mut config = FractalConfig::default();
         let mut t = crate::scene::transforms::Transform::new();
@@ -985,9 +984,6 @@ mod plugin_boundary_tests {
             "no definition-shaped field belongs in a flame payload"
         );
 
-        // ...and the app knows this flame is not portable.
-        let deps = crate::variations::local_plugin_dependencies(&config);
-        assert_eq!(deps, vec!["my_plugin".to_string()]);
 
         crate::variations::global_registry_mut().remove_by_name("my_plugin");
     }
