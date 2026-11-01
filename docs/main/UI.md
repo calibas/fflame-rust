@@ -435,7 +435,11 @@ grabbed decides, as in Apophysis: the origin translates the triangle, X
 or Y moves that point, a side from O rotates about O, the side opposite
 scales from O, each following the pointer; the part under the pointer
 is drawn over in white (`part_at`: a vertex within 10 px, else a side
-within 6). The transform selector's **Auto** (also the default) lets
+within 6), and the pointer says what a drag does: a hand over a vertex,
+a circular arrow over a side from O (painted on egui's top layer in
+place of the hidden cursor, as no OS cursor is one), two-headed arrows
+across the far side (the nearest of the four resize cursors,
+`resize_cursor_along`). O is drawn lighter than X and Y. The transform selector's **Auto** (also the default) lets
 every triangle be grabbed: the one grabbed becomes the selected
 transform, which the coordinates and buttons below edit, the active one
 first where triangles overlap (`pick_part`), and the canvas fits every
