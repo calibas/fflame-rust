@@ -17,25 +17,37 @@
 // (Apophysis's too).
 //
 // It colours as a direct-colour variation: each point's palette index
-// follows its step (the Color choice), and the transform's Direct Color
-// sets how much of that shows (0 gives back the transform's colour).
+// follows its step or its orbit's iteration (the Color choice), and the
+// transform's Direct Color sets how much of that shows (0 gives back
+// the transform's colour).
+//
+// A flame using it starts its orbits afresh every dispatch
+// (`resets_orbits` in INFO), so each orbit is Iterations per Thread
+// long: that setting is how far an orbit goes, and Max Iterations how
+// many are drawn.
 
 const PARAMS = #{
     dt: #{ value: 0.04, caption: "Time step", hint: "How far each pass flows" },
     a: #{ value: 0.2, caption: "a", hint: "How much y feeds its own growth" },
     b: #{ value: 0.2, caption: "b", hint: "z's constant growth" },
     c: #{ value: 5.7, caption: "c", hint: "How far x must climb before z grows" },
-    color: #{ value: 0, caption: "Color", choices: ["Direction", "Step length", "Distance", "Height"], hint: "What the palette index follows: the step's direction (its turn about the z axis), its length over the Time step (the flow's speed), the new point's distance from the origin, or its height" },
-    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction), or per Color Size (Step length, Distance, Height)" },
+    color: #{ value: 0, caption: "Color", choices: ["Direction", "Step length", "Distance", "Height", "Iteration"], hint: "What the palette index follows: the step's direction (its turn about the z axis), its length over the Time step (the flow's speed), the new point's distance from the origin, its height, or the orbit's iteration since it started" },
+    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction), per Color Size (Step length, Distance, Height), or per Color Period (Iteration)" },
     color_size: #{ value: 30.0, min: 0.0, caption: "Color Size", hint: "The length one cycle of the palette spans, for Distance and Height, and the speed it spans for Step length (the attractor spans about 30 at the defaults)" },
     color_offset: #{ value: 0.0, min: 0.0, max: 1.0, caption: "Color Offset", hint: "Added to the palette index" },
+    color_period: #{ value: 1024.0, min: 1.0, caption: "Color Period", hint: "The iterations one cycle of the palette spans, for Iteration (an orbit is Iterations per Thread long, 1,024 by default)" },
 };
 
-const INFO = #{ title: "Rossler Attractor", name: "rossler_attractor" };
+const INFO = #{ title: "Rossler Attractor", name: "rossler_attractor", resets_orbits: true };
+
+// Each thread's count of its orbit's iterations, for the Iteration colour.
+fn init(p) {
+    #{ n: 0.0 }
+}
 
 // The palette index for the step from v to w, as the Color choice says;
 // `dt` the time step a step takes.
-fn rossler_color(v, w, mode, cycles, size, offset, dt) {
+fn rossler_color(v, w, mode, cycles, size, offset, dt, t) {
     let d = w - v;
     let q = if mode == 0 {
         atan2(d.y, d.x) / (2.0 * PI()) + 0.5
@@ -43,18 +55,21 @@ fn rossler_color(v, w, mode, cycles, size, offset, dt) {
         if dt > 0.0 { length(d) / (dt * size) } else { 0.0 }
     } else if mode == 2 {
         length(w) / size
-    } else {
+    } else if mode == 3 {
         w.z / size
+    } else {
+        t
     };
     let k = offset + cycles * q;
     k - floor(k)
 }
 
 fn variation3(v, p) {
+    this.n = this.n + 1.0;
     let w = vec3(
         v.x - (v.y + v.z) * p.dt,
         v.y + (v.x + p.a * v.y) * p.dt,
         v.z + (p.b + v.z * (v.x - p.c)) * p.dt
     );
-    #{ z: w, color: rossler_color(v, w, p.color, p.color_cycles, p.color_size, p.color_offset, p.dt.abs()) }
+    #{ z: w, color: rossler_color(v, w, p.color, p.color_cycles, p.color_size, p.color_offset, p.dt.abs(), this.n / p.color_period) }
 }

@@ -548,8 +548,8 @@ mod tests {
         let (_, source) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-dynamic-system.rhai").unwrap();
         let dl = compile(source).unwrap_or_else(|e| panic!("{e}"));
         assert!(dl.features.iter().any(|f| f == "resets_orbits"), "{:?}", dl.features);
-        let chip = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-chip.rhai").unwrap().1;
-        assert!(!compile(chip).unwrap().features.iter().any(|f| f == "resets_orbits"), "Chip's orbits persist");
+        let whorl = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-whorl.rhai").unwrap().1;
+        assert!(!compile(whorl).unwrap().features.iter().any(|f| f == "resets_orbits"), "Whorl's orbits persist");
         assert!(compile("const INFO = #{ name: \"rhai_x\", resets_orbits: 1 };\nfn variation(z, p) { z }\n").unwrap_err().contains("true or false"));
 
         let mut registry = crate::variations::VariationRegistry::new();

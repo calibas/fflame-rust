@@ -248,9 +248,10 @@ fn the_dynamic_systems_euler_order_steps_y_first() {
 /// Each map's Direct Color: in every Color mode, at Color Cycles 1.5 and
 /// Offset 0.25, the palette index its step gives, against the step's
 /// direction, length, the new point's distance and angle (or height)
-/// written out. The step length is over Color Size, but a flow's: over
-/// its longest step (Popcorn, the dynamic system), or as a speed over
-/// Color Size (Rossler).
+/// written out, and the orbit's iteration: a run's calls, counted by its
+/// state from 1, over Color Period. The step length is over Color Size,
+/// but a flow's: over its longest step (Popcorn, the dynamic system), or
+/// as a speed over Color Size (Rossler).
 #[test]
 fn the_orbit_maps_colour_by_their_steps() {
     use std::f64::consts::{PI, SQRT_2};
@@ -269,7 +270,8 @@ fn the_orbit_maps_colour_by_their_steps() {
             values.values[i] = (v, 0.0);
         }
         let size = p.params.iter().find(|x| x.name == "color_size").expect("Color Size").default.0;
-        (values, size)
+        let period = p.params.iter().find(|x| x.name == "color_period").expect("Color Period").default.0;
+        (values, size, period)
     };
     // (file, the step length's unit when not Color Size)
     let maps: &[(&str, Option<f64>)] = &[
@@ -287,20 +289,23 @@ fn the_orbit_maps_colour_by_their_steps() {
     for &(file, unit) in maps {
         let src = example(file);
         let p = rhai::transformation(src).unwrap_or_else(|d| panic!("{file}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
-        for mode in 0..4 {
-            let (values, size) = set(&p, mode);
+        for mode in 0..5 {
+            let (values, size, period) = set(&p, mode);
             let unit = unit.unwrap_or(size);
             let mut run = VariationRun::new(&p, &values, 1);
+            let mut calls = 0.0;
             for i in 0..12 {
                 for j in 0..12 {
                     let z = C64::new(size * (i as f64 / 11.0 - 0.5) + 0.013, size * (j as f64 / 11.0 - 0.5) - 0.007);
                     let (w, got) = run.call(z, C64::ZERO, 1.0);
+                    calls += 1.0;
                     let (dx, dy) = (w.re - z.re, w.im - z.im);
                     let q = match mode {
                         0 => turn(dy, dx),
                         1 => (dx * dx + dy * dy).sqrt() / unit,
                         2 => (w.re * w.re + w.im * w.im).sqrt() / size,
-                        _ => turn(w.im, w.re),
+                        3 => turn(w.im, w.re),
+                        _ => calls / period,
                     };
                     // Far past the picture a step's index keeps no digits.
                     if q.is_finite() && q.abs() < 1e3 {
@@ -313,22 +318,25 @@ fn the_orbit_maps_colour_by_their_steps() {
     for (file, dt) in [("variation-pickover-attractor.rhai", None), ("variation-rossler-attractor.rhai", Some(0.04))] {
         let src = example(file);
         let p = rhai::transformation3(src).unwrap_or_else(|d| panic!("{file}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
-        for mode in 0..4 {
-            let (values, size) = set(&p, mode);
+        for mode in 0..5 {
+            let (values, size, period) = set(&p, mode);
             let unit = dt.map_or(size, |dt: f64| dt * size);
             let mut run = VariationRun::new(&p, &values, 1);
+            let mut calls = 0.0;
             for i in 0..6 {
                 for j in 0..6 {
                     for k in 0..6 {
                         let at = |n: i32| size * (n as f64 / 5.0 - 0.5) + 0.011;
                         let v = [at(i), at(j), at(k)];
                         let (w, got) = run.call3(v, [0.0; 3], 1.0);
+                        calls += 1.0;
                         let d = [w[0] - v[0], w[1] - v[1], w[2] - v[2]];
                         let q = match mode {
                             0 => turn(d[1], d[0]),
                             1 => (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() / unit,
                             2 => (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt() / size,
-                            _ => w[2] / size,
+                            3 => w[2] / size,
+                            _ => calls / period,
                         };
                         check(file, mode, &format!("{v:?}"), got, q);
                     }
