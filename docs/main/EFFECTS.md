@@ -482,7 +482,8 @@ first time (a second undo step: adding an instance is structural).
 **Twins of the built-ins** live in `assets/effects/*.rhai`, each held to
 its WGSL by a GPU compare within a step of 8-bit rounding, under the
 built-in's name with its parameters in the same order
-(`the_vignettes_rhai_twin_matches_the_wgsl`). They replace the built-ins
+(`the_rhai_twins_match_their_wgsl`, a table: vignette,
+chromatic_aberration, sobel_edges so far). They replace the built-ins
 only once nothing is lost (rhai-plugins.md, D1).
 
 ## The corpus for the API

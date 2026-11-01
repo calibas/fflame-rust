@@ -1719,47 +1719,79 @@ mod gpu_tests {
         registry.remove_by_name(&multiply);
     }
 
-    /// The vignette's Rhai twin (assets/effects/vignette.rhai) renders the
-    /// built-in WGSL's pixels, within a step of 8-bit rounding, at its
-    /// defaults and at other settings and blends -- the D1 check for it.
+    /// The Rhai twins of the built-ins (assets/effects/*.rhai) and how
+    /// each is driven: settings away from the defaults, blends among them.
+    #[cfg(feature = "engine-escape")]
+    const TWINS: &[(&str, &str, &[&[(&str, f32)]])] = &[
+        (
+            "vignette",
+            include_str!("../../assets/effects/vignette.rhai"),
+            &[&[], &[("intensity", 1.0), ("radius", 0.2), ("softness", 0.9)], &[("intensity", 0.7), ("radius", 0.4), ("softness", 0.3), ("blend_mode", 2.0)], &[("intensity", 0.8), ("radius", 0.6), ("softness", 0.2), ("blend_mode", 9.0)]],
+        ),
+        (
+            "chromatic_aberration",
+            include_str!("../../assets/effects/chromatic_aberration.rhai"),
+            &[&[], &[("amount", 9.0)], &[("radial", 0.0), ("amount", 6.0)], &[("amount", 14.0), ("intensity", 0.6), ("blend_mode", 3.0)]],
+        ),
+        (
+            "sobel_edges",
+            include_str!("../../assets/effects/sobel_edges.rhai"),
+            &[&[], &[("threshold", 0.3), ("glow", 1.0), ("preserve_color", 0.0)], &[("threshold", 0.05), ("blend_mode", 0.0), ("intensity", 0.5)], &[("preserve_color", 1.0), ("blend_mode", 4.0)]],
+        ),
+    ];
+
+    /// Each Rhai twin renders its built-in WGSL's pixels, within a step of
+    /// 8-bit rounding, at its defaults and the settings above, under the
+    /// built-in's name with the same parameters in the same order -- the
+    /// D1 checks a twin must pass before it replaces its built-in.
     #[cfg(feature = "engine-escape")]
     #[test]
-    fn the_vignettes_rhai_twin_matches_the_wgsl() {
+    fn the_rhai_twins_match_their_wgsl() {
         let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
         const W: u32 = 96;
         const H: u32 = 64;
-        let data: Vec<u8> = (0..W * H).flat_map(|i| [((i % W) * 255 / W) as u8, ((i / W) * 255 / H) as u8, 160, 255]).collect();
+        // A gradient, and squares of 8 pixels for edges to find.
+        let data: Vec<u8> = (0..W * H)
+            .flat_map(|i| {
+                let (x, y) = (i % W, i / W);
+                let square = if (x / 8 + y / 8) % 2 == 0 { 60 } else { 0 };
+                [(x * 255 / W) as u8, (y * 255 / H) as u8, 100 + square, 255]
+            })
+            .collect();
         let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &data);
-        let mut twin = crate::effects::custom::compile(include_str!("../../assets/effects/vignette.rhai"), crate::provenance::Provenance::Builtin)
-            .unwrap_or_else(|e| panic!("{e}"));
-        {
-            let registry = crate::effects::global_effect_registry();
-            let builtin = registry.get("vignette").expect("vignette");
-            let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, f32, Option<f32>, Option<f32>)> {
-                i.parameters.iter().map(|p| (p.name.clone(), p.default_value, p.min_value, p.max_value)).collect()
-            };
-            assert_eq!(shape(&twin), shape(builtin), "the same parameters, in the same order");
+        for (builtin, source, settings) in TWINS {
+            let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
+            assert_eq!(twin.name, *builtin, "a twin's id is its built-in's name");
+            {
+                let registry = crate::effects::global_effect_registry();
+                let wgsl = registry.get(builtin).expect("the built-in");
+                let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, f32, Option<f32>, Option<f32>)> {
+                    i.parameters.iter().map(|p| (p.name.clone(), p.default_value, p.min_value, p.max_value)).collect()
+                };
+                assert_eq!(shape(&twin), shape(wgsl), "{builtin}: the same parameters, in the same order");
+                assert_eq!(twin.category, wgsl.category, "{builtin}: the same place in the pipeline");
+            }
+            let test_name = format!("{builtin}_rhai_twin");
+            twin.name = test_name.clone();
+            crate::effects::global_effect_registry_mut().register(twin);
+            for set in settings.iter() {
+                let instance = |name: &str| {
+                    let mut e = EffectInstance::new(name);
+                    for (k, v) in set.iter() {
+                        e.set_param(k, *v);
+                    }
+                    e
+                };
+                let wgsl = run_colour(&device, &queue, &view, W, H, &[instance(builtin)]);
+                let rhai = run_colour(&device, &queue, &view, W, H, &[instance(&test_name)]);
+                let worst = wgsl.iter().zip(&rhai).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
+                assert!(worst <= 1, "{builtin} at {set:?}: off by {worst}");
+            }
+            crate::effects::global_effect_registry_mut().remove_by_name(&test_name);
         }
-        twin.name = "vignette_rhai_twin".into();
-        crate::effects::global_effect_registry_mut().register(twin);
-        for (intensity, radius, softness, mode) in [(0.5, 0.5, 0.5, 0.0), (1.0, 0.2, 0.9, 0.0), (0.7, 0.4, 0.3, 2.0), (0.8, 0.6, 0.2, 9.0)] {
-            let set = |name: &str| {
-                let mut e = EffectInstance::new(name);
-                e.set_param("intensity", intensity);
-                e.set_param("radius", radius);
-                e.set_param("softness", softness);
-                e.set_param("blend_mode", mode);
-                e
-            };
-            let wgsl = run_colour(&device, &queue, &view, W, H, &[set("vignette")]);
-            let rhai = run_colour(&device, &queue, &view, W, H, &[set("vignette_rhai_twin")]);
-            let worst = wgsl.iter().zip(&rhai).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
-            assert!(worst <= 1, "at {intensity}, {radius}, {softness}, mode {mode}: off by {worst}");
-        }
-        crate::effects::global_effect_registry_mut().remove_by_name("vignette_rhai_twin");
     }
 
     /// A frame's chains may need more parameter slots than the buffer

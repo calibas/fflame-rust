@@ -357,10 +357,26 @@ one at a time, a config's carried version registered before it renders
 
 **Status 2026-11-01** (branch `rhai-plugins`): steps 1-5 built, on the
 shared core (rule 7's UUIDs, rule 8's labels) rather than after the rest
-of P1 -- see *Order taken* below. The vignette's twin
-(`assets/effects/vignette.rhai`) matches its WGSL within a step of 8-bit
-rounding (`the_vignettes_rhai_twin_matches_the_wgsl`); the other 14
-twins and step 7 are next. Found on the way, for step 7: a build
+of P1 -- see *Order taken* below. Three twins match their WGSL within a
+step of 8-bit rounding at four settings each
+(`the_rhai_twins_match_their_wgsl`): vignette, chromatic_aberration,
+sobel_edges (`assets/effects/*.rhai`). The other 12, and step 7, are
+next; what stands in their way:
+- **The noise effects** (film_grain, worley_noise, simplex_noise,
+  domain_warp) hash with `fract(sin(dot(p, k)) * 43758.5453)`. The
+  dialect's `sin` is range-reduced (`Helper::Reduce`) and its products
+  are written out rather than `dot`, so the hash's argument differs in
+  its last bits and the factor 43758 makes that a different noise --
+  the same character, not the same pixels. Matching them needs either a
+  plain `sin` (no reduction) or hash built-ins written as the shaders
+  write them: the user's choice, as it is the dialect's surface.
+- **Hue Cycle's `offset` is an Angle parameter**: `PARAMS` has no angle
+  kind, and a float would change its widget. A `PARAMS` entry's
+  `angle: true` would carry it.
+- The rest (julia, kaleidoscope, tunnel, plasma, and the three density
+  effects, which read Rgba32Float and need a float compare) look direct.
+
+Found on the way, for step 7: a build
 without `engine-escape` (the gallery's flame-only module) has no
 compiler, so a built-in replaced by its Rhai source needs its compiled
 WGSL committed and held current by a staleness test, as the shader
