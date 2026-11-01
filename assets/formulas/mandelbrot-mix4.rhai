@@ -14,9 +14,10 @@
 // usually a negative real, and the program leaves its imaginary part a
 // signed zero, whose sign picks the log's branch (+pi or -pi): the sign
 // the products' rounding gives it, flipped for four sign patterns of a,
-// b, f and d to match Jim Muth's parser formula. A GPU does not keep the
-// sign of a zero, so this works the sign out and takes the branch itself
-// (at the defaults, -pi).
+// b, f and d to match Jim Muth's parser formula. This forms the base
+// otherwise, so it works the sign out from those rules and takes the
+// branch itself (at the defaults, -pi), once per image (`prepare`: a
+// start the same for every pixel, which keeps it fit for deep zoom).
 
 const PARAMS = #{
     p1: #{ value: complex(0.05, 3.0), caption: "p1 (a, b)", hint: "a, the first term's weight, and b, its power of z" },
@@ -50,7 +51,8 @@ fn mix4_below(a, b, f, d) {
     after_d != flip
 }
 
-fn start(pixel, p, ctx) {
+// The start, every pixel's: once per image.
+fn prepare(p, ctx) {
     let a = p.p1.re;
     let b = p.p1.im;
     let d = p.p2.re;
@@ -63,7 +65,11 @@ fn start(pixel, p, ctx) {
     } else {
         mix4_pow(base, j)
     };
-    #{ z: z0, c: p.fn1(pixel) }
+    #{ z0: z0 }
+}
+
+fn start(pixel, p, ctx) {
+    #{ z: p.z0, c: p.fn1(pixel) }
 }
 
 fn step(s, p) {
