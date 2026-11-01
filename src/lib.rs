@@ -129,17 +129,17 @@ pub fn desktop_main() {
 
 /// Load installed resources for a headless run, and say what happened.
 ///
-/// Headless has no notification area, so refusals go to stderr — a
-/// batch export that quietly dropped a plugin would produce wrong images
-/// with a zero exit code, which is the worst combination available.
+/// Headless has no notification area, so the retired plug-in files go
+/// to stderr — a batch export that quietly dropped one would produce
+/// wrong images with a zero exit code, the worst combination available.
 #[cfg(not(target_arch = "wasm32"))]
 fn report_installed_resources() {
-    let report = crate::storage::load_installed_resources();
-    if !report.loaded.is_empty() {
-        eprintln!("Loaded {} local plugin(s): {}", report.loaded.len(), report.loaded.join(", "));
-    }
-    for (name, why) in &report.refused {
-        eprintln!("WARNING: plugin `{name}` was not loaded: {why}");
+    let retired = crate::storage::load_installed_resources();
+    if !retired.is_empty() {
+        eprintln!(
+            "WARNING: WGSL plug-in files are no longer loaded (the plug-in system was retired): {}",
+            retired.join(", ")
+        );
     }
 }
 

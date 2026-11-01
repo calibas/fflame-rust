@@ -641,7 +641,7 @@ What lives there:
 | --- | --- |
 | `settings.json` | `SystemSettings` |
 | `custom_palettes.json` | the user's palettes |
-| `plugins/variations/`, `plugins/effects/` | locally installed plugins |
+| `plugins/variations/`, `plugins/effects/` | retired WGSL plug-ins: no longer loaded, and listed at start for one release (`storage::retired_plugin_files`) |
 | `textures/` | user simulation textures ([SIMULATION.md](SIMULATION.md)) |
 | `texture_cache/` | generated texture images (desktop) |
 | `orbit_cache/` | deep-zoom reference orbits (desktop) |

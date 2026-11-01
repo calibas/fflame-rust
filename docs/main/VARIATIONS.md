@@ -41,8 +41,6 @@ definitions, mostly ported from flam3, Apophysis and JWildfire.
   back out of the definitions' doc comments
 - [src/variations/analytic_blur.rs](../../src/variations/analytic_blur.rs)
   — kernels for the analytic blur path
-- [src/storage/plugins.rs](../../src/storage/plugins.rs) — locally
-  installed variations
 - [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs) — the
   per-flame dispatcher and helper-library splicing
 
@@ -79,7 +77,7 @@ the names in registration order, and a version counter.
 | `name`, `display_name`, `category`, `phase`, `parameters` | copied |
 | `wgsl_function` | `variation_<name>`; the one exception is `julia`, whose function is `julia` |
 | `features` | copied, as a `Vec` |
-| `provenance` | `Builtin`; a download is `Api { version }`, a local plugin `Local` |
+| `provenance` | `Builtin`; a download is `Api { version }`, a Rhai variation `Custom` |
 | `wgsl_source`, `wgsl_source_3d`, `wgsl_source_init`, `wgsl_source_state_init` | the bodies (optional, because a download may lack one) |
 | `init_param_count`, `state_count` | copied |
 
@@ -116,7 +114,7 @@ and the Transforms panel's picker walk the categories in a fixed order
 and list each one with `by_category`, which keeps registration order.
 
 **Removal.** `clear_api()` removes only `Api` variations — built-ins
-are compiled in, and local plugins are the user's files.
+are compiled in, and `Custom` ones are the user's own.
 `remove_by_name()` removes one variation of any provenance.
 
 ### Categories
@@ -454,39 +452,29 @@ See [forward-bounds.md](../projects/deep-zoom/forward-bounds.md) and
 
 ---
 
-## Downloaded variations and local plugins
+## Downloaded variations
 
 The registry also takes variations at run time, in the API's
 `VariationDownload` JSON, through `register_from_api(download,
-provenance)`:
-- **Downloaded** (`Provenance::Api`). When a flame names an unknown
-  variation, the app fetches it from the API, caches it, and registers
-  it.
-- **Local plugins** (`Provenance::Local`). The same JSON, installed by
-  the user under `plugins/variations/` in the app data directory
-  (localStorage on the web).
-
-`storage::load_installed_resources` loads the cache and then the
-plugins at startup.
+provenance)`: when a flame names an unknown variation, the app fetches
+it from the API, caches it, and registers it (`Provenance::Api`).
+`storage::load_installed_resources` loads the cache at startup. (Local
+WGSL plug-in files under `plugins/variations/` were retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.)
 
 The registry's rules:
 - A built-in can never be replaced.
-- A download cannot displace a local plugin.
-- A plugin whose name is already taken is refused, not shadowed.
+- A download cannot displace a `Custom` (Rhai) variation.
 - A download with no 2D body is refused unless its category is
   `only_3d`, and an `only_3d` one with no 3D body is refused.
 - A variation with no 3D body is dropped from 3D flames, with a
   warning.
-
-A flame that uses a local plugin renders only where the plugin is
-installed (`local_plugin_dependencies` reports it).
 
 ### Variations written in Rhai
 
 A **custom variation** (`Provenance::Custom`, `variations::custom`) is
 a Rhai transformation from the Formula Editor -- `fn variation(z, p)`,
 a point to a point ([ESCAPE.md](ESCAPE.md#the-formula-language)) --
-compiled to the same `VariationDownload` a plug-in is: its parameters
+compiled to the same `VariationDownload` a download is: its parameters
 (a complex one as two, `name_re` and `name_im`), category `plugin`,
 phase normal, and WGSL from the formula language's emitter. The 2D
 function takes the point, and the ids when it has parameters (as

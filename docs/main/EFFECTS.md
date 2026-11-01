@@ -40,9 +40,8 @@ Research survey of candidate effects:
 - [src/app/effect_fetch.rs](../../src/app/effect_fetch.rs) — fetching an
   effect a flame names and this build lacks; the catalog
 - [src/storage/effect_cache.rs](../../src/storage/effect_cache.rs),
-  [effect_catalog.rs](../../src/storage/effect_catalog.rs),
-  [plugins.rs](../../src/storage/plugins.rs) — downloads, the catalog,
-  local plugins
+  [effect_catalog.rs](../../src/storage/effect_catalog.rs) — downloads
+  and the catalog
 - [src/bin/export_effects_json.rs](../../src/bin/export_effects_json.rs)
   — the corpus the API serves
 
@@ -390,12 +389,8 @@ it, and being offline is not an error. Each row says whether it is
 `downloadable`; every row is `false` until the server's shaders are
 seeded, and the panel counts those as "not available to download yet".
 
-**Local plugins** are files in the same JSON shape as a download
-(`EffectDownload`): `<app data>/plugins/effects/<name>.json` on the
-desktop, localStorage under the same `plugins/` prefix on the web. The
-file name is the identity. They live apart from the download cache, so
-clearing the cache never touches them. `plugins::install` validates a
-file with the same `check_download` before saving it.
+Local WGSL plug-in files (`plugins/effects/<name>.json`) were
+retired 2026-11-01 ([rhai-plugins.md](../projects/rhai-plugins.md), D3): nothing in the UI ever installed one, and Rhai plug-ins replace them.
 
 **Refusals** (`effects::check_download`, `register_from_api`):
 
@@ -406,8 +401,6 @@ file with the same `check_download` before saving it.
 | More than `MAX_EFFECT_PARAMS` parameters | The uniform has nowhere to put them |
 | Calls a blend-library function without `// INCLUDE_BLEND_MODES` | It would fail to compile naming a function its author never wrote. Checked against every function the library defines, parsed from the library |
 | A name a built-in has | A download would change what a shared flame renders |
-| A name a local plugin has, from a download | It would replace the user's own work |
-| A plugin whose name is already registered | The user's file is the newcomer, and is refused with the conflict named |
 
 The wire types are `EffectListItem` and `EffectDownload` in
 `src/api/types.rs`. `requires_blend_modes` on the wire is advisory: the

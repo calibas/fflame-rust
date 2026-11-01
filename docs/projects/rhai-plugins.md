@@ -304,7 +304,11 @@ Before a fourth registry is written for effects:
   `plugins/{variations,effects}/*.json`; remove `storage::plugins` and
   its `PluginKind`. For one release, a start that finds files there
   logs that they are no longer loaded, naming them. The WGSL API
-  catalogs and their caches stay (D2).
+  catalogs and their caches stay (D2). **Done 2026-11-01**: the module,
+  `Provenance::Local`, `local_plugin_dependencies` and its save and
+  upload notices, and `assets/plugins-example/` are gone;
+  `storage::retired_plugin_files` names leftovers (a notice in the app,
+  stderr headless); `MissingReason::ProbablyAPlugin` is `NotInCatalog`.
 - **Identity and origin (D6, rule 7)**: built-ins keep their string
   ids, so every existing config and `.flame` reads unchanged;
   everything else is keyed by the UUID in its source, with the source's
