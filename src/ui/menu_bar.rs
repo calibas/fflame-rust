@@ -305,10 +305,7 @@ pub fn render_menu_bar(
                     // that needs it holds it on.
                     let forced_by = &menu_state.reset_orbits_forced_by;
                     let mut reset = menu_state.reset_orbits || forced_by.is_some();
-                    let tip = match forced_by {
-                        Some(name) => t!("settings.tooltip_reset_orbits_forced", variation = name),
-                        None => t!("settings.tooltip_reset_orbits"),
-                    };
+                    let tip = super::settings::reset_orbits_tip(forced_by.as_deref(), menu_state.orbit_length_source.as_ref());
                     if ui
                         .add_enabled(forced_by.is_none(), egui::Checkbox::new(&mut reset, t!("settings.reset_orbits").as_ref()))
                         .on_hover_text(tip.as_ref())

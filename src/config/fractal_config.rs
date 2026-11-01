@@ -1342,6 +1342,16 @@ impl FractalConfig {
         self.reset_orbits || self.flame.needs_fresh_orbits(&crate::variations::global_registry())
     }
 
+    /// The orbits' length where they are reset and a variation of the
+    /// flame sets it (`Flame::orbit_length_source`): saved with the flame,
+    /// it rules over Iterations per Thread on every path. `None` elsewhere.
+    pub fn orbit_length(&self) -> Option<u32> {
+        if !self.resets_orbits() {
+            return None;
+        }
+        self.flame.orbit_length_source(&crate::variations::global_registry()).map(|(_, n)| n)
+    }
+
     /// Whether the density Levels remap should run.
     ///
     /// Off in Escape and Simulation whatever the config says: Levels

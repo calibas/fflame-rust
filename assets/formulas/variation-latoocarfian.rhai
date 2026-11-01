@@ -18,20 +18,20 @@
 // the transform's colour).
 //
 // A flame using it starts its orbits afresh every dispatch
-// (`resets_orbits` in INFO), so each orbit is Iterations per Thread
-// long: that setting is how far an orbit goes, and Max Iterations how
-// many are drawn.
+// (`resets_orbits` in INFO), each its Orbit Length long: how far an
+// orbit goes, saved with the flame in place of Iterations per Thread.
+// Max Iterations is how many are drawn.
 
 const PARAMS = #{
     a: #{ value: -0.966918, caption: "a", hint: "The frequency of y's sines" },
     b: #{ value: 2.879879, caption: "b", hint: "The frequency of x's sines" },
     c: #{ value: 0.765145, caption: "c", hint: "How much sin(b x) adds to x" },
     d: #{ value: 0.744728, caption: "d", hint: "How much sin(a y) adds to y" },
+    orbit_length: #{ value: 1024, min: 16, max: 10000, caption: "Orbit Length", hint: "How many iterations each orbit runs from a fresh start: how far it goes. Saved with the flame, in place of Iterations per Thread" },
     color: #{ value: 0, caption: "Color", choices: ["Direction", "Step length", "Distance", "Angle", "Iteration"], hint: "What the palette index follows: the step's direction, its length, the new point's distance from the origin, its angle about it, or the orbit's iteration since it started" },
-    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction, Angle), per Color Size (Step length, Distance), or per Color Period (Iteration)" },
+    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction, Angle), per Color Size (Step length, Distance), or per orbit (Iteration)" },
     color_size: #{ value: 4.0, min: 0.0, caption: "Color Size", hint: "The length one cycle of the palette spans, for Step length and Distance (the picture spans about 4 at the defaults)" },
     color_offset: #{ value: 0.0, min: 0.0, max: 1.0, caption: "Color Offset", hint: "Added to the palette index" },
-    color_period: #{ value: 1024.0, min: 1.0, caption: "Color Period", hint: "The iterations one cycle of the palette spans, for Iteration (an orbit is Iterations per Thread long, 1,024 by default)" },
 };
 
 const INFO = #{ title: "Latoocarfian", name: "latoocarfian", resets_orbits: true };
@@ -64,5 +64,5 @@ fn variation(z, p) {
     let x = z.re;
     let y = z.im;
     let w = complex(sin(y * p.b) + p.c * sin(x * p.b), sin(x * p.a) + p.d * sin(y * p.a));
-    #{ z: w, color: latoocarfian_color(z, w, p.color, p.color_cycles, p.color_size, p.color_offset, this.n / p.color_period) }
+    #{ z: w, color: latoocarfian_color(z, w, p.color, p.color_cycles, p.color_size, p.color_offset, this.n / p.orbit_length.to_float()) }
 }

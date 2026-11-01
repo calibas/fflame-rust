@@ -186,7 +186,13 @@ are still seeded per dispatch from `params.seed`.
   persisting, an orbit settles or spreads without end, and a pan, a
   zoom or the end of a drag starts a picture from orbits already gone.
   Iterations per Thread is then how far an orbit goes and Max
-  Iterations how many are drawn. The governor sheds width only
+  Iterations how many are drawn -- unless a variation sets the length:
+  one with a parameter named `orbit_length` (`ORBIT_LENGTH_PARAM`; the
+  longest, at most `MAX_ORBIT_LENGTH` = 10,000, as each orbit is one
+  dispatch) gives it, saved with the flame (`Flame::orbit_length_source`),
+  and `compute_pass` dispatches that length on every path, whatever
+  length the caller asks for (`dispatch_length`; gate
+  `a_variations_orbit_length_is_the_dispatchs`). The governor sheds width only
   (`Batch::resets_orbits`); its fill (*Filling the frame*), past the
   batch, adds dispatches of the batch's length, each its own submission,
   rather than lengthening one; and motion-blur moments share the

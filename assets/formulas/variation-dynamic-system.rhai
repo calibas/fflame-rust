@@ -15,7 +15,7 @@
 // about the origin, about 14 units across: the picture is mostly that
 // way out, which an orbit kept from dispatch to dispatch would draw
 // once. So a flame using it starts its orbits afresh every dispatch,
-// each Iterations per Thread long (`resets_orbits` in INFO), much as
+// each its Orbit Length long (`resets_orbits` in INFO), much as
 // Fractint draws many short orbits. To see it whole, scale what is
 // plotted, not the view: a final transform whose triangle shrinks it by
 // about 4 / 14 (a final plots and does not feed the orbit), at a zoom
@@ -32,11 +32,11 @@ const PARAMS = #{
     a: #{ value: 1.0, caption: "a", hint: "How much the inner sine bends the flow" },
     b: #{ value: 3.0, caption: "b", hint: "The inner sine's frequency" },
     update: #{ value: 0, caption: "Update", choices: ["Both from the old point", "y first (Euler)"], hint: "Fractint's two orders: both parts from the old point, or y first and x from the new y (its negative time step)" },
+    orbit_length: #{ value: 1024, min: 16, max: 10000, caption: "Orbit Length", hint: "How many iterations each orbit runs from a fresh start: how far it goes. Saved with the flame, in place of Iterations per Thread" },
     color: #{ value: 0, caption: "Color", choices: ["Direction", "Step length", "Distance", "Angle", "Iteration"], hint: "What the palette index follows: the step's direction, its length against the longest a step can be (the Time step times the square root of 2), the new point's distance from the origin, its angle about it, or the orbit's iteration since it started" },
-    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction, Angle), from no step to the longest (Step length), per Color Size (Distance), or per Color Period (Iteration)" },
+    color_cycles: #{ value: 1.0, min: 0.0, max: 10.0, caption: "Color Cycles", hint: "How many times the palette repeats: per turn (Direction, Angle), from no step to the longest (Step length), per Color Size (Distance), or per orbit (Iteration)" },
     color_size: #{ value: 14.0, min: 0.0, caption: "Color Size", hint: "The length one cycle of the palette spans, for Distance (the picture spans about 14 at the defaults)" },
     color_offset: #{ value: 0.0, min: 0.0, max: 1.0, caption: "Color Offset", hint: "Added to the palette index" },
-    color_period: #{ value: 1024.0, min: 1.0, caption: "Color Period", hint: "The iterations one cycle of the palette spans, for Iteration (an orbit is Iterations per Thread long, 1,024 by default)" },
 };
 
 const INFO = #{ title: "Dynamic System", name: "dynamic_system", resets_orbits: true };
@@ -72,5 +72,5 @@ fn variation(z, p) {
     let ny = y + p.dt * sin(x + p.a * sin(p.b * x));
     let yy = if p.update == 1 { ny } else { y };
     let w = complex(x - p.dt * sin(yy + p.a * sin(p.b * yy)), ny);
-    #{ z: w, color: dynamic_color(z, w, p.color, p.color_cycles, p.color_size, p.color_offset, p.dt.abs() * sqrt(2.0), this.n / p.color_period) }
+    #{ z: w, color: dynamic_color(z, w, p.color, p.color_cycles, p.color_size, p.color_offset, p.dt.abs() * sqrt(2.0), this.n / p.orbit_length.to_float()) }
 }

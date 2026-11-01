@@ -100,6 +100,8 @@ pub struct MenuState {
     /// holds it on, if one does.
     pub reset_orbits: bool,
     pub reset_orbits_forced_by: Option<String>,
+    /// The orbits' length a variation sets, and which (`Flame::orbit_length_source`).
+    pub orbit_length_source: Option<(String, u32)>,
     /// The viewport's render scale, upscaler and physical-pixel setting.
     pub render_scale: f32,
     pub upscaler: crate::renderer::upscale::UpscaleFilter,

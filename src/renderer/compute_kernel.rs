@@ -600,6 +600,10 @@ pub struct FlameRenderer {
     /// or a variation that needs it, `Flame::needs_fresh_orbits`), set where
     /// flame edits land.
     resets_orbits: bool,
+    /// Where they are reset, the orbits' length a variation of the flame
+    /// sets (`Flame::orbit_length_source`): a dispatch's length on every
+    /// path, over the caller's Iterations per Thread.
+    orbit_length: Option<u32>,
     /// The plan as made, before trim (`docs/projects/deep-zoom/word-editing.md`);
     /// `cylinders` is what is drawn. Kept so moving the trim slider
     /// retrims without replanning.
@@ -918,6 +922,7 @@ impl FlameRenderer {
             orbit_fuses: OrbitFuses::default(),
             orbit_refresh_period: 0,
             resets_orbits: false,
+            orbit_length: None,
             cylinders_full: None,
             applied_trim: (0.0, 0),
             applied_removals: Vec::new(),
@@ -1215,6 +1220,11 @@ impl FlameRenderer {
         // Buffers replaced before the previous dispatch are in no
         // unsubmitted encoder now; destroy them (`gpu::buffers::Retired`).
         self.buffers.release_retired();
+
+        // Where orbits are reset, a dispatch is an orbit, and a variation
+        // that sets the orbits' length sets it here, on every path, over
+        // the caller's Iterations per Thread: the flame's own, saved with it.
+        let iterations_per_thread = self.dispatch_length(iterations_per_thread);
 
         let seed = self.get_rng_seed();
 
@@ -2711,6 +2721,7 @@ impl FlameRenderer {
         #[cfg(feature = "engine-escape")]
         crate::variations::custom::ensure(&config.flame);
         self.resets_orbits = config.reset_orbits || config.flame.needs_fresh_orbits(&crate::variations::global_registry());
+        self.orbit_length = config.flame.orbit_length_source(&crate::variations::global_registry()).map(|(_, n)| n);
         let sticky_config;
         let config: &FractalConfig = if self.sticky.enabled() {
             let mut c = config.clone();
@@ -3068,6 +3079,7 @@ impl FlameRenderer {
         crate::variations::custom::ensure(flame);
         // After `ensure`: a variation of the user's can need it too.
         self.resets_orbits = reset_orbits || flame.needs_fresh_orbits(&crate::variations::global_registry());
+        self.orbit_length = flame.orbit_length_source(&crate::variations::global_registry()).map(|(_, n)| n);
         // Sticky superset (Layer B): same shadowing as load_config, for
         // the editor's incremental path — this is what makes toggling a
         // variation off and back on a cache hit instead of two rebuilds.
@@ -3333,6 +3345,15 @@ impl FlameRenderer {
     /// must not shorten.
     pub fn resets_orbits(&self) -> bool {
         self.resets_orbits
+    }
+
+    /// The length a dispatch of `iterations_per_thread` really has: a
+    /// variation's orbit length where orbits are reset and it sets one.
+    pub fn dispatch_length(&self, iterations_per_thread: u32) -> u32 {
+        match self.orbit_length {
+            Some(n) if self.resets_orbits => n,
+            _ => iterations_per_thread,
+        }
     }
 
     /// Explicitly release every GPU resource this renderer owns (its
