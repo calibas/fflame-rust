@@ -164,6 +164,88 @@ pub fn info_string(source: &str, key: &str) -> Option<String> {
     })
 }
 
+/// A label as written (design rule 8): a string, every language's, or a
+/// map of locale to string, `#{ en: "Spiral", ja: "螺旋" }` (a key may be
+/// quoted, `"zh-CN"`). `None` for anything else.
+pub fn label_of(v: &Expr) -> Option<crate::scripted::Label> {
+    match v {
+        Expr::StringConstant(s, _) => Some(crate::scripted::Label::text(s.to_string())),
+        Expr::Map(m, _) => {
+            let mut out = Vec::new();
+            for (k, x) in &m.0 {
+                let Expr::StringConstant(s, _) = x else { return None };
+                out.push((k.name.to_string(), s.to_string()));
+            }
+            Some(crate::scripted::Label::locales(out))
+        }
+        _ => None,
+    }
+}
+
+/// What a person reads of a script, as written, for whatever shows it in
+/// the current language when it shows it: `INFO.title`, and each
+/// `PARAMS` entry's caption, hint and choices.
+#[derive(Debug, Clone, Default)]
+pub struct SourceLabels {
+    pub title: crate::scripted::Label,
+    pub params: Vec<ParamLabels>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ParamLabels {
+    pub key: String,
+    pub caption: crate::scripted::Label,
+    pub hint: crate::scripted::Label,
+    pub choices: Vec<crate::scripted::Label>,
+}
+
+impl SourceLabels {
+    pub fn param(&self, key: &str) -> Option<&ParamLabels> {
+        self.params.iter().find(|p| p.key == key)
+    }
+}
+
+/// A script's labels, read from its `INFO` and `PARAMS` as written.
+/// `None` when it does not parse; a label it does not write is empty.
+pub fn source_labels(source: &str) -> Option<SourceLabels> {
+    let (ast, _) = parse(source).ok()?;
+    let mut out = SourceLabels::default();
+    for st in ast.statements() {
+        let Stmt::Var(x, _, _) = st else { continue };
+        let (ident, value, _) = &**x;
+        let Expr::Map(m, _) = value else { continue };
+        match ident.name.as_str() {
+            "INFO" => {
+                if let Some(t) = m.0.iter().find(|(k, _)| k.name.as_str() == "title").and_then(|(_, v)| label_of(v)) {
+                    out.title = t;
+                }
+            }
+            "PARAMS" => {
+                for (k, v) in &m.0 {
+                    let mut p = ParamLabels { key: k.name.to_string(), ..Default::default() };
+                    if let Expr::Map(fields, _) = v {
+                        for (f, x) in &fields.0 {
+                            match f.name.as_str() {
+                                "caption" => p.caption = label_of(x).unwrap_or_default(),
+                                "hint" => p.hint = label_of(x).unwrap_or_default(),
+                                "choices" => {
+                                    if let Expr::Array(items, _) = x {
+                                        p.choices = items.iter().map(|i| label_of(i).unwrap_or_default()).collect();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    out.params.push(p);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
 fn info_field<T>(source: &str, key: &str, read: impl Fn(&Expr) -> Option<T>) -> Option<T> {
     let (ast, _) = parse(source).ok()?;
     ast.statements().iter().find_map(|st| {
@@ -695,9 +777,11 @@ impl<'s> Lowerer<'s> {
         let mut region = None;
         for (name, v, p) in &info {
             match name.as_str() {
-                "title" => match v {
-                    Expr::StringConstant(s, _) => title = s.to_string(),
-                    _ => return self.err(*p, "`title` is a string"),
+                // A string, or one by locale (design rule 8), in the
+                // current language when compiled.
+                "title" => match label_of(v) {
+                    Some(l) => title = l.resolve(),
+                    None => return self.err(*p, "`title` is a string, or a map of locale to string"),
                 },
                 // The registry name (`variation_name`), read apart.
                 "name" if self.transform => match v {
@@ -1293,16 +1377,16 @@ impl<'s> Lowerer<'s> {
                     match k.name.as_str() {
                         "value" => value = Some(x),
                         "min" | "max" => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
-                        "caption" | "hint" => match x {
-                            Expr::StringConstant(s, _) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Strings(vec![s.to_string()]), span: kspan }),
-                            _ => return self.err(k.pos, format!("`{}` is a string", k.name)),
+                        "caption" | "hint" => match label_of(x) {
+                            Some(l) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Strings(vec![l.resolve()]), span: kspan }),
+                            None => return self.err(k.pos, format!("`{}` is a string, or a map of locale to string", k.name)),
                         },
                         "choices" => match x {
                             Expr::Array(items, _) => {
                                 for it in items.iter() {
-                                    match it {
-                                        Expr::StringConstant(s, _) => choices.push(s.to_string()),
-                                        _ => return self.err(it.position(), "a choice is a string"),
+                                    match label_of(it) {
+                                        Some(l) => choices.push(l.resolve()),
+                                        None => return self.err(it.position(), "a choice is a string, or a map of locale to string"),
                                     }
                                 }
                             }
@@ -2776,6 +2860,48 @@ fn escaped(s, p) {
     s.z.norm_sqr() > p.bailout
 }
 "#;
+
+    /// Labels by locale (design rule 8): a title, caption, hint or choice
+    /// written as a map compiles, in the current language, and
+    /// `source_labels` keeps every language for whatever shows them.
+    #[test]
+    fn labels_may_be_written_by_locale() {
+        let src = r#"
+const PARAMS = #{
+    bailout: #{ value: 4.0, min: 1.0, caption: #{ en: "Bailout", ja: "脱出半径" }, hint: "How far" },
+    shape: #{ value: 0, min: 0, max: 1, choices: [#{ en: "Round", "zh-CN": "圆" }, "Square"] },
+};
+const INFO = #{ title: #{ en: "Mandelbrot", ja: "マンデルブロ" }, center: complex(-0.5, 0.0) };
+
+fn start(pixel, p) {
+    #{ z: complex(0.0, 0.0), c: pixel }
+}
+
+fn step(s, p) {
+    s.z = s.z * s.z + s.c;
+    s
+}
+
+fn escaped(s, p) {
+    s.z.norm_sqr() > p.bailout
+}
+"#;
+        rh(src);
+        let labels = source_labels(src).expect("parses");
+        assert_eq!(labels.title.resolve_in("ja"), "マンデルブロ");
+        assert_eq!(labels.title.resolve_in("es"), "Mandelbrot");
+        let bailout = labels.param("bailout").expect("bailout");
+        assert_eq!(bailout.caption.resolve_in("ja"), "脱出半径");
+        assert_eq!(bailout.hint.resolve_in("ja"), "How far");
+        let shape = labels.param("shape").expect("shape");
+        assert_eq!(shape.choices.len(), 2);
+        assert_eq!(shape.choices[0].resolve_in("zh-CN"), "圆");
+        assert_eq!(shape.choices[1].resolve_in("zh-CN"), "Square");
+        // Anything else is refused, with what it may be.
+        let bad = src.replace("hint: \"How far\"", "hint: 3");
+        let e = program(&bad).expect_err("a number is not a label");
+        assert!(e.iter().any(|d| d.message.contains("map of locale")), "{e:?}");
+    }
 
     /// Arrays (plan, item 3, step 3b): `prepare`'s tables read as
     /// `p.k[i]`, a literal, `array(n, v)`, a state field indexed and

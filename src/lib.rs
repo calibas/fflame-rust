@@ -33,6 +33,8 @@ pub mod effects;
 pub mod audio;
 pub mod api;
 pub mod script;
+/// What every user-written script shares: its identity and labels.
+pub mod scripted;
 pub mod probe;
 pub mod census;
 #[cfg(feature = "engine-escape")]
