@@ -2,8 +2,8 @@
 
 Recorded 2026-10-18 as the direction, from the user's statement of where
 the program is going. Reviewed against the code and turned into a plan
-on 2026-11-01. **Nothing under *The plan* is built yet.** The order is a
-proposal, and the decisions at the end come first.
+on 2026-11-01; the user's decisions the same day are at the end and are
+folded into the steps. **Nothing under *The plan* is built yet.**
 
 ## The goal, in the user's words
 
@@ -219,19 +219,63 @@ only one that needs passes.
 
 ## The plan
 
-### P0. Close the CPU sandbox (small; first)
+### P0. Close the CPU sandbox, keeping `import` (small; first)
 
-- Refuse `import` (a refusing module resolver, or disable the symbol),
-  and remove `sleep` and `timestamp` -- or build from `Engine::new_raw()`
-  with only the packages the API needs; audit what else the standard
-  package brings in.
+The user wants scripts to import other scripts. Half of that is already
+safe: `run_script("id", #{...})` resolves the id through the script
+library, never the filesystem, catches cycles, caps nesting at 8,
+charges one shared operation budget, and lets a downloaded script call
+only shipped ones (`host::run_sub_script`). But it runs a whole script
+against the shared config; it does not give the caller functions.
+Rhai's own `import`, as `Engine::new()` sets it up, is the unsafe half:
+a path on disk, desktop only.
+
+- **`import` through the library.** Replace the `FileModuleResolver`
+  with a resolver over the same library `run_script` reads, with its
+  rules: the downloaded-script restriction (checked before the name is
+  resolved, as there), cycle and depth limits, the shared budget. No
+  filesystem, so it works on the web and in the CLI alike (rule 5).
+- **A library kind.** Rhai runs a module's top-level statements when it
+  is imported, so importing a generator would run its body against the
+  config. A third `ScriptKind`, a library of functions and constants,
+  is what `import` accepts; a generator or modifier is refused with a
+  pointer to `run_script`. Libraries sit in the Scripts panel like the
+  other kinds (shipped ones in `assets/scripts/`, the user's in
+  `scripts/`) and publish like them.
+- Remove `sleep` and `timestamp` -- or build from `Engine::new_raw()`
+  with only the packages the API needs -- and audit what else the
+  standard package brings in.
 - Rewrite `sandbox_has_no_io` so each attempt would work on an open
-  engine: import a real `.rhai` file, `sleep(0)`, `timestamp()`.
+  engine: import a real `.rhai` file by path, `sleep(0)`, `timestamp()`.
+  New tests: a library imports and its functions run; a downloaded
+  script importing a user library is refused; an import cycle is named.
 - Make SCRIPTING.md and the guide say what is true.
 
-### P1. One machinery for every GPU kind
+The GPU dialect's equivalent -- helper functions shared between
+formulas -- is not part of P0; `vary("name", z)` already pulls a
+library variation in by name.
+
+### P1. One machinery for every GPU kind, in namespaces
 
 Before a fourth registry is written for effects:
+- **Retire the WGSL plug-in system first (D3).** Stop loading
+  `plugins/{variations,effects}/*.json`; remove `storage::plugins` and
+  its `PluginKind`. For one release, a start that finds files there
+  logs that they are no longer loaded, naming them. The WGSL API
+  catalogs and their caches stay (D2).
+- **Namespaces (D6)**: the program's own (built-in), the user's (their
+  library and plug-ins), the API's (downloads). A name in one never
+  shadows or replaces a name in another, and every list shows where an
+  entry came from. Built-in names stay bare, so every existing config
+  and `.flame` reads unchanged; the others are qualified internally
+  (spelling settled when built). The WGSL variation and effect catalogs
+  are server copies of the program's own built-ins, so what they fetch
+  lands in the built-in namespace, as a built-in this build lacks.
+  Still to settle: a config from someone else carries a source under a
+  name the opener also has, with different text. Proposed: within the
+  user and API namespaces an entry's identity includes a hash of its
+  source (what the escape slots already do), so the carried version
+  renders as it was saved and the opener's own is untouched.
 - One registry for compiled Rhai entries, keyed by kind and name, with
   one `ensure` from a config's carried sources, one failure memory, one
   error type (`Vec<Diag>`), and a provenance on every entry.
@@ -241,9 +285,8 @@ Before a fourth registry is written for effects:
 - Rhai variations register as a variation def directly, not through a
   synthesized `VariationDownload`.
 - Names: a kind that configs reference by name (variations, effects,
-  simulation models) keeps `INFO.name`; the escape slots keep their
-  content hashes. What happens when a carried source arrives under a
-  name already registered with different source is D6.
+  simulation models) keeps `INFO.name`, inside its namespace; the escape
+  slots keep their content hashes.
 - The kind as one value in the lowering rather than four bools, so the
   next kind costs a table entry, not fifty matches.
 
@@ -277,11 +320,20 @@ feature.
    compare (skipped without an adapter), under the same names with the
    same parameters in the same order -- so no config can tell which it
    got.
-7. **Then D1.** `distance_field` stays WGSL unless passes are added
-   (only if wanted).
+7. **Replace the built-ins (D1)**, each once nothing is lost: its twin
+   matches the WGSL's pixels; it is no slower (timed on the user's
+   GTX 1660 SUPER at 1080p and 4K); it runs on the web (WebGPU); a
+   config that names it reads the same values; the online effects
+   corpus still exports (`export_effects_json` writes the compiled
+   WGSL while the WGSL catalog stays, D2); and the desktop's edit
+   without a rebuild survives (the on-disk copy becomes the `.rhai`).
+   One that fails a check keeps its WGSL until it passes.
+   `distance_field` keeps its WGSL (three passes) unless passes are
+   added to the dialect, which is only done if wanted.
 
 Exit: an effect written in the editor is saved in a `.fflame` and
-renders on another machine with no plug-in installed; the twins match.
+renders on another machine with no plug-in installed; every built-in
+that passed is its Rhai source.
 
 ### P3. One library
 
@@ -291,33 +343,15 @@ renders on another machine with no plug-in installed; the twins match.
   extended to `formulas/`), the same file actions, one scan. The two
   folders stay -- UF files live in `formulas/` -- so no user file moves.
 - **A plug-in is a library entry flagged to load at start**: any kind,
-  registered at start, so a Rhai variation or effect is in the lists
-  without a config carrying it. The plug-in UI -- enable, disable,
-  import a file, remove -- works on the web too.
-- The legacy WGSL plug-in files: D3.
+  registered at start in the user's namespace, so a Rhai variation or
+  effect is in the lists without a config carrying it. The plug-in UI
+  -- enable, disable, import a file, remove -- works on the web too.
+  This replaces the WGSL plug-in system retired in P1.
 - Fix on the way the inconsistencies this touches: the adopt overwrite,
   the banner, the effect install's name check, updates and Clear Cache
   for effects.
 
-### P4. Animation tracks as scripts
-
-`TrackSource::Script`: CPU Rhai, compiled once per track (the AST kept,
-not a new `Engine` each frame), run each frame after the keyframe
-tracks.
-- In: the time, the duration and frame rate, the frame's config (read
-  only, after the keyframes), the track's own parameters. Out: values
-  for the targets the script declares -- declared so the timeline can
-  show them and a clash with a keyframe track on the same target is
-  visible.
-- Deterministic as a pure function of time (D4), so export, scrubbing
-  and motion-blur moments agree; anything that accumulates is
-  recomputed from the time.
-- The same pairs reach both appliers: the live one
-  (`update_param_silent_on`) and the export's (`apply_animation_values`).
-  A per-frame operation budget, smaller than a generator's.
-- Carried in the animation as source.
-
-### P5. Simulations in Rhai
+### P4. Simulations in Rhai
 
 1. **Colourings first**: a colour function over `SimSample`'s fields
    returning rgb and coverage, with `palette(t)`; one pass and no reads
@@ -330,6 +364,25 @@ tracks.
 3. **Carried**: custom model and colouring sources on `SimConfig`,
    ensured like the escape slots.
 
+### P5. Animation tracks as scripts
+
+`TrackSource::Script`: CPU Rhai, compiled once per track (the AST kept,
+not a new `Engine` each frame), run each frame after the keyframe
+tracks.
+- **A pure function of time (D4)**: the same time gives the same
+  values, whatever came before, so export, scrubbing and motion-blur
+  moments agree; anything that accumulates is recomputed from the time.
+  No state survives from one frame to the next.
+- In: the time, the duration and frame rate, the frame's config (read
+  only, after the keyframes), the track's own parameters. Out: values
+  for the targets the script declares -- declared so the timeline can
+  show them and a clash with a keyframe track on the same target is
+  visible.
+- The same pairs reach both appliers: the live one
+  (`update_param_silent_on`) and the export's (`apply_animation_values`).
+  A per-frame operation budget, smaller than a generator's.
+- Carried in the animation as source; P0's libraries can be imported.
+
 ### P6. The API: one resource for every kind
 
 Server work: tell the API repository (RELEASE.md §3; the contract's
@@ -341,28 +394,27 @@ shape fingerprint will not move by itself).
   way.
 - Adopting saves into the library, flagged as a plug-in if wanted. A
   config that carries its sources needs nothing from the API.
-- The WGSL catalogs: D2.
+- The WGSL catalogs stay beside it (D2).
 
-## Decisions for the user
+## Decisions (the user, 2026-11-01)
 
-- **D1. The built-in effects once their twins match.** Replace the WGSL
-  with the Rhai source (one form, every built-in forkable; the price is
-  whatever performance gap the compare shows) or keep the WGSL as the
-  reference with the twins as editable copies (the escape twins' model).
-- **D2. The WGSL download catalogs.** Keep them as the channel that
-  brings new built-ins to older clients (today a flame naming a
-  variation this build lacks fetches it), or retire them once the API
-  serves Rhai. Proposed either way: the 647 built-in variations stay
-  WGSL -- they are the JWF and Apophysis ports; Rhai is for new and
-  user-made ones.
-- **D3. Local WGSL plug-in files.** Keep loading them (cheap; nothing
-  ever installed them from the UI), convert them, or drop them.
-- **D4. Script tracks.** A pure function of time (proposed), or
-  stateful, with an export re-running from zero.
-- **D5. The order after P2.** Tracks (P4) before simulations (P5)?
-- **D6. A carried source whose name is already registered with
-  different source.** Rename it on load, refuse it, or replace the
-  registered one (what variations do today).
+- **D1. The built-in effects: replaced by their Rhai twins**, "so long
+  as we don't lose anything" -- the checks are P2 step 7.
+- **D2. The WGSL download catalogs stay** for the moment: converting
+  them all is a much bigger project. The 647 built-in variations stay
+  WGSL.
+- **D3. The old plug-in system is deprecated**: "it's not really being
+  used, and I'm not sure it even works correctly still." Retired at the
+  start of P1; Rhai plug-ins replace it in P3.
+- **D4. Script tracks are a function of time** (P5).
+- **D5. Simulations before tracks**: the order is P0, P1, P2, P3, P4
+  simulations, P5 tracks, P6 the API.
+- **D6. Namespaces**: "the program's default scripts, user-created
+  plugins and the API won't interfere with each other. The UI can show
+  where things came from." Designed in P1, with one question left
+  there (a carried source under a name the opener also has).
+- **P0**: the user wants a way to import Rhai scripts -- through the
+  library, as P0 now says.
 
 ## Left from the KIFS and variations plan
 
