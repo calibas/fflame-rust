@@ -146,6 +146,15 @@ pub fn info_number(source: &str, key: &str) -> Option<f64> {
     })
 }
 
+/// A true-or-false field of a script's `INFO` (a transformation's
+/// `resets_orbits`).
+pub fn info_bool(source: &str, key: &str) -> Option<bool> {
+    info_field(source, key, |v| match v {
+        Expr::BoolConstant(b, _) => Some(*b),
+        _ => None,
+    })
+}
+
 /// A string field of a script's `INFO` (a solid's `march`, a
 /// transformation's `name`).
 pub fn info_string(source: &str, key: &str) -> Option<String> {
@@ -695,7 +704,13 @@ impl<'s> Lowerer<'s> {
                     Expr::StringConstant(..) => {}
                     _ => return self.err(*p, "`name` is a string"),
                 },
-                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title` and `name`, not `{o}`")),
+                // A flame using it starts its orbits afresh every
+                // dispatch (`Feature::ResetsOrbits`; `info_bool`).
+                "resets_orbits" if self.transform => match v {
+                    Expr::BoolConstant(..) => {}
+                    _ => return self.err(*p, "`resets_orbits` is true or false"),
+                },
+                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `name` and `resets_orbits`, not `{o}`")),
                 // A solid's ball: the set lies within this radius
                 // (`info_number`, read apart).
                 "radius" if kind == EntryKind::Solid => match v {

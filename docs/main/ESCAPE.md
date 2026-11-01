@@ -543,7 +543,10 @@ fn escaped(s, p) {
   not an escape formula: it compiles to a **flame variation**
   ([VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)) and, in
   Escape mode, is offered as the camera lens. `INFO.name` is its
-  registry name; `PARAMS` as a formula's; no `prepare`. The flame's
+  registry name, and `INFO.resets_orbits: true` makes a flame using it
+  start its orbits afresh every dispatch (`Feature::ResetsOrbits`;
+  [RENDERER.md](RENDERER.md) *Persistent orbits*); `PARAMS` as a
+  formula's; no `prepare`. The flame's
   hooks (the KIFS plan, C2), each the `Feature` a built-in declares:
   - `rand()`, a draw in [0, 1) (`NeedsRng`, the flame's stream);
   - `fn variation(z, p, ctx)`: `ctx.accum`, the weighted sum of the

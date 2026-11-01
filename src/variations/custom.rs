@@ -113,6 +113,11 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
             })),
         }
     }
+    // Its flag for the renderer: orbits started afresh every dispatch.
+    let mut features = wgsl.features.clone();
+    if lang::rhai::info_bool(source, "resets_orbits") == Some(true) {
+        features.push("resets_orbits");
+    }
     let payload = serde_json::json!({
         "id": format!("custom:{name}"),
         "name": name,
@@ -124,8 +129,9 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
         "parameters": parameters,
         "shader_2d": wgsl.wgsl_2d,
         "shader_3d": wgsl.wgsl_3d,
-        // The hooks it uses (C2): `rand()`, `ctx.accum`, a colour, state.
-        "features": wgsl.features,
+        // The hooks it uses (C2): `rand()`, `ctx.accum`, a colour, state;
+        // and the renderer's flag.
+        "features": features,
         "state_count": wgsl.state_count,
         "shader_state_init": wgsl.state_init,
     });
@@ -533,6 +539,36 @@ mod tests {
     /// Each hook declares the built-in's `Feature`, takes its argument in
     /// the shader builder's order, and validates; the state's slots and
     /// the statement that seeds them come with it.
+    /// `resets_orbits: true` in INFO is the renderer's flag
+    /// (`Feature::ResetsOrbits`): Dynamic System carries it, and a flame
+    /// using it at a weight other than 0 needs fresh orbits -- in a local
+    /// registry, as a test writing the global one can deadlock the suite.
+    #[test]
+    fn a_variation_declares_that_it_resets_orbits() {
+        let (_, source) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-dynamic-system.rhai").unwrap();
+        let dl = compile(source).unwrap_or_else(|e| panic!("{e}"));
+        assert!(dl.features.iter().any(|f| f == "resets_orbits"), "{:?}", dl.features);
+        let chip = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-chip.rhai").unwrap().1;
+        assert!(!compile(chip).unwrap().features.iter().any(|f| f == "resets_orbits"), "Chip's orbits persist");
+        assert!(compile("const INFO = #{ name: \"rhai_x\", resets_orbits: 1 };\nfn variation(z, p) { z }\n").unwrap_err().contains("true or false"));
+
+        let mut registry = crate::variations::VariationRegistry::new();
+        registry.register_from_api(&dl, Provenance::Custom);
+        let mut flame = crate::scene::transforms::Flame::default();
+        flame.transforms = vec![crate::scene::transforms::Transform::default()];
+        flame.transforms[0].variations.clear();
+        flame.transforms[0].variations.insert("linear".into(), 1.0);
+        assert!(!flame.needs_fresh_orbits(&registry));
+        flame.transforms[0].variations.insert(dl.name.clone(), 0.0);
+        assert!(!flame.needs_fresh_orbits(&registry), "at weight 0");
+        flame.transforms[0].variations.insert(dl.name.clone(), 0.5);
+        assert!(flame.needs_fresh_orbits(&registry));
+        assert_eq!(flame.fresh_orbits_variation(&registry).as_deref(), Some(dl.name.as_str()));
+        let mut parent = crate::scene::transforms::Flame::default();
+        parent.subflames.push(flame);
+        assert!(parent.needs_fresh_orbits(&registry), "in a subflame");
+    }
+
     #[test]
     fn the_hooks_compile_to_the_builtins_features() {
         let blur = compile(hooked("blur")).unwrap_or_else(|e| panic!("{e}"));

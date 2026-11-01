@@ -105,7 +105,9 @@ impl<'a> RenderJob<'a> {
             width,
             height,
             target_iterations: None, // Use config.max_iterations
-            iterations_per_thread: 256,
+            // Where orbits are reset every dispatch, its length is the
+            // orbits': the app's default, so a render matches the view.
+            iterations_per_thread: if config.resets_orbits() { crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD } else { 256 },
             burn_in: 20,
             transparent: false,
             premultiplied: false,

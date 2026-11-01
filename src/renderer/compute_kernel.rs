@@ -596,6 +596,10 @@ pub struct FlameRenderer {
     /// The refresh period the flame needs (`orbit_refresh_period_of`), set
     /// where flame edits land.
     orbit_refresh_period: u32,
+    /// Every dispatch starts its orbits afresh (`FractalConfig::reset_orbits`,
+    /// or a variation that needs it, `Flame::needs_fresh_orbits`), set where
+    /// flame edits land.
+    resets_orbits: bool,
     /// The plan as made, before trim (`docs/projects/deep-zoom/word-editing.md`);
     /// `cylinders` is what is drawn. Kept so moving the trim slider
     /// retrims without replanning.
@@ -913,6 +917,7 @@ impl FlameRenderer {
             flame_hash: 0,
             orbit_fuses: OrbitFuses::default(),
             orbit_refresh_period: 0,
+            resets_orbits: false,
             cylinders_full: None,
             applied_trim: (0.0, 0),
             applied_removals: Vec::new(),
@@ -1233,6 +1238,14 @@ impl FlameRenderer {
         {
             self.orbit_key = None;
         }
+        // ...and where orbits are reset (`resets_orbits`): every dispatch
+        // starts them afresh, as before orbits persisted, so each is one
+        // dispatch long. A map whose orbits settle onto a few points or
+        // loops draws its picture on their way there; kept, they would
+        // draw it once, and a pan would never show it again.
+        if self.resets_orbits {
+            self.orbit_key = None;
+        }
         self.accumulation_restarted = false;
         if orbit_words > 0 {
             // Room for the app's widest dispatch (128 workgroups) from the
@@ -1261,7 +1274,8 @@ impl FlameRenderer {
                 // A motion-blur moment's flame is the last moment's, moved
                 // a little: the orbits go on, and settle onto it within a
                 // few iterations, rather than each moment paying a burn-in.
-                if !self.continuing_frame {
+                // Reset orbits start afresh at every moment too.
+                if !self.continuing_frame || self.resets_orbits {
                     self.orbit_generation = self.orbit_generation.wrapping_add(1).max(1);
                     self.orbit_fuses.restart();
                 }
@@ -2696,6 +2710,7 @@ impl FlameRenderer {
         // the registry for this flame (the KIFS plan, C1).
         #[cfg(feature = "engine-escape")]
         crate::variations::custom::ensure(&config.flame);
+        self.resets_orbits = config.reset_orbits || config.flame.needs_fresh_orbits(&crate::variations::global_registry());
         let sticky_config;
         let config: &FractalConfig = if self.sticky.enabled() {
             let mut c = config.clone();
@@ -3030,7 +3045,7 @@ impl FlameRenderer {
             c.dof_focus_distance, c.dof_blur_strength, c.fog_strength, c.fog_start,
             c.background_color, c.filter_radius, c.filter_blur_edges,
             c.render_mode, c.perspective_strength, c.depth_density_compensation,
-            c.far_density_fade, c.far_density_fade_start, c.preserve_z,
+            c.far_density_fade, c.far_density_fade_start, c.preserve_z, c.reset_orbits,
             c.solid_strength, c.surface_thickness, c.solid_shading.clone(),
         );
     }
@@ -3044,13 +3059,15 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_bank: f32, camera_x: f32, camera_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3], filter_radius: f32, filter_blur_edges: f32, render_mode: crate::scene::transforms::RenderMode, perspective_strength: f32, depth_density_compensation: f32, far_density_fade: f32, far_density_fade_start: f32, preserve_z: bool, reset_orbits: bool, solid_strength: f32, surface_thickness: f32, solid_shading: crate::config::SolidShadingSettings) {
         self.holds_moment = false;
         self.flame_hash = Self::orbit_flame_hash(flame);
         self.orbit_refresh_period = orbit_refresh_period_of(flame);
         // The variations the user wrote, as `load_config` registers them.
         #[cfg(feature = "engine-escape")]
         crate::variations::custom::ensure(flame);
+        // After `ensure`: a variation of the user's can need it too.
+        self.resets_orbits = reset_orbits || flame.needs_fresh_orbits(&crate::variations::global_registry());
         // Sticky superset (Layer B): same shadowing as load_config, for
         // the editor's incremental path — this is what makes toggling a
         // variation off and back on a cache hit instead of two rebuilds.
@@ -3309,6 +3326,13 @@ impl FlameRenderer {
 
     pub fn total_iterations(&self) -> u64 {
         self.total_iterations
+    }
+
+    /// Whether every dispatch starts its orbits afresh (`resets_orbits`):
+    /// then a dispatch's length is its orbits' length, which the governor
+    /// must not shorten.
+    pub fn resets_orbits(&self) -> bool {
+        self.resets_orbits
     }
 
     /// Explicitly release every GPU resource this renderer owns (its

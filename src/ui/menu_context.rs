@@ -41,6 +41,8 @@ pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
     pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
+    /// Reset every orbit each dispatch (the config's `reset_orbits`).
+    pub set_reset_orbits: Option<bool>,
     /// Turn the quality governor on or off (every mode's).
     pub set_frame_governor: Option<bool>,
     /// The workgroups a frame dispatches while the governor is off.
@@ -94,6 +96,10 @@ pub struct MenuState {
     /// workgroups a flame's frame dispatches when it is not.
     pub frame_governor: bool,
     pub manual_workgroups: u32,
+    /// The flame's Reset Orbits Each Dispatch, and the variation that
+    /// holds it on, if one does.
+    pub reset_orbits: bool,
+    pub reset_orbits_forced_by: Option<String>,
     /// The viewport's render scale, upscaler and physical-pixel setting.
     pub render_scale: f32,
     pub upscaler: crate::renderer::upscale::UpscaleFilter,

@@ -2258,6 +2258,28 @@ impl Flame {
         out
     }
 
+    /// Whether a variation the flame uses, at a weight other than 0, needs
+    /// its orbits started afresh every dispatch
+    /// (`Feature::ResetsOrbits`): it forces `FractalConfig::reset_orbits`.
+    pub fn needs_fresh_orbits(&self, registry: &VariationRegistry) -> bool {
+        let needs = |t: &Transform| {
+            t.variations.iter().any(|(name, w)| {
+                *w != 0.0 && registry.get(name).is_some_and(|v| v.has_feature(crate::variations::Feature::ResetsOrbits))
+            })
+        };
+        self.transforms.iter().chain(&self.linked_transforms).chain(&self.final_transforms).any(needs)
+            || self.subflames.iter().any(|sf| sf.needs_fresh_orbits(registry))
+    }
+
+    /// The first variation the flame uses that needs fresh orbits, by
+    /// name: what the Settings panel says forces the option on.
+    pub fn fresh_orbits_variation(&self, registry: &VariationRegistry) -> Option<String> {
+        self.active_variation_names_ordered(registry).into_iter().find(|name| {
+            registry.get(name).is_some_and(|v| v.has_feature(crate::variations::Feature::ResetsOrbits))
+                && self.transforms.iter().chain(&self.linked_transforms).chain(&self.final_transforms).any(|t| t.variations.get(name).is_some_and(|w| *w != 0.0))
+        })
+    }
+
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
         let absorb = |t: &Transform, all: &mut HashMap<String, f32>| {
