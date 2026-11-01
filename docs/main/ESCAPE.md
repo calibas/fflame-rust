@@ -580,13 +580,14 @@ fn escaped(s, p) {
   by its Color choice -- the step's direction or length, the new point's
   distance from the origin or its angle about it (its height in 3D), or
   the orbit's iteration, a per-thread count (`fn init`, `this.n`) over
-  Color Period -- with Color Cycles, Size and Offset (a flow's step
+  the Orbit Length -- with Color Cycles, Size and Offset (a flow's step
   length is against its longest step, Popcorn's and the dynamic
   system's, or a speed, Rossler's); the transform's Direct Color sets
   how much shows. Each declares `resets_orbits` (a flame using it
-  restarts its orbits every dispatch, each Iterations per Thread long:
-  [RENDERER.md](RENDERER.md) *Persistent orbits*). Their count is state,
-  so `vary` refuses them in a formula. The
+  restarts its orbits every dispatch) and carries `orbit_length`, the
+  Orbit Length each orbit runs, saved with the flame in place of
+  Iterations per Thread ([RENDERER.md](RENDERER.md) *Persistent
+  orbits*). Their count is state, so `vary` refuses them in a formula. The
   hooks' twins of `blur` and `macmillan`, and the 3D twins of
   `spherical3D`, `hemisphere` and `zcone`, are in `variations::custom`'s
   tests.

@@ -21,7 +21,7 @@ pub mod analytic_blur;
 pub mod custom;
 
 use definition::VariationDef;
-pub use definition::Feature;
+pub use definition::{Feature, MAX_ORBIT_LENGTH, ORBIT_LENGTH_PARAM};
 
 /// Parameter type for variation parameters.
 ///

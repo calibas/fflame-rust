@@ -2023,8 +2023,10 @@ settings:
 
   # Tooltips
   tooltip_iterations_per_thread: "How the GPU's work is sliced into dispatches.\nEach orbit continues from one dispatch to the next, so this does not change the picture -- unless Reset Orbits Each Dispatch is on, where it is each orbit's length.\nHigher values = fewer dispatches, better GPU utilization.\nLower values = more frequent updates, smoother animation."
-  tooltip_reset_orbits: "Start every orbit afresh each dispatch, so each is Iterations per Thread long, as before orbits persisted.\nFor flames whose picture is the orbits' way from their starts: maps whose orbits settle onto a few points or loops, which kept orbits draw once and a pan never shows again.\nOff, each orbit continues from one dispatch to the next. Saved with the flame."
+  tooltip_reset_orbits: "Start every orbit afresh each dispatch, so each is Iterations per Thread long (or a variation's Orbit Length, saved with the flame), as before orbits persisted.\nFor flames whose picture is the orbits' way from their starts: maps whose orbits settle onto a few points or loops, which kept orbits draw once and a pan never shows again.\nOff, each orbit continues from one dispatch to the next. Saved with the flame."
   tooltip_reset_orbits_forced: "On: the flame's %{variation} variation needs fresh orbits, so every dispatch starts them afresh, each Iterations per Thread long."
+  tooltip_reset_orbits_forced_length: "On: the flame's variations need fresh orbits, so every dispatch starts them afresh, each %{length} iterations long: %{variation}'s Orbit Length, saved with the flame, in place of Iterations per Thread."
+  orbit_length_from: "Orbits: %{length} iterations (%{variation}'s Orbit Length)"
   orbit_cache_mb: "Orbit Cache (MB)"
   tooltip_orbit_cache_mb: "Disk budget for cached deep-zoom reference orbits. One 10M-iteration reference is ~200 MB and takes minutes of single-threaded arithmetic to rebuild, so this decides how many deep locations stay instant to revisit."
   orbit_cache_in_use: "Using %{used} MB"

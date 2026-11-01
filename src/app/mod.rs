@@ -3341,7 +3341,9 @@ impl App {
                     let settings = self.config_manager.system_settings();
                     crate::app::Batch {
                         max_workgroups: NUM_WORKGROUPS,
-                        iterations_per_thread: settings.iterations_per_thread,
+                        // The flame's orbit length, where a variation sets
+                        // one, is what each dispatch really is.
+                        iterations_per_thread: renderer.dispatch_length(settings.iterations_per_thread),
                         burn_in: settings.burn_in,
                         resets_orbits: renderer.resets_orbits(),
                     }

@@ -249,7 +249,7 @@ fn the_dynamic_systems_euler_order_steps_y_first() {
 /// Offset 0.25, the palette index its step gives, against the step's
 /// direction, length, the new point's distance and angle (or height)
 /// written out, and the orbit's iteration: a run's calls, counted by its
-/// state from 1, over Color Period. The step length is over Color Size,
+/// state from 1, over the Orbit Length. The step length is over Color Size,
 /// but a flow's: over its longest step (Popcorn, the dynamic system), or
 /// as a speed over Color Size (Rossler).
 #[test]
@@ -270,7 +270,7 @@ fn the_orbit_maps_colour_by_their_steps() {
             values.values[i] = (v, 0.0);
         }
         let size = p.params.iter().find(|x| x.name == "color_size").expect("Color Size").default.0;
-        let period = p.params.iter().find(|x| x.name == "color_period").expect("Color Period").default.0;
+        let period = p.params.iter().find(|x| x.name == "orbit_length").expect("Orbit Length").default.0;
         (values, size, period)
     };
     // (file, the step length's unit when not Color Size)

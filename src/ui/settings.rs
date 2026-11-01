@@ -97,18 +97,23 @@ pub fn render_settings_content(
 
         // Reset orbits every dispatch: each orbit then Iterations per
         // Thread long. A variation that needs it holds it on.
-        let forced_by = config.flame.fresh_orbits_variation(&crate::variations::global_registry());
-        let mut reset = config.reset_orbits || forced_by.is_some();
-        let tip = match &forced_by {
-            Some(name) => t!("settings.tooltip_reset_orbits_forced", variation = name),
-            None => t!("settings.tooltip_reset_orbits"),
+        let (forced_by, length) = {
+            let registry = crate::variations::global_registry();
+            (config.flame.fresh_orbits_variation(&registry), config.flame.orbit_length_source(&registry))
         };
+        let mut reset = config.reset_orbits || forced_by.is_some();
+        let tip = reset_orbits_tip(forced_by.as_deref(), length.as_ref());
         let response = ui
             .add_enabled(forced_by.is_none(), egui::Checkbox::new(&mut reset, t!("settings.reset_orbits").as_ref()))
             .on_hover_text(tip.as_ref())
             .on_disabled_hover_text(tip.as_ref());
         if response.changed() {
             let _ = config_manager.update_param(ConfigPath::ResetOrbits, reset.into());
+        }
+        // Where a variation sets the orbits' length, Iterations per Thread
+        // does not: say whose it is.
+        if let (true, Some((name, n))) = (reset, &length) {
+            ui.label(egui::RichText::new(t!("settings.orbit_length_from", length = n, variation = name)).small().weak());
         }
     }
 
@@ -261,5 +266,16 @@ pub fn render_settings_content(
     if ui.button(t!("settings.reset_to_defaults").as_ref()).clicked() {
         super::reset_rendering_to_defaults(config_manager);
         *paused = false; // Resume rendering after reset
+    }
+}
+
+/// Reset Orbits Each Dispatch's tooltip, in this panel and the Rendering
+/// menu: why it is held on, if a variation holds it, and how long the
+/// orbits are -- the variation's Orbit Length where one sets it.
+pub(super) fn reset_orbits_tip(forced_by: Option<&str>, length: Option<&(String, u32)>) -> std::borrow::Cow<'static, str> {
+    match (forced_by, length) {
+        (Some(_), Some((name, n))) => t!("settings.tooltip_reset_orbits_forced_length", variation = name, length = n),
+        (Some(name), None) => t!("settings.tooltip_reset_orbits_forced", variation = name),
+        (None, _) => t!("settings.tooltip_reset_orbits"),
     }
 }

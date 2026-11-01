@@ -564,9 +564,19 @@ mod tests {
         flame.transforms[0].variations.insert(dl.name.clone(), 0.5);
         assert!(flame.needs_fresh_orbits(&registry));
         assert_eq!(flame.fresh_orbits_variation(&registry).as_deref(), Some(dl.name.as_str()));
+        // Its Orbit Length is the flame's orbits' length: the default, the
+        // transform's value, and no longer than a dispatch may be.
+        assert_eq!(flame.orbit_length_source(&registry), Some((dl.name.clone(), 1024)));
+        flame.transforms[0].set_variation_param(&dl.name, crate::variations::ORBIT_LENGTH_PARAM, 3000.0);
+        assert_eq!(flame.orbit_length_source(&registry).map(|(_, n)| n), Some(3000));
+        flame.transforms[0].set_variation_param(&dl.name, crate::variations::ORBIT_LENGTH_PARAM, 50_000.0);
+        assert_eq!(flame.orbit_length_source(&registry).map(|(_, n)| n), Some(crate::variations::MAX_ORBIT_LENGTH));
         let mut parent = crate::scene::transforms::Flame::default();
-        parent.subflames.push(flame);
+        parent.subflames.push(flame.clone());
         assert!(parent.needs_fresh_orbits(&registry), "in a subflame");
+        assert!(parent.orbit_length_source(&registry).is_some(), "in a subflame");
+        flame.transforms[0].variations.insert(dl.name.clone(), 0.0);
+        assert_eq!(flame.orbit_length_source(&registry), None, "at weight 0");
     }
 
     #[test]
@@ -824,6 +834,36 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// **A variation's Orbit Length is the dispatch's** where orbits are
+    /// reset: the flame's own, over the caller's Iterations per Thread.
+    /// Dynamic System at an Orbit Length of 300, dispatched as 64 a thread,
+    /// runs 300 a thread, a new generation each, plotting 300 less the
+    /// burn-in.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn a_variations_orbit_length_is_the_dispatchs() {
+        let (device, queue) = device();
+        let (_, source) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "variation-dynamic-system.rhai").unwrap();
+        let carried = CustomSource { dialect: CustomDialect::Rhai, entry: "dynamic_system".into(), source: source.to_string(), variations: Vec::new() };
+        let mut cfg = flame_with("dynamic_system", Some(carried));
+        cfg.flame.transforms[0].set_variation_param("dynamic_system", crate::variations::ORBIT_LENGTH_PARAM, 300.0);
+        assert!(cfg.resets_orbits() && cfg.orbit_length() == Some(300));
+        let mut r = crate::renderer::FlameRenderer::with_palette_size(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64, 64, &cfg.flame, cfg.palette_size);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("load") });
+        r.load_config(&device, &mut enc, &queue, &cfg, &cfg.palette, 64, 20);
+        queue.submit(Some(enc.finish()));
+        assert_eq!(r.dispatch_length(64), 300);
+        let mut gens = Vec::new();
+        for _ in 0..3 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            let n = r.compute_pass(&mut enc, &queue, &device, 8, 64, 20, cfg.zoom, cfg.pan_x as f32, cfg.pan_y as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cfg.speed_factor, true, false);
+            queue.submit(Some(enc.finish()));
+            assert_eq!(n, 8 * 64 * (300 - 20), "a dispatch's count");
+            gens.push(r.orbit_generation());
+        }
+        assert!(gens.windows(2).all(|w| w[0] != w[1]), "a dispatch kept the orbits: {gens:?}");
     }
 
     // ---- the GPU gates ----------------------------------------------------
