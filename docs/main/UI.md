@@ -429,10 +429,19 @@ contract.
 ### Triangle Editor
 
 Visual affine editing: each transform is drawn as a triangle whose
-vertices are the affine basis (O, X, Y). The mouse mode is Move Points,
-Translate, Rotate (the default) or Scale; a drag converts screen space →
-fractal space → affine coefficients and writes them back through
-`update_batch`. A drag is one **modify session**
+vertices are the affine basis (O, X, Y). The mouse mode is Auto (the
+default), Move Points, Translate, Rotate or Scale. In **Auto** the part
+grabbed decides, as in Apophysis: the origin translates the triangle, X
+or Y moves that point, a side from O rotates about O, the side opposite
+scales from O, each following the pointer; the part under the pointer
+is drawn over in white (`part_at`: a vertex within 10 px, else a side
+within 6). The transform selector's **Auto** (also the default) lets
+every triangle be grabbed: the one grabbed becomes the selected
+transform, which the coordinates and buttons below edit, the active one
+first where triangles overlap (`pick_part`), and the canvas fits every
+triangle; a transform picked instead is the only one grabbable. A drag
+converts screen space → fractal space → affine coefficients and writes
+them back through `update_batch`. A drag is one **modify session**
 (`ConfigManager::start_modify_transform`): the intermediate edits apply
 silently and the release records one history entry, so a drag is one
 undo for any pool member (normal, linked or final). A plane selector

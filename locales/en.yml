@@ -1387,15 +1387,20 @@ triangle_editor:
   transform_label: "Transform:"
   transform_n: "Transform %{n}"
   transform_final: "Transform [Final]"
+  auto_transform: "Auto"
+  auto_transform_active: "Auto (%{name})"
+  tooltip_auto_transform: "Every triangle can be grabbed; the one grabbed becomes the transform the coordinates and buttons below edit.\nPick a transform to grab only its triangle."
 
   # Mouse modes
   mode_label: "Mode:"
+  mode_auto: "Auto"
   mode_rotate: "Rotate"
   mode_translate: "Translate"
   mode_scale: "Scale"
   mode_move_points: "Move Points"
 
   # Mode descriptions
+  mode_desc_auto: "Drag O to move the triangle, X or Y to move that point, a side from O to rotate, the far side to scale"
   mode_desc_move_points: "Click and drag O, X, or Y points individually"
   mode_desc_translate: "Click and drag anywhere to move the entire triangle"
   mode_desc_rotate: "Click and drag to rotate the triangle around O"
@@ -1435,6 +1440,7 @@ triangle_editor:
 
   # Tooltips
   tooltip_transform_selector: "Choose which transform to edit.\nEach transform defines an affine mapping."
+  tooltip_mode_auto: "What you grab decides, as in Apophysis:\nthe origin (O) moves the whole triangle, X or Y moves that point,\na side from O rotates the triangle around O, the side opposite O scales it from O.\nThe part under the pointer lights up."
   tooltip_mode_rotate: "Drag to rotate the triangle around origin (O).\nRotation affects the a, b, d, e coefficients."
   tooltip_mode_translate: "Drag to move the entire triangle.\nTranslation affects c and f coefficients."
   tooltip_mode_scale: "Drag perpendicular to X-Y line to scale.\nScaling affects a, b, d, e coefficients."
