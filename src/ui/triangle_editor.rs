@@ -98,6 +98,53 @@ fn pick_part(p: Pos2, candidates: &[(TransformRef, [Pos2; 3])], active: Transfor
         .map(|(xref, part, _)| (xref, part))
 }
 
+/// The resize cursor along `dir` (screen space, y down), for scaling
+/// across the far side: the OS's two-headed arrows come in four
+/// directions, so the nearest.
+fn resize_cursor_along(dir: Vec2) -> egui::CursorIcon {
+    let a = dir.y.atan2(dir.x).rem_euclid(std::f32::consts::PI);
+    let eighth = std::f32::consts::PI / 8.0;
+    if a < eighth || a >= 7.0 * eighth {
+        egui::CursorIcon::ResizeHorizontal
+    } else if a < 3.0 * eighth {
+        egui::CursorIcon::ResizeNwSe
+    } else if a < 5.0 * eighth {
+        egui::CursorIcon::ResizeVertical
+    } else {
+        egui::CursorIcon::ResizeNeSw
+    }
+}
+
+/// A rotate symbol at the pointer, which no OS cursor offers: a circular
+/// arrow round `at`, white on a dark outline so it reads on any
+/// background. Drawn in place of the hidden cursor.
+fn paint_rotate_cursor(painter: &egui::Painter, at: Pos2) {
+    use std::f32::consts::PI;
+    let r = 8.0;
+    let (from, to) = (-0.55 * PI, 1.0 * PI);
+    let arc: Vec<Pos2> = (0..=24)
+        .map(|i| {
+            let a = from + (to - from) * i as f32 / 24.0;
+            at + Vec2::new(a.cos(), a.sin()) * r
+        })
+        .collect();
+    let tip = arc[arc.len() - 1];
+    // Along the arc at its end, and outward from its centre.
+    let (along, out) = (Vec2::new(-to.sin(), to.cos()), Vec2::new(to.cos(), to.sin()));
+    let head = vec![tip + along * 5.0, tip - along * 1.0 + out * 4.5, tip - along * 1.0 - out * 4.5];
+    painter.add(egui::Shape::line(arc.clone(), Stroke::new(4.0, Color32::from_black_alpha(200))));
+    painter.add(egui::Shape::convex_polygon(head.clone(), Color32::from_black_alpha(200), Stroke::new(2.0, Color32::from_black_alpha(200))));
+    painter.add(egui::Shape::line(arc, Stroke::new(2.0, Color32::WHITE)));
+    painter.add(egui::Shape::convex_polygon(head, Color32::WHITE, Stroke::NONE));
+}
+
+/// `c` moved `amount` of the way to white: the origin's colour, so O
+/// stands apart from X and Y.
+fn lighten(c: Color32, amount: f32) -> Color32 {
+    let l = |v: u8| (v as f32 + (255.0 - v as f32) * amount).round() as u8;
+    Color32::from_rgb(l(c.r()), l(c.g()), l(c.b()))
+}
+
 /// A transform's triangle (O, X, Y) in `plane`: its affine's, or its
 /// post-affine's.
 fn plane_triangle(t: &crate::scene::transforms::Transform, plane: EditPlane, post: bool) -> ([f32; 2], [f32; 2], [f32; 2]) {
@@ -985,7 +1032,12 @@ fn render_triangle_editor_core(
                         DragTarget::None => {}
                     }
                 }
-                painter.circle_filled(o_pos, point_radius, color);
+                // O a little lighter than X and Y, so it stands apart.
+                let o_color = {
+                    let c = lighten(base_color, 0.4);
+                    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+                };
+                painter.circle_filled(o_pos, point_radius, o_color);
                 painter.circle_filled(x_pos, point_radius, color);
                 painter.circle_filled(y_pos, point_radius, color);
 
@@ -1043,10 +1095,14 @@ fn render_triangle_editor_core(
 
                 let point_size = if is_active_post { 5.0 } else { 3.0 };
                 let half = point_size / 2.0;
-                for pos in [o_pos, x_pos, y_pos] {
+                let o_color = {
+                    let c = lighten(base_color, 0.4);
+                    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+                };
+                for (pos, fill) in [(o_pos, o_color), (x_pos, color), (y_pos, color)] {
                     painter.rect_filled(
                         egui::Rect::from_min_size(Pos2::new(pos.x - half, pos.y - half), Vec2::splat(point_size)),
-                        0.0, color,
+                        0.0, fill,
                     );
                 }
                 if is_active_post {
@@ -1113,7 +1169,26 @@ fn render_triangle_editor_core(
                             TrianglePart::EdgeOY => { painter.line_segment([o, y], side); }
                             TrianglePart::EdgeXY => { painter.line_segment([x, y], side); }
                         }
-                        ui.ctx().set_cursor_icon(if auto_grab.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+                        // The pointer says what a drag does: a hand to move,
+                        // a circular arrow to rotate (drawn above everything,
+                        // as no OS cursor is one), two-headed arrows across
+                        // the far side to scale.
+                        match part {
+                            TrianglePart::Origin | TrianglePart::XPoint | TrianglePart::YPoint => {
+                                ui.ctx().set_cursor_icon(if auto_grab.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+                            }
+                            TrianglePart::EdgeOX | TrianglePart::EdgeOY => {
+                                if let Some(at) = ui.input(|i| i.pointer.latest_pos()) {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                                    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("triangle_editor_rotate_cursor"));
+                                    paint_rotate_cursor(&ui.ctx().layer_painter(layer), at);
+                                }
+                            }
+                            TrianglePart::EdgeXY => {
+                                let along = y - x;
+                                ui.ctx().set_cursor_icon(resize_cursor_along(Vec2::new(-along.y, along.x)));
+                            }
+                        }
                     }
                 }
             }
@@ -1487,6 +1562,21 @@ mod tests {
         assert_eq!(at(150.0, 120.0), None, "outside");
         // On the side from O, 8 px from O: the vertex.
         assert_eq!(at(108.0, 101.0), Some(TrianglePart::Origin));
+    }
+
+    /// Scaling across the far side shows the two-headed arrow nearest the
+    /// side's normal, whichever way it points.
+    #[test]
+    fn the_scale_cursor_runs_across_the_side() {
+        use egui::CursorIcon::*;
+        assert_eq!(resize_cursor_along(Vec2::new(1.0, 0.1)), ResizeHorizontal);
+        assert_eq!(resize_cursor_along(Vec2::new(-1.0, 0.0)), ResizeHorizontal);
+        assert_eq!(resize_cursor_along(Vec2::new(0.1, 1.0)), ResizeVertical);
+        assert_eq!(resize_cursor_along(Vec2::new(0.0, -1.0)), ResizeVertical);
+        // y down: down-right is the NW-SE diagonal, down-left NE-SW.
+        assert_eq!(resize_cursor_along(Vec2::new(1.0, 1.0)), ResizeNwSe);
+        assert_eq!(resize_cursor_along(Vec2::new(-1.0, -1.0)), ResizeNwSe);
+        assert_eq!(resize_cursor_along(Vec2::new(-1.0, 1.0)), ResizeNeSw);
     }
 
     /// Where triangles overlap, the active one's part is taken; among the
