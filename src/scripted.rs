@@ -83,6 +83,30 @@ impl From<String> for Label {
     }
 }
 
+/// What a person reads of a script, as written: its title, and each
+/// parameter's caption, hint and choices -- for whatever shows them to
+/// resolve in the current language when it shows them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Labels {
+    pub title: Label,
+    pub params: Vec<ParamLabels>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParamLabels {
+    /// The parameter's key, as the script writes it.
+    pub key: String,
+    pub caption: Label,
+    pub hint: Label,
+    pub choices: Vec<Label>,
+}
+
+impl Labels {
+    pub fn param(&self, key: &str) -> Option<&ParamLabels> {
+        self.params.iter().find(|p| p.key == key)
+    }
+}
+
 /// A fresh id: a random (version 4) UUID, lowercase, hyphenated.
 pub fn mint_id() -> String {
     let mut bits: u128 = rand::random();

@@ -34,6 +34,14 @@
 //! `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `exp`, `ln` (and `log`,
 //! base 10, as Rhai's), `sqrt` and `pow(q, n)` (or `q ** n`) for a number
 //! `n`; `q.complex()`, the complex number `t + i r` those act in.
+//!
+//! The colour surface (an effect's, P2; a colour parameter anywhere):
+//! `rgba(r, g, b, a)`, `rgba(v, a)` (`v` a vector, its colour) or
+//! `rgba(s)`; `c.r`, `c.g`, `c.b`, `c.a` read and set, `c.rgb` its colour
+//! as a vector (whose parts are `.r`, `.g`, `.b` too); the vector's
+//! arithmetic, part by part, and `mix(a, b, t)` of either. An effect reads
+//! its image as colours: `input(uv)` at a position, `input_at(x, y)` at a
+//! pixel.
 
 use super::*;
 
@@ -43,6 +51,8 @@ use super::*;
 pub(super) enum Kind {
     Vec3,
     Quat,
+    /// A colour with its alpha (P2).
+    Rgba,
 }
 
 impl Kind {
@@ -51,13 +61,26 @@ impl Kind {
         match self {
             Kind::Vec3 => &["x", "y", "z"],
             Kind::Quat => &["w", "x", "y", "z"],
+            Kind::Rgba => &["r", "g", "b", "a"],
         }
+    }
+
+    /// Part `name`'s index: an axis, or a vector's colour name (`.r` is
+    /// `.x`).
+    fn index_of(self, name: &str) -> Option<usize> {
+        self.axes().iter().position(|a| *a == name).or_else(|| match (self, name) {
+            (Kind::Vec3, "r") => Some(0),
+            (Kind::Vec3, "g") => Some(1),
+            (Kind::Vec3, "b") => Some(2),
+            _ => None,
+        })
     }
 
     fn what(self) -> &'static str {
         match self {
             Kind::Vec3 => "a vector",
             Kind::Quat => "a quaternion",
+            Kind::Rgba => "a colour",
         }
     }
 
@@ -65,6 +88,7 @@ impl Kind {
         match self {
             Kind::Vec3 => "a vector's parts are `.x`, `.y` and `.z`",
             Kind::Quat => "a quaternion's parts are `.w`, `.x`, `.y` and `.z`, and `.v` its vector part",
+            Kind::Rgba => "a colour's parts are `.r`, `.g`, `.b` and `.a`, and `.rgb` its colour without the alpha",
         }
     }
 }
@@ -143,13 +167,15 @@ fn dot_of(a: &[ast::Expr], b: &[ast::Expr], span: Span) -> ast::Expr {
 fn member_kind(kind: Kind, rhs: &Expr) -> Option<Kind> {
     match (kind, rhs) {
         (Kind::Vec3, Expr::MethodCall(f, _)) => {
-            matches!(f.name.as_str(), "abs" | "floor" | "normalize" | "cross" | "min" | "max" | "clamp").then_some(Kind::Vec3)
+            matches!(f.name.as_str(), "abs" | "floor" | "normalize" | "cross" | "min" | "max" | "clamp" | "mix").then_some(Kind::Vec3)
         }
         (Kind::Quat, Expr::MethodCall(f, _)) => {
             let n = f.name.as_str();
             (matches!(n, "normalize" | "conj" | "inv" | "pow") || PLANE_FUNCTIONS.contains(&n)).then_some(Kind::Quat)
         }
         (Kind::Quat, Expr::Property(prop, _)) => (prop.2.as_str() == "v").then_some(Kind::Vec3),
+        (Kind::Rgba, Expr::MethodCall(f, _)) => matches!(f.name.as_str(), "abs" | "floor" | "min" | "max" | "clamp" | "mix").then_some(Kind::Rgba),
+        (Kind::Rgba, Expr::Property(prop, _)) => (prop.2.as_str() == "rgb").then_some(Kind::Vec3),
         (_, Expr::Dot(be, _, _)) => member_kind(kind, &be.lhs).and_then(|k| member_kind(k, &be.rhs)),
         _ => None,
     }
@@ -175,7 +201,7 @@ impl Lowerer<'_> {
     /// is, when it is one. A quaternion's parts include `x`, so it is
     /// looked for first, by its `w`.
     pub(super) fn named_vector(&self, owner: &Owner, name: &str, scope: &Scope, span: Span) -> Option<Vector> {
-        let kinds = [Kind::Quat, Kind::Vec3];
+        let kinds = [Kind::Quat, Kind::Rgba, Kind::Vec3];
         match owner {
             Owner::State => kinds.into_iter().find(|k| scope.fields.iter().any(|f| *f == part(name, *k, 0))).map(|kind| {
                 let parts = (0..kind.axes().len()).map(|i| self.field_target(scope.which, &part(name, kind, i), span)).collect();
@@ -262,7 +288,8 @@ impl Lowerer<'_> {
         match n {
             "vec3" | "cross" => Some(Kind::Vec3),
             "quat" => Some(Kind::Quat),
-            "normalize" | "abs" | "floor" | "min" | "max" | "clamp" => first(),
+            "rgba" | "input" | "input_at" => Some(Kind::Rgba),
+            "normalize" | "abs" | "floor" | "min" | "max" | "clamp" | "mix" => first(),
             "conj" | "inv" | "pow" => first().filter(|k| *k == Kind::Quat),
             _ if PLANE_FUNCTIONS.contains(&n) => first().filter(|k| *k == Kind::Quat),
             // A solid's call of a built-in variation (P5).
@@ -482,7 +509,7 @@ impl Lowerer<'_> {
     }
 
     /// A block's last value, as a vector.
-    fn final_vec(&mut self, f: Final, scope: &mut Scope) -> R<Vector> {
+    pub(super) fn final_vec(&mut self, f: Final, scope: &mut Scope) -> R<Vector> {
         match f {
             Final::Expr(e) => self.vexpr(e, scope),
             Final::Call(c, p) => self.vcall(c, p, scope),
@@ -550,7 +577,10 @@ impl Lowerer<'_> {
                 if v.kind == Kind::Quat && name == "v" {
                     return Ok(Val::V(Vector::new(Kind::Vec3, v.parts[1..].to_vec())));
                 }
-                match v.kind.axes().iter().position(|a| *a == name) {
+                if v.kind == Kind::Rgba && name == "rgb" {
+                    return Ok(Val::V(Vector::new(Kind::Vec3, v.parts[..3].to_vec())));
+                }
+                match v.kind.index_of(name) {
                     Some(i) => Ok(Val::S(v.parts[i].clone())),
                     None => self.err(*p, format!("{}, not `.{name}`", v.kind.parts_are())),
                 }
@@ -699,6 +729,65 @@ impl Lowerer<'_> {
                 }
                 _ => return self.err(p, "`vec3(s)` takes a number: every part `s`"),
             },
+            ("rgba", 4) => {
+                let mut parts = Vec::new();
+                for a in args {
+                    match a {
+                        S(s) => parts.push(s),
+                        V(_) => return self.err(p, "`rgba(r, g, b, a)` takes four numbers, or `rgba(v, a)` a vector and a number"),
+                    }
+                }
+                V(Vector::new(Kind::Rgba, parts))
+            }
+            ("rgba", 2) => match (args.remove(0), args.remove(0)) {
+                (V(v), S(a)) if v.kind == Kind::Vec3 => {
+                    let mut parts = v.parts;
+                    parts.push(a);
+                    V(Vector::new(Kind::Rgba, parts))
+                }
+                _ => return self.err(p, "`rgba(v, a)`: the colour, a vector, and the alpha, a number"),
+            },
+            ("rgba", 1) => match args.pop() {
+                Some(S(s)) => {
+                    let s = self.hold(s, "part");
+                    V(Vector::new(Kind::Rgba, vec![s.clone(), s.clone(), s.clone(), s]))
+                }
+                _ => return self.err(p, "`rgba(s)` takes a number: every part `s`"),
+            },
+            // An effect's reads of its image: four channels of one read.
+            ("input", 1) | ("input_at", 2) if !self.effect => {
+                return self.err(p, format!("`{name}` reads an effect's image: in `fn effect` alone"));
+            }
+            ("input", 1) => match args.remove(0) {
+                S(uv) => {
+                    let uv = self.hold(uv, "uv");
+                    V(Vector::new(Kind::Rgba, ["r", "g", "b", "a"].iter().map(|c| call1(&format!("__sample_{c}"), uv.clone(), span)).collect()))
+                }
+                V(_) => return self.err(p, "`input(uv)`: a position, the complex number `complex(u, v)` from 0 to 1"),
+            },
+            ("input_at", 2) => match (args.remove(0), args.remove(0)) {
+                (S(x), S(y)) => {
+                    let at = self.hold(mk(ExprKind::Complex(Box::new(x), Box::new(y)), span), "at");
+                    V(Vector::new(Kind::Rgba, ["r", "g", "b", "a"].iter().map(|c| call1(&format!("__load_{c}"), at.clone(), span)).collect()))
+                }
+                _ => return self.err(p, "`input_at(x, y)`: a pixel's column and row, numbers"),
+            },
+            ("mix", 3) => match (args.remove(0), args.remove(0), args.remove(0)) {
+                (V(a), V(b), S(t)) if a.kind == b.kind => {
+                    let t = self.hold(t, "amount");
+                    let b = self.hold_all(b, "part");
+                    let a = self.hold_all(a, "part");
+                    let kind = a.kind;
+                    let parts = a
+                        .parts
+                        .into_iter()
+                        .zip(b.parts)
+                        .map(|(x, y)| bin(BinOp::Add, x.clone(), bin(BinOp::Mul, bin(BinOp::Sub, y, x, span), t.clone(), span), span))
+                        .collect();
+                    V(Vector::new(kind, parts))
+                }
+                _ => return self.err(p, "`mix(a, b, t)` of two vectors (or colours) of a kind, and a number"),
+            },
             ("quat", 4) => {
                 let mut parts = Vec::new();
                 for a in args {
@@ -748,7 +837,7 @@ impl Lowerer<'_> {
             },
             ("*", 2) => match (args.remove(0), args.remove(0)) {
                 (V(a), V(b)) if a.kind == Kind::Quat && b.kind == Kind::Quat => V(self.hamilton(a, b, span)),
-                (V(a), V(b)) if a.kind == Kind::Vec3 && b.kind == Kind::Vec3 => V(zip(a, b, BinOp::Mul)),
+                (V(a), V(b)) if a.kind == b.kind && a.kind != Kind::Quat => V(zip(a, b, BinOp::Mul)),
                 (V(a), V(b)) => return self.err(p, format!("`*` between {} and {}", a.kind.what(), b.kind.what())),
                 (V(a), S(s)) => {
                     let s = self.hold(s, "factor");
@@ -761,7 +850,7 @@ impl Lowerer<'_> {
                 (S(_), S(_)) => return self.err(p, VECTOR_WANTED),
             },
             ("/", 2) => match (args.remove(0), args.remove(0)) {
-                (V(a), V(b)) if a.kind == Kind::Vec3 && b.kind == Kind::Vec3 => V(zip(a, b, BinOp::Div)),
+                (V(a), V(b)) if a.kind == b.kind && a.kind != Kind::Quat => V(zip(a, b, BinOp::Div)),
                 (V(a), V(b)) if a.kind == Kind::Quat && b.kind == Kind::Quat => {
                     return self.err(p, "`q / r` of quaternions is two things: `q * inv(r)` or `inv(r) * q`")
                 }
@@ -837,7 +926,7 @@ impl Lowerer<'_> {
                 _ => return self.err(p, "`q.complex()` of a quaternion: `complex(t, r)`, its scalar part and its vector part's length"),
             },
             ("abs" | "floor", 1) => match args.remove(0) {
-                V(a) if a.kind == Kind::Vec3 => V(each(a, &|x| call1(name, x, span))),
+                V(a) if a.kind != Kind::Quat => V(each(a, &|x| call1(name, x, span))),
                 V(_) => return self.err(p, format!("`{name}` of a quaternion: take its parts, or `length(q)`")),
                 S(_) => return self.err(p, VECTOR_WANTED),
             },
@@ -845,20 +934,22 @@ impl Lowerer<'_> {
                 let max = name == "max";
                 match (args.remove(0), args.remove(0)) {
                     (S(a), S(b)) => S(self.min_max(a, b, max, p)?),
-                    (V(a), V(b)) if a.kind == Kind::Vec3 && b.kind == Kind::Vec3 => {
+                    (V(a), V(b)) if a.kind == b.kind && a.kind != Kind::Quat => {
+                        let kind = a.kind;
                         let mut out = Vec::new();
                         for (x, y) in a.parts.into_iter().zip(b.parts) {
                             out.push(self.min_max(x, y, max, p)?);
                         }
-                        V(Vector::new(Kind::Vec3, out))
+                        V(Vector::new(kind, out))
                     }
-                    (V(a), S(b)) if a.kind == Kind::Vec3 => {
+                    (V(a), S(b)) if a.kind != Kind::Quat => {
+                        let kind = a.kind;
                         let b = self.hold(b, "bound");
                         let mut out = Vec::new();
                         for x in a.parts {
                             out.push(self.min_max(x, b.clone(), max, p)?);
                         }
-                        V(Vector::new(Kind::Vec3, out))
+                        V(Vector::new(kind, out))
                     }
                     (S(_), V(_)) => return self.err(p, format!("`{name}(v, s)`: the vector first")),
                     _ => return self.err(p, format!("`{name}` of vectors; of a quaternion, take its parts")),
@@ -874,19 +965,20 @@ impl Lowerer<'_> {
                         let m = self.min_max(x, lo, true, p)?;
                         S(self.min_max(m, hi, false, p)?)
                     }
-                    V(v) if v.kind == Kind::Vec3 => {
+                    V(v) if v.kind != Kind::Quat => {
+                        let kind = v.kind;
                         let mut out = Vec::new();
                         for x in v.parts {
                             let m = self.min_max(x, lo.clone(), true, p)?;
                             out.push(self.min_max(m, hi.clone(), false, p)?);
                         }
-                        V(Vector::new(Kind::Vec3, out))
+                        V(Vector::new(kind, out))
                     }
                     V(_) => return self.err(p, "`clamp` of a vector; of a quaternion, take its parts"),
                 }
             }
             (n, k) => {
-                if matches!(n, "vec3" | "quat" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
+                if matches!(n, "vec3" | "quat" | "rgba" | "mix" | "input" | "input_at" | "dot" | "cross" | "length" | "normalize" | "min" | "max" | "clamp" | "abs" | "floor" | "conj" | "inv" | "pow" | "complex") {
                     return self.err(p, format!("`{n}` does not take {k} argument{}", if k == 1 { "" } else { "s" }));
                 }
                 if first_kind == Some(Kind::Quat) {
@@ -1021,7 +1113,10 @@ impl Lowerer<'_> {
         if whole.kind == Kind::Quat && prop == "v" {
             return Ok(Target::Whole(Vector::new(Kind::Vec3, whole.parts[1..].to_vec())));
         }
-        match whole.kind.axes().iter().position(|a| *a == prop) {
+        if whole.kind == Kind::Rgba && prop == "rgb" {
+            return Ok(Target::Whole(Vector::new(Kind::Vec3, whole.parts[..3].to_vec())));
+        }
+        match whole.kind.index_of(prop) {
             Some(i) => Ok(Target::Part(whole.parts[i].clone())),
             None => self.err(at, whole.kind.parts_are()),
         }
@@ -1142,13 +1237,18 @@ impl Lowerer<'_> {
     /// z)`: a float parameter per part, `name_x` ..., each with the
     /// entry's settings and its part in the caption.
     pub(super) fn vec_param(&mut self, name: &str, value: &FnCallExpr, settings: Vec<Setting>, span: Span, out: &mut Settings) -> R<()> {
-        let kind = if value.name.as_str() == "quat" { Kind::Quat } else { Kind::Vec3 };
+        let kind = match value.name.as_str() {
+            "quat" => Kind::Quat,
+            "rgba" => Kind::Rgba,
+            _ => Kind::Vec3,
+        };
         if value.args.len() != kind.axes().len() {
             return Err(Diag::error(
                 span,
                 match kind {
                     Kind::Vec3 => "a vector parameter's value is `vec3(x, y, z)` of numbers",
                     Kind::Quat => "a quaternion parameter's value is `quat(w, x, y, z)` of numbers",
+                    Kind::Rgba => "a colour parameter's value is `rgba(r, g, b, a)` of numbers",
                 },
             ));
         }

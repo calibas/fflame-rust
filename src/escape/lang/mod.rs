@@ -56,6 +56,13 @@ pub enum EntryKind {
     /// The position is `#pixel` and `#pixelz`; `distance` writes the
     /// estimate as `#index` in `final:`.
     Solid,
+    /// A post-processing effect (docs/projects/rhai-plugins.md, P2), Rhai
+    /// only: `fn effect(c, p, ctx)`, the input's colour at the pixel to
+    /// the output's, run per pixel of the image. `#pixel` is the pixel's
+    /// position in the image (0 to 1); the result is written to the
+    /// `effect_*` places, and reads of the input are the `__sample_*`
+    /// and `__load_*` built-ins.
+    Effect,
 }
 
 /// A byte range in the source text.

@@ -98,6 +98,43 @@ pub struct VariationWgsl {
     pub state_init: Option<String>,
 }
 
+/// An effect's WGSL (P2): its program as `fx_effect(uv)`, which gives the
+/// output colour and the blend it asks for (`FxOut`). The effect template
+/// around it (`effects::custom::assemble`) supplies the input image, the
+/// uniform `effect_params` and `get_param`.
+pub struct EffectWgsl {
+    /// `FxOut`, the function and the helpers it uses.
+    pub body: String,
+    /// Whether it ever asks for a blend (`#{ color, blend }`): the
+    /// template splices the blend library only then.
+    pub blends: bool,
+}
+
+/// [`EffectWgsl`] for a checked effect.
+pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
+    if !p.funcs.is_empty() {
+        return Err("an effect's function parameters are a later step".into());
+    }
+    let mut g = Gen::new(p, Ctx::Effect, "fx_");
+    let mut body = String::from(
+        "struct FxOut {\n    color: vec4<f32>,\n    blend: i32,\n    amount: f32,\n}\n\n\
+         fn uf_effect(uv: vec2<f32>) -> FxOut {\n    let pixel = uv;\n    var effect_r = 0.0;\n    var effect_g = 0.0;\n    \
+         var effect_b = 0.0;\n    var effect_a = 0.0;\n    var effect_blend = -1;\n    var effect_amount = 1.0;\n",
+    );
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.transform, 1, &mut body);
+    body.push_str("    return FxOut(vec4<f32>(effect_r, effect_g, effect_b, effect_a), effect_blend, effect_amount);\n}\n");
+    // The lowering writes the blend last, -1 (none) when the result asks
+    // for none.
+    let blends = p.transform.iter().any(|s| match s {
+        IStmt::Assign(Place::Effect(Predef::EffectBlend), e) => !matches!(e.kind, IExprKind::Int(n) if n < 0),
+        _ => false,
+    });
+    Ok(EffectWgsl { body: g.finish("", body), blends })
+}
+
 /// What a flame variation's function takes besides its point, from what
 /// the program reads and writes: the hooks a built-in declares as
 /// `Feature`s (the KIFS plan, C2), in the shader builder's order
@@ -1291,6 +1328,9 @@ enum Ctx {
     /// A transformation as a flame variation: its parameters the
     /// variation's (`get_param`), `#pixel` the point, variables locals.
     Variation,
+    /// An effect, per pixel of its image (P2): its parameters the effect's
+    /// (`get_param`), `#pixel` the pixel's position, variables locals.
+    Effect,
 }
 
 struct Gen<'p> {
@@ -1573,6 +1613,7 @@ impl<'p> Gen<'p> {
                     Place::Pixel => "pixel".to_string(),
                     Place::Color => "(*vc)".to_string(),
                     Place::PixelZ => "pixel_z".to_string(),
+                    Place::Effect(p) => self.predef(*p),
                 };
                 let _ = writeln!(out, "{pad}{target} = {v};");
             }
@@ -1673,6 +1714,8 @@ impl<'p> Gen<'p> {
                 let read = |k: usize| {
                     if self.ctx == Ctx::Variation {
                         format!("get_param(xform_id, variation_id, {k}u)")
+                    } else if self.ctx == Ctx::Effect {
+                        format!("get_param({k}u)")
                     } else {
                         format!("{f}({k}u)")
                     }
@@ -1765,7 +1808,18 @@ impl<'p> Gen<'p> {
 
     fn predef(&mut self, p: Predef) -> String {
         match (p, self.ctx) {
-            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases | Ctx::Variation) => "pixel".into(),
+            (Predef::Pixel, Ctx::Formula | Ctx::Perturb | Ctx::PerturbBailout | Ctx::PerturbFe | Ctx::Creases | Ctx::Variation | Ctx::Effect) => "pixel".into(),
+            // An effect's (P2): its result's places, and the uniform's.
+            (Predef::EffectR, _) => "effect_r".into(),
+            (Predef::EffectG, _) => "effect_g".into(),
+            (Predef::EffectB, _) => "effect_b".into(),
+            (Predef::EffectA, _) => "effect_a".into(),
+            (Predef::EffectBlend, _) => "effect_blend".into(),
+            (Predef::EffectAmount, _) => "effect_amount".into(),
+            (Predef::DensityMean, _) => "effect_params.density_mean".into(),
+            (Predef::PixelScale, _) => "effect_params.pixel_scale".into(),
+            (Predef::Width, Ctx::Effect) => "i32(effect_params.width)".into(),
+            (Predef::Height, Ctx::Effect) => "i32(effect_params.height)".into(),
             (Predef::Z, Ctx::PerturbFe) => "cfe2_to_f32(cfe2_ref(zm, zlo, ze))".into(),
             (Predef::DZ, Ctx::PerturbFe) => "cfe2_to_f32(w)".into(),
             (Predef::DPixel, Ctx::PerturbFe) => "cfe2_to_f32(d0)".into(),
@@ -1780,7 +1834,7 @@ impl<'p> Gen<'p> {
             (Predef::Z, Ctx::Formula) => "s.z".into(),
             // Refused by the checker: the creases have the start alone,
             // and a variation its point.
-            (Predef::Z, Ctx::Creases | Ctx::Variation) => "pixel".into(),
+            (Predef::Z, Ctx::Creases | Ctx::Variation | Ctx::Effect) => "pixel".into(),
             (Predef::Z, Ctx::ColoringLoop) => "z".into(),
             (Predef::Z, Ctx::ColoringFinal) => "sum.z".into(),
             // A colouring's init runs before the first iterate.
@@ -2360,6 +2414,25 @@ impl<'p> Gen<'p> {
         }
         use Builtin::*;
         let v = self.expr(a);
+        // An effect's reads of its image (P2): `v` the position, or the
+        // pixel as `complex(x, y)`, loaded clamped to the image. A read's
+        // four channels are four calls, which the shader compiler merges.
+        let channel = match f {
+            SampleR | LoadR => Some("r"),
+            SampleG | LoadG => Some("g"),
+            SampleB | LoadB => Some("b"),
+            SampleA | LoadA => Some("a"),
+            _ => None,
+        };
+        if let Some(ch) = channel {
+            let at = if a.ty == Ty::Complex { v } else { format!("vec2<f32>({}, 0.0)", if a.ty == Ty::Int { format!("f32({v})") } else { v }) };
+            return match f {
+                SampleR | SampleG | SampleB | SampleA => format!("textureSampleLevel(input_texture, input_sampler, {at}, 0.0).{ch}"),
+                _ => format!(
+                    "textureLoad(input_texture, clamp(vec2<i32>(floor({at})), vec2<i32>(0, 0), vec2<i32>(i32(effect_params.width) - 1, i32(effect_params.height) - 1)), 0).{ch}"
+                ),
+            };
+        }
         // Fractint's round is floor(x + 0.5), halves always up.
         if f == Round && self.p.dialect == Dialect::Fractint {
             return match (a.ty, ty) {
@@ -2440,6 +2513,7 @@ impl<'p> Gen<'p> {
             Expm1 => format!("{}({v})", self.use_(Helper::FExpm1)),
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
             format!("i32({real})")
@@ -2452,6 +2526,7 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
+        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => unreachable!("an image read, emitted by `Gen::call`"),
         // `Gen::call` passes the value through.
         F32 => Helper::CIdent,
         Sqr => Helper::CSqr,
@@ -3374,6 +3449,13 @@ fn fdata4(i: u32) -> vec4<f32> {
 ";
 
 
+/// naga's verdict on an effect's whole module, as the effect template
+/// assembled it (`effects::custom::assemble`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn validate_effect(module: &str) -> Result<(), String> {
+    validate_module(module)
+}
+
 /// naga's verdict on a whole module.
 #[cfg(not(target_arch = "wasm32"))]
 fn validate_module(src: &str) -> Result<(), String> {
@@ -3481,7 +3563,9 @@ pub(crate) mod tests {
     #[test]
     fn everything_the_language_has_compiles_to_valid_wgsl() {
         let mut calls = String::new();
-        for (name, _) in super::super::builtins::BUILTINS {
+        // An effect's reads of its image are an effect's alone
+        // (`an_effect_compiles_to_a_module_naga_accepts`).
+        for (name, _) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__")) {
             let _ = writeln!(calls, "  c = c + {name}(z)");
             if !matches!(*name, "conj" | "flip" | "cosxx" | "isnan" | "isinf") {
                 let _ = writeln!(calls, "  f = f + real({name}(f))");
@@ -3923,7 +4007,7 @@ fn step(s, p) {
     /// `asin`, found by compiling UF's public formulas).
     #[test]
     fn every_builtin_alone_brings_its_helpers() {
-        for (name, b) in super::super::builtins::BUILTINS {
+        for (name, b) in super::super::builtins::BUILTINS.iter().filter(|(n, _)| !n.starts_with("__")) {
             // The tests are bools: used as one.
             let body = if matches!(b, Builtin::IsInf | Builtin::IsNan) {
                 format!("if {name}(z)\n  z = 0\n endif")
@@ -3985,7 +4069,7 @@ fn step(s, p) {
             for e in &parsed.entries {
                 let (p, d) = match kind {
                     EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid => check(e, kind, dialect),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => check(e, kind, dialect),
                 };
                 let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
                 match p {
@@ -4021,7 +4105,7 @@ fn step(s, p) {
                         let back = super::super::rhai::coloring(&text);
                         (text, back)
                     }
-                    EntryKind::Transform | EntryKind::Solid => unreachable!("the test files hold no transformations or solids"),
+                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => unreachable!("the test files hold no transformations, solids or effects"),
                 };
                 let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
@@ -4045,7 +4129,7 @@ fn step(s, p) {
                     None => Ok(()),
                 }),
                 EntryKind::Coloring => validate_coloring(&coloring(p)),
-                EntryKind::Transform | EntryKind::Solid => unreachable!("the test files hold no transformations or solids"),
+                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => unreachable!("the test files hold no transformations, solids or effects"),
             };
             if let Err(e) = checked {
                 panic!("{file} / {name}: {e}");

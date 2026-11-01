@@ -753,6 +753,8 @@ impl<'p> Machine<'p> {
                         Place::Pixel => sh.pixel = v.as_c64(),
                         Place::Color => sh.vcolor = Some(v.as_f64()),
                         Place::PixelZ => sh.pixel_z = v.as_f64(),
+                        // An effect runs on the GPU alone.
+                        Place::Effect(_) => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -886,6 +888,10 @@ fn predef(p: Predef, sh: &Shared) -> Value {
         Predef::VarColor => Value::Float(sh.vcolor.unwrap_or(0.0)),
         Predef::PixelZ => Value::Float(sh.pixel_z),
         Predef::AccumZ => Value::Float(sh.accum_z),
+        Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
+            Value::Float(0.0)
+        }
+        Predef::EffectBlend => Value::Int(0),
         Predef::Center => Value::Complex(env.center),
         Predef::Magn => Value::Float(env.magn),
         Predef::X => Value::Int(env.x),

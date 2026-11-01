@@ -183,6 +183,19 @@ pub enum Predef {
     /// accumulator's.
     PixelZ,
     AccumZ,
+    /// An effect's result (P2): its colour, and the blend it asks for --
+    /// the mode (-1: none, the colour as it is) and its amount -- applied
+    /// over the input's colour by the effect template.
+    EffectR,
+    EffectG,
+    EffectB,
+    EffectA,
+    EffectBlend,
+    EffectAmount,
+    /// An effect's context: the image's mean density (1 outside flames, 0
+    /// for a colour effect) and how many pixels one picture pixel is.
+    DensityMean,
+    PixelScale,
 }
 
 impl Predef {
@@ -190,6 +203,8 @@ impl Predef {
         match self {
             Predef::Pixel | Predef::Z | Predef::Random | Predef::Center | Predef::ScreenPixel | Predef::Accum => Ty::Complex,
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => Ty::Float,
+            Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => Ty::Float,
+            Predef::EffectBlend => Ty::Int,
             Predef::NumIter | Predef::MaxIter | Predef::X | Predef::Y | Predef::Width | Predef::Height | Predef::Pass | Predef::CreasePattern => Ty::Int,
             Predef::Pi | Predef::E | Predef::Magn | Predef::Index | Predef::CreaseDecay | Predef::CreaseSign | Predef::CreaseReach | Predef::CreaseHeight => Ty::Float,
             Predef::CreaseSlope => Ty::Complex,
@@ -343,6 +358,8 @@ pub enum Place {
     Color,
     /// A 3D variation's point's third part ([`Predef::PixelZ`]).
     PixelZ,
+    /// An effect's result ([`Predef::EffectR`] ...).
+    Effect(Predef),
 }
 
 #[derive(Clone, Debug)]

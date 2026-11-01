@@ -466,6 +466,13 @@ pub struct FractalConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub color_effects: Vec<EffectInstance>,
 
+    /// The effects the user wrote (in Rhai) that the chains use, as their
+    /// sources (docs/projects/rhai-plugins.md, P2): `entry` is the effect's
+    /// id, the name its instances carry. Registered wherever the config is
+    /// rendered (`effects::custom::ensure`), so it renders anywhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_effects: Vec<crate::config::escape::CustomSource>,
+
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
@@ -1319,6 +1326,7 @@ impl Default for FractalConfig {
             levels_gamma: default_levels_gamma(),
             density_effects: Vec::new(),
             color_effects: Vec::new(),
+            custom_effects: Vec::new(),
             deterministic_rng: false,
             importance: ImportanceSettings::default(),
             cylinder_targeting: false,

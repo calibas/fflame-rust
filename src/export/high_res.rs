@@ -2910,6 +2910,7 @@ impl HighResExporter {
         output_view: &TextureView,
         config: &FractalConfig,
     ) -> Result<Vec<u8>, String> {
+        crate::effects::ensure_custom(&config);
         let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
         let mut effect_chain: Option<EffectChainRunner> = None;
         let color_effects_ran = if has_color_effects {
@@ -3536,6 +3537,7 @@ impl HighResExporter {
         // the Rgba32Float ping-pong, and the result feeds tonemap's binding 0
         // (textureLoad, so no filtering needed). Guarded by a resolution
         // ceiling so the extra texture memory doesn't OOM at extreme sizes.
+        crate::effects::ensure_custom(&config);
         let has_density_effects = EffectChainRunner::has_enabled_effects(&config.density_effects);
         let mut density_chain: Option<EffectChainRunner> = None;
         if has_density_effects {
@@ -3691,6 +3693,7 @@ impl HighResExporter {
         let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         // ===== Step 5.5: Run color effects (if enabled) =====
+        crate::effects::ensure_custom(&config);
         let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
         let mut effect_chain: Option<EffectChainRunner> = None;
         let color_effects_ran = if has_color_effects {

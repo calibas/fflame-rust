@@ -262,7 +262,7 @@ impl BigMachine {
                         Place::Var(id) => self.vars[*id] = v,
                         Place::Z => self.z = self.to_c(v),
                         // A formula writes neither; the checker keeps it so.
-                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::PixelZ => {}
+                        Place::Index | Place::Solid | Place::DZ | Place::CreaseHeight | Place::CreaseSlope | Place::Pixel | Place::Color | Place::PixelZ | Place::Effect(_) => {}
                     }
                 }
                 IStmt::SetElem { var, index, value } => {
@@ -457,6 +457,11 @@ impl BigMachine {
             // A draw has no reference value (`lang::perturb` refuses a
             // program that draws); a flame variation's, no orbit.
             Predef::Draw | Predef::Weight | Predef::VarColor | Predef::PixelZ | Predef::AccumZ => BigValue::Float(BigFloat::zero(self.n)),
+            // An effect's; a reference orbit is a formula's.
+            Predef::EffectR | Predef::EffectG | Predef::EffectB | Predef::EffectA | Predef::EffectAmount | Predef::DensityMean | Predef::PixelScale => {
+                BigValue::Float(BigFloat::zero(self.n))
+            }
+            Predef::EffectBlend => BigValue::Int(0),
             Predef::Accum => BigValue::Complex(BigComplex::zero(self.n)),
         }
     }
@@ -645,6 +650,8 @@ impl BigMachine {
             Ident => z.clone(),
             Zero => BigComplex::zero(n),
             F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
+            // An effect's image: never in a reference orbit.
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => return Err(Stop),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

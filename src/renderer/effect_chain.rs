@@ -211,6 +211,9 @@ struct CompiledEffect {
     /// Name of the effect (kept for debugging)
     #[allow(dead_code)]
     name: String,
+    /// The registry's revision of the effect it was built from
+    /// (`EffectRegistry::revision`): a newer one is compiled again.
+    revision: u64,
     /// Render pipeline for this effect
     pipeline: RenderPipeline,
     /// Bind group layout (shared with pipeline)
@@ -764,13 +767,16 @@ impl EffectChainRunner {
 
     /// Compile an effect shader if not already compiled
     fn ensure_effect_compiled(&mut self, device: &Device, effect_name: &str, category: EffectCategory) {
-        if self.compiled_effects.contains_key(effect_name) {
+        let registry = global_effect_registry();
+        // Built from the current registration: an effect registered again
+        // (a Rhai effect edited, a download updated) is built again.
+        let revision = registry.revision(effect_name);
+        if self.compiled_effects.get(effect_name).is_some_and(|c| c.revision == revision) {
             log::debug!("Effect {} already compiled", effect_name);
             return;
         }
         log::info!("Compiling effect shader: {}", effect_name);
 
-        let registry = global_effect_registry();
         let effect_info = match registry.get(effect_name) {
             Some(info) => info,
             None => {
@@ -882,6 +888,7 @@ impl EffectChainRunner {
             effect_name.to_string(),
             CompiledEffect {
                 name: effect_name.to_string(),
+                revision,
                 pipeline,
                 bind_group_layout,
             },
@@ -1660,6 +1667,99 @@ mod gpu_tests {
         };
         assert_eq!(shifted(6.0, 0.5), shifted(3.0, 1.0), "chromatic aberration's amount");
         assert_ne!(shifted(6.0, 1.0), shifted(3.0, 1.0), "the amount moves the channels at all");
+    }
+
+    /// A colour effect through the chain: `fn effect` per pixel, written
+    /// back over the input.
+    fn run_colour(device: &Device, queue: &Queue, view: &TextureView, w: u32, h: u32, effects: &[EffectInstance]) -> Vec<u8> {
+        let mut chain = EffectChainRunner::new(device, w, h);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("colour") });
+        chain.reset_slots();
+        assert!(chain.run_color_effects(device, queue, &mut encoder, view, effects), "the chain ran");
+        queue.submit(Some(encoder.finish()));
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "the colour chain failed validation: {error:?}");
+        let out = pollster::block_on(chain.read_color_output_pixels(device, queue)).expect("read").2;
+        chain.destroy();
+        out
+    }
+
+    /// A Rhai effect (P2) renders through the colour chain as its source
+    /// says: an inversion, and a blend over the input by the library.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn a_rhai_effect_renders_through_the_colour_chain() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 16;
+        const H: u32 = 4;
+        let (_input, view) = filled(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &[200, 120, 40, 255]);
+        let register = |id: &str, body: &str| {
+            let src = format!("const INFO = #{{ id: \"{id}\" }};\n{body}");
+            crate::effects::custom::register(&src, crate::provenance::Provenance::Custom).unwrap_or_else(|e| panic!("{e}"))
+        };
+        let invert = register("3c1b5f0e-2a4d-4e6f-8a9b-0c1d2e3f4a5b", "fn effect(c, p) { rgba(vec3(1.0) - c.rgb, c.a) }");
+        let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new(&invert)]);
+        for px in out.chunks(4) {
+            let near = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 1;
+            assert!(near(px[0], 55) && near(px[1], 135) && near(px[2], 215) && px[3] == 255, "inverted: {px:?}");
+        }
+        // Multiply (2) by white at full amount leaves the input.
+        let multiply = register(
+            "4d2c6a1f-3b5e-4f70-9bac-1d2e3f4a5b6c",
+            "fn effect(c, p) { #{ color: vec3(1.0, 1.0, 1.0), blend: 2, amount: 1.0 } }",
+        );
+        let out = run_colour(&device, &queue, &view, W, H, &[EffectInstance::new(&multiply)]);
+        assert!(out.chunks(4).all(|px| px == [200, 120, 40, 255]), "multiplied by white: {:?}", &out[..4]);
+        let mut registry = crate::effects::global_effect_registry_mut();
+        registry.remove_by_name(&invert);
+        registry.remove_by_name(&multiply);
+    }
+
+    /// The vignette's Rhai twin (assets/effects/vignette.rhai) renders the
+    /// built-in WGSL's pixels, within a step of 8-bit rounding, at its
+    /// defaults and at other settings and blends -- the D1 check for it.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn the_vignettes_rhai_twin_matches_the_wgsl() {
+        let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        const W: u32 = 96;
+        const H: u32 = 64;
+        let data: Vec<u8> = (0..W * H).flat_map(|i| [((i % W) * 255 / W) as u8, ((i / W) * 255 / H) as u8, 160, 255]).collect();
+        let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &data);
+        let mut twin = crate::effects::custom::compile(include_str!("../../assets/effects/vignette.rhai"), crate::provenance::Provenance::Builtin)
+            .unwrap_or_else(|e| panic!("{e}"));
+        {
+            let registry = crate::effects::global_effect_registry();
+            let builtin = registry.get("vignette").expect("vignette");
+            let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, f32, Option<f32>, Option<f32>)> {
+                i.parameters.iter().map(|p| (p.name.clone(), p.default_value, p.min_value, p.max_value)).collect()
+            };
+            assert_eq!(shape(&twin), shape(builtin), "the same parameters, in the same order");
+        }
+        twin.name = "vignette_rhai_twin".into();
+        crate::effects::global_effect_registry_mut().register(twin);
+        for (intensity, radius, softness, mode) in [(0.5, 0.5, 0.5, 0.0), (1.0, 0.2, 0.9, 0.0), (0.7, 0.4, 0.3, 2.0), (0.8, 0.6, 0.2, 9.0)] {
+            let set = |name: &str| {
+                let mut e = EffectInstance::new(name);
+                e.set_param("intensity", intensity);
+                e.set_param("radius", radius);
+                e.set_param("softness", softness);
+                e.set_param("blend_mode", mode);
+                e
+            };
+            let wgsl = run_colour(&device, &queue, &view, W, H, &[set("vignette")]);
+            let rhai = run_colour(&device, &queue, &view, W, H, &[set("vignette_rhai_twin")]);
+            let worst = wgsl.iter().zip(&rhai).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
+            assert!(worst <= 1, "at {intensity}, {radius}, {softness}, mode {mode}: off by {worst}");
+        }
+        crate::effects::global_effect_registry_mut().remove_by_name("vignette_rhai_twin");
     }
 
     /// A frame's chains may need more parameter slots than the buffer
