@@ -118,6 +118,17 @@ pub struct FractalConfig {
     #[serde(default = "default_preserve_z", skip_serializing_if = "is_default_preserve_z")]
     pub preserve_z: bool,
 
+    /// Restart every orbit at each dispatch, as before orbits persisted:
+    /// each thread's orbit is then `iterations_per_thread` long (the
+    /// device's setting) from a fresh start. For a flame whose picture is
+    /// the orbits' way from their starts -- a map whose orbits settle onto
+    /// a few points or loops, which a persisting orbit draws once and a
+    /// pan never shows again. Forced on by a variation that needs it
+    /// (`Feature::ResetsOrbits`; `Flame::needs_fresh_orbits`). Off, orbits
+    /// persist (docs/main/RENDERER.md, *Persistent orbits*).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reset_orbits: bool,
+
     /// View settings
     #[serde(default = "default_zoom")]
     pub zoom: f32,
@@ -1244,6 +1255,7 @@ impl Default for FractalConfig {
             // default to 2D / preserve_z=false (Apo/JWF semantics).
             render_mode: RenderMode::TwoD,
             preserve_z: false,
+            reset_orbits: false,
             perspective_strength: 0.0,
             depth_density_compensation: 0.0,
             far_density_fade: 0.0,
@@ -1320,6 +1332,26 @@ impl Default for FractalConfig {
 }
 
 impl FractalConfig {
+    /// Whether this config's orbits start afresh every dispatch: its own
+    /// `reset_orbits`, or a variation its flame uses that needs it
+    /// (registered first, so one of the user's counts). Then a dispatch's
+    /// length is the orbits' length, which every path renders with.
+    pub fn resets_orbits(&self) -> bool {
+        #[cfg(feature = "engine-escape")]
+        crate::variations::custom::ensure(&self.flame);
+        self.reset_orbits || self.flame.needs_fresh_orbits(&crate::variations::global_registry())
+    }
+
+    /// The orbits' length where they are reset and a variation of the
+    /// flame sets it (`Flame::orbit_length_source`): saved with the flame,
+    /// it rules over Iterations per Thread on every path. `None` elsewhere.
+    pub fn orbit_length(&self) -> Option<u32> {
+        if !self.resets_orbits() {
+            return None;
+        }
+        self.flame.orbit_length_source(&crate::variations::global_registry()).map(|(_, n)| n)
+    }
+
     /// Whether the density Levels remap should run.
     ///
     /// Off in Escape and Simulation whatever the config says: Levels

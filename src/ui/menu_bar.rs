@@ -301,6 +301,20 @@ pub fn render_menu_bar(
                         }
                     });
 
+                    // Reset Orbits Each Dispatch: the flame's; a variation
+                    // that needs it holds it on.
+                    let forced_by = &menu_state.reset_orbits_forced_by;
+                    let mut reset = menu_state.reset_orbits || forced_by.is_some();
+                    let tip = super::settings::reset_orbits_tip(forced_by.as_deref(), menu_state.orbit_length_source.as_ref());
+                    if ui
+                        .add_enabled(forced_by.is_none(), egui::Checkbox::new(&mut reset, t!("settings.reset_orbits").as_ref()))
+                        .on_hover_text(tip.as_ref())
+                        .on_disabled_hover_text(tip.as_ref())
+                        .changed()
+                    {
+                        menu_actions.rendering.set_reset_orbits = Some(reset);
+                    }
+
                     // The dispatch while the governor is off
                     ui.add_enabled_ui(!menu_state.frame_governor, |ui| {
                         ui.menu_button(format!("{}: {}", t!("menu.workgroups"), menu_state.manual_workgroups), |ui| {

@@ -103,6 +103,11 @@
       "on_the_wire_today": false,
       "shipped_variations": 9,
       "wire": "needs_mobius_lib"
+    },
+    {
+      "on_the_wire_today": false,
+      "shipped_variations": 0,
+      "wire": "resets_orbits"
     }
   ],
   "helper_libraries": {

@@ -468,6 +468,9 @@ fn parse_flame_element(
         render_mode,
         perspective_strength,
         preserve_z,
+        // Ours, not Apophysis's or JWildfire's: off (a variation that
+        // needs fresh orbits forces it either way).
+        reset_orbits: false,
         // JWildfire's `sld_render_*` block maps onto our splat-native
         // solid model where a correspondence exists (lights, material,
         // AO intensity, shadows); everything else keeps our defaults.

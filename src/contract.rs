@@ -625,7 +625,7 @@ mod tests {
         // there; this guards the separate `ALL` list from falling behind.
         assert_eq!(
             Feature::ALL.len(),
-            13,
+            14,
             "Feature::ALL is out of step with the enum — add the new variant"
         );
         for f in Feature::ALL {

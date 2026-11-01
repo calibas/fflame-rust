@@ -21,13 +21,9 @@ fn start(pixel, p, ctx) {
 
 fn step(s, p) {
     let z = s.z;
-    // z^(a-1), z^a, z^(a+1), in the program's order of products.
-    let za1 = z;
-    let k = 2;
-    while k < p.order {
-        za1 = z * za1;
-        k += 1;
-    }
+    // z^(a-1), z^a, z^(a+1) (a power, not the program's loop of
+    // products, which would keep the formula from deep zoom).
+    let za1 = z ** (p.order - 1);
     let za = z * za1;
     let fx = z * za - z;
     let ap1 = (p.order + 1).to_float();

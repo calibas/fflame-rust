@@ -23,9 +23,10 @@ pub async fn render_thumbnail_async(
     config: &FractalConfig,
 ) -> image::RgbaImage {
     // Use unified render API
-    let job = RenderJob::new(config, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
-        .with_iterations(THUMBNAIL_ITERATIONS)
-        .with_iterations_per_thread(THUMBNAIL_ITERATIONS_PER_THREAD);
+    // Where orbits are reset every dispatch, a dispatch is an orbit, so
+    // the job keeps the length `RenderJob::new` gives it.
+    let job = RenderJob::new(config, THUMBNAIL_SIZE, THUMBNAIL_SIZE).with_iterations(THUMBNAIL_ITERATIONS);
+    let job = if config.resets_orbits() { job } else { job.with_iterations_per_thread(THUMBNAIL_ITERATIONS_PER_THREAD) };
 
     let result = render(device, queue, job, &mut NoProgress).await;
 

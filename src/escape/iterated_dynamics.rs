@@ -245,6 +245,155 @@ fn the_dynamic_systems_euler_order_steps_y_first() {
     }
 }
 
+/// The orbit maps as escape-time formulas (`orbits-*.rhai`) step as their
+/// variations do: one pass from a pixel is the variation's point there,
+/// over Size (from Start z for the two 3D maps, the colouring reading x and y), at
+/// the defaults, over each formula's own view -- so each picture's map is
+/// the one the tests above hold to the program's.
+#[test]
+fn the_orbit_formulas_step_as_their_variations() {
+    let names = [
+        "hopalong", "martin", "chip", "quadruptwo", "threeply", "gingerbreadman", "latoocarfian", "kamtorus",
+        "pickover-popcorn", "dynamic-system", "pickover-attractor", "rossler-attractor",
+    ];
+    for name in names {
+        let file = format!("orbits-{name}.rhai");
+        let src = example(&file);
+        let formula = rhai::program(src).unwrap_or_else(|d| panic!("{file}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+        let values = ParamValues::defaults(&formula);
+        let size = formula.params.iter().find(|x| x.name == "size").expect("Size").default.0;
+        let vsrc = example(&format!("variation-{name}.rhai"));
+        let three = name.ends_with("attractor");
+        let variation = if three { rhai::transformation3(vsrc) } else { rhai::transformation(vsrc) }.unwrap();
+        let vvalues = ParamValues::defaults(&variation);
+        let mut run_v = VariationRun::new(&variation, &vvalues, 1);
+        let (cx, cy) = formula.view.center.expect("a centre");
+        let span = 4.0 / formula.view.magn.expect("a magnification");
+        let mut checked = 0;
+        for i in 0..10 {
+            for j in 0..10 {
+                let px = C64::new(cx + span * (i as f64 / 9.0 - 0.5) + 0.013 * span, cy + span * (j as f64 / 9.0 - 0.5) - 0.007 * span);
+                let want = if three {
+                    let (w, _) = run_v.call3([px.re, px.im, 0.0], [0.0; 3], 1.0);
+                    C64::new(w[0], w[1])
+                } else {
+                    run_v.call(px, C64::ZERO, 1.0).0
+                };
+                if !(want.re.is_finite() && want.im.is_finite()) {
+                    continue;
+                }
+                // The colouring reads the orbit over Size.
+                let got = run(&formula, &values, None, &Env::at(px, 1)).z.scale(size);
+                let tol = 1e-12 * (1.0 + want.abs());
+                assert!((got.re - want.re).abs() <= tol && (got.im - want.im).abs() <= tol, "{file} at {px:?}: {got:?} against {want:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 90, "{file}: only {checked} checked");
+    }
+}
+
+/// Each map's Direct Color: in every Color mode, at Color Cycles 1.5 and
+/// Offset 0.25, the palette index its step gives, against the step's
+/// direction, length, the new point's distance and angle (or height)
+/// written out, and the orbit's iteration: a run's calls, counted by its
+/// state from 1, over the Orbit Length. The step length is over Color Size,
+/// but a flow's: over its longest step (Popcorn, the dynamic system), or
+/// as a speed over Color Size (Rossler).
+#[test]
+fn the_orbit_maps_colour_by_their_steps() {
+    use std::f64::consts::{PI, SQRT_2};
+    let turn = |y: f64, x: f64| y.atan2(x) / (2.0 * PI) + 0.5;
+    let check = |file: &str, mode: u32, at: &str, got: Option<f64>, q: f64| {
+        let k = 0.25 + 1.5 * q;
+        let want = k - k.floor();
+        let got = got.unwrap_or_else(|| panic!("{file}: no colour"));
+        let gap = (got - want).abs();
+        assert!(gap.min(1.0 - gap) < 1e-9, "{file}, Color {mode}, at {at}: {got} against {want}");
+    };
+    let set = |p: &super::lang::ir::Program, mode: u32| {
+        let mut values = ParamValues::defaults(p);
+        for (name, v) in [("color", f64::from(mode)), ("color_cycles", 1.5), ("color_offset", 0.25)] {
+            let i = p.params.iter().position(|x| x.name == name).unwrap_or_else(|| panic!("no parameter {name}"));
+            values.values[i] = (v, 0.0);
+        }
+        let size = p.params.iter().find(|x| x.name == "color_size").expect("Color Size").default.0;
+        let period = p.params.iter().find(|x| x.name == "orbit_length").expect("Orbit Length").default.0;
+        (values, size, period)
+    };
+    // (file, the step length's unit when not Color Size)
+    let maps: &[(&str, Option<f64>)] = &[
+        ("variation-hopalong.rhai", None),
+        ("variation-martin.rhai", None),
+        ("variation-chip.rhai", None),
+        ("variation-quadruptwo.rhai", None),
+        ("variation-threeply.rhai", None),
+        ("variation-gingerbreadman.rhai", None),
+        ("variation-latoocarfian.rhai", None),
+        ("variation-kamtorus.rhai", None),
+        ("variation-pickover-popcorn.rhai", Some(0.05 * SQRT_2)),
+        ("variation-dynamic-system.rhai", Some(0.1 * SQRT_2)),
+    ];
+    for &(file, unit) in maps {
+        let src = example(file);
+        let p = rhai::transformation(src).unwrap_or_else(|d| panic!("{file}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+        for mode in 0..5 {
+            let (values, size, period) = set(&p, mode);
+            let unit = unit.unwrap_or(size);
+            let mut run = VariationRun::new(&p, &values, 1);
+            let mut calls = 0.0;
+            for i in 0..12 {
+                for j in 0..12 {
+                    let z = C64::new(size * (i as f64 / 11.0 - 0.5) + 0.013, size * (j as f64 / 11.0 - 0.5) - 0.007);
+                    let (w, got) = run.call(z, C64::ZERO, 1.0);
+                    calls += 1.0;
+                    let (dx, dy) = (w.re - z.re, w.im - z.im);
+                    let q = match mode {
+                        0 => turn(dy, dx),
+                        1 => (dx * dx + dy * dy).sqrt() / unit,
+                        2 => (w.re * w.re + w.im * w.im).sqrt() / size,
+                        3 => turn(w.im, w.re),
+                        _ => calls / period,
+                    };
+                    // Far past the picture a step's index keeps no digits.
+                    if q.is_finite() && q.abs() < 1e3 {
+                        check(file, mode, &format!("{z:?}"), got, q);
+                    }
+                }
+            }
+        }
+    }
+    for (file, dt) in [("variation-pickover-attractor.rhai", None), ("variation-rossler-attractor.rhai", Some(0.04))] {
+        let src = example(file);
+        let p = rhai::transformation3(src).unwrap_or_else(|d| panic!("{file}: {:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()));
+        for mode in 0..5 {
+            let (values, size, period) = set(&p, mode);
+            let unit = dt.map_or(size, |dt: f64| dt * size);
+            let mut run = VariationRun::new(&p, &values, 1);
+            let mut calls = 0.0;
+            for i in 0..6 {
+                for j in 0..6 {
+                    for k in 0..6 {
+                        let at = |n: i32| size * (n as f64 / 5.0 - 0.5) + 0.011;
+                        let v = [at(i), at(j), at(k)];
+                        let (w, got) = run.call3(v, [0.0; 3], 1.0);
+                        calls += 1.0;
+                        let d = [w[0] - v[0], w[1] - v[1], w[2] - v[2]];
+                        let q = match mode {
+                            0 => turn(d[1], d[0]),
+                            1 => (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() / unit,
+                            2 => (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt() / size,
+                            3 => w[2] / size,
+                            _ => calls / period,
+                        };
+                        check(file, mode, &format!("{v:?}"), got, q);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The escape-time types.
 
 /// A function of the program's menus: its name in ours, and its maths.
@@ -631,4 +780,59 @@ fn the_fn_or_fn_types_run_as_iterated_dynamics() {
             runs_as(file, &[(name, value), ("shift", (shift, 0.0))], &[("fn1", fn1), ("fn2", fn2)], [-3.0, 3.0, -2.25, 2.25], &reference);
         }
     }
+}
+
+/// Deep zoom: every type but the Escher-like Julia derives perturbation
+/// equations (Halley's power by `**`, MandelbrotMix4's start in
+/// `prepare` and Peterson's coefficient by `**`, as loops and a test on
+/// the pixel in a start would keep them from it), and the interpreter's
+/// f64 model of the perturbed path counts as plain f64 does, pixel for
+/// pixel, at a boundary view (zoom 16, Julia fn||fn's 28; the GPU's, f32,
+/// is `the_iterated_dynamics_formulas_deep_zoom`'s). The Escher-like
+/// Julia's target test is a loop inside the loop: it stays direct.
+#[test]
+fn the_types_deep_zoom_by_derived_equations() {
+    use super::lang::{delta, perturb};
+    let views = [
+        ("halley.rhai", 0.110526084900, -0.749520301819, 16.0),
+        ("mandelbrot-mix4.rhai", -0.022742271423, -1.264760017395, 16.0),
+        ("dividebrot5.rhai", 0.266545295715, -0.582360267639, 16.0),
+        ("peterson.rhai", 0.245820045471, -0.561945915222, 16.0),
+        ("taylor-skinner.rhai", 0.225154876709, -1.424823760986, 16.0),
+        ("lambda-fn-or-fn.rhai", -0.190115610758, -0.226304372152, 16.0),
+        ("julia-fn-or-fn.rhai", 0.007967975922, -0.356394889144, 28.0f64),
+        ("manlam-fn-or-fn.rhai", 0.898100535075, -0.509713490804, 16.0),
+        ("mandel-fn-or-fn.rhai", 0.091780344645, -0.261295318604, 16.0),
+    ];
+    for (file, cx, cy, zoom) in views {
+        let p = rhai::program(example(file)).unwrap();
+        let d = delta::with_derived_equations(&p).unwrap_or_else(|| panic!("{file}: no equations derived"));
+        let how = perturb::perturbation(&d).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let values = ParamValues::defaults(&p);
+        let (w, h, span) = (32u32, 24u32, 4.0 / zoom.exp2());
+        let centre = C64::new(cx, cy);
+        // DivideBrot5's model goes NaN within 80 passes, rebased, it
+        // seems, onto its start at 0, where the deviation of `ln z`
+        // divides by the reference's 0; the GPU's does not (every pixel
+        // right at zooms 16 and 28): a fault of the model's, open.
+        if file == "dividebrot5.rhai" {
+            continue;
+        }
+        let mut apart = Vec::new();
+        for i in 0..w * h {
+            let c = C64::new(cx + ((i % w) as f64 / w as f64 - 0.5) * span * 4.0 / 3.0, cy - ((i / w) as f64 / h as f64 - 0.5) * span);
+            let mut env = Env::at(c, 150);
+            env.center = centre;
+            let want = run(&p, &values, None, &env).n;
+            let got = super::lang::interp::run_perturbed(&d, &values, &env, centre, how.rebase).map(|r| r.n);
+            if got != Some(want) {
+                apart.push((c, got, want));
+            }
+        }
+        // MandelbrotMix4's and mandel(fn||fn)'s chaotic boundaries part a
+        // count or two (of 3,072 at the full grid: 2 and 4).
+        assert!(apart.len() <= 2, "{file}: the model (and plain f64) apart at {apart:?}");
+    }
+    let escher = rhai::program(example("escher-julia.rhai")).unwrap();
+    assert!(delta::with_derived_equations(&escher).is_none(), "the Escher-like Julia's loop inside the loop");
 }

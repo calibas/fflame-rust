@@ -173,9 +173,38 @@ are still seeded per dispatch from `params.seed`.
   overwrite-mode frame — because a state can be a clock rather than a
   register that settles (`curliecue2`'s walker), and JWildfire
   initialises variation state per render.
+- **Reset orbits.** A flame in reset mode -- its config's
+  `reset_orbits` (Reset Orbits Each Dispatch, in the Rendering menu and
+  the Settings panel), or one using a variation that declares
+  `Feature::ResetsOrbits` at a weight other than 0
+  (`Flame::needs_fresh_orbits`; a Rhai variation's `resets_orbits: true`
+  in `INFO`) -- starts its orbits afresh every dispatch, as before orbits
+  persisted: each orbit is one dispatch, `iterations_per_thread` long. It
+  is for a map whose picture is the orbits' way from their starts
+  (Iterated Dynamics' orbit maps: the dynamic system's orbits settle
+  onto a few loops, Chip's spread further the longer they run):
+  persisting, an orbit settles or spreads without end, and a pan, a
+  zoom or the end of a drag starts a picture from orbits already gone.
+  Iterations per Thread is then how far an orbit goes and Max
+  Iterations how many are drawn -- unless a variation sets the length:
+  one with a parameter named `orbit_length` (`ORBIT_LENGTH_PARAM`; the
+  longest, at most `MAX_ORBIT_LENGTH` = 10,000, as each orbit is one
+  dispatch) gives it, saved with the flame (`Flame::orbit_length_source`),
+  and `compute_pass` dispatches that length on every path, whatever
+  length the caller asks for (`dispatch_length`; gate
+  `a_variations_orbit_length_is_the_dispatchs`). The governor sheds width only
+  (`Batch::resets_orbits`); its fill (*Filling the frame*), past the
+  batch, adds dispatches of the batch's length, each its own submission,
+  rather than lengthening one; and motion-blur moments share the
+  frame's width, each moment the full length. A render with no length given
+  (`RenderJob::new`, thumbnails, the high-res exporter, which drops its
+  orbit buffer) takes the app's default, so it matches the viewport.
+  Gate: `reset_orbits_restart_every_dispatch` (a pan is exactly a fresh
+  render; each dispatch plots `ipt − burn_in` a thread).
 - **Burn-in** is paid once per restart, not once per dispatch. So
   `iterations_per_thread` only slices the work: the picture does not
-  depend on it, and a short dispatch costs no orbit depth.
+  depend on it, and a short dispatch costs no orbit depth -- except in
+  reset mode, above, where it is each orbit's length.
 - **Motion-blur moments** (`set_moment`, `set_continuing_frame`;
   [ANIMATION.md](ANIMATION.md), *Motion blur*): a frame's later moments
   take over the orbits on their flame's new key without a restart -- the
