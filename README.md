@@ -39,7 +39,13 @@ It also includes features from [JWildfire](https://jwildfire.overwhale.com/), cr
 Variations contributed by:
 - Joel Faber, Michael Faber, Jed Kelsey, Scott Draves, Brad Stefanov, Jesus Sosa, DarkBeam, Xyrus02, cothe, zephyrtronium, Andreas Maschke, Larry Berlin, Zueuk, Tatyana Zabanova, Raykoid666, Zy0rg, CozyG, eralex61, chronologicaldot, Whittaker Courtney, FracFx, gossamer light, TyrantWave, cyberxaos, FractalDesire, Z+, IROIRO++, slobo777, David Young, FarDareisMai, Will Evans, bezo97, Don Town, Ffey, Framelet, Frank Baumann, guagapunyaimel, Keeps,  Maulana Randa, meckie, Paul Bourke, Rick Sidwell, timothy-vincent, Victor Ganora
 
-Special thanks to the Fractal Chats channel on Discord for all their help.
+Special thanks to lycium, [claude](https://mathr.co.uk/web/) and everyone else from the Fractal Chats channel on Discord for all their help.
+
+Escape-time/orbit-trapping coloring and formulas from [Fractint](https://en.wikipedia.org/wiki/Fractint), [Iterated Dynamics](https://github.com/LegalizeAdulthood/iterated-dynamics), [Kalles Fraktaler](https://mathr.co.uk/kf/kf.html) and [Ultra Fractal](https://www.ultrafractal.com/).
+
+Origami Butterfly and Multi-scale simulations by [Jonathan McCabe](https://jonathanmccabe.com/).
+
+SU(n) Möbius group variations from [Roger Bagula's](https://github.com/RogerBagula) work.
 
 ## See also
 
