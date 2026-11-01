@@ -92,6 +92,39 @@ become one (P3).
    declares (random numbers, the accumulator, per-thread state, colour
    writes), so a script can do what a ported variation does and the
    shader builder has one code path.
+7. **Identity: a UUID for the thing, a hash for the version** (decided
+   2026-11-01; the API already works this way -- scripts and flames have
+   ids and versions, palettes are content hashes).
+   - **Built-ins of every kind keep their string ids** (`julian`,
+     `vignette`, `mandelbrot`, a sim model's name): every config names
+     them, scripts call them by name, and we keep them unique.
+   - **Everything else -- the user's scripts and plug-ins, downloads --
+     is a UUID**, minted on New, Save As, Duplicate, or importing a file
+     that has none, and **written into the script's own text** (`INFO`'s
+     `id` for the GPU kinds, the `script(...)` declaration for the CPU
+     ones), so a copied `.rhai` keeps its identity with no sidecar.
+   - **A version is the SHA-256 of the source.** A config refers to a
+     script by its UUID and carries the source. On load the same UUID and
+     hash use what is registered; the same UUID with another hash
+     registers the carried version beside it, so the config renders as
+     saved, and the UI offers the installed one.
+   - **The namespace is the origin, not part of the key**: built in,
+     mine, downloaded, carried by a config. Lists show it, and the trust
+     rules use it (what a downloaded script may import or run). A plug-in
+     of mine and the same plug-in downloaded back are one thing.
+   - Names are free: two scripts may share one, and nothing is looked up
+     by it.
+   - Publishing keeps the UUID: the API should accept the client's id
+     on create (server work), or the sidecar's link maps the two.
+8. **Everything a person reads follows the language**: titles,
+   descriptions, parameter captions and hints, choice labels. A field
+   is a string (every language) or a map of locale to string
+   (`#{ en: "Spiral", ja: "..." }`), resolved current locale, then
+   `en`, then the first entry, and kept in the script so a plug-in is
+   self-contained. Parameter *keys* stay plain identifiers -- they are
+   what configs, undo and tracks address. Built-ins' labels, English by
+   policy today, move to the same rule; translating them is its own
+   work.
 
 ## Review (2026-11-01): what is disjointed
 
@@ -263,20 +296,17 @@ Before a fourth registry is written for effects:
   its `PluginKind`. For one release, a start that finds files there
   logs that they are no longer loaded, naming them. The WGSL API
   catalogs and their caches stay (D2).
-- **Namespaces (D6)**: the program's own (built-in), the user's (their
-  library and plug-ins), the API's (downloads). A name in one never
-  shadows or replaces a name in another, and every list shows where an
-  entry came from. Built-in names stay bare, so every existing config
-  and `.flame` reads unchanged; the others are qualified internally
-  (spelling settled when built). The WGSL variation and effect catalogs
-  are server copies of the program's own built-ins, so what they fetch
-  lands in the built-in namespace, as a built-in this build lacks.
-  Still to settle: a config from someone else carries a source under a
-  name the opener also has, with different text. Proposed: within the
-  user and API namespaces an entry's identity includes a hash of its
-  source (what the escape slots already do), so the carried version
-  renders as it was saved and the opener's own is untouched.
-- One registry for compiled Rhai entries, keyed by kind and name, with
+- **Identity and origin (D6, rule 7)**: built-ins keep their string
+  ids, so every existing config and `.flame` reads unchanged;
+  everything else is keyed by the UUID in its source, with the source's
+  SHA-256 as its version, and carries an origin (built in, mine,
+  downloaded, carried by a config) that every list shows. The WGSL
+  variation and effect catalogs are server copies of the program's own
+  built-ins, so what they fetch is a built-in this build lacks, under
+  its string id.
+- **Labels follow the language (rule 8)** in the shared parameter and
+  `INFO` lowering: a string or a locale map wherever a person reads it.
+- One registry for compiled Rhai entries, keyed by kind and id, with
   one `ensure` from a config's carried sources, one failure memory, one
   error type (`Vec<Diag>`), and a provenance on every entry.
 - One parameter lowering from `PARAMS`, from which each kind's def is
@@ -284,9 +314,10 @@ Before a fourth registry is written for effects:
   configs saved with Rhai variations keep their values.
 - Rhai variations register as a variation def directly, not through a
   synthesized `VariationDownload`.
-- Names: a kind that configs reference by name (variations, effects,
-  simulation models) keeps `INFO.name`, inside its namespace; the escape
-  slots keep their content hashes.
+- References: a transform names a Rhai variation, and an effect list a
+  Rhai effect, by its UUID; parameters are `<uuid>.<key>`. The escape
+  slots, which hold one carried source each, move from their FNV names
+  to the same UUID and hash.
 - The kind as one value in the lowering rather than four bools, so the
   next kind costs a table entry, not fifty matches.
 
@@ -411,8 +442,9 @@ shape fingerprint will not move by itself).
   simulations, P5 tracks, P6 the API.
 - **D6. Namespaces**: "the program's default scripts, user-created
   plugins and the API won't interfere with each other. The UI can show
-  where things came from." Designed in P1, with one question left
-  there (a carried source under a name the opener also has).
+  where things came from." Then, the same day: UUIDs for everything but
+  the built-ins, with hashes for versions, names free, and every field a
+  person reads following the language -- design rules 7 and 8.
 - **P0**: the user wants a way to import Rhai scripts -- through the
   library, as P0 now says.
 
