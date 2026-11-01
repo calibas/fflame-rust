@@ -286,6 +286,27 @@ on its escaping side 399 (f64 itself 411); its circle test asks for `|r²
 so deep views settle wrong. Frothy Basin 318 scaled, 347 floatexp (f64
 351): its basins are riddled.
 
+**Iterated Dynamics' escape-time types** (the GPL Fractint successor) are
+Rhai formulas too, Formula Editor examples without presets (2026-10-31):
+`halley.rhai` (Halley's method on `z(z^a − 1)`, stopping when |z|²
+settles), `mandelbrot-mix4.rhai` (Jim Muth's mix of two powers, from
+the setup's one start; the program leaves that start's base a negative
+real with a signed zero, whose sign picks the log's branch, so the file
+works the sign out and takes the branch itself, since a GPU does not
+keep the sign of a zero), `dividebrot5.rhai`, `peterson.rhai` (Marks
+Mandel, Marks Julia, Marks Mandel Pwr and Tim's Error, its slip kept),
+`escher-julia.rhai`, `taylor-skinner.rhai` (the seven fn-combining
+forms) and the four fn||fn types (`lambda-fn-or-fn.rhai`, `julia-`,
+`manlam-`, `mandel-`). Each runs as the program's per-pixel start and
+orbit function do (`src/escape/iterated_dynamics.rs`, against them
+written out in f64: z after each of the first passes at every pixel,
+and every count but a chaotic orbit's long one), and renders on the GPU
+as the interpreter
+(`the_iterated_dynamics_formulas_render_as_the_interpreter`: 96.7% of
+the pixels within one count or better). The Mandelbrot-plane types
+count one pass fewer than Fractint, whose per-pixel start counts as
+the first iteration.
+
 ### The colourings
 
 | name | display name | what it shows |
@@ -459,8 +480,8 @@ fn escaped(s, p) {
   and positions.
 - Examples: `assets/formulas/mandelbrot.rhai`, `burning-ship.rhai`,
   `phoenix.rhai` (the editor's New starts a Rhai formula); Fractint's
-  `frothy-basin.rhai`, `volterra-lotka.rhai` and `unity.rhai` (*The
-  formulas*, above). Tests:
+  `frothy-basin.rhai`, `volterra-lotka.rhai` and `unity.rhai`, and
+  Iterated Dynamics' escape-time types (*The formulas*, above). Tests:
   `tests/formulas/rhai/` (every construct, the function names, the
   plane, a cycle), run on the GPU as the interpreter does; a Rhai
   formula runs as its UF twin, renders as its built-in, and deep-zooms

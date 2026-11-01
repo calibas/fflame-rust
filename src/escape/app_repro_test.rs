@@ -2879,6 +2879,69 @@ mod tests {
         }
     }
 
+    /// Iterated Dynamics' escape-time types, written in Rhai (that they run
+    /// as the program's code is `escape::iterated_dynamics`'s): on the GPU
+    /// at their home views, at their defaults, every pixel's count against
+    /// the interpreter's in f64 -- equal but where f32 parts from f64 on a
+    /// boundary. Measured (of 3,072 pixels): within one, MandelbrotMix4
+    /// 2,970 (its powers by exp and log), the rest 3,062 or more.
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn the_iterated_dynamics_formulas_render_as_the_interpreter() {
+        use rayon::prelude::*;
+        let files = [
+            "halley.rhai",
+            "mandelbrot-mix4.rhai",
+            "dividebrot5.rhai",
+            "peterson.rhai",
+            "escher-julia.rhai",
+            "taylor-skinner.rhai",
+            "lambda-fn-or-fn.rhai",
+            "julia-fn-or-fn.rhai",
+            "manlam-fn-or-fn.rhai",
+            "mandel-fn-or-fn.rhai",
+        ];
+        let (w, h) = (64u32, 48u32);
+        for file in files {
+            let text = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == file).unwrap().1;
+            let src = crate::config::escape::CustomSource {
+                dialect: crate::config::escape::CustomDialect::Rhai,
+                entry: crate::escape::lang::rhai::title(text).unwrap_or_default(),
+                source: text.to_string(),
+                variations: Vec::new(),
+            };
+            let prog = crate::escape::lang::rhai::program(text).unwrap();
+            let (cx, cy) = prog.view.center.unwrap_or((0.0, 0.0));
+            let zoom = prog.view.magn.unwrap_or(1.0).log2();
+            let mut esc = crate::config::escape::EscapeConfig::default();
+            esc.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            esc.custom_formula = Some(src.clone());
+            esc.center_re = format!("{cx:.17}");
+            esc.center_im = format!("{cy:.17}");
+            esc.zoom_log2 = zoom;
+            esc.max_iter = prog.view.maxiter.unwrap_or(150);
+            crate::escape::custom::ensure(&esc);
+            let values = as_on_the_gpu(crate::escape::lang::interp::ParamValues::defaults(&prog));
+            let span_y = 4.0 / zoom.exp2();
+            let span_x = span_y * w as f64 / h as f64;
+            let exact: Vec<u32> = (0..w * h)
+                .into_par_iter()
+                .map(|i| {
+                    let (px, py) = (i % w, i / w);
+                    let c = crate::escape::lang::builtins::C64::new(cx + ((px as f64 + 0.5) / w as f64 - 0.5) * span_x, cy - ((py as f64 + 0.5) / h as f64 - 0.5) * span_y);
+                    crate::escape::lang::interp::run(&prog, &values, None, &crate::escape::lang::interp::Env::at(c, esc.max_iter)).n
+                })
+                .collect();
+            let got = records_on(&esc, w, h, false, false, true);
+            let right = got.iter().zip(&exact).filter(|(g, t)| g.n == **t).count();
+            let near = got.iter().zip(&exact).filter(|(g, t)| g.n.abs_diff(**t) <= 1).count();
+            let distinct = exact.iter().collect::<std::collections::BTreeSet<_>>().len();
+            println!("{file}: {right} of {} right, {near} within one ({distinct} distinct counts)", exact.len());
+            assert!(distinct > 3, "{file}: the view shows too little");
+            assert!(near * 100 >= exact.len() * 95, "{file}: {near} of {} within one", exact.len());
+        }
+    }
+
     /// The twins of the built-ins without a native deep tier deep-zoom by
     /// derived equations (order of work, item 2): those escaping on `Re z`
     /// or `|Im z|` (batch 1) and Barnsley, whose steps branch on the
