@@ -810,6 +810,26 @@ impl VariationRegistry {
         &self.ordered_names
     }
 
+    /// The versions of the user's Rhai variations a picker leaves out.
+    /// Each version Used is its own key (`scripted::key`); of each id a
+    /// picker offers one: the version `carried` (the flame's sources) has,
+    /// else the one registered last.
+    pub fn superseded(&self, carried: &[crate::config::escape::CustomSource]) -> std::collections::HashSet<String> {
+        use crate::scripted::key_id;
+        let mut offered: HashMap<String, &str> = HashMap::new();
+        for name in &self.ordered_names {
+            if let Some(id) = key_id(name) {
+                offered.insert(id, name);
+            }
+        }
+        for s in carried {
+            if let Some(id) = key_id(&s.entry).filter(|_| self.has(&s.entry)) {
+                offered.insert(id, &s.entry);
+            }
+        }
+        self.ordered_names.iter().filter(|n| key_id(n).is_some_and(|id| offered.get(&id) != Some(&n.as_str()))).cloned().collect()
+    }
+
     /// Get variations by category (in registration order)
     pub fn by_category(&self, category: VariationCategory) -> Vec<&VariationInfo> {
         // Iterate ordered_names to preserve registration order (numerical ID order)

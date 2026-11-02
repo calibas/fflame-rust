@@ -563,8 +563,10 @@ fn escaped(s, p) {
   `transform:` section, the point `#pixel` read and assigned). It is
   not an escape formula: it compiles to a **flame variation**
   ([VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)) and, in
-  Escape mode, is offered as the camera lens. `INFO.name` is its
-  registry name, and `INFO.resets_orbits: true` makes a flame using it
+  Escape mode, is offered as the camera lens. `INFO.name` is the
+  name `vary` calls it by (its registry key is its id and version:
+  [VARIATIONS.md](VARIATIONS.md#variations-written-in-rhai)), and
+  `INFO.resets_orbits: true` makes a flame using it
   start its orbits afresh every dispatch (`Feature::ResetsOrbits`;
   [RENDERER.md](RENDERER.md) *Persistent orbits*); `PARAMS` as a
   formula's; no `prepare`. The flame's
@@ -1369,8 +1371,18 @@ interpreter does (`test_files_run_on_the_gpu_as_the_interpreter_does`).
 A construct added to the language gets an entry there.
 
 **How it joins the engine.** A compiled entry is registered as a
-`FormulaDef` or `ColoringDef` under the name `custom-` plus a hash of
-its source, which every name-keyed cache then keys on. The config
+`FormulaDef` or `ColoringDef` under a name `custom-` begins
+(`custom::name_of`), which every name-keyed cache then keys on: for a
+Rhai entry with an id of its own (`INFO.id`, a UUID, which the Formula
+Editor writes into the file on Use), `custom-` and its key
+(`scripted::key`: the id, and a version over the source and the
+variations it carries); for any other, `custom-` and an FNV-1a hash of
+its kind, dialect, entry and source. A config keeps the name it was
+saved with, so older files' FNV names still resolve; a variant (array
+sizes, damping, the biomorph) and the perturbation tier are named from
+the slot's 64-bit hash (`custom::slot_hash`). Live and a first Use's
+view follow a Rhai entry by its id, so a change of title is the same
+entry. The config
 carries the source (`EscapeConfig::custom_formula`, `custom_coloring`),
 and the renderer, the CLI and the panel compile it before resolving the
 name, so a saved file, a PNG or an upload renders anywhere.

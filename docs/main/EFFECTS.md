@@ -465,8 +465,9 @@ fn effect(c, p, ctx) {
   (after the tone map, the default) or `"density"`.
 
 **Keyed by id and version.** One of the user's effects registers as
-`<id>@<the first 8 hex of its source's SHA-256>` (`custom::key_for`;
-rule 7), the name its instances run; a built-in's key is its name. So
+`scripted::key(id, source)`, `u<the id's 32 hex>_<the first 8 hex of its
+source's SHA-256>` (`custom::key_for`; rule 7; the same key a Rhai
+variation has), the name its instances run; a built-in's key is its name. So
 two versions of one effect are two entries, and every config renders
 the version it carries whatever else is open -- nothing looks the
 version up through the config. `custom::id_of` drops the version.

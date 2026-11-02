@@ -606,6 +606,32 @@ impl Transform {
         self.variation_priorities.remove(name);
     }
 
+    /// Move variation `from` to the name `to` with everything that names it
+    /// -- its weight, its `from.param` parameters, its place in
+    /// `variation_order`, its priority override: a new version of a Rhai
+    /// variation taking over from the old (`scripted::key`). Whether this
+    /// transform had it.
+    pub fn rename_variation(&mut self, from: &str, to: &str) -> bool {
+        let Some(w) = self.variations.remove(from) else { return false };
+        self.variations.insert(to.to_string(), w);
+        let prefix = format!("{from}.");
+        let moved: Vec<String> = self.variation_params.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        for k in moved {
+            if let Some(v) = self.variation_params.remove(&k) {
+                self.variation_params.insert(format!("{to}.{}", &k[prefix.len()..]), v);
+            }
+        }
+        for n in self.variation_order.iter_mut() {
+            if n == from {
+                *n = to.to_string();
+            }
+        }
+        if let Some(p) = self.variation_priorities.remove(from) {
+            self.variation_priorities.insert(to.to_string(), p);
+        }
+        true
+    }
+
     /// This transform's active variation names in dispatch order: the
     /// `variation_order` hint first (only entries still active), then any
     /// remaining active variations in registry order. The registry-order

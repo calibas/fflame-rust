@@ -288,11 +288,16 @@ impl StickyVariations {
         }
 
         // Extras: retained names not live here, newest first (name as a
-        // deterministic tiebreak), admitted while both ceilings hold.
+        // deterministic tiebreak), admitted while both ceilings hold. An
+        // older version of a Rhai variation live here under its new key
+        // (`scripted::key`: the same id) is not one: each edit Used is a
+        // new key, and its versions would fill the cap with dead code.
+        let live_ids: Vec<String> = union.iter().filter_map(|n| crate::scripted::key_id(n)).collect();
+        let superseded = |n: &str| crate::scripted::key_id(n).is_some_and(|id| live_ids.contains(&id));
         let mut candidates: Vec<(&String, u64)> = self
             .last_live
             .iter()
-            .filter(|(n, _)| !union.contains(n))
+            .filter(|(n, _)| !union.contains(n) && !superseded(n))
             .map(|(n, g)| (n, *g))
             .collect();
         candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));

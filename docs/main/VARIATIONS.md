@@ -488,10 +488,30 @@ function takes the point, and the ids when it has parameters (as
   load (`missing_variations_in`, so it is not fetched from the API),
   when a `FlameRenderer` is built, `load_config`, `update_flame`, and
   `render_with` (an escape lens, CLI, thumbnails, video).
-- **Names**: a lowercase identifier from `INFO.name`; refused when a
-  built-in, a download or a plug-in has it, and a download or plug-in
-  cannot displace one. Using a source again replaces it, and the
-  registry's version rebuilds the shader.
+- **Keyed by id and version** (design rule 7): it registers as
+  `scripted::key(id, source)`, `u<the id's 32 hex>_<the first 8 hex of
+  the source's SHA-256>` -- an identifier, so it is the WGSL function's
+  name (`variation_<key>`) and its parameters' prefix (`<key>.k`). Two
+  versions are two entries, and a flame renders the version it carries.
+  The id is `INFO.id`, a UUID; a source from before ids has `INFO.name`
+  alone, and its id is derived from that name (`scripted::derived_id`,
+  a v8 UUID of its SHA-256), so the same source keys the same way
+  everywhere. `INFO.name`, a lowercase identifier, stays what
+  `vary("name", z)` calls it by. Configs from before (v6) carried it
+  under its name; the v7 migration renames it to its key wherever the
+  config names it (`migrate_custom_variation_keys`).
+- **Use** (the Formula Editor) writes a UUID into a source that has
+  neither an id nor a name, or a hand-written id (`custom::needs_id`).
+  Using a new version moves the config to it in one undo step
+  (`custom::rekey`: every transform's weight, parameters, order and
+  priority, the lens, the escape transformations), the old source
+  going; the old version stays registered, so the undo renders. Live
+  follows a variation by its id. Pickers offer one version of each id
+  (`VariationRegistry::superseded`): the one the flame carries, else
+  the last registered; a picked one the flame does not carry comes with
+  its source (`custom::carry_change`). The sticky shader set keeps no
+  older version of an id that is live (`renderer::sticky`), as each
+  Live edit would otherwise fill its cap with dead code.
 - **`.flame` export drops it** (JWildfire has no such variation): its
   weight, its parameters and its `plugins=` entry, with a warning.
 - **As a lens**: the lens menu lists custom variations after the

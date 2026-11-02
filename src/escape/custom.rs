@@ -108,10 +108,27 @@ fn dialect(d: CustomDialect) -> Dialect {
     }
 }
 
-/// The registry name of a source: stable across runs and builds (FNV-1a,
-/// not the std hasher, whose output is not promised), so a file saved
-/// today names the same entry tomorrow.
+/// The registry name of a source: stable across runs and builds, so a
+/// file saved today names the same entry tomorrow. A Rhai source with an
+/// id of its own (`INFO.id`, a UUID: design rule 7) is named by it and its
+/// version, `custom-<scripted::key>` -- the version over the source and
+/// the variations it carries, as a changed one is a changed entry; any
+/// other by an FNV-1a hash (not the std hasher, whose output is not
+/// promised) of its kind, dialect, entry and source, `custom-<16 hex>`.
+/// A config keeps the name it was saved with: `ensure` registers under it.
 pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
+    if src.dialect == CustomDialect::Rhai {
+        if let Some(id) = lang::rhai::info_string(&src.source, "id").filter(|id| crate::scripted::is_uuid(id)) {
+            let mut versioned = src.source.clone();
+            for v in &src.variations {
+                for part in [&v.entry, &v.source] {
+                    versioned.push('\0');
+                    versioned.push_str(part);
+                }
+            }
+            return format!("{PREFIX}{}", crate::scripted::key(&id, &versioned));
+        }
+    }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |bytes: &[u8]| {
         for b in bytes {
@@ -143,6 +160,19 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
         eat(v.source.as_bytes());
     }
     format!("{PREFIX}{h:016x}")
+}
+
+/// A slot name's 64-bit hash, which names its variants (array sizes,
+/// damping, a biomorph) and its perturbation tier: an FNV name's own
+/// (`custom-<16 hex>`), or an FNV-1a hash of any other (a key's).
+pub fn slot_hash(name: &str) -> u64 {
+    let rest = name.strip_prefix(PREFIX).unwrap_or(name);
+    if rest.len() == 16 {
+        if let Ok(h) = u64::from_str_radix(rest, 16) {
+            return h;
+        }
+    }
+    rest.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
 /// The language's (`lang::rhai`, since the compiler is its own feature):
@@ -631,7 +661,7 @@ pub fn perturb_tier(escape: &EscapeConfig) -> Option<super::assembler::PerturbTi
     if !lang::interp::perturb_holds(&prog, &inputs.params, &inputs.env) {
         return None;
     }
-    let hash = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).ok()?;
+    let hash = slot_hash(&escape.formula);
     let deep = lang::perturb::grows_past_f32(&prog);
     let (stride, width) = (how.references() as u8, (1 + prog.carried.len()) as u8);
     // The built-ins' margin test needs the reference's |Z|^2 at the
@@ -1113,7 +1143,7 @@ fn resolve_coloring_sizes(escape: &EscapeConfig) -> Option<EscapeConfig> {
         note_sizes(&escape.coloring, None);
         return None;
     };
-    let base = u64::from_str_radix(&escape.coloring[PREFIX.len()..], 16).unwrap_or(0);
+    let base = slot_hash(&escape.coloring);
     let name = format!("{PREFIX}{:016x}", base.rotate_left(29) ^ h);
     if coloring(&name).is_none() {
         compile_once(&name, "colouring at its array sizes", src, Some(&settings), || compile_coloring(src, &name));
@@ -1160,7 +1190,7 @@ fn resolve_formula(escape: &EscapeConfig) -> std::borrow::Cow<'_, EscapeConfig> 
         return Cow::Owned(out);
     }
     let tag = u64::from(damped) | axis.map_or(0, |a| if a == lang::modifiers::Axis::Re { 2 } else { 4 });
-    let base = u64::from_str_radix(&escape.formula[PREFIX.len()..], 16).unwrap_or(0);
+    let base = slot_hash(&escape.formula);
     let sizes = sized.as_ref().map_or(0, |(h, _)| *h);
     let name = if !damped && axis.is_none() {
         format!("{PREFIX}{:016x}", base.rotate_left(29) ^ sizes)
@@ -1767,6 +1797,36 @@ mod tests {
         assert_ne!(n, name_of(EntryKind::Coloring, &a), "a formula and a colouring never share one");
         // Pinned: a saved file must keep resolving to its entry.
         assert_eq!(name_of(EntryKind::Formula, &src("x", "y")), "custom-22c22db4acbfd02f");
+        assert_eq!(slot_hash(&n), u64::from_str_radix(&n[PREFIX.len()..], 16).unwrap(), "an FNV name's hash is its own");
+    }
+
+    /// A Rhai entry with an id of its own is named by it and its version:
+    /// an edit, or a change to a variation it carries, is a new version of
+    /// the same id; without an id it keeps its FNV name; and a key's name
+    /// hashes for its variants as an FNV name does.
+    #[test]
+    fn a_rhai_entry_with_an_id_is_named_by_it() {
+        let id = "0f8a3c52-6b1d-4e7a-9c3f-5d2e8b4a7c61";
+        let text = format!("const INFO = #{{ id: \"{id}\", title: \"Keyed\" }};\nfn start(pixel, p) {{ #{{ z: complex(0.0, 0.0), c: pixel }} }}\n");
+        let rhai = |source: &str| CustomSource { dialect: CustomDialect::Rhai, entry: "Keyed".into(), source: source.to_string(), variations: Vec::new() };
+        let n = name_of(EntryKind::Formula, &rhai(&text));
+        let key = n.strip_prefix(PREFIX).expect("a slot's prefix");
+        assert!(crate::scripted::is_key(key), "{n}");
+        assert_eq!(crate::scripted::key_id(key).as_deref(), Some(id));
+        assert_eq!(n, format!("{PREFIX}{}", crate::scripted::key(id, &text)), "with nothing carried, the source's version");
+        let edited = name_of(EntryKind::Formula, &rhai(&text.replace("0.0, 0.0", "0.5, 0.0")));
+        assert_ne!(edited, n);
+        assert_eq!(crate::scripted::key_id(&edited[PREFIX.len()..]).as_deref(), Some(id));
+        let mut carrying = rhai(&text);
+        carrying.variations.push(CustomSource { dialect: CustomDialect::Rhai, entry: "rhai_v".into(), source: "a".into(), variations: Vec::new() });
+        let with_v = name_of(EntryKind::Formula, &carrying);
+        carrying.variations[0].source = "b".into();
+        assert_ne!(with_v, n, "what it carries is in its version");
+        assert_ne!(with_v, name_of(EntryKind::Formula, &carrying));
+        let plain = name_of(EntryKind::Formula, &rhai("fn start(pixel, p) { 0 }\n"));
+        assert_eq!(plain.len(), PREFIX.len() + 16, "no id, an FNV name");
+        assert_ne!(slot_hash(&n), slot_hash(&edited));
+        assert_eq!(slot_hash(&n), slot_hash(&n.clone()));
     }
 
     #[test]

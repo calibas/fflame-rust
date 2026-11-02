@@ -153,16 +153,16 @@ fn splice_blend_library(wgsl: &str) -> String {
 }
 
 /// The registry key of one of the user's effects: its id and its
-/// version, `<id>@<the first 8 hex of the source's SHA-256>` (design rule
-/// 7). Every version is its own entry, so a config renders the version it
-/// carries whatever else is registered; a built-in's key is its name.
+/// version (`scripted::key`, rule 7). Every version is its own entry, so a
+/// config renders the version it carries whatever else is registered; a
+/// built-in's key is its name.
 pub fn key_for(id: &str, source: &str) -> String {
-    format!("{id}@{}", &scripted::version_of(source)[..8])
+    scripted::key(id, source)
 }
 
 /// The id a key names, its version dropped (a built-in's key is its id).
-pub fn id_of(key: &str) -> &str {
-    key.split_once('@').map_or(key, |(id, _)| id)
+pub fn id_of(key: &str) -> String {
+    scripted::key_id(key).unwrap_or_else(|| key.to_string())
 }
 
 /// Compile a source and register it under its key, replacing what has that
