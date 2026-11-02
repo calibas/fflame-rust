@@ -1738,6 +1738,51 @@ mod gpu_tests {
             include_str!("../../assets/effects/sobel_edges.rhai"),
             &[&[], &[("threshold", 0.3), ("glow", 1.0), ("preserve_color", 0.0)], &[("threshold", 0.05), ("blend_mode", 0.0), ("intensity", 0.5)], &[("preserve_color", 1.0), ("blend_mode", 4.0)]],
         ),
+        (
+            "film_grain",
+            include_str!("../../assets/effects/film_grain.rhai"),
+            &[&[], &[("seed", 37.0)], &[("intensity", 0.6), ("blend_mode", 0.0)], &[("seed", 200.0), ("blend_mode", 3.0)]],
+        ),
+        (
+            "hue_shift",
+            include_str!("../../assets/effects/hue_shift.rhai"),
+            &[&[], &[("offset", 90.0)], &[("offset", 200.0), ("intensity", 0.5)], &[("offset", 300.0), ("blend_mode", 9.0)]],
+        ),
+        (
+            "plasma",
+            include_str!("../../assets/effects/plasma.rhai"),
+            &[&[], &[("time", 12.5)], &[("scale", 20.0), ("direction", 45.0), ("time", 3.0)], &[("speed", 3.0), ("time", 7.0), ("blend_mode", 4.0)]],
+        ),
+        (
+            "tunnel",
+            include_str!("../../assets/effects/tunnel.rhai"),
+            &[&[], &[("time", 4.2), ("distortion", 0.5)], &[("speed", 2.0), ("rotation_speed", 1.5), ("time", 9.0)], &[("blend_mode", 3.0), ("intensity", 0.6), ("time", 1.0)]],
+        ),
+        (
+            "kaleidoscope",
+            include_str!("../../assets/effects/kaleidoscope.rhai"),
+            &[&[], &[("segments", 9.5), ("rotation", 40.0)], &[("zoom", 2.2), ("square_mode", 0.0)], &[("edge_offset", 12.0), ("rotation", 200.0), ("blend_mode", 2.0)]],
+        ),
+        (
+            "julia",
+            include_str!("../../assets/effects/julia.rhai"),
+            &[&[], &[("mode", 0.0), ("color_mode", 0.0)], &[("color_mode", 2.0), ("max_iter", 40.0), ("zoom", 2.5), ("center_x", -0.5)], &[("julia_cx", 0.3), ("julia_cy", -0.5), ("blend_mode", 3.0)]],
+        ),
+        (
+            "worley_noise",
+            include_str!("../../assets/effects/worley_noise.rhai"),
+            &[&[], &[("mode", 1.0), ("color_mode", 0.0), ("time", 5.0)], &[("mode", 2.0), ("color_mode", 2.0), ("scale", 3.0)], &[("mode", 3.0), ("direction", 90.0), ("time", 20.0), ("blend_mode", 0.0)]],
+        ),
+        (
+            "simplex_noise",
+            include_str!("../../assets/effects/simplex_noise.rhai"),
+            &[&[], &[("mode", 1.0), ("intensity", 0.8), ("time", 6.0)], &[("mode", 2.0), ("octaves", 2.0)], &[("octaves", 6.0), ("scale", 12.0), ("blend_mode", 0.0), ("direction", 10.0), ("time", 3.0)]],
+        ),
+        (
+            "domain_warp",
+            include_str!("../../assets/effects/domain_warp.rhai"),
+            &[&[], &[("time", 5.0), ("octaves", 2.0)], &[("intensity", 0.4), ("scale", 6.0)], &[("octaves", 6.0), ("direction", 90.0), ("time", 2.0), ("blend_mode", 4.0)]],
+        ),
     ];
 
     /// Each Rhai twin renders its built-in WGSL's pixels, within a step of
@@ -1762,14 +1807,16 @@ mod gpu_tests {
             })
             .collect();
         let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &data);
+        let mut failures = Vec::new();
         for (builtin, source, settings) in TWINS {
             let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
             assert_eq!(twin.name, *builtin, "a twin's id is its built-in's name");
             {
                 let registry = crate::effects::global_effect_registry();
                 let wgsl = registry.get(builtin).expect("the built-in");
-                let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, f32, Option<f32>, Option<f32>)> {
-                    i.parameters.iter().map(|p| (p.name.clone(), p.default_value, p.min_value, p.max_value)).collect()
+                // The type's Debug names its kind and an enum's choices.
+                let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, String, f32, Option<f32>, Option<f32>)> {
+                    i.parameters.iter().map(|p| (p.name.clone(), format!("{:?}", p.param_type), p.default_value, p.min_value, p.max_value)).collect()
                 };
                 assert_eq!(shape(&twin), shape(wgsl), "{builtin}: the same parameters, in the same order");
                 assert_eq!(twin.category, wgsl.category, "{builtin}: the same place in the pipeline");
@@ -1787,11 +1834,110 @@ mod gpu_tests {
                 };
                 let wgsl = run_colour(&device, &queue, &view, W, H, &[instance(builtin)]);
                 let rhai = run_colour(&device, &queue, &view, W, H, &[instance(&test_name)]);
-                let worst = wgsl.iter().zip(&rhai).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
-                assert!(worst <= 1, "{builtin} at {set:?}: off by {worst}");
+                let diffs: Vec<i32> = wgsl.iter().zip(&rhai).map(|(a, b)| (*a as i32 - *b as i32).abs()).collect();
+                let worst = diffs.iter().copied().max().unwrap_or(0);
+                let off = diffs.iter().filter(|d| **d > 1).count();
+                if worst > 1 {
+                    failures.push(format!("{builtin} at {set:?}: off by {worst} ({off} of {} channels past 1)", diffs.len()));
+                }
             }
             crate::effects::global_effect_registry_mut().remove_by_name(&test_name);
         }
+        assert!(failures.is_empty(), "twins that differ from their WGSL:\n{}", failures.join("\n"));
+    }
+
+    /// The density effects' twins, as [`TWINS`] the colour ones'.
+    #[cfg(feature = "engine-escape")]
+    const DENSITY_TWINS: &[(&str, &str, &[&[(&str, f32)]])] = &[
+        (
+            "density_blur",
+            include_str!("../../assets/effects/density_blur.rhai"),
+            &[&[], &[("radius", 8.0), ("threshold", 0.5)], &[("radius", 1.0)], &[("falloff", 0.1), ("threshold", 0.05), ("radius", 6.0)]],
+        ),
+        (
+            "sharpen",
+            include_str!("../../assets/effects/sharpen.rhai"),
+            &[&[], &[("amount", 2.0), ("radius", 3.5)], &[("amount", 0.005)], &[("radius", 0.5), ("amount", 0.7)]],
+        ),
+        (
+            "bilateral_blur",
+            include_str!("../../assets/effects/bilateral_blur.rhai"),
+            &[&[], &[("radius", 7.0), ("sigma_spatial", 6.0)], &[("sigma_range", 0.5), ("radius", 2.0)], &[("radius", 10.0), ("sigma_range", 0.05)]],
+        ),
+    ];
+
+    /// Each density twin gives its WGSL's floats, to a part in a thousand
+    /// of the larger: the accumulation's colours and hit counts, through
+    /// sums of Gaussian taps the two sum in their own order.
+    #[cfg(feature = "engine-escape")]
+    #[test]
+    fn the_density_twins_match_their_wgsl() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        const W: u32 = 48;
+        const H: u32 = 32;
+        const MEAN: f32 = 400.0;
+        // Colours in stripes and squares; hit counts from a tenth of the
+        // mean to twenty times it, so the density blur's threshold divides
+        // the image.
+        let data: Vec<u8> = (0..W * H)
+            .flat_map(|i| {
+                let (x, y) = (i % W, i / W);
+                let square = if (x / 6 + y / 6) % 2 == 0 { 0.4 } else { 0.0 };
+                let hits = MEAN * (0.1 + 19.9 * ((x * 7 + y * 3) % 23) as f32 / 22.0);
+                [x as f32 / W as f32, y as f32 / H as f32, 0.3 + square, hits]
+            })
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba32Float, &data);
+        let run = |effect: EffectInstance| {
+            let mut chain = EffectChainRunner::new(&device, W, H);
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("density") });
+            chain.reset_slots();
+            assert!(chain.run_density_effects(&device, &queue, &mut encoder, &view, &[effect], MEAN), "the chain ran");
+            queue.submit(Some(encoder.finish()));
+            let out = chain.read_density_output_blocking(&device, &queue);
+            chain.destroy();
+            out
+        };
+        let mut failures = Vec::new();
+        for (builtin, source, settings) in DENSITY_TWINS {
+            let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
+            {
+                let registry = crate::effects::global_effect_registry();
+                let wgsl = registry.get(builtin).expect("the built-in");
+                let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, String, f32, Option<f32>, Option<f32>)> {
+                    i.parameters.iter().map(|p| (p.name.clone(), format!("{:?}", p.param_type), p.default_value, p.min_value, p.max_value)).collect()
+                };
+                assert_eq!(shape(&twin), shape(wgsl), "{builtin}: the same parameters, in the same order");
+                assert_eq!(twin.category, wgsl.category, "{builtin}: the same place in the pipeline");
+            }
+            let test_name = format!("{builtin}_rhai_twin");
+            twin.name = test_name.clone();
+            crate::effects::global_effect_registry_mut().register(twin);
+            for set in settings.iter() {
+                let instance = |name: &str| {
+                    let mut e = EffectInstance::new(name);
+                    for (k, v) in set.iter() {
+                        e.set_param(k, *v);
+                    }
+                    e
+                };
+                let wgsl = run(instance(builtin));
+                let rhai = run(instance(&test_name));
+                let mut worst = 0.0f32;
+                for (a, b) in wgsl.iter().flatten().zip(rhai.iter().flatten()) {
+                    worst = worst.max((a - b).abs() / a.abs().max(b.abs()).max(1.0));
+                }
+                if worst > 1e-3 {
+                    failures.push(format!("{builtin} at {set:?}: off by {worst:e} of the larger"));
+                }
+            }
+            crate::effects::global_effect_registry_mut().remove_by_name(&test_name);
+        }
+        assert!(failures.is_empty(), "density twins that differ from their WGSL:\n{}", failures.join("\n"));
     }
 
     /// A frame's chains may need more parameter slots than the buffer

@@ -446,7 +446,9 @@ impl D<'_> {
                     Ident | F32 => return Ok(Some(da)),
                     Zero => return Ok(None),
                     // An effect's image: no formula derives through it.
-                    SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => return Ok(None),
+                    SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Hash2 => return Ok(None),
+                    // A sawtooth's slope is 1, between its jumps.
+                    Fract => return Ok(Some(da)),
                     Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),
                     Log => bin(BinOp::Div, one, a),
                     Exp => call(Exp, a),
@@ -731,7 +733,8 @@ impl J<'_> {
             Sqr => times(konst(2.0, 0.0), a),
             Ident | F32 => return Some(da),
             Zero | Round | Trunc | Ceil | Floor | IsInf | IsNan => return None,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => return None,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Hash2 => return None,
+            Fract => return Some(da),
             Sqrt => bin(BinOp::Div, konst(0.5, 0.0), call(Sqrt, a)),
             Log => bin(BinOp::Div, one, a),
             Exp | Expm1 => call(Exp, a),

@@ -650,8 +650,9 @@ impl BigMachine {
             Ident => z.clone(),
             Zero => BigComplex::zero(n),
             F32 => self.c(z.re.to_f64() as f32 as f64, z.im.to_f64() as f32 as f64),
-            // An effect's image: never in a reference orbit.
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => return Err(Stop),
+            // An effect's image, and the noise functions: never in a
+            // reference orbit.
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Fract | Hash2 => return Err(Stop),
             Sin => {
                 let (s, c) = z.re.sin_cos();
                 let (ch, sh) = self.cosh_sinh(&z.im)?;

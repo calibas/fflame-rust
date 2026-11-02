@@ -2453,6 +2453,8 @@ impl<'p> Gen<'p> {
                 Cabs => format!("length({v})"),
                 Abs => format!("abs({v})"),
                 Atan2 => format!("{}({v})", self.use_(Helper::CArg)),
+                Fract => format!("fract({v})"),
+                Hash2 => format!("{}({v})", self.use_(Helper::Hash2)),
                 IsNan => format!("{}({v})", self.use_(Helper::CIsNan)),
                 IsInf => format!("{}({v})", self.use_(Helper::CIsInf)),
                 Sin if self.exact_near_zero => format!("{}({v})", self.use_(Helper::CSinSmall)),
@@ -2512,7 +2514,8 @@ impl<'p> Gen<'p> {
             IsInf => return format!("{}({v})", self.use_(Helper::IsInf)),
             Expm1 => format!("{}({v})", self.use_(Helper::FExpm1)),
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
-            Conj | Flip | Cosxx => unreachable!("complex-valued"),
+            Fract => format!("fract({v})"),
+            Conj | Flip | Cosxx | Hash2 => unreachable!("complex-valued"),
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
@@ -2527,6 +2530,8 @@ fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
         SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => unreachable!("an image read, emitted by `Gen::call`"),
+        Hash2 => Helper::Hash2,
+        Fract => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.
         F32 => Helper::CIdent,
         Sqr => Helper::CSqr,
@@ -2835,6 +2840,8 @@ fn sanitize(name: &str) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Helper {
     Reduce,
+    /// The effects' noise hash (`Builtin::Hash2`).
+    Hash2,
     Atan2,
     Round,
     IsNan,
@@ -2911,6 +2918,7 @@ impl Helper {
         use Helper::*;
         match self {
             Reduce => "uf_reduce",
+            Hash2 => "uf_hash2",
             FSin => "uf_sin",
             FSinh => "uf_sinh",
             FExpm1 => "uf_expm1",
@@ -3017,6 +3025,11 @@ impl Helper {
         let src: &str = match self {
             // Cody-Waite reduction of a trig argument: the template's
             // `esc_reduce`, which the measured M2 cos error needed.
+            // As the built-in noise shaders write it, to the operation.
+            Hash2 => "fn uf_hash2(p: vec2<f32>) -> vec2<f32> {
+    var n = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)), dot(p, vec2<f32>(269.5, 183.3)));
+    return fract(sin(n) * 43758.5453);
+}",
             Reduce => "fn uf_reduce(t: f32) -> f32 {
     let k = round(t * 0.15915494309189535);
     var r = fma(-k, 6.2831855, t);

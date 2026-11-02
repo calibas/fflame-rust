@@ -365,6 +365,39 @@ fn a_librarys_runaway_function_spends_the_shared_budget() {
     assert!(format!("{err}").contains("budget"), "{err}");
 }
 
+/// `param_angle` is a float in degrees that says it is an angle: the panel
+/// draws the angle control, and the wire form adds `"angle": true` to a
+/// float's, which anything that knows no more reads as a float.
+#[test]
+fn an_angle_parameter_is_a_float_that_says_so() {
+    let script = r#"
+        script("Angles", "generator");
+        let a = param_angle("turn", 45);
+        let b = param_angle("tilt", 10.0, -90.0, 90.0);
+        let t = flame.add_transform();
+        t.add_variation("linear", 1.0);
+        t.weight = (a + b) / 100.0;
+    "#;
+    let meta = ScriptHost::new().collect(script, &FractalConfig::default()).expect("collect");
+    match &meta.params[0] {
+        ParamDecl::Float { default, min, max, angle, .. } => assert_eq!((*default, *min, *max, *angle), (45.0, 0.0, 360.0, true)),
+        other => panic!("expected an angle, got {other:?}"),
+    }
+    match &meta.params[1] {
+        ParamDecl::Float { min, max, angle, .. } => assert_eq!((*min, *max, *angle), (-90.0, 90.0, true)),
+        other => panic!("expected an angle, got {other:?}"),
+    }
+    let json = meta.params[0].to_api_json();
+    assert_eq!((json["type"].as_str(), json["angle"].as_bool()), (Some("float"), Some(true)));
+    // A plain float's wire form is as it was.
+    let plain = ParamDecl::Float { key: "k".into(), label: "K".into(), default: 1.0, min: 0.0, max: 2.0, angle: false }.to_api_json();
+    assert!(plain.get("angle").is_none(), "{plain}");
+    let out = run(script, 1).unwrap();
+    assert_eq!(out.config.flame.transforms[0].weight, 0.55);
+    let out = run_with(script, 1, &[("turn", ParamValue::Float(400.0))]).unwrap();
+    assert_eq!(out.config.flame.transforms[0].weight, 3.7, "clamped to its turn");
+}
+
 #[test]
 fn params_are_collected_then_supplied() {
     let script = r#"

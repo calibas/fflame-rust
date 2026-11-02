@@ -63,6 +63,7 @@ pub fn damped(p: &Program) -> Program {
         hint: "Mann iteration: z + alpha (f(z) - z) a pass (the panel's Damping)".to_string(),
         choices: Vec::new(),
         exponential: false,
+        angle: false,
         span: Default::default(),
     });
     let alpha = out.params.len() - 1;
