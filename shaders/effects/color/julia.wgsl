@@ -1,5 +1,9 @@
 // Julia/Mandelbrot Overlay Effect
 //
+// The app runs this WGSL: its Rhai twin, assets/effects/julia.rhai, is
+// pending (docs/main/EFFECTS.md, Rhai effects) -- it passes every check
+// but speed -- and is held to this file's pixels until it replaces it.
+//
 // Renders Mandelbrot or Julia set fractals as an overlay on the image.
 // Parameters:
 //   params[0] = mode: 0 = Mandelbrot, 1 = Julia

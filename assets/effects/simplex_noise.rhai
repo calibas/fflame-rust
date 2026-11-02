@@ -1,9 +1,11 @@
 // Simplex Noise: fractal simplex noise, as colour, as a distortion of the
 // image, or as a mask.
 //
-// The Rhai twin of shaders/effects/color/simplex_noise.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The built-in `simplex_noise` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/simplex_noise.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     intensity: #{ value: 0.5, min: 0.0, max: 1.0, caption: "Intensity" },

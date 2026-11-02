@@ -1,8 +1,10 @@
 // Plasma: the demoscene's plasma, a sum of sines, travelling in a direction.
 //
-// The Rhai twin of shaders/effects/color/plasma.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The built-in `plasma` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/plasma.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     intensity: #{ value: 0.3, min: 0.0, max: 1.0, caption: "Intensity" },

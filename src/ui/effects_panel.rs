@@ -3,6 +3,7 @@
 //! UI for managing post-processing effects (color and density effects).
 
 use egui::Ui;
+use rust_i18n::t;
 
 use crate::animation::AnimationController;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};
@@ -81,6 +82,14 @@ fn widget_param(p: &EffectParameter) -> VariationParameter {
         max_value,
         description: p.description.clone(),
     }
+}
+
+/// Edit as Rhai, on a built-in that is its Rhai twin: whether it was
+/// clicked. The Formula Editor makes it one of the user's
+/// (`FormulaEditorPanel::edit_effect_as_rhai`).
+fn edit_as_rhai_button(ui: &mut Ui, effect_type: &str) -> bool {
+    let twin = crate::effects::custom::all_twins().any(|(n, _)| *n == effect_type);
+    twin && ui.small_button(t!("effects_panel.edit_as_rhai")).on_hover_text(t!("effects_panel.edit_as_rhai_tip")).clicked()
 }
 
 /// Draw the parameters of the effect at `index` in `list`.
@@ -242,8 +251,12 @@ pub fn render_effects_panel(
     // in `app::gpu_updates`.
     _animation_controller: &mut AnimationController,
     catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
+    formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
+    open_formula_editor: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+    // Edit as Rhai: (density, index, the built-in).
+    let mut edit_as_rhai: Option<(bool, usize, String)> = None;
 
     ui.heading("Post-Processing Effects");
     ui.add_space(8.0);
@@ -298,6 +311,9 @@ pub fn render_effects_panel(
                         // Remove button
                         if ui.small_button("X").clicked() {
                             effect_to_remove = Some(idx);
+                        }
+                        if edit_as_rhai_button(ui, &effect.effect_type) {
+                            edit_as_rhai = Some((false, idx, effect.effect_type.clone()));
                         }
                     });
                 });
@@ -467,6 +483,9 @@ pub fn render_effects_panel(
                             if ui.small_button("X").clicked() {
                                 effect_to_remove = Some(idx);
                             }
+                            if edit_as_rhai_button(ui, &effect.effect_type) {
+                                edit_as_rhai = Some((true, idx, effect.effect_type.clone()));
+                            }
                         });
                     });
 
@@ -546,6 +565,12 @@ pub fn render_effects_panel(
     });
 
     render_effect_catalog(ui, catalog);
+
+    if let Some((density, index, builtin)) = edit_as_rhai {
+        formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_effect_as_rhai(config_manager, density, index, &builtin);
+        *open_formula_editor = true;
+        max_update = max_update.max(UpdateType::ToneMappingOnly);
+    }
 
     max_update
 }

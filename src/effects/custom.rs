@@ -129,8 +129,12 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
     }
 
     let wgsl = assemble(&lang::wgsl::effect(&program)?);
+    // A shipped twin is validated by the tests (`every_built_in_effect_
+    // validates`), not again at every start.
     #[cfg(not(target_arch = "wasm32"))]
-    lang::wgsl::validate_effect(&splice_blend_library(&wgsl)).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
+    if !provenance.is_builtin() {
+        lang::wgsl::validate_effect(&splice_blend_library(&wgsl)).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
+    }
 
     Ok(EffectInfo {
         // Under its key: the version is its name's, so two versions of
@@ -143,6 +147,94 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         provenance,
         labels: lang::rhai::source_labels(source).map(Arc::new),
     })
+}
+
+/// The built-ins that are their Rhai twins (D1; docs/projects/
+/// rhai-plugins.md, P2 step 7): each one-pass effect that passed the
+/// checks, by name, as `assets/effects/<name>.rhai`. Each is held to the
+/// WGSL it replaced (`effects::wgsl_builtins`) by the pixel compares in
+/// `effect_chain`.
+pub const BUILTIN_TWINS: &[(&str, &str)] = &[
+    ("vignette", include_str!("../../assets/effects/vignette.rhai")),
+    ("film_grain", include_str!("../../assets/effects/film_grain.rhai")),
+    ("chromatic_aberration", include_str!("../../assets/effects/chromatic_aberration.rhai")),
+    ("sobel_edges", include_str!("../../assets/effects/sobel_edges.rhai")),
+    ("density_blur", include_str!("../../assets/effects/density_blur.rhai")),
+    ("bilateral_blur", include_str!("../../assets/effects/bilateral_blur.rhai")),
+    ("sharpen", include_str!("../../assets/effects/sharpen.rhai")),
+    ("hue_shift", include_str!("../../assets/effects/hue_shift.rhai")),
+    ("plasma", include_str!("../../assets/effects/plasma.rhai")),
+    ("tunnel", include_str!("../../assets/effects/tunnel.rhai")),
+    ("worley_noise", include_str!("../../assets/effects/worley_noise.rhai")),
+    ("simplex_noise", include_str!("../../assets/effects/simplex_noise.rhai")),
+    ("domain_warp", include_str!("../../assets/effects/domain_warp.rhai")),
+];
+
+/// Twins that have not passed every check: the built-in stays its WGSL
+/// ("one that fails a check keeps its WGSL until it passes"), and the
+/// twin is held to it all the same, timed beside the others
+/// (`the_twins_are_no_slower` says when one is ready), and offered by
+/// Edit as Rhai. Both pass all but speed: measured 2026-11-02 on a
+/// GTX 1660 SUPER, 9-13% slower at 1080p and 4K, the causes not found
+/// once the compiler's general costs were taken out (rhai-plugins.md,
+/// P2 step 7).
+pub const PENDING_TWINS: &[(&str, &str)] = &[
+    ("kaleidoscope", include_str!("../../assets/effects/kaleidoscope.rhai")),
+    ("julia", include_str!("../../assets/effects/julia.rhai")),
+];
+
+/// Every twin, replaced or pending.
+pub fn all_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    BUILTIN_TWINS.iter().chain(PENDING_TWINS)
+}
+
+/// The built-in `name` as its Rhai twin, if it has one: on desktop the
+/// working copy under `assets/effects/` when it differs and compiles --
+/// so a built-in is edited without a rebuild, as its WGSL was under
+/// `shaders/` -- else the embedded copy. A working copy that does not
+/// compile is logged and the shipped one runs.
+pub fn builtin_twin(name: &str) -> Option<EffectInfo> {
+    match builtin_source(BUILTIN_TWINS, name)? {
+        (_, Ok(info)) => Some(info),
+        (_, Err(e)) => {
+            log::error!("the built-in effect `{name}`'s twin does not compile ({e}); its WGSL runs");
+            None
+        }
+    }
+}
+
+/// The Rhai source of the built-in `name`, replaced or pending
+/// ([`builtin_twin`]'s choice of copy): what the Effects panel's Edit as
+/// Rhai starts from.
+pub fn builtin_twin_source(name: &str) -> Option<String> {
+    builtin_source(BUILTIN_TWINS, name)
+        .or_else(|| builtin_source(PENDING_TWINS, name))
+        .and_then(|(text, compiled)| compiled.is_ok().then_some(text))
+}
+
+/// The twin's source in `list` -- the working copy when it differs and
+/// compiles, else the embedded one -- and what it compiled to.
+fn builtin_source(list: &[(&str, &'static str)], name: &str) -> Option<(String, Result<EffectInfo, String>)> {
+    let (_, embedded) = list.iter().find(|(n, _)| *n == name)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(text) = std::fs::read_to_string(crate::resources::resource_path(format!("assets/effects/{name}.rhai"))) {
+        if text != *embedded {
+            match compile_twin(name, &text) {
+                Ok(info) => return Some((text, Ok(info))),
+                Err(e) => log::warn!("assets/effects/{name}.rhai does not compile ({e}); the shipped copy runs"),
+            }
+        }
+    }
+    Some((embedded.to_string(), compile_twin(name, embedded)))
+}
+
+/// A twin compiled as the built-in it is: under that name.
+fn compile_twin(name: &str, source: &str) -> Result<EffectInfo, String> {
+    let info = compile(source, Provenance::Builtin)?;
+    if info.name != name {
+        return Err(format!("its id is `{}`, not `{name}`", info.name));
+    }
+    Ok(info)
 }
 
 /// The module as the effect chain builds it: the blend library spliced
@@ -243,6 +335,39 @@ pub fn failure(id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The built-ins that are their twins run on the web (a D1 check):
+    /// each module, as the chain builds it, samples only at an explicit
+    /// level (Chrome refuses implicit derivatives in non-uniform control
+    /// flow), writes no operator mix Tint refuses, no self-compare or
+    /// self-division Metal's fast-math folds, and no subnormal literal.
+    #[test]
+    fn the_builtin_twins_are_web_safe() {
+        use crate::variations::shader_lint;
+        for (name, source) in all_twins() {
+            let info = compile(source, Provenance::Builtin).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let wgsl = splice_blend_library(&info.source.wgsl());
+            let code = shader_lint::strip_wgsl_comments(&wgsl);
+            for implicit in ["textureSample(", "textureSampleBias(", "textureSampleCompare("] {
+                assert!(!code.contains(implicit), "{name}: {implicit}..) samples with implicit derivatives");
+            }
+            assert!(shader_lint::mixed_operators(&wgsl).is_empty(), "{name}: {:?}", shader_lint::mixed_operators(&wgsl));
+            assert!(shader_lint::self_operations(&wgsl).is_empty(), "{name}: {:?}", shader_lint::self_operations(&wgsl));
+            assert!(shader_lint::subnormal_literals(&wgsl).is_empty(), "{name}: {:?}", shader_lint::subnormal_literals(&wgsl));
+        }
+    }
+
+    /// Compiling the fifteen twins is what the effect registry's first use
+    /// now costs; printed, for the record.
+    #[test]
+    #[ignore = "a measurement"]
+    fn how_long_the_twins_take_to_compile() {
+        let start = web_time::Instant::now();
+        for (name, _) in BUILTIN_TWINS {
+            assert!(builtin_twin(name).is_some(), "{name}");
+        }
+        println!("{} twins compiled in {:?}", BUILTIN_TWINS.len(), start.elapsed());
+    }
 
     /// An effect of the user's: an id, a parameter of each kind, a blend.
     pub(crate) const TINT: &str = r#"

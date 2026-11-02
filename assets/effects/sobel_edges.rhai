@@ -1,9 +1,11 @@
 // Edge Glow: the image's edges, found by the Sobel operator on its
 // luminance, drawn glowing over it.
 //
-// The Rhai twin of shaders/effects/color/sobel_edges.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The built-in `sobel_edges` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/sobel_edges.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     intensity: #{ value: 1.0, min: 0.0, max: 2.0, caption: "Intensity" },

@@ -506,6 +506,43 @@ impl FormulaEditorPanel {
         }
     }
 
+    /// The Effects panel's Edit as Rhai: the built-in effect at `index` of
+    /// its chain (`density`, which) becomes one of the user's -- the source
+    /// the built-in runs, with an id of its own, registered, and the
+    /// instance moved to it with its values, one undo step -- and opens
+    /// here unsaved and in use, so Live re-applies an edit. Save keeps it
+    /// in the library; the built-in is untouched.
+    pub fn edit_effect_as_rhai(&mut self, cm: &mut ConfigManager, density: bool, index: usize, builtin: &str) {
+        let Some(text) = crate::effects::custom::builtin_twin_source(builtin) else { return };
+        let source = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
+        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+            Ok(key) => key,
+            Err(e) => {
+                self.status = Some(t!("formula_editor.did_not_compile", entry = builtin, error = e).to_string());
+                return;
+            }
+        };
+        let Some(src) = crate::effects::custom::carried(&source) else { return };
+        let mut list = cm.config().custom_effects.clone();
+        list.push(src);
+        let path = if density { ConfigPath::DensityEffectType { index } } else { ConfigPath::ColorEffectType { index } };
+        let changes = vec![
+            (path, ConfigValue::String(key.clone())),
+            (ConfigPath::CustomEffects, ConfigValue::String(serde_json::to_string(&list).unwrap_or_default())),
+        ];
+        if let Err(e) = cm.update_batch(changes, "history.action.edit_effect_as_rhai".to_string()) {
+            self.status = Some(format!("{e:?}"));
+            return;
+        }
+        let title = crate::effects::global_effect_registry().get(builtin).map(|i| i.translated_name()).unwrap_or_else(|| builtin.to_string());
+        let file = formula_store::file_name_for(&format!("{builtin}.rhai")).unwrap_or_else(|| "effect.rhai".into());
+        self.adopt(None, file, source);
+        let id = crate::effects::custom::id_of(&key);
+        self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Effect && *n == id));
+        self.in_use.push((EntryKind::Effect, None, id));
+        self.status = Some(t!("formula_editor.editing_builtin_effect", name = title).to_string());
+    }
+
     /// Use an effect (P2): give it an id if it has none -- written into the
     /// file, which Save then keeps -- register it under its key (its id
     /// and version, rule 7), and put its source in the config, one undo
@@ -1075,6 +1112,36 @@ mod tests {
         let mut registry = crate::effects::global_effect_registry_mut();
         registry.remove_by_name(&key);
         registry.remove_by_name(&new_key);
+    }
+
+    /// Edit as Rhai on a built-in effect: the instance runs the user's
+    /// copy of the source the built-in runs, under a UUID of its own, its
+    /// settings kept, in one undo step; the editor holds that copy in use;
+    /// the built-in is untouched, and undo returns the instance to it.
+    #[test]
+    fn edit_as_rhai_makes_a_builtin_effect_the_users() {
+        let mut config = crate::config::FractalConfig::default();
+        let mut vignette = crate::effects::EffectInstance::new("vignette");
+        vignette.set_param("intensity", 0.8);
+        config.color_effects = vec![vignette];
+        let mut cm = ConfigManager::new(config);
+        let mut panel = FormulaEditorPanel::new();
+        let before = cm.history_len();
+        panel.edit_effect_as_rhai(&mut cm, false, 0, "vignette");
+        let c = cm.config();
+        let key = c.color_effects[0].effect_type.clone();
+        let id = crate::effects::custom::id_of(&key);
+        assert!(crate::scripted::is_uuid(&id), "{key}: {:?}", panel.status);
+        assert_eq!(c.color_effects[0].params.get("intensity"), Some(&0.8), "its settings kept");
+        assert_eq!(c.custom_effects.len(), 1);
+        assert_eq!(c.custom_effects[0].entry, key);
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        assert_eq!(lang::rhai::info_string(&panel.text, "id").as_deref(), Some(id.as_str()), "the editor holds the copy");
+        assert!(panel.in_use.iter().any(|(k, _, n)| *k == EntryKind::Effect && *n == id), "in use, for Live");
+        assert!(crate::effects::global_effect_registry().get("vignette").is_some_and(|i| i.provenance.is_builtin()), "the built-in stays");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().color_effects[0].effect_type, "vignette");
+        crate::effects::global_effect_registry_mut().remove_by_name(&key);
     }
 
     /// A variation from before ids (its `INFO.name` alone) is Used under
