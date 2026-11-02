@@ -1,5 +1,9 @@
 // Kaleidoscope Effect
 //
+// The app runs this WGSL: its Rhai twin, assets/effects/kaleidoscope.rhai, is
+// pending (docs/main/EFFECTS.md, Rhai effects) -- it passes every check
+// but speed -- and is held to this file's pixels until it replaces it.
+//
 // Creates N-fold rotational symmetry by folding UV coordinates in polar space.
 // Parameters:
 //   params[0] = segments (2-16): Number of symmetric segments

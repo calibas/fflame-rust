@@ -1948,6 +1948,8 @@ impl<'a> PanelViewer<'a> {
             self.context.config_manager,
             self.context.animation_controller,
             self.context.effect_catalog,
+            self.context.formula_editor,
+            self.context.open_formula_editor,
         );
     }
 

@@ -1719,6 +1719,75 @@ mod gpu_tests {
         registry.remove_by_name(&multiply);
     }
 
+    /// What a config reads of an effect: each parameter's name, type (its
+    /// Debug names its kind and an enum's choices), default, range, label
+    /// and hint, in order.
+    #[cfg(feature = "lang")]
+    #[allow(clippy::type_complexity)]
+    fn values(i: &crate::effects::EffectInfo) -> Vec<(String, String, f32, Option<f32>, Option<f32>, String, Option<String>)> {
+        i.parameters
+            .iter()
+            .map(|p| (p.name.clone(), format!("{:?}", p.param_type), p.default_value, p.min_value, p.max_value, p.display_name.clone(), p.description.clone()))
+            .collect()
+    }
+
+    /// The D1 checks that need no pixels, for a built-in's twin: the
+    /// registered built-in is the twin `source` compiles to, under the
+    /// built-in's name, when it replaced the WGSL (`BUILTIN_TWINS`), and
+    /// the WGSL when it waits (`PENDING_TWINS`); a config reads the same
+    /// values of the twin as of the WGSL, in the same place in the
+    /// pipeline. Registers the other of the two beside the built-in and
+    /// gives the names, `(twin, WGSL)`, the one registered here second
+    /// for a replaced one and first for a pending one -- [`TestPair::extra`]
+    /// is which to remove; what differs goes in `failures`.
+    #[cfg(feature = "lang")]
+    fn reference_beside_twin(builtin: &str, source: &str, failures: &mut Vec<String>) -> TestPair {
+        let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
+        assert_eq!(twin.name, builtin, "a twin's id is its built-in's name");
+        let mut wgsl = crate::effects::wgsl_builtins().into_iter().find(|i| i.name == builtin).expect("the built-in's WGSL");
+        let replaced = crate::effects::custom::BUILTIN_TWINS.iter().any(|(n, _)| *n == builtin);
+        {
+            let registry = crate::effects::global_effect_registry();
+            let registered = registry.get(builtin).expect("the built-in");
+            let expected = if replaced { &twin } else { &wgsl };
+            assert_eq!(registered.source.wgsl(), expected.source.wgsl(), "{builtin}: the built-in is {}", if replaced { "its twin" } else { "its WGSL" });
+            assert!(registered.provenance.is_builtin(), "{builtin}: still a built-in");
+        }
+        let (a, b) = (values(&twin), values(&wgsl));
+        if a.len() != b.len() {
+            failures.push(format!("{builtin}: {} parameters, its WGSL {}", a.len(), b.len()));
+        }
+        for (t, w) in a.iter().zip(&b) {
+            if t != w {
+                failures.push(format!("{builtin}: the twin's {t:?}
+    the WGSL's  {w:?}"));
+            }
+        }
+        if twin.category != wgsl.category {
+            failures.push(format!("{builtin}: in the other pipeline"));
+        }
+        if replaced {
+            let name = format!("{builtin}_wgsl_reference");
+            wgsl.name = name.clone();
+            crate::effects::global_effect_registry_mut().register(wgsl);
+            TestPair { twin: builtin.to_string(), wgsl: name.clone(), extra: name }
+        } else {
+            let name = format!("{builtin}_rhai_twin");
+            twin.name = name.clone();
+            crate::effects::global_effect_registry_mut().register(twin);
+            TestPair { twin: name.clone(), wgsl: builtin.to_string(), extra: name }
+        }
+    }
+
+    /// A twin and its WGSL by the names they run under in a test, and the
+    /// one the test registered.
+    #[cfg(feature = "lang")]
+    struct TestPair {
+        twin: String,
+        wgsl: String,
+        extra: String,
+    }
+
     /// The Rhai twins of the built-ins (assets/effects/*.rhai) and how
     /// each is driven: settings away from the defaults, blends among them.
     #[cfg(feature = "lang")]
@@ -1785,10 +1854,11 @@ mod gpu_tests {
         ),
     ];
 
-    /// Each Rhai twin renders its built-in WGSL's pixels, within a step of
-    /// 8-bit rounding, at its defaults and the settings above, under the
-    /// built-in's name with the same parameters in the same order -- the
-    /// D1 checks a twin must pass before it replaces its built-in.
+    /// Each built-in that is its Rhai twin renders the pixels of the WGSL it
+    /// replaced, within a step of 8-bit rounding, at its defaults and the
+    /// settings above, under the built-in's name with the same values
+    /// ([`reference_beside_twin`]) -- the D1 checks a twin passes to
+    /// replace its built-in, held now against a compiler change.
     #[cfg(feature = "lang")]
     #[test]
     fn the_rhai_twins_match_their_wgsl() {
@@ -1809,21 +1879,7 @@ mod gpu_tests {
         let (_input, view) = texture_of(&device, &queue, W, H, TextureFormat::Rgba8Unorm, &data);
         let mut failures = Vec::new();
         for (builtin, source, settings) in TWINS {
-            let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
-            assert_eq!(twin.name, *builtin, "a twin's id is its built-in's name");
-            {
-                let registry = crate::effects::global_effect_registry();
-                let wgsl = registry.get(builtin).expect("the built-in");
-                // The type's Debug names its kind and an enum's choices.
-                let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, String, f32, Option<f32>, Option<f32>)> {
-                    i.parameters.iter().map(|p| (p.name.clone(), format!("{:?}", p.param_type), p.default_value, p.min_value, p.max_value)).collect()
-                };
-                assert_eq!(shape(&twin), shape(wgsl), "{builtin}: the same parameters, in the same order");
-                assert_eq!(twin.category, wgsl.category, "{builtin}: the same place in the pipeline");
-            }
-            let test_name = format!("{builtin}_rhai_twin");
-            twin.name = test_name.clone();
-            crate::effects::global_effect_registry_mut().register(twin);
+            let pair = reference_beside_twin(builtin, source, &mut failures);
             for set in settings.iter() {
                 let instance = |name: &str| {
                     let mut e = EffectInstance::new(name);
@@ -1832,8 +1888,8 @@ mod gpu_tests {
                     }
                     e
                 };
-                let wgsl = run_colour(&device, &queue, &view, W, H, &[instance(builtin)]);
-                let rhai = run_colour(&device, &queue, &view, W, H, &[instance(&test_name)]);
+                let wgsl = run_colour(&device, &queue, &view, W, H, &[instance(&pair.wgsl)]);
+                let rhai = run_colour(&device, &queue, &view, W, H, &[instance(&pair.twin)]);
                 let diffs: Vec<i32> = wgsl.iter().zip(&rhai).map(|(a, b)| (*a as i32 - *b as i32).abs()).collect();
                 let worst = diffs.iter().copied().max().unwrap_or(0);
                 let off = diffs.iter().filter(|d| **d > 1).count();
@@ -1841,7 +1897,7 @@ mod gpu_tests {
                     failures.push(format!("{builtin} at {set:?}: off by {worst} ({off} of {} channels past 1)", diffs.len()));
                 }
             }
-            crate::effects::global_effect_registry_mut().remove_by_name(&test_name);
+            crate::effects::global_effect_registry_mut().remove_by_name(&pair.extra);
         }
         assert!(failures.is_empty(), "twins that differ from their WGSL:\n{}", failures.join("\n"));
     }
@@ -1904,19 +1960,7 @@ mod gpu_tests {
         };
         let mut failures = Vec::new();
         for (builtin, source, settings) in DENSITY_TWINS {
-            let mut twin = crate::effects::custom::compile(source, crate::provenance::Provenance::Builtin).unwrap_or_else(|e| panic!("{builtin}: {e}"));
-            {
-                let registry = crate::effects::global_effect_registry();
-                let wgsl = registry.get(builtin).expect("the built-in");
-                let shape = |i: &crate::effects::EffectInfo| -> Vec<(String, String, f32, Option<f32>, Option<f32>)> {
-                    i.parameters.iter().map(|p| (p.name.clone(), format!("{:?}", p.param_type), p.default_value, p.min_value, p.max_value)).collect()
-                };
-                assert_eq!(shape(&twin), shape(wgsl), "{builtin}: the same parameters, in the same order");
-                assert_eq!(twin.category, wgsl.category, "{builtin}: the same place in the pipeline");
-            }
-            let test_name = format!("{builtin}_rhai_twin");
-            twin.name = test_name.clone();
-            crate::effects::global_effect_registry_mut().register(twin);
+            let pair = reference_beside_twin(builtin, source, &mut failures);
             for set in settings.iter() {
                 let instance = |name: &str| {
                     let mut e = EffectInstance::new(name);
@@ -1925,8 +1969,8 @@ mod gpu_tests {
                     }
                     e
                 };
-                let wgsl = run(instance(builtin));
-                let rhai = run(instance(&test_name));
+                let wgsl = run(instance(&pair.wgsl));
+                let rhai = run(instance(&pair.twin));
                 let mut worst = 0.0f32;
                 for (a, b) in wgsl.iter().flatten().zip(rhai.iter().flatten()) {
                     worst = worst.max((a - b).abs() / a.abs().max(b.abs()).max(1.0));
@@ -1935,9 +1979,91 @@ mod gpu_tests {
                     failures.push(format!("{builtin} at {set:?}: off by {worst:e} of the larger"));
                 }
             }
-            crate::effects::global_effect_registry_mut().remove_by_name(&test_name);
+            crate::effects::global_effect_registry_mut().remove_by_name(&pair.extra);
         }
         assert!(failures.is_empty(), "density twins that differ from their WGSL:\n{}", failures.join("\n"));
+    }
+
+    /// D1's speed check: each built-in that is its twin against the WGSL
+    /// it replaced, at its defaults, at 1080p and 4K, on one chain: the
+    /// first run (the pipeline built), then the best of seven batches of
+    /// about 20 ms each (so a small effect is timed, not its submission),
+    /// the two interleaved so a clock change falls on both. A twin more
+    /// than 5% slower fails; a pending one (`PENDING_TWINS`) is timed and
+    /// reported, ready to replace its WGSL once it passes. A measurement
+    /// on the GPU: run it alone, with the app closed --
+    /// `cargo test --release --lib -- --ignored --nocapture the_twins_are_no_slower`.
+    #[cfg(feature = "lang")]
+    #[test]
+    #[ignore = "a measurement on the GPU: run alone, with the app closed"]
+    fn the_twins_are_no_slower() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        let wait = || {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        };
+        let mut failures = Vec::new();
+        let mut still_pending = Vec::new();
+        let mut ignored = Vec::new();
+        println!("{:<22} {:>9} {:>10} {:>10} {:>7} {:>11} {:>11}", "effect", "size", "WGSL ms", "twin ms", "ratio", "WGSL 1st", "twin 1st");
+        for (w, h) in [(1920u32, 1080u32), (3840, 2160)] {
+            let colour: Vec<u8> = (0..w * h).flat_map(|i| [((i % w) * 255 / w) as u8, ((i / w) * 255 / h) as u8, 120, 255]).collect();
+            let (_c, cview) = texture_of(&device, &queue, w, h, TextureFormat::Rgba8Unorm, &colour);
+            drop(colour);
+            let density: Vec<u8> = (0..w * h)
+                .flat_map(|i| [(i % w) as f32 / w as f32, (i / w) as f32 / h as f32, 0.4, 50.0 + (i % 997) as f32])
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            let (_d, dview) = texture_of(&device, &queue, w, h, TextureFormat::Rgba32Float, &density);
+            drop(density);
+            let mut chain = EffectChainRunner::new(&device, w, h);
+            for (name, source) in crate::effects::custom::all_twins() {
+                let pending = crate::effects::custom::PENDING_TWINS.iter().any(|(n, _)| n == name);
+                let pair = reference_beside_twin(name, source, &mut ignored);
+                let is_density = crate::effects::global_effect_registry().get(name).is_some_and(|i| i.category == crate::effects::EffectCategory::Density);
+                let mut batch = |effect: &str, n: u32| {
+                    let instance = [EffectInstance::new(effect)];
+                    let start = web_time::Instant::now();
+                    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("timing") });
+                    for _ in 0..n {
+                        chain.reset_slots();
+                        let ran = if is_density {
+                            chain.run_density_effects(&device, &queue, &mut encoder, &dview, &instance, 400.0)
+                        } else {
+                            chain.run_color_effects(&device, &queue, &mut encoder, &cview, &instance)
+                        };
+                        assert!(ran, "{effect} ran");
+                    }
+                    queue.submit(Some(encoder.finish()));
+                    wait();
+                    start.elapsed().as_secs_f64() * 1000.0 / f64::from(n)
+                };
+                let (first_ref, first_twin) = (batch(&pair.wgsl, 1), batch(&pair.twin, 1));
+                let estimate = batch(&pair.wgsl, 5).min(batch(&pair.twin, 5));
+                let runs = ((20.0 / estimate) as u32).clamp(5, 400);
+                let (mut best_ref, mut best_twin) = (f64::MAX, f64::MAX);
+                for _ in 0..7 {
+                    best_ref = best_ref.min(batch(&pair.wgsl, runs));
+                    best_twin = best_twin.min(batch(&pair.twin, runs));
+                }
+                let ratio = best_twin / best_ref;
+                let mark = if pending { "  (pending)" } else { "" };
+                println!("{name:<22} {:>9} {best_ref:>10.3} {best_twin:>10.3} {ratio:>7.3} {first_ref:>11.1} {first_twin:>11.1}{mark}", format!("{w}x{h}"));
+                if ratio > 1.05 && !pending {
+                    failures.push(format!("{name} at {w}x{h}: {best_twin:.3} ms against {best_ref:.3} ({ratio:.2}x)"));
+                }
+                if ratio > 1.05 && pending {
+                    still_pending.push(format!("{name} at {w}x{h}: {ratio:.2}x"));
+                }
+                crate::effects::global_effect_registry_mut().remove_by_name(&pair.extra);
+            }
+            chain.destroy();
+        }
+        assert!(ignored.is_empty(), "{ignored:?}");
+        println!("pending twins still slower: {still_pending:?} (none: ready to replace their WGSL)");
+        assert!(failures.is_empty(), "twins slower than their WGSL:\n{}", failures.join("\n"));
     }
 
     /// A frame's chains may need more parameter slots than the buffer

@@ -1333,6 +1333,7 @@ history:
     edit_as_formula: "Edit as Formula"
     use_custom_coloring: "Use Custom Colouring"
     use_custom_variation: "Use Custom Variation"
+    edit_effect_as_rhai: "Edit Effect as Rhai"
     add_custom_variation: "Add Custom Variation"
     use_custom_effect: "Use Custom Effect"
     escape_transform_add: "Add Transformation"
@@ -3007,6 +3008,10 @@ progress:
   sim_stopped: "Simulation stopped at step %{step}"
   animation: "Animation playing"
 
+effects_panel:
+  edit_as_rhai: "Rhai"
+  edit_as_rhai_tip: "Edit this effect as a Rhai script of your own, in the Formula Editor: this instance runs your copy, with its settings kept, and Live shows each edit. The built-in is untouched."
+
 formula_editor:
   example: "Example: %{file}"
   new: "New"
@@ -3042,6 +3047,7 @@ formula_editor:
   use_effect: "Use as effect"
   edit_as_rhai: "Edit as Rhai"
   editing_builtin: "`%{entry}` is in use as your own formula; Save keeps it in your library"
+  editing_builtin_effect: "%{name} is your own effect now, in use; Save keeps it in your library"
   edit_as_rhai_tip: "Convert this to Rhai and open it here, to change and save as your own. The file you opened stays as it is."
   converted: "Converted `%{entry}` to Rhai; Save keeps it in your library"
   cannot_convert: "`%{entry}` did not convert: %{error}"

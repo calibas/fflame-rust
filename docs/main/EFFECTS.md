@@ -34,8 +34,11 @@ Research survey of candidate effects:
 - [src/renderer/effect_chain.rs](../../src/renderer/effect_chain.rs) —
   `EffectChainRunner`: ping-pong textures, the parameter uniform, the
   `distance_field` jump flood
+- [assets/effects/](../../assets/effects/) — the one-pass built-ins
+  as Rhai: thirteen the app runs, two pending
 - [shaders/effects/](../../shaders/effects/) — `density/`, `color/`, and
-  `common/blend_modes.wgsl`
+  `common/blend_modes.wgsl`: `distance_field`, the blend library, and
+  the WGSL the Rhai built-ins replaced (the reference, below)
 - [src/ui/effects_panel.rs](../../src/ui/effects_panel.rs) — the Effects panel
 - [src/app/effect_fetch.rs](../../src/app/effect_fetch.rs) — fetching an
   effect a flame names and this build lacks; the catalog
@@ -131,19 +134,37 @@ variations' `ParamType`), `default_value`, optional `min_value` and
 `max_value`, and an optional `description` shown as the slider's
 tooltip. Only `distance_field`'s parameters have descriptions today.
 
-**Shader source.** A built-in's WGSL is embedded with `include_str!`
-(`effects::embedded_shaders`) on every target. On the desktop the
-on-disk copy under `shaders/` is preferred when it exists, so an effect
-can be edited and seen after a restart without a rebuild; an absent
-file falls back to the embedded copy. A download or plugin carries its
-WGSL in `EffectSource::Owned`.
+**Shader source.** Thirteen of the sixteen built-ins are Rhai
+(rhai-plugins.md, D1; [Effects written in Rhai](#effects-written-in-rhai)):
+`assets/effects/<name>.rhai`, embedded with `include_str!`
+(`effects::custom::BUILTIN_TWINS`) and compiled when the registry is
+first used (about 25 ms for fifteen, native; a shipped one is not
+validated again at startup, the tests do that). On the desktop the copy
+beside the app is preferred when it differs and compiles, so a built-in
+can be edited and seen after a restart without a rebuild; one that does
+not compile is logged and the shipped copy runs. Their registry entries
+hold the compiled WGSL (`EffectSource::Owned`). `distance_field`,
+`kaleidoscope` and `julia` are WGSL, embedded (`effects::embedded_shaders`)
+with the same on-disk preference under `shaders/`
+(`EffectSource::Builtin { embedded, path }`); the last two have twins
+waiting to replace them (below).
+
+The WGSL the thirteen replaced stays, as **the reference**
+(`effects::wgsl_builtins`, the definitions in registration order): what
+a build without the compiler (`lang` off: only the engine test matrix's
+`engine-flame` and `engine-sim` alone; every shipped module has it)
+registers, and what each Rhai built-in is held to pixel for pixel. An
+edit to one of those files reaches neither, and each says so in its
+header. A download carries its WGSL in `EffectSource::Owned`.
 
 ---
 
 ## The shipped effects
 
-From the registry, in registration order (`register_builtin_effects`).
-The label is the curated name from `locales/en.yml`.
+From the registry, in registration order (`register_builtin_effects`,
+over `wgsl_builtins`). The label is the curated name from
+`locales/en.yml`. All but `distance_field`, `kaleidoscope` and `julia`
+run as Rhai.
 
 | Name | Label | Kind | Params | What it does |
 | --- | --- | --- | --- | --- |
@@ -356,6 +377,13 @@ Effects", available in every render mode:
   a track animating one switches at the halfway point. A value is
   written only when it changes, never by being drawn. Undo entries name
   the effect the same way.
+- **Rhai**, on an instance of a built-in that is Rhai: Edit as Rhai.
+  The instance runs the user's own copy of the source the built-in runs,
+  under a UUID minted for it, its settings kept, one undo step
+  (`ColorEffectType` / `DensityEffectType` and `CustomEffects` in one
+  batch), and the Formula Editor opens the copy unsaved and in use, so
+  Live shows each edit; Save keeps it in the library. The built-in is
+  untouched (`FormulaEditorPanel::edit_effect_as_rhai`).
 - An **Add effect** combo per chain, listing that category's
   registered effects by their translated names.
 - **Online library**, when a catalog is cached or fetched: how many the
@@ -494,14 +522,48 @@ adding an instance is structural). The panel's Add lists leave Rhai
 effects out: each version would list once.
 *Live* re-applies it by its id.
 
-**Twins of the built-ins** live in `assets/effects/*.rhai`, each held to
-its WGSL by a GPU compare within a step of 8-bit rounding, under the
-built-in's name with its parameters in the same order
-(`the_rhai_twins_match_their_wgsl` for the twelve colour effects, within
-a step of 8-bit rounding; `the_density_twins_match_their_wgsl` for the
-three density ones, to a part in a thousand). Every built-in has one but
-`distance_field`, whose three passes the language cannot write. They
-replace the built-ins only once nothing is lost (rhai-plugins.md, D1).
+**The built-ins are Rhai** (rhai-plugins.md, D1, P2 step 7): thirteen
+are `assets/effects/<name>.rhai` (`custom::BUILTIN_TWINS`, compiled by
+`custom::builtin_twin` under the built-in's name, `Provenance::Builtin`).
+Each replaced its WGSL once nothing was lost. `kaleidoscope` and `julia`
+have twins that pass every check but speed (`custom::PENDING_TWINS`: 9
+to 13% slower on a GTX 1660 SUPER), so the WGSL runs and the twin waits;
+`distance_field`'s three passes the language cannot write. The checks
+stay as tests against the WGSL (`wgsl_builtins`), for the pending twins
+too:
+- **Pixels**: `the_rhai_twins_match_their_wgsl` (the twelve colour
+  effects, within a step of 8-bit rounding, at four settings each) and
+  `the_density_twins_match_their_wgsl` (the three density ones, to a
+  part in a thousand).
+- **The values a config reads**: each parameter's name, type, default,
+  range, label and hint, in order, and the category
+  (`reference_beside_twin`, in both); the title is the locale's English
+  (`a_builtin_takes_its_curated_locale_name`).
+- **The web**: `the_builtin_twins_are_web_safe` -- explicit-level
+  sampling only, no operator mix Tint refuses, no self-compare or
+  self-division, no subnormal literal -- with naga's validation of
+  every built-in (`every_built_in_effect_validates`).
+- **Speed**: `the_twins_are_no_slower`, ignored (a GPU measurement, run
+  alone, the app closed): each at 1080p and 4K against its WGSL, the
+  first run and the best of seven batches of about 20 ms; a replaced
+  twin more than 5% slower fails, and a pending one is reported, ready
+  once it is within 5%. The thirteen measured within 1% of their WGSL
+  or faster (`density_blur` 5% faster, its taps skipped as the shader
+  skips them).
+- **The corpus** exports the compiled WGSL, the blend marker kept.
+A built-in that fails a check goes back to its WGSL by moving from
+`BUILTIN_TWINS` to `PENDING_TWINS`.
+
+**What the speed check changed in the compiler** (its causes were the
+language's general costs, not the twins'): in an effect, real `sin`,
+`cos` and `tan` are the GPU's own rather than range-reduced (an effect's
+arguments are its image's coordinates, and the WGSL effects call them
+so) and a real's `floor`, `trunc` or `ceil` read as a float is the float
+function, without the int's round trip; everywhere, a loop whose counter
+bounds it folds the cap into its bound instead of running a second
+counter ([ESCAPE.md](ESCAPE.md#the-formula-language)), and `atan2`'s
+zero-pair guard is a `select`, not a branch. Plasma was 1.5x slower
+before, julia 1.4x, density_blur 1.1x.
 
 ## The corpus for the API
 
@@ -514,7 +576,9 @@ It writes every registered effect, sorted by name: its curated
 `display_name`, category, parameters, `version` 1, and its **raw** WGSL
 with the `// INCLUDE_BLEND_MODES` marker intact (the client splices at
 compile time, so a pre-spliced copy would duplicate the library), plus
-`requires_blend_modes`. `description`, `description_plain` and `authors`
+`requires_blend_modes`. For a built-in that is Rhai the WGSL is what its
+source compiles to (the catalogs stay WGSL, D2); the Rhai source itself
+is not in the corpus yet (P6). `description`, `description_plain` and `authors`
 are emitted as null. Run it whenever an effect is added or edited, and
 send the result to the API repository ([RELEASE.md](../RELEASE.md) §3).
 
@@ -522,12 +586,19 @@ send the result to the API repository ([RELEASE.md](../RELEASE.md) §3).
 
 ## Adding a built-in effect
 
+A new one-pass built-in is a Rhai source: write
+`assets/effects/<name>.rhai` (`INFO.id` its name, `INFO.title` its
+English label), add it to `custom::BUILTIN_TWINS`, give it a WGSL
+fallback in `wgsl_builtins` for builds without the compiler (steps 1-3
+below) and a row in the pixel compares, and do steps 4-5. One the
+language cannot write is WGSL alone:
+
 1. Write `shaders/effects/{density,color}/<name>.wgsl` with the
    `EffectParams` struct above, bindings 0–2, `vs_main` and `fs_main`.
    A colour effect that blends puts `// INCLUDE_BLEND_MODES` on its own
    line and calls `apply_blend`.
 2. Add an `include_str!` constant to `effects::embedded_shaders`.
-3. Register it in `register_builtin_effects` with an empty
+3. Add it to `wgsl_builtins` with an empty
    `display_name`, `EffectSource::Builtin { embedded, path }` (`path`
    relative to `shaders/`), `Provenance::Builtin`, and its parameters in
    slot order. A registry name is never reused for something else: it

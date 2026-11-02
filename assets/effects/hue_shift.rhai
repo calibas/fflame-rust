@@ -1,8 +1,10 @@
 // Hue Cycle: every colour's hue turned by an angle.
 //
-// The Rhai twin of shaders/effects/color/hue_cycle.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The built-in `hue_shift` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/hue_cycle.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     offset: #{ value: 0.0, min: 0.0, max: 360.0, type: "angle", caption: "Hue Offset" },
@@ -14,7 +16,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Hue Cycle", id: "hue_shift" };
+const INFO = #{ title: "Hue Shift", id: "hue_shift" };
 
 // Hue, saturation and value, each 0 to 1.
 fn rgb_to_hsv(rgb) {

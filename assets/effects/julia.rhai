@@ -1,13 +1,15 @@
 // Julia: a Mandelbrot or Julia set drawn over the image.
 //
-// The Rhai twin of shaders/effects/color/julia.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The Rhai twin of the built-in `julia` effect, pending
+// (docs/main/EFFECTS.md, Rhai effects): it keeps the pixels, parameters
+// and order of shaders/effects/color/julia.wgsl, which the app still runs, and
+// replaces it once it is as fast (`the_twins_are_no_slower`). Edit as
+// Rhai in the Effects panel starts from this file.
 
 const PARAMS = #{
     mode: #{ value: 1, caption: "Mode", choices: ["Mandelbrot", "Julia"] },
-    julia_cx: #{ value: -0.7, min: -2.0, max: 2.0, caption: "Julia C (real)" },
-    julia_cy: #{ value: 0.27, min: -2.0, max: 2.0, caption: "Julia C (imag)" },
+    julia_cx: #{ value: -0.7, min: -2.0, max: 2.0, caption: "Julia C (Real)" },
+    julia_cy: #{ value: 0.27, min: -2.0, max: 2.0, caption: "Julia C (Imag)" },
     max_iter: #{ value: 100, min: 10, max: 500, caption: "Max Iterations" },
     zoom: #{ value: 1.0, min: 0.1, max: 100.0, caption: "Zoom" },
     center_x: #{ value: 0.0, min: -3.0, max: 3.0, caption: "Center X" },
@@ -21,7 +23,7 @@ const PARAMS = #{
                   "Color Dodge", "Color Burn", "Hue", "Saturation", "Color", "Luminosity"],
     },
 };
-const INFO = #{ title: "Julia", id: "julia" };
+const INFO = #{ title: "Julia/Mandelbrot", id: "julia" };
 
 // The shader's `hsv_to_rgb`: hue by sextant, its `%` a remainder.
 fn hsv_to_rgb(h, s, v) {
@@ -54,18 +56,16 @@ fn effect(c, p, ctx) {
     let julia = p.mode == 1;
     let z = if julia { complex(px, py) } else { complex(0.0, 0.0) };
     let k = if julia { complex(p.julia_cx, p.julia_cy) } else { complex(px, py) };
-    // The shader's loop, its `break` a flag: the count where |z|^2 > 4.
+    // The shader's loop, its `break` the loop's test: the count where
+    // |z|^2 > 4, each z's squares taken once.
     let i = 0;
-    let out = false;
-    while i < max_iter && !out {
-        let x2 = z.re * z.re;
-        let y2 = z.im * z.im;
-        if x2 + y2 > 4.0 {
-            out = true;
-        } else {
-            z = complex(x2 - y2 + k.re, 2.0 * z.re * z.im + k.im);
-            i += 1;
-        }
+    let x2 = z.re * z.re;
+    let y2 = z.im * z.im;
+    while i < max_iter && !(x2 + y2 > 4.0) {
+        z = complex(x2 - y2 + k.re, 2.0 * z.re * z.im + k.im);
+        x2 = z.re * z.re;
+        y2 = z.im * z.im;
+        i += 1;
     }
     let iter = to_float(i);
     let max_f = to_float(max_iter);

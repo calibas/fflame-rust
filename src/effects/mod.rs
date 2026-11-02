@@ -682,11 +682,30 @@ impl EffectRegistry {
 }
 
 /// Register all built-in effects
+/// Register the built-in effects: each one-pass effect as its Rhai twin
+/// where the build has the compiler (`lang`; D1, docs/projects/
+/// rhai-plugins.md P2 step 7: [`custom::builtin_twin`]), its WGSL
+/// otherwise; `distance_field`, three passes, as its WGSL always.
 fn register_builtin_effects(registry: &mut EffectRegistry) {
+    for info in wgsl_builtins() {
+        #[cfg(feature = "lang")]
+        if let Some(twin) = custom::builtin_twin(&info.name) {
+            registry.register(twin);
+            continue;
+        }
+        registry.register(info);
+    }
+}
+
+/// The built-in effects as their WGSL, in the order the lists show them:
+/// what a build without the compiler registers, and the reference each
+/// Rhai twin is held to (`the_rhai_twins_match_their_wgsl`).
+pub fn wgsl_builtins() -> Vec<EffectInfo> {
+    let mut out = Vec::new();
     // === Color Effects (after tonemap) ===
 
     // Vignette - darken edges
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "vignette".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -739,7 +758,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Film Grain - per-pixel random noise
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "film_grain".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -783,7 +802,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Chromatic Aberration - RGB channel offset
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "chromatic_aberration".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -836,7 +855,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Hue Shift - static hue rotation (animate via keyframes)
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "hue_shift".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -882,7 +901,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // === Density Effects (before tonemap) ===
 
     // Density Blur - blur weighted by density
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "density_blur".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -930,7 +949,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Sharpen - detail enhancement
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "sharpen".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -965,7 +984,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Bilateral Blur - edge-preserving blur
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "bilateral_blur".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1011,7 +1030,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // === Psychedelic Color Effects ===
 
     // Kaleidoscope - N-fold rotational symmetry
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "kaleidoscope".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1093,7 +1112,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Plasma - classic demoscene effect
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "plasma".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1164,7 +1183,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Tunnel - infinite tunnel effect
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "tunnel".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1235,7 +1254,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Sobel Edges - neon edge detection
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "sobel_edges".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1297,7 +1316,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Domain Warp - organic noise distortion
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "domain_warp".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1368,7 +1387,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Simplex Noise - psychedelic noise overlay
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "simplex_noise".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1450,7 +1469,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Worley Noise - cellular patterns
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "worley_noise".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1534,7 +1553,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     });
 
     // Julia/Mandelbrot - fractal overlay
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "julia".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1650,7 +1669,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // looks for ARBITRARY flames, no invertibility required. The
     // chain runner special-cases its execution into a multi-pass
     // pipeline (seed + ~log2(max dim) floods + composite).
-    registry.register(EffectInfo {
+    out.push(EffectInfo {
         name: "distance_field".to_string(),
         // Empty on purpose: built-ins are labelled from
         // `locales/*.yml`, where the curated names live.
@@ -1718,6 +1737,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
         ],
     });
+    out
 }
 
 #[cfg(test)]
@@ -2039,13 +2059,22 @@ mod label_tests {
 
     /// A built-in is labelled from the locale, where the curated name
     /// lives. `sobel_edges` is "Edge Glow", so a name derived from the
-    /// registry key would be wrong, not merely ugly.
+    /// registry key would be wrong, not merely ugly. A built-in that is
+    /// its Rhai twin carries a title too, which is the locale's English,
+    /// so a copy of it opened in the Formula Editor reads the same.
     #[test]
     fn a_builtin_takes_its_curated_locale_name() {
         let reg = global_effect_registry();
         let sobel = reg.get("sobel_edges").expect("ships");
-        assert!(sobel.display_name.is_empty(), "built-ins carry no inline label");
         assert_eq!(sobel.translated_name(), "Edge Glow");
+        let wgsl = wgsl_builtins().into_iter().find(|i| i.name == "distance_field").expect("ships");
+        assert!(wgsl.display_name.is_empty(), "a WGSL built-in carries no inline label");
+        #[cfg(feature = "lang")]
+        for (name, source) in custom::all_twins() {
+            let twin = custom::compile(source, crate::provenance::Provenance::Builtin).expect("compiles");
+            let info = reg.get(name).expect("ships");
+            assert_eq!(twin.display_name, info.translated_name(), "{name}: its title is the locale's");
+        }
     }
 
     /// A plugin or downloaded effect uses the label it declares.

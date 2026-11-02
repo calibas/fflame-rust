@@ -1,5 +1,11 @@
 // Sharpen Effect
 //
+// The REFERENCE, not what the app runs: the built-in is its Rhai twin,
+// assets/effects/sharpen.rhai (docs/main/EFFECTS.md, Rhai effects). This
+// WGSL is what a build without the compiler (`lang`) registers, and what
+// the twin is held to (`the_rhai_twins_match_their_wgsl`): an edit here
+// changes neither the app nor the twin.
+//
 // Enhances detail using unsharp mask technique.
 // Parameters:
 //   params[0] = amount (0-2): Sharpening strength

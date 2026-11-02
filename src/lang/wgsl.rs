@@ -1329,7 +1329,12 @@ enum Ctx {
     /// variation's (`get_param`), `#pixel` the point, variables locals.
     Variation,
     /// An effect, per pixel of its image (P2): its parameters the effect's
-    /// (`get_param`), `#pixel` the pixel's position, variables locals.
+    /// (`get_param`), `#pixel` the pixel's position, variables locals. Its
+    /// real `sin`, `cos` and `tan` are the GPU's own, not range-reduced as
+    /// elsewhere: an effect's arguments are the image's coordinates and
+    /// its parameters, the WGSL effects it replaced call them so (on Metal
+    /// too), and the reduction cost plasma a third of its time (D1's speed
+    /// check, `the_twins_are_no_slower`).
     Effect,
 }
 
@@ -1644,9 +1649,25 @@ impl<'p> Gen<'p> {
                 // Capped: a loop that never ends must not hang the GPU.
                 let k = self.loops;
                 self.loops += 1;
-                let c = self.expr(cond);
-                let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
-                let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+                if let Some(counted) = counted_loop(cond, body) {
+                    // Its counter bounds it: the cap goes into the bound,
+                    // read once, and no second counter runs beside it.
+                    let i = self.expr(counted.counter);
+                    let b = self.expr(counted.bound);
+                    let (op, step, most) = if counted.inclusive { ("<=", LOOP_CAP - 1, i32::MAX - 1) } else { ("<", LOOP_CAP, i32::MAX) };
+                    let limit = i32::MAX - LOOP_CAP as i32;
+                    let _ = writeln!(out, "{pad}let loop_end{k} = min({b}, select({i} + {step}i, {most}i, {i} > {limit}i));");
+                    let c = match counted.rest {
+                        Some(rest) => format!("(({i} {op} loop_end{k}) && {})", self.expr(rest)),
+                        None => format!("({i} {op} loop_end{k})"),
+                    };
+                    let _ = writeln!(out, "{pad}loop {{");
+                    let _ = writeln!(out, "{pad}    if (!{c}) {{\n{pad}        break;\n{pad}    }}");
+                } else {
+                    let c = self.expr(cond);
+                    let _ = writeln!(out, "{pad}for (var loop{k} = 0; loop{k} < {LOOP_CAP}; loop{k} = loop{k} + 1) {{");
+                    let _ = writeln!(out, "{pad}    if (!({c})) {{\n{pad}        break;\n{pad}    }}");
+                }
                 self.stmts(body, depth + 1, out);
                 let _ = writeln!(out, "{pad}}}");
             }
@@ -1728,6 +1749,24 @@ impl<'p> Gen<'p> {
                 }
             }
             IExprKind::Predef(p) => self.predef(*p),
+            // In an effect, a real's floor, trunc or ceil read as a float is
+            // the float function: the same value below 2^31, without the
+            // int's round trip, which cost the kaleidoscope effect 5% (D1's
+            // speed check). Elsewhere the int stays, as the interpreter
+            // has it.
+            IExprKind::Convert(a)
+                if self.ctx == Ctx::Effect
+                    && (a.ty, e.ty) == (Ty::Int, Ty::Float)
+                    && matches!(&a.kind, IExprKind::Call(Builtin::Floor | Builtin::Trunc | Builtin::Ceil, x) if x.ty == Ty::Float) =>
+            {
+                let IExprKind::Call(f, x) = &a.kind else { unreachable!() };
+                let name = match f {
+                    Builtin::Floor => "floor",
+                    Builtin::Trunc => "trunc",
+                    _ => "ceil",
+                };
+                format!("{name}({})", self.expr(x))
+            }
             IExprKind::Convert(a) => {
                 let v = self.expr(a);
                 match (a.ty, e.ty) {
@@ -2491,6 +2530,10 @@ impl<'p> Gen<'p> {
             Recip => format!("(1.0 / {v})"),
             Ident | Real => v,
             Zero | Imag => "0.0".into(),
+            Sin if self.ctx == Ctx::Effect => format!("sin({v})"),
+            Cos if self.ctx == Ctx::Effect => format!("cos({v})"),
+            Tan if self.ctx == Ctx::Effect => format!("tan({v})"),
+            Cotan if self.ctx == Ctx::Effect => format!("(1.0 / tan({v}))"),
             Sin => format!("sin({}({v}))", self.use_(Helper::Reduce)),
             Cos => format!("cos({}({v}))", self.use_(Helper::Reduce)),
             Tan => format!("tan({}({v}))", self.use_(Helper::Reduce)),
@@ -2745,6 +2788,48 @@ fn literal(e: &IExpr) -> bool {
         IExprKind::Unary(UnOp::Neg, a) | IExprKind::Convert(a) => literal(a),
         _ => false,
     }
+}
+
+/// A `while` its counter bounds ([`counted_loop`]).
+struct CountedLoop<'a> {
+    counter: &'a IExpr,
+    bound: &'a IExpr,
+    inclusive: bool,
+    /// The rest of the test, `&&`ed after the bound's.
+    rest: Option<&'a IExpr>,
+}
+
+/// A `while` whose test starts `i < b` (or `<=`), an int `i` the body
+/// steps by one as its last statement and writes nowhere else, `b` a
+/// variable the body does not write or a literal -- a Rhai range `for`,
+/// or a `while` written so (the julia effect's). It runs the iterations
+/// the capped form does with the cap folded into its bound
+/// (`min(b, i + LOOP_CAP)`, guarded at the int's top): the GPU's work
+/// is the loop's own, not a second counter's (D1's speed check).
+fn counted_loop<'a>(cond: &'a IExpr, body: &'a [IStmt]) -> Option<CountedLoop<'a>> {
+    use super::delta::writes_var;
+    let (test, rest) = match &cond.kind {
+        IExprKind::Binary(BinOp::And, a, b) => (&**a, Some(&**b)),
+        _ => (cond, None),
+    };
+    let IExprKind::Binary(op @ (BinOp::Lt | BinOp::Le), counter, bound) = &test.kind else { return None };
+    let IExprKind::Var(i) = counter.kind else { return None };
+    if counter.ty != Ty::Int || bound.ty != Ty::Int {
+        return None;
+    }
+    let (last, before) = body.split_last()?;
+    let IStmt::Assign(Place::Var(v), step) = last else { return None };
+    let steps_by_one = matches!(&step.kind, IExprKind::Binary(BinOp::Add, a, b)
+        if matches!(a.kind, IExprKind::Var(w) if w == i) && matches!(b.kind, IExprKind::Int(1)));
+    if *v != i || !steps_by_one || writes_var(before, i) {
+        return None;
+    }
+    match bound.kind {
+        IExprKind::Int(_) => {}
+        IExprKind::Var(b) if b != i && !writes_var(body, b) => {}
+        _ => return None,
+    }
+    Some(CountedLoop { counter, bound, inclusive: *op == BinOp::Le, rest })
 }
 
 /// Whether a colouring can mark a pixel solid: it writes `#solid`, or it
@@ -3039,13 +3124,13 @@ impl Helper {
 }",
             // IEEE-exact at the zero pairs, where Metal's atan2 is wrong
             // (CLAUDE.md; shaders/core/utilities.wgsl `ff_atan2`).
+            // By `select`, not a branch: the same values, and the
+            // kaleidoscope effect 5% faster (D1's speed check).
             Atan2 => "fn uf_atan2(y: f32, x: f32) -> f32 {
-    if (y == 0.0 && x == 0.0) {
-        let pi = 3.14159265358979;
-        let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
-        return select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
-    }
-    return atan2(y, x);
+    let pi = 3.14159265358979;
+    let mag = select(0.0, pi, (bitcast<u32>(x) & 0x80000000u) != 0u);
+    let zero = select(mag, -mag, (bitcast<u32>(y) & 0x80000000u) != 0u);
+    return select(atan2(y, x), zero, (y == 0.0) && (x == 0.0));
 }",
             // Halves away from zero, as UF's round (WGSL's goes to even).
             Round => "fn uf_round(x: f32) -> f32 {
@@ -3878,6 +3963,76 @@ fn step(s, p) {
         for (&(x, y), got) in points.iter().zip(&out) {
             let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(super::super::builtins::C64::new(x, y), 1)).z;
             assert_eq!((got.0 as f64, got.1 as f64), (want.re as f32 as f64, want.im as f32 as f64), "({x}, {y})");
+        }
+    }
+
+    /// Loops: a range `for` (both kinds) and a `while` its counter bounds
+    /// run with their cap folded into the bound ([`counted_loop`]); one
+    /// whose counter moves elsewhere in the body, or whose bound the body
+    /// writes, keeps its cap counter; on the GPU every one gives what the
+    /// interpreter does.
+    const LOOPS: &str = r#"
+fn start(pixel, p) {
+    let n = to_int(abs(pixel.re)) % 7 + 3;
+    let a = 0.0;
+    for k in 0..n {
+        a += to_float(k) * pixel.im;
+    }
+    let b = 0.0;
+    for k in 1..=n {
+        b += 1.0 / to_float(k);
+    }
+    let i = 0;
+    let x = pixel.re;
+    while i < 40 && !(x * x > 100.0) {
+        x = x * 1.5 + 0.25;
+        i += 1;
+    }
+    let j = 0;
+    let y = 0.0;
+    while j < 9 {
+        j += 2;
+        y += 1.0;
+        j -= 1;
+    }
+    let m = 6;
+    let q = 0;
+    while q < m {
+        m -= 1;
+        q += 1;
+    }
+    #{ z: complex(a + b + y, x + to_float(i + q)) }
+}
+
+fn step(s, p) {
+    s
+}
+"#;
+
+    #[test]
+    fn a_loop_its_counter_bounds_runs_without_a_second_counter() {
+        let p = super::super::rhai::program(LOOPS).expect("compiles");
+        let wgsl = formula(&p);
+        assert_eq!(wgsl.matches("let loop_end").count(), 3, "{wgsl}");
+        assert_eq!(wgsl.matches(&format!("< {LOOP_CAP}; loop")).count(), 2, "{wgsl}");
+        assert!(crate::variations::shader_lint::mixed_operators(&wgsl).is_empty(), "{:?}", crate::variations::shader_lint::mixed_operators(&wgsl));
+    }
+
+    #[test]
+    #[ignore = "needs a GPU"]
+    fn counted_loops_match_the_interpreter_on_the_gpu() {
+        let p = super::super::rhai::program(LOOPS).expect("compiles");
+        let points: Vec<(f64, f64)> = [(0.3, -0.2), (-4.4, 0.1), (5.1, 0.45), (-2.25, -0.3), (11.0, 2.0), (0.0, 0.0)].to_vec();
+        let inputs: Vec<(f32, f32, f32)> = points.iter().map(|&(x, y)| (x as f32, y as f32, 0.0)).collect();
+        let Some(out) = gpu_one_step(&p, &inputs) else {
+            eprintln!("no GPU");
+            return;
+        };
+        let params = super::super::interp::ParamValues::defaults(&p);
+        for (&(x, y), got) in points.iter().zip(&out) {
+            let want = super::super::interp::run(&p, &params, None, &super::super::interp::Env::at(super::super::builtins::C64::new(x as f32 as f64, y as f32 as f64), 1)).z;
+            let near = |a: f32, b: f64| (f64::from(a) - b).abs() <= 1e-4 * b.abs().max(1.0);
+            assert!(near(got.0, want.re) && near(got.1, want.im), "({x}, {y}): the GPU {:?}, the interpreter {want:?}", (got.0, got.1));
         }
     }
 

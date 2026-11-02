@@ -1,8 +1,10 @@
 // Tunnel: the image wrapped on the inside of a tunnel, flown through.
 //
-// The Rhai twin of shaders/effects/color/tunnel.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The built-in `tunnel` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/tunnel.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     speed: #{ value: 1.0, min: 0.0, max: 5.0, caption: "Speed" },

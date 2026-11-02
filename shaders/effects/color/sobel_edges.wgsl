@@ -1,5 +1,11 @@
 // Sobel Edge Detection Effect
 //
+// The REFERENCE, not what the app runs: the built-in is its Rhai twin,
+// assets/effects/sobel_edges.rhai (docs/main/EFFECTS.md, Rhai effects). This
+// WGSL is what a build without the compiler (`lang`) registers, and what
+// the twin is held to (`the_rhai_twins_match_their_wgsl`): an edit here
+// changes neither the app nor the twin.
+//
 // Detects edges using Sobel operator and creates neon glow aesthetic.
 // Parameters:
 //   params[0] = intensity (0-2): Edge brightness multiplier

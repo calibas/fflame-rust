@@ -1,9 +1,11 @@
 // Domain Warp: the image pushed along a field of noise warped by noise,
 // as Inigo Quilez describes it.
 //
-// The Rhai twin of shaders/effects/color/domain_warp.wgsl
-// (docs/projects/rhai-plugins.md, P2): the same parameters, in the same
-// order, so a config cannot tell which it got.
+// The built-in `domain_warp` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/domain_warp.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     intensity: #{ value: 0.1, min: 0.0, max: 0.5, caption: "Intensity" },
