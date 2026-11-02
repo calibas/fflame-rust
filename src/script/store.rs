@@ -80,6 +80,29 @@ pub fn free_stem(desired: &str) -> String {
         .unwrap_or_else(|| format!("{base}-copy-x"))
 }
 
+/// The stem to adopt an online script under: `desired`'s, unless a
+/// shipped script has it or one of the user's does -- then `-copy`,
+/// `-copy-2`, ... -- except that the user's copy of this same online
+/// script (`cloud_id`) is the one to replace. Adopting never overwrites
+/// the user's own work (rhai-plugins.md, P3; `free_stem` avoided only
+/// the shipped stems, though its caller's comment said otherwise).
+pub fn adopt_stem(desired: &str, cloud_id: &str) -> String {
+    let taken = |stem: &str| {
+        if super::library::is_builtin_stem(stem) {
+            return true;
+        }
+        load(stem).is_some() && link_of(stem).and_then(|l| l.cloud_id).as_deref() != Some(cloud_id)
+    };
+    let base = stem_for(desired);
+    if !taken(&base) {
+        return base;
+    }
+    std::iter::once(format!("{base}-copy"))
+        .chain((2..1000).map(|n| format!("{base}-copy-{n}")))
+        .find(|s| !taken(s))
+        .unwrap_or_else(|| format!("{base}-copy-x"))
+}
+
 fn key_for(stem: &str) -> PathBuf {
     Path::new(PREFIX).join(format!("{stem}.rhai"))
 }
@@ -307,6 +330,25 @@ mod tests {
                 "fork of `{stem}` still collides"
             );
         }
+    }
+
+    /// Adopting never takes one of the user's stems, except the copy of
+    /// the same online script, which it replaces; a shipped stem is
+    /// avoided as before. Against the real store, cleaned up.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn adopting_never_overwrites_the_users_own() {
+        let stem = "adopt-stem-test";
+        let _ = delete(stem);
+        let _ = delete("adopt-stem-test-copy");
+        assert_eq!(adopt_stem(stem, "cloud-1"), stem, "free: its own name");
+        save(stem, "script(\"Mine\", \"generator\");\n").unwrap();
+        assert_eq!(adopt_stem(stem, "cloud-1"), "adopt-stem-test-copy", "the user's own is not overwritten");
+        set_link(stem, ScriptLink { cloud_id: Some("cloud-1".into()), from_others: true, ..Default::default() }).unwrap();
+        assert_eq!(adopt_stem(stem, "cloud-1"), stem, "the same online script replaces its copy");
+        assert_eq!(adopt_stem(stem, "cloud-2"), "adopt-stem-test-copy", "another does not");
+        assert_eq!(adopt_stem("random_palette", "x"), "random_palette-copy", "a shipped name as before");
+        delete(stem).unwrap();
     }
 
     /// Sanitizing must be idempotent, or the stem `save` returns would

@@ -189,6 +189,10 @@ pub struct UiResponse {
     pub script_cloud_request: Option<crate::app::script_cloud::ScriptCloudRequest>,
     /// Downloaded variations to re-fetch at the catalog's version.
     pub variation_update_requested: Vec<String>,
+    /// Downloaded effects to re-fetch at the catalog's version.
+    pub effect_update_requested: Vec<String>,
+    /// The Effects panel's Clear Cache.
+    pub clear_effect_cache_requested: bool,
 }
 
 /// API save action type (flame only — animation is separate)
@@ -293,6 +297,8 @@ impl Default for UiResponse {
             clear_variation_cache_requested: false,
             script_cloud_request: None,
             variation_update_requested: Vec::new(),
+            effect_update_requested: Vec::new(),
+            clear_effect_cache_requested: false,
         }
     }
 }

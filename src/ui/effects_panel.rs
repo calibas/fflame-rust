@@ -215,15 +215,18 @@ enum ReorderAction {
 /// through `storage::catalog`. Silent when there is no catalog: an app
 /// that renders perfectly well offline should not grow an error panel
 /// because a metadata endpoint was unreachable.
+/// The online library's section; gives the downloaded effects the user
+/// asked to update to the catalog's version.
 fn render_effect_catalog(
     ui: &mut Ui,
     catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
-) {
+) -> Vec<String> {
     use crate::storage::catalog::summarize;
 
-    let Some(catalog) = catalog else { return };
+    let mut update = Vec::new();
+    let Some(catalog) = catalog else { return update };
     if catalog.items.is_empty() {
-        return;
+        return update;
     }
 
     let registry = global_effect_registry();
@@ -254,10 +257,19 @@ fn render_effect_catalog(
                 .strong(),
             );
             for (item, have, avail) in &summary.updatable {
-                ui.weak(format!(
-                    "{} — have v{have}, v{avail} available",
-                    item.display_name
-                ));
+                ui.horizontal(|ui| {
+                    ui.weak(format!(
+                        "{} — have v{have}, v{avail} available",
+                        item.display_name
+                    ));
+                    // The path that installs also updates.
+                    if ui.small_button(t!("effects_panel.update")).clicked() {
+                        update.push(item.name.clone());
+                    }
+                });
+            }
+            if summary.updatable.len() > 1 && ui.button(t!("effects_panel.update_all", count = summary.updatable.len())).clicked() {
+                update.extend(summary.updatable.iter().map(|(i, _, _)| i.name.clone()));
             }
             ui.add_space(4.0);
         }
@@ -294,6 +306,7 @@ fn render_effect_catalog(
             ui.weak("Everything in the catalog is already here.");
         }
     });
+    update
 }
 
 pub fn render_effects_panel(
@@ -307,6 +320,8 @@ pub fn render_effects_panel(
     catalog: Option<&crate::storage::effect_catalog::CachedEffectCatalog>,
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
+    effect_update_requested: &mut Vec<String>,
+    clear_effect_cache_requested: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
     // Edit as Rhai: (density, index, the built-in).
@@ -624,7 +639,15 @@ pub fn render_effects_panel(
         }
     });
 
-    render_effect_catalog(ui, catalog);
+    *effect_update_requested = render_effect_catalog(ui, catalog);
+    // Downloads only: the built-ins and the user's own are not cache.
+    let downloaded = global_effect_registry().all().filter(|i| i.provenance.is_cached_download()).count();
+    if downloaded > 0 {
+        ui.add_space(4.0);
+        if ui.button(t!("effects_panel.clear_cache", count = downloaded)).on_hover_text(t!("effects_panel.clear_cache_tip")).clicked() {
+            *clear_effect_cache_requested = true;
+        }
+    }
 
     if let Some((density, index, builtin)) = edit_as_rhai {
         formula_editor.get_or_insert_with(super::formula_editor::FormulaEditorPanel::new).edit_effect_as_rhai(config_manager, density, index, &builtin);

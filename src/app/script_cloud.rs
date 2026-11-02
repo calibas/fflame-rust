@@ -286,12 +286,13 @@ impl App {
 
 /// Store a fetched script locally, marked as somebody else's.
 ///
-/// Named from the server's `name`, but through `free_stem`: a published
+/// Named from the server's `name`, but through `adopt_stem`: a published
 /// script may carry a name that collides with a shipped stem on an older
 /// client even though the server rejects those, and a local collision
-/// must not silently overwrite the user's own work either.
+/// must not silently overwrite the user's own work either -- the same
+/// online script adopted again replaces its copy.
 fn adopt(resp: &ScriptResponse) -> Result<String, String> {
-    let desired = store::free_stem(&resp.name);
+    let desired = store::adopt_stem(&resp.name, &resp.id);
     let stem = store::save(&desired, &resp.source)?;
     store::set_link(
         &stem,

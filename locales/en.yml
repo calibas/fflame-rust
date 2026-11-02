@@ -1652,6 +1652,9 @@ api:
   variation_fetch_failed: "Couldn't load variations: %{names}. Fractal may render incorrectly."
   variation_cache_cleared: "Cleared %{count} cached variations"
   variation_cache_clear_failed: "Failed to clear variation cache: %{error}"
+  effect_cache_cleared: "Cleared %{count} cached effects"
+  effect_cache_clear_failed: "Failed to clear the effect cache: %{error}"
+  effect_update_needs_sign_in: "Sign in to update downloaded effects"
   load_flame_success: "Loaded flame: %{name}"
   url_load_flame_success: "Loaded flame '%{name}' from URL"
   url_load_animation_success: "Loaded animation '%{name}' from URL"
@@ -3012,6 +3015,10 @@ progress:
   animation: "Animation playing"
 
 effects_panel:
+  update: "Update"
+  update_all: "Update all (%{count})"
+  clear_cache: "Clear downloaded effects (%{count})"
+  clear_cache_tip: "Remove the effects downloaded from the online library, and its catalog: a flame using one fetches it again. The built-ins and your own are not touched."
   plugins: "Your plug-ins"
   plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   edit_as_rhai: "Rhai"

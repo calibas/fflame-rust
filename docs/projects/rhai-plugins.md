@@ -182,22 +182,22 @@ effect that is not built in renders only where that effect is installed.
 
 ### Inconsistencies between the kinds
 
-- An effect plug-in's install checks only `check_download`, not the
-  name (a variation's checks the registry), so a plug-in named as a
-  built-in installs and is refused at the next start.
+- ~~An effect plug-in's install checks only `check_download`, not the
+  name~~ -- gone with the WGSL plug-ins (D3).
 - Effect downloads need a token and are gated by online mode only at the
   caller; variation downloads need neither.
-- Updates and Clear Cache exist for variations only. The Effects panel
-  says a newer version exists and offers no action; `EffectRegistry` has
-  no version counter and no remove.
+- ~~Updates and Clear Cache exist for variations only~~ -- fixed in P3
+  step 3: the Effects panel updates a download and clears the cache
+  (`EffectRegistry::clear_api`; revisions and `remove_by_name` came
+  with P2).
 - An effect download's WGSL is never parsed before it is registered: a
   broken one is a pipeline error at first use. (The built-ins are now
   validated by `every_built_in_effect_validates`.)
-- The Variations panel's "downloaded" banner also counts Local and
-  Custom entries (`is_third_party`).
-- Adopting an online script whose stem matches one of the user's own
-  overwrites it: `free_stem` avoids only the shipped stems, though the
-  comment above `adopt` says it must not.
+- ~~The Variations panel's "downloaded" banner also counts Local and
+  Custom entries~~ -- fixed in P3 step 3: downloads only.
+- ~~Adopting an online script whose stem matches one of the user's own
+  overwrites it~~ -- fixed in P3 step 3 (`store::adopt_stem`: free of
+  theirs too; the same online script replaces its copy).
 - `ApiVariation` and `ApiEffectStage` have no users.
 
 ### The CPU sandbox is open (found 2026-11-01)
@@ -538,7 +538,7 @@ that passed is its Rhai source.
    The Formula Editor's file list marks plug-ins and gives the open file
    a "load at start" switch; Import and Delete are its own, on the web
    too.
-3. **The fixes**: adopting an online script never overwrites one of the
+3. **The fixes** (built 2026-11-02; `store::adopt_stem`, `downloaded_variations_in_use` on `is_cached_download`, `EffectRegistry::clear_api` and the Effects panel's Update and Clear buttons): adopting an online script never overwrites one of the
    user's (a stem free of theirs too, or the same script by its cloud
    id); the Variations panel's "downloaded" banner counts downloads
    only; effect downloads get updates and Clear Cache as variations
