@@ -465,7 +465,9 @@ fn escaped(s, p) {
   hybrids), `ctx.maxiter`, `ctx.center`, `ctx.magn`, `ctx.angle` (the
   view's rotation, degrees), `ctx.x`, `ctx.y`, `ctx.width`,
   `ctx.height` (the pixel on the screen), `ctx.random`, `ctx.pixel`.
-  `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`.
+  `INFO` gives `title`, `center`, `magn`, `maxiter`, `angle`; every
+  kind's `INFO` may also give `id`, `description` and `author`, what the
+  library shows of it (`storage::library`).
 - **`prepare(p, ctx)`**, optional, runs once per image (UF's
   `global:`): the map it returns is read as `p.name`.
 - **`fn creases(p0, p, ctx)`**, optional: a folding formula's paper,
@@ -802,8 +804,9 @@ fn escaped(s, p) {
   noise to the bit -- where the language's own `sin`, range-reduced
   (`uf_reduce`, for Metal's error), would make it a different noise.
   Fast, not good: hash a lattice point, as noise does.
-- **Labels by locale** (design rule 8): `INFO.title` and a parameter's
-  `caption`, `hint` and each choice may be a map of locale to string,
+- **Labels by locale** (design rule 8): `INFO.title`, `INFO.description`
+  and a parameter's `caption`, `hint` and each choice may be a map of
+  locale to string,
   `#{ en: "Spiral", ja: "螺旋" }`, compiled in the current language;
   `rhai::source_labels` keeps every language for a kind that shows them
   at display time (effects). `rhai::with_info_id` writes an id into a

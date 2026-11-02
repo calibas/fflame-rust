@@ -208,6 +208,7 @@ impl App {
                         // Publishing your own script does not make it
                         // somebody else's — preserve whatever was there.
                         from_others: store::link_of(&stem).is_some_and(|l| l.from_others),
+                        ..Default::default()
                     };
                     if let Err(e) = store::set_link(&stem, link) {
                         log::warn!("Could not record the cloud link for `{stem}`: {e}");
@@ -252,6 +253,7 @@ impl App {
                                         resp.owner_display_name, resp.name
                                     )),
                                     from_others: was_theirs,
+                                    ..Default::default()
                                 },
                             );
                             self.script_cloud.conflict = None;
@@ -300,6 +302,7 @@ fn adopt(resp: &ScriptResponse) -> Result<String, String> {
             // The whole point: this survives the save, so the script
             // keeps running under the cross-call restriction.
             from_others: true,
+            ..Default::default()
         },
     )?;
     Ok(stem)

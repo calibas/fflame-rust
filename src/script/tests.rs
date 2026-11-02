@@ -3964,6 +3964,7 @@ fn adopting_a_downloaded_script_keeps_it_untrusted() {
             version: Some(3),
             owner: Some("someone/theirs".into()),
             from_others: true,
+            ..Default::default()
         },
     )
     .expect("link");
@@ -4043,6 +4044,7 @@ fn refetching_your_own_script_keeps_it_yours() {
             version: Some(4),
             owner: Some("me/mine".into()),
             from_others: false,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -4058,6 +4060,7 @@ fn refetching_your_own_script_keeps_it_yours() {
             version: Some(5),
             owner: Some("me/mine".into()),
             from_others: was_theirs,
+            ..Default::default()
         },
     )
     .unwrap();

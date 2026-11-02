@@ -185,6 +185,24 @@ pub fn find(entries: &[ScriptEntry], id: &str) -> Option<ScriptEntry> {
     entries.iter().find(|e| e.id == id).cloned()
 }
 
+/// A script's declared name and kind, from its top-level
+/// `script("Name", "kind")` by parsing alone -- what a scan of the
+/// library reads (`storage::library`), where running every script as
+/// [`discover`] does costs ~5 ms each. `None` when it does not parse or
+/// declares itself some other way (a computed name).
+pub fn declared(source: &str) -> Option<(String, ScriptKind)> {
+    use rhai::{Expr, Stmt};
+    let ast = rhai::Engine::new_raw().compile(source).ok()?;
+    ast.statements().iter().find_map(|st| {
+        let Stmt::FnCall(f, _) = st else { return None };
+        if f.name != "script" || f.args.len() < 2 {
+            return None;
+        }
+        let (Expr::StringConstant(name, _), Expr::StringConstant(kind, _)) = (&f.args[0], &f.args[1]) else { return None };
+        Some((name.to_string(), ScriptKind::parse(kind)?))
+    })
+}
+
 /// Is this stem the name of a script that ships with the app?
 ///
 /// Shipped stems are reserved: a user script cannot take one (see
