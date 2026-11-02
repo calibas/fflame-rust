@@ -188,9 +188,10 @@ impl FormulaEditorPanel {
             }
         }
         // An effect becomes one: its module too, under the id Use gives it
-        // when it has none.
+        // when it has none of its own (none, or not a UUID: a copy of a
+        // built-in's, one typed by hand).
         if kind == EntryKind::Effect && checked.is_ok() {
-            let with_id = lang::rhai::with_info_id(&text, &crate::scripted::mint_id());
+            let with_id = lang::rhai::with_own_id(&text, &crate::scripted::mint_id());
             if let Err(e) = crate::effects::custom::compile(&with_id, crate::provenance::Provenance::Custom) {
                 errors.push(e);
             }
@@ -464,8 +465,8 @@ impl FormulaEditorPanel {
         let name = entry.name.clone();
         let mut source = entry.source.clone();
         let mut minted = false;
-        if lang::rhai::info_string(&source, "id").is_none() {
-            source = lang::rhai::with_info_id(&source, &crate::scripted::mint_id());
+        if !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id)) {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
             minted = true;
         }
         let id = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
@@ -931,5 +932,28 @@ mod tests {
         let c = cm.config();
         assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
         assert!(c.escape.formula.starts_with(custom::PREFIX), "{}", c.escape.formula);
+    }
+
+    /// An effect opened with an id that is not one of the user's -- a copy
+    /// of a built-in's twin, `vignette`, or one typed by hand -- is offered
+    /// for Use, and Use gives it a UUID, written into the file, before it
+    /// goes into the config and the chain. (It was refused: "not an
+    /// effect's id", with Use disabled and nothing to do about it.)
+    #[test]
+    fn an_effect_with_a_hand_written_id_gets_its_own_on_use() {
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        let mut panel = FormulaEditorPanel::new();
+        let copied = include_str!("../../assets/effects/vignette.rhai").replace("id: \"vignette\"", "id: \"my_vignette\"");
+        panel.adopt(None, "my-vignette.rhai".into(), copied);
+        panel.recheck();
+        assert!(panel.entries[0].errors(EntryKind::Effect).is_empty(), "{:?}", panel.entries[0].errors(EntryKind::Effect));
+        panel.use_entry(&mut cm, EntryKind::Effect, 0);
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert!(crate::scripted::is_uuid(&id), "{id}: {:?}", panel.status);
+        let c = cm.config();
+        assert_eq!(c.custom_effects.len(), 1);
+        assert_eq!(c.custom_effects[0].entry, id);
+        assert_eq!(c.color_effects.last().map(|e| e.effect_type.as_str()), Some(id.as_str()));
+        crate::effects::global_effect_registry_mut().remove_by_name(&id);
     }
 }
