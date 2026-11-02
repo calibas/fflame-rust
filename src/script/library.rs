@@ -164,14 +164,16 @@ impl ScriptEntry {
             ScriptKind::Modifier => "Modifier",
             ScriptKind::Library => "Library",
         };
-        let mark = if self.untrusted {
-            " ↓"
+        // The library's marks, the Formula Editor's too.
+        use crate::storage::library::{marks, Origin};
+        let origin = if self.untrusted {
+            Origin::Downloaded
         } else if matches!(self.origin, ScriptOrigin::User) {
-            " *"
+            Origin::Yours
         } else {
-            ""
+            Origin::Shipped
         };
-        format!("{tag} · {}{mark}", self.display_name)
+        format!("{tag} · {}{}", self.display_name, marks(origin, false))
     }
 }
 

@@ -1486,10 +1486,16 @@ it the first time (its `magn` does not yet: what span UF's magnification
 1 shows is unverified). **Live** re-applies the entry in use whenever an
 edit to it compiles again. Files live in a `formulas/` folder in the app's
 data directory (localStorage on the web, `storage::formula_store`); Open
-reads a `.ufm`, `.ucl` or `.frm` from disk, Export writes one; two example
+reads a `.ufm`, `.ucl` or `.frm` from disk, Export writes one; the example
 files ship (`assets/formulas/`), each entry compiled by
-`every_example_entry_compiles`. Scripts: `escape.custom_formula` and
-`escape.custom_coloring` ([SCRIPTING.md](SCRIPTING.md)).
+`every_example_entry_compiles`, and the built-in effects' sources after
+them (opened unsaved: a copy to Save and Use as one's own). The file list
+marks each file as the Scripts panel marks a script (`storage::library::
+marks`: ` *` the user's, ` ↓` somebody else's, and "(plug-in)"), and a
+stored Rhai file has **Load at start**: a plug-in, registered at every
+start and offered in the lists ([VARIATIONS.md](VARIATIONS.md#downloaded-variations)).
+Scripts: `escape.custom_formula` and `escape.custom_coloring`
+([SCRIPTING.md](SCRIPTING.md)).
 
 Measured against the built-ins it rewrites, the language's Mandelbrot,
 Lambda and Magnet I are identical, and so is a custom colouring at

@@ -93,19 +93,38 @@ pub fn scan() -> Vec<Entry> {
     let script_links = crate::script::store::load_links();
     for (stem, source) in crate::script::store::list() {
         let link = script_links.get(&stem).cloned().unwrap_or_default();
-        out.push(script_entry(&format!("{stem}.rhai"), &source, origin_of(&link), link));
+        out.push(script_entry(&format!("{stem}.rhai"), &source, origin_of_link(&link), link));
     }
     let formula_links = crate::storage::formula_store::links();
     for file in crate::storage::formula_store::list() {
         let Some(source) = crate::storage::formula_store::load(&file) else { continue };
         let link = formula_links.get(&file).cloned().unwrap_or_default();
-        out.push(formula_entry(&file, &source, origin_of(&link), link));
+        out.push(formula_entry(&file, &source, origin_of_link(&link), link));
     }
     out.sort_by_key(|e| (e.origin != Origin::Shipped, e.store == Store::Formulas, e.title.to_lowercase()));
     out
 }
 
-fn origin_of(link: &Link) -> Origin {
+/// What a list shows after an entry's title -- the Scripts panel's and
+/// the Formula Editor's alike (P3, step 4): ` ↓` for somebody else's,
+/// ` *` for the user's own, nothing for a shipped one; and whether it is
+/// a plug-in.
+pub fn marks(origin: Origin, plugin: bool) -> String {
+    let mut out = match origin {
+        Origin::Downloaded => " ↓",
+        Origin::Yours => " *",
+        Origin::Shipped => "",
+    }
+    .to_string();
+    if plugin {
+        out.push(' ');
+        out.push_str(&rust_i18n::t!("library.plugin"));
+    }
+    out
+}
+
+/// A stored file's origin, from its link.
+pub fn origin_of_link(link: &Link) -> Origin {
     if link.from_others {
         Origin::Downloaded
     } else {
@@ -371,6 +390,16 @@ mod tests {
             assert_eq!(vignette.version.len(), 8);
             assert!(shipped.iter().any(|e| e.kind == Kind::Formula), "the formula examples");
         }
+    }
+
+    /// Both lists mark an entry alike: whose it is, and a plug-in.
+    #[test]
+    fn the_marks_say_whose_it_is_and_a_plugin() {
+        assert_eq!(marks(Origin::Shipped, false), "");
+        assert_eq!(marks(Origin::Yours, false), " *");
+        assert_eq!(marks(Origin::Downloaded, false), " ↓");
+        let plugin = marks(Origin::Yours, true);
+        assert!(plugin.starts_with(" * ") && plugin.contains("plug-in"), "{plugin}");
     }
 
     /// A formula store file's link: set, read back, cleared by deleting the
