@@ -419,6 +419,17 @@ impl EffectRegistry {
         self.effects.remove(name)
     }
 
+    /// Remove every downloaded effect, what Clear Cache does (the
+    /// variations' `clear_api`); a pipeline built from one is then stale.
+    /// Gives how many went.
+    pub fn clear_api(&mut self) -> usize {
+        let names: Vec<String> = self.effects.values().filter(|i| i.provenance.is_cached_download()).map(|i| i.name.clone()).collect();
+        for n in &names {
+            self.remove_by_name(n);
+        }
+        names.len()
+    }
+
     /// Get effect info by name
     pub fn get(&self, name: &str) -> Option<&EffectInfo> {
         self.effects.get(name)
@@ -2032,6 +2043,21 @@ mod download_tests {
             Some("fn luminance(c: vec3<f32>) -> f32 { return c.g; }\nfn main() { luminance(x); }"),
         );
         assert!(check_download(&d).is_ok());
+    }
+
+    /// Clear Cache removes the downloads, and only them.
+    #[test]
+    fn clear_api_removes_the_downloads_alone() {
+        let mut reg = EffectRegistry::new();
+        register_builtin_effects(&mut reg);
+        let builtins = reg.len();
+        reg.register_from_api(&dl("fetched_one", Some("fn main() {}")), crate::provenance::Provenance::Api { version: 1 }).unwrap();
+        let mut mine = check_download(&dl("mine_one", Some("fn main() {}"))).unwrap();
+        mine.provenance = crate::provenance::Provenance::Custom;
+        reg.register(mine);
+        assert_eq!(reg.clear_api(), 1);
+        assert!(!reg.contains("fetched_one") && reg.contains("mine_one") && reg.contains("vignette"));
+        assert_eq!(reg.len(), builtins + 1);
     }
 
     /// A built-in cannot be replaced by a download, matching variations.

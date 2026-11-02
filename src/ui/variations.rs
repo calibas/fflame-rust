@@ -18,12 +18,14 @@ use rust_i18n::t;
 
 use crate::variations::{global_registry, VariationCategory};
 
-/// Variations this flame uses that did not ship with the app.
+/// Variations this flame uses that were downloaded.
 ///
 /// Pure and separate from the panel so the rule can be tested: "is this
 /// flame running third-party code" is the question §1 of the
 /// shared-resources plan asks, and the answer must not depend on
-/// scrolling a 646-row list looking for "API v#".
+/// scrolling a 646-row list looking for "API v#". Downloads only, as the
+/// banner says: a Rhai variation of the user's (`Provenance::Custom`) is
+/// theirs, and its key would read as noise (rhai-plugins.md, P3).
 ///
 /// A name the registry does not know is NOT reported here — it is
 /// missing rather than untrusted, and the fetch path handles it.
@@ -34,7 +36,7 @@ pub fn downloaded_variations_in_use(
     flame
         .active_variation_names_ordered(registry)
         .into_iter()
-        .filter(|name| registry.get(name).is_some_and(|v| v.provenance.is_third_party()))
+        .filter(|name| registry.get(name).is_some_and(|v| v.provenance.is_cached_download()))
         .collect()
 }
 
@@ -380,6 +382,13 @@ mod tests {
             downloaded_variations_in_use(&flame, &registry),
             vec!["borrowed_thing".to_string()]
         );
+
+        // One of the user's own Rhai variations is not a download.
+        registry.register_from_api(&api_download("mine_in_rhai"), crate::provenance::Provenance::Custom);
+        let mut t3 = Transform::new();
+        t3.set_variation("mine_in_rhai", 1.0);
+        flame.transforms.push(t3);
+        assert_eq!(downloaded_variations_in_use(&flame, &registry), vec!["borrowed_thing".to_string()]);
     }
 
     /// An unknown name is missing, not untrusted — the fetch path deals

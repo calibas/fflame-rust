@@ -385,9 +385,15 @@ Effects", available in every render mode:
   registered effects by their translated names.
 - **Online library**, when a catalog is cached or fetched: how many the
   server lists and how many are here, downloaded effects with a newer
-  version, effects available to fetch, and how many the server lists
-  without a shader yet. It is a listing, not download buttons: an
-  effect is fetched when a flame uses it.
+  version -- each with **Update**, and **Update all** for several, the
+  path that installs (`App::handle_effect_updates`; signed in) -- effects
+  available to fetch, and how many the server lists without a shader
+  yet. What is available is a listing, not download buttons: an effect
+  is fetched when a flame uses it.
+- **Clear downloaded effects (N)**, when any are here: the cached
+  downloads and the catalog go, the registry's downloads with them
+  (`EffectRegistry::clear_api`); a flame using one fetches it again. The
+  built-ins and the user's own are not touched.
 
 ---
 

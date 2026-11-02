@@ -42,6 +42,8 @@ impl App {
         self.handle_variation_fetches();
         self.handle_clear_variation_cache(ui_response);
         self.handle_variation_updates(ui_response);
+        self.handle_clear_effect_cache(ui_response);
+        self.handle_effect_updates(ui_response);
         // Online mode off: no catalog fetches, and an effect a flame
         // lacks stays in the missing set rather than being fetched, so
         // turning online mode on fetches it then. (Results already in
