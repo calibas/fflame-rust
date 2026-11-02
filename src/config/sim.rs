@@ -844,6 +844,12 @@ pub struct SimConfig {
     #[serde(default = "default_coloring", skip_serializing_if = "is_default_coloring")]
     pub coloring: String,
 
+    /// A colouring written in Rhai (P4: `sim::custom`), carried so the
+    /// file renders anywhere: `coloring` names it (`custom-...`), and
+    /// `sim::custom::ensure` registers it under that name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_coloring: Option<crate::config::escape::CustomSource>,
+
     /// Cell count, or how to derive it from the output size.
     #[serde(default, skip_serializing_if = "is_default_grid")]
     pub grid: SimGrid,
@@ -1555,6 +1561,7 @@ impl Default for SimConfig {
         Self {
             model: default_model(),
             coloring: default_coloring(),
+            custom_coloring: None,
             grid: SimGrid::default(),
             seed: default_seed(),
             init: SimInit::default(),

@@ -40,6 +40,9 @@ pub mod assembler;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod app_repro_test;
 pub mod colorings;
+/// Simulation colourings written in Rhai (P4).
+#[cfg(feature = "lang")]
+pub mod custom;
 pub mod fft;
 pub mod models;
 pub mod renderer;
@@ -1299,6 +1302,12 @@ pub fn model_or_default(name: &str) -> &'static ModelDef {
 }
 
 pub fn coloring_or_default(name: &str) -> &'static SimColoringDef {
+    // One written in Rhai, registered from the config that carries it
+    // (P4).
+    #[cfg(feature = "lang")]
+    if let Some(def) = custom::coloring(name) {
+        return def;
+    }
     COLORINGS
         .iter()
         .copied()

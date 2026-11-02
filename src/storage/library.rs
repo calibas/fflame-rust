@@ -28,6 +28,8 @@ pub enum Kind {
     Variation,
     Solid,
     Effect,
+    /// A simulation's colouring (P4).
+    SimColoring,
     /// An Ultra Fractal or Fractint file: many entries, of its kind.
     UfFormulas,
     UfColorings,
@@ -40,7 +42,7 @@ pub enum Kind {
 impl Kind {
     /// A GPU Rhai entry that can be a plug-in (`storage::links::Link::plugin`).
     pub fn can_be_plugin(self) -> bool {
-        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid)
+        matches!(self, Kind::Variation | Kind::Effect | Kind::Formula | Kind::Coloring | Kind::Solid | Kind::SimColoring)
     }
 }
 
@@ -89,6 +91,10 @@ pub fn scan() -> Vec<Entry> {
     #[cfg(feature = "lang")]
     for (name, source) in crate::effects::custom::BUILTIN_TWINS {
         out.push(formula_entry(&format!("{name}.rhai"), source, Origin::Shipped, Link::default()));
+    }
+    #[cfg(all(feature = "lang", feature = "engine-sim"))]
+    for (name, source) in crate::sim::custom::SHIPPED {
+        out.push(formula_entry(&format!("sim-{name}.rhai"), source, Origin::Shipped, Link::default()));
     }
     let script_links = crate::script::store::load_links();
     for (stem, source) in crate::script::store::list() {
@@ -201,6 +207,7 @@ fn formula_entry(file: &str, source: &str, origin: Origin, link: Link) -> Entry 
             Some(EntryKind::Transform) => Kind::Variation,
             Some(EntryKind::Solid) => Kind::Solid,
             Some(EntryKind::Effect) => Kind::Effect,
+            Some(EntryKind::SimColoring) => Kind::SimColoring,
             None => Kind::Unknown,
         };
         if let Some(labels) = rhai::source_labels(source) {
@@ -360,9 +367,14 @@ fn register_kind(kind: Kind, title: &str, source: &str) -> Result<(String, crate
             compiled.map_err(|d| d.first().map(|x| x.render(source)).unwrap_or_else(|| "it does not compile".to_string()))?;
             Ok((name, src))
         }
+        #[cfg(feature = "engine-sim")]
+        Kind::SimColoring => {
+            let name = crate::sim::custom::register(source)?;
+            Ok((name, crate::sim::custom::carried(source)))
+        }
         _ => {
             let _ = title;
-            Err("this build has no escape-time engine".to_string())
+            Err("this build has no engine for it".to_string())
         }
     }
 }

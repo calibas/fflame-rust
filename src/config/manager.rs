@@ -1979,6 +1979,7 @@ impl ConfigManager {
             // to the viewport.
             ConfigPath::SimModel => Ok(ConfigValue::String(config.sim.model.clone())),
             ConfigPath::SimColoring => Ok(ConfigValue::String(config.sim.coloring.clone())),
+            ConfigPath::SimCustomColoring => Ok(ConfigValue::String(custom_source_json(&config.sim.custom_coloring))),
             ConfigPath::SimGridMode => Ok(ConfigValue::String(
                 match config.sim.grid {
                     crate::config::sim::SimGrid::Fixed { .. } => "fixed",
@@ -3311,6 +3312,10 @@ impl ConfigManager {
             }
             ConfigPath::SimColoring => {
                 self.current.sim.coloring = String::try_from(value)?;
+            }
+            ConfigPath::SimCustomColoring => {
+                let s: String = value.try_into()?;
+                self.current.sim.custom_coloring = custom_source_from_json(&s)?;
             }
             ConfigPath::SimGridMode => {
                 let mode = String::try_from(value)?;

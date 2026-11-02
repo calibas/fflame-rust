@@ -135,6 +135,115 @@ pub fn effect(p: &Program) -> Result<EffectWgsl, String> {
     Ok(EffectWgsl { body: g.finish("", body), blends })
 }
 
+/// A simulation colouring's sample fields by `__cell`'s index
+/// (`lang::rhai::vec`'s `Owner::Cell`): the colour template's `SimSample`.
+const SIM_CELL_FIELDS: [&str; 19] = [
+    "x.s.x", "x.s.y", "x.s.z", "x.s.w", "x.gx.x", "x.gx.y", "x.gx.z", "x.gx.w", "x.gy.x", "x.gy.y", "x.gy.z", "x.gy.w", "x.dist", "x.tensor.x",
+    "x.tensor.y", "x.tensor.z", "x.relief.x", "x.relief.y", "x.relief.z",
+];
+
+/// `__cell`'s field index: its literal, as the checker leaves it (an int
+/// argument widened to the float a builtin takes).
+fn cell_index(a: &IExpr) -> Option<usize> {
+    match &a.kind {
+        IExprKind::Int(i) => usize::try_from(*i).ok(),
+        IExprKind::Float(f) if *f >= 0.0 && f.fract() == 0.0 => Some(*f as usize),
+        IExprKind::Convert(x) => cell_index(x),
+        _ => None,
+    }
+}
+
+/// A simulation colouring's WGSL (P4): `sim_color(x, p)` as the colour
+/// template calls it, and what it reads, which the template measures only
+/// when a colouring declares it (`sim::ColoringFeature`).
+pub struct SimColoringWgsl {
+    /// The function and the helpers it uses.
+    pub body: String,
+    /// It reads the gradient (`cell.gx`, `cell.gy`).
+    pub gradient: bool,
+    /// The structure tensor (`cell.tensor`).
+    pub structure: bool,
+    /// The distance to the matte's edge (`cell.dist`).
+    pub distance: bool,
+    /// The relief (`cell.relief`).
+    pub relief: bool,
+    /// The cell it is at (`ctx.cell`), which a colouring under an
+    /// interpolating resolve reads only if it says so.
+    pub reads_cell: bool,
+}
+
+/// [`SimColoringWgsl`] for a checked simulation colouring: the effect
+/// context, hosted by the simulation's colour template.
+pub fn sim_coloring(p: &Program) -> Result<SimColoringWgsl, String> {
+    if !p.funcs.is_empty() {
+        return Err("a colouring's function parameters are a later step".into());
+    }
+    let mut g = Gen::new(p, Ctx::Effect, "sc_");
+    g.sim = true;
+    let mut body = String::from(
+        "fn sim_color(x: SimSample, p: vec2<i32>) -> vec4<f32> {\n    let pixel = vec2<f32>(p);\n    var effect_r = 0.0;\n    \
+         var effect_g = 0.0;\n    var effect_b = 0.0;\n    var effect_a = 1.0;\n",
+    );
+    for (i, v) in p.vars.iter().enumerate() {
+        let _ = writeln!(body, "    {};", var_decl(i, v));
+    }
+    g.stmts(&p.transform, 1, &mut body);
+    body.push_str("    return vec4<f32>(effect_r, effect_g, effect_b, effect_a);\n}\n");
+    let mut read = [false; 19];
+    let mut pixel = false;
+    fn visit(e: &IExpr, read: &mut [bool; 19], pixel: &mut bool) {
+        match &e.kind {
+            IExprKind::Call(Builtin::Cell, a) => {
+                if let Some(i) = cell_index(a).filter(|i| *i < 19) {
+                    read[i] = true;
+                }
+            }
+            IExprKind::Predef(Predef::Pixel) => *pixel = true,
+            IExprKind::Convert(a) | IExprKind::Unary(_, a) | IExprKind::PowInt(a, _) | IExprKind::Modulus(a) | IExprKind::Call(_, a) | IExprKind::UserCall(_, a) | IExprKind::Elem(_, a) => {
+                visit(a, read, pixel)
+            }
+            IExprKind::MakeComplex(a, b) | IExprKind::Binary(_, a, b) => {
+                visit(a, read, pixel);
+                visit(b, read, pixel);
+            }
+            _ => {}
+        }
+    }
+    fn stmts(s: &[IStmt], read: &mut [bool; 19], pixel: &mut bool) {
+        for st in s {
+            match st {
+                IStmt::Assign(_, e) => visit(e, read, pixel),
+                IStmt::SetElem { index, value, .. } => {
+                    visit(index, read, pixel);
+                    visit(value, read, pixel);
+                }
+                IStmt::If { arms, otherwise } => {
+                    for (c, b) in arms {
+                        visit(c, read, pixel);
+                        stmts(b, read, pixel);
+                    }
+                    stmts(otherwise, read, pixel);
+                }
+                IStmt::While { cond, body } | IStmt::Repeat { body, cond } => {
+                    visit(cond, read, pixel);
+                    stmts(body, read, pixel);
+                }
+                IStmt::Map { .. } => {}
+            }
+        }
+    }
+    stmts(&p.transform, &mut read, &mut pixel);
+    let any = |r: std::ops::Range<usize>| read[r].iter().any(|&b| b);
+    Ok(SimColoringWgsl {
+        body: g.finish("", body),
+        gradient: any(4..12),
+        distance: read[12],
+        structure: any(13..16),
+        relief: any(16..19),
+        reads_cell: pixel,
+    })
+}
+
 /// What a flame variation's function takes besides its point, from what
 /// the program reads and writes: the hooks a built-in declares as
 /// `Feature`s (the KIFS plan, C2), in the shader builder's order
@@ -1373,6 +1482,10 @@ struct Gen<'p> {
     /// A solid's globals (`prepare`): in its parameter block from this
     /// slot, after its parameters, where mode D's `fdata` is the walk's.
     global_base: Option<usize>,
+    /// The effect context hosted by the simulation's colour template
+    /// (P4): parameters are `cparam`, the size the grid's, the sample
+    /// `x` and the palette the template's.
+    sim: bool,
 }
 
 impl<'p> Gen<'p> {
@@ -1406,6 +1519,7 @@ impl<'p> Gen<'p> {
             user_jac: false,
             exact_near_zero: false,
             global_base: None,
+            sim: false,
         }
     }
 
@@ -1766,6 +1880,8 @@ impl<'p> Gen<'p> {
                 let read = |k: usize| {
                     if self.ctx == Ctx::Variation {
                         format!("get_param(xform_id, variation_id, {k}u)")
+                    } else if self.ctx == Ctx::Effect && self.sim {
+                        format!("cparam({k}u)")
                     } else if self.ctx == Ctx::Effect {
                         format!("get_param({k}u)")
                     } else {
@@ -1896,6 +2012,8 @@ impl<'p> Gen<'p> {
             (Predef::EffectAmount, _) => "effect_amount".into(),
             (Predef::DensityMean, _) => "effect_params.density_mean".into(),
             (Predef::PixelScale, _) => "effect_params.pixel_scale".into(),
+            (Predef::Width, Ctx::Effect) if self.sim => "sim_grid().x".into(),
+            (Predef::Height, Ctx::Effect) if self.sim => "sim_grid().y".into(),
             (Predef::Width, Ctx::Effect) => "i32(effect_params.width)".into(),
             (Predef::Height, Ctx::Effect) => "i32(effect_params.height)".into(),
             (Predef::Z, Ctx::PerturbFe) => "cfe2_to_f32(cfe2_ref(zm, zlo, ze))".into(),
@@ -1967,8 +2085,11 @@ impl<'p> Gen<'p> {
     /// In an effect, an int parameter, or the image's width or height, as
     /// a float expression with the int's value; `None` for anything else.
     fn int_as_float(&self, e: &IExpr) -> Option<String> {
+        let read = if self.sim { "cparam" } else { "get_param" };
         match &e.kind {
-            IExprKind::Param(id) if self.p.params[*id].ty() == Ty::Int => Some(format!("round(get_param({}u))", self.slots[*id])),
+            IExprKind::Param(id) if self.p.params[*id].ty() == Ty::Int => Some(format!("round({read}({}u))", self.slots[*id])),
+            IExprKind::Predef(Predef::Width) if self.sim => Some("f32(sim_grid().x)".to_string()),
+            IExprKind::Predef(Predef::Height) if self.sim => Some("f32(sim_grid().y)".to_string()),
             IExprKind::Predef(Predef::Width) => Some("f32(effect_params.width)".to_string()),
             IExprKind::Predef(Predef::Height) => Some("f32(effect_params.height)".to_string()),
             _ => None,
@@ -2517,6 +2638,21 @@ impl<'p> Gen<'p> {
         }
         use Builtin::*;
         let v = self.expr(a);
+        // A simulation colouring's sample and palette (P4): the field
+        // `__cell`'s literal index names (`SIM_CELL_FIELDS`).
+        if f == Cell {
+            let i = cell_index(a).expect("the checker's literal");
+            return SIM_CELL_FIELDS[i].to_string();
+        }
+        if let Some(part) = match f {
+            PaletteR => Some("x"),
+            PaletteG => Some("y"),
+            PaletteB => Some("z"),
+            _ => None,
+        } {
+            let t = if a.ty == Ty::Int { format!("f32({v})") } else { v };
+            return format!("sim_palette({t}).{part}");
+        }
         // An effect's reads of its image (P2): `v` the position, or the
         // pixel as `complex(x, y)`, loaded clamped to the image. A read's
         // four channels are four calls, which the shader compiler merges.
@@ -2623,7 +2759,7 @@ impl<'p> Gen<'p> {
             Log1p => format!("{}({v})", self.use_(Helper::FLog1p)),
             Fract => format!("fract({v})"),
             Conj | Flip | Cosxx | Hash2 => unreachable!("complex-valued"),
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => unreachable!("an image read, emitted above"),
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => unreachable!("an image read, emitted above"),
         };
         if ty == Ty::Int {
             format!("i32({real})")
@@ -2636,7 +2772,7 @@ impl<'p> Gen<'p> {
 fn complex_helper(f: Builtin) -> Helper {
     use Builtin::*;
     match f {
-        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => unreachable!("an image read, emitted by `Gen::call`"),
+        SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Cell | PaletteR | PaletteG | PaletteB => unreachable!("an image read, emitted by `Gen::call`"),
         Hash2 => Helper::Hash2,
         Fract => unreachable!("emitted by `Gen::call`, real or complex"),
         // `Gen::call` passes the value through.
@@ -4326,7 +4462,7 @@ fn step(s, p) {
             for e in &parsed.entries {
                 let (p, d) = match kind {
                     EntryKind::Formula => super::super::switch::check_formula(&parsed, e, dialect),
-                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => check(e, kind, dialect),
+                    EntryKind::Coloring | EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => check(e, kind, dialect),
                 };
                 let errors: Vec<String> = d.iter().filter(|x| x.severity == super::super::Severity::Error).map(|x| x.render(text)).collect();
                 match p {
@@ -4362,7 +4498,7 @@ fn step(s, p) {
                         let back = super::super::rhai::coloring(&text);
                         (text, back)
                     }
-                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => unreachable!("the test files hold no transformations, solids or effects"),
+                    EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => unreachable!("the test files hold no transformations, solids or effects"),
                 };
                 let back = back.unwrap_or_else(|d| panic!("{file} / {name} as Rhai: {:?}", d[0].render(&text)));
                 (*file, format!("{name} as Rhai"), back)
@@ -4386,7 +4522,7 @@ fn step(s, p) {
                     None => Ok(()),
                 }),
                 EntryKind::Coloring => validate_coloring(&coloring(p)),
-                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect => unreachable!("the test files hold no transformations, solids or effects"),
+                EntryKind::Transform | EntryKind::Solid | EntryKind::Effect | EntryKind::SimColoring => unreachable!("the test files hold no transformations, solids or effects"),
             };
             if let Err(e) = checked {
                 panic!("{file} / {name}: {e}");

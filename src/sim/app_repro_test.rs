@@ -180,6 +180,43 @@ fn small_config() -> SimConfig {
     cfg
 }
 
+/// A Rhai colouring renders its built-in twin's picture (P4): Channel's
+/// Rhai source against the built-in, at its defaults and at three other
+/// settings (the other channel, a wrap, an offset), over a run that
+/// leaves structure in both of Gray-Scott's.
+#[cfg(feature = "lang")]
+#[test]
+fn the_rhai_channel_colours_as_the_built_in() {
+    let Some((device, queue)) = repro_device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let palette = test_palette(&device, &queue);
+    let carried = crate::sim::custom::carried(include_str!("../../assets/sim/channel.rhai"));
+    let settings: [&[(&str, f32)]; 4] = [&[], &[("channel", 0.0), ("scale", 1.5)], &[("wrap", 1.0), ("scale", 7.0), ("offset", 0.2)], &[("channel", 1.0), ("scale", 5.0), ("offset", -0.3)]];
+    let render = |cfg: &SimConfig| {
+        let mut r = SimRenderer::new(&device, cfg, 96, 72);
+        r.render_still(&device, &queue, cfg, &palette);
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        read_rgba32f(&device, &queue, r.output_texture(), 96, 72)
+    };
+    for set in settings {
+        let mut builtin = small_config();
+        builtin.steps = 400;
+        builtin.coloring = "channel".into();
+        for (k, v) in set {
+            builtin.coloring_params.insert(k.to_string(), *v);
+        }
+        let mut twin = builtin.clone();
+        twin.coloring = carried.entry.clone();
+        twin.custom_coloring = Some(carried.clone());
+        let (a, b) = (render(&builtin), render(&twin));
+        assert!(a.iter().any(|p| p[0] > 0.05), "{set:?}: the built-in drew something");
+        let worst = a.iter().zip(&b).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs())).fold(0.0f32, f32::max);
+        assert!(worst <= 1e-5, "{set:?}: the twin is off by {worst}");
+    }
+}
+
 /// An active run's grid held through a resize (app/sim_lock.rs, D7):
 /// resized with its cells fixed, the field and its step survive a new
 /// picture size, shown larger; resized as the bound grid it is, the cells
