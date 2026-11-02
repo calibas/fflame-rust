@@ -3051,7 +3051,7 @@ formula_editor:
   using_lens: "Using `%{name}` as the camera lens"
   using_solid: "Using `%{entry}` as the solid"
   using_effect: "`%{name}` is in the effects chain"
-  id_minted: "Gave `%{entry}` an id of its own, written into the file: Save keeps it"
+  id_minted: "Gave `%{entry}` an id of its own (a UUID), written into the file: Save keeps it"
   saved: "Saved %{file}"
   deleted: "Deleted %{file}"
   exported: "Exported %{file}"

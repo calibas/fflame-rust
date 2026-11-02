@@ -263,6 +263,51 @@ pub fn with_info_id(source: &str, id: &str) -> String {
     format!("{}const INFO = #{{ id: \"{id}\" }};\n{}", &source[..at], &source[at..])
 }
 
+/// `source` with an id of its own: a UUID it has is kept; any other id
+/// (a copy of a built-in's, `vignette`, or one typed by hand) is replaced
+/// by `id`; none, `id` is added ([`with_info_id`]). What the Formula
+/// Editor gives one of the user's scripts on Use (design rule 7: the
+/// user's are UUIDs).
+pub fn with_own_id(source: &str, id: &str) -> String {
+    match info_string(source, "id") {
+        None => with_info_id(source, id),
+        Some(have) if crate::scripted::is_uuid(&have) => source.to_string(),
+        Some(_) => {
+            // The literal's span, from the parse: its opening quote, then
+            // the next quote not escaped.
+            let Ok((ast, pos)) = parse(source) else { return source.to_string() };
+            let at = ast.statements().iter().find_map(|st| {
+                let Stmt::Var(x, _, _) = st else { return None };
+                let Expr::Map(m, _) = &x.1 else { return None };
+                (x.0.name.as_str() == "INFO").then_some(())?;
+                m.0.iter().find(|(k, _)| k.name.as_str() == "id").and_then(|(_, v)| match v {
+                    Expr::StringConstant(_, p) => Some(pos.span(*p).start),
+                    _ => None,
+                })
+            });
+            let Some(open) = at.and_then(|s| source[s.min(source.len())..].find('"').map(|i| s + i)) else {
+                return source.to_string();
+            };
+            let mut close = None;
+            let mut escaped = false;
+            for (i, ch) in source[open + 1..].char_indices() {
+                match ch {
+                    '\\' if !escaped => escaped = true,
+                    '"' if !escaped => {
+                        close = Some(open + 1 + i);
+                        break;
+                    }
+                    _ => escaped = false,
+                }
+            }
+            match close {
+                Some(close) => format!("{}\"{id}\"{}", &source[..open], &source[close + 1..]),
+                None => source.to_string(),
+            }
+        }
+    }
+}
+
 fn info_field<T>(source: &str, key: &str, read: impl Fn(&Expr) -> Option<T>) -> Option<T> {
     let (ast, _) = parse(source).ok()?;
     ast.statements().iter().find_map(|st| {
@@ -3007,6 +3052,17 @@ fn escaped(s, p) {
         assert!(bare.starts_with("// Glow: a soft bloom.\n\nconst INFO = #{ id: "), "{bare}");
         assert_eq!(info_string(&bare, "id").as_deref(), Some(id));
         assert_eq!(with_info_id(&with, "another"), with, "an id it has stays");
+
+        // An id of one's own: a UUID stays; a built-in's or a hand-typed
+        // one is replaced, the rest of the text as it was; none is added.
+        let fresh = "0e5c6b2a-1d3f-4a7e-9b8c-2f4d6a8c0e1b";
+        assert_eq!(with_own_id(&with, fresh), with, "a UUID it has stays");
+        let copied = "const INFO = #{ title: \"Vignette\", id: \"vignette\" };\nfn effect(c, p) { c }\n";
+        let own = with_own_id(copied, fresh);
+        assert_eq!(own, copied.replace("\"vignette\"", &format!("\"{fresh}\"")));
+        assert_eq!(info_string(&own, "title").as_deref(), Some("Vignette"));
+        let bare = "fn effect(c, p) { c }\n";
+        assert_eq!(info_string(&with_own_id(bare, fresh), "id").as_deref(), Some(fresh));
     }
 
     /// Labels by locale (design rule 8): a title, caption, hint or choice

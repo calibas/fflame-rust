@@ -473,8 +473,10 @@ and hashes only a new one, and a source that does not compile is
 logged once (`scripted::Ledger`). A build without `engine-escape` has
 no compiler, and a carried effect renders as an unknown one does.
 
-**In the Formula Editor**, an effect's row offers *Use as effect*: an
-id is minted into the file if it has none, the effect registers, the
+**In the Formula Editor**, an effect's row offers *Use as effect*: a
+UUID is minted into the file if it has none of its own -- none, or an
+id that is not a UUID, such as a twin's copied `vignette` or one typed
+by hand (`rhai::with_own_id`) -- the effect registers, the
 config's sources take it, and an instance is added to its chain the
 first time (a second undo step: adding an instance is structural).
 *Live* re-applies it by its id.

@@ -82,7 +82,9 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
     let id = lang::rhai::info_string(source, "id")
         .ok_or_else(|| "an effect names itself: `const INFO = #{ id: \"...\" }` (one is minted when it is saved)".to_string())?;
     if !provenance.is_builtin() && !scripted::is_uuid(&id) {
-        return Err(format!("`{id}` is not an effect's id: one of yours is a UUID, minted when it is saved"));
+        return Err(format!(
+            "`{id}` is not an effect's id: one of yours is named by a UUID, which the Formula Editor gives it on Use as effect"
+        ));
     }
     let category = match lang::rhai::info_string(source, "category").as_deref() {
         Some("density") => EffectCategory::Density,
