@@ -1,10 +1,10 @@
 // Julia: a Mandelbrot or Julia set drawn over the image.
 //
-// The Rhai twin of the built-in `julia` effect, pending
-// (docs/main/EFFECTS.md, Rhai effects): it keeps the pixels, parameters
-// and order of shaders/effects/color/julia.wgsl, which the app still runs, and
-// replaces it once it is as fast (`the_twins_are_no_slower`). Edit as
-// Rhai in the Effects panel starts from this file.
+// The built-in `julia` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/julia.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     mode: #{ value: 1, caption: "Mode", choices: ["Mandelbrot", "Julia"] },

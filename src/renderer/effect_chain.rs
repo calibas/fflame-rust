@@ -1986,10 +1986,11 @@ mod gpu_tests {
 
     /// D1's speed check: each built-in that is its twin against the WGSL
     /// it replaced, at its defaults, at 1080p and 4K, on one chain: the
-    /// first run (the pipeline built), then the best of seven batches of
+    /// first run (the pipeline built), then nine rounds of a batch of
     /// about 20 ms each (so a small effect is timed, not its submission),
-    /// the two interleaved so a clock change falls on both. A twin more
-    /// than 5% slower fails; a pending one (`PENDING_TWINS`) is timed and
+    /// the twin straight after the WGSL, and the median of the rounds'
+    /// ratios (best-of-N moved with the GPU's clocks). A twin more than
+    /// 5% slower fails; a pending one (`PENDING_TWINS`) is timed and
     /// reported, ready to replace its WGSL once it passes. A measurement
     /// on the GPU: run it alone, with the app closed --
     /// `cargo test --release --lib -- --ignored --nocapture the_twins_are_no_slower`.
@@ -2043,12 +2044,20 @@ mod gpu_tests {
                 let (first_ref, first_twin) = (batch(&pair.wgsl, 1), batch(&pair.twin, 1));
                 let estimate = batch(&pair.wgsl, 5).min(batch(&pair.twin, 5));
                 let runs = ((20.0 / estimate) as u32).clamp(5, 400);
+                // Each round the twin straight after the WGSL: the median of
+                // the rounds' ratios, which a clock change between rounds
+                // does not move.
                 let (mut best_ref, mut best_twin) = (f64::MAX, f64::MAX);
-                for _ in 0..7 {
-                    best_ref = best_ref.min(batch(&pair.wgsl, runs));
-                    best_twin = best_twin.min(batch(&pair.twin, runs));
+                let mut ratios = Vec::new();
+                for _ in 0..9 {
+                    let r = batch(&pair.wgsl, runs);
+                    let t = batch(&pair.twin, runs);
+                    best_ref = best_ref.min(r);
+                    best_twin = best_twin.min(t);
+                    ratios.push(t / r);
                 }
-                let ratio = best_twin / best_ref;
+                ratios.sort_by(|a, b| a.total_cmp(b));
+                let ratio = ratios[ratios.len() / 2];
                 let mark = if pending { "  (pending)" } else { "" };
                 println!("{name:<22} {:>9} {best_ref:>10.3} {best_twin:>10.3} {ratio:>7.3} {first_ref:>11.1} {first_twin:>11.1}{mark}", format!("{w}x{h}"));
                 if ratio > 1.05 && !pending {
@@ -2064,6 +2073,137 @@ mod gpu_tests {
         assert!(ignored.is_empty(), "{ignored:?}");
         println!("pending twins still slower: {still_pending:?} (none: ready to replace their WGSL)");
         assert!(failures.is_empty(), "twins slower than their WGSL:\n{}", failures.join("\n"));
+    }
+
+    /// A tool for a twin's speed (D1): times the WGSL files in
+    /// `$EFFECT_VARIANTS` (default `output/effect-variants`), one folder
+    /// per effect named as the built-in, each `*.wgsl` a module the chain
+    /// runs with the built-in's parameters, against the built-in's WGSL
+    /// and its twin, interleaved, the best of `$EFFECT_VARIANTS_ROUNDS`
+    /// (default 7) ~20 ms batches at `$EFFECT_VARIANTS_SIZE` (default
+    /// `3840x2160`). Writes `wgsl.wgsl`
+    /// and `twin.wgsl` beside the variants first, to start from. Files,
+    /// not code, so an experiment needs no rebuild.
+    #[cfg(feature = "lang")]
+    #[test]
+    #[ignore = "a tool: a measurement on the GPU, run alone with the app closed"]
+    fn time_effect_variants() {
+        let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {
+            eprintln!("no adapter with FLOAT32_FILTERABLE; skipping");
+            return;
+        };
+        let root = std::path::PathBuf::from(std::env::var("EFFECT_VARIANTS").unwrap_or_else(|_| "output/effect-variants".into()));
+        let size = std::env::var("EFFECT_VARIANTS_SIZE").unwrap_or_else(|_| "3840x2160".into());
+        let (w, h) = size.split_once('x').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).expect("WxH");
+        let rounds: usize = std::env::var("EFFECT_VARIANTS_ROUNDS").ok().and_then(|r| r.parse().ok()).unwrap_or(7);
+        let wait = || {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        };
+        let colour: Vec<u8> = (0..w * h).flat_map(|i| [((i % w) * 255 / w) as u8, ((i / w) * 255 / h) as u8, 120, 255]).collect();
+        let (_c, cview) = texture_of(&device, &queue, w, h, TextureFormat::Rgba8Unorm, &colour);
+        drop(colour);
+        let Ok(dirs) = std::fs::read_dir(&root) else {
+            eprintln!("no {}: make a folder per effect there", root.display());
+            return;
+        };
+        let dirs: Vec<_> = dirs.flatten().filter(|d| d.path().is_dir()).collect();
+        // The density input only when a density effect is timed: at large
+        // sizes it is the biggest texture here.
+        let any_density = dirs.iter().any(|d| {
+            crate::effects::global_effect_registry().get(&d.file_name().to_string_lossy()).is_some_and(|i| i.category == crate::effects::EffectCategory::Density)
+        });
+        let (dw, dh) = if any_density { (w, h) } else { (1, 1) };
+        let density: Vec<u8> = (0..dw * dh)
+            .flat_map(|i| [(i % dw) as f32 / dw as f32, (i / dw) as f32 / dh as f32, 0.4, 50.0 + (i % 997) as f32])
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (_d, dview) = texture_of(&device, &queue, dw, dh, TextureFormat::Rgba32Float, &density);
+        drop(density);
+        let mut chain = EffectChainRunner::new(&device, w, h);
+        let mut registered = Vec::new();
+        for dir in dirs {
+            let effect = dir.file_name().to_string_lossy().to_string();
+            let Some(builtin) = crate::effects::global_effect_registry().get(&effect).cloned() else {
+                eprintln!("{effect}: not a built-in effect");
+                continue;
+            };
+            let wgsl = crate::effects::wgsl_builtins().into_iter().find(|i| i.name == effect).expect("its WGSL");
+            let twin = crate::effects::custom::all_twins()
+                .find(|(n, _)| *n == effect)
+                .map(|(_, s)| crate::effects::custom::compile(s, crate::provenance::Provenance::Builtin).expect("compiles"));
+            let _ = std::fs::write(dir.path().join("wgsl.wgsl"), wgsl.source.wgsl());
+            if let Some(t) = &twin {
+                let _ = std::fs::write(dir.path().join("twin.wgsl"), t.source.wgsl());
+            }
+            let mut files: Vec<_> = std::fs::read_dir(dir.path()).into_iter().flatten().flatten().map(|f| f.path()).filter(|p| p.extension().is_some_and(|e| e == "wgsl")).collect();
+            files.sort();
+            let mut names = Vec::new();
+            for file in &files {
+                let stem = file.file_stem().unwrap().to_string_lossy().to_string();
+                let mut info = builtin.clone();
+                info.name = format!("{effect}__{stem}");
+                info.source = crate::effects::EffectSource::Owned(std::fs::read_to_string(file).expect("reads"));
+                crate::effects::global_effect_registry_mut().register(info.clone());
+                registered.push(info.name.clone());
+                names.push((stem, info.name));
+            }
+            // `wgsl` first: the ratios are to it.
+            names.sort_by_key(|(s, _)| (s != "wgsl", s != "twin", s.clone()));
+            let density = builtin.category == crate::effects::EffectCategory::Density;
+            let mut batch = |effect: &str, n: u32| {
+                let instance = [EffectInstance::new(effect)];
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let start = web_time::Instant::now();
+                let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: Some("variants") });
+                for _ in 0..n {
+                    chain.reset_slots();
+                    let ran = if density {
+                        chain.run_density_effects(&device, &queue, &mut encoder, &dview, &instance, 400.0)
+                    } else {
+                        chain.run_color_effects(&device, &queue, &mut encoder, &cview, &instance)
+                    };
+                    assert!(ran, "{effect} ran");
+                }
+                queue.submit(Some(encoder.finish()));
+                wait();
+                let t = start.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+                pollster::block_on(scope.pop()).map_or(t, |e| {
+                    eprintln!("{effect}: {e}");
+                    f64::NAN
+                })
+            };
+            let runs: Vec<u32> = names.iter().map(|(_, n)| {
+                batch(n, 1);
+                ((20.0 / batch(n, 5)) as u32).clamp(5, 400)
+            }).collect();
+            // Each variant timed straight after the WGSL, round by round: the
+            // median of those ratios, which a clock change between rounds
+            // does not move, beside the best time.
+            let mut best = vec![f64::MAX; names.len()];
+            let mut ratios = vec![Vec::new(); names.len()];
+            for _ in 0..rounds {
+                for k in 1..names.len() {
+                    let base = batch(&names[0].1, runs[0]);
+                    let t = batch(&names[k].1, runs[k]);
+                    best[0] = best[0].min(base);
+                    best[k] = best[k].min(t);
+                    ratios[k].push(t / base);
+                }
+            }
+            println!("{effect} at {w}x{h}: {:<28} {:>8} {:>8} {:>16}", "", "best ms", "median", "quartiles");
+            for (k, (stem, _)) in names.iter().enumerate() {
+                let r = &mut ratios[k];
+                r.sort_by(|a, b| a.total_cmp(b));
+                let at = |q: f64| r.get(((r.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(1.0);
+                println!("  {stem:<28} {:>8.3} {:>8.3}   {:.3}-{:.3}", best[k], at(0.5), at(0.25), at(0.75));
+            }
+        }
+        let mut registry = crate::effects::global_effect_registry_mut();
+        for n in registered {
+            registry.remove_by_name(&n);
+        }
+        drop(registry);
+        chain.destroy();
     }
 
     /// A frame's chains may need more parameter slots than the buffer

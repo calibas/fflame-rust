@@ -165,6 +165,8 @@ pub const BUILTIN_TWINS: &[(&str, &str)] = &[
     ("hue_shift", include_str!("../../assets/effects/hue_shift.rhai")),
     ("plasma", include_str!("../../assets/effects/plasma.rhai")),
     ("tunnel", include_str!("../../assets/effects/tunnel.rhai")),
+    ("kaleidoscope", include_str!("../../assets/effects/kaleidoscope.rhai")),
+    ("julia", include_str!("../../assets/effects/julia.rhai")),
     ("worley_noise", include_str!("../../assets/effects/worley_noise.rhai")),
     ("simplex_noise", include_str!("../../assets/effects/simplex_noise.rhai")),
     ("domain_warp", include_str!("../../assets/effects/domain_warp.rhai")),
@@ -174,14 +176,10 @@ pub const BUILTIN_TWINS: &[(&str, &str)] = &[
 /// ("one that fails a check keeps its WGSL until it passes"), and the
 /// twin is held to it all the same, timed beside the others
 /// (`the_twins_are_no_slower` says when one is ready), and offered by
-/// Edit as Rhai. Both pass all but speed: measured 2026-11-02 on a
-/// GTX 1660 SUPER, 9-13% slower at 1080p and 4K, the causes not found
-/// once the compiler's general costs were taken out (rhai-plugins.md,
-/// P2 step 7).
-pub const PENDING_TWINS: &[(&str, &str)] = &[
-    ("kaleidoscope", include_str!("../../assets/effects/kaleidoscope.rhai")),
-    ("julia", include_str!("../../assets/effects/julia.rhai")),
-];
+/// Edit as Rhai. None now: kaleidoscope and julia waited here until the
+/// compiler wrote what hand-written WGSL does (rhai-plugins.md, P2
+/// step 7).
+pub const PENDING_TWINS: &[(&str, &str)] = &[];
 
 /// Every twin, replaced or pending.
 pub fn all_twins() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
@@ -354,6 +352,35 @@ mod tests {
             assert!(shader_lint::mixed_operators(&wgsl).is_empty(), "{name}: {:?}", shader_lint::mixed_operators(&wgsl));
             assert!(shader_lint::self_operations(&wgsl).is_empty(), "{name}: {:?}", shader_lint::self_operations(&wgsl));
             assert!(shader_lint::subnormal_literals(&wgsl).is_empty(), "{name}: {:?}", shader_lint::subnormal_literals(&wgsl));
+        }
+    }
+
+    /// An effect's code is what a hand-written one would be (D1's speed
+    /// check): an int parameter read as a float, or compared with an int,
+    /// is the float rounded; the image's size the u32 widened; `min`,
+    /// `max` and `clamp` WGSL's own; `sin` the GPU's.
+    #[test]
+    fn an_effect_compiles_as_hand_written_wgsl() {
+        let src = r#"
+const PARAMS = #{
+    n: #{ value: 3, min: 0, max: 9 },
+    k: #{ value: 0.5, min: 0.0, max: 1.0 },
+};
+const INFO = #{ id: "7a1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f" };
+fn effect(c, p, ctx) {
+    let a = to_float(p.n) / to_float(ctx.width);
+    let on = p.n > 2;
+    let x = clamp(c.r + a, 0.0, 1.0);
+    let y = max(0.1, p.k) + min(x, 0.5) + sin(x);
+    if on { rgba(vec3(y), c.a) } else { c }
+}
+"#;
+        let wgsl = compile(src, Provenance::Custom).unwrap_or_else(|e| panic!("{e}")).source.wgsl();
+        for want in ["round(get_param(0u))", "f32(effect_params.width)", "(round(get_param(0u)) > 2.0)", "max(", "min(", "sin("] {
+            assert!(wgsl.contains(want), "{want} in\n{wgsl}");
+        }
+        for not in ["i32(round(get_param(0u)))", "i32(effect_params.width)", "fx_reduce"] {
+            assert!(!wgsl.contains(not), "{not} in\n{wgsl}");
         }
     }
 

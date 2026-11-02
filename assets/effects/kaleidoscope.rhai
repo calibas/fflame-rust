@@ -1,10 +1,10 @@
 // Kaleidoscope: one slice of the image folded into mirrored segments.
 //
-// The Rhai twin of the built-in `kaleidoscope` effect, pending
-// (docs/main/EFFECTS.md, Rhai effects): it keeps the pixels, parameters
-// and order of shaders/effects/color/kaleidoscope.wgsl, which the app still runs, and
-// replaces it once it is as fast (`the_twins_are_no_slower`). Edit as
-// Rhai in the Effects panel starts from this file.
+// The built-in `kaleidoscope` effect (docs/main/EFFECTS.md, Rhai effects): the
+// app runs this file -- on desktop the copy beside the app, so an edit
+// shows on the next start. It replaced shaders/effects/color/kaleidoscope.wgsl, whose
+// pixels, parameters and order it keeps, so a config cannot tell which
+// it got.
 
 const PARAMS = #{
     segments: #{ value: 6.0, min: 2.0, max: 16.0, caption: "Segments" },

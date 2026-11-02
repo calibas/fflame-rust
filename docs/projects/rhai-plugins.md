@@ -448,11 +448,9 @@ Step 7 can now go ahead.
    `distance_field` keeps its WGSL (three passes) unless passes are
    added to the dialect, which is only done if wanted.
 
-   **Built 2026-11-02**: thirteen are their Rhai sources
-   (`effects::custom::BUILTIN_TWINS`; [EFFECTS.md](../main/EFFECTS.md#effects-written-in-rhai));
-   `kaleidoscope` and `julia` pass all but speed and wait
-   (`PENDING_TWINS`), their WGSL still running. The WGSL is kept as the
-   reference and as what a build without `lang`
+   **Built 2026-11-02**: all fifteen are their Rhai sources
+   (`effects::custom::BUILTIN_TWINS`; [EFFECTS.md](../main/EFFECTS.md#effects-written-in-rhai)).
+   The WGSL is kept as the reference and as what a build without `lang`
    registers (`effects::wgsl_builtins`; only the test matrix's
    single-engine builds lack it -- every shipped module compiles Rhai,
    the user's answer of 2026-11-02). The checks, as tests:
@@ -472,20 +470,26 @@ Step 7 can now go ahead.
      beside the app, when it differs and compiles; the WGSL files carry
      a note that an edit there reaches nothing
      (`scripts/mark_effect_wgsl_references.py`);
-   - speed -- `the_twins_are_no_slower` (ignored; 1080p and 4K, the
-     best of seven ~20 ms batches, interleaved; more than 5% slower
-     fails), run on the user's GTX 1660 SUPER with the app closed. The
-     first run had nine failures, all from the compiler's general costs,
-     which were fixed rather than the twins dropped: trig range reduction
-     in effects (plasma 1.54x), the loop cap's second counter (julia
-     1.44x, `density_blur`), the `atan2` guard's branch and the int round
-     trip of `floor` (kaleidoscope); and `density_blur`'s twin skipped
-     the taps its shader skips. Now the thirteen are within 1% or faster
-     (`density_blur` 5% faster); kaleidoscope (1.09-1.13x) and julia
-     (1.09x) remain, causes not found, so they wait. **Next for them**:
-     what the GPU compiler makes of the twin's body -- its function-scope
-     `var`s, the scalarized samples, the clamps as branches -- read in the
-     driver's output rather than guessed.
+   - speed -- `the_twins_are_no_slower` (ignored; 1080p and 4K, nine
+     rounds of a ~20 ms batch, the median of the rounds' twin/WGSL
+     ratios; more than 5% slower fails), run on the user's GTX 1660
+     SUPER with the app closed. The first run had nine failures, every
+     one from the compiler's code, fixed there rather than the twins
+     dropped (the user: "I want Rhai to be first-class and compile to
+     equivalent WGSL"): trig range reduction in effects (plasma 1.54x),
+     the loop cap's second counter (julia 1.44x, `density_blur`), and
+     `density_blur`'s twin skipped the taps its shader skips. Then
+     kaleidoscope (1.09-1.13x) and julia (1.09x), found with
+     `time_effect_variants` -- WGSL files timed against the built-in, the
+     twin moved toward the WGSL one change at a time and the WGSL toward
+     the twin: julia's loop test `!(a && b)` (6%; now one `break` per
+     part, everywhere), kaleidoscope's int parameters read through i32
+     per pixel (6%; now the float rounded, in effects), `min`/`max`/
+     `clamp` as tests (2%; now WGSL's own, in effects), the `atan2`
+     guard's branch and `floor`'s int round trip. Kaleidoscope's twin
+     with the WGSL's own body inside the template ran at 1.001x, so the
+     template costs nothing. Now all fifteen are within 3% or faster
+     (julia 4% faster, `density_blur` 5%).
    Startup: compiling fifteen twins takes about 25 ms (native release; a
    shipped twin skips naga's validation, which the tests do). Step 5's
    remainder came with it: **Edit as Rhai** on a built-in's instance in

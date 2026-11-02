@@ -784,13 +784,17 @@ fn escaped(s, p) {
   effect's alone: the `__sample_*` and `__load_*` built-ins the lowering
   emits), and end with a colour or `#{ color, blend, amount }`. What an
   effect is and how it registers is in
-  [EFFECTS.md](EFFECTS.md#effects-written-in-rhai). Two things differ in
-  an effect, both for speed (D1's speed check): its real `sin`, `cos`
+  [EFFECTS.md](EFFECTS.md#effects-written-in-rhai). A few things differ in
+  an effect, all for speed (D1's speed check): its real `sin`, `cos`
   and `tan` are the GPU's own, not range-reduced -- an effect's arguments
   are its image's coordinates and parameters, and the WGSL effects call
   them so, on Metal too -- and a real's `floor`, `trunc` or `ceil` read
   as a float is the float function (the same value below 2^31), without
-  the int's round trip.
+  the int's round trip; so is an int parameter read as a float or
+  compared with an int literal (`round(get_param(k))`), and the image's
+  width and height; and `min`, `max` and `clamp` are WGSL's own (the
+  language lowers them to a test for UF; they differ only at NaN).
+  [EFFECTS.md](EFFECTS.md#effects-written-in-rhai) has what each cost.
 - **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
   point to two numbers in [0, 1), the built-in noise effects' hash
   (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *
@@ -1029,7 +1033,9 @@ the int `i` stepped by one as the body's last statement and nowhere
 else, and `b` a literal or a variable the body does not write, carries
 the cap in its bound, `min(b, i + 4096)`, rather than in a second
 counter: the same passes, the GPU's work the loop's own;
-`wgsl::counted_loop`). `|z|` is the
+`wgsl::counted_loop`; and a test of parts joined by `&&` is one `break`
+for each, short-circuited as Rhai reads it, which the GPU's compiler
+runs faster than one `!(a && b)`). `|z|` is the
 SQUARED modulus; unary minus binds tighter than `^`, so `-x^2` is
 `(-x)^2`. Functions: `sqr sqrt log exp abs cabs recip ident zero`, the
 trigonometric and hyperbolic functions and their inverses, `atan2`,
