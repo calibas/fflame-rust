@@ -3014,6 +3014,9 @@ progress:
   sim_stopped: "Simulation stopped at step %{step}"
   animation: "Animation playing"
 
+library:
+  plugin: "(plug-in)"
+
 effects_panel:
   update: "Update"
   update_all: "Update all (%{count})"
@@ -3026,6 +3029,7 @@ effects_panel:
 
 formula_editor:
   example: "Example: %{file}"
+  example_effect: "Effect: %{name}"
   new: "New"
   new_tip: "Start a new formula, in Rhai, from a template"
   name: "Name"
@@ -3062,7 +3066,6 @@ formula_editor:
   editing_builtin_effect: "%{name} is your own effect now, in use; Save keeps it in your library"
   plugin: "Load at start"
   plugin_tip: "A plug-in: registered every time the app starts, so it is in the lists -- the variation pickers, the effects' Add list, the escape formulas and colourings -- without opening it here first. Saving it updates it."
-  plugin_mark: "%{file}  (plug-in)"
   plugin_on: "%{title} loads at every start"
   plugin_off: "%{file} no longer loads at start"
   plugin_save_first: "Save it first: what loads at start is the saved file"

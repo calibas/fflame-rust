@@ -515,6 +515,12 @@ that passed is its Rhai source.
   the banner, the effect install's name check, updates and Clear Cache
   for effects.
 
+**Status 2026-11-02: steps 1-4 built** (branch `rhai-plugins`). What P3
+leaves for P6: publishing and adopting a GPU Rhai entry online (the
+formula store's link record holds a cloud id already, unused); a
+library panel of both stores together, if one is wanted -- the scan
+(`storage::library::scan`) is ready for it, and nothing draws it yet.
+
 **The steps** (written 2026-11-02, from the code as it stands):
 1. **One sidecar, one metadata** (built 2026-11-02). `storage::links`: the record
    `scripts/_links.json` keeps (`ScriptLink`: cloud id, version, owner,
@@ -543,7 +549,7 @@ that passed is its Rhai source.
    id); the Variations panel's "downloaded" banner counts downloads
    only; effect downloads get updates and Clear Cache as variations
    have.
-4. **One presentation**: the Formula Editor's list and the Scripts
+4. **One presentation** (built 2026-11-02; `storage::library::marks`): the Formula Editor's list and the Scripts
    panel show the same marks for an entry's origin and plug-in flag,
    from the scan; the shipped effects are in the editor's list beside
    the formula examples.

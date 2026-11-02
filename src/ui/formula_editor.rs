@@ -815,14 +815,16 @@ impl FormulaEditorPanel {
             let current = format!("{}{}", self.name, if dirty { " *" } else { "" });
             let mut open: Option<String> = None;
             let mut example: Option<usize> = None;
+            let mut shipped_effect: Option<(String, String)> = None;
             egui::ComboBox::from_id_salt("formula_editor_file")
                 .selected_text(current)
                 .width(180.0)
                 .show_ui(ui, |ui| {
+                    // The library's marks: whose it is, and a plug-in.
                     let links = formula_store::links();
                     for f in &self.files {
-                        // A plug-in, marked: it loads at every start.
-                        let label = if links.get(f).is_some_and(|l| l.plugin) { t!("formula_editor.plugin_mark", file = f).to_string() } else { f.clone() };
+                        let link = links.get(f).cloned().unwrap_or_default();
+                        let label = format!("{f}{}", crate::storage::library::marks(crate::storage::library::origin_of_link(&link), link.plugin));
                         if ui.selectable_label(self.file.as_deref() == Some(f.as_str()), label).clicked() {
                             open = Some(f.clone());
                         }
@@ -835,7 +837,19 @@ impl FormulaEditorPanel {
                             example = Some(i);
                         }
                     }
+                    // The built-in effects' sources, which the app runs:
+                    // opened unsaved, a copy to Save and Use as one's own.
+                    ui.separator();
+                    for (name, source) in crate::effects::custom::BUILTIN_TWINS {
+                        let title = crate::effects::global_effect_registry().get(name).map(|i| i.translated_name()).unwrap_or_else(|| name.to_string());
+                        if ui.selectable_label(false, t!("formula_editor.example_effect", name = title)).clicked() {
+                            shipped_effect = Some((format!("{name}.rhai"), source.to_string()));
+                        }
+                    }
                 });
+            if let Some((file, text)) = shipped_effect {
+                self.adopt(None, file, text);
+            }
             if let Some(f) = open {
                 self.open_stored(&f);
             }
