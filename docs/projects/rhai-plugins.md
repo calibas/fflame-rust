@@ -330,7 +330,7 @@ Before a fourth registry is written for effects:
 - References: a transform names a Rhai variation, and an effect list a
   Rhai effect, by its UUID; parameters are `<uuid>.<key>`. The escape
   slots, which hold one carried source each, move from their FNV names
-  to the same UUID and hash.
+  to the same UUID and hash. **Done 2026-11-02** (below, *Order taken*).
 - The kind as one value in the lowering rather than four bools, so the
   next kind costs a table entry, not fifty matches.
 
@@ -341,17 +341,44 @@ feature.
 shares: `crate::scripted` (UUIDs, versions, the `Ledger`, `Label` and
 `Labels`), labels by locale in the dialect, `with_info_id`. Effects (P2)
 were then built on it directly, with UUID identity from the start, so
-they needed no migration and tested the core. **Not done, for the
-user's review first**: moving Rhai variations and the escape slots onto
-it. That migration changes what configs hold -- a transform's variation
-key becomes the variation's id, `vary("name", z)` in a formula's text
-must find a variation by id or by a name that is no longer unique, the
-lens and escape transformations name variations, and an edited
-variation's Live re-Use replaces one version with another -- and one
-choice in it is the user's: whether two versions of one id may be live
-at once (a version-keyed registry, every lookup through the config) or
-one at a time, a config's carried version registered before it renders
-(simpler; rule 7 then reads "renders as saved" rather than "beside it").
+they needed no migration and tested the core.
+
+**Rhai variations and the escape slots moved onto it, 2026-11-02** (the
+user's order: "the id@version keys for effects, then the variation and
+escape-slot migration on top of them"). Versions live side by side, as
+effects' do: every version is its own registry entry, and a config
+renders the one it carries.
+- **One key format** for both, `scripted::key(id, source)` =
+  `u<32 hex of the UUID>_<first 8 hex of the source's SHA-256>`: an
+  identifier, because a variation's key is its WGSL function's name and
+  its parameters' prefix. `scripted::key_id` reads the id back. (Effects
+  were `<id>@<version>` in one commit on this branch, a3d5c947; a config
+  saved by that build still renders, as `ensure` registers under the
+  entry a config names, but Use does not move it to the new form.)
+- **Variations.** The id is `INFO.id`; a source with only `INFO.name`
+  derives one from the name (`scripted::derived_id`, a v8 UUID), so it
+  keys the same everywhere without being rewritten. `INFO.name` stays
+  what `vary("name", z)` calls, so a formula's text needs no ids.
+  Config **v7** renames every carried variation from its name to its key
+  wherever the config names it. `ensure` registers a source under the
+  entry the config names, so an unmigrated config (an `.anim`'s base,
+  which derives `Deserialize`) still renders. Use mints a UUID only for
+  a source with neither an id nor a name, or a hand-written id; a new
+  version re-keys the config (`custom::rekey`, one `apply_config_edit`
+  step); Live follows the id; pickers offer one version of each id
+  (`VariationRegistry::superseded`); the sticky shader set drops older
+  versions of a live id.
+- **Escape slots.** A Rhai entry with an id is `custom-<key>`, its
+  version over the source and the variations it carries; any other
+  keeps its FNV name, and a config keeps the name it was saved with, so
+  no migration: no Rhai formula had an id before. Use mints one into the
+  file. A variant and the perturbation tier take the slot's 64-bit hash
+  through `custom::slot_hash`, which reads an FNV name's own hex and
+  hashes a key. Live and a first Use's view follow the id.
+- **Known gaps.** An animation track that names a variation by a key a
+  later Use replaced still names the old one (the base config moves, the
+  track does not); a subflame's transforms are not re-keyed by Use (the
+  flame's own are, and the subflame renders the version it carries).
 
 ### P2. Effects in Rhai
 

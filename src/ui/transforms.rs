@@ -887,6 +887,8 @@ fn render_variations_section(
         egui::ScrollArea::vertical().show(ui, |ui| {
             let registry = global_registry();
             let search_lower = search_text.to_lowercase();
+            // One version of each of the user's Rhai variations.
+            let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
 
             // Categories offered, by render mode. The picker mirrors the
             // shader's rule exactly: everything is available, except that
@@ -930,7 +932,7 @@ fn render_variations_section(
                             || v.name.to_lowercase().contains(&search_lower)
                             || v.display_name.to_lowercase().contains(&search_lower);
                         let not_enabled = !transform.variations.contains_key(&v.name);
-                        matches_search && not_enabled
+                        matches_search && not_enabled && !superseded.contains(&v.name)
                     })
                     .collect();
 
@@ -1454,8 +1456,18 @@ fn render_pool_member_block(
                     }
                 }
                 if let Some(var_name) = var_to_add {
-                    let path = xref.variation_path(var_name);
-                    if let Ok(u) = config_manager.update_param(path, 1.0f32.into()) {
+                    let path = xref.variation_path(var_name.clone());
+                    // A variation of the user's the flame does not carry
+                    // yet comes with its source, in the same step.
+                    #[cfg(feature = "lang")]
+                    let carry = crate::variations::custom::carry_change(config_manager.active_config(), [var_name.as_str()]);
+                    #[cfg(not(feature = "lang"))]
+                    let carry: Option<(crate::config::ConfigPath, crate::config::ConfigValue)> = None;
+                    let result = match carry {
+                        Some(carry) => config_manager.update_batch(vec![(path, 1.0f32.into()), carry], "history.action.add_custom_variation".to_string()),
+                        None => config_manager.update_param(path, 1.0f32.into()),
+                    };
+                    if let Ok(u) = result {
                         update = update.max(u);
                     }
                 }

@@ -128,6 +128,46 @@ pub fn is_uuid(s: &str) -> bool {
         })
 }
 
+/// The registry key of one of the user's scripts: its id and its version,
+/// `u<the id's 32 hex>_<the first 8 hex of the source's SHA-256>` (rule
+/// 7). Every version is its own entry, so a config renders the version it
+/// carries whatever else is open; and the key is an identifier wherever a
+/// name goes -- a WGSL function's (`variation_<key>`), a config key, a
+/// parameter's prefix (`<key>.power`). A built-in's key is its name.
+pub fn key(id: &str, source: &str) -> String {
+    format!("u{}_{}", id.replace('-', ""), &version_of(source)[..8])
+}
+
+/// Whether `s` is a [`key`]: `u`, 32 hex, `_`, 8 hex. A built-in's name
+/// never is.
+pub fn is_key(s: &str) -> bool {
+    let b = s.as_bytes();
+    let hex = |r: std::ops::Range<usize>| b[r].iter().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c));
+    b.len() == 42 && b[0] == b'u' && b[33] == b'_' && hex(1..33) && hex(34..42)
+}
+
+/// The id a [`key`] names, hyphenated again; `None` for a built-in's name.
+pub fn key_id(key: &str) -> Option<String> {
+    is_key(key).then(|| {
+        let h = &key[1..33];
+        format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    })
+}
+
+/// The id of a script from before ids, named by its `INFO.name` alone: a
+/// UUID (version 8, a hash of the name) that is the same for the same name
+/// on every machine -- what a config saved then migrates to, and what the
+/// script is given when it is next saved, so its versions stay one thing.
+pub fn derived_id(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(format!("fflame-script-name:{name}").as_bytes());
+    let mut bits = u128::from_be_bytes(d[..16].try_into().expect("16 bytes"));
+    bits = (bits & !(0xf << 76)) | (0x8 << 76);
+    bits = (bits & !(0x3 << 62)) | (0x2 << 62);
+    let hex = format!("{bits:032x}");
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+}
+
 /// A source's version: the SHA-256 of its text, lowercase hex.
 pub fn version_of(source: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -226,6 +266,22 @@ mod tests {
         assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"), "RFC 4122 variant: {a}");
         assert!(!is_uuid("vignette"));
         assert!(!is_uuid("3F2B9C1E-0000-4000-8000-000000000000"), "lowercase only");
+    }
+
+    #[test]
+    fn a_key_is_an_identifier_naming_its_id_and_version() {
+        let id = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+        let k = key(id, "fn effect(c, p) { c }");
+        assert!(is_key(&k), "{k}");
+        assert!(k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "an identifier: {k}");
+        assert_eq!(key_id(&k).as_deref(), Some(id));
+        assert_ne!(k, key(id, "fn effect(c, p) { c * 2.0 }"), "a version of its own");
+        assert!(!is_key("vignette") && key_id("julian").is_none());
+        let d = derived_id("rhai_swirl");
+        assert!(is_uuid(&d), "{d}");
+        assert_eq!(d, derived_id("rhai_swirl"), "the same from the same name");
+        assert_ne!(d, derived_id("rhai_twirl"));
+        assert_eq!(&d[14..15], "8", "version 8: {d}");
     }
 
     #[test]

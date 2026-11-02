@@ -34,7 +34,7 @@ const STURMIAN: f64 = 2.0;
 /// colours the coarsest level's map, the unit square in view.
 fn presets() -> Vec<serde_json::Value> {
     let text = example("variation-moran.rhai");
-    let name = rhai::variation_name(&text).expect("the variation's name");
+    let name = crate::variations::custom::key_of(&text).expect("the variation's key");
     let moran = CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source: text, variations: Vec::new() };
     let palette = serde_json::to_value(crate::config::FractalConfig::default().palette).unwrap();
     // (title, coarse, fine, schedule, split).

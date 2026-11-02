@@ -89,7 +89,14 @@ fn json_is_solid(esc: &serde_json::Map<String, serde_json::Value>) -> bool {
 /// default (`SolidShadingSettings::lights_follow_camera` off); before,
 /// they turned with the camera. The v5→v6 arm keeps an older solid's
 /// lights the camera's, so it renders as it did.
-pub const CURRENT_CONFIG_VERSION: u32 = 6;
+///
+/// v7 keys a Rhai variation by its id and version (`scripted::key`;
+/// docs/projects/rhai-plugins.md, rule 7), not its `INFO.name`. The
+/// v6→v7 arm renames each one a flame carries to the key its name's
+/// derived id (`scripted::derived_id`: nothing before had an `INFO.id`)
+/// and its source give, wherever the config names it
+/// ([`migrate_custom_variation_keys`]).
+pub const CURRENT_CONFIG_VERSION: u32 = 7;
 
 /// Complete fractal configuration (excludes runtime-only settings)
 /// All fields except `flame` have defaults for compact serialization
@@ -1339,6 +1346,111 @@ impl Default for FractalConfig {
     }
 }
 
+/// The v6→v7 arm: every Rhai variation a flame (or a subflame) carries
+/// under its `INFO.name` takes its key -- the name's derived id and the
+/// source's version, `scripted::key(scripted::derived_id(name), source)`,
+/// the key it registers under -- and every place the config names it
+/// follows: a transform's weight, its `name.param` parameters, its
+/// `variation_order` and priority, at every level; the escape-time lens and
+/// transformations. A string rewrite: nothing is compiled.
+pub(crate) fn migrate_custom_variation_keys(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+    fn collect(flame: &mut Value, renames: &mut Vec<(String, String)>) {
+        let Some(f) = flame.as_object_mut() else { return };
+        if let Some(Value::Array(list)) = f.get_mut("custom_variations") {
+            for src in list.iter_mut() {
+                let (Some(entry), Some(source)) = (src.get("entry").and_then(Value::as_str), src.get("source").and_then(Value::as_str)) else { continue };
+                if crate::scripted::is_key(entry) {
+                    continue;
+                }
+                let key = crate::scripted::key(&crate::scripted::derived_id(entry), source);
+                renames.push((entry.to_string(), key.clone()));
+                src["entry"] = Value::String(key);
+            }
+        }
+        if let Some(Value::Array(subs)) = f.get_mut("subflames") {
+            for s in subs {
+                collect(s, renames);
+            }
+        }
+    }
+    fn rename_transform(t: &mut Value, renames: &[(String, String)]) {
+        let Some(t) = t.as_object_mut() else { return };
+        for (old, new) in renames {
+            if let Some(Value::Object(v)) = t.get_mut("variations") {
+                if let Some(w) = v.remove(old) {
+                    v.insert(new.clone(), w);
+                }
+            }
+            if let Some(Value::Object(p)) = t.get_mut("variation_params") {
+                let prefix = format!("{old}.");
+                let moved: Vec<String> = p.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+                for k in moved {
+                    if let Some(v) = p.remove(&k) {
+                        p.insert(format!("{new}.{}", &k[prefix.len()..]), v);
+                    }
+                }
+            }
+            if let Some(Value::Array(order)) = t.get_mut("variation_order") {
+                for n in order.iter_mut() {
+                    if n.as_str() == Some(old.as_str()) {
+                        *n = Value::String(new.clone());
+                    }
+                }
+            }
+            if let Some(Value::Object(p)) = t.get_mut("variation_priorities") {
+                if let Some(v) = p.remove(old) {
+                    p.insert(new.clone(), v);
+                }
+            }
+        }
+    }
+    fn rename(flame: &mut Value, renames: &[(String, String)]) {
+        let Some(f) = flame.as_object_mut() else { return };
+        for list in ["transforms", "linked_transforms", "final_transforms"] {
+            if let Some(Value::Array(ts)) = f.get_mut(list) {
+                for t in ts {
+                    rename_transform(t, renames);
+                }
+            }
+        }
+        // The single final transform of older files.
+        if let Some(t) = f.get_mut("final_transform") {
+            rename_transform(t, renames);
+        }
+        if let Some(Value::Array(subs)) = f.get_mut("subflames") {
+            for s in subs {
+                rename(s, renames);
+            }
+        }
+    }
+    let mut renames = Vec::new();
+    if let Some(flame) = obj.get_mut("flame") {
+        collect(flame, &mut renames);
+        rename(flame, &renames);
+    }
+    if renames.is_empty() {
+        return;
+    }
+    let renamed = |s: &mut Value| {
+        if let Some((_, new)) = renames.iter().find(|(old, _)| s.as_str() == Some(old.as_str())) {
+            *s = Value::String(new.clone());
+        }
+    };
+    if let Some(esc) = obj.get_mut("escape").and_then(Value::as_object_mut) {
+        if let Some(lens) = esc.get_mut("lens") {
+            renamed(lens);
+        }
+        if let Some(Value::Array(ts)) = esc.get_mut("transforms") {
+            for t in ts {
+                if let Some(v) = t.get_mut("variation") {
+                    renamed(v);
+                }
+            }
+        }
+    }
+}
+
 impl FractalConfig {
     /// Whether this config's orbits start afresh every dispatch: its own
     /// `reset_orbits`, or a variation its flame uses that needs it
@@ -1693,6 +1805,9 @@ impl FractalConfig {
                         }
                     }
                 }
+                // v6 -> v7: a Rhai variation is keyed by its id and version,
+                // not its name.
+                6 => migrate_custom_variation_keys(obj),
                 other => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -2197,6 +2312,54 @@ mod tests {
             }
         }
         assert!(solids >= 20, "{solids} solid presets");
+    }
+
+    /// A Rhai variation became keyed by its id and version in v7: a v6
+    /// config's, carried under its name, takes the key it now registers
+    /// under, and the transforms (weights, parameters, order; a subflame's
+    /// too), the lens and the escape transformations that named it follow;
+    /// a built-in of the same name elsewhere is untouched, and a v7 config
+    /// is left as it is.
+    #[test]
+    fn a_v6_rhai_variation_takes_its_key() {
+        let source = "const INFO = #{ name: \"rhai_mig\" };\nfn variation(z, p) { z * p.k }\nconst PARAMS = #{ k: 0.5 };\n";
+        let carried = serde_json::json!([{"dialect": "rhai", "entry": "rhai_mig", "source": source}]);
+        let mut xform = serde_json::to_value(crate::scene::transforms::Transform::default()).unwrap();
+        xform["variations"] = serde_json::json!({"rhai_mig": 0.5, "linear": 0.5});
+        xform["variation_params"] = serde_json::json!({"rhai_mig.k": 0.25, "linear.x": 1.0});
+        xform["variation_order"] = serde_json::json!(["linear", "rhai_mig"]);
+        xform["variation_priorities"] = serde_json::json!({"rhai_mig": 1});
+        let file = |version: u32| {
+            serde_json::json!({
+                "version": version, "render_mode": "escape",
+                "flame": {"name": "t", "transforms": [xform.clone()], "final_transforms": [xform.clone()], "custom_variations": carried.clone(),
+                          "subflames": [{"name": "s", "transforms": [xform.clone()], "custom_variations": carried.clone()}]},
+                "escape": {"formula": "mandelbrot", "lens": "rhai_mig", "transforms": [{"stage": "orbit", "variation": "rhai_mig"}, {"stage": "orbit", "variation": "swirl"}]}
+            })
+            .to_string()
+        };
+        let key = crate::scripted::key(&crate::scripted::derived_id("rhai_mig"), source);
+        assert_eq!(crate::variations::custom::key_of(source).as_deref(), Some(key.as_str()), "the key it registers under");
+        let c = FractalConfig::from_json(&file(6)).expect("loads");
+        let check = |f: &crate::scene::transforms::Flame, what: &str| {
+            assert_eq!(f.custom_variations[0].entry, key, "{what}");
+            for t in f.transforms.iter().chain(f.final_transforms.iter()) {
+                assert_eq!(t.variations.get(&key), Some(&0.5), "{what}");
+                assert!(!t.variations.contains_key("rhai_mig"), "{what}");
+                assert_eq!(t.variation_params.get(&format!("{key}.k")), Some(&0.25), "{what}");
+                assert_eq!(t.variation_params.get("linear.x"), Some(&1.0), "{what}");
+                assert_eq!(t.variation_order, ["linear".to_string(), key.clone()], "{what}");
+                assert_eq!(t.variation_priorities.get(&key), Some(&1), "{what}");
+            }
+        };
+        check(&c.flame, "the flame");
+        check(&c.flame.subflames[0], "a subflame");
+        assert_eq!(c.escape.lens, key);
+        assert_eq!(c.escape.transforms[0].variation, key);
+        assert_eq!(c.escape.transforms[1].variation, "swirl");
+        let v7 = FractalConfig::from_json(&file(7)).expect("loads");
+        assert_eq!(v7.flame.custom_variations[0].entry, "rhai_mig", "a v7 file is not migrated");
+        assert_eq!(v7.escape.lens, "rhai_mig");
     }
 
     #[test]

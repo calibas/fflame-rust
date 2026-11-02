@@ -873,6 +873,13 @@ impl<'s> Lowerer<'s> {
         let mut region = None;
         for (name, v, p) in &info {
             match name.as_str() {
+                // Its identity (design rule 7): a UUID for one of the
+                // user's, a built-in's name for a shipped one; read apart
+                // (`info_string`).
+                "id" => match v {
+                    Expr::StringConstant(..) => {}
+                    _ => return self.err(*p, "`id` is a string: the script's UUID, or a built-in's name"),
+                },
                 // A string, or one by locale (design rule 8), in the
                 // current language when compiled.
                 "title" => match label_of(v) {
@@ -890,14 +897,10 @@ impl<'s> Lowerer<'s> {
                     Expr::BoolConstant(..) => {}
                     _ => return self.err(*p, "`resets_orbits` is true or false"),
                 },
-                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `name` and `resets_orbits`, not `{o}`")),
+                o if self.transform => return self.err(*p, format!("a transformation's `INFO` has `title`, `id`, `name` and `resets_orbits`, not `{o}`")),
                 // An effect's identity (design rule 7: a UUID, or a
                 // built-in's name) and its place in the pipeline, read
                 // apart (`info_string`).
-                "id" if self.effect => match v {
-                    Expr::StringConstant(..) => {}
-                    _ => return self.err(*p, "`id` is a string: the effect's UUID, or a built-in's name"),
-                },
                 "category" if self.effect => match v {
                     Expr::StringConstant(s, _) if matches!(s.as_str(), "color" | "density") => {}
                     _ => return self.err(*p, "`category` is \"color\" (after the tone map) or \"density\" (before it)"),

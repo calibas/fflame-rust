@@ -2092,6 +2092,9 @@ pub(super) fn show_lens_section(ui: &mut egui::Ui, config_manager: &mut ConfigMa
                     } else {
                         crate::escape::lens::lens_menu(&registry)
                     };
+                    // One version of each of the user's Rhai variations.
+                    let superseded = registry.superseded(&config_manager.active_config().flame.custom_variations);
+                    let menu: Vec<String> = menu.into_iter().filter(|n| *n == current || !superseded.contains(n)).collect();
                     let head = if show_all {
                         0
                     } else {

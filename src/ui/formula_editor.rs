@@ -64,6 +64,15 @@ impl EntryRow {
     }
 }
 
+/// What tells one escape-time entry from another, version to version: a
+/// Rhai source's id (`INFO.id`), else its entry name.
+fn entry_ident(src: &CustomSource) -> String {
+    match src.dialect {
+        CustomDialect::Rhai => lang::rhai::info_string(&src.source, "id").filter(|id| crate::scripted::is_uuid(id)).unwrap_or_else(|| src.entry.clone()),
+        _ => src.entry.clone(),
+    }
+}
+
 pub struct FormulaEditorPanel {
     /// The user's files.
     files: Vec<String>,
@@ -181,9 +190,11 @@ impl FormulaEditorPanel {
         if kind == EntryKind::Coloring && checked.as_ref().is_ok_and(|p| !lang::wgsl::colours_anything(p)) {
             errors.push(t!("formula_editor.colours_nothing").to_string());
         }
-        // A transformation becomes a variation: its name and WGSL too.
+        // A transformation becomes a variation: its WGSL too, under the
+        // id Use gives it when it needs one.
         if kind == EntryKind::Transform && checked.is_ok() {
-            if let Err(e) = crate::variations::custom::compile(&text) {
+            let with_id = if crate::variations::custom::needs_id(&text) { lang::rhai::with_own_id(&text, &crate::scripted::mint_id()) } else { text.clone() };
+            if let Err(e) = crate::variations::custom::compile(&with_id) {
                 errors.push(e);
             }
         }
@@ -317,8 +328,16 @@ impl FormulaEditorPanel {
             return self.use_effect(cm, row);
         }
         let Some(entry) = self.entries.get(row) else { return };
+        // A Rhai entry is the user's: it has an id of its own (rule 7),
+        // given here when it has none -- written into the file, which Save
+        // then keeps -- and is named by it and its version.
+        let mut source = entry.source.clone();
+        let minted = self.dialect == CustomDialect::Rhai && !lang::rhai::info_string(&source, "id").is_some_and(|id| crate::scripted::is_uuid(&id));
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
         // With the variations it calls (`vary`), which the config carries.
-        let src = custom::with_called_variations(kind, CustomSource { dialect: self.dialect, entry: entry.name.clone(), source: entry.source.clone(), variations: Vec::new() });
+        let src = custom::with_called_variations(kind, CustomSource { dialect: self.dialect, entry: entry.name.clone(), source, variations: Vec::new() });
         let name = custom::name_of(kind, &src);
         let compiled = match kind {
             EntryKind::Formula => custom::compile_formula(&src, &name).map(|_| ()),
@@ -330,6 +349,10 @@ impl FormulaEditorPanel {
             let first = d.first().map(|x| x.render(&src.source)).unwrap_or_default();
             self.status = Some(t!("formula_editor.did_not_compile", entry = src.entry, error = first).to_string());
             return;
+        }
+        if minted {
+            self.text = src.source.clone();
+            self.changed_at = Some(web_time::Instant::now());
         }
         let escape = &cm.config().escape;
         let (current, path_src, path_name, description) = match kind {
@@ -347,7 +370,10 @@ impl FormulaEditorPanel {
                 "history.action.use_custom_coloring",
             ),
         };
-        let first_use = current.is_none_or(|c| c.entry != src.entry);
+        // The same entry by its id, which outlives a change of title; one
+        // without (another dialect's) by its entry name.
+        let ident = entry_ident(&src);
+        let first_use = current.is_none_or(|c| entry_ident(c) != ident);
         let mut changes = vec![
             (path_src, ConfigValue::String(custom_source_json(&Some(src.clone())))),
             (path_name, ConfigValue::String(name)),
@@ -373,8 +399,9 @@ impl FormulaEditorPanel {
         match super::render_mode::choose(cm, changes, description, crate::scene::transforms::RenderMode::Escape) {
             Ok(_) => {
                 self.in_use.retain(|(k, _, _)| *k != kind);
-                self.in_use.push((kind, self.file.clone(), src.entry.clone()));
+                self.in_use.push((kind, self.file.clone(), ident));
                 self.status = Some(match kind {
+                    _ if minted => t!("formula_editor.id_minted", entry = src.entry),
                     EntryKind::Formula => t!("formula_editor.using_formula", entry = src.entry),
                     EntryKind::Solid => t!("formula_editor.using_solid", entry = src.entry),
                     EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect => t!("formula_editor.using_coloring", entry = src.entry),
@@ -385,64 +412,93 @@ impl FormulaEditorPanel {
         }
     }
 
-    /// Use a transformation as a flame variation: register it
-    /// (`variations::custom`) and put its source in the flame, one undo
-    /// step, replacing the one of its name. It is then in every
+    /// Use a transformation as a flame variation: give it an id if it
+    /// needs one (`variations::custom::needs_id`; written into the file,
+    /// which Save then keeps), register it under its key (its id and
+    /// version, rule 7), and put its source in the flame, one undo step:
+    /// what named an earlier version -- the flame's transforms, the lens,
+    /// the escape transformations -- moves to this one (`custom::rekey`),
+    /// and a source nothing names any more goes. It is then in every
     /// transform's variation picker. In Escape mode it is also made the
     /// camera lens (at full amount if the lens was off).
     fn use_variation(&mut self, cm: &mut ConfigManager, row: usize) {
+        use crate::variations::custom;
         let Some(entry) = self.entries.get(row) else { return };
         if self.dialect != CustomDialect::Rhai {
             self.status = Some(t!("formula_editor.variation_rhai_only").to_string());
             return;
         }
-        let source = entry.source.clone();
-        let name = match crate::variations::custom::register(&source) {
-            Ok(name) => name,
+        let label = entry.name.clone();
+        let mut source = entry.source.clone();
+        let minted = custom::needs_id(&source);
+        if minted {
+            source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
+        }
+        let key = match custom::register(&source) {
+            Ok(key) => key,
             Err(e) => {
-                self.status = Some(t!("formula_editor.did_not_compile", entry = entry.name, error = e).to_string());
+                self.status = Some(t!("formula_editor.did_not_compile", entry = label, error = e).to_string());
                 return;
             }
         };
-        // The flame carries the sources it uses: this one, and those
-        // its transforms (or the lens) still name -- a renamed variation's
-        // old source goes.
-        let config = cm.config();
-        let mut list: Vec<CustomSource> = config
+        if minted {
+            // The file carries its id from now on.
+            self.text = source.clone();
+            self.changed_at = Some(web_time::Instant::now());
+        }
+        let id = crate::scripted::key_id(&key).unwrap_or_default();
+        let title = crate::variations::global_registry().get(&key).map(|v| v.display_name.clone()).unwrap_or_else(|| label.clone());
+        let mut after = cm.config().clone();
+        let moved = custom::rekey(&mut after, &id, &key);
+        // The flame carries the sources it uses: this version, and the
+        // others its transforms (or the lens) still name.
+        let names = |c: &crate::config::FractalConfig, entry: &str| {
+            custom::used_by(&c.flame, entry) || c.escape.lens == entry || c.escape.transforms.iter().any(|t| t.variation == entry)
+        };
+        let mut list: Vec<CustomSource> = after
             .flame
             .custom_variations
             .iter()
-            .filter(|s| {
-                s.entry == name
-                    || crate::variations::custom::used_by(&config.flame, &s.entry)
-                    || config.escape.lens == s.entry
-                    || config.escape.transforms.iter().any(|t| t.variation == s.entry)
-            })
+            .filter(|s| crate::scripted::key_id(&s.entry).as_deref() != Some(id.as_str()) && names(&after, &s.entry))
             .cloned()
             .collect();
-        let src = crate::variations::custom::carried(&source)
-            .unwrap_or(CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source, variations: Vec::new() });
-        match list.iter_mut().find(|s| s.entry == name) {
-            Some(s) => *s = src,
-            None => list.push(src),
-        }
-        let json = serde_json::to_string(&list).unwrap_or_default();
-        let mut changes = vec![(ConfigPath::FlameCustomVariations, ConfigValue::String(json))];
-        let as_lens = cm.config().render_mode == crate::scene::transforms::RenderMode::Escape;
-        if as_lens {
-            changes.push((ConfigPath::EscapeLens, ConfigValue::String(name.clone())));
-            if cm.config().escape.lens_amount == 0.0 {
-                changes.push((ConfigPath::EscapeLensAmount, ConfigValue::Float(1.0)));
+        let mut src = custom::carried(&source).unwrap_or(CustomSource { dialect: CustomDialect::Rhai, entry: key.clone(), source, variations: Vec::new() });
+        src.entry = key.clone();
+        list.push(src);
+        let as_lens = after.render_mode == crate::scene::transforms::RenderMode::Escape;
+        let result = if moved {
+            // Renaming a variation in the transforms is no single path's
+            // edit: the whole config, as one step.
+            after.flame.custom_variations = list;
+            if as_lens {
+                after.escape.lens = key.clone();
+                if after.escape.lens_amount == 0.0 {
+                    after.escape.lens_amount = 1.0;
+                }
             }
-        }
-        match cm.update_batch(changes, "history.action.use_custom_variation".to_string()) {
-            Ok(_) => {
-                self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Transform && *n == name));
-                self.in_use.push((EntryKind::Transform, self.file.clone(), name.clone()));
-                self.status = Some(if as_lens {
-                    t!("formula_editor.using_lens", name = name)
+            cm.apply_config_edit(after, "history.action.use_custom_variation".to_string())
+        } else {
+            let json = serde_json::to_string(&list).unwrap_or_default();
+            let mut changes = vec![(ConfigPath::FlameCustomVariations, ConfigValue::String(json))];
+            if as_lens {
+                changes.push((ConfigPath::EscapeLens, ConfigValue::String(key.clone())));
+                if after.escape.lens_amount == 0.0 {
+                    changes.push((ConfigPath::EscapeLensAmount, ConfigValue::Float(1.0)));
+                }
+            }
+            cm.update_batch(changes, "history.action.use_custom_variation".to_string()).map(|_| ())
+        };
+        match result {
+            Ok(()) => {
+                // By its id: Live follows it from version to version.
+                self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Transform && *n == id));
+                self.in_use.push((EntryKind::Transform, self.file.clone(), id));
+                self.status = Some(if minted {
+                    t!("formula_editor.id_minted", entry = label)
+                } else if as_lens {
+                    t!("formula_editor.using_lens", name = title)
                 } else {
-                    t!("formula_editor.using_variation", name = name)
+                    t!("formula_editor.using_variation", name = title)
                 }
                 .to_string());
             }
@@ -484,7 +540,7 @@ impl FormulaEditorPanel {
             self.changed_at = Some(web_time::Instant::now());
         }
         use crate::effects::custom::id_of;
-        let id = id_of(&key).to_string();
+        let id = id_of(&key);
         let config = cm.config();
         // The instances of any version of this effect move to this one.
         let mut changes = Vec::new();
@@ -555,10 +611,17 @@ impl FormulaEditorPanel {
             if file != self.file {
                 continue;
             }
-            // A variation: by its name, while the flame carries it.
+            // A variation: by its id, while the flame carries a version of
+            // it.
             if kind == EntryKind::Transform {
-                let carried = cm.config().flame.custom_variations.iter().find(|s| s.entry == entry).map(|s| s.source.clone());
-                let row = self.entries.iter().position(|r| lang::rhai::variation_name(&r.source).as_deref() == Some(entry.as_str()));
+                let carried = cm
+                    .config()
+                    .flame
+                    .custom_variations
+                    .iter()
+                    .find(|s| crate::scripted::key_id(&s.entry).as_deref() == Some(entry.as_str()))
+                    .map(|s| s.source.clone());
+                let row = self.entries.iter().position(|r| crate::variations::custom::id_of_source(&r.source).as_deref() == Some(entry.as_str()));
                 if let (Some(carried), Some(row)) = (carried, row) {
                     let r = &self.entries[row];
                     if r.errors(kind).is_empty() && r.source != carried {
@@ -574,7 +637,7 @@ impl FormulaEditorPanel {
                     .config()
                     .custom_effects
                     .iter()
-                    .find(|s| crate::effects::custom::id_of(&s.entry) == entry)
+                    .find(|s| crate::effects::custom::id_of(&s.entry) == *entry)
                     .map(|s| s.source.clone());
                 let row = self.entries.iter().position(|r| lang::rhai::info_string(&r.source, "id").as_deref() == Some(entry.as_str()));
                 if let (Some(carried), Some(row)) = (carried, row) {
@@ -591,10 +654,17 @@ impl FormulaEditorPanel {
                 EntryKind::Coloring | EntryKind::Transform | EntryKind::Effect => (escape.custom_coloring.as_ref(), &escape.coloring),
             };
             let Some(carried) = carried else { continue };
-            if carried.entry != entry || !name.starts_with(custom::PREFIX) {
+            if entry_ident(carried) != entry || !name.starts_with(custom::PREFIX) {
                 continue;
             }
-            let Some(row) = self.entries.iter().position(|r| r.name == entry) else { continue };
+            let dialect = self.dialect;
+            let Some(row) = self
+                .entries
+                .iter()
+                .position(|r| entry_ident(&CustomSource { dialect, entry: r.name.clone(), source: r.source.clone(), variations: Vec::new() }) == entry)
+            else {
+                continue;
+            };
             let r = &self.entries[row];
             if r.errors(kind).is_empty() && (r.source != carried.source || carried.dialect != self.dialect) {
                 self.use_entry(cm, kind, row);
@@ -944,6 +1014,9 @@ mod tests {
         let c = cm.config();
         assert_eq!(c.render_mode, RenderMode::Escape, "{:?}", panel.status);
         assert!(c.escape.coloring.starts_with(custom::PREFIX), "{}", c.escape.coloring);
+        // Given an id, written into the file, and named by it.
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert_eq!(crate::scripted::key_id(&c.escape.coloring[custom::PREFIX.len()..]).as_deref(), Some(id.as_str()), "{}", c.escape.coloring);
         assert_eq!(c.escape.formula, formula, "over the formula the config had");
         assert_eq!(cm.history_len() - before, 1, "one undo step");
         cm.undo().unwrap();
@@ -1002,5 +1075,61 @@ mod tests {
         let mut registry = crate::effects::global_effect_registry_mut();
         registry.remove_by_name(&key);
         registry.remove_by_name(&new_key);
+    }
+
+    /// A variation from before ids (its `INFO.name` alone) is Used under
+    /// its name's derived id, the file untouched; edited and Used again,
+    /// the transforms naming the old version move to the new one, its
+    /// parameters with it, in one undo step; the old source goes, and undo
+    /// brings the old version back, still registered. One without a name
+    /// or an id gets an id written into the file.
+    #[test]
+    #[ignore = "writes the global variation registry (VARIATIONS.md, Testing): run alone"]
+    fn a_new_version_of_a_variation_moves_its_transforms() {
+        let mut cm = ConfigManager::new(crate::config::FractalConfig::default());
+        let mut panel = FormulaEditorPanel::new();
+        let text = "const INFO = #{ title: \"Rekey\", name: \"rhai_use_rekey_test\" };\nconst PARAMS = #{ k: 0.5 };\nfn variation(z, p) {\n    z * p.k\n}\n";
+        panel.adopt(None, "rekey.rhai".into(), text.into());
+        panel.recheck();
+        assert!(panel.entries[0].errors(EntryKind::Transform).is_empty(), "{:?}", panel.entries[0].errors(EntryKind::Transform));
+        panel.use_entry(&mut cm, EntryKind::Transform, 0);
+        assert_eq!(panel.text, text, "a name derives its id: nothing written");
+        let key = cm.config().flame.custom_variations[0].entry.clone();
+        assert_eq!(crate::variations::custom::key_of(text).as_deref(), Some(key.as_str()), "{:?}", panel.status);
+        cm.config_mut().flame.transforms.push(crate::scene::transforms::Transform::default());
+        cm.config_mut().flame.transforms[0].variations.insert(key.clone(), 0.5);
+        cm.config_mut().flame.transforms[0].variation_params.insert(format!("{key}.k"), 0.75);
+
+        panel.text = text.replace("z * p.k", "z * p.k * 0.5");
+        panel.recheck();
+        let before = cm.history_len();
+        panel.use_entry(&mut cm, EntryKind::Transform, 0);
+        let c = cm.config();
+        let new_key = c.flame.custom_variations[0].entry.clone();
+        assert_ne!(new_key, key, "a new version, a new key");
+        assert_eq!(crate::scripted::key_id(&new_key), crate::scripted::key_id(&key), "of the same id");
+        assert_eq!(c.flame.custom_variations.len(), 1, "the old source goes");
+        let t = &c.flame.transforms[0];
+        assert_eq!(t.variations.get(&new_key), Some(&0.5));
+        assert!(!t.variations.contains_key(&key));
+        assert_eq!(t.variation_params.get(&format!("{new_key}.k")), Some(&0.75));
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().flame.transforms[0].variations.get(&key), Some(&0.5));
+        assert_eq!(cm.config().flame.custom_variations[0].entry, key);
+        assert!(crate::variations::global_registry().has(&key), "the old version still renders");
+
+        let bare = "const INFO = #{ title: \"Bare\" };\nfn variation(z, p) {\n    z\n}\n";
+        panel.adopt(None, "bare.rhai".into(), bare.into());
+        panel.recheck();
+        assert!(panel.entries[0].errors(EntryKind::Transform).is_empty(), "{:?}", panel.entries[0].errors(EntryKind::Transform));
+        panel.use_entry(&mut cm, EntryKind::Transform, 0);
+        let id = lang::rhai::info_string(&panel.text, "id").expect("an id in the file");
+        assert!(crate::scripted::is_uuid(&id), "{id}: {:?}", panel.status);
+        let bare_key = cm.config().flame.custom_variations.iter().map(|s| s.entry.clone()).find(|e| crate::scripted::key_id(e).as_deref() == Some(id.as_str()));
+        let mut registry = crate::variations::global_registry_mut();
+        for k in [Some(key), Some(new_key), bare_key].into_iter().flatten() {
+            registry.remove_by_name(&k);
+        }
     }
 }

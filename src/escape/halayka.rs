@@ -96,7 +96,7 @@ fn presets() -> Vec<serde_json::Value> {
         .collect();
 
     let text = example("variation-escape-paths.rhai");
-    let name = rhai::variation_name(&text).expect("the variation's name");
+    let name = crate::variations::custom::key_of(&text).expect("the variation's key");
     let paths = CustomSource { dialect: CustomDialect::Rhai, entry: name.clone(), source: text, variations: Vec::new() };
     // The 2018 paper's figures 1 and 5.
     for (title, step, power, zoom) in [("Halayka Escape Paths: Z^2 + C", 0.0, 2.0, 1.2), ("Halayka Escape Paths: sin Z + C sin Z", 1.0, 2.0, 0.75)] {

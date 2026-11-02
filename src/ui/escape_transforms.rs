@@ -81,6 +81,7 @@ fn entry(stage: TransformStage, variation: &str, amount: f32) -> EscapeTransform
 /// 3D solid, which draws the Orbit stage alone.
 pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut ConfigManager, solid: bool) {
     let list = config_manager.active_config().escape.transforms.clone();
+    let superseded = crate::variations::global_registry().superseded(&config_manager.active_config().flame.custom_variations);
     egui::CollapsingHeader::new(t!("escape_transforms.title"))
         .id_salt("escape_transforms")
         .default_open(!list.is_empty())
@@ -103,7 +104,7 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
                                 }
                             });
                             // The variation.
-                            if let Some(name) = variation_picker(ui, i, &t.variation, solid) {
+                            if let Some(name) = variation_picker(ui, i, &t.variation, solid, &superseded) {
                                 let mut l = list.clone();
                                 // The same transformation, as a flame
                                 // transform keeps its id through a
@@ -178,7 +179,9 @@ pub(super) fn show_transforms_section(ui: &mut egui::Ui, config_manager: &mut Co
 /// solid, with a 3D body -- a popup, not a combo, so a click in the
 /// filter does not close it (the lens picker's reason). The chosen name,
 /// when one is chosen.
-fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool) -> Option<String> {
+/// `superseded`: the versions of the user's variations not offered
+/// (`VariationRegistry::superseded`).
+fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool, superseded: &std::collections::HashSet<String>) -> Option<String> {
     let registry = crate::variations::global_registry();
     let label = registry.get(current).map(|v| v.display_name.clone()).unwrap_or_else(|| current.to_string());
     let popup_id = egui::Id::new(("escape_transform_popup", i));
@@ -205,6 +208,9 @@ fn variation_picker(ui: &mut egui::Ui, i: usize, current: &str, solid: bool) -> 
                 for name in registry.names() {
                     let Some(info) = registry.get(name) else { continue };
                     if if solid { info.wgsl_source_3d.is_none() } else { info.category == VariationCategory::Only3D } {
+                        continue;
+                    }
+                    if superseded.contains(name) && name != current {
                         continue;
                     }
                     if !needle.is_empty() && !name.to_lowercase().contains(&needle) && !info.display_name.to_lowercase().contains(&needle) {

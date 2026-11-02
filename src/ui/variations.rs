@@ -241,8 +241,10 @@ pub fn render_variations_panel(
             (VariationCategory::Plugin, "variations_panel.category_plugin"),
         ];
 
+        // One version of each of the user's Rhai variations.
+        let superseded = registry.superseded(&flame.custom_variations);
         for (cat, label_key) in categories {
-            let in_cat: Vec<_> = registry.by_category(cat);
+            let in_cat: Vec<_> = registry.by_category(cat).into_iter().filter(|v| !superseded.contains(&v.name)).collect();
             if in_cat.is_empty() {
                 continue;
             }

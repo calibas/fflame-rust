@@ -1333,6 +1333,7 @@ history:
     edit_as_formula: "Edit as Formula"
     use_custom_coloring: "Use Custom Colouring"
     use_custom_variation: "Use Custom Variation"
+    add_custom_variation: "Add Custom Variation"
     use_custom_effect: "Use Custom Effect"
     escape_transform_add: "Add Transformation"
     lights_to_world: "Fix Lights in the Fractal"
