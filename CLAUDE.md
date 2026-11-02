@@ -45,6 +45,7 @@ Project history is in git: `git log --oneline`.
 - `src/renderer/` - FlameRenderer (compute_kernel.rs), the unified render API (render.rs), sticky.rs, shade_pass.rs, dof_pass.rs, effect_chain.rs, thumbnails
 - `src/shader_builder_v2.rs`, `src/shader_cache.rs`, `src/gpu/` (buffers.rs, pipelines.rs), `shaders/` - see [SHADERS.md](docs/main/SHADERS.md)
 - `src/escape/`, `src/sim/`, `src/camera/`, `src/textures/` (simulation recipes as textures)
+- `src/lang/` - the formula language (feature `lang`, brought by `engine-escape`): Rhai, UF and Fractint to WGSL, for formulas, colourings, solids, variations and effects; `src/scripted.rs` (ids, versions, labels shared by every user-written script)
 - `src/export/` - high-res export (tiled GPU, CPU fallback), 2x AA (supersample.rs)
 - `src/ui/` - dockable panels (egui_dock); `src/animation/`, `src/signal/`, `src/audio/`; `src/effects/`
 - `src/script/` - Rhai scripting (api.rs registers every function; cli.rs; assets/scripts/)

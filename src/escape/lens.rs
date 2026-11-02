@@ -259,7 +259,7 @@ pub fn drawn_transforms<'a>(escape: &'a EscapeConfig, registry: &'a VariationReg
 /// A solid's calls of built-in variations (3d-look-and-tools P5): the
 /// maps after the lens and the transformations, built in 3D
 /// (`flame_map3`) when there are any. Its source compiled (`ensure`).
-pub fn solid_maps(escape: &EscapeConfig) -> Vec<crate::escape::lang::ir::MapCall> {
+pub fn solid_maps(escape: &EscapeConfig) -> Vec<crate::lang::ir::MapCall> {
     crate::escape::custom::solid_maps(&escape.formula)
 }
 
@@ -271,8 +271,8 @@ pub fn maps_3d(escape: &EscapeConfig, registry: &VariationRegistry) -> bool {
 
 /// A map call's parameter value this picture: a number, or the solid's
 /// parameter's (its default when unset).
-fn map_value(escape: &EscapeConfig, v: &crate::escape::lang::ir::MapValue) -> f64 {
-    use crate::escape::lang::ir::MapValue;
+fn map_value(escape: &EscapeConfig, v: &crate::lang::ir::MapValue) -> f64 {
+    use crate::lang::ir::MapValue;
     match v {
         MapValue::Const(x) => *x,
         MapValue::Param(name) => escape.formula_params.get(name).copied().map(f64::from).unwrap_or_else(|| {
@@ -470,8 +470,8 @@ pub fn lens_key(escape: &EscapeConfig, registry: &VariationRegistry) -> String {
         key.push_str(&format!("|solid:{}", m.variation));
         for (k, v) in &m.params {
             match v {
-                crate::escape::lang::ir::MapValue::Const(x) => key.push_str(&format!(",{k}={x}")),
-                crate::escape::lang::ir::MapValue::Param(p) => key.push_str(&format!(",{k}=p.{p}")),
+                crate::lang::ir::MapValue::Const(x) => key.push_str(&format!(",{k}={x}")),
+                crate::lang::ir::MapValue::Param(p) => key.push_str(&format!(",{k}=p.{p}")),
             }
         }
     }
@@ -1270,7 +1270,7 @@ mod gpu_tests {
         };
         let with = |src: CustomSource| {
             let mut c = config("", 1.0);
-            c.escape.coloring = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Coloring, &src);
+            c.escape.coloring = crate::escape::custom::name_of(crate::lang::EntryKind::Coloring, &src);
             c.escape.custom_coloring = Some(src);
             c
         };
@@ -1318,7 +1318,7 @@ mod gpu_tests {
             );
             let src = CustomSource { dialect: CustomDialect::Rhai, entry: "Halved".into(), source: src, variations: Vec::new() };
             let mut c = config("", 1.0);
-            c.escape.formula = crate::escape::custom::name_of(crate::escape::lang::EntryKind::Formula, &src);
+            c.escape.formula = crate::escape::custom::name_of(crate::lang::EntryKind::Formula, &src);
             c.escape.custom_formula = Some(src);
             c
         };

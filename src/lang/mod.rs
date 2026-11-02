@@ -1,5 +1,11 @@
-//! The escape-time formula language: Ultra Fractal's, which accepts
-//! Fractint's shape, compiled to WGSL.
+//! The formula language: Rhai, and Ultra Fractal's (which accepts
+//! Fractint's shape), compiled to WGSL -- the one compiler for every kind
+//! written in it: escape-time formulas, colourings and solids, flame
+//! variations, effects (docs/projects/rhai-plugins.md, design rule 1).
+//! Its own module and feature (`lang`) since 2026-11-02, so a build
+//! without the escape engine compiles Rhai effects and variations; the
+//! deep-zoom passes that need the engine's big floats and reference
+//! orbits ([`bigeval`], [`periodic`]) come with `engine-escape` alone.
 //!
 //! The plan, the language reference this follows and the order of work
 //! are in `docs/projects/escape-formula-language.md`. In brief: a file
@@ -10,6 +16,7 @@
 //! program; the back ends evaluate it on the CPU or emit WGSL.
 
 pub mod ast;
+#[cfg(feature = "engine-escape")]
 pub mod bigeval;
 pub mod builtins;
 pub mod check;
@@ -21,6 +28,7 @@ pub mod ir;
 pub mod lexer;
 pub mod modifiers;
 pub mod parser;
+#[cfg(feature = "engine-escape")]
 pub mod periodic;
 pub mod perturb;
 pub mod rhai;

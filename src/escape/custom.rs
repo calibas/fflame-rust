@@ -145,27 +145,9 @@ pub fn name_of(kind: EntryKind, src: &CustomSource) -> String {
     format!("{PREFIX}{h:016x}")
 }
 
-/// `src` with the variations it calls (`vary`) filled in from where they
-/// are now -- the user's registered variations and library -- so the
-/// config that carries it carries them too (the KIFS plan, C1e). A
-/// source that is not Rhai, or calls none, comes back as it was.
-pub fn with_called_variations(kind: EntryKind, src: CustomSource) -> CustomSource {
-    if src.dialect != CustomDialect::Rhai {
-        return src;
-    }
-    let called = lang::rhai::with_variations(&carried_variations(&src), || lang::rhai::variations_called(&src.source, kind));
-    let variations = called
-        .into_iter()
-        .map(|(entry, source)| CustomSource { dialect: CustomDialect::Rhai, entry, source, variations: Vec::new() })
-        .collect();
-    CustomSource { variations, ..src }
-}
-
-/// What `src` carries of the variations it calls, as the lowering's
-/// scope takes them.
-pub fn carried_variations(src: &CustomSource) -> Vec<(String, String)> {
-    src.variations.iter().map(|v| (v.entry.clone(), v.source.clone())).collect()
-}
+/// The language's (`lang::rhai`, since the compiler is its own feature):
+/// here too, where the escape engine has always called them.
+pub use crate::lang::rhai::{carried_variations, with_called_variations};
 
 /// Parse and check the named entry of a source. The source may hold
 /// other entries; only this one is compiled.
@@ -1665,8 +1647,8 @@ mod tests {
     /// not the formula's arithmetic.
     #[test]
     fn the_kifs_2d_example_draws_the_carpet() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         let (_, text) = crate::storage::formula_store::EXAMPLES.iter().find(|(f, _)| *f == "kifs-2d.rhai").expect("the example");
         let p = lang::rhai::program(text).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
         let params = ParamValues::defaults(&p);

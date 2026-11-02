@@ -37,6 +37,11 @@ pub mod script;
 pub mod scripted;
 pub mod probe;
 pub mod census;
+/// The formula language: Rhai (and UF's and Fractint's formulas) to WGSL,
+/// for every kind written in it -- formulas, colourings, solids,
+/// variations, effects (docs/projects/rhai-plugins.md, rule 1).
+#[cfg(feature = "lang")]
+pub mod lang;
 #[cfg(feature = "engine-escape")]
 pub mod escape;
 #[cfg(feature = "engine-sim")]

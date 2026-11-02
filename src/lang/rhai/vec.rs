@@ -1290,8 +1290,8 @@ enum Target {
 #[cfg(test)]
 mod tests {
     use super::super::{program, with_variations};
-    use crate::escape::lang::builtins::C64;
-    use crate::escape::lang::interp::{run, Env, ParamValues};
+    use crate::lang::builtins::C64;
+    use crate::lang::interp::{run, Env, ParamValues};
 
     /// Every vector operation, in a formula that carries a vector in its
     /// state and takes a vector parameter.
@@ -1341,7 +1341,7 @@ fn step(s, p) {
 fn escaped(s, p) { s.z.norm_sqr() > p.bailout }
 "#;
 
-    fn compiled(src: &str) -> crate::escape::lang::ir::Program {
+    fn compiled(src: &str) -> crate::lang::ir::Program {
         program(src).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(src)).collect::<Vec<_>>()))
     }
 
@@ -1367,7 +1367,7 @@ fn escaped(s, p) { s.z.norm_sqr() > p.bailout }
         }
         assert!(escaped > 20 && escaped < 400, "the view holds both: {escaped}");
         #[cfg(not(target_arch = "wasm32"))]
-        crate::escape::lang::wgsl::validate_formula(&crate::escape::lang::wgsl::formula(&v)).expect("valid WGSL");
+        crate::lang::wgsl::validate_formula(&crate::lang::wgsl::formula(&v)).expect("valid WGSL");
     }
 
     /// What vectors refuse, with the reason.
@@ -1464,7 +1464,7 @@ fn escaped(s, p) { s.z.norm_sqr() > p.bailout }
         }
         assert!(escaped > 20 && escaped < 400, "the view holds both: {escaped}");
         #[cfg(not(target_arch = "wasm32"))]
-        crate::escape::lang::wgsl::validate_formula(&crate::escape::lang::wgsl::formula(&v)).expect("valid WGSL");
+        crate::lang::wgsl::validate_formula(&crate::lang::wgsl::formula(&v)).expect("valid WGSL");
     }
 
     /// A helper takes a vector; `escaped` reads a vector's length; a
@@ -1552,7 +1552,7 @@ fn escaped(s, p) { s.z.norm_sqr() + length(s.w) * 0.0 > p.bailout }
     /// steps, `(1 + C) sin Z` and `inv(sinh Z) cosh Z`.
     #[test]
     fn quaternions_run_as_the_algebra_says() {
-        use crate::escape::lang::builtins::Builtin;
+        use crate::lang::builtins::Builtin;
         let r: Q = [0.3, 0.5, 0.4, 0.2];
         let sin = |q: Q| halayka(q, |t, r| (t.sin() * r.cosh(), t.cos() * r.sinh()));
         let cos = |q: Q| halayka(q, |t, r| (t.cos() * r.cosh(), -t.sin() * r.sinh()));
@@ -1704,13 +1704,13 @@ fn distance(s, p) {
 
     #[test]
     fn a_quaternion_solid_runs_as_its_algebra() {
-        use crate::escape::lang::interp;
-        let p = crate::escape::lang::rhai::solid(QUAT_JULIA).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(QUAT_JULIA)).collect::<Vec<_>>()));
+        use crate::lang::interp;
+        let p = crate::lang::rhai::solid(QUAT_JULIA).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(QUAT_JULIA)).collect::<Vec<_>>()));
         let base = crate::escape::ifs::template_parameters().len();
-        let w = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
+        let w = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
         assert!(w.contains("length(vec4<f32>("), "the walk's escape reads the whole quaternion:\n{w}");
         #[cfg(not(target_arch = "wasm32"))]
-        crate::escape::lang::wgsl::validate_solid(&w).expect("validates");
+        crate::lang::wgsl::validate_solid(&w).expect("validates");
         let c: Q = [-1.0, 0.2, 0.0, 0.0];
         let params = ParamValues::defaults(&p);
         let mut outside = 0;
@@ -1740,13 +1740,13 @@ fn distance(s, p) {
     /// validates.
     #[test]
     fn a_3d_variation_computes_with_quaternions() {
-        use crate::escape::lang::interp::VariationRun;
+        use crate::lang::interp::VariationRun;
         let src = "const PARAMS = #{ c: #{ value: quat(0.3, 0.5, 0.4, 0.2), caption: \"C\" } };\n\
                    const INFO = #{ name: \"rhai_quat_step_test\" };\n\
                    fn variation3(v, p) {\n    let q = quat(v.x, v.y, v.z, 0.0);\n    let o = sin(q) + p.c * sin(q);\n    vec3(o.w, o.x, o.y)\n}\n";
         let dl = crate::variations::custom::compile(src).unwrap_or_else(|e| panic!("{e}"));
         assert!(dl.shader_3d.is_some());
-        let p = crate::escape::lang::rhai::transformation3(src).unwrap();
+        let p = crate::lang::rhai::transformation3(src).unwrap();
         let params = ParamValues::defaults(&p);
         let c: Q = [0.3, 0.5, 0.4, 0.2];
         for v in [[0.3f64, -0.7, 0.2], [-1.2, 0.4, 0.9]] {
@@ -1796,12 +1796,12 @@ fn distance(s, p) {
 
     /// The shipped solid, and its parameters at a step of `halayka_steps`
     /// and a `draw`.
-    fn halayka_solid() -> crate::escape::lang::ir::Program {
-        let src = include_str!("../../../../assets/formulas/solid-halayka-quaternions.rhai").replace("\r\n", "\n");
-        crate::escape::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(&src)).collect::<Vec<_>>()))
+    fn halayka_solid() -> crate::lang::ir::Program {
+        let src = include_str!("../../../assets/formulas/solid-halayka-quaternions.rhai").replace("\r\n", "\n");
+        crate::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(&src)).collect::<Vec<_>>()))
     }
 
-    fn halayka_params(p: &crate::escape::lang::ir::Program, step: f64, power: f64, c: Q, draw: usize) -> ParamValues {
+    fn halayka_params(p: &crate::lang::ir::Program, step: f64, power: f64, c: Q, draw: usize) -> ParamValues {
         let mut params = ParamValues::defaults(p);
         let mut set = |name: &str, v: f64| {
             let i = p.params.iter().position(|x| x.name == name).unwrap_or_else(|| panic!("no parameter {name}"));
@@ -1826,7 +1826,7 @@ fn distance(s, p) {
     /// lattice point of the other kind.
     #[test]
     fn halaykas_sets_hold_what_the_paper_says() {
-        use crate::escape::lang::interp;
+        use crate::lang::interp;
         let p = halayka_solid();
         const N: usize = 9;
         let lattice: Vec<[f64; 3]> = (0..N * N * N).map(|i| [i % N, (i / N) % N, i / (N * N)].map(|k| -1.4 + 2.8 * k as f64 / (N - 1) as f64)).collect();
@@ -1871,7 +1871,7 @@ fn distance(s, p) {
     /// estimate's caps are what this holds to.
     #[test]
     fn halaykas_sets_are_never_stepped_through() {
-        use crate::escape::lang::interp;
+        use crate::lang::interp;
         let p = halayka_solid();
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut next = move || {
@@ -1969,7 +1969,7 @@ fn distance(s, p) {
     /// it is not held here (docs/projects/quaternions.md).
     #[test]
     fn halaykas_distance_has_no_jump_at_the_sets_boundary() {
-        use crate::escape::lang::interp;
+        use crate::lang::interp;
         let p = halayka_solid();
         let mut seed = 0x9e37_79b9_7f4a_7c15u64;
         let mut next = move || {
@@ -2015,11 +2015,11 @@ fn distance(s, p) {
     /// control points -- against the same written in f64.
     #[test]
     fn the_escape_paths_lie_on_their_orbits_paths() {
-        use crate::escape::lang::interp::VariationRun;
-        let src = include_str!("../../../../assets/formulas/variation-escape-paths.rhai").replace("\r\n", "\n");
+        use crate::lang::interp::VariationRun;
+        let src = include_str!("../../../assets/formulas/variation-escape-paths.rhai").replace("\r\n", "\n");
         let dl = crate::variations::custom::compile(&src).unwrap_or_else(|e| panic!("{e}"));
         assert!(dl.shader_3d.is_some() && dl.shader_2d.is_none());
-        let p = crate::escape::lang::rhai::transformation3(&src).unwrap();
+        let p = crate::lang::rhai::transformation3(&src).unwrap();
         let mut params = ParamValues::defaults(&p);
         let mut set = |name: &str, v: f64| {
             let i = p.params.iter().position(|x| x.name == name).unwrap_or_else(|| panic!("no parameter {name}"));

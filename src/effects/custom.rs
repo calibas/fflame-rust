@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::{EffectCategory, EffectInfo, EffectParameter, EffectSource};
 use crate::renderer::effect_chain::MAX_EFFECT_PARAMS;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::escape::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, ir::ParamKind, EntryKind};
 use crate::provenance::Provenance;
 use crate::scripted::{self, Ledger};
 use crate::variations::ParamType;

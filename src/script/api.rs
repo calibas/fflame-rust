@@ -1837,17 +1837,17 @@ fn register_escape(engine: &mut Engine) {
         Ok(crate::config::escape::CustomSource { dialect, entry: entry.to_string(), source: source.to_string(), variations: Vec::new() })
     }
     #[cfg(feature = "engine-escape")]
-    fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::escape::lang::Diag]) -> Box<EvalAltResult> {
+    fn compile_error(src: &crate::config::escape::CustomSource, diags: &[crate::lang::Diag]) -> Box<EvalAltResult> {
         let lines: Vec<String> = diags
             .iter()
-            .filter(|d| d.severity == crate::escape::lang::Severity::Error)
+            .filter(|d| d.severity == crate::lang::Severity::Error)
             .map(|d| d.render(&src.source))
             .collect();
         err(format!("`{}` does not compile:\n{}", src.entry, lines.join("\n")))
     }
     #[cfg(feature = "engine-escape")]
     fn set_custom_formula(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         // With the variations it calls (`vary`), which the config carries.
         let src = crate::escape::custom::with_called_variations(EntryKind::Formula, src);
         let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
@@ -1865,7 +1865,7 @@ fn register_escape(engine: &mut Engine) {
     }
     #[cfg(feature = "engine-escape")]
     fn set_custom_coloring(e: &mut EscapeHandle, src: crate::config::escape::CustomSource) -> Result<(), Box<EvalAltResult>> {
-        use crate::escape::lang::EntryKind;
+        use crate::lang::EntryKind;
         let src = crate::escape::custom::with_called_variations(EntryKind::Coloring, src);
         let name = crate::escape::custom::name_of(EntryKind::Coloring, &src);
         if let Err(d) = crate::escape::custom::compile_coloring(&src, &name) {
@@ -1903,7 +1903,7 @@ fn register_escape(engine: &mut Engine) {
         // A Rhai formula: its source alone, one formula to a source
         // (phase 4, step 8).
         engine.register_fn("custom_formula", |e: &mut EscapeHandle, source: &str| -> Result<(), Box<EvalAltResult>> {
-            let entry = crate::escape::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
+            let entry = crate::lang::rhai::title(source).unwrap_or_else(|| "Formula".into());
             set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry, source: source.to_string(), variations: Vec::new() })
         });
         // A formula from the script's own function `f(z, c)`, its step:
@@ -1921,10 +1921,10 @@ fn register_escape(engine: &mut Engine) {
             if !found {
                 return Err(err(format!("no function `{name}(z, c)` in the script")));
             }
-            let p = crate::escape::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
+            let p = crate::lang::rhai::program_from_fn(name, &fns).map_err(|d| {
                 err(format!("`{name}` does not make a formula: {}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join("; ")))
             })?;
-            let source = crate::escape::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
+            let source = crate::lang::to_rhai::formula(&p, &[]).map_err(|e| err(format!("`{name}`: {e}")))?;
             set_custom_formula(e, crate::config::escape::CustomSource { dialect: crate::config::escape::CustomDialect::Rhai, entry: name.to_string(), source, variations: Vec::new() })
         });
         // A hybrid composed in the script: the Hybrid Designer's groups.
@@ -1942,7 +1942,7 @@ fn register_escape(engine: &mut Engine) {
     // `lines` as the hybrid's JSON has them.
     #[cfg(feature = "engine-escape")]
     fn hybrid_source(groups: &Array, loop_start: i64) -> Result<crate::config::escape::CustomSource, Box<EvalAltResult>> {
-        use crate::escape::lang::hybrid::{Hybrid, Member};
+        use crate::lang::hybrid::{Hybrid, Member};
         let member = |source: Option<String>, twin: Option<String>| -> Result<Option<serde_json::Value>, Box<EvalAltResult>> {
             let rhai = match (source, twin) {
                 (Some(s), _) => s,
@@ -1951,7 +1951,7 @@ fn register_escape(engine: &mut Engine) {
                     .to_string(),
                 (None, None) => return Ok(None),
             };
-            let title = crate::escape::lang::rhai::title(&rhai).unwrap_or_else(|| "Formula".into());
+            let title = crate::lang::rhai::title(&rhai).unwrap_or_else(|| "Formula".into());
             Ok(Some(serde_json::to_value(Member { title, rhai }).expect("a member serialises")))
         };
         // Maps too, which a config value never is.

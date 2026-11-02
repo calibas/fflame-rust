@@ -230,6 +230,29 @@ pub fn source_labels(source: &str) -> Option<crate::scripted::Labels> {
     Some(out)
 }
 
+/// `src` with the variations it calls (`vary`) filled in from where they
+/// are now -- the user's registered variations and library -- so the
+/// config that carries it carries them too (the KIFS plan, C1e). A
+/// source that is not Rhai, or calls none, comes back as it was.
+pub fn with_called_variations(kind: EntryKind, src: crate::config::escape::CustomSource) -> crate::config::escape::CustomSource {
+    use crate::config::escape::{CustomDialect, CustomSource};
+    if src.dialect != CustomDialect::Rhai {
+        return src;
+    }
+    let called = with_variations(&carried_variations(&src), || variations_called(&src.source, kind));
+    let variations = called
+        .into_iter()
+        .map(|(entry, source)| CustomSource { dialect: CustomDialect::Rhai, entry, source, variations: Vec::new() })
+        .collect();
+    CustomSource { variations, ..src }
+}
+
+/// What `src` carries of the variations it calls, as the lowering's
+/// scope takes them.
+pub fn carried_variations(src: &crate::config::escape::CustomSource) -> Vec<(String, String)> {
+    src.variations.iter().map(|v| (v.entry.clone(), v.source.clone())).collect()
+}
+
 /// `source` with `id` in its `INFO` -- first in the map, or a new `INFO`
 /// above the first line of code -- unless it has an id already: how a
 /// script gets the identity it carries (design rule 7). Nothing else of
@@ -3364,14 +3387,14 @@ fn escaped(s, p) { s.z.re > 1e9 }
     /// (on both planes where they have them).
     #[test]
     fn the_examples_run_as_their_uf_twins() {
-        let m = rh(include_str!("../../../assets/formulas/mandelbrot.rhai"));
+        let m = rh(include_str!("../../assets/formulas/mandelbrot.rhai"));
         let um = uf("M {\ninit:\n if ismand == 0\n  z = #pixel\n  c = (-0.8, 0.156)\n else\n  z = 0\n  c = #pixel\n endif\nloop:\n z = z * z + c\nbailout:\n |z| <= @bailout\ndefault:\n float param bailout\n  default = 4\n endparam\n}");
         same(&m, &um, false);
         same(&m, &um, true);
-        let ship = rh(include_str!("../../../assets/formulas/burning-ship.rhai"));
+        let ship = rh(include_str!("../../assets/formulas/burning-ship.rhai"));
         let us = uf("B {\ninit:\n z = 0\n c = #pixel\nloop:\n z = sqr(abs(z)) + c\nbailout:\n |z| <= 4\n}");
         same(&ship, &us, false);
-        let ph = rh(include_str!("../../../assets/formulas/phoenix.rhai"));
+        let ph = rh(include_str!("../../assets/formulas/phoenix.rhai"));
         let up = uf("P {\ninit:\n z = 0\n prev = 0\n c = #pixel\nloop:\n t = z\n z = z * z + c + (-0.5, 0) * prev\n prev = t\nbailout:\n |z| <= 4\n}");
         same(&ph, &up, false);
         // A `start` whose arms disagree on the state is refused.
@@ -3395,7 +3418,7 @@ fn escaped(s, p) { s.z.re > 1e9 }
         use super::super::ir::Region;
         use super::super::to_rhai::parting_coloring;
         let m = uf("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}");
-        let text = include_str!("../../../assets/formulas/orbit-trap.rhai");
+        let text = include_str!("../../assets/formulas/orbit-trap.rhai");
         assert_eq!(kind_of(text), Some(EntryKind::Coloring));
         let trap = coloring(text).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(text)).collect::<Vec<_>>()));
         let utrap = ucl(
@@ -3406,7 +3429,7 @@ fn escaped(s, p) { s.z.re > 1e9 }
         );
         assert_eq!(parting_coloring(&m, &utrap, &trap, 100), None);
         assert_eq!(trap.state_floats(), 1, "the closest distance alone");
-        let text = include_str!("../../../assets/formulas/smooth.rhai");
+        let text = include_str!("../../assets/formulas/smooth.rhai");
         let smooth = coloring(text).unwrap();
         assert_eq!(smooth.region, Region::Outside);
         let usmooth = ucl(

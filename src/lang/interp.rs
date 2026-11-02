@@ -340,6 +340,8 @@ pub struct Run {
 /// table's single steps are read from (`custom::bla_steps`). The
 /// equations are free of cancellation, so a deviation of any size
 /// steps exactly, folds (`diffabs`) included.
+// The escape engine's deep zoom alone reads these two.
+#[cfg(feature = "engine-escape")]
 pub(crate) struct PerturbStepper<'p> {
     formula: &'p Program,
     params: &'p ParamValues,
@@ -351,6 +353,7 @@ pub(crate) struct PerturbStepper<'p> {
     arrays: Vec<Vec<Value>>,
 }
 
+#[cfg(feature = "engine-escape")]
 impl<'p> PerturbStepper<'p> {
     pub(crate) fn new(formula: &'p Program, params: &'p ParamValues, env: &Env) -> Option<Self> {
         if formula.perturb_loop.is_empty() || !formula.carried.is_empty() {
@@ -381,6 +384,7 @@ impl<'p> PerturbStepper<'p> {
 /// own -- is kept in units of `2^e`, rescaled together as `e` moves, as
 /// the GPU's floatexp rung keeps them, so it does not overflow however
 /// deep the view: the iterate's pair is `(P, Q) 2^e`.
+#[cfg(feature = "engine-escape")]
 pub(crate) struct DerivStepper {
     prog: std::sync::Arc<Program>,
     params: ParamValues,
@@ -395,6 +399,7 @@ pub(crate) struct DerivStepper {
     e: i32,
 }
 
+#[cfg(feature = "engine-escape")]
 impl DerivStepper {
     /// The derivative program `d` of a program with `first` variables,
     /// started at `env.pixel`: its `global:` and `init:` run.

@@ -387,14 +387,16 @@ is [escape-coloring-survey.md](../projects/escape-coloring-survey.md).
 
 ## The formula language
 
-Formulas and colourings can also be written as text; `escape::lang`
-compiles them to WGSL. The language's own form is **Rhai** (the
+Formulas and colourings can also be written as text; the formula
+language (`crate::lang`, its own module and feature since 2026-11-02,
+re-exported as `escape::lang`) compiles them to WGSL -- and the flame
+variations and effects written in it. The language's own form is **Rhai** (the
 scripting language the program embeds; since phase 4), and **Ultra
 Fractal's formula language** -- which accepts Fractint's shape too --
 is read as well. The plan, its phases and what is left are in
 [escape-formula-language.md](../projects/escape-formula-language.md).
 
-**Where it lives.** `src/escape/lang/`: `rhai.rs` (a Rhai formula
+**Where it lives.** `src/lang/`: `rhai.rs` (a Rhai formula
 lowered to the parse tree), `to_rhai.rs` (a checked UF or Fractint
 formula printed as Rhai), `lexer.rs`, `parser.rs` (a UF file into
 entries and sections), `check.rs` (names and types, UF's rules,

@@ -4875,7 +4875,7 @@ fn escaped(s, p) { s.z.norm_sqr() > 16.0 }`);
     .expect("script ran");
     let esc = out.config.escape;
     assert_eq!(esc.custom_formula.as_ref().map(|s| s.dialect), Some(crate::config::escape::CustomDialect::Hybrid));
-    let h = crate::escape::lang::hybrid::Hybrid::from_json(&esc.custom_formula.unwrap().source).unwrap();
+    let h = crate::lang::hybrid::Hybrid::from_json(&esc.custom_formula.unwrap().source).unwrap();
     assert_eq!(h.groups.len(), 2);
     assert_eq!(h.groups[1].repeats, 2);
     assert!(h.groups[1].blend.as_ref().is_some_and(|b| b.title == "Tricorn"));
@@ -4904,14 +4904,14 @@ fn a_script_function_becomes_a_formula() {
     let esc = out.config.escape;
     let src = esc.custom_formula.as_ref().expect("a custom formula");
     assert_eq!((src.dialect, src.entry.as_str()), (crate::config::escape::CustomDialect::Rhai, "ship"));
-    let ours = crate::escape::lang::rhai::program(&src.source).unwrap();
-    let twin = crate::escape::lang::rhai::program(crate::escape::twins::source("burning_ship").unwrap()).unwrap();
-    use crate::escape::lang::interp::{run as run_formula, Env, ParamValues};
+    let ours = crate::lang::rhai::program(&src.source).unwrap();
+    let twin = crate::lang::rhai::program(crate::escape::twins::source("burning_ship").unwrap()).unwrap();
+    use crate::lang::interp::{run as run_formula, Env, ParamValues};
     for julia in [false, true] {
         for c in [(-0.5, -0.5), (-1.7, -0.02), (0.3, 0.2), (-1.0, -1.0)] {
-            let mut env = Env::at(crate::escape::lang::builtins::C64::new(c.0, c.1), 100);
+            let mut env = Env::at(crate::lang::builtins::C64::new(c.0, c.1), 100);
             env.julia = julia;
-            env.julia_c = crate::escape::lang::builtins::C64::new(-0.8, 0.156);
+            env.julia_c = crate::lang::builtins::C64::new(-0.8, 0.156);
             let (a, b) = (run_formula(&ours, &ParamValues::defaults(&ours), None, &env), run_formula(&twin, &ParamValues::defaults(&twin), None, &env));
             assert_eq!((a.n, a.escaped), (b.n, b.escaped), "at {c:?} julia {julia}");
         }

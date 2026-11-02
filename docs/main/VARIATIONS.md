@@ -501,7 +501,7 @@ function takes the point, and the ids when it has parameters (as
   ([ESCAPE.md](ESCAPE.md#the-formula-language)). A Rhai solid calls a
   BUILT-IN variation's 3D body on a vector the same way, through the
   maps flame built in 3D (`flame_map3`).
-- **Hooks** (`escape::lang::wgsl::variation_shape`): `rand()` declares
+- **Hooks** (`lang::wgsl::variation_shape`): `rand()` declares
   `NeedsRng`, `ctx.accum` `NeedsAccum`, a `#{ z, color }` result
   `WritesColor`; `init(p)` and `this.name` are per-thread state
   (`state_count`, the seeding call as `wgsl_state_init`); state or

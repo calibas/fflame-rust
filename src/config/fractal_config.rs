@@ -1345,7 +1345,7 @@ impl FractalConfig {
     /// (registered first, so one of the user's counts). Then a dispatch's
     /// length is the orbits' length, which every path renders with.
     pub fn resets_orbits(&self) -> bool {
-        #[cfg(feature = "engine-escape")]
+        #[cfg(feature = "lang")]
         crate::variations::custom::ensure(&self.flame);
         self.reset_orbits || self.flame.needs_fresh_orbits(&crate::variations::global_registry())
     }
