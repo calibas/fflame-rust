@@ -493,6 +493,7 @@ pub fn compose(members: &[(Program, Option<Program>)], rename: &dyn Fn(usize, bo
                 hint: "0 runs the group's first formula, 1 its second, between them a mix of the two steps".into(),
                 choices: Vec::new(),
                 exponential: false,
+                angle: false,
                 span: Span::default(),
             });
             let t = IExpr { kind: IExprKind::Convert(Box::new(IExpr { kind: IExprKind::Param(out.params.len() - 1), ty: Ty::Float })), ty: Ty::Complex };

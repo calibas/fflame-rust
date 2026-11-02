@@ -39,6 +39,7 @@ the key (`"scale_max"` → "Scale Max").
 | call | returns | what it does |
 |---|---|---|
 | `param(key, default, min, max)` | float | A float slider; returns the user's value clamped to `[min, max]`. |
+| `param_angle(key, default)` / `param_angle(key, default, min, max)` | float | An angle in **degrees**, drawn with the angle control (0–360 without a range); clamped like `param`. On the wire a float with `"angle": true`. |
 | `param_int(key, default, min, max)` | int | An integer slider, inclusive range. |
 | `param_bool(key, default)` | bool | A checkbox. |
 | `param_choice(key, options, default_index)` | string | A dropdown; returns the **chosen option's text**, so compare against the option strings. |

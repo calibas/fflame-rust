@@ -96,6 +96,7 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
         let caption = if param.caption.is_empty() { param.name.clone() } else { param.caption.clone() };
         let bounded = param.min.is_some() && param.max.is_some();
         let param_type = match param.kind {
+            ParamKind::Float if param.angle => ParamType::Angle,
             ParamKind::Float if bounded => ParamType::Float,
             ParamKind::Float => ParamType::UnlimitedFloat,
             ParamKind::Int if bounded => ParamType::Integer,

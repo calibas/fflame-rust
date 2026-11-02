@@ -197,6 +197,14 @@ pub enum Builtin {
     LoadG,
     LoadB,
     LoadA,
+    /// `x - floor(x)`, each part of a complex: WGSL's `fract`.
+    Fract,
+    /// A hash of a point to two numbers in [0, 1): the effects' noise hash,
+    /// `fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *
+    /// 43758.5453)`, emitted as the built-in shaders write it so a twin
+    /// draws their noise to the bit. Not a good hash: a fast one, which
+    /// is what noise wants.
+    Hash2,
 }
 
 /// Every built-in by name (lowered).
@@ -209,6 +217,8 @@ pub const BUILTINS: &[(&str, Builtin)] = &[
     ("__load_g", Builtin::LoadG),
     ("__load_b", Builtin::LoadB),
     ("__load_a", Builtin::LoadA),
+    ("fract", Builtin::Fract),
+    ("hash2", Builtin::Hash2),
     ("sqr", Builtin::Sqr),
     ("sqrt", Builtin::Sqrt),
     ("log", Builtin::Log),
@@ -307,6 +317,9 @@ impl Builtin {
             IsInf | IsNan => Ty::Bool,
             Cabs | Real | Imag | Atan2 => Ty::Float,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => Ty::Float,
+            Hash2 => Ty::Complex,
+            Fract if arg == Ty::Complex => Ty::Complex,
+            Fract => Ty::Float,
             Conj | Flip | Cosxx => Ty::Complex,
             // Keep an integer an integer where the result must be one.
             Sqr | Abs | Ident | Zero => arg,
@@ -383,6 +396,14 @@ impl Builtin {
             F32 => C64::new(z.re as f32 as f64, z.im as f32 as f64),
             // An effect's image is the GPU's.
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => C64::ZERO,
+            Fract => C64::new(z.re - z.re.floor(), z.im - z.im.floor()),
+            Hash2 => {
+                let h = |x: f64| {
+                    let v = x.sin() * 43758.5453;
+                    v - v.floor()
+                };
+                C64::new(h(z.re * 127.1 + z.im * 311.7), h(z.re * 269.5 + z.im * 183.3))
+            }
         }
     }
 
@@ -416,8 +437,8 @@ impl Builtin {
             Atanh => one.div(one.sub(z.mul(z))),
             Expm1 => z.exp(),
             Log1p => one.div(one.add(z)),
-            F32 => one,
-            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => C64::ZERO,
+            F32 | Fract => one,
+            SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA | Hash2 => C64::ZERO,
             Zero | Abs | Cabs | Real | Imag | Conj | Flip | Atan2 | Round | Trunc | Ceil | Floor | Cosxx | IsInf
             | IsNan => C64::ZERO,
         }
@@ -466,6 +487,8 @@ impl Builtin {
             Log1p => x.ln_1p(),
             F32 => x as f32 as f64,
             SampleR | SampleG | SampleB | SampleA | LoadR | LoadG | LoadB | LoadA => 0.0,
+            Fract => x - x.floor(),
+            Hash2 => Builtin::Hash2.eval_c(C64::real(x)).re,
             Conj | Flip | Cosxx => unreachable!("complex-valued"),
         }
     }

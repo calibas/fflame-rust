@@ -484,9 +484,11 @@ first time (a second undo step: adding an instance is structural).
 **Twins of the built-ins** live in `assets/effects/*.rhai`, each held to
 its WGSL by a GPU compare within a step of 8-bit rounding, under the
 built-in's name with its parameters in the same order
-(`the_rhai_twins_match_their_wgsl`, a table: vignette,
-chromatic_aberration, sobel_edges so far). They replace the built-ins
-only once nothing is lost (rhai-plugins.md, D1).
+(`the_rhai_twins_match_their_wgsl` for the twelve colour effects, within
+a step of 8-bit rounding; `the_density_twins_match_their_wgsl` for the
+three density ones, to a part in a thousand). Every built-in has one but
+`distance_field`, whose three passes the language cannot write. They
+replace the built-ins only once nothing is lost (rhai-plugins.md, D1).
 
 ## The corpus for the API
 

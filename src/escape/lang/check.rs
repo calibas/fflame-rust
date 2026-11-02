@@ -518,6 +518,9 @@ impl Checker {
             let exponential = block.get("exponential").is_some_and(|s| {
                 matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
             });
+            let angle = block.get("angle").is_some_and(|s| {
+                matches!(&s.value, SettingValue::Expr(Expr { kind: ExprKind::Bool(true), .. }))
+            });
             let param = Param {
                 name: block.name.clone(),
                 caption: string_setting(block.get("caption")).unwrap_or_else(|| block.name.clone()),
@@ -528,6 +531,7 @@ impl Checker {
                 hint: string_setting(block.get("hint")).unwrap_or_default(),
                 choices,
                 exponential,
+                angle,
                 span: block.span,
             };
             // The last block for a name wins (UF's rule).
@@ -869,6 +873,7 @@ impl Checker {
             hint: String::new(),
             choices: Vec::new(),
             exponential: false,
+            angle: false,
             span,
         });
         id

@@ -1565,10 +1565,18 @@ impl<'s> Lowerer<'s> {
                             Expr::BoolConstant(..) => settings.push(Setting { name: k.name.to_string(), value: SettingValue::Expr(self.literal(x)?), span: kspan }),
                             _ => return self.err(k.pos, "`exponential` is `true` or `false`"),
                         },
+                        // What the control is, beyond what the value says:
+                        // an angle, in degrees as stored and shown.
+                        "type" => match x {
+                            Expr::StringConstant(t, _) if t.as_str() == "angle" => {
+                                settings.push(Setting { name: "angle".into(), value: SettingValue::Expr(mk(ExprKind::Bool(true), kspan)), span: kspan })
+                            }
+                            _ => return self.err(k.pos, "`type` is `\"angle\"` (degrees, as stored and shown); a number's other kinds follow its `value`"),
+                        },
                         o => {
                             return self.err(
                                 k.pos,
-                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`; not `{o}`"),
+                                format!("a parameter has `value`, `min`, `max`, `caption`, `hint`, `choices`, `function`, `exponential`, `type`; not `{o}`"),
                             )
                         }
                     }

@@ -74,7 +74,7 @@ pub fn compile(source: &str) -> Result<VariationDownload, String> {
             serde_json::json!({
                 "name": name,
                 "display_name": display,
-                "param_type": if bounded { "float" } else { "unlimited_float" },
+                "param_type": if param.angle { "angle" } else if bounded { "float" } else { "unlimited_float" },
                 "default_value": value,
                 "min_value": param.min,
                 "max_value": param.max,
@@ -305,6 +305,10 @@ mod tests {
         assert_eq!(names, ["k", "c_re", "c_im", "n", "flip"]);
         assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("get_param(xform_id, variation_id, 2u)")), "c's imaginary part in slot 2");
         assert!(dl.shader_2d.as_deref().is_some_and(|s| s.contains("fn variation_rhai_params(p: vec2<f32>, xform_id: u32, variation_id: u32)")));
+        // An angle parameter is the registry's angle (degrees, its control).
+        let angled = "const PARAMS = #{ turn: #{ value: 30.0, min: 0.0, max: 360.0, type: \"angle\" } };\nconst INFO = #{ name: \"rhai_turn\" };\nfn variation(z, p) { z * p.turn }\n";
+        let dl = compile(angled).unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(dl.parameters[0].param_type, crate::api::types::ApiParamType::Angle), "{:?}", dl.parameters[0].param_type);
         // Refused: no name, a name that is not one, the image's symbols.
         assert!(compile("fn variation(z, p) { z }").unwrap_err().contains("names itself"));
         assert!(compile("const INFO = #{ name: \"Bad Name\" };\nfn variation(z, p) { z }").unwrap_err().contains("not a variation name"));

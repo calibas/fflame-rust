@@ -446,7 +446,9 @@ fn escaped(s, p) {
   `FormulaFeature::Convergent`.
 - **Parameters** in `PARAMS`: a value alone, or `value` with `min`,
   `max`, `caption`, `hint`, `choices` (an int's names), `exponential`
-  (the slider runs logarithmically, `custom::is_exponential`), or
+  (the slider runs logarithmically, `custom::is_exponential`), `type:
+  "angle"` (a float in degrees, as stored and shown: `ParamType::Angle`
+  for an effect's or a variation's, `ir::Param::angle`), or
   `function` (a user function, called `p.f(z)`). They are the panel's
   controls, animation targets and script parameters
   (`escape.formula_params()`). A complex parameter is two, `name.re` and
@@ -779,6 +781,13 @@ fn escaped(s, p) {
   emits), and end with a colour or `#{ color, blend, amount }`. What an
   effect is and how it registers is in
   [EFFECTS.md](EFFECTS.md#effects-written-in-rhai).
+- **`fract(x)`** (WGSL's, each part of a complex) and **`hash2(p)`**: a
+  point to two numbers in [0, 1), the built-in noise effects' hash
+  (`fract(sin(vec2(dot(p, (127.1, 311.7)), dot(p, (269.5, 183.3)))) *
+  43758.5453)`) emitted as their shaders write it, so a twin draws their
+  noise to the bit -- where the language's own `sin`, range-reduced
+  (`uf_reduce`, for Metal's error), would make it a different noise.
+  Fast, not good: hash a lattice point, as noise does.
 - **Labels by locale** (design rule 8): `INFO.title` and a parameter's
   `caption`, `hint` and each choice may be a map of locale to string,
   `#{ en: "Spiral", ja: "螺旋" }`, compiled in the current language;

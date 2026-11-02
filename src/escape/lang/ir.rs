@@ -244,6 +244,10 @@ pub struct Param {
     pub hint: String,
     pub choices: Vec<String>,
     pub exponential: bool,
+    /// An angle in degrees (a Rhai `PARAMS` entry's `type: "angle"`): its
+    /// control is the angle one, `ParamType::Angle`. The script reads the
+    /// degrees as stored and shown.
+    pub angle: bool,
     pub span: Span,
 }
 

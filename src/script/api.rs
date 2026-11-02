@@ -441,11 +441,37 @@ fn register_meta(engine: &mut Engine, state: Rc<RefCell<ScriptState>>) {
                 default,
                 min,
                 max,
+                angle: false,
             };
             match s.borrow_mut().declare(decl).map_err(err)? {
                 ParamValue::Float(v) => Ok(v.clamp(min, max)),
                 other => Err(err(format!("param `{key}`: expected a number, got {other:?}"))),
             }
+        },
+    );
+
+    // An angle in degrees, drawn with the angle control: the same value
+    // `param` gives, labelled as what it is. Without a range, a turn.
+    let declare_angle = |s: &Rc<RefCell<ScriptState>>, key: &str, default: f64, min: f64, max: f64| -> Result<f64, Box<EvalAltResult>> {
+        if min > max {
+            return Err(err(format!("param `{key}`: min ({min}) is above max ({max})")));
+        }
+        let decl = ParamDecl::Float { key: key.to_string(), label: humanize(key), default, min, max, angle: true };
+        match s.borrow_mut().declare(decl).map_err(err)? {
+            ParamValue::Float(v) => Ok(v.clamp(min, max)),
+            other => Err(err(format!("param `{key}`: expected an angle, got {other:?}"))),
+        }
+    };
+    let s = Rc::clone(&state);
+    engine.register_fn("param_angle", move |key: &str, default: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+        declare_angle(&s, key, num(&default, "param_angle default")?, 0.0, 360.0)
+    });
+    let s = Rc::clone(&state);
+    engine.register_fn(
+        "param_angle",
+        move |key: &str, default: Dynamic, min: Dynamic, max: Dynamic| -> Result<f64, Box<EvalAltResult>> {
+            let (min, max) = (num(&min, "param_angle minimum")?, num(&max, "param_angle maximum")?);
+            declare_angle(&s, key, num(&default, "param_angle default")?, min, max)
         },
     );
 

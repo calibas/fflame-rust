@@ -504,6 +504,9 @@ impl<'p> Printer<'p> {
         if x.exponential {
             parts.push("exponential: true".into());
         }
+        if x.angle {
+            parts.push("type: \"angle\"".into());
+        }
         Ok(parts)
     }
 
