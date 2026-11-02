@@ -516,7 +516,7 @@ that passed is its Rhai source.
   for effects.
 
 **The steps** (written 2026-11-02, from the code as it stands):
-1. **One sidecar, one metadata.** `storage::links`: the record
+1. **One sidecar, one metadata** (built 2026-11-02). `storage::links`: the record
    `scripts/_links.json` keeps (`ScriptLink`: cloud id, version, owner,
    `from_others`), plus `plugin`, for both stores --
    `formulas/_links.json` keyed by file name, as a formula file's
@@ -527,7 +527,7 @@ that passed is its Rhai source.
    and per shipped one (the script starters, the formula examples, the
    effects): its store and file, kind, title, description, author, id,
    version, origin (shipped, yours, downloaded), link and plug-in flag.
-2. **Plug-ins.** A Rhai variation, effect, formula, colouring or solid
+2. **Plug-ins** (built 2026-11-02, as written here). A Rhai variation, effect, formula, colouring or solid
    in `formulas/` with `plugin` set is registered at start, where every
    entry point registers the downloads (`load_installed_resources`,
    desktop, web and CLI), under its key in the user's namespace. It is

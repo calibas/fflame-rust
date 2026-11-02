@@ -40,6 +40,34 @@ fn edit_as_formula(
     *open_formula_editor = true;
 }
 
+/// The user's plug-ins in the formula picker (formulas and solids) or the
+/// colouring picker (P3), after a separator. Choosing one is the Formula
+/// Editor's Use: its source carried in the config, its slot named, and
+/// Escape entered in the same undo step.
+fn plugin_entries(ui: &mut egui::Ui, config_manager: &mut ConfigManager, current: &str, formulas: bool) {
+    use crate::storage::library::{plugins, Kind};
+    let list: Vec<_> = plugins()
+        .into_iter()
+        .filter(|p| if formulas { matches!(p.kind, Kind::Formula | Kind::Solid) } else { p.kind == Kind::Coloring })
+        .collect();
+    if list.is_empty() {
+        return;
+    }
+    ui.separator();
+    ui.weak(t!("escape_panel.plugins"));
+    for p in list {
+        if ui.selectable_label(current == p.key, &p.title).on_hover_text(t!("escape_panel.plugin_tip", file = p.file)).clicked() && current != p.key {
+            let source = ConfigValue::String(crate::config::manager::custom_source_json(&Some(p.carried.clone())));
+            let (changes, description) = if formulas {
+                (vec![(ConfigPath::EscapeCustomFormula, source), (ConfigPath::EscapeFormula, ConfigValue::String(p.key.clone()))], "history.action.use_custom_formula")
+            } else {
+                (vec![(ConfigPath::EscapeCustomColoring, source), (ConfigPath::EscapeColoring, ConfigValue::String(p.key.clone()))], "history.action.use_custom_coloring")
+            };
+            let _ = super::render_mode::choose(config_manager, changes, description, RenderMode::Escape);
+        }
+    }
+}
+
 /// Render the Escape panel.
 pub fn render_escape_content(
     ui: &mut egui::Ui,
@@ -194,6 +222,7 @@ pub fn render_escape_content(
                         );
                     }
                 }
+                plugin_entries(ui, config_manager, &esc.formula, true);
             });
         // A built-in with a twin in Rhai (`escape::twins`): put the twin
         // in its place, the picture unchanged, and open it in the Formula
@@ -2492,6 +2521,7 @@ fn show_coloring_section(
                         pick_coloring(config_manager, formula_def, esc, c);
                     }
                 }
+                plugin_entries(ui, config_manager, &esc.coloring, false);
             });
     });
     // The saved coloring may predate the formula it is paired with (an

@@ -84,6 +84,60 @@ fn widget_param(p: &EffectParameter) -> VariationParameter {
     }
 }
 
+/// The user's plug-in effects of `category` in an Add list (P3), after a
+/// separator: whether one was added. Adding one puts its source in the
+/// config first, which carries what its chains run (as the Formula
+/// Editor's Use does), then an instance at the end of the chain.
+fn plugin_effects(ui: &mut Ui, config_manager: &mut ConfigManager, category: EffectCategory) -> bool {
+    let registry = global_effect_registry();
+    let plugins: Vec<(crate::storage::library::Plugin, String)> = crate::storage::library::plugins_of(crate::storage::library::Kind::Effect)
+        .into_iter()
+        .filter_map(|p| {
+            let info = registry.get(&p.key)?;
+            (info.category == category).then(|| (p.clone(), info.translated_name()))
+        })
+        .collect();
+    drop(registry);
+    if plugins.is_empty() {
+        return false;
+    }
+    ui.separator();
+    ui.weak(t!("effects_panel.plugins"));
+    let mut added = false;
+    for (plugin, title) in plugins {
+        if !ui.selectable_label(false, &title).on_hover_text(t!("effects_panel.plugin_tip", file = plugin.file)).clicked() {
+            continue;
+        }
+        let config = config_manager.active_config();
+        if !config.custom_effects.iter().any(|s| s.entry == plugin.key) {
+            let mut list = config.custom_effects.clone();
+            list.push(plugin.carried.clone());
+            let json = serde_json::to_string(&list).unwrap_or_default();
+            if let Err(e) = config_manager.update_batch(vec![(ConfigPath::CustomEffects, crate::config::ConfigValue::String(json))], "history.action.add_plugin_effect".to_string()) {
+                log::error!("Failed to carry the effect `{}`: {e}", plugin.key);
+                continue;
+            }
+        }
+        let effect = EffectInstance::new(&plugin.key);
+        let description = format!("Add Effect: {title}");
+        let change = match category {
+            EffectCategory::Density => {
+                let index = config_manager.active_config().density_effects.len();
+                ConfigChange::add_density_effect_snapshot(index, effect, description)
+            }
+            EffectCategory::Color => {
+                let index = config_manager.active_config().color_effects.len();
+                ConfigChange::add_color_effect_snapshot(index, effect, description)
+            }
+        };
+        if let Err(e) = config_manager.apply_structural_change(change) {
+            log::error!("Failed to add effect: {}", e);
+        }
+        added = true;
+    }
+    added
+}
+
 /// Edit as Rhai, on a built-in that is its Rhai twin: whether it was
 /// clicked. The Formula Editor makes it one of the user's
 /// (`FormulaEditorPanel::edit_effect_as_rhai`).
@@ -405,6 +459,9 @@ pub fn render_effects_panel(
                                 max_update = max_update.max(UpdateType::ToneMappingOnly);
                             }
                         }
+                        if plugin_effects(ui, config_manager, EffectCategory::Color) {
+                            max_update = max_update.max(UpdateType::ToneMappingOnly);
+                        }
                     });
             }
         });
@@ -558,6 +615,9 @@ pub fn render_effects_panel(
                                 }
                                 max_update = max_update.max(UpdateType::ToneMappingOnly);
                             }
+                        }
+                        if plugin_effects(ui, config_manager, EffectCategory::Density) {
+                            max_update = max_update.max(UpdateType::ToneMappingOnly);
                         }
                     });
             });

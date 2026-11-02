@@ -148,6 +148,9 @@ fn report_installed_resources() {
             retired.join(", ")
         );
     }
+    for failed in crate::storage::library::plugin_failures() {
+        eprintln!("WARNING: a plug-in did not load: {failed}");
+    }
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "web-app"))]

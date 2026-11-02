@@ -1334,6 +1334,7 @@ history:
     use_custom_coloring: "Use Custom Colouring"
     use_custom_variation: "Use Custom Variation"
     edit_effect_as_rhai: "Edit Effect as Rhai"
+    add_plugin_effect: "Add Plug-in Effect"
     add_custom_variation: "Add Custom Variation"
     use_custom_effect: "Use Custom Effect"
     escape_transform_add: "Add Transformation"
@@ -2627,6 +2628,8 @@ sim_panel:
   matte_edge_tip: "What Softness measures. Both settings put the edge in the same place — a distance field built from cells knows no more about where the boundary is than the cells do, and that was measured. Threshold feathers in the channel's own units, so the same Softness is a different width on every model. Distance builds a distance field every coloured frame, so Softness is a width in cells, the same on every model, and a wide feather stays a feather rather than a smear. It costs a few grid-sized passes per frame."
 
 escape_panel:
+  plugins: "Your plug-ins"
+  plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   as_a_point: "As a point:"
   radius_tip: "The parameter's distance from 0: animate it (or the angle) to move the point around the origin"
   angle_tip: "The parameter's angle about 0, in degrees"
@@ -3009,6 +3012,8 @@ progress:
   animation: "Animation playing"
 
 effects_panel:
+  plugins: "Your plug-ins"
+  plugin_tip: "A plug-in from your formulas (%{file}), registered at every start"
   edit_as_rhai: "Rhai"
   edit_as_rhai_tip: "Edit this effect as a Rhai script of your own, in the Formula Editor: this instance runs your copy, with its settings kept, and Live shows each edit. The built-in is untouched."
 
@@ -3048,6 +3053,13 @@ formula_editor:
   edit_as_rhai: "Edit as Rhai"
   editing_builtin: "`%{entry}` is in use as your own formula; Save keeps it in your library"
   editing_builtin_effect: "%{name} is your own effect now, in use; Save keeps it in your library"
+  plugin: "Load at start"
+  plugin_tip: "A plug-in: registered every time the app starts, so it is in the lists -- the variation pickers, the effects' Add list, the escape formulas and colourings -- without opening it here first. Saving it updates it."
+  plugin_mark: "%{file}  (plug-in)"
+  plugin_on: "%{title} loads at every start"
+  plugin_off: "%{file} no longer loads at start"
+  plugin_save_first: "Save it first: what loads at start is the saved file"
+  plugin_failed: "%{file} did not load as a plug-in: %{error}"
   edit_as_rhai_tip: "Convert this to Rhai and open it here, to change and save as your own. The file you opened stays as it is."
   converted: "Converted `%{entry}` to Rhai; Save keeps it in your library"
   cannot_convert: "`%{entry}` did not convert: %{error}"
