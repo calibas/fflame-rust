@@ -2815,6 +2815,14 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(effect.enabled.into())
             }
+            ConfigPath::ColorEffectType { index } => {
+                let effect = config.color_effects.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::String(effect.effect_type.clone()))
+            }
+            ConfigPath::DensityEffectType { index } => {
+                let effect = config.density_effects.get(*index).ok_or(ConfigError::InvalidIndex)?;
+                Ok(ConfigValue::String(effect.effect_type.clone()))
+            }
             ConfigPath::ColorEffectParam { index, param } => {
                 let effect = config
                     .color_effects
@@ -4726,6 +4734,16 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 effect.enabled = value.try_into()?;
+            }
+            // Its parameters stay: a parameter the new effect lacks is
+            // ignored, one it adds reads its default.
+            ConfigPath::ColorEffectType { index } => {
+                let effect = self.current.color_effects.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                effect.effect_type = value.try_into()?;
+            }
+            ConfigPath::DensityEffectType { index } => {
+                let effect = self.current.density_effects.get_mut(*index).ok_or(ConfigError::InvalidIndex)?;
+                effect.effect_type = value.try_into()?;
             }
             ConfigPath::ColorEffectParam { index, param } => {
                 let effect = self

@@ -133,7 +133,9 @@ pub fn compile(source: &str, provenance: Provenance) -> Result<EffectInfo, Strin
     lang::wgsl::validate_effect(&splice_blend_library(&wgsl)).map_err(|e| format!("the compiler produced invalid WGSL (a bug): {e}"))?;
 
     Ok(EffectInfo {
-        name: id,
+        // Under its key: the version is its name's, so two versions of
+        // one effect live side by side (rule 7).
+        name: if provenance.is_builtin() { id } else { key_for(&id, source) },
         category,
         display_name: program.name.clone(),
         source: EffectSource::Owned(wgsl),
@@ -150,11 +152,28 @@ fn splice_blend_library(wgsl: &str) -> String {
     wgsl.replace("// INCLUDE_BLEND_MODES", super::embedded_shaders::BLEND_MODES)
 }
 
-/// Compile a source and register it, replacing the registered effect of
-/// its id; refused when a built-in has that id and this is not one. Gives
-/// the id.
+/// The registry key of one of the user's effects: its id and its
+/// version, `<id>@<the first 8 hex of the source's SHA-256>` (design rule
+/// 7). Every version is its own entry, so a config renders the version it
+/// carries whatever else is registered; a built-in's key is its name.
+pub fn key_for(id: &str, source: &str) -> String {
+    format!("{id}@{}", &scripted::version_of(source)[..8])
+}
+
+/// The id a key names, its version dropped (a built-in's key is its id).
+pub fn id_of(key: &str) -> &str {
+    key.split_once('@').map_or(key, |(id, _)| id)
+}
+
+/// Compile a source and register it under its key, replacing what has that
+/// key (the same version, again); refused when a built-in has it and this
+/// is not one. Gives the key.
 pub fn register(source: &str, provenance: Provenance) -> Result<String, String> {
     let info = compile(source, provenance.clone())?;
+    register_info(info, provenance)
+}
+
+fn register_info(info: EffectInfo, provenance: Provenance) -> Result<String, String> {
     let id = info.name.clone();
     let mut registry = super::global_effect_registry_mut();
     if let Some(existing) = registry.get(&id) {
@@ -166,10 +185,11 @@ pub fn register(source: &str, provenance: Provenance) -> Result<String, String> 
     Ok(id)
 }
 
-/// A source as a config carries it: under its id.
+/// A source as a config carries it: under its key, the name its
+/// instances run.
 pub fn carried(source: &str) -> Option<CustomSource> {
     let id = lang::rhai::info_string(source, "id")?;
-    Some(CustomSource { dialect: CustomDialect::Rhai, entry: id, source: source.to_string(), variations: Vec::new() })
+    Some(CustomSource { dialect: CustomDialect::Rhai, entry: key_for(&id, source), source: source.to_string(), variations: Vec::new() })
 }
 
 /// Which version of each effect source is registered, and the text it was
@@ -202,7 +222,12 @@ pub fn ensure(config: &crate::config::FractalConfig) {
         if !ledger.needs(&src.entry, &version) {
             continue;
         }
-        let result = register(&src.source, Provenance::Custom).map(|_| ());
+        // Under the key the config names, which its instances run (a
+        // config edited by hand may name one its text no longer hashes to).
+        let result = compile(&src.source, Provenance::Custom).and_then(|mut info| {
+            info.name = src.entry.clone();
+            register_info(info, Provenance::Custom).map(|_| ())
+        });
         if let Err(e) = &result {
             log::warn!("Custom effect `{}` did not register: {e}", src.entry);
         }
@@ -238,7 +263,8 @@ fn effect(c, p, ctx) {
     #[test]
     fn an_effect_compiles_to_a_module_naga_accepts() {
         let info = compile(TINT, Provenance::Custom).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(info.name, "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b");
+        assert_eq!(info.name, key_for("6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b", TINT), "under its key: id and version");
+        assert_eq!(id_of(&info.name), "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b");
         assert_eq!(info.category, EffectCategory::Color);
         let names: Vec<&str> = info.parameters.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["amount", "tint_r", "tint_g", "tint_b", "tint_a", "mode", "invert"]);

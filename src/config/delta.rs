@@ -327,6 +327,12 @@ pub enum ConfigPath {
     ColorEffectEnabled { index: usize },
     /// Parameter value for a color effect
     ColorEffectParam { index: usize, param: String },
+    /// Which effect an instance runs, by its registry name: a Rhai
+    /// effect's key moves to its new version when the effect is edited
+    /// (`<id>@<version>`, docs/projects/rhai-plugins.md, rule 7), its
+    /// parameters kept.
+    ColorEffectType { index: usize },
+    DensityEffectType { index: usize },
     /// Add a new color effect
     AddColorEffect { effect_type: String },
     /// Remove a color effect by index
@@ -1462,6 +1468,8 @@ impl Display for ConfigPath {
             ConfigPath::ColorEffectParam { index, param } => {
                 write!(f, "Color Effect {} → {}", index + 1, param)
             }
+            ConfigPath::ColorEffectType { index } => write!(f, "Color Effect {} → Type", index + 1),
+            ConfigPath::DensityEffectType { index } => write!(f, "Density Effect {} → Type", index + 1),
             ConfigPath::AddColorEffect { effect_type } => {
                 write!(f, "Add Color Effect: {}", effect_type)
             }
@@ -2212,6 +2220,14 @@ impl ConfigPath {
             ),
             ConfigPath::ColorEffectEnabled { index } => I18nKey::with_params(
                 "history.param.color_effect_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::ColorEffectType { index } => I18nKey::with_params(
+                "history.param.color_effect_type",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::DensityEffectType { index } => I18nKey::with_params(
+                "history.param.density_effect_type",
                 vec![("index", (index + 1).to_string())],
             ),
             ConfigPath::ColorEffectParam { index, param } => I18nKey::with_params(
@@ -3473,7 +3489,9 @@ impl ConfigPath {
             | ConfigPath::RemoveColorEffect { .. }
             | ConfigPath::AddDensityEffect { .. }
             | ConfigPath::RemoveDensityEffect { .. }
-            | ConfigPath::CustomEffects => UpdateType::ToneMappingOnly,
+            | ConfigPath::CustomEffects
+            | ConfigPath::ColorEffectType { .. }
+            | ConfigPath::DensityEffectType { .. } => UpdateType::ToneMappingOnly,
 
             // The size the exports render at. Nothing on screen changes,
             // or the viewport's letterbox takes the new aspect, which
@@ -3980,6 +3998,8 @@ impl ConfigPath {
             ConfigPath::DensityEffectParam { index, param } => format!("DensityEffect.{}.{}", index, param),
             ConfigPath::ColorEffectEnabled { index } => format!("ColorEffect.{}.Enabled", index),
             ConfigPath::ColorEffectParam { index, param } => format!("ColorEffect.{}.{}", index, param),
+            ConfigPath::ColorEffectType { index } => format!("ColorEffect.{}.Type", index),
+            ConfigPath::DensityEffectType { index } => format!("DensityEffect.{}.Type", index),
             ConfigPath::AddColorEffect { effect_type } => format!("ColorEffect.Add.{}", effect_type),
             ConfigPath::RemoveColorEffect { index } => format!("ColorEffect.Remove.{}", index),
             ConfigPath::AddDensityEffect { effect_type } => format!("DensityEffect.Add.{}", effect_type),
@@ -4631,6 +4651,8 @@ impl ConfigPath {
             if let Ok(index) = parts[1].parse::<usize>() {
                 if parts[2] == "Enabled" {
                     return Some(ConfigPath::DensityEffectEnabled { index });
+                } else if parts[2] == "Type" {
+                    return Some(ConfigPath::DensityEffectType { index });
                 } else {
                     return Some(ConfigPath::DensityEffectParam { index, param: parts[2].to_string() });
                 }
@@ -4641,6 +4663,8 @@ impl ConfigPath {
             if let Ok(index) = parts[1].parse::<usize>() {
                 if parts[2] == "Enabled" {
                     return Some(ConfigPath::ColorEffectEnabled { index });
+                } else if parts[2] == "Type" {
+                    return Some(ConfigPath::ColorEffectType { index });
                 } else {
                     return Some(ConfigPath::ColorEffectParam { index, param: parts[2].to_string() });
                 }
@@ -5276,6 +5300,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::EscapeCustomColoring
         | ConfigPath::FlameCustomVariations
         | ConfigPath::CustomEffects
+        | ConfigPath::ColorEffectType { .. }
+        | ConfigPath::DensityEffectType { .. }
         | ConfigPath::EscapeColoring
         | ConfigPath::EscapeLayerColoring
         | ConfigPath::EscapeLayerBlend
