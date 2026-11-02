@@ -354,9 +354,12 @@ pub fn render_effects_panel(
         ui.horizontal(|ui| {
             // Get available color effects
             let registry = global_effect_registry();
+            // A Rhai effect is put to use from the Formula Editor: every
+            // version of one is registered under its own key, and would
+            // list once each.
             let available: Vec<_> = registry
                 .all()
-                .filter(|info| info.category == EffectCategory::Color)
+                .filter(|info| info.category == EffectCategory::Color && info.provenance != crate::provenance::Provenance::Custom)
                 .collect();
 
             if available.is_empty() {
@@ -420,7 +423,7 @@ pub fn render_effects_panel(
             let registry = global_effect_registry();
             let available = registry
                 .all()
-                .filter(|info| info.category == EffectCategory::Density)
+                .filter(|info| info.category == EffectCategory::Density && info.provenance != crate::provenance::Provenance::Custom)
                 .map(|info| (info.name.clone(), info.translated_name()))
                 .collect();
             let labels = density_effects.iter().map(|e| effect_label(&registry, &e.effect_type)).collect();

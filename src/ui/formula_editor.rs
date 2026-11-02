@@ -451,10 +451,12 @@ impl FormulaEditorPanel {
     }
 
     /// Use an effect (P2): give it an id if it has none -- written into the
-    /// file, which Save then keeps -- register it, and put its source in
-    /// the config, with an instance at the end of its chain the first time
-    /// (a second undo step: adding an instance is structural). Used again,
-    /// its source is replaced and its instances stay.
+    /// file, which Save then keeps -- register it under its key (its id
+    /// and version, rule 7), and put its source in the config, one undo
+    /// step: the instances of an earlier version move to this one
+    /// (`ColorEffectType`, their parameters kept), and the source the
+    /// config no longer runs goes. The first time, an instance is added at
+    /// the end of its chain (a second step: adding one is structural).
     fn use_effect(&mut self, cm: &mut ConfigManager, row: usize) {
         use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
         let Some(entry) = self.entries.get(row) else { return };
@@ -469,8 +471,8 @@ impl FormulaEditorPanel {
             source = lang::rhai::with_own_id(&source, &crate::scripted::mint_id());
             minted = true;
         }
-        let id = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
-            Ok(id) => id,
+        let key = match crate::effects::custom::register(&source, crate::provenance::Provenance::Custom) {
+            Ok(key) => key,
             Err(e) => {
                 self.status = Some(t!("formula_editor.did_not_compile", entry = name, error = e).to_string());
                 return;
@@ -481,29 +483,43 @@ impl FormulaEditorPanel {
             self.text = source.clone();
             self.changed_at = Some(web_time::Instant::now());
         }
-        // The config carries the sources its chains use: this one, and
-        // those an instance still names.
+        use crate::effects::custom::id_of;
+        let id = id_of(&key).to_string();
         let config = cm.config();
-        let used = |s: &CustomSource| s.entry == id || config.color_effects.iter().chain(&config.density_effects).any(|e| e.effect_type == s.entry);
-        let mut list: Vec<CustomSource> = config.custom_effects.iter().filter(|s| used(s)).cloned().collect();
-        let Some(src) = crate::effects::custom::carried(&source) else { return };
-        match list.iter_mut().find(|s| s.entry == id) {
-            Some(s) => *s = src,
-            None => list.push(src),
+        // The instances of any version of this effect move to this one.
+        let mut changes = Vec::new();
+        let mut in_chain = false;
+        for (list, path) in [
+            (&config.color_effects, (|index| ConfigPath::ColorEffectType { index }) as fn(usize) -> ConfigPath),
+            (&config.density_effects, |index| ConfigPath::DensityEffectType { index }),
+        ] {
+            for (index, e) in list.iter().enumerate() {
+                if id_of(&e.effect_type) == id {
+                    in_chain = true;
+                    if e.effect_type != key {
+                        changes.push((path(index), ConfigValue::String(key.clone())));
+                    }
+                }
+            }
         }
-        let in_chain = config.color_effects.iter().chain(&config.density_effects).any(|e| e.effect_type == id);
-        let json = serde_json::to_string(&list).unwrap_or_default();
-        if let Err(e) = cm.update_batch(vec![(ConfigPath::CustomEffects, ConfigValue::String(json))], "history.action.use_custom_effect".to_string()) {
+        // The config carries the sources its chains run: this one, and
+        // the others an instance still names.
+        let runs = |s: &CustomSource| config.color_effects.iter().chain(&config.density_effects).any(|e| e.effect_type == s.entry);
+        let mut list: Vec<CustomSource> = config.custom_effects.iter().filter(|s| id_of(&s.entry) != id && runs(s)).cloned().collect();
+        let Some(src) = crate::effects::custom::carried(&source) else { return };
+        list.push(src);
+        changes.push((ConfigPath::CustomEffects, ConfigValue::String(serde_json::to_string(&list).unwrap_or_default())));
+        if let Err(e) = cm.update_batch(changes, "history.action.use_custom_effect".to_string()) {
             self.status = Some(format!("{e:?}"));
             return;
         }
         let (title, category) = {
             let registry = global_effect_registry();
-            let info = registry.get(&id);
+            let info = registry.get(&key);
             (info.map(|i| i.translated_name()).unwrap_or_else(|| id.clone()), info.map(|i| i.category))
         };
         if !in_chain {
-            let effect = EffectInstance::new(&id);
+            let effect = EffectInstance::new(&key);
             let description = format!("Add Effect: {title}");
             let change = match category {
                 Some(EffectCategory::Density) => {
@@ -520,6 +536,7 @@ impl FormulaEditorPanel {
                 return;
             }
         }
+        // By its id: Live follows it from version to version.
         self.in_use.retain(|(k, _, n)| !(*k == EntryKind::Effect && *n == id));
         self.in_use.push((EntryKind::Effect, self.file.clone(), id));
         self.status = Some(if minted {
@@ -550,9 +567,15 @@ impl FormulaEditorPanel {
                 }
                 continue;
             }
-            // An effect: by its id, while the config carries it.
+            // An effect: by its id, while the config carries a version of
+            // it.
             if kind == EntryKind::Effect {
-                let carried = cm.config().custom_effects.iter().find(|s| s.entry == entry).map(|s| s.source.clone());
+                let carried = cm
+                    .config()
+                    .custom_effects
+                    .iter()
+                    .find(|s| crate::effects::custom::id_of(&s.entry) == entry)
+                    .map(|s| s.source.clone());
                 let row = self.entries.iter().position(|r| lang::rhai::info_string(&r.source, "id").as_deref() == Some(entry.as_str()));
                 if let (Some(carried), Some(row)) = (carried, row) {
                     let r = &self.entries[row];
@@ -952,8 +975,32 @@ mod tests {
         assert!(crate::scripted::is_uuid(&id), "{id}: {:?}", panel.status);
         let c = cm.config();
         assert_eq!(c.custom_effects.len(), 1);
-        assert_eq!(c.custom_effects[0].entry, id);
-        assert_eq!(c.color_effects.last().map(|e| e.effect_type.as_str()), Some(id.as_str()));
-        crate::effects::global_effect_registry_mut().remove_by_name(&id);
+        assert_eq!(crate::effects::custom::id_of(&c.custom_effects[0].entry), id);
+        let key = c.custom_effects[0].entry.clone();
+        assert_eq!(crate::effects::custom::id_of(&key), id, "keyed by its id and version");
+        assert_eq!(c.color_effects.last().map(|e| e.effect_type.as_str()), Some(key.as_str()));
+        let instances = c.color_effects.len();
+
+        // Edited and used again: the instance moves to the new version, its
+        // source replaces the old, one undo step; both versions stay
+        // registered, so the undo renders what it did.
+        panel.text = panel.text.replace("value: 0.5, min: 0.0, max: 1.0, caption: \"Radius\"", "value: 0.7, min: 0.0, max: 1.0, caption: \"Radius\"");
+        panel.recheck();
+        let before = cm.history_len();
+        panel.use_entry(&mut cm, EntryKind::Effect, 0);
+        let c = cm.config();
+        let new_key = c.custom_effects[0].entry.clone();
+        assert_ne!(new_key, key, "a new version, a new key");
+        assert_eq!(crate::effects::custom::id_of(&new_key), id);
+        assert_eq!(c.custom_effects.len(), 1, "the old source goes");
+        assert_eq!(c.color_effects.len(), instances, "no second instance");
+        assert_eq!(c.color_effects.last().map(|e| e.effect_type.as_str()), Some(new_key.as_str()));
+        assert_eq!(cm.history_len() - before, 1, "one undo step");
+        cm.undo().unwrap();
+        assert_eq!(cm.config().color_effects.last().map(|e| e.effect_type.as_str()), Some(key.as_str()));
+        assert!(crate::effects::global_effect_registry().get(&key).is_some(), "the old version still renders");
+        let mut registry = crate::effects::global_effect_registry_mut();
+        registry.remove_by_name(&key);
+        registry.remove_by_name(&new_key);
     }
 }

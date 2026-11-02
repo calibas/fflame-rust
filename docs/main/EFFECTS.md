@@ -464,21 +464,33 @@ fn effect(c, p, ctx) {
   Use), a built-in's name for a shipped one; `category`, `"color"`
   (after the tone map, the default) or `"density"`.
 
-**Carried.** A config holds the sources its chains use
+**Keyed by id and version.** One of the user's effects registers as
+`<id>@<the first 8 hex of its source's SHA-256>` (`custom::key_for`;
+rule 7), the name its instances run; a built-in's key is its name. So
+two versions of one effect are two entries, and every config renders
+the version it carries whatever else is open -- nothing looks the
+version up through the config. `custom::id_of` drops the version.
+
+**Carried.** A config holds the sources its chains run
 (`FractalConfig::custom_effects`, `ConfigPath::CustomEffects`), `entry`
-the id its instances name. `effects::ensure_custom(config)` registers
-them where every path decides it has effects (`render_with`'s three
-kinds, the high-res exports, the viewport); it compares the text first
-and hashes only a new one, and a source that does not compile is
-logged once (`scripted::Ledger`). A build without `engine-escape` has
-no compiler, and a carried effect renders as an unknown one does.
+the key its instances name. `effects::ensure_custom(config)` registers
+them, under that key, where every path decides it has effects
+(`render_with`'s three kinds, the high-res exports, the viewport); it
+compares the text first and hashes only a new one, and a source that
+does not compile is logged once (`scripted::Ledger`). A build without
+`lang` has no compiler, and a carried effect renders as an unknown one
+does.
 
 **In the Formula Editor**, an effect's row offers *Use as effect*: a
 UUID is minted into the file if it has none of its own -- none, or an
 id that is not a UUID, such as a twin's copied `vignette` or one typed
-by hand (`rhai::with_own_id`) -- the effect registers, the
-config's sources take it, and an instance is added to its chain the
-first time (a second undo step: adding an instance is structural).
+by hand (`rhai::with_own_id`) -- the effect registers under its key,
+and in one undo step the instances of an earlier version move to this
+one (`ConfigPath::ColorEffectType` / `DensityEffectType`, their
+parameters kept) and the source no instance runs any more goes. The
+first time, an instance is added to its chain (a second undo step:
+adding an instance is structural). The panel's Add lists leave Rhai
+effects out: each version would list once.
 *Live* re-applies it by its id.
 
 **Twins of the built-ins** live in `assets/effects/*.rhai`, each held to
