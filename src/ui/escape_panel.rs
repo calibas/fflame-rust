@@ -26,7 +26,7 @@ fn edit_as_formula(
     formula_editor: &mut Option<super::formula_editor::FormulaEditorPanel>,
     open_formula_editor: &mut bool,
 ) {
-    use crate::escape::lang::EntryKind;
+    use crate::lang::EntryKind;
     let name = crate::escape::custom::name_of(EntryKind::Formula, &src);
     let changes = vec![
         (ConfigPath::EscapeCustomFormula, ConfigValue::String(crate::config::manager::custom_source_json(&Some(src.clone())))),

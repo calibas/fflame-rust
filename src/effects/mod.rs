@@ -17,7 +17,7 @@ use rust_i18n::t;
 use crate::variations::ParamType;
 
 /// Effects written in Rhai, compiled by the formula language (P2).
-#[cfg(feature = "engine-escape")]
+#[cfg(feature = "lang")]
 pub mod custom;
 
 /// Register the effects a config carries (`FractalConfig::custom_effects`)
@@ -26,7 +26,7 @@ pub mod custom;
 /// `engine-escape`) a carried effect cannot compile, and renders as an
 /// unknown one does.
 pub fn ensure_custom(config: &crate::config::FractalConfig) {
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     custom::ensure(config);
     #[cfg(not(feature = "engine-escape"))]
     let _ = config;

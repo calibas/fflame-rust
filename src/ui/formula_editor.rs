@@ -21,7 +21,7 @@ use crate::config::escape::{CustomDialect, CustomSource};
 use crate::config::manager::custom_source_json;
 use crate::config::{ConfigManager, ConfigPath, ConfigValue};
 use crate::escape::custom;
-use crate::escape::lang::{self, EntryKind, Severity};
+use crate::lang::{self, EntryKind, Severity};
 use crate::storage::formula_store;
 
 /// Where the browser's file picker leaves the opened file's text.

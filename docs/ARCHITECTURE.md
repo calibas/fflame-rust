@@ -399,7 +399,8 @@ since the export competes for the same GPU.
 | --- | --- | --- |
 | `web-app` | on | `mod app`, `mod ui`, the editor's wasm-bindgen exports (`wasm_main`, `WasmApi`) |
 | `engine-flame` | on | the variation catalog; off, the registry holds `linear` alone |
-| `engine-escape` | on | `src/escape/` |
+| `engine-escape` | on | `src/escape/`; implies `lang` |
+| `lang` | on (with `engine-escape`) | `src/lang/`, the formula language: Rhai (and UF's, Fractint's) to WGSL, so a build compiles Rhai effects and variations; its deep-zoom passes (`bigeval`, `periodic`) come with `engine-escape` alone. The flame and simulation gallery modules turn it on (+0.33 MB gzip to the flame module, measured before `wasm-opt`) |
 | `engine-sim` | on | `src/sim/` |
 | `terrain` | on | the terrain view; implies `engine-escape` |
 

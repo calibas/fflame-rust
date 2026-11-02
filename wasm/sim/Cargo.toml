@@ -35,7 +35,7 @@ crate-type = ["cdylib", "rlib"]
 path = "../render/src/lib.rs"
 
 [dependencies]
-fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-sim"] }
+fractal_flame_wgpu = { path = "../..", default-features = false, features = ["engine-sim", "lang"] }
 egui-wgpu = { version = "0.34", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

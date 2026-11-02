@@ -1687,7 +1687,7 @@ mod gpu_tests {
 
     /// A Rhai effect (P2) renders through the colour chain as its source
     /// says: an inversion, and a blend over the input by the library.
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     #[test]
     fn a_rhai_effect_renders_through_the_colour_chain() {
         let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
@@ -1721,7 +1721,7 @@ mod gpu_tests {
 
     /// The Rhai twins of the built-ins (assets/effects/*.rhai) and how
     /// each is driven: settings away from the defaults, blends among them.
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     const TWINS: &[(&str, &str, &[&[(&str, f32)]])] = &[
         (
             "vignette",
@@ -1789,7 +1789,7 @@ mod gpu_tests {
     /// 8-bit rounding, at its defaults and the settings above, under the
     /// built-in's name with the same parameters in the same order -- the
     /// D1 checks a twin must pass before it replaces its built-in.
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     #[test]
     fn the_rhai_twins_match_their_wgsl() {
         let Some((device, queue)) = device_with(wgpu::Features::empty()) else {
@@ -1847,7 +1847,7 @@ mod gpu_tests {
     }
 
     /// The density effects' twins, as [`TWINS`] the colour ones'.
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     const DENSITY_TWINS: &[(&str, &str, &[&[(&str, f32)]])] = &[
         (
             "density_blur",
@@ -1869,7 +1869,7 @@ mod gpu_tests {
     /// Each density twin gives its WGSL's floats, to a part in a thousand
     /// of the larger: the accumulation's colours and hit counts, through
     /// sums of Gaussian taps the two sum in their own order.
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     #[test]
     fn the_density_twins_match_their_wgsl() {
         let Some((device, queue)) = device_with(wgpu::Features::FLOAT32_FILTERABLE) else {

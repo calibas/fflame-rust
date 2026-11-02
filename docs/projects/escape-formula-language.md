@@ -1,7 +1,7 @@
 # Escape-time formula language: formulas and colourings in Rhai, Ultra Fractal and Fractint imported
 
 Status: **phase 1 done 2026-10-14** on `escape-expansion`: the language
-(`src/escape/lang/`), the runtime registry (`src/escape/custom.rs`), the
+(`src/lang/`), the runtime registry (`src/escape/custom.rs`), the
 engine and config, the Formula Editor panel and its library, the script
 functions, the docs (ESCAPE.md, "The formula language"). **Phase 2
 done 2026-10-14**: Fractint's conventions, the derivative, interior
@@ -300,7 +300,7 @@ compiler.
 
 ### Phase 1: the language, formulas and colourings, embedded, editable
 
-1. **Front end** (`src/escape/lang/`): lexer, parser (UF sections,
+1. **Front end** (`src/lang/`): lexer, parser (UF sections,
    Fractint's empty label and commas), AST with spans, diagnostics; type
    checker (UF rules, predefined symbols, parameters, the function
    table). Unit tests on parsing and every error.

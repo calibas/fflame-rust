@@ -46,7 +46,7 @@ folded into the steps. **Nothing under *The plan* is built yet.**
 ## Two Rhai worlds
 
 The word covers two engines, and the design keeps them apart:
-- **The GPU dialect** (`escape::lang`): a typed subset of Rhai lowered
+- **The GPU dialect** (`crate::lang`, its own feature since 2026-11-02): a typed subset of Rhai lowered
   to the formula language's IR and compiled to WGSL, run per sample or
   per pixel. Rhai only parses it (`Engine::new_raw()`); it never runs.
   Variations, formulas, colourings and solids today; effects and
@@ -67,7 +67,7 @@ become one (P3).
 
 1. **One compiler, one parameter model.** Every GPU-side kind is a Rhai
    source with `PARAMS` and `INFO`, checked and compiled by
-   `escape::lang`. A new kind (a simulation rule, an effect) is a new
+   `crate::lang`. A new kind (a simulation rule, an effect) is a new
    entry kind of the same language, not a new language.
 2. **The source is the artefact.** A config carries the sources it
    uses and registers them on load (`escape::custom::ensure`,
@@ -147,7 +147,7 @@ become one (P3).
 
 ### Inside the GPU dialect: one compiler, two of everything below it
 
-One front end (`escape/lang/rhai.rs`), checker, IR and WGSL back end.
+One front end (`lang/rhai.rs`), checker, IR and WGSL back end.
 Below that:
 - **Three registries**: `escape::custom::Registry` (content-hash names,
   `custom-<fnv>`), `ifs::custom_solids`, and the variation registry with
@@ -230,7 +230,7 @@ other people run in this engine; P0 closes it.
 ## What a new GPU kind needs from the dialect
 
 The dialect cannot read a texture or another pixel (nothing in
-`src/escape/lang` does), has no `vec2` or `vec4`, and its outputs are a
+`src/lang` does), has no `vec2` or `vec4`, and its outputs are a
 point, a palette index or a distance -- never a colour. Effects and
 simulations need exactly what is missing:
 
@@ -372,10 +372,18 @@ additions made that possible (user's answers, 2026-11-02):
   API: a float in degrees, drawn with the angle control. Scripts read
   degrees, as stored and shown.
 
-Step 7 waits for the compiler's own feature (the user, 2026-11-02:
-"compile Rhai to WGSL" in every WASM module, the Rhai scripting module
-an option) -- replacing a built-in in a build without the compiler
-would otherwise lose it.
+**The compiler's own feature, done 2026-11-02** (the user: "compile
+Rhai to WGSL" in every WASM module, the Rhai scripting module an
+option): `src/escape/lang/` is `src/lang/`, the `lang` feature, which
+`engine-escape` brings; the deep-zoom passes (`bigeval`, `periodic`,
+the interpreter's steppers) stay with `engine-escape`; Rhai variations
+and effects need `lang` alone, and the flame and simulation gallery
+modules turn it on. **Its price**: the flame module from 1.21 MB to 1.55
+MB gzipped (5.2 to 6.3 MB raw), measured before `wasm-opt`. The CPU
+scripting module (`src/script`) is compiled into every build and linked
+only where something calls it (wasm/script, the app), so it is already
+an option by use; a `scripting` feature would make it one by name.
+Step 7 can now go ahead.
 
 1. **Dialect**: `vec4` (split into scalars like `vec3`); an `effect`
    entry kind returning a `vec4`; the pixel's position, the image size,

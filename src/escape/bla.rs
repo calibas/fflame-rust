@@ -452,7 +452,7 @@ mod tests {
     /// by each.
     #[test]
     fn real_linear_entries_merge_as_their_maps_compose() {
-        use crate::escape::lang::builtins::C64;
+        use crate::lang::builtins::C64;
         let c = |v: (f64, f64)| Cfe64::from_f64(v.0, v.1);
         let entry = |p, q, b, bq| BlaEntry { a: c(p), aq: c(q), b: c(b), bq: c(bq), r: MagFe::from_f64(1.0) };
         let x = entry((1.2, -0.3), (0.4, 0.1), (0.5, 0.2), (-0.1, 0.3));

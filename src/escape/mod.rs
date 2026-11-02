@@ -37,7 +37,9 @@ pub mod reference;
 pub mod fields;
 pub mod ifs;
 pub mod custom;
-pub mod lang;
+/// The formula language, its own module since 2026-11-02 (`crate::lang`,
+/// the `lang` feature): re-exported, so the engine's paths to it stay.
+pub use crate::lang;
 pub mod lens;
 pub mod formulas;
 pub mod surface;

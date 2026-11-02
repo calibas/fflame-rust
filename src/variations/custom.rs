@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::api::types::VariationDownload;
 use crate::config::escape::{CustomDialect, CustomSource};
-use crate::escape::lang::{self, ir::ParamKind, EntryKind};
+use crate::lang::{self, ir::ParamKind, EntryKind};
 use crate::provenance::Provenance;
 use crate::scene::transforms::Flame;
 
@@ -184,7 +184,7 @@ pub fn source_of(name: &str) -> Option<String> {
 pub fn carried(source: &str) -> Option<CustomSource> {
     let name = lang::rhai::variation_name(source)?;
     let src = CustomSource { dialect: CustomDialect::Rhai, entry: name, source: source.to_string(), variations: Vec::new() };
-    Some(crate::escape::custom::with_called_variations(EntryKind::Transform, src))
+    Some(crate::lang::rhai::with_called_variations(EntryKind::Transform, src))
 }
 
 /// When a config comes to use any of `names` that is a variation of the
@@ -228,7 +228,7 @@ pub fn ensure(flame: &Flame) {
         known.insert(src.entry.clone(), src.source.clone());
         drop(known);
         // Against the variations it carries (`vary`).
-        let carried = crate::escape::custom::carried_variations(src);
+        let carried = crate::lang::rhai::carried_variations(src);
         if let Err(e) = lang::rhai::with_variations(&carried, || register(&src.source)) {
             log::warn!("Custom variation `{}` did not register: {e}", src.entry);
         }
@@ -320,8 +320,8 @@ mod tests {
     /// side of what the GPU tests render.
     #[test]
     fn the_twins_run_as_their_formulas() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{transform, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{transform, ParamValues};
         let at = |builtin: &str, z: C64| {
             let src = TWINS.iter().find(|(n, _)| *n == builtin).unwrap().1;
             let p = lang::rhai::transformation(src).unwrap();
@@ -397,8 +397,8 @@ mod tests {
     /// zoom derives its equations and the derivative as for that one.
     #[test]
     fn a_formula_calls_a_variation_as_written_out() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         let varied = lang::rhai::with_variations(&bend_scope(), || lang::rhai::program(VARIED)).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(VARIED)).collect::<Vec<_>>()));
         let written = lang::rhai::program(WRITTEN_OUT).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.render(WRITTEN_OUT)).collect::<Vec<_>>()));
         let (pv, pw) = (ParamValues::defaults(&varied), ParamValues::defaults(&written));
@@ -428,7 +428,7 @@ mod tests {
     /// a parameter it does not have.
     #[test]
     fn a_solid_calls_a_built_in_variation() {
-        use crate::escape::lang::ir::{MapCall, MapValue};
+        use crate::lang::ir::{MapCall, MapValue};
         let solid = |step: &str, extra: &str| {
             format!(
                 "const PARAMS = #{{ k: #{{ value: 0.5 }} }};\nconst INFO = #{{ title: \"t\", radius: 2.0 }};\n{extra}\n\
@@ -436,7 +436,7 @@ mod tests {
             )
         };
         let src = solid("s.z = vary(\"linear3D\", s.z) * 0.9; s.z = vary(\"julia3D\", s.z, #{ power: p.k }); s.z = vary(\"julia3D\", s.z, #{ power: -3 });", "");
-        let p = crate::escape::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{}", d[0].message));
+        let p = crate::lang::rhai::solid(&src).unwrap_or_else(|d| panic!("{}", d[0].message));
         assert_eq!(
             p.maps,
             vec![
@@ -446,13 +446,13 @@ mod tests {
             ]
         );
         let base = crate::escape::ifs::template_parameters().len();
-        let w = crate::escape::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
+        let w = crate::lang::wgsl::solid(&p, base, base + p.param_slots()).expect("WGSL");
         for k in 0..3 {
             assert!(w.contains(&format!("esc_solid_map({k}u, vec3<f32>(")), "call {k}:\n{w}");
         }
-        crate::escape::lang::wgsl::validate_solid(&w).expect("validates");
+        crate::lang::wgsl::validate_solid(&w).expect("validates");
         let refused = |src: String, says: &str| {
-            let d = crate::escape::lang::rhai::solid(&src).err().unwrap_or_else(|| panic!("compiled: {src}"));
+            let d = crate::lang::rhai::solid(&src).err().unwrap_or_else(|| panic!("compiled: {src}"));
             assert!(d.iter().any(|x| x.message.contains(says)), "{says}: {:?}", d.iter().map(|x| &x.message).collect::<Vec<_>>());
         };
         refused(solid("", "fn prepare(p) { #{ q: vary(\"linear3D\", vec3(1.0, 0.0, 0.0)) } }"), "GPU");
@@ -615,8 +615,8 @@ mod tests {
     /// accumulator and the weight read, the colour written.
     #[test]
     fn the_macmillan_twin_runs_as_the_builtin() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{ParamValues, VariationRun};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{ParamValues, VariationRun};
         let p = lang::rhai::transformation(hooked("macmillan")).unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
         let params = ParamValues::defaults(&p);
         let mut run = VariationRun::new(&p, &params, 7);
@@ -647,8 +647,8 @@ mod tests {
     /// draws has no deep zoom.
     #[test]
     fn rand_draws_a_stream() {
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues, VariationRun};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues, VariationRun};
         let p = lang::rhai::transformation(hooked("blur")).unwrap();
         let params = ParamValues::defaults(&p);
         let mut v = VariationRun::new(&p, &params, 12345);
@@ -693,8 +693,8 @@ mod tests {
         let compiled = |step: &str| lang::rhai::with_variations(&scope, || lang::rhai::program(&formula(step)));
         let varied = compiled("s.z = vary(\"rhai_ctx_test\", s.z * s.z + s.c);").unwrap_or_else(|d| panic!("{:?}", d.iter().map(|x| x.message.clone()).collect::<Vec<_>>()));
         let plain = lang::rhai::program(&formula("s.z = s.z * s.z + s.c;")).unwrap();
-        use crate::escape::lang::builtins::C64;
-        use crate::escape::lang::interp::{run, Env, ParamValues};
+        use crate::lang::builtins::C64;
+        use crate::lang::interp::{run, Env, ParamValues};
         for px in [C64::new(-0.5, 0.3), C64::new(0.3, 0.5), C64::new(-1.2, 0.1)] {
             let (a, b) = (run(&varied, &ParamValues::defaults(&varied), None, &Env::at(px, 100)), run(&plain, &ParamValues::defaults(&plain), None, &Env::at(px, 100)));
             assert_eq!((a.n, a.escaped), (b.n, b.escaped));
@@ -765,7 +765,7 @@ mod tests {
     /// variation keeps its state and reads its vector accumulator.
     #[test]
     fn the_3d_twins_run_as_their_formulas() {
-        use crate::escape::lang::interp::{ParamValues, VariationRun};
+        use crate::lang::interp::{ParamValues, VariationRun};
         let at = |builtin: &str, v: [f64; 3]| {
             let src = TWINS_3D.iter().find(|(n, _)| *n == builtin).unwrap().1;
             let p = lang::rhai::transformation3(src).unwrap();

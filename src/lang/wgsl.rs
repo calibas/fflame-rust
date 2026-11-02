@@ -4056,19 +4056,19 @@ fn step(s, p) {
 
     /// The test files (`tests/formulas/`): name, text, kind, dialect.
     const TEST_FILES: &[(&str, &str, EntryKind, Dialect)] = &[
-        ("language.ufm", include_str!("../../../tests/formulas/language.ufm"), EntryKind::Formula, Dialect::UltraFractal),
-        ("language.ucl", include_str!("../../../tests/formulas/language.ucl"), EntryKind::Coloring, Dialect::UltraFractal),
-        ("fractint.frm", include_str!("../../../tests/formulas/fractint.frm"), EntryKind::Formula, Dialect::Fractint),
+        ("language.ufm", include_str!("../../tests/formulas/language.ufm"), EntryKind::Formula, Dialect::UltraFractal),
+        ("language.ucl", include_str!("../../tests/formulas/language.ucl"), EntryKind::Coloring, Dialect::UltraFractal),
+        ("fractint.frm", include_str!("../../tests/formulas/fractint.frm"), EntryKind::Formula, Dialect::Fractint),
     ];
 
     /// The Rhai test formulas, one to a file (`lang::rhai`).
     const RHAI_TEST_FILES: &[(&str, &str)] = &[
-        ("rhai/mandelbrot.rhai", include_str!("../../../tests/formulas/rhai/mandelbrot.rhai")),
-        ("rhai/constructs.rhai", include_str!("../../../tests/formulas/rhai/constructs.rhai")),
-        ("rhai/plane.rhai", include_str!("../../../tests/formulas/rhai/plane.rhai")),
-        ("rhai/cycle.rhai", include_str!("../../../tests/formulas/rhai/cycle.rhai")),
-        ("rhai/functions.rhai", include_str!("../../../tests/formulas/rhai/functions.rhai")),
-        ("rhai/coloring.rhai", include_str!("../../../tests/formulas/rhai/coloring.rhai")),
+        ("rhai/mandelbrot.rhai", include_str!("../../tests/formulas/rhai/mandelbrot.rhai")),
+        ("rhai/constructs.rhai", include_str!("../../tests/formulas/rhai/constructs.rhai")),
+        ("rhai/plane.rhai", include_str!("../../tests/formulas/rhai/plane.rhai")),
+        ("rhai/cycle.rhai", include_str!("../../tests/formulas/rhai/cycle.rhai")),
+        ("rhai/functions.rhai", include_str!("../../tests/formulas/rhai/functions.rhai")),
+        ("rhai/coloring.rhai", include_str!("../../tests/formulas/rhai/coloring.rhai")),
     ];
 
     /// Every entry of the test files, checked as the registry checks it

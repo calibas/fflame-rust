@@ -1278,8 +1278,8 @@ mod tests {
     fn the_test_files_convert_and_run_as_written() {
         let mut n = 0;
         for (text, dialect) in [
-            (include_str!("../../../tests/formulas/language.ufm"), Dialect::UltraFractal),
-            (include_str!("../../../tests/formulas/fractint.frm"), Dialect::Fractint),
+            (include_str!("../../tests/formulas/language.ufm"), Dialect::UltraFractal),
+            (include_str!("../../tests/formulas/fractint.frm"), Dialect::Fractint),
         ] {
             for p in programs(text, dialect) {
                 round_trip(&p);
@@ -1294,7 +1294,7 @@ mod tests {
     #[test]
     fn the_test_colourings_convert_and_colour_as_written() {
         let formula = programs("M {\ninit:\n z = 0\nloop:\n z = sqr(z) + #pixel\nbailout:\n |z| <= 4\n}", Dialect::UltraFractal).remove(0);
-        let text = include_str!("../../../tests/formulas/language.ucl");
+        let text = include_str!("../../tests/formulas/language.ucl");
         let (file, _) = parse_file(text);
         let mut n = 0;
         for e in &file.entries {

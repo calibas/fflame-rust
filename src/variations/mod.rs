@@ -17,7 +17,7 @@ pub mod defs;
 pub mod docs;
 pub mod analytic_blur;
 /// Variations written in the formula language (the KIFS plan, C1).
-#[cfg(feature = "engine-escape")]
+#[cfg(feature = "lang")]
 pub mod custom;
 
 use definition::VariationDef;
@@ -943,7 +943,7 @@ pub fn classify_missing(
 pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
     // The variations the flame carries the source of are not missing:
     // registered here, they are not fetched.
-    #[cfg(feature = "engine-escape")]
+    #[cfg(feature = "lang")]
     custom::ensure(flame);
     let registry = global_registry();
     let mut missing = std::collections::HashSet::new();

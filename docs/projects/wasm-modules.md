@@ -80,7 +80,7 @@ compressed on its own, so the gzip column overshoots the whole a little):
 | Fonts (egui's four defaults) | 1.4 MB | 0.78 MB | Always (the two emoji fonts could wait) |
 | Font rasterising (skrifa, read_fonts, vello_cpu, ...) | 0.7 MB | 0.23 MB | Always |
 | Our UI, config, scene, app, renderer, other | 2.8 MB | 0.99 MB | Always (the flame engine and the editor) |
-| **Formula languages and scripting**: the `rhai` crate, `escape::lang` (the Rhai / UF / Fractint compilers), `script`, the bundled examples | 3.1 MB | **0.78 MB** | A custom formula, solid, colouring or variation; the Formula Editor; the Scripts panel |
+| **Formula languages and scripting**: the `rhai` crate, `lang` (the Rhai / UF / Fractint compilers; its own feature since 2026-11-02), `script`, the bundled examples | 3.1 MB | **0.78 MB** | A custom formula, solid, colouring or variation; the Formula Editor; the Scripts panel |
 | **Escape engine** (less `lang`) and most of the other WGSL | 0.6 MB + ~1 MB | **~0.5 MB** | Escape mode |
 | **Audio decoding** (symphonia, rustfft, cpal) | 0.55 MB | **0.20 MB** | An audio file, capture, an audio signal |
 | **Variation WGSL** (647 variations) | 1.47 MB | **0.18 MB** | Each variation a config uses |
